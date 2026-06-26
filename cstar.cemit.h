@@ -65,6 +65,17 @@ struct ClassInfo {
     bool                              hasVtable = false;     // this or an ancestor has a virtual
     std::string                       vtableRoot;            // class owning the __vptr member
     std::map<std::string,std::string> slotImpl;             // virtual slot name -> impl cName (most-derived here)
+
+    // Interfaces (M6b)
+    std::vector<std::string>          interfaces;            // implemented interface names
+};
+
+// An interface (M6b): a set of method prototypes, lowered to a vtable struct
+// type + a fat-pointer value type. Implemented by classes via a C__as_I vtable.
+struct InterfaceMethod { std::string name; FunctionDeclarationNode* node; };
+struct InterfaceInfo {
+    std::string                  name;
+    std::vector<InterfaceMethod> methods;
 };
 
 class CEmitter {
@@ -92,6 +103,8 @@ private:
     struct VSlot { std::string name; std::string owner; ClassMethodDeclarationNode* node; };
     std::map<std::string, std::vector<VSlot>> _rootVtables;   // root class name -> slots
 
+    std::map<std::string, InterfaceInfo> _interfaces;        // interface name -> info (M6b)
+
     // RAII scope stack (M5): live destructible locals per lexical scope.
     struct LiveLocal { std::string cVar; std::string className; };
     struct Scope { std::vector<LiveLocal> locals; bool isLoopBoundary = false; bool isFunctionRoot = false; };
@@ -104,6 +117,7 @@ private:
 
     // Pre-pass
     void collectSignatures(SharedCompilationUnit unit);
+    void collectInterfaces(SharedCompilationUnit unit);
     void collectClasses(SharedCompilationUnit unit);
     void linkBases();
     void buildVtables();
@@ -120,6 +134,16 @@ private:
     void emitVtableType(ClassInfo& ci);                       // only when ci is its own vtableRoot
     void emitVtableInstance(ClassInfo& ci);                   // for every class with hasVtable
     std::string vtableSlotSig(const VSlot& s);                // "(Owner* self, T a, ...)"
+
+    // Interfaces (M6b)
+    bool isInterface(const std::string& name) const { return _interfaces.count(name) != 0; }
+    std::string ifaceSlotSig(FunctionDeclarationNode* m);     // "(void* self, T a, ...)"
+    void emitInterfaceTypes(InterfaceInfo& ii);               // vtbl struct + fat-pointer struct
+    void emitClassInterfaceVtables(ClassInfo& ci);            // the C__as_I instances
+    // (I){ (void*)&<obj>, &<C>__as_I } — wrap a concrete lvalue as an interface value
+    std::string fatPointer(const std::string& iface, const std::string& concrete, const std::string& addrExpr);
+    std::string emitInterfaceDispatch(const std::string& fatExpr, const std::string& iface,
+                                      const std::string& method, SharedArgumentList args, int srcLine);
 
     // Declarations / top level
     bool paramByRef(FunctionParameterNode* p);

@@ -1,0 +1,30 @@
+interface IShape
+{
+    int64 area();
+}
+class Circle implements IShape
+{
+    int64 r;
+    Circle(int64 r) { this.r = r; }
+    int64 area() { return r * r; }
+}
+class Square implements IShape
+{
+    int64 s;
+    Square(int64 s) { this.s = s; }
+    int64 area() { return s * s; }
+}
+int64 measure(IShape sh)
+{
+    return sh.area();
+}
+int main()
+{
+    Circle c = new Circle(r: 7);
+    Square q = new Square(s: 5);
+    int64 a = measure(sh: c);
+    int64 b = measure(sh: q);
+    uint64 sum = cast<uint64>(a) + cast<uint64>(b);
+    uint64 m = sum % 256;
+    return cast<int>(m);
+}

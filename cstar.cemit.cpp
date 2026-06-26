@@ -338,10 +338,29 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* decl = dynamic_cast<LocalVariableDeclaration*>(n)) {
         std::string ty = cType(decl->type);
         bool cls = isClass(ty);
+        bool iface = isInterface(ty);
         if (decl->variables) {
             for (auto& d : *decl->variables) {
                 std::string nm = (d->name && d->name->value) ? *d->name->value : "";
-                _localTypes[nm] = cls ? ty : "";   // record all names (shadow fields)
+                _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
+
+                // Interface-typed local: `I s = concrete;` -> a fat pointer borrowing
+                // the concrete object (which must be an lvalue that outlives `s`).
+                if (iface) {
+                    line(n->line); indent(depth);
+                    _out << ty << " " << nm;
+                    if (d->initializer) {
+                        std::string c = exprClass(d->initializer);
+                        if (!c.empty() && isClass(c))
+                            _out << " = " << fatPointer(ty, c, emitExpression(d->initializer));
+                        else if (!c.empty() && isInterface(c))
+                            _out << " = " << emitExpression(d->initializer);  // already an interface value
+                        else
+                            unsupported("interface initializer must be a concrete object lvalue", n->line);
+                    }
+                    _out << ";\n";
+                    continue;
+                }
 
                 if (!cls) {
                     line(n->line); indent(depth);
@@ -597,6 +616,25 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
     }
 }
 
+// Collect interface declarations (method prototype lists).
+void CEmitter::collectInterfaces(SharedCompilationUnit unit)
+{
+    if (!unit || !unit->codeDeclarationList) return;
+    for (auto& decl : *unit->codeDeclarationList) {
+        auto* id = dynamic_cast<InterfaceDeclarationNode*>(decl.get());
+        if (!id || !id->identifier || !id->identifier->value) continue;
+        if (id->baseTypes && !id->baseTypes->empty())
+            unsupported("interface inheritance (interface : interface) — deferred", id->line);
+        InterfaceInfo ii;
+        ii.name = *id->identifier->value;
+        if (id->body)
+            for (auto& m : *id->body)
+                if (m->name && m->name->value)
+                    ii.methods.push_back({*m->name->value, m.get()});
+        _interfaces[ii.name] = ii;
+    }
+}
+
 // Build the class table: ordered fields, methods, and the (single) constructor.
 void CEmitter::collectClasses(SharedCompilationUnit unit)
 {
@@ -613,8 +651,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         if (cd->baseTypes) {
             if (cd->baseTypes->base && cd->baseTypes->base->value)
                 ci.baseName = *cd->baseTypes->base->value;
-            if (cd->baseTypes->interfaces && !cd->baseTypes->interfaces->empty())
-                unsupported("interfaces (implements) — deferred to M6b", cd->line);
+            if (cd->baseTypes->interfaces)
+                for (auto& itf : *cd->baseTypes->interfaces)
+                    if (itf && itf->value) ci.interfaces.push_back(*itf->value);
         }
         // Class-level `abstract` modifier.
         if (cd->modifiers)
@@ -823,11 +862,17 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         auto f = byName.find(p.name);
         if (f == byName.end()) { unsupported("missing argument in call", srcLine); s += "0"; continue; }
         std::string val = emitExpression(f->second->expression);
-        if (p.byRef)
+        if (isInterface(p.className)) {
+            // Wrap a concrete object as an interface fat pointer; pass through an
+            // existing interface value.
+            std::string c = exprClass(f->second->expression);
+            s += (!c.empty() && isClass(c)) ? fatPointer(p.className, c, val) : val;
+        } else if (p.byRef) {
             s += isClass(p.className) ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base
                                       : ("&(" + val + ")");
-        else
+        } else {
             s += val;
+        }
     }
     return s + ")";
 }
@@ -889,6 +934,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             recvClass = fcls;
         }
 
+        if (isInterface(recvClass))
+            return emitInterfaceDispatch(recvExpr, recvClass, name, call->args, call->line);
         if (recvClass.empty() || !_classes.count(recvClass)) {
             unsupported("method call on unresolved receiver", call->line); return "0";
         }
@@ -958,7 +1005,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
             std::string pty = p->type ? cType(p->type) : "";
-            _localTypes[pn] = isClass(pty) ? pty : "";   // record all names (shadow fields)
+            _localTypes[pn] = (isClass(pty) || isInterface(pty)) ? pty : "";   // record all names (shadow fields)
         }
     }
 
@@ -1065,6 +1112,75 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
     _out << "};\n\n";
 }
 
+// ---- Interfaces (M6b) -----------------------------------------------------
+
+// "(void* self, T a, U b)" — an interface slot's C signature (self is type-erased).
+std::string CEmitter::ifaceSlotSig(FunctionDeclarationNode* m)
+{
+    std::string sig = "(void* self";
+    if (m->parameters)
+        for (auto& p : *m->parameters) {
+            std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
+            sig += ", " + cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + nm;
+        }
+    return sig + ")";
+}
+
+// Interface I -> a vtable struct type `I_vtbl` and a fat-pointer value type `I`.
+void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
+{
+    _out << "struct " << ii.name << "_vtbl {\n";
+    for (auto& m : ii.methods) {
+        indent(1);
+        _out << cType(m.node->returnType) << " (*" << m.name << ")" << ifaceSlotSig(m.node) << ";\n";
+    }
+    _out << "};\n";
+    _out << "struct " << ii.name << " { void* obj; const " << ii.name << "_vtbl* vtbl; };\n\n";
+}
+
+// For each interface C implements, a static const I_vtbl C__as_I mapping interface
+// methods to the class's matching methods (cast to the type-erased slot signature).
+void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
+{
+    for (auto& ifn : ci.interfaces) {
+        auto it = _interfaces.find(ifn);
+        if (it == _interfaces.end()) { unsupported("unknown interface in implements", ci.node->line); continue; }
+        InterfaceInfo& ii = it->second;
+        _out << "static const " << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
+        for (auto& m : ii.methods) {
+            ClassInfo* owner = nullptr;
+            MethodInfo* mi = findMethod(&ci, m.name, &owner);
+            if (!mi) { unsupported(("class missing interface method '" + m.name + "'").c_str(), ci.node->line); continue; }
+            indent(1);
+            _out << "." << m.name << " = (" << cType(m.node->returnType) << "(*)" << ifaceSlotSig(m.node)
+                 << ")&" << mi->cName << ",\n";
+        }
+        _out << "};\n\n";
+    }
+}
+
+// (I){ (void*)&(lvalue), &C__as_I } — wrap a concrete class lvalue as interface I.
+std::string CEmitter::fatPointer(const std::string& iface, const std::string& concrete, const std::string& lvalue)
+{
+    return "(" + iface + "){ (void*)&(" + lvalue + "), &" + concrete + "__as_" + iface + " }";
+}
+
+// s.m(args) where s is an interface value -> (s).vtbl->m((s).obj, <reordered args>)
+std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const std::string& iface,
+                                            const std::string& method, SharedArgumentList args, int srcLine)
+{
+    auto it = _interfaces.find(iface);
+    if (it == _interfaces.end()) { unsupported("dispatch on unknown interface", srcLine); return "0"; }
+    for (auto& m : it->second.methods) {
+        if (m.name != method) continue;
+        std::vector<ParamSig> params = paramSigsOf(m.node->parameters);
+        return emitReorderedCall("(" + fatExpr + ").vtbl->" + method, "(" + fatExpr + ").obj",
+                                 params, args, srcLine);
+    }
+    unsupported("unknown interface method", srcLine);
+    return "0";
+}
+
 void CEmitter::emitClassPrototypes(ClassInfo& ci)
 {
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
@@ -1141,7 +1257,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
             std::string pty = p->type ? cType(p->type) : "";
-            _localTypes[pn] = isClass(pty) ? pty : "";   // record all names (shadow fields)
+            _localTypes[pn] = (isClass(pty) || isInterface(pty)) ? pty : "";   // record all names (shadow fields)
         }
     }
 
@@ -1292,6 +1408,8 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
     SharedExpression receiver = recv->expression;
     std::string cls = exprClass(receiver);
+    if (isInterface(cls))
+        return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line);
     if (cls.empty() || !_classes.count(cls)) {
         unsupported("method call on unresolved receiver", call->line);
         return "0";
@@ -1321,6 +1439,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
 
     // Pass 0: collect, link inheritance, build vtables, compute destructibility.
     collectSignatures(unit);
+    collectInterfaces(unit);
     collectClasses(unit);
     linkBases();
     buildVtables();
@@ -1328,20 +1447,26 @@ int CEmitter::emit(SharedCompilationUnit unit)
 
     std::vector<ClassInfo*> classes = topoOrderClasses();   // base before derived
 
-    // Pass S0: forward typedefs (classes + vtable types) so the struct bodies and
-    // vtable types can reference each other and any class.
+    // Pass S0: forward typedefs (classes, vtable types, interfaces) so bodies can
+    // reference each other and any class.
     for (ClassInfo* ci : classes) {
         _out << "typedef struct " << ci->name << " " << ci->name << ";\n";
         if (ci->hasVtable && ci->vtableRoot == ci->name)
             _out << "typedef struct " << ci->name << "_vtable " << ci->name << "_vtable;\n";
     }
-    if (!classes.empty()) _out << "\n";
+    for (auto& kv : _interfaces) {
+        _out << "typedef struct " << kv.first << "_vtbl " << kv.first << "_vtbl;\n";
+        _out << "typedef struct " << kv.first << " " << kv.first << ";\n";
+    }
+    if (!classes.empty() || !_interfaces.empty()) _out << "\n";
 
-    // Pass S: vtable struct types (roots) + struct bodies (topological).
+    // Pass S: vtable struct types + struct bodies (topological), then interface
+    // types (their slot signatures may reference class types by value).
     for (ClassInfo* ci : classes) {
         if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
         emitStruct(*ci);
     }
+    for (auto& kv : _interfaces) emitInterfaceTypes(kv.second);
 
     // Pass A: prototypes — class ctors/dtors/methods, then free functions.
     // extern functions are provided by C (runtime/linked) — no prototype/def.
@@ -1356,8 +1481,10 @@ int CEmitter::emit(SharedCompilationUnit unit)
     }
     if (any) _out << "\n";
 
-    // Pass A2: vtable instances (after prototypes, which declare the fn names).
+    // Pass A2: vtable instances + interface (C__as_I) vtables — after prototypes,
+    // which declare the fn names they reference.
     for (ClassInfo* ci : classes) emitVtableInstance(*ci);
+    for (ClassInfo* ci : classes) emitClassInterfaceVtables(*ci);
 
     // Pass B: definitions — class methods/ctors/dtors, then free functions.
     for (ClassInfo* ci : classes) emitClassDefinitions(*ci);
@@ -1367,6 +1494,8 @@ int CEmitter::emit(SharedCompilationUnit unit)
             emitFunction(fn);
         } else if (dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // already emitted via the class passes
+        } else if (dynamic_cast<InterfaceDeclarationNode*>(decl.get())) {
+            // already emitted via the interface passes
         } else if (decl) {
             unsupported("top-level declaration", decl->line);
             _out << "\n";
