@@ -27,9 +27,9 @@ the grammar; for semantics, read the spec; for runnable examples, read the test 
 ## Status
 Implemented: functions, primitives, control flow, named-parameter calls, ref/out, classes, RAII
 destructors, single inheritance + virtual dispatch, interfaces, enums; **generic collections**
-(`Array<T>`/`List<T>`/`String`, monomorphized + RAII, `foreach`, bounds-checked `[]`); the **`Owned<T>`
-smart pointer** (unique heap ownership, move semantics, auto-deref, RAII); native + WASM + debug/release
-builds; IDE breakpoint debugging (VSCode extension in `editor/vscode/`). No raw pointers / no `unsafe` by
-design (collection/pointer internals are confined to the C runtime). Planned: `Shared<T>`/`Weak<T>` (rest
-of the smart-pointer family), `Map<K,V>` + multi-param generics, modules (`using`), scripting (`cstar
-run`), `cstar describe --json`, cstar-level WebGPU bindings.
+(`Array<T>`/`List<T>`/`String`, monomorphized + RAII, `foreach`, bounds-checked `[]`); **smart pointers**
+(`Owned<T>` unique + `Shared<T>` ref-counted, with move/retain semantics, auto-deref, RAII); native + WASM
++ debug/release builds; IDE breakpoint debugging (VSCode extension in `editor/vscode/`). No raw pointers /
+no `unsafe` by design (collection/pointer internals are confined to the C runtime). Planned: `Weak<T>`
+(completes the smart-pointer family), `Map<K,V>` + multi-param generics, modules (`using`), scripting
+(`cstar run`), `cstar describe --json`, cstar-level WebGPU bindings.

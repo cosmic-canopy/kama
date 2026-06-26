@@ -63,11 +63,24 @@ Owned<Node> make(int v) { Owned<Node> n = new Owned<Node>(id: v); return n; }  /
 ```
 
 Move-only: copying/initializing/returning an `Owned` transfers ownership and invalidates the source, so
-the pointee is freed exactly once (RAII, with the pointee's destructor). M10 limits: pointee must be a
-**class** type; **borrow** by passing `ref Owned<T>` (passing by value is rejected — no move-as-argument
-yet); **use-after-move** is a runtime null-trap (no borrow checker yet); polymorphic `Owned<Base> =
-Derived` is deferred. `Shared<T>` (ref-counted) and `Weak<T>` are 🚧 next; `Map<K,V>` + multi-param/nested
-generics also 🚧.
+the pointee is freed exactly once (RAII, with the pointee's destructor).
+
+`Shared<T>` — ref-counted shared ownership (= C++ `shared_ptr` / Rust `Rc`). **Copyable**: each copy
+retains (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.
+
+```cstar
+Shared<Tex> a = new Shared<Tex>(id: 7);
+Shared<Tex> b = a;     // retain — a and b share one Tex (both valid)
+b.use();  int n = a.id;
+// a, b drop in RAII order; the Tex is freed exactly once, with the last handle
+```
+
+Shared limits (same family as Owned): pointee must be a **class** type; **borrow** by passing `ref
+Owned<T>`/`ref Shared<T>` (passing a smart pointer by value is rejected); `Owned` **use-after-move** is a
+runtime null-trap (no borrow checker yet); polymorphic `Smart<Base> = Derived` is deferred; storing a
+smart pointer in a collection or a bitwise-copied class field is deferred (aggregate copy doesn't
+retain/move). Reference **cycles** of `Shared` leak until `Weak<T>` (🚧 next). `Map<K,V>` +
+multi-param/nested generics also 🚧.
 
 ## Functions ✅
 
