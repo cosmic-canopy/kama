@@ -1,0 +1,56 @@
+//namespace some.qualified.namespaceName;
+
+//using myalias = some.qualified.name;
+
+int my_main()
+{
+    //int val = true ? 0 : 1;
+    //return val;
+    double d1 = 0.0;
+    double d2 = 0.0;
+    double d3 = d1 + d2;
+    return d3;
+}
+
+/*
+enum myEnum
+{
+    someval,
+    someval2 = 0
+};
+
+int main(List<String> arguments)
+{
+
+}
+
+void somefunc(float64 value)
+{
+
+}
+
+class MyClass
+{
+#region My Region
+    // This is
+    string st = @"This is 
+    a multiLine String.";
+
+    MyClass()
+    {
+
+    }
+
+    ~MyClass()
+    {
+
+    }
+
+    int someMethod()
+    {
+
+    }
+
+    public int _mMyVariable = 0;
+#endregion
+}*/

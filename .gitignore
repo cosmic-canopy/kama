@@ -1,0 +1,11 @@
+.DS_store
+*.o
+*.bc
+bison_report
+
+cstar
+cstar.lexer.cpp
+cstar.lexer.hpp
+cstar.parser.cpp
+cstar.parser.hpp
+cstar.parser.output
