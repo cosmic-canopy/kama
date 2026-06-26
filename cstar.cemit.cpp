@@ -163,6 +163,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<IdentifierNode*>(n)) {
         // Variable/parameter reference. Qualified/member resolution is later.
         std::string nm = v->value ? *v->value : "";
+        // Enum member: `Enum.Member` parses as value=Member, qualifier=[Enum].
+        if (v->qualifier && !v->qualifier->empty() && isEnum(*(*v->qualifier)[0]))
+            return *(*v->qualifier)[0] + "_" + nm;
         // A ref/out parameter is a pointer in C; reads dereference it.
         if (_refParams.count(nm)) return "(*" + nm + ")";
         // An unqualified name that is a field of the enclosing class (or an
@@ -633,6 +636,36 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     ii.methods.push_back({*m->name->value, m.get()});
         _interfaces[ii.name] = ii;
     }
+}
+
+// Collect enum declarations.
+void CEmitter::collectEnums(SharedCompilationUnit unit)
+{
+    if (!unit || !unit->codeDeclarationList) return;
+    for (auto& decl : *unit->codeDeclarationList) {
+        auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
+        if (!ed || !ed->identifier || !ed->identifier->value) continue;
+        EnumInfo ei;
+        ei.name = *ed->identifier->value;
+        if (ed->body)
+            for (auto& m : *ed->body)
+                if (m->identifier && m->identifier->value)
+                    ei.members.push_back({*m->identifier->value, m->constantExpression});
+        _enums[ei.name] = ei;
+    }
+}
+
+// enum Name { Name_M0, Name_M1 = <expr>, … }
+void CEmitter::emitEnum(EnumInfo& ei)
+{
+    _out << "typedef enum " << ei.name << " {\n";
+    for (auto& m : ei.members) {
+        indent(1);
+        _out << ei.name << "_" << m.name;
+        if (m.value) _out << " = " << emitExpression(m.value);
+        _out << ",\n";
+    }
+    _out << "} " << ei.name << ";\n\n";
 }
 
 // Build the class table: ordered fields, methods, and the (single) constructor.
@@ -1439,6 +1472,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
 
     // Pass 0: collect, link inheritance, build vtables, compute destructibility.
     collectSignatures(unit);
+    collectEnums(unit);
     collectInterfaces(unit);
     collectClasses(unit);
     linkBases();
@@ -1459,6 +1493,9 @@ int CEmitter::emit(SharedCompilationUnit unit)
         _out << "typedef struct " << kv.first << " " << kv.first << ";\n";
     }
     if (!classes.empty() || !_interfaces.empty()) _out << "\n";
+
+    // Enums first — independent value types other declarations may reference.
+    for (auto& kv : _enums) emitEnum(kv.second);
 
     // Pass S: vtable struct types + struct bodies (topological), then interface
     // types (their slot signatures may reference class types by value).
@@ -1496,6 +1533,8 @@ int CEmitter::emit(SharedCompilationUnit unit)
             // already emitted via the class passes
         } else if (dynamic_cast<InterfaceDeclarationNode*>(decl.get())) {
             // already emitted via the interface passes
+        } else if (dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+            // already emitted via the enum pass
         } else if (decl) {
             unsupported("top-level declaration", decl->line);
             _out << "\n";

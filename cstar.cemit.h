@@ -78,6 +78,10 @@ struct InterfaceInfo {
     std::vector<InterfaceMethod> methods;
 };
 
+// An enum (M7): lowered to a C `enum` with members mangled `Enum_Member`.
+struct EnumMember { std::string name; SharedExpression value; };  // value optional
+struct EnumInfo   { std::string name; std::vector<EnumMember> members; };
+
 class CEmitter {
 public:
     CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives);
@@ -104,6 +108,7 @@ private:
     std::map<std::string, std::vector<VSlot>> _rootVtables;   // root class name -> slots
 
     std::map<std::string, InterfaceInfo> _interfaces;        // interface name -> info (M6b)
+    std::map<std::string, EnumInfo>      _enums;             // enum name -> info (M7)
 
     // RAII scope stack (M5): live destructible locals per lexical scope.
     struct LiveLocal { std::string cVar; std::string className; };
@@ -118,6 +123,9 @@ private:
     // Pre-pass
     void collectSignatures(SharedCompilationUnit unit);
     void collectInterfaces(SharedCompilationUnit unit);
+    void collectEnums(SharedCompilationUnit unit);
+    void emitEnum(EnumInfo& ei);
+    bool isEnum(const std::string& name) const { return _enums.count(name) != 0; }
     void collectClasses(SharedCompilationUnit unit);
     void linkBases();
     void buildVtables();

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "cstar",
+  "scopeName": "source.cstar",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#numbers" },
+    { "include": "#cast" },
+    { "include": "#declarations" },
+    { "include": "#functions" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.cstar", "match": "//.*$" },
+        { "name": "comment.block.cstar", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.cstar",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.cstar", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" }
+          ]
+        },
+        {
+          "name": "string.quoted.verbatim.cstar",
+          "begin": "@\"",
+          "end": "\""
+        }
+      ]
+    },
+    "chars": {
+      "name": "string.quoted.single.cstar",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        { "name": "constant.character.escape.cstar", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.cstar", "match": "\\b(if|else|switch|case|default|while|do|for|foreach|break|continue|return)\\b" },
+        { "name": "keyword.other.modifier.cstar", "match": "\\b(abstract|override|virtual|final|static|private|protected|public|friend|const|volatile|ref|out|in|extern|export)\\b" },
+        { "name": "keyword.other.cstar", "match": "\\b(namespace|using|extends|implements|operator)\\b" },
+        { "name": "keyword.operator.new.cstar", "match": "\\b(new)\\b" },
+        { "name": "variable.language.cstar", "match": "\\b(this|base)\\b" }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(class|interface|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.cstar" },
+            "2": { "name": "entity.name.type.cstar" }
+          }
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "name": "storage.type.primitive.cstar", "match": "\\b(bool|int|int8|int16|int32|int64|uint8|uint16|uint32|uint64|float32|float64|double|string|void)\\b" },
+        { "name": "entity.name.type.cstar", "match": "\\b([A-Z][A-Za-z0-9_]*)\\b" }
+      ]
+    },
+    "constants": {
+      "name": "constant.language.cstar",
+      "match": "\\b(true|false|null)\\b"
+    },
+    "cast": {
+      "match": "\\b(cast)\\s*<\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*>",
+      "captures": {
+        "1": { "name": "keyword.operator.cast.cstar" },
+        "2": { "name": "entity.name.type.cstar" }
+      }
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.cstar", "match": "\\b0[xX][0-9A-Fa-f_]+(i8|i16|i32|i64|u8|u16|u32|u64)?\\b" },
+        { "name": "constant.numeric.octal.cstar", "match": "\\b0[oO][0-7_]+(i8|i16|i32|i64|u8|u16|u32|u64)?\\b" },
+        { "name": "constant.numeric.float.cstar", "match": "\\b[0-9][0-9_]*\\.[0-9_]+([eE][-+]?[0-9]+)?(f32|f64)?\\b" },
+        { "name": "constant.numeric.integer.cstar", "match": "\\b[0-9][0-9_]*(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64)?\\b" }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "name": "entity.name.function.cstar"
+        }
+      ]
+    }
+  }
+}

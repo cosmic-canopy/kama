@@ -71,6 +71,15 @@ Single inheritance (`extends`), base embedded by value (upcast is offset-0), bas
 `base.m()` for non-virtual upcalls. `virtual`/`override` methods dispatch through a vtable. `interface`/
 `implements` are 🚧 M6b.
 
+## Enums ✅
+
+```cstar
+enum Color { Red, Green = 5, Blue }   // Red=0, Green=5, Blue=6
+Color c = Color.Blue;
+```
+Lowers to a C `enum` (members mangled `Color_Red`…). Enum values are integers — usable in `switch`,
+comparisons, and `cast`.
+
 ## Namespaces & modules 🚧
 
 `namespace a.b;` and `using` parse; full multi-file modules are planned (M7+).

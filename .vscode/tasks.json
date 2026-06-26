@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cstar: build (debug)",
+      "type": "shell",
+      "command": "${workspaceFolder}/cstar",
+      "args": [
+        "build",
+        "${file}",
+        "-o", "${fileDirname}/${fileBasenameNoExtension}"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "cstar: build (release)",
+      "type": "shell",
+      "command": "${workspaceFolder}/cstar",
+      "args": [
+        "build",
+        "${file}",
+        "--release",
+        "-o", "${fileDirname}/${fileBasenameNoExtension}"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "group": "build"
+    }
+  ]
+}

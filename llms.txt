@@ -26,6 +26,7 @@ the grammar; for semantics, read the spec; for runnable examples, read the test 
 
 ## Status
 Implemented: functions, primitives, control flow, named-parameter calls, ref/out, classes, RAII
-destructors, single inheritance + virtual dispatch; native + WASM + debug/release builds; IDE breakpoint
-debugging. Planned: interfaces, enums, string ops, generic collections (`List<T>`), modules, scripting
-(`cstar run`), `cstar describe --json`, cstar-level WebGPU bindings.
+destructors, single inheritance + virtual dispatch, interfaces, enums; native + WASM + debug/release
+builds; IDE breakpoint debugging (VSCode extension in `editor/vscode/`). Planned: string ops, generic
+collections (`List<T>`), modules (`using`), scripting (`cstar run`), `cstar describe --json`, cstar-level
+WebGPU bindings.

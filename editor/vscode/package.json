@@ -1,0 +1,31 @@
+{
+  "name": "cstar",
+  "displayName": "cstar",
+  "description": "Syntax highlighting and language support for the cstar language (.cstar). Debug .cstar with CodeLLDB.",
+  "version": "0.1.0",
+  "publisher": "cosmic-canopy",
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "keywords": ["cstar", "transpiler", "c", "wasm"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "cstar",
+        "aliases": ["cstar", "Cstar"],
+        "extensions": [".cstar", ".str"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cstar",
+        "scopeName": "source.cstar",
+        "path": "./syntaxes/cstar.tmLanguage.json"
+      }
+    ]
+  },
+  "extensionPack": [
+    "vadimcn.vscode-lldb"
+  ]
+}
