@@ -94,8 +94,7 @@ struct cstaryystype {
 
 /* Options */
 %expect 1
-%output "cstar.parser.cpp"
-%defines "cstar.parser.hpp"
+%defines
 %define api.pure full
 %lex-param   { yyscan_t scanner }
 %parse-param { yyscan_t scanner }

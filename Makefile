@@ -3,46 +3,59 @@ all: cstar
 CXX      = clang++
 CXXFLAGS = -std=c++14 -g -Wall -Wno-deprecated-register
 
+# All build artifacts live under build/ (objects + generated parser/lexer), so
+# the repo root stays sources-only and host(mach-o)/container(ELF) objects can't
+# collide. The cstar binary stays at the root for stable tooling paths.
+BUILD = build
+
 # The grammar uses %code/api.pure full, which need bison >= 2.7. macOS ships
 # 2.3, so prefer a Homebrew keg-only bison when present.
 BISON = $(shell [ -x /opt/homebrew/opt/bison/bin/bison ] && echo /opt/homebrew/opt/bison/bin/bison || ([ -x /usr/local/opt/bison/bin/bison ] && echo /usr/local/opt/bison/bin/bison || echo bison))
 
-OBJECTS = cstar.lexer.o  \
-          cstar.parser.o \
-          cstar.ast.o    \
-          cstar.cemit.o  \
-          cstar.driver.o
+OBJECTS = $(addprefix $(BUILD)/, \
+            cstar.lexer.o  \
+            cstar.parser.o \
+            cstar.ast.o    \
+            cstar.cemit.o  \
+            cstar.driver.o)
 
-# Bison emits cstar.parser.cpp/.hpp (see %output/%defines in cstar.y).
-cstar.parser.cpp cstar.parser.hpp: cstar.y
-	$(BISON) cstar.y
+$(BUILD):
+	mkdir -p $(BUILD)
 
-# Flex emits cstar.lexer.cpp/.hpp (see %option outfile/header-file in cstar.l).
-cstar.lexer.cpp cstar.lexer.hpp: cstar.l cstar.parser.hpp
-	flex cstar.l
+# Bison/flex: CLI -o/--defines/--header-file override the %output/%option names
+# baked into the source, redirecting generated files into build/.
+$(BUILD)/cstar.parser.cpp $(BUILD)/cstar.parser.hpp: cstar.y | $(BUILD)
+	$(BISON) -o $(BUILD)/cstar.parser.cpp --defines=$(BUILD)/cstar.parser.hpp cstar.y
 
-# Header dependencies (the implicit rule below can't see #includes). Listing all
+$(BUILD)/cstar.lexer.cpp $(BUILD)/cstar.lexer.hpp: cstar.l $(BUILD)/cstar.parser.hpp | $(BUILD)
+	flex -o $(BUILD)/cstar.lexer.cpp --header-file=$(BUILD)/cstar.lexer.hpp cstar.l
+
+# Header dependencies (the implicit rules can't see #includes). Listing all
 # project headers against every object is coarse but cheap, and prevents stale
 # object/ABI-skew bugs when a class layout in a header changes.
 HEADERS = cstar.forward.h cstar.context.h cstar.ast.h cstar.cemit.h
 $(OBJECTS): $(HEADERS)
 
 # Generated-header dependencies.
-cstar.lexer.o cstar.parser.o cstar.driver.o cstar.cemit.o: cstar.parser.hpp
-cstar.lexer.o cstar.driver.o: cstar.lexer.hpp
+$(BUILD)/cstar.lexer.o $(BUILD)/cstar.parser.o $(BUILD)/cstar.driver.o $(BUILD)/cstar.cemit.o: $(BUILD)/cstar.parser.hpp
+$(BUILD)/cstar.lexer.o $(BUILD)/cstar.driver.o: $(BUILD)/cstar.lexer.hpp
 
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+# Compile: hand-written sources live in the root, generated ones in build/.
+# -Ibuild so #include "cstar.parser.hpp" finds the generated header.
+$(BUILD)/%.o: %.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -I$(BUILD) -I. -c $< -o $@
+
+$(BUILD)/%.o: $(BUILD)/%.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -I$(BUILD) -I. -c $< -o $@
 
 cstar: $(OBJECTS)
-	$(CXX) $(CXXFLAGS) $^ -o $@
+	$(CXX) $(CXXFLAGS) $^ -o cstar
 
 test: cstar
 	./run_tests.sh
 
 clean:
-	rm -f *.o *~ *.output bison_report
-	rm -f cstar.lexer.cpp cstar.lexer.hpp cstar.parser.cpp cstar.parser.hpp
-	rm -f cstar
+	rm -rf $(BUILD)
+	rm -f cstar *~
 
 .PHONY: all clean test

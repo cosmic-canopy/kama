@@ -31,8 +31,6 @@ void error(const char *, yyscan_t scanner);
 %option 8bit reentrant bison-bridge
 %option never-interactive
 %option warn nodefault
-%option outfile="cstar.lexer.cpp"
-%option header-file="cstar.lexer.hpp"
 %option stack
 %option noyywrap nounistd nounput noinput noyy_top_state
 

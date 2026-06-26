@@ -1,0 +1,22 @@
+class Counter
+{
+    int value;
+    Counter(int start)
+    {
+        value = start;
+    }
+    void add(int n)
+    {
+        value = value + n;
+    }
+    int get()
+    {
+        return value;
+    }
+}
+int main()
+{
+    Counter c = new Counter(start: 40);
+    c.add(n: 2);
+    return c.get();
+}

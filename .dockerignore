@@ -3,10 +3,7 @@
 .git
 *.o
 cstar
-cstar.lexer.cpp
-cstar.lexer.hpp
-cstar.parser.cpp
-cstar.parser.hpp
+build/
 *.output
 bison_report
 out/

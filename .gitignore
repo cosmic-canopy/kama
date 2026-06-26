@@ -2,14 +2,12 @@
 *.o
 *.bc
 bison_report
+*.llvm.bak
+
+# all build artifacts (objects + generated parser/lexer) live here
+build/
 
 cstar
-cstar.lexer.cpp
-cstar.lexer.hpp
-cstar.parser.cpp
-cstar.parser.hpp
-cstar.parser.output
-*.llvm.bak
 
 # build output / generated transpiler artifacts
 out/

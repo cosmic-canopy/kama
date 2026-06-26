@@ -1,0 +1,17 @@
+class Box
+{
+    int w = 6;
+    int h = 7;
+    Box()
+    {
+    }
+    int area()
+    {
+        return w * h;
+    }
+}
+int main()
+{
+    Box b = new Box();
+    return b.area();
+}

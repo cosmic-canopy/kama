@@ -164,7 +164,25 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string nm = v->value ? *v->value : "";
         // A ref/out parameter is a pointer in C; reads dereference it.
         if (_refParams.count(nm)) return "(*" + nm + ")";
+        // An unqualified name that is a field of the enclosing class (and not a
+        // local/param) resolves to self->field.
+        if (_currentClass && !_localTypes.count(nm) && _currentClass->fieldNames.count(nm))
+            return "self->" + nm;
         return nm;
+    }
+
+    if (dynamic_cast<ThisAccessNode*>(n)) return "self";
+
+    if (auto* v = dynamic_cast<MemberAccessNode*>(n)) {
+        return emitMemberAccess(v);
+    }
+
+    if (auto* v = dynamic_cast<ObjectCreationNode*>(n)) {
+        // `new T(...)` is supported only as a local-variable initializer in M4
+        // (handled in LocalVariableDeclaration). Bare expression position needs
+        // a temp/statement context that arrives with RAII (M5).
+        unsupported("`new` outside a local-variable initializer", v->line);
+        return "0";
     }
 
     if (auto* v = dynamic_cast<BinaryExpressionNode*>(n)) {
@@ -251,14 +269,39 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* decl = dynamic_cast<LocalVariableDeclaration*>(n)) {
         std::string ty = cType(decl->type);
+        bool cls = isClass(ty);
         if (decl->variables) {
             for (auto& d : *decl->variables) {
-                line(n->line);
-                indent(depth);
-                _out << ty << " " << (d->name && d->name->value ? *d->name->value : "");
-                if (d->initializer)
-                    _out << " = " << emitExpression(d->initializer);
-                _out << ";\n";
+                std::string nm = (d->name && d->name->value) ? *d->name->value : "";
+                if (cls) _localTypes[nm] = ty;
+
+                if (!cls) {
+                    line(n->line); indent(depth);
+                    _out << ty << " " << nm;
+                    if (d->initializer) _out << " = " << emitExpression(d->initializer);
+                    _out << ";\n";
+                    continue;
+                }
+
+                // Class-typed local: declare the value, then construct in place.
+                line(n->line); indent(depth);
+                _out << ty << " " << nm << ";\n";
+                if (!d->initializer) continue;
+
+                if (auto* oc = dynamic_cast<ObjectCreationNode*>(d->initializer.get())) {
+                    std::string octy = cType(oc->type);
+                    if (isClass(octy) && _classes[octy].hasCtor) {
+                        line(n->line); indent(depth);
+                        _out << emitCtorCall(nm, _classes[octy], oc->args, n->line) << ";\n";
+                    } else if (!isClass(octy)) {
+                        unsupported("`new` of a non-class type", n->line);
+                    }
+                    // class with no ctor: left default-initialized
+                } else {
+                    // Copy-initialize from another expression.
+                    line(n->line); indent(depth);
+                    _out << nm << " = " << emitExpression(d->initializer) << ";\n";
+                }
             }
         }
         return;
@@ -426,6 +469,20 @@ std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isE
     return cFunctionName(name);
 }
 
+std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
+{
+    std::vector<ParamSig> out;
+    if (params) {
+        for (auto& p : *params) {
+            ParamSig ps;
+            ps.name  = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
+            ps.byRef = paramByRef(p.get());
+            out.push_back(ps);
+        }
+    }
+    return out;
+}
+
 // Build the function signature table so call sites can reorder named arguments
 // into C's positional order.
 void CEmitter::collectSignatures(SharedCompilationUnit unit)
@@ -436,35 +493,151 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         if (!fn || !fn->name || !fn->name->value) continue;
 
         FuncSig sig;
-        sig.cName = cFunctionName(*fn->name->value);
-        if (fn->parameters) {
-            for (auto& p : *fn->parameters) {
-                ParamSig ps;
-                ps.name  = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
-                ps.byRef = p->modifier && p->modifier->value &&
-                           (*p->modifier->value == "ref" || *p->modifier->value == "out");
-                sig.params.push_back(ps);
-            }
-        }
+        sig.cName  = cFunctionName(*fn->name->value);
+        sig.params = paramSigsOf(fn->parameters);
         _funcs[*fn->name->value] = sig;
     }
+}
+
+// Build the class table: ordered fields, methods, and the (single) constructor.
+void CEmitter::collectClasses(SharedCompilationUnit unit)
+{
+    if (!unit || !unit->codeDeclarationList) return;
+    for (auto& decl : *unit->codeDeclarationList) {
+        auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
+        if (!cd || !cd->name || !cd->name->value) continue;
+
+        ClassInfo ci;
+        ci.name = *cd->name->value;
+        ci.node = cd;
+
+        if (cd->baseTypes)
+            unsupported("class inheritance (extends/implements) — deferred to M6", cd->line);
+
+        if (cd->members) {
+            for (auto& m : *cd->members) {
+                ASTNode* mn = m.get();
+                if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
+                    if (fd->declarators) {
+                        for (auto& d : *fd->declarators) {
+                            FieldInfo fi;
+                            fi.name        = (d->name && d->name->value) ? *d->name->value : "";
+                            fi.type        = fd->type;
+                            fi.initializer = d->initializer;
+                            ci.fields.push_back(fi);
+                            ci.fieldNames.insert(fi.name);
+                        }
+                    }
+                } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
+                    if (md->name && md->name->value) {
+                        MethodInfo mi;
+                        mi.cName      = ci.name + "__" + *md->name->value;
+                        mi.returnType = md->returnType;
+                        mi.params     = paramSigsOf(md->params);
+                        mi.node       = md;
+                        ci.methods[*md->name->value] = mi;
+                    }
+                } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
+                    if (ci.hasCtor)
+                        unsupported("multiple constructors (no overloading yet)", cc->line);
+                    ci.hasCtor   = true;
+                    ci.ctorNode  = cc;
+                    if (cc->declarator) ci.ctorParams = paramSigsOf(cc->declarator->params);
+                } else if (dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
+                    unsupported("destructor — deferred to M5", mn->line);
+                } else if (dynamic_cast<ClassConstDeclarationNode*>(mn)) {
+                    unsupported("class const member", mn->line);
+                } else if (dynamic_cast<ClassOperatorDeclarationNode*>(mn)) {
+                    unsupported("operator overload — deferred", mn->line);
+                }
+            }
+        }
+        _classes[ci.name] = ci;
+    }
+}
+
+// Emit `cName(leadArg, <args reordered to declared param order>)`.
+//
+// NOTE: arguments are emitted in declared (param) order, which can differ from
+// source order. With side-effecting args this changes evaluation order; a
+// temp-hoisting pass (plan risk #3) is a later refinement.
+std::string CEmitter::emitReorderedCall(const std::string& cName, const std::string& leadArg,
+                                        const std::vector<ParamSig>& params,
+                                        SharedArgumentList args, int srcLine)
+{
+    std::map<std::string, ArgumentNode*> byName;
+    if (args)
+        for (auto& a : *args)
+            if (a->name && a->name->value) byName[*a->name->value] = a.get();
+
+    std::string s = cName + "(";
+    bool first = true;
+    if (!leadArg.empty()) { s += leadArg; first = false; }
+    for (auto& p : params) {
+        if (!first) s += ", ";
+        first = false;
+        auto f = byName.find(p.name);
+        if (f == byName.end()) { unsupported("missing argument in call", srcLine); s += "0"; continue; }
+        std::string val = emitExpression(f->second->expression);
+        s += p.byRef ? ("&(" + val + ")") : val;
+    }
+    return s + ")";
 }
 
 // Lower a call, reordering named arguments to the callee's declared order.
 std::string CEmitter::emitInvocation(InvocationNode* call)
 {
-    // Only simple/qualified function-name callees are handled here; method calls
-    // (the `expression` form, e.g. obj.method(...)) arrive with classes (M4).
+    // Expression-form callee (this.method(...), parenthesized, etc.).
     if (!call->identifier || !call->identifier->value) {
-        unsupported("method/indirect call", call->line);
+        if (call->expression) {
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(call->expression.get()))
+                return emitMethodCall(call, ma);
+        }
+        unsupported("indirect call", call->line);
         return "0";
     }
+
     std::string name = *call->identifier->value;
 
+    // A qualified callee `recv.method` parses as identifier{value=method,
+    // qualifier=[recv...]}. (With no namespaces in M4, a qualifier means a method
+    // receiver.) Build the receiver C-expression + class from the qualifier chain.
+    SharedStringList qual = call->identifier->qualifier;
+    if (qual && !qual->empty()) {
+        std::string recvExpr, recvClass;
+        const std::string& head = *(*qual)[0];
+        if (_localTypes.count(head)) { recvExpr = head; recvClass = _localTypes[head]; }
+        else if (_currentClass && _currentClass->fieldNames.count(head)) {
+            recvExpr = "self->" + head;
+            for (auto& f : _currentClass->fields)
+                if (f.name == head && f.type) recvClass = cType(f.type);
+        } else { unsupported("method receiver not a known object", call->line); return "0"; }
+
+        for (size_t i = 1; i < qual->size(); ++i) {
+            if (recvClass.empty() || !_classes.count(recvClass)) {
+                unsupported("method receiver chain not resolvable", call->line); return "0";
+            }
+            const std::string& fld = *(*qual)[i];
+            std::string fcls;
+            for (auto& f : _classes[recvClass].fields)
+                if (f.name == fld && f.type) fcls = cType(f.type);
+            recvExpr  = "(" + recvExpr + ")." + fld;
+            recvClass = fcls;
+        }
+
+        if (recvClass.empty() || !_classes.count(recvClass)) {
+            unsupported("method call on unresolved receiver", call->line); return "0";
+        }
+        ClassInfo& ci = _classes[recvClass];
+        auto mit = ci.methods.find(name);
+        if (mit == ci.methods.end()) { unsupported("unknown method", call->line); return "0"; }
+        return emitReorderedCall(mit->second.cName, "&(" + recvExpr + ")",
+                                 mit->second.params, call->args, call->line);
+    }
+
+    // Free-function call.
     auto it = _funcs.find(name);
     if (it == _funcs.end()) {
-        // Unknown callee (extern/forward/typo). Best effort: emit args in source
-        // order. Names can't be reordered without a signature.
         unsupported("call to unknown function (args kept in source order)", call->line);
         std::string s = cFunctionName(name) + "(";
         bool first = true;
@@ -475,33 +648,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
         return s + ")";
     }
-    const FuncSig& sig = it->second;
-
-    // Index the supplied arguments by their (named) parameter name.
-    std::map<std::string, ArgumentNode*> byName;
-    if (call->args) {
-        for (auto& a : *call->args) {
-            if (a->name && a->name->value) byName[*a->name->value] = a.get();
-        }
-    }
-
-    // NOTE: arguments are emitted in declared (param) order, which can differ
-    // from source order. With side-effecting args this changes evaluation order;
-    // a temp-hoisting pass (plan risk #3) is a later refinement.
-    std::string s = sig.cName + "(";
-    for (size_t i = 0; i < sig.params.size(); ++i) {
-        if (i) s += ", ";
-        const ParamSig& p = sig.params[i];
-        auto found = byName.find(p.name);
-        if (found == byName.end()) {
-            unsupported("missing argument in call", call->line);
-            s += "/*missing:" + p.name + "*/0";
-            continue;
-        }
-        std::string val = emitExpression(found->second->expression);
-        s += p.byRef ? ("&(" + val + ")") : val;
-    }
-    return s + ")";
+    return emitReorderedCall(it->second.cName, "", it->second.params, call->args, call->line);
 }
 
 bool CEmitter::paramByRef(FunctionParameterNode* p)
@@ -510,19 +657,22 @@ bool CEmitter::paramByRef(FunctionParameterNode* p)
            (*p->modifier->value == "ref" || *p->modifier->value == "out");
 }
 
-// C parameter list. ref/out parameters become pointers.
-std::string CEmitter::paramListC(FunctionDeclarationNode* fn)
+// C parameter list. ref/out parameters become pointers. When selfType is set,
+// a leading `selfType* self` is prepended (for methods/constructors).
+std::string CEmitter::paramListC(SharedParameterList params, const char* selfType)
 {
-    if (!fn->parameters || fn->parameters->empty())
-        return "void";
     std::string s;
     bool first = true;
-    for (auto& p : *fn->parameters) {
-        if (!first) s += ", ";
-        first = false;
-        std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
-        s += cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + nm;
+    if (selfType) { s += std::string(selfType) + "* self"; first = false; }
+    if (params) {
+        for (auto& p : *params) {
+            if (!first) s += ", ";
+            first = false;
+            std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
+            s += cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + nm;
+        }
     }
+    if (s.empty()) s = "void";
     return s;
 }
 
@@ -530,7 +680,7 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn)
 {
     bool isEntry = false;
     std::string name = mangledFunctionName(fn, isEntry);
-    _out << cType(fn->returnType) << " " << name << "(" << paramListC(fn) << ");\n";
+    _out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ");\n";
 }
 
 void CEmitter::emitFunction(FunctionDeclarationNode* fn)
@@ -538,17 +688,21 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
     bool isEntry = false;
     std::string name = mangledFunctionName(fn, isEntry);
 
-    // Track by-ref params so reads of them in the body emit a dereference.
+    // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
+    _localTypes.clear();
+    _currentClass = nullptr;
     if (fn->parameters) {
         for (auto& p : *fn->parameters) {
-            if (paramByRef(p.get()) && p->identifier && p->identifier->value)
-                _refParams.insert(*p->identifier->value);
+            if (!p->identifier || !p->identifier->value) continue;
+            const std::string& pn = *p->identifier->value;
+            if (paramByRef(p.get())) _refParams.insert(pn);
+            if (p->type && isClass(cType(p->type))) _localTypes[pn] = cType(p->type);
         }
     }
 
     line(fn->line);
-    _out << cType(fn->returnType) << " " << name << "(" << paramListC(fn) << ")\n";
+    _out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ")\n";
 
     if (fn->block) {
         emitBlock(fn->block.get(), 0);
@@ -570,6 +724,163 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
 }
 
 // ---------------------------------------------------------------------------
+// Classes
+// ---------------------------------------------------------------------------
+
+void CEmitter::emitStruct(ClassInfo& ci)
+{
+    _out << "typedef struct " << ci.name << " {\n";
+    for (auto& f : ci.fields) {
+        indent(1);
+        _out << cType(f.type) << " " << f.name << ";\n";
+    }
+    if (ci.fields.empty()) {
+        indent(1);
+        _out << "char __empty; /* C forbids empty structs */\n";
+    }
+    _out << "} " << ci.name << ";\n\n";
+}
+
+void CEmitter::emitClassPrototypes(ClassInfo& ci)
+{
+    if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
+        _out << "void " << ci.name << "__ctor("
+             << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
+    for (auto& kv : ci.methods) {
+        MethodInfo& mi = kv.second;
+        _out << cType(mi.returnType) << " " << mi.cName << "("
+             << paramListC(mi.node->params, ci.name.c_str()) << ");\n";
+    }
+}
+
+// Emit a method or constructor body with `self`/field/param context set up.
+void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retType,
+                                    SharedParameterList params, SharedBlock body,
+                                    ClassInfo& owner, bool isCtor)
+{
+    _currentClass = &owner;
+    _refParams.clear();
+    _localTypes.clear();
+    if (params) {
+        for (auto& p : *params) {
+            if (!p->identifier || !p->identifier->value) continue;
+            const std::string& pn = *p->identifier->value;
+            if (paramByRef(p.get())) _refParams.insert(pn);
+            if (p->type && isClass(cType(p->type))) _localTypes[pn] = cType(p->type);
+        }
+    }
+
+    _out << retType << " " << cName << "(" << paramListC(params, owner.name.c_str()) << ")\n{\n";
+
+    if (isCtor) {
+        for (auto& f : owner.fields) {
+            if (f.initializer) {
+                indent(1);
+                _out << "self->" << f.name << " = " << emitExpression(f.initializer) << ";\n";
+            }
+        }
+    }
+    if (body && body->statements) {
+        for (auto& st : *body->statements)
+            emitStatement(st, 1);
+    }
+    _out << "}\n\n";
+
+    _currentClass = nullptr;
+    _refParams.clear();
+    _localTypes.clear();
+}
+
+void CEmitter::emitClassDefinitions(ClassInfo& ci)
+{
+    if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator) {
+        line(ci.ctorNode->line);
+        emitMethodOrCtorBody(ci.name + "__ctor", "void",
+                             ci.ctorNode->declarator->params, ci.ctorNode->body, ci, true);
+    }
+    for (auto& kv : ci.methods) {
+        MethodInfo& mi = kv.second;
+        line(mi.node->line);
+        std::string ret = cType(mi.returnType);
+        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false);
+    }
+}
+
+// The static class type of an expression ("" if primitive/unknown).
+std::string CEmitter::exprClass(SharedExpression e)
+{
+    if (!e) return "";
+    ASTNode* n = e.get();
+
+    if (dynamic_cast<ThisAccessNode*>(n))
+        return _currentClass ? _currentClass->name : "";
+
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (!id->value) return "";
+        auto it = _localTypes.find(*id->value);
+        if (it != _localTypes.end()) return it->second;
+        if (_currentClass) {
+            for (auto& f : _currentClass->fields)
+                if (f.name == *id->value && f.type && isClass(cType(f.type)))
+                    return cType(f.type);
+        }
+        return "";
+    }
+
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        std::string recv = exprClass(ma->expression);
+        if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
+            for (auto& f : _classes[recv].fields)
+                if (f.name == *ma->identifier->value && f.type && isClass(cType(f.type)))
+                    return cType(f.type);
+        }
+        return "";
+    }
+    return "";
+}
+
+// obj.field / this.field
+std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
+{
+    std::string field = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+    if (!ma->expression) {
+        unsupported("static member access", ma->line);
+        return field;
+    }
+    if (dynamic_cast<ThisAccessNode*>(ma->expression.get()))
+        return "self->" + field;
+    return "(" + emitExpression(ma->expression) + ")." + field;
+}
+
+// obj.method(args) -> Class__method(&obj, reordered args)
+std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* recv)
+{
+    std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
+    SharedExpression receiver = recv->expression;
+    std::string cls = exprClass(receiver);
+    if (cls.empty() || !_classes.count(cls)) {
+        unsupported("method call on unresolved receiver", call->line);
+        return "0";
+    }
+    ClassInfo& ci = _classes[cls];
+    auto mit = ci.methods.find(method);
+    if (mit == ci.methods.end()) {
+        unsupported("unknown method", call->line);
+        return "0";
+    }
+    MethodInfo& mi = mit->second;
+    std::string selfArg = dynamic_cast<ThisAccessNode*>(receiver.get())
+                        ? std::string("self")
+                        : "&(" + emitExpression(receiver) + ")";
+    return emitReorderedCall(mi.cName, selfArg, mi.params, call->args, call->line);
+}
+
+std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine)
+{
+    return emitReorderedCall(ci.name + "__ctor", "&" + cVar, ci.ctorParams, args, srcLine);
+}
+
+// ---------------------------------------------------------------------------
 // Translation unit
 // ---------------------------------------------------------------------------
 
@@ -581,10 +892,17 @@ int CEmitter::emit(SharedCompilationUnit unit)
     if (!unit || !unit->codeDeclarationList)
         return _unsupported;
 
-    // Pass 0: collect signatures so calls can reorder named args.
+    // Pass 0: collect function signatures and the class table.
     collectSignatures(unit);
+    collectClasses(unit);
 
-    // Pass A: prototypes for all top-level functions (order-independent calls).
+    // Pass S: struct typedefs for all classes (so prototypes can use them).
+    // NOTE: emitted in map order; a class holding another class by value would
+    // need a topological sort (deferred — not exercised by M4 fixtures).
+    for (auto& kv : _classes) emitStruct(kv.second);
+
+    // Pass A: prototypes — class ctors/methods, then free functions.
+    for (auto& kv : _classes) emitClassPrototypes(kv.second);
     bool any = false;
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
@@ -594,10 +912,13 @@ int CEmitter::emit(SharedCompilationUnit unit)
     }
     if (any) _out << "\n";
 
-    // Pass B: definitions.
+    // Pass B: definitions — class methods/ctors, then free functions.
+    for (auto& kv : _classes) emitClassDefinitions(kv.second);
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
             emitFunction(fn);
+        } else if (dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+            // already emitted via the class passes
         } else if (decl) {
             unsupported("top-level declaration", decl->line);
             _out << "\n";
