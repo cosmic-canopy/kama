@@ -9,10 +9,11 @@ Goal: a portable, lightweight WebGPU game engine with no .NET/runtime baggage.
 
 > Status: usable. Functions, control flow, named-parameter calls, classes,
 > **RAII** (no GC), single inheritance + **virtual dispatch**, **interfaces**,
-> **enums**, and **generic collections** (`Array<T>`/`List<T>`/`String`, with
-> `foreach` + bounds-checked `[]`) — building for **native** and **WASM**, with
-> debug/release builds and **IDE breakpoint debugging**. No raw pointers / no
-> `unsafe` by design. New here? See **[GETTING_STARTED.md](GETTING_STARTED.md)**.
+> **enums**, **generic collections** (`Array<T>`/`List<T>`/`String`, with
+> `foreach` + bounds-checked `[]`), and the **`Owned<T>` smart pointer** (unique
+> heap ownership, move semantics, auto-deref) — building for **native** and
+> **WASM**, with debug/release builds and **IDE breakpoint debugging**. No raw
+> pointers / no `unsafe` by design. New? See **[GETTING_STARTED.md](GETTING_STARTED.md)**.
 
 ## Toolchain
 

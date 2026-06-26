@@ -45,10 +45,29 @@ bool eq = s.equals(other: t);   int len = s.length();
 ```
 
 All collections own their storage and free it via RAII (with element-destructor chaining). Only the
-`(collection, element-type)` pairs the program actually uses are emitted (pay-for-what-you-use). `Map<K,V>`
-+ multi-parameter/nested generics, and a smart-pointer family (`Owned`/`Shared`/`Weak`), are 🚧 post-M9.
+`(collection, element-type)` pairs the program actually uses are emitted (pay-for-what-you-use).
 M9 limits: `add`/index take elements **by value** (no move yet) — don't separately destruct an added
 source; don't return or inline-use a temp-owned string without binding it to a local.
+
+## Smart pointers ✅ (M10) / 🚧
+
+`Owned<T>` — unique heap ownership (= Rust `Box` / C++ `unique_ptr`), zero overhead, **move-only**,
+**auto-deref**, RAII-freed. The cstar surface stays pointer-free; the raw pointer is confined to the
+runtime. Use it for heap objects, recursive data structures, and (later) polymorphic ownership.
+
+```cstar
+Owned<Counter> c = new Owned<Counter>(start: 40);  // heap-allocate + run Counter's ctor
+c.bump();  int n = c.get();                          // auto-deref: . reaches the pointee
+Owned<Counter> d = c;                                // MOVE: c is now empty (moved-from)
+Owned<Node> make(int v) { Owned<Node> n = new Owned<Node>(id: v); return n; }  // factory: moves out
+```
+
+Move-only: copying/initializing/returning an `Owned` transfers ownership and invalidates the source, so
+the pointee is freed exactly once (RAII, with the pointee's destructor). M10 limits: pointee must be a
+**class** type; **borrow** by passing `ref Owned<T>` (passing by value is rejected — no move-as-argument
+yet); **use-after-move** is a runtime null-trap (no borrow checker yet); polymorphic `Owned<Base> =
+Derived` is deferred. `Shared<T>` (ref-counted) and `Weak<T>` are 🚧 next; `Map<K,V>` + multi-param/nested
+generics also 🚧.
 
 ## Functions ✅
 
