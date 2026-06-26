@@ -1,0 +1,19 @@
+class Base
+{
+    int x;
+    Base(int x) { this.x = x; }
+}
+class Derived extends Base
+{
+    int y;
+    Derived(int x, int y) : base(x: x)
+    {
+        this.y = y;
+    }
+    int sum() { return x + y; }
+}
+int main()
+{
+    Derived d = new Derived(x: 30, y: 12);
+    return d.sum();
+}

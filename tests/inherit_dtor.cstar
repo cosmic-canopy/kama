@@ -1,0 +1,20 @@
+extern void cstar_trace(int code);
+extern int cstar_trace_get();
+
+class Base
+{
+    Base() { }
+    ~Base() { cstar_trace(code: 1); }
+}
+class Derived extends Base
+{
+    Derived() { }
+    ~Derived() { cstar_trace(code: 2); }
+}
+int main()
+{
+    {
+        Derived d = new Derived();
+    }
+    return cstar_trace_get();
+}

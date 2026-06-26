@@ -16,7 +16,8 @@
 // against these to recover C's positional order at each call site.
 struct ParamSig {
     std::string name;
-    bool        byRef;   // ref/out => passed as a pointer (call site emits &arg)
+    bool        byRef;        // ref/out => passed as a pointer (call site emits &arg)
+    std::string className;    // class type (for ref upcast at call sites), "" if primitive
 };
 
 struct FuncSig {
@@ -33,10 +34,13 @@ struct FieldInfo {
 };
 
 struct MethodInfo {
-    std::string                  cName;   // Class__method
+    std::string                  cName;   // Class__method (declaring class)
     SharedIdentifier             returnType;
     std::vector<ParamSig>        params;
     ClassMethodDeclarationNode*  node;    // for body emission
+    bool                         isVirtual  = false;  // virtual/override/abstract
+    bool                         isOverride = false;
+    bool                         isAbstract = false;  // null body
 };
 
 struct ClassInfo {
@@ -53,6 +57,14 @@ struct ClassInfo {
     bool                              hasDtor = false;   // declares its own ~dtor
     ClassDestructorDeclarationNode*   dtorNode = nullptr;
     bool                              destructible = false; // own dtor OR a destructible field (transitive)
+
+    // Inheritance + virtual dispatch (M6)
+    std::string                       baseName;        // "" if no base
+    ClassInfo*                        base = nullptr;  // resolved by linkBases()
+    bool                              isAbstractClass = false;
+    bool                              hasVtable = false;     // this or an ancestor has a virtual
+    std::string                       vtableRoot;            // class owning the __vptr member
+    std::map<std::string,std::string> slotImpl;             // virtual slot name -> impl cName (most-derived here)
 };
 
 class CEmitter {
@@ -76,6 +88,10 @@ private:
     std::map<std::string, std::string> _localTypes;  // local/param -> class name ("" if primitive)
     ClassInfo*                         _currentClass = nullptr;  // when emitting a method/ctor
 
+    // Virtual dispatch (M6): per-root union of vtable slots, in introduction order.
+    struct VSlot { std::string name; std::string owner; ClassMethodDeclarationNode* node; };
+    std::map<std::string, std::vector<VSlot>> _rootVtables;   // root class name -> slots
+
     // RAII scope stack (M5): live destructible locals per lexical scope.
     struct LiveLocal { std::string cVar; std::string className; };
     struct Scope { std::vector<LiveLocal> locals; bool isLoopBoundary = false; bool isFunctionRoot = false; };
@@ -89,9 +105,21 @@ private:
     // Pre-pass
     void collectSignatures(SharedCompilationUnit unit);
     void collectClasses(SharedCompilationUnit unit);
+    void linkBases();
+    void buildVtables();
     void computeDestructible();
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
     static bool isExtern(FunctionDeclarationNode* fn);
+
+    // Inheritance/vtable resolution (M6)
+    std::vector<ClassInfo*> topoOrderClasses();
+    ClassInfo* findFieldOwner(ClassInfo* ci, const std::string& field);   // class declaring `field`
+    MethodInfo* findMethod(ClassInfo* ci, const std::string& name, ClassInfo** owner);
+    std::string basePathTo(ClassInfo* from, ClassInfo* to);   // "__base." chain from `from` down to `to`
+    std::string vptrPrefix(ClassInfo* ci);                    // "__base." * (hops to vtableRoot)
+    void emitVtableType(ClassInfo& ci);                       // only when ci is its own vtableRoot
+    void emitVtableInstance(ClassInfo& ci);                   // for every class with hasVtable
+    std::string vtableSlotSig(const VSlot& s);                // "(Owner* self, T a, ...)"
 
     // Declarations / top level
     bool paramByRef(FunctionParameterNode* p);
@@ -110,6 +138,10 @@ private:
                               ClassInfo& owner, bool isCtor);
     std::string emitMemberAccess(MemberAccessNode* ma);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
+    // Dispatch a call on a receiver of static class `clsName`, given the C pointer
+    // expression `recvPtr` (e.g. "self" or "&(c)"): virtual -> via __vptr; else direct.
+    std::string emitDispatch(const std::string& clsName, const std::string& recvPtr,
+                             const std::string& method, SharedArgumentList args, int srcLine);
     // `new T(args)` reordered against the ctor signature -> "T__ctor(&dst, a0, ...)"
     std::string emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine);
 

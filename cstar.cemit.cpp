@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <sstream>
+#include <functional>
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -164,10 +165,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string nm = v->value ? *v->value : "";
         // A ref/out parameter is a pointer in C; reads dereference it.
         if (_refParams.count(nm)) return "(*" + nm + ")";
-        // An unqualified name that is a field of the enclosing class (and not a
-        // local/param) resolves to self->field.
-        if (_currentClass && !_localTypes.count(nm) && _currentClass->fieldNames.count(nm))
-            return "self->" + nm;
+        // An unqualified name that is a field of the enclosing class (or an
+        // ancestor) and not a local/param resolves to self->[__base.]…field.
+        if (_currentClass && !_localTypes.count(nm)) {
+            ClassInfo* owner = findFieldOwner(_currentClass, nm);
+            if (owner) return "self->" + basePathTo(_currentClass, owner) + nm;
+        }
         return nm;
     }
 
@@ -175,6 +178,17 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<MemberAccessNode*>(n)) {
         return emitMemberAccess(v);
+    }
+
+    if (auto* ba = dynamic_cast<BaseAccessNode*>(n)) {
+        // base.field (bare; base.method(...) is handled in emitInvocation).
+        std::string name = (ba->identifier && ba->identifier->value) ? *ba->identifier->value : "";
+        if (_currentClass && _currentClass->base) {
+            ClassInfo* owner = findFieldOwner(_currentClass->base, name);
+            if (owner) return "self->__base." + basePathTo(_currentClass->base, owner) + name;
+        }
+        unsupported("base access", ba->line);
+        return name;
     }
 
     if (auto* v = dynamic_cast<ObjectCreationNode*>(n)) {
@@ -558,6 +572,9 @@ std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
             ParamSig ps;
             ps.name  = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             ps.byRef = paramByRef(p.get());
+            // Store the C type spelling; whether it's a class is checked at the
+            // call site (paramSigsOf may run before the class table is built).
+            ps.className = p->type ? cType(p->type) : "";
             out.push_back(ps);
         }
     }
@@ -592,8 +609,17 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ci.name = *cd->name->value;
         ci.node = cd;
 
-        if (cd->baseTypes)
-            unsupported("class inheritance (extends/implements) — deferred to M6", cd->line);
+        // Single inheritance (extends). Interfaces (implements) are M6b.
+        if (cd->baseTypes) {
+            if (cd->baseTypes->base && cd->baseTypes->base->value)
+                ci.baseName = *cd->baseTypes->base->value;
+            if (cd->baseTypes->interfaces && !cd->baseTypes->interfaces->empty())
+                unsupported("interfaces (implements) — deferred to M6b", cd->line);
+        }
+        // Class-level `abstract` modifier.
+        if (cd->modifiers)
+            for (auto& mod : *cd->modifiers)
+                if (mod->value && *mod->value == "abstract") ci.isAbstractClass = true;
 
         if (cd->members) {
             for (auto& m : *cd->members) {
@@ -616,6 +642,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.returnType = md->returnType;
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
+                        if (md->modifiers)
+                            for (auto& mod : *md->modifiers) {
+                                if (!mod->value) continue;
+                                if (*mod->value == "virtual")  mi.isVirtual = true;
+                                if (*mod->value == "override") { mi.isVirtual = true; mi.isOverride = true; }
+                                if (*mod->value == "abstract") { mi.isVirtual = true; mi.isAbstract = true; }
+                            }
+                        if (!md->body) mi.isAbstract = mi.isVirtual = true;   // null body => pure
                         ci.methods[*md->name->value] = mi;
                     }
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
@@ -638,8 +672,76 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
     }
 }
 
-// A class is destructible if it declares a dtor or has a destructible field
-// (transitive). Fixed-point pass — cycle-safe by construction.
+// Resolve `extends` names to ClassInfo pointers; error on unknown/cycle.
+void CEmitter::linkBases()
+{
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.baseName.empty()) continue;
+        auto it = _classes.find(ci.baseName);
+        if (it == _classes.end()) {
+            unsupported("unknown base class", ci.node ? ci.node->line : 0);
+            ci.baseName.clear();
+        } else {
+            ci.base = &it->second;
+        }
+    }
+    // Break cycles defensively (A extends B extends A): cut the back-edge.
+    for (auto& kv : _classes) {
+        int hops = 0;
+        for (ClassInfo* b = kv.second.base; b; b = b->base) {
+            if (b == &kv.second || ++hops > 1000) { kv.second.base = nullptr; kv.second.baseName.clear(); break; }
+        }
+    }
+}
+
+// Classes in base-before-derived order.
+std::vector<ClassInfo*> CEmitter::topoOrderClasses()
+{
+    std::vector<ClassInfo*> out;
+    std::set<ClassInfo*> done;
+    std::function<void(ClassInfo*)> visit = [&](ClassInfo* ci) {
+        if (!ci || done.count(ci)) return;
+        if (ci->base) visit(ci->base);
+        done.insert(ci);
+        out.push_back(ci);
+    };
+    for (auto& kv : _classes) visit(&kv.second);
+    return out;
+}
+
+// Build the per-class virtual slot tables and the per-root vtable union.
+void CEmitter::buildVtables()
+{
+    for (ClassInfo* ci : topoOrderClasses()) {
+        // Inherit base's vtable model.
+        if (ci->base && ci->base->hasVtable) {
+            ci->hasVtable  = true;
+            ci->vtableRoot = ci->base->vtableRoot;
+            ci->slotImpl   = ci->base->slotImpl;   // inherited impls
+        }
+        for (auto& kv : ci->methods) {
+            MethodInfo& mi = kv.second;
+            const std::string& mname = kv.first;
+            if (!mi.isVirtual) continue;
+            if (mi.isOverride || ci->slotImpl.count(mname)) {
+                // Re-slot an inherited virtual with this class's implementation.
+                if (!mi.isAbstract) ci->slotImpl[mname] = mi.cName;
+            } else {
+                // New virtual slot (abstract slots have no impl until overridden).
+                if (!ci->hasVtable) { ci->hasVtable = true; ci->vtableRoot = ci->name; }
+                if (!mi.isAbstract) ci->slotImpl[mname] = mi.cName;
+                VSlot vs; vs.name = mname; vs.owner = ci->name; vs.node = mi.node;
+                _rootVtables[ci->vtableRoot].push_back(vs);
+            }
+        }
+        // A class is abstract if marked, or any slot still resolves to a pure impl.
+        if (ci->isAbstractClass) { /* keep */ }
+    }
+}
+
+// A class is destructible if it declares a dtor, has a destructible field, OR
+// its base is destructible (transitive). Fixed-point — cycle-safe.
 void CEmitter::computeDestructible()
 {
     for (auto& kv : _classes) kv.second.destructible = kv.second.hasDtor;
@@ -649,16 +751,48 @@ void CEmitter::computeDestructible()
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
             if (ci.destructible) continue;
-            for (auto& f : ci.fields) {
-                auto it = _classes.find(cType(f.type));
-                if (it != _classes.end() && it->second.destructible) {
-                    ci.destructible = true;
-                    changed = true;
-                    break;
+            bool d = (ci.base && ci.base->destructible);
+            if (!d)
+                for (auto& f : ci.fields) {
+                    auto it = _classes.find(cType(f.type));
+                    if (it != _classes.end() && it->second.destructible) { d = true; break; }
                 }
-            }
+            if (d) { ci.destructible = true; changed = true; }
         }
     }
+}
+
+// The class in ci's ancestry that declares `field` (or nullptr).
+ClassInfo* CEmitter::findFieldOwner(ClassInfo* ci, const std::string& field)
+{
+    for (; ci; ci = ci->base)
+        if (ci->fieldNames.count(field)) return ci;
+    return nullptr;
+}
+
+// The nearest method `name` in ci's ancestry; sets *owner to the declaring class.
+MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassInfo** owner)
+{
+    for (; ci; ci = ci->base) {
+        auto it = ci->methods.find(name);
+        if (it != ci->methods.end()) { if (owner) *owner = ci; return &it->second; }
+    }
+    return nullptr;
+}
+
+// "__base." repeated for each hop from `from` down to ancestor `to` ("" if equal).
+std::string CEmitter::basePathTo(ClassInfo* from, ClassInfo* to)
+{
+    std::string path;
+    for (ClassInfo* c = from; c && c != to; c = c->base) path += "__base.";
+    return path;
+}
+
+std::string CEmitter::vptrPrefix(ClassInfo* ci)
+{
+    if (!ci || ci->vtableRoot.empty()) return "";
+    auto it = _classes.find(ci->vtableRoot);
+    return (it != _classes.end()) ? basePathTo(ci, &it->second) : "";
 }
 
 bool CEmitter::isExtern(FunctionDeclarationNode* fn)
@@ -689,7 +823,11 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         auto f = byName.find(p.name);
         if (f == byName.end()) { unsupported("missing argument in call", srcLine); s += "0"; continue; }
         std::string val = emitExpression(f->second->expression);
-        s += p.byRef ? ("&(" + val + ")") : val;
+        if (p.byRef)
+            s += isClass(p.className) ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base
+                                      : ("&(" + val + ")");
+        else
+            s += val;
     }
     return s + ")";
 }
@@ -697,11 +835,23 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
 // Lower a call, reordering named arguments to the callee's declared order.
 std::string CEmitter::emitInvocation(InvocationNode* call)
 {
-    // Expression-form callee (this.method(...), parenthesized, etc.).
+    // Expression-form callee (this.method(...), base.method(...), parenthesized).
     if (!call->identifier || !call->identifier->value) {
         if (call->expression) {
             if (auto* ma = dynamic_cast<MemberAccessNode*>(call->expression.get()))
                 return emitMethodCall(call, ma);
+            if (auto* ba = dynamic_cast<BaseAccessNode*>(call->expression.get())) {
+                // base.m(args) -> direct (non-virtual) call into the base.
+                if (!_currentClass || !_currentClass->base) {
+                    unsupported("base call outside a derived class", call->line); return "0";
+                }
+                std::string m = (ba->identifier && ba->identifier->value) ? *ba->identifier->value : "";
+                ClassInfo* owner = nullptr;
+                MethodInfo* mi = findMethod(_currentClass->base, m, &owner);
+                if (!mi) { unsupported("unknown base method", call->line); return "0"; }
+                std::string self = "(" + owner->name + "*)&self->__base";
+                return emitReorderedCall(mi->cName, self, mi->params, call->args, call->line);
+            }
         }
         unsupported("indirect call", call->line);
         return "0";
@@ -710,17 +860,21 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     std::string name = *call->identifier->value;
 
     // A qualified callee `recv.method` parses as identifier{value=method,
-    // qualifier=[recv...]}. (With no namespaces in M4, a qualifier means a method
+    // qualifier=[recv...]}. (No namespaces yet, so a qualifier means a method
     // receiver.) Build the receiver C-expression + class from the qualifier chain.
     SharedStringList qual = call->identifier->qualifier;
     if (qual && !qual->empty()) {
         std::string recvExpr, recvClass;
         const std::string& head = *(*qual)[0];
-        if (_localTypes.count(head)) { recvExpr = head; recvClass = _localTypes[head]; }
-        else if (_currentClass && _currentClass->fieldNames.count(head)) {
-            recvExpr = "self->" + head;
-            for (auto& f : _currentClass->fields)
-                if (f.name == head && f.type) recvClass = cType(f.type);
+        if (_localTypes.count(head) && !_localTypes[head].empty()) {
+            // A ref/out param is already a pointer; deref so &(recv) is the pointer.
+            recvExpr = _refParams.count(head) ? ("(*" + head + ")") : head;
+            recvClass = _localTypes[head];
+        } else if (_currentClass) {
+            ClassInfo* fo = findFieldOwner(_currentClass, head);
+            if (!fo) { unsupported("method receiver not a known object", call->line); return "0"; }
+            recvExpr = "self->" + basePathTo(_currentClass, fo) + head;
+            for (auto& f : fo->fields) if (f.name == head && f.type) recvClass = cType(f.type);
         } else { unsupported("method receiver not a known object", call->line); return "0"; }
 
         for (size_t i = 1; i < qual->size(); ++i) {
@@ -728,21 +882,17 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 unsupported("method receiver chain not resolvable", call->line); return "0";
             }
             const std::string& fld = *(*qual)[i];
+            ClassInfo* fo = findFieldOwner(&_classes[recvClass], fld);
             std::string fcls;
-            for (auto& f : _classes[recvClass].fields)
-                if (f.name == fld && f.type) fcls = cType(f.type);
-            recvExpr  = "(" + recvExpr + ")." + fld;
+            if (fo) for (auto& f : fo->fields) if (f.name == fld && f.type) fcls = cType(f.type);
+            recvExpr  = "(" + recvExpr + ")." + (fo ? basePathTo(&_classes[recvClass], fo) : "") + fld;
             recvClass = fcls;
         }
 
         if (recvClass.empty() || !_classes.count(recvClass)) {
             unsupported("method call on unresolved receiver", call->line); return "0";
         }
-        ClassInfo& ci = _classes[recvClass];
-        auto mit = ci.methods.find(name);
-        if (mit == ci.methods.end()) { unsupported("unknown method", call->line); return "0"; }
-        return emitReorderedCall(mit->second.cName, "&(" + recvExpr + ")",
-                                 mit->second.params, call->args, call->line);
+        return emitDispatch(recvClass, "&(" + recvExpr + ")", name, call->args, call->line);
     }
 
     // Free-function call.
@@ -844,16 +994,75 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
 
 void CEmitter::emitStruct(ClassInfo& ci)
 {
-    _out << "typedef struct " << ci.name << " {\n";
+    _out << "struct " << ci.name << " {\n";
+    // Offset-0 invariant: the vptr (root only) or the embedded base comes FIRST.
+    bool hasMember = false;
+    if (ci.hasVtable && ci.vtableRoot == ci.name) {
+        indent(1);
+        _out << "const " << ci.name << "_vtable* __vptr;\n";
+        hasMember = true;
+    }
+    if (ci.base) {
+        indent(1);
+        _out << ci.baseName << " __base;\n";
+        hasMember = true;
+    }
     for (auto& f : ci.fields) {
         indent(1);
         _out << cType(f.type) << " " << f.name << ";\n";
+        hasMember = true;
     }
-    if (ci.fields.empty()) {
+    if (!hasMember) {
         indent(1);
         _out << "char __empty; /* C forbids empty structs */\n";
     }
-    _out << "} " << ci.name << ";\n\n";
+    _out << "};\n\n";
+}
+
+// "(Owner* self, T a, U b)" — the C signature of a vtable slot.
+std::string CEmitter::vtableSlotSig(const VSlot& s)
+{
+    std::string sig = "(" + s.owner + "* self";
+    if (s.node && s.node->params) {
+        for (auto& p : *s.node->params) {
+            std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
+            sig += ", " + cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + nm;
+        }
+    }
+    return sig + ")";
+}
+
+// Vtable struct TYPE — one per root (the class that first introduces a virtual).
+// Lists every slot in the hierarchy; fn-ptr self type is pinned to the slot owner.
+void CEmitter::emitVtableType(ClassInfo& ci)
+{
+    auto it = _rootVtables.find(ci.name);
+    if (it == _rootVtables.end()) return;
+    _out << "struct " << ci.name << "_vtable {\n";
+    for (auto& s : it->second) {
+        indent(1);
+        _out << cType(s.node->returnType) << " (*" << s.name << ")" << vtableSlotSig(s) << ";\n";
+    }
+    _out << "};\n\n";
+}
+
+// Static const vtable INSTANCE per class with a vtable, filled with the most-
+// derived impl visible to this class (designated initializers; missing slots zero).
+void CEmitter::emitVtableInstance(ClassInfo& ci)
+{
+    if (!ci.hasVtable) return;
+    auto it = _rootVtables.find(ci.vtableRoot);
+    if (it == _rootVtables.end()) return;
+    _out << "static const " << ci.vtableRoot << "_vtable " << ci.name << "__vtable = {\n";
+    for (auto& s : it->second) {
+        auto impl = ci.slotImpl.find(s.name);
+        if (impl == ci.slotImpl.end()) continue;   // not visible here -> zero
+        indent(1);
+        // cast the impl (declared with a derived* self) to the slot's owner* signature
+        _out << "." << s.name << " = (" << cType(s.node->returnType) << "(*)"
+             << vtableSlotSig(s) << ")&" << impl->second << ",\n";
+    }
+    _out << "};\n\n";
 }
 
 void CEmitter::emitClassPrototypes(ClassInfo& ci)
@@ -865,6 +1074,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         _out << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
+        if (mi.isAbstract) continue;   // pure: no definition, no prototype
         _out << cType(mi.returnType) << " " << mi.cName << "("
              << paramListC(mi.node->params, ci.name.c_str()) << ");\n";
     }
@@ -901,6 +1111,11 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
             _out << cit->second.name << "__dtor(&self->" << it->name << ");\n";
         }
     }
+    // Base destructor LAST.
+    if (ci.base && ci.base->destructible) {
+        indent(1);
+        _out << ci.baseName << "__dtor(&self->__base);\n";
+    }
     _out << "}\n\n";
 
     _scopes.clear();
@@ -933,6 +1148,25 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _out << retType << " " << cName << "(" << paramListC(params, owner.name.c_str()) << ")\n{\n";
 
     if (isCtor) {
+        // 1. Base constructor first (so derived overrides its effects + vptr).
+        if (owner.base) {
+            SharedArgumentList baseArgs;
+            if (owner.ctorNode && owner.ctorNode->declarator && owner.ctorNode->declarator->initializer)
+                baseArgs = owner.ctorNode->declarator->initializer->args;
+            if (owner.base->hasCtor) {
+                indent(1);
+                _out << emitReorderedCall(owner.baseName + "__ctor", "&self->__base",
+                                          owner.base->ctorParams, baseArgs, owner.node->line) << ";\n";
+            } else if (baseArgs && !baseArgs->empty()) {
+                unsupported("base has no constructor to receive arguments", owner.node->line);
+            }
+        }
+        // 2. Set the vptr to THIS class's vtable (after base, so most-derived wins).
+        if (owner.hasVtable) {
+            indent(1);
+            _out << "self->" << vptrPrefix(&owner) << "__vptr = &" << owner.name << "__vtable;\n";
+        }
+        // 3. Field initializers.
         for (auto& f : owner.fields) {
             if (f.initializer) {
                 indent(1);
@@ -963,6 +1197,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     }
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
+        if (mi.isAbstract) continue;   // pure: no body to emit
         line(mi.node->line);
         std::string ret = cType(mi.returnType);
         emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false);
@@ -985,9 +1220,10 @@ std::string CEmitter::exprClass(SharedExpression e)
         auto it = _localTypes.find(*id->value);
         if (it != _localTypes.end()) return it->second;
         if (_currentClass) {
-            for (auto& f : _currentClass->fields)
-                if (f.name == *id->value && f.type && isClass(cType(f.type)))
-                    return cType(f.type);
+            ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
+            if (owner)
+                for (auto& f : owner->fields)
+                    if (f.name == *id->value && f.type && isClass(cType(f.type))) return cType(f.type);
         }
         return "";
     }
@@ -995,16 +1231,18 @@ std::string CEmitter::exprClass(SharedExpression e)
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
-            for (auto& f : _classes[recv].fields)
-                if (f.name == *ma->identifier->value && f.type && isClass(cType(f.type)))
-                    return cType(f.type);
+            ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
+            if (owner)
+                for (auto& f : owner->fields)
+                    if (f.name == *ma->identifier->value && f.type && isClass(cType(f.type)))
+                        return cType(f.type);
         }
         return "";
     }
     return "";
 }
 
-// obj.field / this.field
+// obj.field / this.field — splice the __base. chain to the declaring ancestor.
 std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
 {
     std::string field = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
@@ -1012,12 +1250,43 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         unsupported("static member access", ma->line);
         return field;
     }
+    std::string cls = exprClass(ma->expression);
+    std::string basePath;
+    if (!cls.empty() && _classes.count(cls)) {
+        ClassInfo* owner = findFieldOwner(&_classes[cls], field);
+        if (owner) basePath = basePathTo(&_classes[cls], owner);
+    }
     if (dynamic_cast<ThisAccessNode*>(ma->expression.get()))
-        return "self->" + field;
-    return "(" + emitExpression(ma->expression) + ")." + field;
+        return "self->" + basePath + field;
+    return "(" + emitExpression(ma->expression) + ")." + basePath + field;
 }
 
-// obj.method(args) -> Class__method(&obj, reordered args)
+// Dispatch a method call on a receiver of static class `clsName`.
+std::string CEmitter::emitDispatch(const std::string& clsName, const std::string& recvPtr,
+                                   const std::string& method, SharedArgumentList args, int srcLine)
+{
+    if (!_classes.count(clsName)) { unsupported("call on unknown class", srcLine); return "0"; }
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = findMethod(&_classes[clsName], method, &owner);
+    if (!mi) { unsupported("unknown method", srcLine); return "0"; }
+
+    if (mi->isVirtual) {
+        // Dynamic dispatch through the vptr (at offset 0 via the vtable root).
+        const std::string& root = _classes[clsName].vtableRoot;
+        std::string slotOwner = owner->name;
+        auto rit = _rootVtables.find(root);
+        if (rit != _rootVtables.end())
+            for (auto& s : rit->second) if (s.name == method) { slotOwner = s.owner; break; }
+        std::string self = "(" + slotOwner + "*)" + recvPtr;
+        std::string vptr = "((" + root + "*)" + recvPtr + ")->__vptr";
+        return emitReorderedCall(vptr + "->" + method, self, mi->params, args, srcLine);
+    }
+    // Static call; upcast self to the declaring class (offset-0 valid).
+    std::string self = "(" + owner->name + "*)" + recvPtr;
+    return emitReorderedCall(mi->cName, self, mi->params, args, srcLine);
+}
+
+// obj.method(args) — the member-access callee form (incl. this.method()).
 std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* recv)
 {
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
@@ -1027,17 +1296,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         unsupported("method call on unresolved receiver", call->line);
         return "0";
     }
-    ClassInfo& ci = _classes[cls];
-    auto mit = ci.methods.find(method);
-    if (mit == ci.methods.end()) {
-        unsupported("unknown method", call->line);
-        return "0";
-    }
-    MethodInfo& mi = mit->second;
-    std::string selfArg = dynamic_cast<ThisAccessNode*>(receiver.get())
+    std::string recvPtr = dynamic_cast<ThisAccessNode*>(receiver.get())
                         ? std::string("self")
                         : "&(" + emitExpression(receiver) + ")";
-    return emitReorderedCall(mi.cName, selfArg, mi.params, call->args, call->line);
+    return emitDispatch(cls, recvPtr, method, call->args, call->line);
 }
 
 std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine)
@@ -1057,19 +1319,33 @@ int CEmitter::emit(SharedCompilationUnit unit)
     if (!unit || !unit->codeDeclarationList)
         return _unsupported;
 
-    // Pass 0: collect function signatures and the class table.
+    // Pass 0: collect, link inheritance, build vtables, compute destructibility.
     collectSignatures(unit);
     collectClasses(unit);
+    linkBases();
+    buildVtables();
     computeDestructible();
 
-    // Pass S: struct typedefs for all classes (so prototypes can use them).
-    // NOTE: emitted in map order; a class holding another class by value would
-    // need a topological sort (deferred — not exercised by current fixtures).
-    for (auto& kv : _classes) emitStruct(kv.second);
+    std::vector<ClassInfo*> classes = topoOrderClasses();   // base before derived
 
-    // Pass A: prototypes — class ctors/methods, then free functions.
+    // Pass S0: forward typedefs (classes + vtable types) so the struct bodies and
+    // vtable types can reference each other and any class.
+    for (ClassInfo* ci : classes) {
+        _out << "typedef struct " << ci->name << " " << ci->name << ";\n";
+        if (ci->hasVtable && ci->vtableRoot == ci->name)
+            _out << "typedef struct " << ci->name << "_vtable " << ci->name << "_vtable;\n";
+    }
+    if (!classes.empty()) _out << "\n";
+
+    // Pass S: vtable struct types (roots) + struct bodies (topological).
+    for (ClassInfo* ci : classes) {
+        if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
+        emitStruct(*ci);
+    }
+
+    // Pass A: prototypes — class ctors/dtors/methods, then free functions.
     // extern functions are provided by C (runtime/linked) — no prototype/def.
-    for (auto& kv : _classes) emitClassPrototypes(kv.second);
+    for (ClassInfo* ci : classes) emitClassPrototypes(*ci);
     bool any = false;
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
@@ -1080,8 +1356,11 @@ int CEmitter::emit(SharedCompilationUnit unit)
     }
     if (any) _out << "\n";
 
-    // Pass B: definitions — class methods/ctors, then free functions.
-    for (auto& kv : _classes) emitClassDefinitions(kv.second);
+    // Pass A2: vtable instances (after prototypes, which declare the fn names).
+    for (ClassInfo* ci : classes) emitVtableInstance(*ci);
+
+    // Pass B: definitions — class methods/ctors/dtors, then free functions.
+    for (ClassInfo* ci : classes) emitClassDefinitions(*ci);
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
             if (isExtern(fn)) continue;   // provided externally

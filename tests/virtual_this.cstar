@@ -1,0 +1,16 @@
+class Shape
+{
+    int describe() { return this.area(); }
+    virtual int area() { return 1; }
+}
+class Circle extends Shape
+{
+    int r;
+    Circle(int r) { this.r = r; }
+    override int area() { return r * r; }
+}
+int main()
+{
+    Circle c = new Circle(r: 7);
+    return c.describe();
+}

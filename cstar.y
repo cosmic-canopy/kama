@@ -801,9 +801,9 @@ class_base_opt
   | class_base
   ;
 class_base
-  : EXTENDS class_type   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<IdentifierList>()); }
+  : EXTENDS type_name   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<IdentifierList>()); }
   | IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), $2); }
-  | EXTENDS class_type IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
+  | EXTENDS type_name IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
   ;
 class_body
   : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE   { $$ = $2; }
