@@ -32,6 +32,28 @@ static inline void NAME##__dtor(NAME* self) {                                  \
     if (self->ptr) { ELEM_DTOR(self->ptr); free(self->ptr); self->ptr = NULL; } \
 }
 
+// Shared<T> — ref-counted shared ownership (shared_ptr / Rc). Copy retains;
+// drop releases; the pointee is destroyed + freed when the last strong handle
+// goes away. The control block (counts) is a SEPARATE allocation so a future
+// Weak<T> can outlive the T. `ptr` mirrors Owned's, so auto-deref is identical.
+typedef struct cstar_ctrl { size_t strong; size_t weak; } cstar_ctrl;   // weak: reserved for Weak<T>
+static inline cstar_ctrl* cstar_ctrl_new(void) {
+    cstar_ctrl* c = (cstar_ctrl*)malloc(sizeof(cstar_ctrl));
+    c->strong = 1; c->weak = 0;
+    return c;
+}
+#define CSTAR_SHARED_DEFINE(T, NAME, ELEM_DTOR)                                 \
+typedef struct NAME { T* ptr; cstar_ctrl* ctrl; } NAME;                        \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    if (self->ctrl) {                                                          \
+        if (--self->ctrl->strong == 0) {                                       \
+            ELEM_DTOR(self->ptr); free(self->ptr);                            \
+            if (self->ctrl->weak == 0) free(self->ctrl);                       \
+        }                                                                      \
+        self->ptr = NULL; self->ctrl = NULL;                                  \
+    }                                                                          \
+}
+
 // Bounds-check trap: a clean panic (not undefined behavior) on out-of-range.
 static inline void cstar_bounds_fail(size_t i, size_t len) {
     fprintf(stderr, "cstar: index %zu out of bounds (length %zu)\n",

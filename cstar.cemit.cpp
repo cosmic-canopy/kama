@@ -45,9 +45,11 @@ std::string CEmitter::cType(SharedIdentifier type)
 {
     if (!type) return "void";
     // Collection / smart-pointer types spell their mangled struct name:
-    // Array<int32> -> Array_int32 (M9); Owned<Node> -> Owned_Node (M10).
+    // Array<int32> -> Array_int32 (M9); Owned<Node> -> Owned_Node (M10);
+    // Shared<Tex> -> Shared_Tex (M11).
     if (type->genericArg && type->value &&
-        (*type->value == "Array" || *type->value == "List" || *type->value == "Owned"))
+        (*type->value == "Array" || *type->value == "List" ||
+         *type->value == "Owned" || *type->value == "Shared"))
         return *type->value + "_" + mangleElem(type->genericArg);
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "int8_t";
@@ -410,8 +412,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(d->initializer.get())) {
                     std::string octy = cType(oc->type);
-                    if (isOwnedClass(octy)) {
-                        // new Owned<T>(args): box T on the heap and run T's ctor in place.
+                    if (isSmartPtrClass(octy)) {
+                        // new Owned/Shared<T>(args): box T on the heap, run T's
+                        // ctor in place, and (Shared) allocate the control block.
                         std::string T = _classes[octy].collElemClass;
                         line(n->line); indent(depth);
                         _out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
@@ -419,6 +422,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             line(n->line); indent(depth);
                             _out << emitReorderedCall(T + "__ctor", nm + ".ptr",
                                                       _classes[T].ctorParams, oc->args, n->line) << ";\n";
+                        }
+                        if (smartKind(octy) == CollKind::Shared) {
+                            indent(depth);
+                            _out << nm << ".ctrl = cstar_ctrl_new();\n";
                         }
                         // T with no ctor: malloc leaves it default (callers init fields).
                     } else if (isClass(octy) && _classes[octy].hasCtor) {
@@ -432,11 +439,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // Copy-initialize from another expression.
                     line(n->line); indent(depth);
                     _out << nm << " = " << emitExpression(d->initializer) << ";\n";
-                    // Owned move: initializing from an Owned lvalue transfers
-                    // ownership — invalidate the source so only `nm` drops it.
-                    if (isOwnedLValue(d->initializer)) {
+                    // Smart-pointer copy from an lvalue: Owned MOVES (invalidate
+                    // the source so only `nm` drops it); Shared RETAINS (refcount++
+                    // — both handles stay valid).
+                    if (isSmartPtrLValue(d->initializer)) {
                         indent(depth);
-                        _out << emitExpression(d->initializer) << ".ptr = NULL;\n";
+                        if (smartKind(exprClass(d->initializer)) == CollKind::Shared)
+                            _out << nm << ".ctrl->strong++;\n";
+                        else
+                            _out << smartPtrInvalidate(emitExpression(d->initializer), CollKind::Owned) << "\n";
                     }
                 }
             }
@@ -452,12 +463,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
             indent(depth);
             _out << _currentReturnCType << " " << tmp << " = " << emitExpression(ret->expression) << ";\n";
-            // Owned move-out: returning an Owned local transfers ownership to the
-            // caller. Null it BEFORE the unwind so the scope's dtor doesn't free
-            // the pointee the caller now owns (the factory-function landmine).
-            if (isOwnedLValue(ret->expression)) {
+            // Smart-pointer move-out: returning a smart-ptr local transfers the
+            // ref/ownership to the caller. Invalidate it BEFORE the unwind so the
+            // scope's dtor doesn't free/decrement what the caller now owns (the
+            // factory-function landmine).
+            if (isSmartPtrLValue(ret->expression)) {
                 indent(depth);
-                _out << emitExpression(ret->expression) << ".ptr = NULL;\n";
+                _out << smartPtrInvalidate(emitExpression(ret->expression),
+                                           smartKind(exprClass(ret->expression))) << "\n";
             }
             emitUnwindAll(depth);
             indent(depth); _out << "return " << tmp << ";\n";
@@ -600,18 +613,22 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         return;
     }
 
-    // Owned move-assignment `b = a;` — drop b's current pointee first (no leak),
-    // move, then invalidate the source if it was a movable lvalue. This must be a
-    // statement (the null can't live inside an expression).
+    // Smart-pointer assignment `b = a;` — release b's current pointee first (no
+    // leak), copy, then either invalidate the source (Owned: move) or retain
+    // (Shared: refcount++). The null/retain is a statement, so it can't live in
+    // an expression.
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
-        if (as->token == EQ && isOwnedExpr(as->unaryExpression)) {
-            std::string b    = emitExpression(as->unaryExpression);
-            std::string ownT = exprClass(as->unaryExpression);     // Owned_T
+        if (as->token == EQ && isSmartPtrExpr(as->unaryExpression)) {
+            std::string b   = emitExpression(as->unaryExpression);
+            std::string ty  = exprClass(as->unaryExpression);      // Owned_T / Shared_T
+            CollKind    knd = smartKind(ty);
             line(n->line);
-            indent(depth); _out << ownT << "__dtor(&" << b << ");\n";
+            indent(depth); _out << ty << "__dtor(&" << b << ");\n";       // release b's old
             indent(depth); _out << b << " = " << emitExpression(as->expression) << ";\n";
-            if (isOwnedLValue(as->expression)) {                   // move from a local
-                indent(depth); _out << emitExpression(as->expression) << ".ptr = NULL;\n";
+            if (isSmartPtrLValue(as->expression)) {                       // copy from a local
+                indent(depth);
+                if (knd == CollKind::Shared) _out << b << ".ctrl->strong++;\n";
+                else _out << smartPtrInvalidate(emitExpression(as->expression), CollKind::Owned) << "\n";
             }
             return;
         }
@@ -894,7 +911,8 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
     if (!t) return false;
     if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string / String
     return t->genericArg && t->value &&
-           (*t->value == "Array" || *t->value == "List" || *t->value == "Owned");
+           (*t->value == "Array" || *t->value == "List" ||
+            *t->value == "Owned" || *t->value == "Shared");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -903,23 +921,27 @@ void CEmitter::registerCollection(SharedIdentifier collType)
 {
     if (!isCollectionType(collType)) return;
 
-    bool isStr   = collType->builtInVal == IDENTIFIER_STRING_VAL;
-    bool isOwned = !isStr && collType->value && *collType->value == "Owned";
-    CollKind kind = isStr   ? CollKind::String
-                  : isOwned ? CollKind::Owned
+    bool isStr    = collType->builtInVal == IDENTIFIER_STRING_VAL;
+    bool isOwned  = !isStr && collType->value && *collType->value == "Owned";
+    bool isShared = !isStr && collType->value && *collType->value == "Shared";
+    bool isSmart  = isOwned || isShared;
+    CollKind kind = isStr    ? CollKind::String
+                  : isOwned  ? CollKind::Owned
+                  : isShared ? CollKind::Shared
                   : (*collType->value == "List") ? CollKind::List : CollKind::Array;
     SharedIdentifier elem = isStr ? SharedIdentifier() : collType->genericArg;
     std::string elemCType  = isStr ? "" : cType(elem);
     std::string elemMangle = isStr ? "" : mangleElem(elem);
     std::string elemClass  = (!isStr && isClass(elemCType)) ? elemCType : "";
-    std::string cName = isStr   ? "cstar_string"
-                      : isOwned ? "Owned_" + elemMangle
+    std::string cName = isStr    ? "cstar_string"
+                      : isOwned  ? "Owned_"  + elemMangle
+                      : isShared ? "Shared_" + elemMangle
                       : (kind == CollKind::List ? "List_" : "Array_") + elemMangle;
 
-    // M10: Owned<T> requires a class element type (construction needs a ctor /
-    // zero-init; auto-deref needs a ClassInfo for field/method lookup).
-    if (isOwned && elemClass.empty()) {
-        unsupported("Owned<T> requires a class element type in M10", collType->line);
+    // Smart pointers require a class element type (construction needs a ctor /
+    // auto-deref needs a ClassInfo for field/method lookup).
+    if (isSmart && elemClass.empty()) {
+        unsupported("a smart pointer requires a class element type", collType->line);
         return;
     }
 
@@ -938,9 +960,9 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     ci.collKind = kind;
     ci.collElemClass = elemClass;
     ci.destructible = true;                    // owns heap -> RAII frees
-    // Owned construction is the inline heap-ctor lowering, not an Owned_T__ctor;
-    // strings come from literals/concat; Array/List have a real ctor.
-    ci.hasCtor = !isStr && !isOwned;
+    // Smart-pointer construction is the inline heap-ctor lowering, not a
+    // <ptr>__ctor; strings come from literals/concat; Array/List have a real ctor.
+    ci.hasCtor = !isStr && !isSmart;
     ci.ctorParams = (kind == CollKind::Array)
                         ? std::vector<ParamSig>{ ParamSig{"size", false, ""} }
                         : std::vector<ParamSig>{};
@@ -953,7 +975,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.isIntrinsic = true;
         ci.methods[mname] = mi;
     };
-    if (kind == CollKind::Owned) {
+    if (kind == CollKind::Owned || kind == CollKind::Shared) {
         // No intrinsic methods — auto-deref forwards to T's real methods.
     } else if (kind == CollKind::String) {
         addMethod("length", {}, SharedIdentifier());
@@ -1095,6 +1117,9 @@ void CEmitter::emitCollectionDefs()
         } else if (info.kind == CollKind::Owned) {
             _out << "CSTAR_OWNED_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", " << elemDtor << ")\n";
+        } else if (info.kind == CollKind::Shared) {
+            _out << "CSTAR_SHARED_DEFINE(" << info.elemCType << ", " << info.cName
+                 << ", " << elemDtor << ")\n";
         }
     }
     if (!_collections.empty()) _out << "\n";
@@ -1117,33 +1142,47 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     return true;
 }
 
-// ---- Smart pointers (M10) -------------------------------------------------
+// ---- Smart pointers (M10 Owned, M11 Shared) -------------------------------
 
-bool CEmitter::isOwnedClass(const std::string& cls) const
+bool CEmitter::isSmartPtrClass(const std::string& cls) const
 {
     auto it = _classes.find(cls);
-    return it != _classes.end() && it->second.isCollection && it->second.collKind == CollKind::Owned;
+    return it != _classes.end() && it->second.isCollection &&
+           (it->second.collKind == CollKind::Owned || it->second.collKind == CollKind::Shared);
+}
+
+CollKind CEmitter::smartKind(const std::string& cls) const
+{
+    return _classes.at(cls).collKind;   // precondition: isSmartPtrClass(cls)
 }
 
 bool CEmitter::derefSmartPtr(std::string& cls, std::string& recvExpr)
 {
-    if (!isOwnedClass(cls)) return false;
-    recvExpr = "(" + recvExpr + ").ptr";        // a T*
+    if (!isSmartPtrClass(cls)) return false;
+    recvExpr = "(" + recvExpr + ").ptr";        // both Owned & Shared expose a T*
     cls      = _classes[cls].collElemClass;     // effective class = pointee T
     return true;
 }
 
-bool CEmitter::isOwnedExpr(SharedExpression e)
+bool CEmitter::isSmartPtrExpr(SharedExpression e)
 {
-    return e && isOwnedClass(exprClass(e));
+    return e && isSmartPtrClass(exprClass(e));
 }
 
-// A plain movable lvalue: a bare identifier naming an Owned local/param. A
-// `new Owned<T>(...)` initializer is NOT an lvalue, so it never nulls a source.
-bool CEmitter::isOwnedLValue(SharedExpression e)
+// A plain transferable lvalue: a bare identifier naming a smart-pointer local/
+// param. A `new ...<T>(...)` initializer is NOT an lvalue (no source to touch).
+bool CEmitter::isSmartPtrLValue(SharedExpression e)
 {
     auto* id = dynamic_cast<IdentifierNode*>(e.get());
-    return id && id->value && isOwnedExpr(e);
+    return id && id->value && isSmartPtrExpr(e);
+}
+
+// Invalidate a moved-from smart pointer: null the field its dtor guards on, so
+// the source's drop becomes a no-op (the ref/ownership transfers to the dest).
+std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind)
+{
+    return (kind == CollKind::Shared) ? (expr + ".ctrl = NULL; " + expr + ".ptr = NULL;")
+                                      : (expr + ".ptr = NULL;");
 }
 
 // Resolve `extends` names to ClassInfo pointers; error on unknown/cycle.
@@ -1306,13 +1345,13 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             s += isClass(p.className) ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base
                                       : ("&(" + val + ")");
         } else {
-            // Move-as-argument is not supported in M10 (the ownership transfer
-            // would need a statement to null the source). Pass an Owned by `ref`
-            // to borrow it, or return it to transfer. Flag rather than risk a
-            // silent double-free.
-            if (isOwnedLValue(f->second->expression))
-                unsupported("Owned<T> passed by value (M10 has no move-as-argument; "
-                            "pass by `ref` to borrow, or return it to transfer)", srcLine);
+            // Passing a smart pointer by value is not supported (the ownership
+            // transfer / retain would need a statement, and a param isn't auto-
+            // dropped). Pass by `ref` to borrow it, or return it to transfer.
+            // Flag rather than risk a silent double-free / refcount leak.
+            if (isSmartPtrLValue(f->second->expression))
+                unsupported("smart pointer passed by value (pass by `ref` to borrow, "
+                            "or return it to transfer)", srcLine);
             s += val;
         }
     }
@@ -1377,7 +1416,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
 
         // Auto-deref a smart-pointer receiver: dispatch on T with its T* (no &).
-        if (isOwnedClass(recvClass))
+        if (isSmartPtrClass(recvClass))
             return emitDispatch(_classes[recvClass].collElemClass, "(" + recvExpr + ").ptr",
                                 name, call->args, call->line);
         if (isInterface(recvClass))
@@ -1794,7 +1833,7 @@ std::string CEmitter::exprClass(SharedExpression e)
 
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
-        if (isOwnedClass(recv)) recv = _classes[recv].collElemClass;   // auto-deref: look up on T
+        if (isSmartPtrClass(recv)) recv = _classes[recv].collElemClass;   // auto-deref: look up on T
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)
@@ -1817,7 +1856,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     }
     std::string cls = exprClass(ma->expression);
     // Auto-deref a smart pointer: `n.field` -> `(n).ptr->[base]field` (T*).
-    if (isOwnedClass(cls)) {
+    if (isSmartPtrClass(cls)) {
         std::string T = _classes[cls].collElemClass;
         std::string basePath;
         ClassInfo* owner = findFieldOwner(&_classes[T], field);
@@ -1866,7 +1905,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     SharedExpression receiver = recv->expression;
     std::string cls = exprClass(receiver);
     // Auto-deref a smart pointer: dispatch on T with the held T* as the receiver.
-    if (isOwnedClass(cls)) {
+    if (isSmartPtrClass(cls)) {
         std::string ptr = "(" + emitExpression(receiver) + ").ptr";   // already a T*
         return emitDispatch(_classes[cls].collElemClass, ptr, method, call->args, call->line);
     }

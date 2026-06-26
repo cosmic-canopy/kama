@@ -1,0 +1,19 @@
+// Shared<T> refcount: two handles share one pointee. When one handle drops, the
+// pointee survives (strong 2->1); the other handle is still valid.
+class Counter
+{
+    int32 value;
+    Counter(int32 start) { this.value = start; }
+    void bump() { this.value = this.value + 1; }
+    int32 get() { return this.value; }
+}
+
+int main()
+{
+    Shared<Counter> a = new Shared<Counter>(start: 40);
+    {
+        Shared<Counter> b = a;   // retain (strong=2); shared state
+        b.bump();                // a sees it too -> 41
+    }                            // b drops (strong=2->1, NOT freed)
+    return a.get();              // 41 — a still valid (refcount kept it alive)
+}

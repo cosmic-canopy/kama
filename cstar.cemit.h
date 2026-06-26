@@ -46,7 +46,7 @@ struct MethodInfo {
 
 // A built-in generic collection / smart-pointer kind (M9/M10). Backed by a C
 // runtime template. Owned<T> (M10) is a 4th kind: a unique heap-owning pointer.
-enum class CollKind { Array, List, String, Owned };
+enum class CollKind { Array, List, String, Owned, Shared };
 
 struct ClassInfo {
     std::string                       name;       // struct name (== cstar class name in M4)
@@ -164,12 +164,14 @@ private:
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
                               std::string& recvExpr, std::string& idx);
 
-    // Smart pointers (M10). If `cls` is an Owned_T, rewrite `cls` -> pointee T and
-    // `recvExpr` -> "(recv).ptr" (a T*); return true (auto-deref).
+    // Smart pointers (M10 Owned, M11 Shared). If `cls` is a smart-pointer type,
+    // rewrite `cls` -> pointee T and `recvExpr` -> "(recv).ptr" (a T*) (auto-deref).
     bool derefSmartPtr(std::string& cls, std::string& recvExpr);
-    bool isOwnedClass(const std::string& cls) const;   // cls is a registered Owned_T
-    bool isOwnedExpr(SharedExpression e);              // e's static class is Owned_T
-    bool isOwnedLValue(SharedExpression e);            // e is a bare identifier of Owned type
+    bool isSmartPtrClass(const std::string& cls) const;  // Owned_T or Shared_T
+    CollKind smartKind(const std::string& cls) const;    // Owned/Shared (precond: isSmartPtrClass)
+    bool isSmartPtrExpr(SharedExpression e);             // e's static class is a smart pointer
+    bool isSmartPtrLValue(SharedExpression e);           // e is a bare identifier of smart-ptr type
+    std::string smartPtrInvalidate(const std::string& expr, CollKind kind);  // null the dtor's guard field
 
     void linkBases();
     void buildVtables();

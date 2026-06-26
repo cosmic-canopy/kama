@@ -1,0 +1,16 @@
+// Shared<T>: heap construction + control block, auto-deref, RAII (last handle frees).
+class Counter
+{
+    int32 value;
+    Counter(int32 start) { this.value = start; }
+    void bump() { this.value = this.value + 1; }
+    int32 get() { return this.value; }
+}
+
+int main()
+{
+    Shared<Counter> c = new Shared<Counter>(start: 40);
+    c.bump();
+    c.bump();
+    return c.get();   // 42
+}
