@@ -75,12 +75,23 @@ b.use();  int n = a.id;
 // a, b drop in RAII order; the Tex is freed exactly once, with the last handle
 ```
 
-Shared limits (same family as Owned): pointee must be a **class** type; **borrow** by passing `ref
-Owned<T>`/`ref Shared<T>` (passing a smart pointer by value is rejected); `Owned` **use-after-move** is a
-runtime null-trap (no borrow checker yet); polymorphic `Smart<Base> = Derived` is deferred; storing a
-smart pointer in a collection or a bitwise-copied class field is deferred (aggregate copy doesn't
-retain/move). Reference **cycles** of `Shared` leak until `Weak<T>` (🚧 next). `Map<K,V>` +
-multi-param/nested generics also 🚧.
+`Weak<T>` — a non-owning weak reference to a `Shared<T>`'s pointee. It does **not** keep the pointee
+alive, so it **breaks reference cycles** that `Shared` alone would leak. You can't dereference a `Weak`
+(it may be dead) — **upgrade** it with a checked `lock()`:
+
+```cstar
+Weak<Tex>  w = s;          // make a weak ref from a Shared (does not keep Tex alive)
+Shared<Tex> up = w.lock();  // upgrade -> a valid Shared if the Tex is alive, else empty
+if (up.valid()) { up.use(); }       // .valid() = the upgraded Shared is non-empty
+bool dead = w.expired();    // true once the last Shared is gone
+Weak<Tex>  e;               // default-empty (expired)
+```
+
+Smart-pointer limits (whole family): pointee must be a **class** type; **borrow** by passing `ref
+Owned<T>`/`ref Shared<T>`/`ref Weak<T>` (passing a smart pointer by value is rejected); `Owned`
+**use-after-move** is a runtime null-trap (no borrow checker yet); polymorphic `Smart<Base> = Derived` is
+deferred; storing a smart pointer in a collection or a bitwise-copied class field is deferred (aggregate
+copy doesn't retain/move). `Map<K,V>` + multi-param/nested generics are 🚧.
 
 ## Functions ✅
 
