@@ -143,7 +143,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<IdentifierNode*>(n)) {
         // Variable/parameter reference. Qualified/member resolution is later.
-        return v->value ? *v->value : "";
+        std::string nm = v->value ? *v->value : "";
+        // A ref/out parameter is a pointer in C; reads dereference it.
+        if (_refParams.count(nm)) return "(*" + nm + ")";
+        return nm;
     }
 
     if (auto* v = dynamic_cast<BinaryExpressionNode*>(n)) {
@@ -159,6 +162,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<TernaryExpressionNode*>(n)) {
         return "(" + emitExpression(v->condition) + " ? " + emitExpression(v->LHS)
                    + " : " + emitExpression(v->RHS) + ")";
+    }
+
+    if (auto* v = dynamic_cast<InvocationNode*>(n)) {
+        return emitInvocation(v);
     }
 
     unsupported("expression", n->line);
@@ -236,35 +243,124 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 // Functions
 // ---------------------------------------------------------------------------
 
+std::string CEmitter::cFunctionName(const std::string& cstarName)
+{
+    // The user `main` becomes `cstar_main`; a real C `main` wrapper is synthesized.
+    return (cstarName == "main") ? "cstar_main" : cstarName;
+}
+
 std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isEntryPoint)
 {
     std::string name = (fn->name && fn->name->value) ? *fn->name->value : "anon";
-    // The user `main` becomes `cstar_main`; a real C `main` wrapper is synthesized.
-    if (name == "main") {
-        isEntryPoint = true;
-        return "cstar_main";
+    isEntryPoint = (name == "main");
+    return cFunctionName(name);
+}
+
+// Build the function signature table so call sites can reorder named arguments
+// into C's positional order.
+void CEmitter::collectSignatures(SharedCompilationUnit unit)
+{
+    if (!unit || !unit->codeDeclarationList) return;
+    for (auto& decl : *unit->codeDeclarationList) {
+        auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
+        if (!fn || !fn->name || !fn->name->value) continue;
+
+        FuncSig sig;
+        sig.cName = cFunctionName(*fn->name->value);
+        if (fn->parameters) {
+            for (auto& p : *fn->parameters) {
+                ParamSig ps;
+                ps.name  = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
+                ps.byRef = p->modifier && p->modifier->value &&
+                           (*p->modifier->value == "ref" || *p->modifier->value == "out");
+                sig.params.push_back(ps);
+            }
+        }
+        _funcs[*fn->name->value] = sig;
     }
-    isEntryPoint = false;
-    return name;
+}
+
+// Lower a call, reordering named arguments to the callee's declared order.
+std::string CEmitter::emitInvocation(InvocationNode* call)
+{
+    // Only simple/qualified function-name callees are handled here; method calls
+    // (the `expression` form, e.g. obj.method(...)) arrive with classes (M4).
+    if (!call->identifier || !call->identifier->value) {
+        unsupported("method/indirect call", call->line);
+        return "0";
+    }
+    std::string name = *call->identifier->value;
+
+    auto it = _funcs.find(name);
+    if (it == _funcs.end()) {
+        // Unknown callee (extern/forward/typo). Best effort: emit args in source
+        // order. Names can't be reordered without a signature.
+        unsupported("call to unknown function (args kept in source order)", call->line);
+        std::string s = cFunctionName(name) + "(";
+        bool first = true;
+        if (call->args) for (auto& a : *call->args) {
+            if (!first) s += ", ";
+            first = false;
+            s += emitExpression(a->expression);
+        }
+        return s + ")";
+    }
+    const FuncSig& sig = it->second;
+
+    // Index the supplied arguments by their (named) parameter name.
+    std::map<std::string, ArgumentNode*> byName;
+    if (call->args) {
+        for (auto& a : *call->args) {
+            if (a->name && a->name->value) byName[*a->name->value] = a.get();
+        }
+    }
+
+    // NOTE: arguments are emitted in declared (param) order, which can differ
+    // from source order. With side-effecting args this changes evaluation order;
+    // a temp-hoisting pass (plan risk #3) is a later refinement.
+    std::string s = sig.cName + "(";
+    for (size_t i = 0; i < sig.params.size(); ++i) {
+        if (i) s += ", ";
+        const ParamSig& p = sig.params[i];
+        auto found = byName.find(p.name);
+        if (found == byName.end()) {
+            unsupported("missing argument in call", call->line);
+            s += "/*missing:" + p.name + "*/0";
+            continue;
+        }
+        std::string val = emitExpression(found->second->expression);
+        s += p.byRef ? ("&(" + val + ")") : val;
+    }
+    return s + ")";
+}
+
+bool CEmitter::paramByRef(FunctionParameterNode* p)
+{
+    return p && p->modifier && p->modifier->value &&
+           (*p->modifier->value == "ref" || *p->modifier->value == "out");
+}
+
+// C parameter list. ref/out parameters become pointers.
+std::string CEmitter::paramListC(FunctionDeclarationNode* fn)
+{
+    if (!fn->parameters || fn->parameters->empty())
+        return "void";
+    std::string s;
+    bool first = true;
+    for (auto& p : *fn->parameters) {
+        if (!first) s += ", ";
+        first = false;
+        std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
+        s += cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + nm;
+    }
+    return s;
 }
 
 void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn)
 {
     bool isEntry = false;
     std::string name = mangledFunctionName(fn, isEntry);
-    _out << cType(fn->returnType) << " " << name << "(";
-    if (fn->parameters && !fn->parameters->empty()) {
-        bool first = true;
-        for (auto& p : *fn->parameters) {
-            if (!first) _out << ", ";
-            first = false;
-            _out << cType(p->type) << " "
-                 << (p->identifier && p->identifier->value ? *p->identifier->value : "");
-        }
-    } else {
-        _out << "void";
-    }
-    _out << ");\n";
+    _out << cType(fn->returnType) << " " << name << "(" << paramListC(fn) << ");\n";
 }
 
 void CEmitter::emitFunction(FunctionDeclarationNode* fn)
@@ -272,20 +368,17 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
     bool isEntry = false;
     std::string name = mangledFunctionName(fn, isEntry);
 
-    line(fn->line);
-    _out << cType(fn->returnType) << " " << name << "(";
-    if (fn->parameters && !fn->parameters->empty()) {
-        bool first = true;
+    // Track by-ref params so reads of them in the body emit a dereference.
+    _refParams.clear();
+    if (fn->parameters) {
         for (auto& p : *fn->parameters) {
-            if (!first) _out << ", ";
-            first = false;
-            _out << cType(p->type) << " "
-                 << (p->identifier && p->identifier->value ? *p->identifier->value : "");
+            if (paramByRef(p.get()) && p->identifier && p->identifier->value)
+                _refParams.insert(*p->identifier->value);
         }
-    } else {
-        _out << "void";
     }
-    _out << ")\n";
+
+    line(fn->line);
+    _out << cType(fn->returnType) << " " << name << "(" << paramListC(fn) << ")\n";
 
     if (fn->block) {
         emitBlock(fn->block.get(), 0);
@@ -293,6 +386,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
         _out << "{\n}";
     }
     _out << "\n\n";
+
+    _refParams.clear();
 
     if (isEntry) {
         // Synthesized portable entry point. Argument marshaling (List<String>)
@@ -315,6 +410,9 @@ int CEmitter::emit(SharedCompilationUnit unit)
 
     if (!unit || !unit->codeDeclarationList)
         return _unsupported;
+
+    // Pass 0: collect signatures so calls can reorder named args.
+    collectSignatures(unit);
 
     // Pass A: prototypes for all top-level functions (order-independent calls).
     bool any = false;

@@ -21,7 +21,13 @@ cstar.parser.cpp cstar.parser.hpp: cstar.y
 cstar.lexer.cpp cstar.lexer.hpp: cstar.l cstar.parser.hpp
 	flex cstar.l
 
-# Generated-header dependencies (implicit rule below can't see these).
+# Header dependencies (the implicit rule below can't see #includes). Listing all
+# project headers against every object is coarse but cheap, and prevents stale
+# object/ABI-skew bugs when a class layout in a header changes.
+HEADERS = cstar.forward.h cstar.context.h cstar.ast.h cstar.cemit.h
+$(OBJECTS): $(HEADERS)
+
+# Generated-header dependencies.
 cstar.lexer.o cstar.parser.o cstar.driver.o cstar.cemit.o: cstar.parser.hpp
 cstar.lexer.o cstar.driver.o: cstar.lexer.hpp
 

@@ -7,7 +7,22 @@
 
 #include <ostream>
 #include <string>
+#include <vector>
+#include <map>
+#include <set>
 #include "cstar.forward.h"
+
+// A function parameter, in declared order. Named cstar arguments are matched
+// against these to recover C's positional order at each call site.
+struct ParamSig {
+    std::string name;
+    bool        byRef;   // ref/out => passed as a pointer (call site emits &arg)
+};
+
+struct FuncSig {
+    std::string            cName;    // mangled C name (e.g. main -> cstar_main)
+    std::vector<ParamSig>  params;
+};
 
 class CEmitter {
 public:
@@ -23,10 +38,18 @@ private:
     bool          _lines;            // whether to emit #line directives
     int           _unsupported;      // count of nodes we could not lower
 
+    std::map<std::string, FuncSig> _funcs;   // cstar function name -> signature
+    std::set<std::string> _refParams;        // by-ref params of the function being emitted
+
     void line(int srcLine);                          // emit a #line directive
     void indent(int depth);
 
+    // Pre-pass
+    void collectSignatures(SharedCompilationUnit unit);
+
     // Declarations / top level
+    bool paramByRef(FunctionParameterNode* p);
+    std::string paramListC(FunctionDeclarationNode* fn);
     void emitFunctionPrototype(FunctionDeclarationNode* fn);
     void emitFunction(FunctionDeclarationNode* fn);
 
@@ -36,9 +59,11 @@ private:
 
     // Expressions -> C expression text
     std::string emitExpression(SharedExpression expr);
+    std::string emitInvocation(InvocationNode* call);
 
     // Helpers
     std::string cType(SharedIdentifier type);
+    std::string cFunctionName(const std::string& cstarName);   // main -> cstar_main
     std::string mangledFunctionName(FunctionDeclarationNode* fn, bool& isEntryPoint);
     std::string binaryOperator(int token);
 

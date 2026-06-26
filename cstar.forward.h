@@ -26,6 +26,7 @@ class ExpressionStatementNode;
 class SwitchSectionNode;
 class SwitchLabelNode;
 class ArgumentNode;
+class InvocationNode;
 class EnumMemberDeclarationNode;
 class ClassBaseDeclarationNode;
 class ClassMemberDeclarationNode;

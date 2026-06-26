@@ -1,0 +1,12 @@
+int add(int a, int b)
+{
+    return a + b;
+}
+int triple(int x)
+{
+    return add(a: x, b: add(a: x, b: x));
+}
+int main()
+{
+    return triple(x: 14);
+}
