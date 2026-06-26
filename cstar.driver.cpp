@@ -19,35 +19,69 @@
 #include <vector>
 
 #include <limits.h>
-#include <unistd.h>
+#ifdef _WIN32
+  #include <stdlib.h>          // _fullpath, _MAX_PATH
+  #ifndef PATH_MAX
+    #define PATH_MAX _MAX_PATH
+  #endif
+#else
+  #include <unistd.h>
+#endif
 
 #include "cstar.parser.hpp"
 #include "cstar.lexer.hpp"
 #include "cstar.context.h"
 #include "cstar.cemit.h"
 
+#ifndef CSTAR_VERSION
+#define CSTAR_VERSION "0.0.0-dev"
+#endif
+
 namespace {
 
 std::string absolutePath(const std::string& path)
 {
     char buf[PATH_MAX];
+#ifdef _WIN32
+    if (_fullpath(buf, path.c_str(), PATH_MAX)) return std::string(buf);
+#else
     if (realpath(path.c_str(), buf)) return std::string(buf);
+#endif
     return path; // fall back to as-given (e.g. file doesn't exist yet)
 }
 
+// Split on either separator so the same code works on Windows paths.
 std::string dirName(const std::string& path)
 {
-    size_t slash = path.find_last_of('/');
+    size_t slash = path.find_last_of("/\\");
     return (slash == std::string::npos) ? std::string(".") : path.substr(0, slash);
 }
 
 std::string stripExtension(const std::string& path)
 {
-    size_t slash = path.find_last_of('/');
+    size_t slash = path.find_last_of("/\\");
     size_t dot   = path.find_last_of('.');
     if (dot == std::string::npos || (slash != std::string::npos && dot < slash))
         return path;
     return path.substr(0, dot);
+}
+
+bool fileExists(const std::string& p)
+{
+    std::ifstream f(p.c_str());
+    return f.good();
+}
+
+// Where cstar_runtime.h lives, resolved so an INSTALLED binary finds it from any
+// cwd: $CSTAR_HOME, else <exeDir>/../include (bin/cstar -> ../include), else
+// <exeDir> (repo root layout), else ".".
+std::string resolveRuntimeDir(const char* argv0)
+{
+    if (const char* home = getenv("CSTAR_HOME")) return home;
+    std::string exeDir = dirName(absolutePath(argv0 ? argv0 : "cstar"));
+    if (fileExists(exeDir + "/../include/cstar_runtime.h")) return exeDir + "/../include";
+    if (fileExists(exeDir + "/cstar_runtime.h"))            return exeDir;
+    return ".";
 }
 
 // Parse one cstar file into a CompilationUnit. Returns nullptr on failure.
@@ -122,6 +156,10 @@ void usage()
 
 int main(int argc, char** argv)
 {
+    if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
+        printf("cstar %s\n", CSTAR_VERSION);
+        return 0;
+    }
     if (argc < 2) { usage(); return 2; }
 
     std::string subcommand = argv[1];
@@ -163,10 +201,9 @@ int main(int argc, char** argv)
     // Release builds strip debug info and #line, optimize, and define NDEBUG.
     if (release) emitLines = false;
 
-    // Where cstar_runtime.h lives: alongside this driver's source tree, plus the
-    // current directory. CSTAR_HOME overrides. (Install layout is firmed up later.)
-    std::string runtimeDir = ".";
-    if (const char* home = getenv("CSTAR_HOME")) runtimeDir = home;
+    // Where cstar_runtime.h lives — resolved so an installed binary works from any
+    // cwd ($CSTAR_HOME, else <exe>/../include, else <exe>, else ".").
+    std::string runtimeDir = resolveRuntimeDir(argv[0]);
 
     if (subcommand == "transpile") {
         std::string outPath = output.empty() ? (stripExtension(input) + ".c") : output;
@@ -200,16 +237,25 @@ int main(int argc, char** argv)
         std::ostringstream cmd;
         cmd << compiler << " -std=c11 ";
         if (release) {
-            // Optimized, no debug info, asserts off; native strips symbols.
-            cmd << (wasm ? "-Oz " : "-O2 ") << "-DNDEBUG ";
-            if (!wasm) cmd << "-s ";
+            // Optimized, no debug info, asserts off. -ffunction/data-sections +
+            // --gc-sections let the linker drop unused (std)library code — the
+            // "pay for what you use" pruning lever. Native also strips symbols.
+            cmd << (wasm ? "-Oz " : "-O2 ") << "-DNDEBUG -ffunction-sections -fdata-sections ";
+            if (!wasm) {
+#ifdef __APPLE__
+                cmd << "-Wl,-dead_strip ";
+#else
+                cmd << "-Wl,--gc-sections ";
+#endif
+                cmd << "-s ";
+            }
         } else {
             // Debug: faithful stepping + breakpoints in .cstar via #line.
             cmd << (wasm ? "-g -gsource-map -O0 " : "-g -O0 ");
         }
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
-        cmd << "'" << cPath << "' -o '" << outPath << "'";
+        cmd << "\"" << cPath << "\" -o \"" << outPath << "\"";
         int rc = runCmd(cmd.str());
 
         if (!keepC) remove(cPath.c_str());

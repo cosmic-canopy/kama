@@ -8,6 +8,7 @@
   "engines": { "vscode": "^1.75.0" },
   "categories": ["Programming Languages"],
   "keywords": ["cstar", "transpiler", "c", "wasm"],
+  "repository": { "type": "git", "url": "https://github.com/cosmic-canopy/cstar" },
   "contributes": {
     "languages": [
       {

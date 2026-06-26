@@ -1,7 +1,10 @@
 all: cstar
 
+# Version: from the VERSION file (CI overrides with the git tag: make VERSION=1.2.3).
+VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0-dev)
+
 CXX      = clang++
-CXXFLAGS = -std=c++14 -g -Wall -Wno-deprecated-register
+CXXFLAGS = -std=c++14 -g -Wall -Wno-deprecated-register -DCSTAR_VERSION='"$(VERSION)"'
 
 # All build artifacts live under build/ (objects + generated parser/lexer), so
 # the repo root stays sources-only and host(mach-o)/container(ELF) objects can't
@@ -43,10 +46,10 @@ $(BUILD)/cstar.lexer.o $(BUILD)/cstar.driver.o: $(BUILD)/cstar.lexer.hpp
 # Compile: hand-written sources live in the root, generated ones in build/.
 # -Ibuild so #include "cstar.parser.hpp" finds the generated header.
 $(BUILD)/%.o: %.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -I$(BUILD) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) -iquote $(BUILD) -iquote . -c $< -o $@
 
 $(BUILD)/%.o: $(BUILD)/%.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -I$(BUILD) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) -iquote $(BUILD) -iquote . -c $< -o $@
 
 cstar: $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $^ -o cstar

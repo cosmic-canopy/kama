@@ -1,0 +1,104 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # create the GitHub Release
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    name: linux-x64 }
+          - { os: ubuntu-24.04-arm, name: linux-arm64 }
+          - { os: macos-13,         name: macos-x64 }   # last Intel image
+          - { os: macos-14,         name: macos-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version (from tag)
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Install flex + bison (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y flex bison make clang
+
+      - name: Install flex + bison (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bison flex
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+
+      - name: Build (version-stamped)
+        run: make VERSION="$VERSION"
+
+      - name: Verify version stamp
+        run: ./cstar --version | grep -q "$VERSION"
+
+      - name: Smoke (22 fixtures)
+        run: ./run_tests.sh
+
+      - name: Package
+        shell: bash
+        run: |
+          PKG="cstar-${{ matrix.name }}-v${VERSION}"
+          mkdir -p "$PKG/bin" "$PKG/include"
+          cp cstar "$PKG/bin/cstar"
+          cp cstar_runtime.h "$PKG/include/"
+          cp LICENSE "$PKG/" 2>/dev/null || true
+          cp GETTING_STARTED.md "$PKG/README.md" 2>/dev/null || true
+          cat > "$PKG/install.sh" <<'EOS'
+          #!/bin/sh
+          # Install cstar into a prefix (default /usr/local). cstar finds its runtime
+          # header via <prefix>/include/cstar_runtime.h relative to the binary.
+          set -e
+          PREFIX="${1:-/usr/local}"
+          install -d "$PREFIX/bin" "$PREFIX/include"
+          install bin/cstar "$PREFIX/bin/cstar"
+          install -m 644 include/cstar_runtime.h "$PREFIX/include/cstar_runtime.h"
+          echo "installed cstar to $PREFIX/bin (add it to PATH)"
+          EOS
+          chmod +x "$PKG/install.sh"
+          tar czf "${PKG}.tar.gz" "$PKG"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cstar-${{ matrix.name }}
+          path: cstar-*.tar.gz
+
+  vsix:
+    name: package VSCode extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: vsce package
+        shell: bash
+        run: |
+          npm i -g @vscode/vsce
+          cd editor/vscode
+          vsce package --allow-missing-repository -o "../../cstar-vscode-${GITHUB_REF_NAME#v}.vsix"
+      - uses: actions/upload-artifact@v4
+        with: { name: cstar-vsix, path: cstar-vscode-*.vsix }
+
+  release:
+    name: publish release
+    needs: [build, vsix]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/cstar-*.tar.gz
+            dist/cstar-vscode-*.vsix
+          generate_release_notes: true

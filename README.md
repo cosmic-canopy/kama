@@ -7,10 +7,11 @@ platform, and in the browser as WebAssembly via Emscripten.
 
 Goal: a portable, lightweight WebGPU game engine with no .NET/runtime baggage.
 
-> Status: early. The compiler front end (Flex lexer, Bison grammar, AST) is
-> complete; the C backend is being built up milestone by milestone. Today it
-> lowers functions, primitive types, locals, and expressions, and builds for
-> **native** and **WASM**. See `/Users/matt/.claude/plans/` notes for the roadmap.
+> Status: usable. Functions, control flow, named-parameter calls, classes,
+> **RAII** (no GC), single inheritance + **virtual dispatch**, **interfaces**,
+> and **enums** — building for **native** and **WASM**, with debug/release
+> builds and **IDE breakpoint debugging**. New here? See
+> **[GETTING_STARTED.md](GETTING_STARTED.md)**.
 
 ## Toolchain
 
