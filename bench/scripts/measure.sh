@@ -9,7 +9,7 @@ OUT=bench/build/results.tsv
 printf "track\tlang\tworkload\ttime_ms\trss_kb\tsize_bytes\texit\n" > "$OUT"
 
 WORKLOADS="${1:-all}"
-[ "$WORKLOADS" = "all" ] && WORKLOADS="fib pi collatz dispatch"
+[ "$WORKLOADS" = "all" ] && WORKLOADS="fib pi collatz dispatch alloc"
 
 NATIVE="cstar c cpp rust go csharp lua python"
 WASM="cstar-wasm js ts"

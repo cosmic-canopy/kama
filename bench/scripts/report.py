@@ -12,7 +12,7 @@ TSV = os.path.join(ROOT, "bench/build/results.tsv")
 OUT_MD = os.path.join(ROOT, "docs/benchmarks/RESULTS.md")
 OUT_JSON = os.path.join(ROOT, "docs/benchmarks/results.json")
 
-WORKLOADS = ["fib", "pi", "collatz", "dispatch"]
+WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc"]
 NATIVE = ["cstar", "c", "cpp", "rust", "go", "csharp", "lua", "python"]
 WASM = ["cstar-wasm", "js", "ts"]
 LABEL = {"cstar": "cstar", "c": "C", "cpp": "C++", "rust": "Rust", "go": "Go",
@@ -115,10 +115,13 @@ finding. The signals worth trusting here are:
 2. **peak RSS** and **artifact size** (the low-footprint goal),
 3. on the WASM track, **cstar→wasm vs hand-written JS/TS** under the same node.
 
-Allocation/GC-heavy benchmarks are intentionally absent: cstar has no arrays/collections/heap yet, so
-allocator and GC pressure can't be fairly measured. Revisit once `List<T>`/`Array<T>` land. Workloads are
-compute-bound and tuned so the slow interpreters finish quickly; the fast compiled languages run in a few
-ms, so small absolute differences between them are noise.
+The compute workloads (fib/pi/collatz/dispatch) are tuned so the slow interpreters finish quickly; the
+fast compiled languages run in a few ms, so small absolute differences between them are noise. The
+**`alloc`** workload (added once `List<T>` landed in M9) is the one to watch for the no-GC story: it
+churns ~2M growable-list appends and 2000 collection lifetimes, so it contrasts cstar's deterministic
+**RAII** free against the **garbage collectors** (Go, C#, Lua, Python, JS) and against the RAII peers
+(C++ `vector`, Rust `Vec`). Watch its **peak RSS** in particular — GC runtimes keep dead allocations
+resident until a collection runs.
 
 ## Fairness gate (checksum equality)
 
@@ -132,6 +135,9 @@ diverged:
 - **pi** — Leibniz series, 2×10⁷ terms, float64 (FP throughput; cleanest cross-language compare).
 - **collatz** — sum of Collatz stopping times for 1..699 999 (integer ALU + unpredictable branches).
 - **dispatch** — 8×10⁶ virtual-method calls through a base reference (dynamic-dispatch cost).
+- **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
+  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — cstar `List<int32>`,
+  C++ `vector`, Rust `Vec`, Go slice, C# `List`, Lua table, Python/JS array, C manual realloc).
 
 ## NATIVE — execution time (median, ms)
 

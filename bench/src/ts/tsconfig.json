@@ -1,1 +1,1 @@
-{ "compilerOptions": { "target": "ES2020", "module": "CommonJS", "strict": false, "types": [], "outDir": "../../build/ts", "lib": ["ES2020"] }, "files": ["globals.d.ts","fib.ts","pi.ts","collatz.ts","dispatch.ts"] }
+{ "compilerOptions": { "target": "ES2020", "module": "CommonJS", "strict": false, "types": [], "outDir": "../../build/ts", "lib": ["ES2020"] }, "files": ["globals.d.ts","fib.ts","pi.ts","collatz.ts","dispatch.ts","alloc.ts"] }

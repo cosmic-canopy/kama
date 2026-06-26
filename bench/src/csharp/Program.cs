@@ -12,6 +12,7 @@ class P {
     else if(w=="pi"){ double pi=0,sign=1; for(ulong i=0;i<20000000;i++){ ulong d=2*i+1; pi+=sign/(double)d; sign=-sign; } double scaled=pi*4000000000.0; sum=(ulong)scaled; }
     else if(w=="collatz"){ for(ulong i=1;i<700000;i++) sum+=Clen(i); }
     else if(w=="dispatch"){ Shape c=new Circle(3), q=new Square(4); for(ulong i=0;i<8000000;i++){ if(i%2==0) sum+=(ulong)Measure(c); else sum+=(ulong)Measure(q); } }
+    else if(w=="alloc"){ for(int iter=0;iter<2000;iter++){ var xs=new System.Collections.Generic.List<int>(); for(int j=1;j<=1000;j++) xs.Add(j); ulong s=0; foreach(var v in xs) s+=(ulong)v; sum+=s; } }
     return (int)(sum%256);
   }
 }

@@ -1,6 +1,6 @@
 # cstar benchmark results
 
-_Generated: 2026-06-26 15:10 · arch: aarch64 (Linux) · in the `cstar-bench` container_
+_Generated: 2026-06-26 19:06 · arch: aarch64 (Linux) · in the `cstar-bench` container_
 
 Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
 Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median). Peak RSS: `/usr/bin/time -v`.
@@ -14,10 +14,13 @@ finding. The signals worth trusting here are:
 2. **peak RSS** and **artifact size** (the low-footprint goal),
 3. on the WASM track, **cstar→wasm vs hand-written JS/TS** under the same node.
 
-Allocation/GC-heavy benchmarks are intentionally absent: cstar has no arrays/collections/heap yet, so
-allocator and GC pressure can't be fairly measured. Revisit once `List<T>`/`Array<T>` land. Workloads are
-compute-bound and tuned so the slow interpreters finish quickly; the fast compiled languages run in a few
-ms, so small absolute differences between them are noise.
+The compute workloads (fib/pi/collatz/dispatch) are tuned so the slow interpreters finish quickly; the
+fast compiled languages run in a few ms, so small absolute differences between them are noise. The
+**`alloc`** workload (added once `List<T>` landed in M9) is the one to watch for the no-GC story: it
+churns ~2M growable-list appends and 2000 collection lifetimes, so it contrasts cstar's deterministic
+**RAII** free against the **garbage collectors** (Go, C#, Lua, Python, JS) and against the RAII peers
+(C++ `vector`, Rust `Vec`). Watch its **peak RSS** in particular — GC runtimes keep dead allocations
+resident until a collection runs.
 
 ## Fairness gate (checksum equality)
 
@@ -28,50 +31,57 @@ diverged:
 - `pi`: checksum = 27 (exit code) — ✓ all match
 - `collatz`: checksum = 2 (exit code) — ✓ all match
 - `dispatch`: checksum = 0 (exit code) — ✓ all match
+- `alloc`: checksum = 64 (exit code) — ✓ all match
 
 ## Workloads
 - **fib** — naive recursive Fibonacci summed over 0..31 (function-call / stack-frame cost).
 - **pi** — Leibniz series, 2×10⁷ terms, float64 (FP throughput; cleanest cross-language compare).
 - **collatz** — sum of Collatz stopping times for 1..699 999 (integer ALU + unpredictable branches).
 - **dispatch** — 8×10⁶ virtual-method calls through a base reference (dynamic-dispatch cost).
+- **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
+  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — cstar `List<int32>`,
+  C++ `vector`, Rust `Vec`, Go slice, C# `List`, Lua table, Python/JS array, C manual realloc).
 
 ## NATIVE — execution time (median, ms)
 
 | workload | cstar | C | C++ | Rust | Go | C# (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|
-| fib | 7.37 | 7.33 | 7.55 | 6.08 | 10.1 | 32.34 | 88.14 | 212.96 |
-| pi | 11.79 | 11.78 | 12.07 | 11.92 | 13.94 | 29.82 | 120.81 | 1669.3 |
-| collatz | 65.65 | 65.84 | 65.85 | 65.94 | 91.25 | 121.36 | 966.37 | 2940.19 |
-| dispatch | 6.18 | 6.19 | 6.4 | 1.21 | 5.0 | 24.94 | 141.94 | 715.0 |
+| fib | 7.36 | 7.33 | 7.51 | 6.03 | 10.32 | 27.4 | 90.53 | 211.46 |
+| pi | 11.79 | 11.8 | 11.97 | 11.93 | 14.06 | 32.95 | 120.18 | 1648.48 |
+| collatz | 65.57 | 65.57 | 66.29 | 65.85 | 91.41 | 123.87 | 968.4 | 2941.17 |
+| dispatch | 6.65 | 6.21 | 6.36 | 1.23 | 5.08 | 25.99 | 141.75 | 701.61 |
+| alloc | 1.17 | 1.16 | 1.57 | 2.22 | 6.97 | 22.73 | 24.34 | 107.56 |
 
 ## NATIVE — peak resident memory (MB)
 
 | workload | cstar | C | C++ | Rust | Go | C# (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|
 | fib | 2 | 2 | 3 | 2 | 2 | 19 | 2 | 8 |
-| pi | 2 | 2 | 3 | 2 | 2 | 19 | 2 | 8 |
-| collatz | 2 | 2 | 3 | 2 | 2 | 19 | 2 | 8 |
-| dispatch | 2 | 2 | 3 | 2 | 2 | 19 | 2 | 8 |
+| pi | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
+| collatz | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
+| dispatch | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
+| alloc | 2 | 2 | 3 | 2 | 6 | 24 | 2 | 8 |
 
 ## NATIVE — artifact size
 
 | lang | artifact size |
 |---|---|
-| cstar | 66.1 KB |
+| cstar | 66.0 KB |
 | C | 66.1 KB |
 | C++ | 66.1 KB |
 | Rust | 322.3 KB |
 | Go | 1604.8 KB |
-| C# (JIT) | 5.0 KB |
+| C# (JIT) | 5.5 KB |
 
 ## WASM track — execution time under node (median, ms)
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 18.93 | 27.78 | 26.91 |
-| pi | 42.26 | 25.78 | 26.28 |
-| collatz | 190.2 | 415.56 | 415.01 |
-| dispatch | 27.99 | 20.6 | 20.98 |
+| fib | 20.53 | 27.2 | 27.4 |
+| pi | 43.1 | 25.59 | 25.93 |
+| collatz | 189.67 | 418.47 | 409.88 |
+| dispatch | 28.16 | 20.89 | 20.7 |
+| alloc | 14.53 | 16.26 | 15.67 |
 
 ## WASM track — peak resident memory (MB)
 
@@ -79,8 +89,9 @@ diverged:
 |---|---|---|---|
 | fib | 42 | 44 | 44 |
 | pi | 43 | 45 | 45 |
-| collatz | 43 | 45 | 45 |
+| collatz | 43 | 44 | 45 |
 | dispatch | 43 | 45 | 45 |
+| alloc | 45 | 46 | 46 |
 
 ## WASM track — module size
 
