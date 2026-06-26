@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# bench/run — drive the cross-language benchmark harness in a container.
+# Portable across podman (preferred) and docker; mirrors tools/cdev.
+#
+#   bench/run build-image     build the cstar-bench toolchain image (heavy, ~3-4 GB)
+#   bench/run build           compile cstar + every language into bench/build/
+#   bench/run run [workload]  measure time/RSS/size (default: all 4 workloads)
+#   bench/run report          render docs/benchmarks/RESULTS.md from results
+#   bench/run all             build-image (if needed) + build + run + report
+#   bench/run sh              interactive shell in the bench image
+#
+# Override the engine with CSTAR_ENGINE=docker|podman.
+set -euo pipefail
+
+IMAGE="${CSTAR_BENCH_IMAGE:-cstar-bench}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+ENGINE="${CSTAR_ENGINE:-}"
+if [ -z "$ENGINE" ]; then
+  if command -v podman >/dev/null 2>&1; then ENGINE=podman
+  elif command -v docker >/dev/null 2>&1; then ENGINE=docker
+  else echo "bench: need podman or docker on PATH" >&2; exit 1; fi
+fi
+
+run_ni() { "$ENGINE" run --rm -v "$ROOT:/work" -w /work "$IMAGE" "$@"; }
+
+case "${1:-}" in
+  build-image) "$ENGINE" build -t "$IMAGE" -f "$ROOT/bench/Dockerfile" "$ROOT" ;;
+  build)       run_ni bash bench/scripts/build.sh ;;
+  run)         run_ni bash bench/scripts/measure.sh "${2:-all}" ;;
+  report)      run_ni python3 bench/scripts/report.py ;;
+  all)         run_ni bash -c "bash bench/scripts/build.sh && bash bench/scripts/measure.sh all && python3 bench/scripts/report.py" ;;
+  sh|shell)    "$ENGINE" run --rm -it -v "$ROOT:/work" -w /work "$IMAGE" bash ;;
+  *) echo "usage: bench/run {build-image|build|run [workload]|report|all|sh}" >&2; exit 2 ;;
+esac
