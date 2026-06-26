@@ -1,0 +1,31 @@
+# cstar
+
+> A C-family language (C#-like syntax, no garbage collector / RAII, explicit named parameters) that
+> transpiles to portable C — running natively everywhere and in the browser via WebAssembly, with no
+> runtime. Goal: a portable, lightweight WebGPU game engine. MIT licensed.
+
+cstar's grammar is the source of truth (the compiler is a Flex lexer + Bison grammar + AST → C emitter).
+Docs are generated from or point at that source so they never drift. For the authoritative syntax, read
+the grammar; for semantics, read the spec; for runnable examples, read the test fixtures.
+
+## Language
+- [Specification (semantics overview)](docs/SPEC.md): types, named params, RAII, classes, inheritance, build/debug.
+- [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `cstar.y` by `tools/gen-grammar`.
+- [Goals & design philosophy](GOALS.md): no-GC, one-way/simplicity, explicit>implicit, self-describing, LLM-discoverable.
+
+## Examples
+- [tests/](tests/): each `*.cstar` is a runnable program with a `.expect` exit code. See
+  `class_basic.cstar` (classes), `dtor_block.cstar` (RAII), `named_args.cstar` (named params),
+  `refparam.cstar` (ref/out), and the inheritance/virtual fixtures.
+
+## Toolchain & runtime
+- [README](README.md): build/run via the containerized toolchain (`tools/cdev`); native + wasm targets;
+  `cstar build [--release] [--target native|wasm]`.
+- [Runtime header](cstar_runtime.h): the small C runtime included by generated code (`cstar_string`, trace hook).
+- [Repo guide for AI assistants](CLAUDE.md): working conventions and build commands.
+
+## Status
+Implemented: functions, primitives, control flow, named-parameter calls, ref/out, classes, RAII
+destructors, single inheritance + virtual dispatch; native + WASM + debug/release builds; IDE breakpoint
+debugging. Planned: interfaces, enums, string ops, generic collections (`List<T>`), modules, scripting
+(`cstar run`), `cstar describe --json`, cstar-level WebGPU bindings.

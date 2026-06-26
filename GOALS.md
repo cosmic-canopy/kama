@@ -34,6 +34,27 @@ lightweight WebGPU game engine.
    (e.g. via TinyCC) gives sub-second iteration while reusing the single C backend — preferred over a
    separate interpreter. A tree-walking interpreter / hot-reload are larger, later options.
 
+7. **Self-describing.** The grammar (`cstar.y`) is the single source of truth — the compiler embodies
+   the BNF. Generate machine-readable grammar/spec from it (`docs/grammar.bnf` via `tools/gen-grammar`)
+   so the language always describes itself. A future `cstar describe --json` exposes the language surface
+   (keywords, types, builtins, grammar) for tools.
+
+8. **MIT licensed.** Permissive and embeddable — see `LICENSE`.
+
+9. **LLM-discoverable on day 1.** AI assistants can read the current syntax, semantics, and library
+   availability from a canonical, always-current entry point (`llms.txt` at the repo root → grammar,
+   spec, goals, examples, runtime API). Docs are generated from / point at source of truth so they never
+   drift.
+
+## Production-grade build & debugging
+
+- **Debug / Release configs.** `cstar build` defaults to debug (`-g -O0`, `#line` on, asserts on);
+  `--release` opts into optimized (`-O2`/`-Oz`, `-DNDEBUG`, stripped, no `#line`).
+- **IDE breakpoint debugging (VSCode first).** Set breakpoints in `.cstar`, step, and inspect the call
+  stack + locals — enabled by the `#line` directives mapping generated C back to `.cstar` and by locals
+  keeping their cstar names. The VSCode extension ships a CodeLLDB launch config + Build Debug/Release
+  tasks. WASM debugging works in the browser via emscripten source maps.
+
 ## Working principles (see `.claude/skills/`)
 
 Development of cstar follows two vendored guidance skills that reinforce goals #4 and #5:

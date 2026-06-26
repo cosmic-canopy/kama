@@ -45,10 +45,13 @@ cstar build tests/arith.cstar -o arith && ./arith
 # Build for the browser (WASM). Default output is an HTML harness:
 cstar build tests/arith.cstar --target wasm          # -> arith.html + .js + .wasm
 cstar build tests/arith.cstar --target wasm -o app.js # -> app.js + app.wasm (headless: `node app.js`)
+
+# Optimized release build (stripped, NDEBUG, no #line):
+cstar build tests/arith.cstar --release
 ```
 
-Options: `--target native|wasm`, `--webgpu` (link Emscripten's WebGPU port),
-`--cc <compiler>`, `--no-line` (omit `#line` directives), `--keep-c`.
+Options: `--release`/`--debug` (default debug: `-g -O0`, debuggable), `--target native|wasm`,
+`--webgpu` (link Emscripten's WebGPU port), `--cc <compiler>`, `--no-line` (omit `#line`), `--keep-c`.
 
 ### Debugging
 
@@ -77,4 +80,5 @@ tools/cdev exec tests/webgpu/build.sh   # compiles+links a WebGPU WASM module
 - `cstar.driver.cpp` — CLI (`transpile` / `build`)
 - `tests/`, `run_tests.sh` — end-to-end fixtures (assert on exit codes)
 - `Dockerfile`, `tools/cdev` — containerized toolchain
-- `legacy-llvm/` — the original LLVM backend, kept for reference (not built)
+- `docs/` — `SPEC.md` (semantics) + `grammar.bnf` (generated from `cstar.y` by `tools/gen-grammar`)
+- `llms.txt`, `GOALS.md` — LLM-discovery entry point and design philosophy

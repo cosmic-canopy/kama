@@ -114,8 +114,8 @@ void usage()
     fprintf(stderr,
         "usage:\n"
         "  cstar transpile <in.cstar> [-o out.c] [--no-line]\n"
-        "  cstar build     <in.cstar> [-o out] [--target native|wasm] [--webgpu]\n"
-        "                             [--cc <compiler>] [--no-line] [--keep-c]\n");
+        "  cstar build     <in.cstar> [-o out] [--target native|wasm] [--release|--debug]\n"
+        "                             [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n");
 }
 
 } // namespace
@@ -132,6 +132,7 @@ int main(int argc, char** argv)
     bool        emitLines  = true;
     bool        keepC      = false;
     bool        webgpu     = false;
+    bool        release    = false;        // debug by default
 
     // Options may appear in any order, before or after the input file.
     for (int i = 2; i < argc; ++i) {
@@ -142,6 +143,8 @@ int main(int argc, char** argv)
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
         else if (a == "--webgpu")                 webgpu = true;
+        else if (a == "--release")                release = true;
+        else if (a == "--debug")                  release = false;
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "cstar: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
@@ -156,6 +159,9 @@ int main(int argc, char** argv)
         return 2;
     }
     const bool wasm = (target == "wasm");
+
+    // Release builds strip debug info and #line, optimize, and define NDEBUG.
+    if (release) emitLines = false;
 
     // Where cstar_runtime.h lives: alongside this driver's source tree, plus the
     // current directory. CSTAR_HOME overrides. (Install layout is firmed up later.)
@@ -193,7 +199,14 @@ int main(int argc, char** argv)
 
         std::ostringstream cmd;
         cmd << compiler << " -std=c11 ";
-        if (emitLines) cmd << (wasm ? "-g -gsource-map " : "-g ");
+        if (release) {
+            // Optimized, no debug info, asserts off; native strips symbols.
+            cmd << (wasm ? "-Oz " : "-O2 ") << "-DNDEBUG ";
+            if (!wasm) cmd << "-s ";
+        } else {
+            // Debug: faithful stepping + breakpoints in .cstar via #line.
+            cmd << (wasm ? "-g -gsource-map -O0 " : "-g -O0 ");
+        }
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
         cmd << "'" << cPath << "' -o '" << outPath << "'";

@@ -1,0 +1,741 @@
+// cstar grammar (BNF) — GENERATED from cstar.y by tools/gen-grammar. Do not edit.
+// The Bison grammar is the source of truth; regenerate after any grammar change.
+
+
+/*------------------------------------------------------------------------------
+                              Useful Debug Printing
+
+------------------------------------------------------------------------------*/
+
+/*------------------------------------------------------------------------------
+                              Compilation Unit
+------------------------------------------------------------------------------*/
+
+compilation_unit
+  : namespace_opt using_directives_opt code_opt
+  ;
+
+namespace_opt
+  : /* Nothing */
+  | NAMESPACE qualified_identifier_no_generic SEMICOLON
+  ;
+
+using_directives_opt
+  : /* Nothing */
+  | using_directives
+  ;
+using_directives
+  : using_directive
+  | using_directives using_directive
+  ;
+using_directive
+  : USING qualified_identifier_no_generic SEMICOLON
+  | using_alias_directive
+  ;
+using_alias_directive
+  : USING IDENTIFIER EQ qualified_identifier_no_generic SEMICOLON
+  ;
+
+code_opt
+  : /* Nothing */
+  | code_declarations
+  ;
+code_declarations
+  : code_declaration
+  | code_declarations code_declaration
+  ;
+code_declaration
+  : function_declaration
+  | type_declaration
+  ;
+
+/*------------------------------------------------------------------------------
+                              Literals
+------------------------------------------------------------------------------*/
+
+literal
+  : boolean_literal
+  | DEC_LITERAL_NO_SUFFIX
+  | HEX_LITERAL_NO_SUFFIX
+  | OCT_LITERAL_NO_SUFFIX
+  | BASED_LITERAL_NO_SUFFIX
+
+  | DEC_LITERAL
+  | HEX_LITERAL
+  | OCT_LITERAL
+  | BASED_LITERAL
+
+  | FLOAT_LITERAL_NO_SUFFIX
+  | FLOAT_LITERAL_32
+  | FLOAT_LITERAL_64
+  | CHARACTER_LITERAL
+  | STRING_LITERAL
+  | NULL_LITERAL
+  ;
+boolean_literal
+  : TRUE
+  | FALSE
+  ;
+
+/*------------------------------------------------------------------------------
+                              Basic Identification
+------------------------------------------------------------------------------*/
+
+qualified_identifier
+  : basic_identifier
+  | qualifier basic_identifier
+  ;
+qualifier
+  : IDENTIFIER DOT
+  | qualifier IDENTIFIER DOT
+  ;
+basic_identifier
+  : IDENTIFIER
+  | IDENTIFIER LT IDENTIFIER GT
+  ;
+
+qualified_identifier_no_generic
+  : IDENTIFIER
+  | qualifier IDENTIFIER
+  ;
+
+type_name
+  : qualified_identifier
+  ;
+
+/*------------------------------------------------------------------------------
+                              Types
+------------------------------------------------------------------------------*/
+
+type
+  : non_array_type
+  ;
+non_array_type
+  : simple_type
+  | type_name
+  ;
+simple_type
+  : primitive_type
+  | class_type
+  ;
+primitive_type
+  : numeric_type
+  | BOOL
+  ;
+numeric_type
+  : integral_type
+  | floating_point_type
+  ;
+integral_type
+  : INT
+  | UINT8
+  | UINT16
+  | UINT32
+  | UINT64
+  | INT8
+  | INT16
+  | INT32
+  | INT64
+  ;
+floating_point_type
+  : DOUBLE
+  | FLOAT32
+  | FLOAT64
+  ;
+class_type
+  : STRING
+  ;
+
+type_declaration
+  : class_declaration
+  | interface_declaration
+  | enum_declaration
+  ;
+
+/*------------------------------------------------------------------------------
+                              Modifiers
+------------------------------------------------------------------------------*/
+
+modifiers_opt
+  : /* Nothing */
+  | modifiers
+  ;
+modifiers
+  : modifier
+  | modifiers modifier
+  ;
+modifier
+  : ABSTRACT
+  | EXTERN
+  | OVERRIDE
+  | PRIVATE
+  | PROTECTED
+  | PUBLIC
+  | FRIEND LPAREN friend_list RPAREN
+  | FINAL
+  | STATIC
+  | VIRTUAL
+  | VOLATILE
+  | EXPORT
+  ;
+
+friend_list
+  : qualified_identifier
+  | friend_list qualified_identifier
+  ;
+
+function_modifier_opt
+  : /* Nothing */
+  | EXPORT
+  ;
+
+/*------------------------------------------------------------------------------
+                              Functions
+------------------------------------------------------------------------------*/
+
+function_declaration
+  : EXTERN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
+
+  | function_modifier_opt function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
+
+  ;
+function_return_type
+  : type
+  | VOID
+  ;
+parameter_list_opt
+  : /* Nothing */
+  | parameter_list
+  ;
+parameter_list
+  : parameter
+  | parameter_list COMMA parameter
+  ;
+parameter
+  : parameter_modifier_opt type IDENTIFIER
+  ;
+parameter_modifier_opt
+  : /* Nothing */
+  | REF
+  | OUT
+  ;
+
+/*------------------------------------------------------------------------------
+                              Statements
+------------------------------------------------------------------------------*/
+
+statement
+  : declaration_statement
+  | embedded_statement
+  ;
+declaration_statement
+  : local_variable_declaration SEMICOLON
+  | local_constant_declaration SEMICOLON
+  ;
+local_variable_declaration
+  : type variable_declarators
+  ;
+variable_declarators
+  : variable_declarator
+  | variable_declarators COMMA variable_declarator
+  ;
+variable_declarator
+  : IDENTIFIER
+  | IDENTIFIER EQ variable_initializer
+  ;
+variable_initializer
+  : expression
+  ;
+local_constant_declaration
+  : CONST type constant_declarators
+  ;
+constant_declarators
+  : constant_declarator
+  | constant_declarators COMMA constant_declarator
+  ;
+constant_declarator
+  : IDENTIFIER EQ constant_expression
+  ;
+block
+  : LEFT_BRACE statement_list_opt RIGHT_BRACE
+  ;
+statement_list_opt
+  : /* Nothing */
+  | statement_list
+  ;
+statement_list
+  : statement
+  | statement_list statement
+  ;
+embedded_statement
+  : block
+  | empty_statement
+  | expression_statement
+  | selection_statement
+  | iteration_statement
+  | jump_statement
+  ;
+empty_statement
+  : SEMICOLON
+  ;
+expression_statement
+  : statement_expression SEMICOLON
+  ;
+statement_expression
+  : invocation_expression
+  | object_creation_expression
+  | assignment
+  | post_increment_expression
+  | post_decrement_expression
+  | pre_increment_expression
+  | pre_decrement_expression
+  ;
+selection_statement
+  : if_statement
+  | switch_statement
+  ;
+if_statement
+  : IF LPAREN boolean_expression RPAREN embedded_statement
+  | IF LPAREN boolean_expression RPAREN embedded_statement ELSE embedded_statement
+  ;
+switch_statement
+  : SWITCH LPAREN expression RPAREN switch_block
+  ;
+switch_block
+  : LEFT_BRACE switch_sections_opt RIGHT_BRACE
+  ;
+switch_sections_opt
+  : /* Nothing */
+  | switch_sections
+  ;
+switch_sections
+  : switch_section
+  | switch_sections switch_section
+  ;
+switch_section
+  : switch_labels statement_list
+  ;
+switch_labels
+  : switch_label
+  | switch_labels switch_label
+  ;
+switch_label
+  : CASE constant_expression COLON
+  | DEFAULT COLON
+  ;
+iteration_statement
+  : while_statement
+  | do_statement
+  | for_statement
+  | foreach_statement
+  ;
+while_statement
+  : WHILE LPAREN boolean_expression RPAREN embedded_statement
+  ;
+do_statement
+  : DO embedded_statement WHILE LPAREN boolean_expression RPAREN SEMICOLON
+  ;
+for_statement
+  : FOR LPAREN for_initializer_opt SEMICOLON for_condition_opt SEMICOLON for_iterator_opt RPAREN embedded_statement
+
+  ;
+for_initializer_opt
+  : /* Nothing */
+  | for_initializer
+  ;
+for_condition_opt
+  : /* Nothing */
+  | for_condition
+  ;
+for_iterator_opt
+  : /* Nothing */
+  | for_iterator
+  ;
+for_initializer
+  : local_variable_declaration
+  | statement_expression_list
+  ;
+for_condition
+  : boolean_expression
+  ;
+for_iterator
+  : statement_expression_list
+  ;
+statement_expression_list
+  : statement_expression
+  | statement_expression_list COMMA statement_expression
+  ;
+foreach_statement
+  : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement
+  ;
+jump_statement
+  : break_statement
+  | continue_statement
+  | return_statement
+  ;
+break_statement
+  : BREAK SEMICOLON
+  ;
+continue_statement
+  : CONTINUE SEMICOLON
+  ;
+return_statement
+  : RETURN expression_opt SEMICOLON
+  ;
+expression_opt
+  : /* Nothing */
+  | expression
+  ;
+semicolon_opt
+  : /* Nothing */
+  | SEMICOLON
+  ;
+
+/*------------------------------------------------------------------------------
+                              Expressions
+------------------------------------------------------------------------------*/
+
+expression
+  : conditional_expression
+  | assignment
+  ;
+assignment
+  : unary_expression assignment_operator expression
+  ;
+assignment_operator
+  : EQ
+  | PLUSEQ
+  | MINUSEQ
+  | STAREQ
+  | DIVEQ
+  | MODEQ
+  | XOREQ
+  | ANDEQ
+  | OREQ
+  | GTGTEQ
+  | LTLTEQ
+  ;
+primary_expression
+  : parenthesized_expression
+  | primary_expression_no_parenthesis
+  ;
+primary_expression_no_parenthesis
+  : literal
+  | member_access
+  | invocation_expression
+  | element_access
+  | this_access
+  | base_access
+  | new_expression
+  ;
+parenthesized_expression
+  : LPAREN expression RPAREN
+  ;
+member_access
+  : primary_expression DOT IDENTIFIER
+  | class_type DOT IDENTIFIER
+  ;
+invocation_expression
+  : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN
+  | qualified_identifier_no_generic LPAREN argument_list_opt RPAREN
+  ;
+argument_list_opt
+  : /* Nothing */
+  | argument_list
+  ;
+argument_list
+  : argument
+  | argument_list COMMA argument
+  ;
+argument
+  : IDENTIFIER COLON expression
+  | IDENTIFIER COLON REF variable_reference
+  | IDENTIFIER COLON OUT variable_reference
+  ;
+variable_reference
+  : expression
+  ;
+element_access
+  : primary_expression LEFT_BRACKET expression_list RIGHT_BRACKET
+  | qualified_identifier_no_generic LEFT_BRACKET expression_list RIGHT_BRACKET
+  ;
+this_access
+  : THIS
+  ;
+base_access
+  : BASE DOT IDENTIFIER
+  | BASE LEFT_BRACKET expression_list RIGHT_BRACKET
+  ;
+new_expression
+  : object_creation_expression
+  ;
+object_creation_expression
+  : NEW type LPAREN argument_list_opt RPAREN
+  ;
+unary_expression
+  : postfix_expression
+  | EXCLAMATION unary_expression
+  | TILDE unary_expression
+  | cast_expression
+  | PLUS unary_expression
+  | MINUS unary_expression
+  | pre_increment_expression
+  | pre_decrement_expression
+  ;
+postfix_expression
+  : primary_expression
+  | qualified_identifier_no_generic
+  | post_increment_expression
+  | post_decrement_expression
+  ;
+pre_increment_expression
+  : PLUSPLUS unary_expression
+  ;
+pre_decrement_expression
+  : MINUSMINUS unary_expression
+  ;
+post_increment_expression
+  : postfix_expression PLUSPLUS
+  ;
+post_decrement_expression
+  : postfix_expression MINUSMINUS
+  ;
+cast_expression
+  : CAST LT type GT LPAREN unary_expression RPAREN
+  ;
+constant_expression
+  : expression
+  ;
+boolean_expression
+  : expression
+  ;
+expression_list
+  : expression
+  | expression_list COMMA expression
+  ;
+
+   /* TODO: simplify these with operator precedence rules? */
+
+multiplicative_expression
+  : unary_expression
+  | multiplicative_expression STAR unary_expression
+  | multiplicative_expression SLASH unary_expression
+  | multiplicative_expression PERCENT unary_expression
+  ;
+additive_expression
+  : multiplicative_expression
+  | additive_expression PLUS multiplicative_expression
+  | additive_expression MINUS multiplicative_expression
+  ;
+shift_expression
+  : additive_expression
+  | shift_expression LTLT additive_expression
+  | shift_expression GTGT additive_expression
+  ;
+relational_expression
+  : shift_expression
+  | relational_expression LT shift_expression
+  | relational_expression GT shift_expression
+  | relational_expression LEQ shift_expression
+  | relational_expression GEQ shift_expression
+  ;
+equality_expression
+  : relational_expression
+  | equality_expression EQEQ relational_expression
+  | equality_expression NOTEQ relational_expression
+  ;
+and_expression
+  : equality_expression
+  | and_expression AMP equality_expression
+  ;
+exclusive_or_expression
+  : and_expression
+  | exclusive_or_expression CARET and_expression
+  ;
+inclusive_or_expression
+  : exclusive_or_expression
+  | inclusive_or_expression BAR exclusive_or_expression
+  ;
+conditional_and_expression
+  : inclusive_or_expression
+  | conditional_and_expression ANDAND inclusive_or_expression
+  ;
+conditional_or_expression
+  : conditional_and_expression
+  | conditional_or_expression OROR conditional_and_expression
+  ;
+conditional_expression
+  : conditional_or_expression
+  | conditional_or_expression QUESTION expression COLON expression
+  ;
+
+/*------------------------------------------------------------------------------
+                              Class
+------------------------------------------------------------------------------*/
+
+class_declaration
+  : modifiers_opt CLASS basic_identifier class_base_opt class_body semicolon_opt
+  ;
+class_base_opt
+  : /* Nothing */
+  | class_base
+  ;
+class_base
+  : EXTENDS class_type
+  | IMPLEMENTS interface_type_list
+  | EXTENDS class_type IMPLEMENTS interface_type_list
+  ;
+class_body
+  : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
+  ;
+class_member_declarations_opt
+  : /* Nothing */
+  | class_member_declarations
+  ;
+class_member_declarations
+  : class_member_declaration
+  | class_member_declarations class_member_declaration
+  ;
+class_member_declaration
+  : constant_declaration
+  | field_declaration
+  | method_declaration
+  | operator_declaration
+  | constructor_declaration
+  | destructor_declaration
+  ;
+constant_declaration
+  : modifiers_opt CONST type constant_declarators SEMICOLON
+  ;
+field_declaration
+  : modifiers_opt type variable_declarators SEMICOLON
+  ;
+method_declaration
+  : modifiers_opt type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
+  | modifiers_opt VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
+  ;
+method_body
+  : block
+  | SEMICOLON
+  ;
+
+operator_declaration
+  : modifiers_opt operator_declarator operator_body
+  ;
+operator_declarator
+  : overloadable_operator_declarator
+  ;
+operator_body
+  : block
+  | SEMICOLON
+  ;
+overloadable_operator_declarator
+  : type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN
+  | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN
+  ;
+overloadable_operator
+  : PLUS
+  | MINUS
+  | EXCLAMATION
+  | TILDE
+  | PLUSPLUS
+  | MINUSMINUS
+  | TRUE
+  | FALSE
+  | STAR
+  | SLASH
+  | PERCENT
+  | AMP
+  | BAR
+  | CARET
+  | LTLT
+  | GTGT
+  | EQEQ
+  | NOTEQ
+  | GT
+  | LT
+  | GEQ
+  | LEQ
+  ;
+constructor_declaration
+  : modifiers_opt constructor_declarator constructor_body
+  ;
+constructor_declarator
+  : IDENTIFIER LPAREN parameter_list_opt RPAREN constructor_initializer_opt
+  ;
+constructor_initializer_opt
+  : /* Nothing */
+  | constructor_initializer
+  ;
+constructor_initializer
+  : COLON BASE LPAREN argument_list_opt RPAREN
+  ;
+constructor_body
+  : block
+  | SEMICOLON
+  ;
+destructor_declaration
+  : modifiers_opt TILDE IDENTIFIER LPAREN RPAREN block
+  ;
+
+/*------------------------------------------------------------------------------
+                              Enum
+------------------------------------------------------------------------------*/
+
+enum_declaration
+  : modifiers_opt ENUM IDENTIFIER enum_body semicolon_opt
+  ;
+enum_body
+  : LEFT_BRACE enum_member_declarations_opt RIGHT_BRACE
+  | LEFT_BRACE enum_member_declarations COMMA RIGHT_BRACE
+  ;
+enum_member_declarations_opt
+  : /* Nothing */
+  | enum_member_declarations
+  ;
+enum_member_declarations
+  : enum_member_declaration
+  | enum_member_declarations COMMA enum_member_declaration
+  ;
+enum_member_declaration
+  : IDENTIFIER
+  | IDENTIFIER EQ constant_expression
+  ;
+
+/*------------------------------------------------------------------------------
+                              Interface
+------------------------------------------------------------------------------*/
+
+interface_declaration
+  : modifiers_opt INTERFACE basic_identifier interface_base_opt interface_body semicolon_opt
+  ;
+interface_base_opt
+  : /* Nothing */
+  | interface_base
+  ;
+interface_base
+  : COLON interface_type_list
+  ;
+interface_type_list
+  : type_name
+  | interface_type_list COMMA type_name
+  ;
+interface_body
+  : LEFT_BRACE interface_member_declarations_opt RIGHT_BRACE
+  ;
+interface_member_declarations_opt
+  : /* Nothing */
+  | interface_member_declarations
+  ;
+interface_member_declarations
+  : interface_member_declaration
+  | interface_member_declarations interface_member_declaration
+  ;
+interface_member_declaration
+  : interface_method_declaration
+  ;
+interface_method_declaration
+  : type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
+  | VOID IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
+  ;
+
