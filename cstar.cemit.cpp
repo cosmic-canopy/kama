@@ -848,8 +848,8 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
 
 bool CEmitter::isCollectionType(SharedIdentifier t) const
 {
-    // Stage 2: Array only. List (stage 3) and String (stage 4) join here.
-    return t && t->genericArg && t->value && *t->value == "Array";
+    // Array + List. String (stage 4) joins here.
+    return t && t->genericArg && t->value && (*t->value == "Array" || *t->value == "List");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -858,12 +858,12 @@ void CEmitter::registerCollection(SharedIdentifier collType)
 {
     if (!isCollectionType(collType)) return;
 
-    CollKind kind = CollKind::Array;          // (Array only for now)
+    CollKind kind = (*collType->value == "List") ? CollKind::List : CollKind::Array;
     SharedIdentifier elem = collType->genericArg;
     std::string elemCType  = cType(elem);
     std::string elemMangle = mangleElem(elem);
     std::string elemClass  = isClass(elemCType) ? elemCType : "";
-    std::string cName = "Array_" + elemMangle;
+    std::string cName = (kind == CollKind::List ? "List_" : "Array_") + elemMangle;
 
     if (_collections.count(cName)) return;    // dedup
 
@@ -881,7 +881,9 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     ci.collElemClass = elemClass;
     ci.destructible = true;                    // owns heap -> RAII frees the buffer
     ci.hasCtor = true;
-    ci.ctorParams = { ParamSig{"size", false, ""} };
+    ci.ctorParams = (kind == CollKind::Array)   // Array(size:); List()
+                        ? std::vector<ParamSig>{ ParamSig{"size", false, ""} }
+                        : std::vector<ParamSig>{};
 
     auto addMethod = [&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret) {
         MethodInfo mi;
@@ -891,6 +893,8 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.isIntrinsic = true;
         ci.methods[mname] = mi;
     };
+    if (kind == CollKind::List)
+        addMethod("add", { ParamSig{"item", false, elemClass} }, SharedIdentifier());
     addMethod("get",    { ParamSig{"index", false, ""} }, elem);
     addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} }, SharedIdentifier());
     addMethod("length", {}, SharedIdentifier());
@@ -1016,6 +1020,9 @@ void CEmitter::emitCollectionDefs()
         std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "CSTAR_ELEM_NODTOR";
         if (info.kind == CollKind::Array) {
             _out << "CSTAR_ARRAY_DEFINE(" << info.elemCType << ", " << info.cName
+                 << ", " << elemDtor << ")\n";
+        } else if (info.kind == CollKind::List) {
+            _out << "CSTAR_LIST_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", " << elemDtor << ")\n";
         }
     }

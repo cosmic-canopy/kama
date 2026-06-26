@@ -1,0 +1,34 @@
+// List<T> RAII + element-dtor chaining over the LIVE length (len=3, cap=4):
+// the list's dtor must destroy exactly its 3 live elements, not its capacity.
+//
+// NB (M9 limitation): `add(item:)` takes the element BY VALUE, so each source
+// local (a,b,c) and its list copy both destruct — the trace below counts both.
+// Move semantics (one owner) is future work.
+extern void cstar_trace(int code);
+extern int cstar_trace_get();
+
+class Probe
+{
+    int id;
+    Probe(int id) { this.id = id; }
+    ~Probe() { cstar_trace(code: id); }
+}
+
+int build()
+{
+    List<Probe> xs = new List<Probe>();
+    Probe a = new Probe(id: 1);
+    Probe b = new Probe(id: 2);
+    Probe c = new Probe(id: 4);
+    xs.add(item: a);
+    xs.add(item: b);
+    xs.add(item: c);
+    return 0;
+    // scope exit (reverse decl order): ~c(4) ~b(2) ~a(1), then xs -> ~[1,2,4]
+}
+
+int main()
+{
+    int r = build();
+    return cstar_trace_get();
+}

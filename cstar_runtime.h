@@ -49,6 +49,32 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 }                                                                              \
 static inline size_t NAME##__length(NAME* self) { return self->len; }
 
+// List<T> — growable (capacity doubling), owns its buffer (RAII frees).
+#define CSTAR_LIST_DEFINE(T, NAME, ELEM_DTOR)                                   \
+typedef struct NAME { T* data; size_t len; size_t cap; } NAME;                 \
+static inline void NAME##__ctor(NAME* self) { self->data=NULL; self->len=0; self->cap=0; } \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    for (size_t i = 0; i < self->len; ++i) { T* e = &self->data[i]; ELEM_DTOR(e); } \
+    free(self->data); self->data = NULL; self->len = 0; self->cap = 0;         \
+}                                                                              \
+static inline void   NAME##__add(NAME* self, T v) {                            \
+    if (self->len == self->cap) {                                             \
+        size_t nc = self->cap ? self->cap * 2 : 4;                            \
+        self->data = (T*)realloc(self->data, nc * sizeof(T));                 \
+        self->cap  = nc;                                                      \
+    }                                                                         \
+    self->data[self->len++] = v;                                             \
+}                                                                              \
+static inline T      NAME##__get(NAME* self, size_t i) {                       \
+    if (i >= self->len) cstar_bounds_fail(i, self->len);                       \
+    return self->data[i];                                                      \
+}                                                                              \
+static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
+    if (i >= self->len) cstar_bounds_fail(i, self->len);                       \
+    self->data[i] = v;                                                         \
+}                                                                              \
+static inline size_t NAME##__length(NAME* self) { return self->len; }
+
 
 // cstar `string` lowers to a fat, length-prefixed view. `cap == 0` means the
 // bytes are borrowed (e.g. a C string literal) and must not be freed; `cap > 0`
