@@ -10,3 +10,12 @@ cstar.parser.cpp
 cstar.parser.hpp
 cstar.parser.output
 *.llvm.bak
+
+# build output / generated transpiler artifacts
+out/
+*.wasm
+*.html
+*.js
+# generated C from `cstar transpile`/`build` (keep generated .c out of the tree)
+tests/**/*.c
+!tests/webgpu/smoke.c

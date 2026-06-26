@@ -2,8 +2,11 @@
 // invoking a C compiler to produce a native executable.
 //
 //   cstar transpile <in.cstar> [-o out.c] [--no-line]
-//   cstar build     <in.cstar> [-o exe] [--cc clang] [--no-line] [--keep-c]
+//   cstar build     <in.cstar> [-o out] [--target native|wasm] [--webgpu]
+//                              [--cc <compiler>] [--no-line] [--keep-c]
 //
+// native builds invoke clang; wasm builds invoke emcc (Emscripten), keying the
+// output format off the -o extension (.html harness by default).
 // (LLVM is gone; the backend is cstar.cemit.*.)
 
 #include <cstdio>
@@ -111,30 +114,48 @@ void usage()
     fprintf(stderr,
         "usage:\n"
         "  cstar transpile <in.cstar> [-o out.c] [--no-line]\n"
-        "  cstar build     <in.cstar> [-o exe] [--cc <compiler>] [--no-line] [--keep-c]\n");
+        "  cstar build     <in.cstar> [-o out] [--target native|wasm] [--webgpu]\n"
+        "                             [--cc <compiler>] [--no-line] [--keep-c]\n");
 }
 
 } // namespace
 
 int main(int argc, char** argv)
 {
-    if (argc < 3) { usage(); return 2; }
+    if (argc < 2) { usage(); return 2; }
 
     std::string subcommand = argv[1];
-    std::string input      = argv[2];
+    std::string input;                    // first positional after the subcommand
     std::string output;
-    std::string cc         = "clang";
+    std::string cc;                       // empty => pick default per target
+    std::string target     = "native";    // native | wasm
     bool        emitLines  = true;
     bool        keepC      = false;
+    bool        webgpu     = false;
 
-    for (int i = 3; i < argc; ++i) {
+    // Options may appear in any order, before or after the input file.
+    for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "-o" && i + 1 < argc)        output = argv[++i];
-        else if (a == "--cc" && i + 1 < argc) cc = argv[++i];
-        else if (a == "--no-line")            emitLines = false;
-        else if (a == "--keep-c")             keepC = true;
-        else { fprintf(stderr, "cstar: unknown option '%s'\n", a.c_str()); usage(); return 2; }
+        if (a == "-o" && i + 1 < argc)            output = argv[++i];
+        else if (a == "--cc" && i + 1 < argc)     cc = argv[++i];
+        else if (a == "--target" && i + 1 < argc) target = argv[++i];
+        else if (a == "--no-line")                emitLines = false;
+        else if (a == "--keep-c")                 keepC = true;
+        else if (a == "--webgpu")                 webgpu = true;
+        else if (!a.empty() && a[0] == '-') {
+            fprintf(stderr, "cstar: unknown option '%s'\n", a.c_str()); usage(); return 2;
+        }
+        else if (input.empty())                   input = a;
+        else { fprintf(stderr, "cstar: unexpected extra argument '%s'\n", a.c_str()); return 2; }
     }
+
+    if (input.empty()) { fprintf(stderr, "cstar: no input file\n"); usage(); return 2; }
+
+    if (target != "native" && target != "wasm") {
+        fprintf(stderr, "cstar: unknown --target '%s' (expected native|wasm)\n", target.c_str());
+        return 2;
+    }
+    const bool wasm = (target == "wasm");
 
     // Where cstar_runtime.h lives: alongside this driver's source tree, plus the
     // current directory. CSTAR_HOME overrides. (Install layout is firmed up later.)
@@ -149,24 +170,41 @@ int main(int argc, char** argv)
     }
 
     if (subcommand == "build") {
-        std::string cPath   = stripExtension(input) + ".c";
-        std::string exePath = output.empty() ? stripExtension(input) : output;
+        // Compiler: native uses clang; wasm uses emcc (emcc keys output format
+        // off the -o extension). --cc / $EMCC override.
+        std::string compiler = cc;
+        if (compiler.empty()) {
+            if (wasm) {
+                const char* env = getenv("EMCC");
+                compiler = env ? env : "emcc";
+            } else {
+                compiler = "clang";
+            }
+        }
+
+        // Default output: native -> bare exe name; wasm -> an HTML harness
+        // (emcc also emits the .js + .wasm alongside it).
+        std::string defaultOut = wasm ? (stripExtension(input) + ".html") : stripExtension(input);
+        std::string cPath      = stripExtension(input) + ".c";
+        std::string outPath    = output.empty() ? defaultOut : output;
 
         if (transpileToFile(input, cPath, emitLines) != 0)
             return 1;
 
         std::ostringstream cmd;
-        cmd << cc << " -std=c11 " << (emitLines ? "-g " : "")
-            << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. "
-            << "'" << cPath << "' -o '" << exePath << "'";
+        cmd << compiler << " -std=c11 ";
+        if (emitLines) cmd << (wasm ? "-g -gsource-map " : "-g ");
+        cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
+        if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
+        cmd << "'" << cPath << "' -o '" << outPath << "'";
         int rc = runCmd(cmd.str());
 
         if (!keepC) remove(cPath.c_str());
         if (rc != 0) {
-            fprintf(stderr, "cstar: C compiler failed (exit %d)\n", rc);
+            fprintf(stderr, "cstar: %s failed (exit %d)\n", compiler.c_str(), rc);
             return rc;
         }
-        fprintf(stderr, "cstar: built %s\n", exePath.c_str());
+        fprintf(stderr, "cstar: built %s\n", outPath.c_str());
         return 0;
     }
 

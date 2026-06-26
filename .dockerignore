@@ -1,0 +1,16 @@
+# The image is toolchain-only (source is bind-mounted), so keep the build
+# context tiny and free of host-built artifacts.
+.git
+*.o
+cstar
+cstar.lexer.cpp
+cstar.lexer.hpp
+cstar.parser.cpp
+cstar.parser.hpp
+*.output
+bison_report
+out/
+*.wasm
+*.html
+*.llvm.bak
+.DS_Store

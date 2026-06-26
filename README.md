@@ -1,37 +1,80 @@
-CStar Compiler
+# cstar
 
+A small C-family language: C#-like syntax, **no garbage collector** (RAII /
+deterministic destruction), and **explicit named parameters**. cstar
+**transpiles to portable C**, so it runs anywhere C runs — native on every
+platform, and in the browser as WebAssembly via Emscripten.
 
-Compiling From Source
+Goal: a portable, lightweight WebGPU game engine with no .NET/runtime baggage.
 
-You will need LLVM installed you can try to follow the instructions on the website.  This worked best for me:
+> Status: early. The compiler front end (Flex lexer, Bison grammar, AST) is
+> complete; the C backend is being built up milestone by milestone. Today it
+> lowers functions, primitive types, locals, and expressions, and builds for
+> **native** and **WASM**. See `/Users/matt/.claude/plans/` notes for the roadmap.
 
-```
-git clone http://llvm.org/git/llvm.git
-git clone http://llvm.org/git/clang.git llvm/tools/clang
-git clone http://llvm.org/git/clang-tools-extra.git llvm/tools/clang/tools/extra
-git clone http://llvm.org/git/compiler-rt.git llvm/projects/compiler-rt
-git clone http://llvm.org/git/libcxx.git llvm/projects/libcxx
-git clone http://llvm.org/git/libcxxabi.git llvm/projects/libcxxabi
+## Toolchain
 
-mkdir build_llvm
-cd build_llvm && cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX=prefix=/usr/local/llvm ../llvm
-make
-```
+The build toolchain is **containerized** for reproducibility and portability —
+it works the same under **podman** (preferred) or **docker**. The image is based
+on the official Emscripten SDK (emcc + node) plus bison/flex/clang for building
+the compiler itself.
 
-This may take several hours to build.
-
-You can then create a nice update script to keep your LLVM up to date:
-
-```
-#!/bin/bash
-
-root=$(pwd)
-cd $root/llvm && git pull --rebase origin master
-cd $root/llvm/tools/clang && git pull --rebase origin master
-cd $root/llvm/tools/clang/tools/extra && git pull --rebase origin master
-cd $root/llvm/projects/compiler-rt && git pull --rebase origin master
-cd $root/llvm/projects/libcxx && git pull --rebase origin master
-cd $root/llvm/projects/libcxxabi && git pull --rebase origin master
+```sh
+tools/cdev build-image      # one-time: build the cstar-dev toolchain image
+tools/cdev make             # build the cstar compiler
+tools/cdev test             # run the native end-to-end test suite
+tools/cdev sh               # interactive shell in the toolchain
+tools/cdev exec <cmd...>    # run any command in the toolchain
 ```
 
-The current MakeFile assumes you have installed LLVM under: /usr/local/llvm/include
+Override the engine with `CSTAR_ENGINE=docker` if you prefer docker.
+
+A host-native build also works if you have bison ≥ 2.7, flex, and clang
+(`brew install bison` on macOS — the system bison 2.3 is too old). Just run
+`make`.
+
+## Using the compiler
+
+```sh
+# Transpile cstar to C (no compiler invoked):
+cstar transpile tests/arith.cstar -o arith.c
+
+# Build a native executable:
+cstar build tests/arith.cstar -o arith && ./arith
+
+# Build for the browser (WASM). Default output is an HTML harness:
+cstar build tests/arith.cstar --target wasm          # -> arith.html + .js + .wasm
+cstar build tests/arith.cstar --target wasm -o app.js # -> app.js + app.wasm (headless: `node app.js`)
+```
+
+Options: `--target native|wasm`, `--webgpu` (link Emscripten's WebGPU port),
+`--cc <compiler>`, `--no-line` (omit `#line` directives), `--keep-c`.
+
+### Debugging
+
+Generated C carries `#line` directives back to the original `.cstar`, so a
+native `-g` build is debuggable in lldb/gdb with breakpoints in your `.cstar`
+source, and a WASM `-g -gsource-map` build steps through `.cstar` in browser
+devtools.
+
+## WebGPU
+
+The container's Emscripten ships the `emdawnwebgpu` WebGPU port. A toolchain
+smoke test lives in `tests/webgpu/` (hand-written C for now — cstar-level WebGPU
+bindings need pointer/extern support, a later milestone):
+
+```sh
+tools/cdev exec tests/webgpu/build.sh   # compiles+links a WebGPU WASM module
+```
+
+## Layout
+
+- `cstar.l`, `cstar.y` — Flex lexer and Bison grammar (the language front end)
+- `cstar.ast.h`, `cstar.ast.cpp`, `cstar.forward.h` — AST
+- `cstar.context.h` — parse-time context (source position + errors)
+- `cstar.cemit.{h,cpp}` — the C-emitting backend
+- `cstar_runtime.h` — minimal runtime included by generated C
+- `cstar.driver.cpp` — CLI (`transpile` / `build`)
+- `tests/`, `run_tests.sh` — end-to-end fixtures (assert on exit codes)
+- `Dockerfile`, `tools/cdev` — containerized toolchain
+- `legacy-llvm/` — the original LLVM backend, kept for reference (not built)
