@@ -107,12 +107,20 @@ class CEmitter {
 public:
     CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives);
 
-    // Emit a full translation unit. Returns the number of unsupported nodes
-    // encountered (0 == fully lowered).
+    // Emit a single self-contained translation unit (transpile / single-file
+    // build). Returns the number of unsupported nodes (0 == fully lowered).
     int emit(SharedCompilationUnit unit);
 
+    // Emit a multi-file program: one shared header (all decls) + one .c of
+    // definitions per source file. `headerName` is the #include spelling the
+    // modules use; `moduleStreams` is parallel to `units`.
+    int emitProgram(const std::vector<SharedCompilationUnit>& units,
+                    const std::string& headerName, std::ostream& header,
+                    const std::vector<std::ostream*>& moduleStreams,
+                    const std::vector<std::string>& sourcePaths);  // per-module #line paths
+
 private:
-    std::ostream& _out;
+    std::ostream* _out;
     std::string   _sourcePath;       // absolute path, used in #line directives
     bool          _lines;            // whether to emit #line directives
     int           _unsupported;      // count of nodes we could not lower
@@ -259,6 +267,12 @@ private:
     std::string assignmentOperator(int token);
 
     void unsupported(const char* what, int srcLine);
+
+    // Multi-file (M13): collect a whole program, then emit declarations (shared
+    // header) and definitions (per module) separately.
+    void collectProgram(const std::vector<SharedCompilationUnit>& units);
+    void emitHeaderContent(const std::vector<SharedCompilationUnit>& units);  // typedefs/structs/protos/macros
+    void emitModuleContent(SharedCompilationUnit unit);                       // this file's vtables + defs
 };
 
 #endif // __CSTAR_CEMIT_H__

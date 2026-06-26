@@ -1,0 +1,10 @@
+// Module: a free function + a class, used from main.cstar.
+int32 add(int32 a, int32 b) { return a + b; }
+
+class Counter
+{
+    int32 value;
+    Counter(int32 start) { this.value = start; }
+    void bump() { this.value = this.value + 1; }
+    int32 get() { return this.value; }
+}

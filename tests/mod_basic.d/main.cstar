@@ -1,0 +1,20 @@
+// Entry point: pulls a function + classes from other files, plus a smart pointer
+// and a collection over a cross-file type.
+int main()
+{
+    int32 s = add(a: 10, b: 5);            // cross-file function -> 15
+    Counter c = new Counter(start: 0);
+    c.bump();
+    c.bump();                              // cross-file class + method -> 2
+    Box b = new Box(w: 3, h: 4);           // cross-file class -> area 12
+    Owned<Box> o = new Owned<Box>(w: 2, h: 5);  // cross-file type in a smart pointer -> area 10
+
+    List<int32> xs = new List<int32>();
+    xs.add(item: s);
+    xs.add(item: c.get());
+    xs.add(item: b.area());
+    xs.add(item: o.area());
+    int32 total = 0;
+    foreach (int32 v in xs) { total = total + v; }
+    return total;                          // 15 + 2 + 12 + 10 = 39
+}

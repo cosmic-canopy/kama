@@ -5,13 +5,14 @@
 #include <cstdio>
 #include <sstream>
 #include <functional>
+#include <cctype>
 
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
 
 CEmitter::CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives)
-    : _out(out)
+    : _out(&out)
     , _sourcePath(sourcePath)
     , _lines(emitLineDirectives)
     , _unsupported(0)
@@ -20,13 +21,13 @@ CEmitter::CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLi
 
 void CEmitter::indent(int depth)
 {
-    for (int i = 0; i < depth; ++i) _out << "    ";
+    for (int i = 0; i < depth; ++i) *_out << "    ";
 }
 
 void CEmitter::line(int srcLine)
 {
     if (_lines && srcLine > 0)
-        _out << "#line " << srcLine << " \"" << _sourcePath << "\"\n";
+        *_out << "#line " << srcLine << " \"" << _sourcePath << "\"\n";
 }
 
 void CEmitter::unsupported(const char* what, int srcLine)
@@ -34,7 +35,7 @@ void CEmitter::unsupported(const char* what, int srcLine)
     ++_unsupported;
     std::fprintf(stderr, "cstar: warning: unsupported %s at %s:%d (not yet lowered)\n",
                  what, _sourcePath.c_str(), srcLine);
-    _out << "/* TODO(cstar): unsupported " << what << " */";
+    *_out << "/* TODO(cstar): unsupported " << what << " */";
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +302,7 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
 {
     for (auto it = s.locals.rbegin(); it != s.locals.rend(); ++it) {
         indent(depth);
-        _out << it->className << "__dtor(&" << it->cVar << ");\n";
+        *_out << it->className << "__dtor(&" << it->cVar << ");\n";
     }
 }
 
@@ -339,7 +340,7 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
     Scope sc; sc.isLoopBoundary = loopBoundary; sc.isFunctionRoot = functionRoot;
     _scopes.push_back(sc);
 
-    _out << "{\n";
+    *_out << "{\n";
     SharedStatement last;
     if (block && block->statements) {
         for (auto& stmt : *block->statements) { emitStatement(stmt, depth + 1); last = stmt; }
@@ -350,7 +351,7 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
         emitScopeCleanup(_scopes.back(), depth + 1);
 
     indent(depth);
-    _out << "}";
+    *_out << "}";
     _scopes.pop_back();
 }
 
@@ -363,7 +364,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         line(n->line);
         indent(depth);
         emitBlock(block, depth);
-        _out << "\n";
+        *_out << "\n";
         return;
     }
 
@@ -380,32 +381,32 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // the concrete object (which must be an lvalue that outlives `s`).
                 if (iface) {
                     line(n->line); indent(depth);
-                    _out << ty << " " << nm;
+                    *_out << ty << " " << nm;
                     if (d->initializer) {
                         std::string c = exprClass(d->initializer);
                         if (!c.empty() && isClass(c))
-                            _out << " = " << fatPointer(ty, c, emitExpression(d->initializer));
+                            *_out << " = " << fatPointer(ty, c, emitExpression(d->initializer));
                         else if (!c.empty() && isInterface(c))
-                            _out << " = " << emitExpression(d->initializer);  // already an interface value
+                            *_out << " = " << emitExpression(d->initializer);  // already an interface value
                         else
                             unsupported("interface initializer must be a concrete object lvalue", n->line);
                     }
-                    _out << ";\n";
+                    *_out << ";\n";
                     continue;
                 }
 
                 if (!cls) {
                     line(n->line); indent(depth);
-                    _out << ty << " " << nm;
-                    if (d->initializer) _out << " = " << emitExpression(d->initializer);
-                    _out << ";\n";
+                    *_out << ty << " " << nm;
+                    if (d->initializer) *_out << " = " << emitExpression(d->initializer);
+                    *_out << ";\n";
                     continue;
                 }
 
                 // Class-typed local: declare the value, then construct in place.
                 // Collections zero-init so an unconstructed one frees safely (free(NULL)).
                 line(n->line); indent(depth);
-                _out << ty << " " << nm << (_classes[ty].isCollection ? " = {0}" : "") << ";\n";
+                *_out << ty << " " << nm << (_classes[ty].isCollection ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible) recordDestructibleLocal(nm, ty);
                 if (!d->initializer) continue;
@@ -417,20 +418,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // ctor in place, and (Shared) allocate the control block.
                         std::string T = _classes[octy].collElemClass;
                         line(n->line); indent(depth);
-                        _out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
+                        *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
                         if (isClass(T) && _classes[T].hasCtor) {
                             line(n->line); indent(depth);
-                            _out << emitReorderedCall(T + "__ctor", nm + ".ptr",
+                            *_out << emitReorderedCall(T + "__ctor", nm + ".ptr",
                                                       _classes[T].ctorParams, oc->args, n->line) << ";\n";
                         }
                         if (smartKind(octy) == CollKind::Shared) {
                             indent(depth);
-                            _out << nm << ".ctrl = cstar_ctrl_new();\n";
+                            *_out << nm << ".ctrl = cstar_ctrl_new();\n";
                         }
                         // T with no ctor: malloc leaves it default (callers init fields).
                     } else if (isClass(octy) && _classes[octy].hasCtor) {
                         line(n->line); indent(depth);
-                        _out << emitCtorCall(nm, _classes[octy], oc->args, n->line) << ";\n";
+                        *_out << emitCtorCall(nm, _classes[octy], oc->args, n->line) << ";\n";
                     } else if (!isClass(octy)) {
                         unsupported("`new` of a non-class type", n->line);
                     }
@@ -441,12 +442,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // field-copy + weak retain. The source Shared stays valid.
                     line(n->line); indent(depth);
                     std::string src = emitExpression(d->initializer);
-                    _out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
-                    indent(depth); _out << "if (" << nm << ".ctrl) " << nm << ".ctrl->weak++;\n";
+                    *_out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
+                    indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->weak++;\n";
                 } else {
                     // Copy-initialize from another expression.
                     line(n->line); indent(depth);
-                    _out << nm << " = " << emitExpression(d->initializer) << ";\n";
+                    *_out << nm << " = " << emitExpression(d->initializer) << ";\n";
                     // Smart-pointer copy from an lvalue: Owned MOVES (invalidate the
                     // source so only `nm` drops it); Shared/Weak RETAIN (strong/weak++
                     // — both handles stay valid).
@@ -454,9 +455,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         CollKind k = smartKind(ty);
                         indent(depth);
                         if (k == CollKind::Owned)
-                            _out << smartPtrInvalidate(emitExpression(d->initializer), k) << "\n";
+                            *_out << smartPtrInvalidate(emitExpression(d->initializer), k) << "\n";
                         else
-                            _out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
+                            *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
                     }
                 }
             }
@@ -471,91 +472,91 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (ret->expression && _currentReturnCType != "void") {
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
             indent(depth);
-            _out << _currentReturnCType << " " << tmp << " = " << emitExpression(ret->expression) << ";\n";
+            *_out << _currentReturnCType << " " << tmp << " = " << emitExpression(ret->expression) << ";\n";
             // Smart-pointer move-out: returning a smart-ptr local transfers the
             // ref/ownership to the caller. Invalidate it BEFORE the unwind so the
             // scope's dtor doesn't free/decrement what the caller now owns (the
             // factory-function landmine).
             if (isSmartPtrLValue(ret->expression)) {
                 indent(depth);
-                _out << smartPtrInvalidate(emitExpression(ret->expression),
+                *_out << smartPtrInvalidate(emitExpression(ret->expression),
                                            smartKind(exprClass(ret->expression))) << "\n";
             }
             emitUnwindAll(depth);
-            indent(depth); _out << "return " << tmp << ";\n";
+            indent(depth); *_out << "return " << tmp << ";\n";
         } else {
-            if (ret->expression) { indent(depth); _out << emitExpression(ret->expression) << ";\n"; }
+            if (ret->expression) { indent(depth); *_out << emitExpression(ret->expression) << ";\n"; }
             emitUnwindAll(depth);
-            indent(depth); _out << "return;\n";
+            indent(depth); *_out << "return;\n";
         }
         return;
     }
 
     if (auto* f = dynamic_cast<IfNode*>(n)) {
         line(n->line); indent(depth);
-        _out << "if (" << emitExpression(f->booleanExpression) << ") ";
+        *_out << "if (" << emitExpression(f->booleanExpression) << ") ";
         emitBody(f->ifStatement, depth, /*loopBoundary=*/false);
-        if (f->elseStatement) { _out << " else "; emitBody(f->elseStatement, depth, false); }
-        _out << "\n";
+        if (f->elseStatement) { *_out << " else "; emitBody(f->elseStatement, depth, false); }
+        *_out << "\n";
         return;
     }
 
     if (auto* w = dynamic_cast<WhileNode*>(n)) {
         line(n->line); indent(depth);
-        _out << "while (" << emitExpression(w->booleanExpression) << ") ";
+        *_out << "while (" << emitExpression(w->booleanExpression) << ") ";
         emitBody(w->whileStatement, depth, /*loopBoundary=*/true);
-        _out << "\n";
+        *_out << "\n";
         return;
     }
 
     if (auto* d = dynamic_cast<DoWhileNode*>(n)) {
         line(n->line); indent(depth);
-        _out << "do ";
+        *_out << "do ";
         emitBody(d->doWhileStatement, depth, /*loopBoundary=*/true);
-        _out << " while (" << emitExpression(d->booleanExpression) << ");\n";
+        *_out << " while (" << emitExpression(d->booleanExpression) << ");\n";
         return;
     }
 
     if (auto* f = dynamic_cast<ForNode*>(n)) {
         line(n->line); indent(depth);
-        _out << "for (" << emitForClause(f->initializerStatements) << "; "
+        *_out << "for (" << emitForClause(f->initializerStatements) << "; "
              << (f->booleanExpression ? emitExpression(f->booleanExpression) : std::string()) << "; "
              << emitForClause(f->iteratorStatements) << ") ";
         emitBody(f->body, depth, /*loopBoundary=*/true);
-        _out << "\n";
+        *_out << "\n";
         return;
     }
 
     if (dynamic_cast<BreakNode*>(n)) {
         line(n->line);
         emitUnwindToLoop(depth);   // dtors must run before the break keyword
-        indent(depth); _out << "break;\n";
+        indent(depth); *_out << "break;\n";
         return;
     }
     if (dynamic_cast<ContinueNode*>(n)) {
         line(n->line);
         emitUnwindToLoop(depth);
-        indent(depth); _out << "continue;\n";
+        indent(depth); *_out << "continue;\n";
         return;
     }
 
     if (auto* sw = dynamic_cast<SwitchNode*>(n)) {
         line(n->line); indent(depth);
-        _out << "switch (" << emitExpression(sw->expression) << ") {\n";
+        *_out << "switch (" << emitExpression(sw->expression) << ") {\n";
         if (sw->switchsections) {
             for (auto& sec : *sw->switchsections) {
                 if (sec->labels) {
                     for (auto& lbl : *sec->labels) {
                         indent(depth + 1);
                         if (lbl->isDefault())
-                            _out << "default:\n";
+                            *_out << "default:\n";
                         else
-                            _out << "case " << emitExpression(lbl->constantExpression) << ":\n";
+                            *_out << "case " << emitExpression(lbl->constantExpression) << ":\n";
                     }
                 }
                 // Wrap the section body in a block: C forbids a declaration
                 // directly after a `case` label (e.g. a `return`'s __ret temp).
-                indent(depth + 1); _out << "{\n";
+                indent(depth + 1); *_out << "{\n";
                 SharedStatement last;
                 if (sec->statementList) {
                     for (auto& st : *sec->statementList) { emitStatement(st, depth + 2); last = st; }
@@ -564,12 +565,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // section already ends in a break/return.
                 bool ends = last && (dynamic_cast<BreakNode*>(last.get()) ||
                                      dynamic_cast<ReturnNode*>(last.get()));
-                if (!ends) { indent(depth + 2); _out << "break;\n"; }
-                indent(depth + 1); _out << "}\n";
+                if (!ends) { indent(depth + 2); *_out << "break;\n"; }
+                indent(depth + 1); *_out << "}\n";
             }
         }
         indent(depth);
-        _out << "}\n";
+        *_out << "}\n";
         return;
     }
 
@@ -577,7 +578,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         line(n->line); indent(depth);
         std::string itCls = exprClass(fe->expression);
         if (itCls.empty() || !_classes.count(itCls) || !_classes[itCls].isCollection) {
-            unsupported("foreach over a non-collection", n->line); _out << "\n"; return;
+            unsupported("foreach over a non-collection", n->line); *_out << "\n"; return;
         }
         const std::string& coll = _classes[itCls].name;
         std::string elemTy   = cType(fe->type);
@@ -589,10 +590,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         std::string recvExpr = emitExpression(fe->expression);
 
         // Outer wrapper holds the receiver pointer (evaluate the receiver once).
-        _out << "{\n";
-        indent(depth + 1); _out << coll << "* " << fp << " = &(" << recvExpr << ");\n";
+        *_out << "{\n";
+        indent(depth + 1); *_out << coll << "* " << fp << " = &(" << recvExpr << ");\n";
         indent(depth + 1);
-        _out << "for (size_t " << ix << " = 0; " << ix << " < " << coll << "__length(" << fp
+        *_out << "for (size_t " << ix << " = 0; " << ix << " < " << coll << "__length(" << fp
              << "); ++" << ix << ") {\n";
 
         // Loop-body scope (a loop boundary so break/continue unwind correctly).
@@ -604,7 +605,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
         // The element binding is a borrowed copy — NOT recorded destructible.
         indent(depth + 2);
-        _out << elemTy << " " << nm << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
+        *_out << elemTy << " " << nm << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
 
         SharedStatement last;
         if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
@@ -617,8 +618,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
         _scopes.pop_back();
 
-        indent(depth + 1); _out << "}\n";   // close for
-        indent(depth);     _out << "}\n";   // close wrapper
+        indent(depth + 1); *_out << "}\n";   // close for
+        indent(depth);     *_out << "}\n";   // close wrapper
         return;
     }
 
@@ -633,18 +634,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             CollKind    knd = smartKind(ty);
             SharedExpression rhs = as->expression;
             line(n->line);
-            indent(depth); _out << ty << "__dtor(&" << b << ");\n";       // release b's old
+            indent(depth); *_out << ty << "__dtor(&" << b << ");\n";       // release b's old
             if (knd == CollKind::Weak && isSmartPtrLValue(rhs) && exprClass(rhs) != ty) {
                 // Shared->Weak reseat: field-copy + weak retain.
                 std::string src = emitExpression(rhs);
-                indent(depth); _out << b << ".ptr = (" << src << ").ptr; " << b << ".ctrl = (" << src << ").ctrl;\n";
-                indent(depth); _out << "if (" << b << ".ctrl) " << b << ".ctrl->weak++;\n";
+                indent(depth); *_out << b << ".ptr = (" << src << ").ptr; " << b << ".ctrl = (" << src << ").ctrl;\n";
+                indent(depth); *_out << "if (" << b << ".ctrl) " << b << ".ctrl->weak++;\n";
             } else {
-                indent(depth); _out << b << " = " << emitExpression(rhs) << ";\n";
+                indent(depth); *_out << b << " = " << emitExpression(rhs) << ";\n";
                 if (isSmartPtrLValue(rhs)) {                              // copy from a local
                     indent(depth);
-                    if (knd == CollKind::Owned) _out << smartPtrInvalidate(emitExpression(rhs), knd) << "\n";
-                    else _out << b << ".ctrl->" << (knd == CollKind::Weak ? "weak" : "strong") << "++;\n";
+                    if (knd == CollKind::Owned) *_out << smartPtrInvalidate(emitExpression(rhs), knd) << "\n";
+                    else *_out << b << ".ctrl->" << (knd == CollKind::Weak ? "weak" : "strong") << "++;\n";
                 }
             }
             return;
@@ -655,14 +656,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (dynamic_cast<ExpressionStatementNode*>(n)) {
         line(n->line);
         indent(depth);
-        _out << emitExpression(std::dynamic_pointer_cast<ExpressionNode>(stmt)) << ";\n";
+        *_out << emitExpression(std::dynamic_pointer_cast<ExpressionNode>(stmt)) << ";\n";
         return;
     }
 
     line(n->line);
     indent(depth);
     unsupported("statement", n->line);
-    _out << "\n";
+    *_out << "\n";
 }
 
 // A brace-wrapped body for if/while/for/do. Reuses an existing block as-is.
@@ -675,12 +676,12 @@ void CEmitter::emitBody(SharedStatement stmt, int depth, bool loopBoundary)
     } else {
         Scope sc; sc.isLoopBoundary = loopBoundary;
         _scopes.push_back(sc);
-        _out << "{\n";
+        *_out << "{\n";
         emitStatement(stmt, depth + 1);
         if (!stmtIsJump(stmt))
             emitScopeCleanup(_scopes.back(), depth + 1);
         indent(depth);
-        _out << "}";
+        *_out << "}";
         _scopes.pop_back();
     }
 }
@@ -814,14 +815,14 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
 // enum Name { Name_M0, Name_M1 = <expr>, … }
 void CEmitter::emitEnum(EnumInfo& ei)
 {
-    _out << "typedef enum " << ei.name << " {\n";
+    *_out << "typedef enum " << ei.name << " {\n";
     for (auto& m : ei.members) {
         indent(1);
-        _out << ei.name << "_" << m.name;
-        if (m.value) _out << " = " << emitExpression(m.value);
-        _out << ",\n";
+        *_out << ei.name << "_" << m.name;
+        if (m.value) *_out << " = " << emitExpression(m.value);
+        *_out << ",\n";
     }
-    _out << "} " << ei.name << ";\n\n";
+    *_out << "} " << ei.name << ";\n\n";
 }
 
 // Build the class table: ordered fields, methods, and the (single) constructor.
@@ -1161,24 +1162,24 @@ void CEmitter::emitCollectionDefs()
         CollectionInfo& info = kv.second;
         std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "CSTAR_ELEM_NODTOR";
         if (info.kind == CollKind::Array) {
-            _out << "CSTAR_ARRAY_DEFINE(" << info.elemCType << ", " << info.cName
+            *_out << "CSTAR_ARRAY_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", " << elemDtor << ")\n";
         } else if (info.kind == CollKind::List) {
-            _out << "CSTAR_LIST_DEFINE(" << info.elemCType << ", " << info.cName
+            *_out << "CSTAR_LIST_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", " << elemDtor << ")\n";
         } else if (info.kind == CollKind::Owned) {
-            _out << "CSTAR_OWNED_DEFINE(" << info.elemCType << ", " << info.cName
+            *_out << "CSTAR_OWNED_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", " << elemDtor << ")\n";
         } else if (info.kind == CollKind::Shared) {
-            _out << "CSTAR_SHARED_DEFINE(" << info.elemCType << ", " << info.cName
+            *_out << "CSTAR_SHARED_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", " << elemDtor << ")\n";
         } else if (info.kind == CollKind::Weak) {
             // lock() returns the matching Shared (emitted earlier — map order Shared_ < Weak_).
-            _out << "CSTAR_WEAK_DEFINE(" << info.elemCType << ", " << info.cName
+            *_out << "CSTAR_WEAK_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", Shared_" << info.elemMangle << ")\n";
         }
     }
-    if (!_collections.empty()) _out << "\n";
+    if (!_collections.empty()) *_out << "\n";
 }
 
 // If `ea` indexes a collection, fill coll (cName), recvExpr, idx; return true.
@@ -1541,7 +1542,7 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn)
 {
     bool isEntry = false;
     std::string name = mangledFunctionName(fn, isEntry);
-    _out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ");\n";
+    *_out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ");\n";
 }
 
 void CEmitter::emitFunction(FunctionDeclarationNode* fn)
@@ -1568,21 +1569,21 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
     _scopes.clear();
 
     line(fn->line);
-    _out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ")\n";
+    *_out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ")\n";
 
     if (fn->block) {
         emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
     } else {
-        _out << "{\n}";
+        *_out << "{\n}";
     }
-    _out << "\n\n";
+    *_out << "\n\n";
 
     _refParams.clear();
 
     if (isEntry) {
         // Synthesized portable entry point. Argument marshaling (List<String>)
         // arrives once collections land; for now args are ignored.
-        _out << "int main(int argc, char** argv) {\n"
+        *_out << "int main(int argc, char** argv) {\n"
              << "    (void)argc; (void)argv;\n"
              << "    return (int)cstar_main();\n"
              << "}\n\n";
@@ -1595,29 +1596,29 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
 
 void CEmitter::emitStruct(ClassInfo& ci)
 {
-    _out << "struct " << ci.name << " {\n";
+    *_out << "struct " << ci.name << " {\n";
     // Offset-0 invariant: the vptr (root only) or the embedded base comes FIRST.
     bool hasMember = false;
     if (ci.hasVtable && ci.vtableRoot == ci.name) {
         indent(1);
-        _out << "const " << ci.name << "_vtable* __vptr;\n";
+        *_out << "const " << ci.name << "_vtable* __vptr;\n";
         hasMember = true;
     }
     if (ci.base) {
         indent(1);
-        _out << ci.baseName << " __base;\n";
+        *_out << ci.baseName << " __base;\n";
         hasMember = true;
     }
     for (auto& f : ci.fields) {
         indent(1);
-        _out << cType(f.type) << " " << f.name << ";\n";
+        *_out << cType(f.type) << " " << f.name << ";\n";
         hasMember = true;
     }
     if (!hasMember) {
         indent(1);
-        _out << "char __empty; /* C forbids empty structs */\n";
+        *_out << "char __empty; /* C forbids empty structs */\n";
     }
-    _out << "};\n\n";
+    *_out << "};\n\n";
 }
 
 // "(Owner* self, T a, U b)" — the C signature of a vtable slot.
@@ -1639,12 +1640,12 @@ void CEmitter::emitVtableType(ClassInfo& ci)
 {
     auto it = _rootVtables.find(ci.name);
     if (it == _rootVtables.end()) return;
-    _out << "struct " << ci.name << "_vtable {\n";
+    *_out << "struct " << ci.name << "_vtable {\n";
     for (auto& s : it->second) {
         indent(1);
-        _out << cType(s.node->returnType) << " (*" << s.name << ")" << vtableSlotSig(s) << ";\n";
+        *_out << cType(s.node->returnType) << " (*" << s.name << ")" << vtableSlotSig(s) << ";\n";
     }
-    _out << "};\n\n";
+    *_out << "};\n\n";
 }
 
 // Static const vtable INSTANCE per class with a vtable, filled with the most-
@@ -1654,16 +1655,16 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
     if (!ci.hasVtable) return;
     auto it = _rootVtables.find(ci.vtableRoot);
     if (it == _rootVtables.end()) return;
-    _out << "static const " << ci.vtableRoot << "_vtable " << ci.name << "__vtable = {\n";
+    *_out << "static const " << ci.vtableRoot << "_vtable " << ci.name << "__vtable = {\n";
     for (auto& s : it->second) {
         auto impl = ci.slotImpl.find(s.name);
         if (impl == ci.slotImpl.end()) continue;   // not visible here -> zero
         indent(1);
         // cast the impl (declared with a derived* self) to the slot's owner* signature
-        _out << "." << s.name << " = (" << cType(s.node->returnType) << "(*)"
+        *_out << "." << s.name << " = (" << cType(s.node->returnType) << "(*)"
              << vtableSlotSig(s) << ")&" << impl->second << ",\n";
     }
-    _out << "};\n\n";
+    *_out << "};\n\n";
 }
 
 // ---- Interfaces (M6b) -----------------------------------------------------
@@ -1683,13 +1684,13 @@ std::string CEmitter::ifaceSlotSig(FunctionDeclarationNode* m)
 // Interface I -> a vtable struct type `I_vtbl` and a fat-pointer value type `I`.
 void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 {
-    _out << "struct " << ii.name << "_vtbl {\n";
+    *_out << "struct " << ii.name << "_vtbl {\n";
     for (auto& m : ii.methods) {
         indent(1);
-        _out << cType(m.node->returnType) << " (*" << m.name << ")" << ifaceSlotSig(m.node) << ";\n";
+        *_out << cType(m.node->returnType) << " (*" << m.name << ")" << ifaceSlotSig(m.node) << ";\n";
     }
-    _out << "};\n";
-    _out << "struct " << ii.name << " { void* obj; const " << ii.name << "_vtbl* vtbl; };\n\n";
+    *_out << "};\n";
+    *_out << "struct " << ii.name << " { void* obj; const " << ii.name << "_vtbl* vtbl; };\n\n";
 }
 
 // For each interface C implements, a static const I_vtbl C__as_I mapping interface
@@ -1700,16 +1701,16 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end()) { unsupported("unknown interface in implements", ci.node->line); continue; }
         InterfaceInfo& ii = it->second;
-        _out << "static const " << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
+        *_out << "static const " << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&ci, m.name, &owner);
             if (!mi) { unsupported(("class missing interface method '" + m.name + "'").c_str(), ci.node->line); continue; }
             indent(1);
-            _out << "." << m.name << " = (" << cType(m.node->returnType) << "(*)" << ifaceSlotSig(m.node)
+            *_out << "." << m.name << " = (" << cType(m.node->returnType) << "(*)" << ifaceSlotSig(m.node)
                  << ")&" << mi->cName << ",\n";
         }
-        _out << "};\n\n";
+        *_out << "};\n\n";
     }
 }
 
@@ -1739,14 +1740,14 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
 {
     if (ci.isCollection) return;   // the C macro already declared ctor/dtor/methods
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
-        _out << "void " << ci.name << "__ctor("
+        *_out << "void " << ci.name << "__ctor("
              << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
     if (ci.destructible)
-        _out << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
+        *_out << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
-        _out << cType(mi.returnType) << " " << mi.cName << "("
+        *_out << cType(mi.returnType) << " " << mi.cName << "("
              << paramListC(mi.node->params, ci.name.c_str()) << ");\n";
     }
 }
@@ -1765,7 +1766,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     Scope root; root.isFunctionRoot = true;
     _scopes.push_back(root);
 
-    _out << "void " << ci.name << "__dtor(" << ci.name << "* self)\n{\n";
+    *_out << "void " << ci.name << "__dtor(" << ci.name << "* self)\n{\n";
 
     SharedStatement last;
     if (ci.dtorNode && ci.dtorNode->body && ci.dtorNode->body->statements) {
@@ -1779,15 +1780,15 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
         auto cit = _classes.find(cType(it->type));
         if (cit != _classes.end() && cit->second.destructible) {
             indent(1);
-            _out << cit->second.name << "__dtor(&self->" << it->name << ");\n";
+            *_out << cit->second.name << "__dtor(&self->" << it->name << ");\n";
         }
     }
     // Base destructor LAST.
     if (ci.base && ci.base->destructible) {
         indent(1);
-        _out << ci.baseName << "__dtor(&self->__base);\n";
+        *_out << ci.baseName << "__dtor(&self->__base);\n";
     }
-    _out << "}\n\n";
+    *_out << "}\n\n";
 
     _scopes.clear();
     _currentClass = nullptr;
@@ -1816,7 +1817,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         }
     }
 
-    _out << retType << " " << cName << "(" << paramListC(params, owner.name.c_str()) << ")\n{\n";
+    *_out << retType << " " << cName << "(" << paramListC(params, owner.name.c_str()) << ")\n{\n";
 
     if (isCtor) {
         // 1. Base constructor first (so derived overrides its effects + vptr).
@@ -1826,7 +1827,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
                 baseArgs = owner.ctorNode->declarator->initializer->args;
             if (owner.base->hasCtor) {
                 indent(1);
-                _out << emitReorderedCall(owner.baseName + "__ctor", "&self->__base",
+                *_out << emitReorderedCall(owner.baseName + "__ctor", "&self->__base",
                                           owner.base->ctorParams, baseArgs, owner.node->line) << ";\n";
             } else if (baseArgs && !baseArgs->empty()) {
                 unsupported("base has no constructor to receive arguments", owner.node->line);
@@ -1835,13 +1836,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         // 2. Set the vptr to THIS class's vtable (after base, so most-derived wins).
         if (owner.hasVtable) {
             indent(1);
-            _out << "self->" << vptrPrefix(&owner) << "__vptr = &" << owner.name << "__vtable;\n";
+            *_out << "self->" << vptrPrefix(&owner) << "__vptr = &" << owner.name << "__vtable;\n";
         }
         // 3. Field initializers.
         for (auto& f : owner.fields) {
             if (f.initializer) {
                 indent(1);
-                _out << "self->" << f.name << " = " << emitExpression(f.initializer) << ";\n";
+                *_out << "self->" << f.name << " = " << emitExpression(f.initializer) << ";\n";
             }
         }
     }
@@ -1851,7 +1852,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     }
     if (!(last && stmtIsJump(last)))
         emitScopeCleanup(_scopes.back(), 1);
-    _out << "}\n\n";
+    *_out << "}\n\n";
 
     _scopes.clear();
     _currentClass = nullptr;
@@ -2002,45 +2003,46 @@ std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, Share
 // Translation unit
 // ---------------------------------------------------------------------------
 
-int CEmitter::emit(SharedCompilationUnit unit)
+// Whole-program symbol table: run the collect passes for every unit (they append
+// to the shared maps), then resolve inheritance/vtables/destructibility once.
+void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
 {
-    _out << "/* Generated by cstar. Do not edit. */\n";
-    _out << "#include \"cstar_runtime.h\"\n\n";
-
-    if (!unit || !unit->codeDeclarationList)
-        return _unsupported;
-
-    // Pass 0: collect, link inheritance, build vtables, compute destructibility.
-    collectSignatures(unit);
-    collectEnums(unit);
-    collectInterfaces(unit);
-    collectClasses(unit);
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        collectSignatures(u);
+        collectEnums(u);
+        collectInterfaces(u);
+        collectClasses(u);
+    }
     linkBases();
     buildVtables();
     computeDestructible();
-    collectCollections(unit);   // M9: register Coll<T> instantiations (after destructibility)
+    for (auto& u : units)
+        if (u && u->codeDeclarationList) collectCollections(u);
+}
 
+// All DECLARATIONS (the shared header): typedefs, enums, struct/vtable types,
+// interface types, collection/smart-pointer macros, and every prototype.
+void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units)
+{
     std::vector<ClassInfo*> classes = topoOrderClasses();   // base before derived
 
-    // Pass S0: forward typedefs (classes, vtable types, interfaces) so bodies can
-    // reference each other and any class.
+    // Forward typedefs so bodies can reference each other and any class.
     for (ClassInfo* ci : classes) {
         if (ci->isCollection) continue;   // the C macro emits the collection's typedef
-        _out << "typedef struct " << ci->name << " " << ci->name << ";\n";
+        *_out << "typedef struct " << ci->name << " " << ci->name << ";\n";
         if (ci->hasVtable && ci->vtableRoot == ci->name)
-            _out << "typedef struct " << ci->name << "_vtable " << ci->name << "_vtable;\n";
+            *_out << "typedef struct " << ci->name << "_vtable " << ci->name << "_vtable;\n";
     }
     for (auto& kv : _interfaces) {
-        _out << "typedef struct " << kv.first << "_vtbl " << kv.first << "_vtbl;\n";
-        _out << "typedef struct " << kv.first << " " << kv.first << ";\n";
+        *_out << "typedef struct " << kv.first << "_vtbl " << kv.first << "_vtbl;\n";
+        *_out << "typedef struct " << kv.first << " " << kv.first << ";\n";
     }
-    if (!classes.empty() || !_interfaces.empty()) _out << "\n";
+    if (!classes.empty() || !_interfaces.empty()) *_out << "\n";
 
-    // Enums first — independent value types other declarations may reference.
     for (auto& kv : _enums) emitEnum(kv.second);
 
-    // Pass S: vtable struct types + struct bodies (topological), then interface
-    // types (their slot signatures may reference class types by value).
+    // vtable struct types + struct bodies (topological), then interface types.
     for (ClassInfo* ci : classes) {
         if (ci->isCollection) continue;   // the C macro emits the collection's struct
         if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
@@ -2048,49 +2050,96 @@ int CEmitter::emit(SharedCompilationUnit unit)
     }
     for (auto& kv : _interfaces) emitInterfaceTypes(kv.second);
 
-    // Pass A: prototypes — class ctors/dtors/methods first.
-    // extern functions are provided by C (runtime/linked) — no prototype/def.
+    // Class prototypes, then the collection/smart-pointer macros (which reference
+    // element struct/dtor decls), then free-function prototypes (which may use a
+    // collection/smart-pointer type in their signature).
     for (ClassInfo* ci : classes) emitClassPrototypes(*ci);
-
-    // Pass C: monomorphized collection / smart-pointer templates. Emitted AFTER
-    // class structs (pass S) + class dtor prototypes (just above) — the macros'
-    // static-inline funcs reference an element class's struct/dtor — and BEFORE
-    // free-function prototypes, which may use a collection/Owned type as a
-    // parameter or return type.
     emitCollectionDefs();
-
     bool any = false;
+    for (auto& u : units)
+        for (auto& decl : *u->codeDeclarationList)
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+                if (isExtern(fn)) continue;
+                emitFunctionPrototype(fn);
+                any = true;
+            }
+    if (any) *_out << "\n";
+}
+
+// This file's DEFINITIONS: its classes' vtable instances + interface vtables +
+// method/ctor/dtor bodies, then its free-function bodies. Prototypes for anything
+// referenced across files live in the shared header.
+void CEmitter::emitModuleContent(SharedCompilationUnit unit)
+{
+    auto classOf = [&](ASTNode* d) -> ClassInfo* {
+        auto* cd = dynamic_cast<ClassDeclarationNode*>(d);
+        if (cd && cd->name && cd->name->value && _classes.count(*cd->name->value))
+            return &_classes[*cd->name->value];
+        return nullptr;
+    };
+    // vtable instances + interface vtables first (referenced by ctor bodies).
+    for (auto& decl : *unit->codeDeclarationList)
+        if (ClassInfo* ci = classOf(decl.get())) emitVtableInstance(*ci);
+    for (auto& decl : *unit->codeDeclarationList)
+        if (ClassInfo* ci = classOf(decl.get())) emitClassInterfaceVtables(*ci);
+    // class definitions, then free-function definitions.
+    for (auto& decl : *unit->codeDeclarationList)
+        if (ClassInfo* ci = classOf(decl.get())) emitClassDefinitions(*ci);
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
-            if (isExtern(fn)) continue;
-            emitFunctionPrototype(fn);
-            any = true;
-        }
-    }
-    if (any) _out << "\n";
-
-    // Pass A2: vtable instances + interface (C__as_I) vtables — after prototypes,
-    // which declare the fn names they reference.
-    for (ClassInfo* ci : classes) emitVtableInstance(*ci);
-    for (ClassInfo* ci : classes) emitClassInterfaceVtables(*ci);
-
-    // Pass B: definitions — class methods/ctors/dtors, then free functions.
-    for (ClassInfo* ci : classes) emitClassDefinitions(*ci);
-    for (auto& decl : *unit->codeDeclarationList) {
-        if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
-            if (isExtern(fn)) continue;   // provided externally
-            emitFunction(fn);
+            if (!isExtern(fn)) emitFunction(fn);
         } else if (dynamic_cast<ClassDeclarationNode*>(decl.get())) {
-            // already emitted via the class passes
+            // emitted above
         } else if (dynamic_cast<InterfaceDeclarationNode*>(decl.get())) {
-            // already emitted via the interface passes
+            // type-only (header)
         } else if (dynamic_cast<EnumDeclarationNode*>(decl.get())) {
-            // already emitted via the enum pass
+            // emitted in the header
         } else if (decl) {
             unsupported("top-level declaration", decl->line);
-            _out << "\n";
+            *_out << "\n";
         }
     }
+}
 
+// Single self-contained TU (transpile / single-file build): header content +
+// module definitions in one stream.
+int CEmitter::emit(SharedCompilationUnit unit)
+{
+    *_out << "/* Generated by cstar. Do not edit. */\n";
+    *_out << "#include \"cstar_runtime.h\"\n\n";
+    if (!unit || !unit->codeDeclarationList)
+        return _unsupported;
+    collectProgram({unit});
+    emitHeaderContent({unit});
+    emitModuleContent(unit);
+    return _unsupported;
+}
+
+// Multi-file program: a guarded shared header of all declarations, then one .c of
+// definitions per source file (each #include-ing the header).
+int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
+                          const std::string& headerName, std::ostream& header,
+                          const std::vector<std::ostream*>& moduleStreams,
+                          const std::vector<std::string>& sourcePaths)
+{
+    collectProgram(units);
+
+    std::string guard = "CSTAR_GEN_";
+    for (char c : headerName) guard += (isalnum((unsigned char)c) ? (char)toupper(c) : '_');
+
+    _out = &header;
+    header << "/* Generated by cstar. Do not edit. */\n";
+    header << "#ifndef " << guard << "\n#define " << guard << "\n";
+    header << "#include \"cstar_runtime.h\"\n\n";
+    emitHeaderContent(units);   // declarations only — no bodies, so no #line needed
+    header << "#endif /* " << guard << " */\n";
+
+    for (size_t i = 0; i < units.size(); ++i) {
+        _out = moduleStreams[i];
+        _sourcePath = sourcePaths[i];   // #line in this module points to its own source
+        *_out << "/* Generated by cstar. Do not edit. */\n";
+        *_out << "#include \"" << headerName << "\"\n\n";
+        emitModuleContent(units[i]);
+    }
     return _unsupported;
 }

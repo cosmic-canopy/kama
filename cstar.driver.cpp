@@ -57,6 +57,12 @@ std::string dirName(const std::string& path)
     return (slash == std::string::npos) ? std::string(".") : path.substr(0, slash);
 }
 
+std::string baseName(const std::string& path)
+{
+    size_t slash = path.find_last_of("/\\");
+    return (slash == std::string::npos) ? path : path.substr(slash + 1);
+}
+
 std::string stripExtension(const std::string& path)
 {
     size_t slash = path.find_last_of("/\\");
@@ -137,6 +143,45 @@ int transpileToFile(const std::string& inputFile, const std::string& outPath, bo
     return 0;
 }
 
+// Transpile a multi-file program: parse every input, emit one shared header
+// (`headerPath`, included as `headerName`) + one `.c` per input (`cPaths`,
+// parallel to `inputs`). Returns 0 on success.
+int transpileProgram(const std::vector<std::string>& inputs,
+                     const std::string& headerPath, const std::string& headerName,
+                     const std::vector<std::string>& cPaths, bool emitLines)
+{
+    std::vector<SharedCompilationUnit> units;
+    std::vector<std::string> sourcePaths;
+    for (auto& in : inputs) {
+        SharedCompilationUnit u = parseFile(in);
+        if (!u) return 1;
+        units.push_back(u);
+        sourcePaths.push_back(absolutePath(in));
+    }
+
+    std::ofstream header(headerPath);
+    if (!header) { fprintf(stderr, "cstar: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
+
+    std::vector<std::unique_ptr<std::ofstream>> moduleFiles;
+    std::vector<std::ostream*> moduleStreams;
+    for (auto& cp : cPaths) {
+        auto f = std::unique_ptr<std::ofstream>(new std::ofstream(cp));
+        if (!*f) { fprintf(stderr, "cstar: error: cannot write '%s'\n", cp.c_str()); return 1; }
+        moduleStreams.push_back(f.get());
+        moduleFiles.push_back(std::move(f));
+    }
+
+    CEmitter emitter(header, "", emitLines);
+    int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
+    header.close();
+    for (auto& f : moduleFiles) f->close();
+
+    if (unsupported > 0)
+        fprintf(stderr, "cstar: %d construct(s) not yet lowered; generated C may be incomplete.\n",
+                unsupported);
+    return 0;
+}
+
 int runCmd(const std::string& cmd)
 {
     int rc = system(cmd.c_str());
@@ -163,7 +208,7 @@ int main(int argc, char** argv)
     if (argc < 2) { usage(); return 2; }
 
     std::string subcommand = argv[1];
-    std::string input;                    // first positional after the subcommand
+    std::vector<std::string> inputs;      // one or more .cstar source files
     std::string output;
     std::string cc;                       // empty => pick default per target
     std::string target     = "native";    // native | wasm
@@ -186,11 +231,11 @@ int main(int argc, char** argv)
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "cstar: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
-        else if (input.empty())                   input = a;
-        else { fprintf(stderr, "cstar: unexpected extra argument '%s'\n", a.c_str()); return 2; }
+        else                                      inputs.push_back(a);
     }
 
-    if (input.empty()) { fprintf(stderr, "cstar: no input file\n"); usage(); return 2; }
+    if (inputs.empty()) { fprintf(stderr, "cstar: no input file\n"); usage(); return 2; }
+    const std::string& input = inputs[0];   // first input drives default output naming
 
     if (target != "native" && target != "wasm") {
         fprintf(stderr, "cstar: unknown --target '%s' (expected native|wasm)\n", target.c_str());
@@ -206,6 +251,10 @@ int main(int argc, char** argv)
     std::string runtimeDir = resolveRuntimeDir(argv[0]);
 
     if (subcommand == "transpile") {
+        if (inputs.size() > 1) {
+            fprintf(stderr, "cstar: transpile takes a single file; use `build` for multi-file programs\n");
+            return 2;
+        }
         std::string outPath = output.empty() ? (stripExtension(input) + ".c") : output;
         int rc = transpileToFile(input, outPath, emitLines);
         if (rc == 0) fprintf(stderr, "cstar: wrote %s\n", outPath.c_str());
@@ -228,11 +277,32 @@ int main(int argc, char** argv)
         // Default output: native -> bare exe name; wasm -> an HTML harness
         // (emcc also emits the .js + .wasm alongside it).
         std::string defaultOut = wasm ? (stripExtension(input) + ".html") : stripExtension(input);
-        std::string cPath      = stripExtension(input) + ".c";
         std::string outPath    = output.empty() ? defaultOut : output;
 
-        if (transpileToFile(input, cPath, emitLines) != 0)
-            return 1;
+        // Transpile to one or more .c (multi-file emits a shared header too).
+        // Generated files land in the output directory; cleaned unless --keep-c.
+        std::string genDir = dirName(outPath);
+        std::vector<std::string> cFiles;     // .c to compile
+        std::vector<std::string> genFiles;   // generated files to remove afterwards
+        std::string headerDir;
+
+        if (inputs.size() == 1) {
+            std::string cPath = stripExtension(input) + ".c";
+            if (transpileToFile(input, cPath, emitLines) != 0) return 1;
+            cFiles.push_back(cPath);
+            genFiles.push_back(cPath);
+        } else {
+            std::string headerName = baseName(stripExtension(outPath)) + ".gen.h";
+            std::string headerPath = genDir + "/" + headerName;
+            headerDir = genDir;
+            std::vector<std::string> cPaths;
+            for (auto& in : inputs)
+                cPaths.push_back(genDir + "/" + baseName(stripExtension(in)) + ".c");
+            if (transpileProgram(inputs, headerPath, headerName, cPaths, emitLines) != 0) return 1;
+            cFiles   = cPaths;
+            genFiles = cPaths;
+            genFiles.push_back(headerPath);
+        }
 
         std::ostringstream cmd;
         cmd << compiler << " -std=c11 ";
@@ -254,11 +324,13 @@ int main(int argc, char** argv)
             cmd << (wasm ? "-g -gsource-map -O0 " : "-g -O0 ");
         }
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
+        if (!headerDir.empty()) cmd << "-I" << headerDir << " ";   // the shared generated header
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
-        cmd << "\"" << cPath << "\" -o \"" << outPath << "\"";
+        for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
+        cmd << "-o \"" << outPath << "\"";
         int rc = runCmd(cmd.str());
 
-        if (!keepC) remove(cPath.c_str());
+        if (!keepC) for (auto& gf : genFiles) remove(gf.c_str());
         if (rc != 0) {
             fprintf(stderr, "cstar: %s failed (exit %d)\n", compiler.c_str(), rc);
             return rc;

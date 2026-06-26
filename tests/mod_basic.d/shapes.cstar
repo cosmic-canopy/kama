@@ -1,0 +1,8 @@
+// Module: a class used both directly and through Owned<Box> from main.cstar.
+class Box
+{
+    int32 w;
+    int32 h;
+    Box(int32 w, int32 h) { this.w = w; this.h = h; }
+    int32 area() { return this.w * this.h; }
+}
