@@ -432,6 +432,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // Copy-initialize from another expression.
                     line(n->line); indent(depth);
                     _out << nm << " = " << emitExpression(d->initializer) << ";\n";
+                    // Owned move: initializing from an Owned lvalue transfers
+                    // ownership — invalidate the source so only `nm` drops it.
+                    if (isOwnedLValue(d->initializer)) {
+                        indent(depth);
+                        _out << emitExpression(d->initializer) << ".ptr = NULL;\n";
+                    }
                 }
             }
         }
@@ -446,6 +452,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
             indent(depth);
             _out << _currentReturnCType << " " << tmp << " = " << emitExpression(ret->expression) << ";\n";
+            // Owned move-out: returning an Owned local transfers ownership to the
+            // caller. Null it BEFORE the unwind so the scope's dtor doesn't free
+            // the pointee the caller now owns (the factory-function landmine).
+            if (isOwnedLValue(ret->expression)) {
+                indent(depth);
+                _out << emitExpression(ret->expression) << ".ptr = NULL;\n";
+            }
             emitUnwindAll(depth);
             indent(depth); _out << "return " << tmp << ";\n";
         } else {
@@ -585,6 +598,23 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         indent(depth + 1); _out << "}\n";   // close for
         indent(depth);     _out << "}\n";   // close wrapper
         return;
+    }
+
+    // Owned move-assignment `b = a;` — drop b's current pointee first (no leak),
+    // move, then invalidate the source if it was a movable lvalue. This must be a
+    // statement (the null can't live inside an expression).
+    if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        if (as->token == EQ && isOwnedExpr(as->unaryExpression)) {
+            std::string b    = emitExpression(as->unaryExpression);
+            std::string ownT = exprClass(as->unaryExpression);     // Owned_T
+            line(n->line);
+            indent(depth); _out << ownT << "__dtor(&" << b << ");\n";
+            indent(depth); _out << b << " = " << emitExpression(as->expression) << ";\n";
+            if (isOwnedLValue(as->expression)) {                   // move from a local
+                indent(depth); _out << emitExpression(as->expression) << ".ptr = NULL;\n";
+            }
+            return;
+        }
     }
 
     // Bare expression statement (e.g. an assignment or call used as a statement).
@@ -1276,6 +1306,13 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             s += isClass(p.className) ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base
                                       : ("&(" + val + ")");
         } else {
+            // Move-as-argument is not supported in M10 (the ownership transfer
+            // would need a statement to null the source). Pass an Owned by `ref`
+            // to borrow it, or return it to transfer. Flag rather than risk a
+            // silent double-free.
+            if (isOwnedLValue(f->second->expression))
+                unsupported("Owned<T> passed by value (M10 has no move-as-argument; "
+                            "pass by `ref` to borrow, or return it to transfer)", srcLine);
             s += val;
         }
     }
@@ -1900,9 +1937,17 @@ int CEmitter::emit(SharedCompilationUnit unit)
     }
     for (auto& kv : _interfaces) emitInterfaceTypes(kv.second);
 
-    // Pass A: prototypes — class ctors/dtors/methods, then free functions.
+    // Pass A: prototypes — class ctors/dtors/methods first.
     // extern functions are provided by C (runtime/linked) — no prototype/def.
     for (ClassInfo* ci : classes) emitClassPrototypes(*ci);
+
+    // Pass C: monomorphized collection / smart-pointer templates. Emitted AFTER
+    // class structs (pass S) + class dtor prototypes (just above) — the macros'
+    // static-inline funcs reference an element class's struct/dtor — and BEFORE
+    // free-function prototypes, which may use a collection/Owned type as a
+    // parameter or return type.
+    emitCollectionDefs();
+
     bool any = false;
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
@@ -1912,11 +1957,6 @@ int CEmitter::emit(SharedCompilationUnit unit)
         }
     }
     if (any) _out << "\n";
-
-    // Pass C: monomorphized collection templates. After class structs (pass S)
-    // and dtor prototypes (pass A) — the macro's static-inline funcs may
-    // reference an element class's struct/dtor — and before pass B definitions.
-    emitCollectionDefs();
 
     // Pass A2: vtable instances + interface (C__as_I) vtables — after prototypes,
     // which declare the fn names they reference.
