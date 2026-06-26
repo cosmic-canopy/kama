@@ -479,6 +479,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             _out << "case " << emitExpression(lbl->constantExpression) << ":\n";
                     }
                 }
+                // Wrap the section body in a block: C forbids a declaration
+                // directly after a `case` label (e.g. a `return`'s __ret temp).
+                indent(depth + 1); _out << "{\n";
                 SharedStatement last;
                 if (sec->statementList) {
                     for (auto& st : *sec->statementList) { emitStatement(st, depth + 2); last = st; }
@@ -488,6 +491,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 bool ends = last && (dynamic_cast<BreakNode*>(last.get()) ||
                                      dynamic_cast<ReturnNode*>(last.get()));
                 if (!ends) { indent(depth + 2); _out << "break;\n"; }
+                indent(depth + 1); _out << "}\n";
             }
         }
         indent(depth);
