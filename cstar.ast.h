@@ -187,13 +187,18 @@ public:
     int builtInVal;
     SharedString value;
     SharedStringList qualifier;
-    SharedString generic;
+    SharedString generic;          // legacy bare-name generic (kept for compat)
+    SharedIdentifier genericArg;   // element type for Coll<T> (a full type) — M9
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
     IdentifierNode(CodeGenContext& context, SharedString value, int builtInVal = IDENTIFIER_NONE_VAL)
-        : ASTNode(context),  ExpressionNode(context), builtInVal(builtInVal), value(value), qualifier( std::make_shared<StringList>() ), generic( SharedString() ) { }
+        : ASTNode(context),  ExpressionNode(context), builtInVal(builtInVal), value(value), qualifier( std::make_shared<StringList>() ), generic( SharedString() ), genericArg( SharedIdentifier() ) { }
     IdentifierNode(CodeGenContext& context, SharedString value, SharedStringList qualifier, SharedString generic)
-        : ASTNode(context),  ExpressionNode(context), builtInVal(IDENTIFIER_NONE_VAL), value(value), qualifier(qualifier), generic(generic) { }
+        : ASTNode(context),  ExpressionNode(context), builtInVal(IDENTIFIER_NONE_VAL), value(value), qualifier(qualifier), generic(generic), genericArg( SharedIdentifier() ) { }
+    // Coll<T>: the generic argument is a full type (IdentifierNode), so primitives
+    // (List<int32>) and class element types (List<Point>) both work.
+    IdentifierNode(CodeGenContext& context, SharedString value, SharedStringList qualifier, SharedIdentifier genericArg)
+        : ASTNode(context),  ExpressionNode(context), builtInVal(IDENTIFIER_NONE_VAL), value(value), qualifier(qualifier), generic( SharedString() ), genericArg(genericArg) { }
 };
 
 //------------------------------------------------------------------------------ 

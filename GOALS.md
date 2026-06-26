@@ -23,6 +23,15 @@ lightweight WebGPU game engine.
 3. **Predictable allocation/deallocation, no GC.** Lifetimes are deterministic (RAII). Allocation is
    explicit in the generated C. Arena/pool allocators arrive as library types for the engine.
 
+3a. **No unsafe code; no raw pointers in the language.** The cstar surface never exposes raw pointers or
+   raw memory. Heap and buffers are reached only through safe abstractions: **collections** (`Array<T>`/
+   `List<T>`/`String`) now, and a **smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted,
+   `Weak<T>`) later. These are compiler-known intrinsics whose unsafe internals (raw pointers, `malloc`/
+   `free`) live ONLY in `cstar_runtime.h` — the Rust-`Vec`/Swift-`Array` model: unsafe core, safe API.
+   Indexing is **bounds-checked** (traps, not UB). A raw pointer / `unsafe` block is explicitly NOT a
+   language goal. (Self-hosting the compiler in cstar — goal #1 — is the one case that may someday need a
+   tightly-contained escape hatch; a separate, deferred decision.)
+
 4. **One way to do a thing. Favor simplicity.** Unlike C++'s many syntaxes for one concept, cstar
    prefers a single, obvious construct. Resist redundant syntax. (Already: named args only — no
    positional; one form per construct.)

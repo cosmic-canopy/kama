@@ -309,7 +309,7 @@ qualifier
   ;
 basic_identifier
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | IDENTIFIER LT IDENTIFIER GT   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), $3); }
+  | IDENTIFIER LT type GT   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), $3); }
   ;
 
 qualified_identifier_no_generic
