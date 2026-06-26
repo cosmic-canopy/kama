@@ -1,0 +1,22 @@
+// Array<T>: fixed buffer, indexed assignment, foreach iteration, RAII free.
+int main()
+{
+    Array<int32> a = new Array<int32>(size: 5);
+    a[0] = 10;
+    a[1] = 8;
+    a[2] = 7;
+    a[3] = 6;
+    a[4] = 11;
+
+    int32 total = 0;
+    foreach (int32 x in a)
+    {
+        total = total + x;
+    }
+
+    // also exercise indexed read + compound assignment
+    total += a[0];   // +10
+    total = total - a[4];   // -11
+
+    return total;   // 42 + 10 - 11 = 41
+}

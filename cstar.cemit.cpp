@@ -44,6 +44,9 @@ void CEmitter::unsupported(const char* what, int srcLine)
 std::string CEmitter::cType(SharedIdentifier type)
 {
     if (!type) return "void";
+    // Collection types (M9) spell their mangled struct name: Array<int32> -> Array_int32.
+    if (type->genericArg && type->value && (*type->value == "Array" || *type->value == "List"))
+        return *type->value + "_" + mangleElem(type->genericArg);
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "int8_t";
         case IDENTIFIER_INT16_VAL:   return "int16_t";
@@ -222,8 +225,30 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
+        // Indexed assignment to a collection lowers to __set, not `lhs = rhs`.
+        if (auto* ea = dynamic_cast<ElementAccessNode*>(v->unaryExpression.get())) {
+            std::string coll, recvExpr, idx;
+            if (collectionElemAccess(ea, coll, recvExpr, idx)) {
+                std::string rhs = emitExpression(v->expression);
+                if (v->token == EQ)
+                    return coll + "__set(&(" + recvExpr + "), " + idx + ", " + rhs + ")";
+                // Compound (a[i] += x): set(get(...) <op> (x)). NB: index double-evaluated.
+                std::string op = assignmentOperator(v->token);   // e.g. "+="
+                if (op.size() >= 2 && op.back() == '=') op.pop_back();
+                return coll + "__set(&(" + recvExpr + "), " + idx + ", "
+                            + coll + "__get(&(" + recvExpr + "), " + idx + ") " + op + " (" + rhs + "))";
+            }
+        }
         return "(" + emitExpression(v->unaryExpression) + " "
                    + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
+    }
+
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        std::string coll, recvExpr, idx;
+        if (collectionElemAccess(ea, coll, recvExpr, idx))
+            return coll + "__get(&(" + recvExpr + "), " + idx + ")";
+        unsupported("index on a non-collection", ea->line);
+        return "0";
     }
 
     if (auto* v = dynamic_cast<PreIncrDecrNode*>(n)) {
@@ -374,8 +399,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 }
 
                 // Class-typed local: declare the value, then construct in place.
+                // Collections zero-init so an unconstructed one frees safely (free(NULL)).
                 line(n->line); indent(depth);
-                _out << ty << " " << nm << ";\n";
+                _out << ty << " " << nm << (_classes[ty].isCollection ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible) recordDestructibleLocal(nm, ty);
                 if (!d->initializer) continue;
@@ -496,6 +522,55 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         }
         indent(depth);
         _out << "}\n";
+        return;
+    }
+
+    if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+        line(n->line); indent(depth);
+        std::string itCls = exprClass(fe->expression);
+        if (itCls.empty() || !_classes.count(itCls) || !_classes[itCls].isCollection) {
+            unsupported("foreach over a non-collection", n->line); _out << "\n"; return;
+        }
+        const std::string& coll = _classes[itCls].name;
+        std::string elemTy   = cType(fe->type);
+        std::string elemClass = _classes[itCls].collElemClass;   // "" if primitive element
+        std::string nm = (fe->name && fe->name->value) ? *fe->name->value : "__x";
+        int id = _tempCounter++;
+        std::string fp = "__fe" + std::to_string(id);
+        std::string ix = "__i"  + std::to_string(id);
+        std::string recvExpr = emitExpression(fe->expression);
+
+        // Outer wrapper holds the receiver pointer (evaluate the receiver once).
+        _out << "{\n";
+        indent(depth + 1); _out << coll << "* " << fp << " = &(" << recvExpr << ");\n";
+        indent(depth + 1);
+        _out << "for (size_t " << ix << " = 0; " << ix << " < " << coll << "__length(" << fp
+             << "); ++" << ix << ") {\n";
+
+        // Loop-body scope (a loop boundary so break/continue unwind correctly).
+        Scope sc; sc.isLoopBoundary = true;
+        _scopes.push_back(sc);
+        bool hadType = _localTypes.count(nm);
+        std::string prevType = hadType ? _localTypes[nm] : std::string();
+        _localTypes[nm] = elemClass;   // element binding's class (for x.method() resolution)
+
+        // The element binding is a borrowed copy — NOT recorded destructible.
+        indent(depth + 2);
+        _out << elemTy << " " << nm << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
+
+        SharedStatement last;
+        if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
+            if (b->statements) for (auto& st : *b->statements) { emitStatement(st, depth + 2); last = st; }
+        } else if (fe->body) {
+            emitStatement(fe->body, depth + 2); last = fe->body;
+        }
+        if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
+
+        if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
+        _scopes.pop_back();
+
+        indent(depth + 1); _out << "}\n";   // close for
+        indent(depth);     _out << "}\n";   // close wrapper
         return;
     }
 
@@ -746,6 +821,222 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         }
         _classes[ci.name] = ci;
     }
+}
+
+// ---- Collections (M9) -----------------------------------------------------
+
+// The mangling suffix for an element type: primitives use a short stable
+// spelling; a class/enum uses its own name. Array<int32> -> "int32".
+std::string CEmitter::mangleElem(SharedIdentifier elem)
+{
+    if (!elem) return "void";
+    switch (elem->builtInVal) {
+        case IDENTIFIER_INT8_VAL:    return "int8";
+        case IDENTIFIER_INT16_VAL:   return "int16";
+        case IDENTIFIER_INT32_VAL:   return "int32";
+        case IDENTIFIER_INT64_VAL:   return "int64";
+        case IDENTIFIER_UINT8_VAL:   return "uint8";
+        case IDENTIFIER_UINT16_VAL:  return "uint16";
+        case IDENTIFIER_UINT32_VAL:  return "uint32";
+        case IDENTIFIER_UINT64_VAL:  return "uint64";
+        case IDENTIFIER_BOOL_VAL:    return "bool";
+        case IDENTIFIER_FLOAT32_VAL: return "float32";
+        case IDENTIFIER_FLOAT64_VAL: return "float64";
+        default:                     return elem->value ? *elem->value : "void";
+    }
+}
+
+bool CEmitter::isCollectionType(SharedIdentifier t) const
+{
+    // Stage 2: Array only. List (stage 3) and String (stage 4) join here.
+    return t && t->genericArg && t->value && *t->value == "Array";
+}
+
+// Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
+// macro emission) and a synthetic ClassInfo (so dispatch/RAII/decl reuse works).
+void CEmitter::registerCollection(SharedIdentifier collType)
+{
+    if (!isCollectionType(collType)) return;
+
+    CollKind kind = CollKind::Array;          // (Array only for now)
+    SharedIdentifier elem = collType->genericArg;
+    std::string elemCType  = cType(elem);
+    std::string elemMangle = mangleElem(elem);
+    std::string elemClass  = isClass(elemCType) ? elemCType : "";
+    std::string cName = "Array_" + elemMangle;
+
+    if (_collections.count(cName)) return;    // dedup
+
+    CollectionInfo info;
+    info.kind = kind; info.cName = cName;
+    info.elemCType = elemCType; info.elemMangle = elemMangle; info.elemClass = elemClass;
+    info.elemDestructible = !elemClass.empty() && _classes.count(elemClass) && _classes[elemClass].destructible;
+    _collections[cName] = info;
+
+    // Synthetic ClassInfo: a struct with a ctor, a dtor, and intrinsic methods.
+    ClassInfo ci;
+    ci.name = cName;
+    ci.isCollection = true;
+    ci.collKind = kind;
+    ci.collElemClass = elemClass;
+    ci.destructible = true;                    // owns heap -> RAII frees the buffer
+    ci.hasCtor = true;
+    ci.ctorParams = { ParamSig{"size", false, ""} };
+
+    auto addMethod = [&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret) {
+        MethodInfo mi;
+        mi.cName = cName + "__" + mname;
+        mi.params = std::move(params);
+        mi.returnType = ret;
+        mi.isIntrinsic = true;
+        ci.methods[mname] = mi;
+    };
+    addMethod("get",    { ParamSig{"index", false, ""} }, elem);
+    addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} }, SharedIdentifier());
+    addMethod("length", {}, SharedIdentifier());
+
+    _classes[cName] = ci;
+}
+
+void CEmitter::scanTypeForCollections(SharedIdentifier t)
+{
+    if (!t) return;
+    if (isCollectionType(t)) registerCollection(t);
+    if (t->genericArg) scanTypeForCollections(t->genericArg);   // nested (harmless)
+}
+
+void CEmitter::scanExprForCollections(SharedExpression e)
+{
+    if (!e) return;
+    ASTNode* n = e.get();
+    if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) {
+        scanTypeForCollections(oc->type);
+        if (oc->args) for (auto& a : *oc->args) if (a) scanExprForCollections(a->expression);
+    } else if (auto* c = dynamic_cast<CastNode*>(n)) {
+        scanTypeForCollections(c->type);
+        scanExprForCollections(c->unaryExpression);
+    } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
+        scanExprForCollections(b->LHS); scanExprForCollections(b->RHS);
+    } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) {
+        scanExprForCollections(l->LHS); scanExprForCollections(l->RHS);
+    } else if (auto* tn = dynamic_cast<TernaryExpressionNode*>(n)) {
+        scanExprForCollections(tn->condition); scanExprForCollections(tn->LHS); scanExprForCollections(tn->RHS);
+    } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        scanExprForCollections(as->unaryExpression); scanExprForCollections(as->expression);
+    } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        scanExprForCollections(inv->expression);
+        if (inv->args) for (auto& a : *inv->args) if (a) scanExprForCollections(a->expression);
+    } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        scanExprForCollections(ea->expression);
+        if (ea->expressionlist) for (auto& x : *ea->expressionlist) scanExprForCollections(x);
+    } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        scanExprForCollections(ma->expression);
+    } else if (auto* pe = dynamic_cast<PreIncrDecrNode*>(n)) {
+        scanExprForCollections(pe->expression);
+    } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) {
+        scanExprForCollections(po->expression);
+    } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        scanExprForCollections(su->expression);
+    }
+}
+
+void CEmitter::scanStmtForCollections(SharedStatement s)
+{
+    if (!s) return;
+    ASTNode* n = s.get();
+    if (auto* b = dynamic_cast<BlockNode*>(n)) {
+        if (b->statements) for (auto& st : *b->statements) scanStmtForCollections(st);
+    } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
+        scanTypeForCollections(d->type);
+        if (d->variables) for (auto& v : *d->variables) if (v) scanExprForCollections(v->initializer);
+    } else if (auto* cd = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
+        scanTypeForCollections(cd->type);
+    } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
+        scanExprForCollections(r->expression);
+    } else if (auto* f = dynamic_cast<IfNode*>(n)) {
+        scanExprForCollections(f->booleanExpression);
+        scanStmtForCollections(f->ifStatement); scanStmtForCollections(f->elseStatement);
+    } else if (auto* w = dynamic_cast<WhileNode*>(n)) {
+        scanExprForCollections(w->booleanExpression); scanStmtForCollections(w->whileStatement);
+    } else if (auto* dw = dynamic_cast<DoWhileNode*>(n)) {
+        scanExprForCollections(dw->booleanExpression); scanStmtForCollections(dw->doWhileStatement);
+    } else if (auto* fr = dynamic_cast<ForNode*>(n)) {
+        if (fr->initializerStatements) for (auto& st : *fr->initializerStatements) scanStmtForCollections(st);
+        scanExprForCollections(fr->booleanExpression);
+        if (fr->iteratorStatements) for (auto& st : *fr->iteratorStatements) scanStmtForCollections(st);
+        scanStmtForCollections(fr->body);
+    } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+        scanTypeForCollections(fe->type);
+        scanExprForCollections(fe->expression);
+        scanStmtForCollections(fe->body);
+    } else if (auto* sw = dynamic_cast<SwitchNode*>(n)) {
+        scanExprForCollections(sw->expression);
+        if (sw->switchsections) for (auto& sec : *sw->switchsections)
+            if (sec && sec->statementList) for (auto& st : *sec->statementList) scanStmtForCollections(st);
+    } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
+        scanExprForCollections(std::dynamic_pointer_cast<ExpressionNode>(s));
+    }
+}
+
+// Pre-pass: scan the whole program for Coll<T> instantiations.
+void CEmitter::collectCollections(SharedCompilationUnit unit)
+{
+    if (!unit || !unit->codeDeclarationList) return;
+    for (auto& decl : *unit->codeDeclarationList) {
+        if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+            scanTypeForCollections(fn->returnType);
+            if (fn->parameters) for (auto& p : *fn->parameters) if (p) scanTypeForCollections(p->type);
+            scanStmtForCollections(fn->block);
+        } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+            if (cd->members) for (auto& m : *cd->members) {
+                ASTNode* mn = m.get();
+                if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
+                    scanTypeForCollections(fd->type);
+                } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
+                    scanTypeForCollections(md->returnType);
+                    if (md->params) for (auto& p : *md->params) if (p) scanTypeForCollections(p->type);
+                    scanStmtForCollections(md->body);
+                } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
+                    if (cc->declarator && cc->declarator->params)
+                        for (auto& p : *cc->declarator->params) if (p) scanTypeForCollections(p->type);
+                    scanStmtForCollections(cc->body);
+                } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
+                    scanStmtForCollections(dd->body);
+                }
+            }
+        }
+    }
+}
+
+// Pass C: emit the CSTAR_*_DEFINE(...) macro line per registered instantiation.
+void CEmitter::emitCollectionDefs()
+{
+    for (auto& kv : _collections) {
+        CollectionInfo& info = kv.second;
+        std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "CSTAR_ELEM_NODTOR";
+        if (info.kind == CollKind::Array) {
+            _out << "CSTAR_ARRAY_DEFINE(" << info.elemCType << ", " << info.cName
+                 << ", " << elemDtor << ")\n";
+        }
+    }
+    if (!_collections.empty()) _out << "\n";
+}
+
+// If `ea` indexes a collection, fill coll (cName), recvExpr, idx; return true.
+bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
+                                    std::string& recvExpr, std::string& idx)
+{
+    if (!ea) return false;
+    SharedExpression recv = ea->expression ? ea->expression
+                                           : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+    if (!recv) return false;
+    std::string cls = exprClass(recv);
+    if (cls.empty() || !_classes.count(cls) || !_classes[cls].isCollection) return false;
+    coll     = _classes[cls].name;
+    recvExpr = emitExpression(recv);
+    idx      = (ea->expressionlist && !ea->expressionlist->empty())
+                   ? emitExpression((*ea->expressionlist)[0]) : "0";
+    return true;
 }
 
 // Resolve `extends` names to ClassInfo pointers; error on unknown/cycle.
@@ -1220,6 +1511,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
 
 void CEmitter::emitClassPrototypes(ClassInfo& ci)
 {
+    if (ci.isCollection) return;   // the C macro already declared ctor/dtor/methods
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
         _out << "void " << ci.name << "__ctor("
              << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
@@ -1343,6 +1635,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 
 void CEmitter::emitClassDefinitions(ClassInfo& ci)
 {
+    if (ci.isCollection) return;   // the C macro already defined ctor/dtor/methods
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator) {
         line(ci.ctorNode->line);
         emitMethodOrCtorBody(ci.name + "__ctor", "void",
@@ -1482,12 +1775,14 @@ int CEmitter::emit(SharedCompilationUnit unit)
     linkBases();
     buildVtables();
     computeDestructible();
+    collectCollections(unit);   // M9: register Coll<T> instantiations (after destructibility)
 
     std::vector<ClassInfo*> classes = topoOrderClasses();   // base before derived
 
     // Pass S0: forward typedefs (classes, vtable types, interfaces) so bodies can
     // reference each other and any class.
     for (ClassInfo* ci : classes) {
+        if (ci->isCollection) continue;   // the C macro emits the collection's typedef
         _out << "typedef struct " << ci->name << " " << ci->name << ";\n";
         if (ci->hasVtable && ci->vtableRoot == ci->name)
             _out << "typedef struct " << ci->name << "_vtable " << ci->name << "_vtable;\n";
@@ -1504,6 +1799,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     // Pass S: vtable struct types + struct bodies (topological), then interface
     // types (their slot signatures may reference class types by value).
     for (ClassInfo* ci : classes) {
+        if (ci->isCollection) continue;   // the C macro emits the collection's struct
         if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
         emitStruct(*ci);
     }
@@ -1521,6 +1817,11 @@ int CEmitter::emit(SharedCompilationUnit unit)
         }
     }
     if (any) _out << "\n";
+
+    // Pass C: monomorphized collection templates. After class structs (pass S)
+    // and dtor prototypes (pass A) — the macro's static-inline funcs may
+    // reference an element class's struct/dtor — and before pass B definitions.
+    emitCollectionDefs();
 
     // Pass A2: vtable instances + interface (C__as_I) vtables — after prototypes,
     // which declare the fn names they reference.

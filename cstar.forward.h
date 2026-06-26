@@ -28,6 +28,7 @@ class SwitchLabelNode;
 class ArgumentNode;
 class InvocationNode;
 class MemberAccessNode;
+class ElementAccessNode;
 class ThisAccessNode;
 class ObjectCreationNode;
 class EnumMemberDeclarationNode;

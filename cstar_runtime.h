@@ -9,6 +9,46 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>   // malloc/calloc/realloc/free/abort
+#include <string.h>   // memcpy/memcmp
+#include <stdio.h>    // fprintf (bounds trap)
+
+// ---- Collections (M9) -----------------------------------------------------
+// Generic collections are monomorphized per element type from these templates.
+// All raw-pointer / heap access is confined HERE (trusted compiler runtime) —
+// the cstar surface stays pointer-free and safe. Indexing is bounds-checked.
+
+// A no-op per-element destructor, used when the element type isn't destructible.
+#define CSTAR_ELEM_NODTOR(p) ((void)(p))
+
+// Bounds-check trap: a clean panic (not undefined behavior) on out-of-range.
+static inline void cstar_bounds_fail(size_t i, size_t len) {
+    fprintf(stderr, "cstar: index %zu out of bounds (length %zu)\n",
+            (size_t)i, (size_t)len);
+    abort();
+}
+
+// Array<T> — fixed-size, owns a zero-initialized contiguous buffer (RAII frees).
+#define CSTAR_ARRAY_DEFINE(T, NAME, ELEM_DTOR)                                  \
+typedef struct NAME { T* data; size_t len; } NAME;                             \
+static inline void NAME##__ctor(NAME* self, size_t n) {                        \
+    self->len  = n;                                                            \
+    self->data = (n ? (T*)calloc(n, sizeof(T)) : NULL);                        \
+}                                                                              \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    for (size_t i = 0; i < self->len; ++i) { T* e = &self->data[i]; ELEM_DTOR(e); } \
+    free(self->data); self->data = NULL; self->len = 0;                        \
+}                                                                              \
+static inline T      NAME##__get(NAME* self, size_t i) {                       \
+    if (i >= self->len) cstar_bounds_fail(i, self->len);                       \
+    return self->data[i];                                                      \
+}                                                                              \
+static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
+    if (i >= self->len) cstar_bounds_fail(i, self->len);                       \
+    self->data[i] = v;                                                         \
+}                                                                              \
+static inline size_t NAME##__length(NAME* self) { return self->len; }
+
 
 // cstar `string` lowers to a fat, length-prefixed view. `cap == 0` means the
 // bytes are borrowed (e.g. a C string literal) and must not be freed; `cap > 0`

@@ -37,11 +37,15 @@ struct MethodInfo {
     std::string                  cName;   // Class__method (declaring class)
     SharedIdentifier             returnType;
     std::vector<ParamSig>        params;
-    ClassMethodDeclarationNode*  node;    // for body emission
+    ClassMethodDeclarationNode*  node = nullptr;   // for body emission (null for intrinsics)
     bool                         isVirtual  = false;  // virtual/override/abstract
     bool                         isOverride = false;
     bool                         isAbstract = false;  // null body
+    bool                         isIntrinsic = false; // collection op: body is in cstar_runtime.h, not AST
 };
+
+// A built-in generic collection kind (M9). Backed by a C runtime template.
+enum class CollKind { Array, List, String };
 
 struct ClassInfo {
     std::string                       name;       // struct name (== cstar class name in M4)
@@ -68,6 +72,22 @@ struct ClassInfo {
 
     // Interfaces (M6b)
     std::vector<std::string>          interfaces;            // implemented interface names
+
+    // Collections (M9): a monomorphized Coll<T> is a synthetic ClassInfo whose
+    // method bodies come from a C-template macro (not cstar AST).
+    bool                              isCollection = false;
+    CollKind                          collKind = CollKind::Array;
+    std::string                       collElemClass;         // element class name ("" if primitive)
+};
+
+// A monomorphized collection instantiation (e.g. Array<int32> -> Array_int32).
+struct CollectionInfo {
+    CollKind     kind;
+    std::string  cName;            // mangled struct/func prefix: "Array_int32"
+    std::string  elemCType;        // "int32_t" / "Point" (C spelling of the element)
+    std::string  elemClass;        // element class name ("" if primitive)
+    std::string  elemMangle;       // "int32" / "Point" (mangling suffix)
+    bool         elemDestructible = false;
 };
 
 // An interface (M6b): a set of method prototypes, lowered to a vtable struct
@@ -109,6 +129,7 @@ private:
 
     std::map<std::string, InterfaceInfo> _interfaces;        // interface name -> info (M6b)
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info (M7)
+    std::map<std::string, CollectionInfo> _collections;      // cName -> info (M9)
 
     // RAII scope stack (M5): live destructible locals per lexical scope.
     struct LiveLocal { std::string cVar; std::string className; };
@@ -127,6 +148,21 @@ private:
     void emitEnum(EnumInfo& ei);
     bool isEnum(const std::string& name) const { return _enums.count(name) != 0; }
     void collectClasses(SharedCompilationUnit unit);
+
+    // Collections (M9): discover used Coll<T> instantiations, register a synthetic
+    // ClassInfo + CollectionInfo for each, and emit the C-template macro lines.
+    void collectCollections(SharedCompilationUnit unit);
+    void scanStmtForCollections(SharedStatement s);
+    void scanExprForCollections(SharedExpression e);
+    void scanTypeForCollections(SharedIdentifier t);
+    bool isCollectionType(SharedIdentifier t) const;
+    std::string mangleElem(SharedIdentifier elem);
+    void registerCollection(SharedIdentifier collType);
+    void emitCollectionDefs();   // pass C: the CSTAR_*_DEFINE(...) macro lines
+    // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
+    bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
+                              std::string& recvExpr, std::string& idx);
+
     void linkBases();
     void buildVtables();
     void computeDestructible();
