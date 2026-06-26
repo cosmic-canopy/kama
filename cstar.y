@@ -6,7 +6,7 @@
 #include <cstdlib>
 #include "cstar.parser.hpp"
 #include "cstar.ast.h"
-#include "cstar.codegen.h"
+#include "cstar.context.h"
 
 
 struct LexerInstanceData*  yyget_extra ( yyscan_t scanner );
@@ -27,7 +27,7 @@ typedef void* yyscan_t;
 #endif
 
 #include "cstar.ast.h"
-#include "cstar.codegen.h"
+#include "cstar.context.h"
 
 #ifndef CSTAR_LEXER_INSTANCE_DATA
 #define CSTAR_LEXER_INSTANCE_DATA

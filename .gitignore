@@ -9,3 +9,4 @@ cstar.lexer.hpp
 cstar.parser.cpp
 cstar.parser.hpp
 cstar.parser.output
+*.llvm.bak

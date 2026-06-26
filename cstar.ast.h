@@ -2,8 +2,6 @@
 #define __CSTAR_AST_H__
 
 #include <iostream>
-#include <llvm/IR/Value.h>
-#include <llvm/ADT/STLExtras.h>
 #include "cstar.forward.h"
 
 enum SymbolType {
@@ -21,11 +19,6 @@ public:
     ASTNode& operator=(const ASTNode&) & = default;     // Copy assignment operator
     ASTNode& operator=(ASTNode&&) & = default;          // Move assignment operator
     virtual ~ASTNode() {}                               // Destructor
-    CodeGenRtn codeGen(CodeGenContext& context);
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context) = 0;
-    void debugPrint(CodeGenContext& context, const llvm::Twine& prefix){ debugPrintInternal(std::cout, context, prefix); }
-    void debugPrintPart(CodeGenContext& context, SharedAST node, const llvm::Twine& prefix);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix) = 0;
     virtual SymbolType symbolType() { return SymbolType::UNDEFINED; }
 };
 
@@ -69,8 +62,6 @@ public:
         , usingDeclarationList(usingDeclarationList)
         , codeDeclarationList(codeDeclarationList)
         { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class NamespaceDeclarationNode : public StatementNode {
@@ -78,8 +69,6 @@ public:
     SharedIdentifier name;
     NamespaceDeclarationNode(CodeGenContext& context, SharedIdentifier name)
         : ASTNode(context),  StatementNode(context), name(name) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context){ /* No Op */  return NULL; }
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class UsingDeclarationNode : public StatementNode {
@@ -90,8 +79,6 @@ public:
         : ASTNode(context),  StatementNode(context), identifier(identifier) { }
     UsingDeclarationNode(CodeGenContext& context, SharedIdentifier identifier, SharedIdentifier alias)
         : ASTNode(context),  StatementNode(context), identifier(identifier), alias(alias) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context){ /* No Op */  return NULL; }
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -102,103 +89,77 @@ class Int8Node : public ExpressionNode {
 public:
     int8_t value;
     Int8Node(CodeGenContext& context, int8_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class Int16Node : public ExpressionNode {
 public:
     int16_t value;
     Int16Node(CodeGenContext& context, int16_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class Int32Node : public ExpressionNode {
 public:
     int32_t value;
     Int32Node(CodeGenContext& context, int32_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class Int64Node : public ExpressionNode {
 public:
     int64_t value;
     Int64Node(CodeGenContext& context, int64_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class UInt8Node : public ExpressionNode {
 public:
     uint8_t value;
     UInt8Node(CodeGenContext& context, uint8_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class UInt16Node : public ExpressionNode {
 public:
     uint16_t value;
     UInt16Node(CodeGenContext& context, uint16_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class UInt32Node : public ExpressionNode {
 public:
     uint32_t value;
     UInt32Node(CodeGenContext& context, uint32_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class UInt64Node : public ExpressionNode {
 public:
     uint64_t value;
     UInt64Node(CodeGenContext& context, uint64_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class Float32Node : public ExpressionNode {
 public:
     float value;
     Float32Node(CodeGenContext& context, float value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class Float64Node : public ExpressionNode {
 public:
     double value;
     Float64Node(CodeGenContext& context, double value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class StringNode : public ExpressionNode {
 public:
     SharedString value;
     StringNode(CodeGenContext& context, SharedString value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class BooleanNode : public ExpressionNode {
 public:
     bool value;
     BooleanNode(CodeGenContext& context, bool value) : ASTNode(context),  ExpressionNode(context), value(value) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class NullNode : public ExpressionNode {
 public:
     NullNode(CodeGenContext& context) : ASTNode(context),  ExpressionNode(context) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -227,14 +188,12 @@ public:
     SharedString value;
     SharedStringList qualifier;
     SharedString generic;
-    void setQualifier(SharedStringList qualifier){ qualifier = qualifier; }
+    void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
     IdentifierNode(CodeGenContext& context, SharedString value, int builtInVal = IDENTIFIER_NONE_VAL)
         : ASTNode(context),  ExpressionNode(context), builtInVal(builtInVal), value(value), qualifier( std::make_shared<StringList>() ), generic( SharedString() ) { }
     IdentifierNode(CodeGenContext& context, SharedString value, SharedStringList qualifier, SharedString generic)
         : ASTNode(context),  ExpressionNode(context), builtInVal(IDENTIFIER_NONE_VAL), value(value), qualifier(qualifier), generic(generic) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -249,8 +208,6 @@ public:
         : ASTNode(context),  ExpressionNode(context), value(value), targets( std::make_shared<IdentifierList>() ) { }
     ModifierNode(CodeGenContext& context, SharedString value, SharedIdentifierList targets)
         : ASTNode(context),  ExpressionNode(context), value(value), targets(targets) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context){ /* No Op */  return NULL; }
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -272,8 +229,6 @@ public:
         , name(name)
         , parameters(parameters)
         , block(block) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class FunctionParameterNode : public ExpressionNode {
@@ -283,8 +238,6 @@ public:
     SharedIdentifier identifier;
     FunctionParameterNode(CodeGenContext& context, SharedModifier modifier, SharedIdentifier type, SharedIdentifier identifier) 
         : ASTNode(context),  ExpressionNode(context), modifier(modifier), type(type), identifier(identifier) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context){ /* No Op */  return NULL; }
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -296,8 +249,6 @@ public:
     SharedStatementList statements;
     BlockNode(CodeGenContext& context, SharedStatementList statements)
         : ASTNode(context),  StatementNode(context), statements(statements) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class VariableDeclarator : public StatementNode {
@@ -306,8 +257,6 @@ public:
     SharedExpression initializer;
     VariableDeclarator(CodeGenContext& context, SharedIdentifier name, SharedExpression initializer)
         : ASTNode(context),  StatementNode(context), name(name), initializer(initializer) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context){ /* No Op */  return NULL; }
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ConstVariableDeclarator : public StatementNode {
@@ -316,8 +265,6 @@ public:
     SharedExpression initializer;
     ConstVariableDeclarator(CodeGenContext& context, SharedIdentifier name, SharedExpression initializer)
         : ASTNode(context),  StatementNode(context), name(name), initializer(initializer) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context){ /* No Op */  return NULL; }
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class LocalVariableDeclaration : public StatementNode {
@@ -326,8 +273,6 @@ public:
     SharedVariableDeclaratorList variables;
     LocalVariableDeclaration(CodeGenContext& context, SharedIdentifier type, SharedVariableDeclaratorList variables)
         : ASTNode(context),  StatementNode(context), type(type), variables(variables) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
     virtual SymbolType symbolType() { return SymbolType::VARIABLE; }
 };
 
@@ -337,8 +282,6 @@ public:
     SharedConstVariableDeclaratorList variables;
     ConstLocalVariableDeclaration(CodeGenContext& context, SharedIdentifier type, SharedConstVariableDeclaratorList variables)
         : ASTNode(context),  StatementNode(context), type(type), variables(variables) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class IfNode : public StatementNode {
@@ -351,8 +294,6 @@ public:
         , booleanExpression(booleanExpression)
         , ifStatement(ifStatement)
         , elseStatement(elseStatement) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class SwitchNode : public StatementNode {
@@ -361,8 +302,6 @@ public:
     SharedSwitchSectionList switchsections;
     SwitchNode(CodeGenContext& context, SharedExpression expression, SharedSwitchSectionList switchsections)
         : ASTNode(context),  StatementNode(context), expression(expression), switchsections(switchsections) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class SwitchSectionNode : public StatementNode {
@@ -372,8 +311,6 @@ public:
     SwitchSectionNode(CodeGenContext& context, SharedSwitchLabelList labels, SharedStatementList statementList)
         : ASTNode(context),  StatementNode(context), labels(labels)
     , statementList(statementList) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class SwitchLabelNode : public StatementNode {
@@ -381,9 +318,7 @@ public:
     SharedExpression constantExpression;
     SwitchLabelNode(CodeGenContext& context, SharedExpression constantExpression)
         : ASTNode(context),  StatementNode(context), constantExpression(constantExpression) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
     bool isDefault(){ return !constantExpression; }
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class WhileNode : public StatementNode {
@@ -394,8 +329,6 @@ public:
         : ASTNode(context),  StatementNode(context)
         , booleanExpression(booleanExpression)
         , whileStatement(whileStatement) {}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class DoWhileNode : public StatementNode {
@@ -406,8 +339,6 @@ public:
         : ASTNode(context),  StatementNode(context)
         , booleanExpression(booleanExpression)
         , doWhileStatement(doWhileStatement) {}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ForNode : public StatementNode {
@@ -425,8 +356,6 @@ public:
     , booleanExpression(booleanExpression)
     , iteratorStatements(iteratorStatements)
     , body(body) {}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ForEachNode : public StatementNode {
@@ -444,30 +373,22 @@ public:
     , name(name)
     , expression(expression)
     , body(body) {}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class BreakNode : public StatementNode {
 public:
     BreakNode(CodeGenContext& context) : ASTNode(context),  StatementNode(context) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ContinueNode : public StatementNode {
 public:
     ContinueNode(CodeGenContext& context) : ASTNode(context),  StatementNode(context) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ReturnNode : public StatementNode {
 public:
     SharedExpression expression;
     ReturnNode(CodeGenContext& context, SharedExpression expression) : ASTNode(context),  StatementNode(context), expression(expression) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -487,8 +408,6 @@ public:
         : ASTNode(context),  ExpressionNode(context)
         , identifier(identifier)
         , classType(classType) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ArgumentNode : public ExpressionNode {
@@ -501,8 +420,6 @@ public:
         , name(name)
         , modifier(modifier)
         , expression(expression) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ElementAccessNode : public ExpressionNode {
@@ -518,15 +435,11 @@ public:
         : ASTNode(context),  ExpressionNode(context)
         , expression(expression)
         , expressionlist(expressionlist) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ThisAccessNode : public ExpressionNode {
 public:
     ThisAccessNode(CodeGenContext& context) : ASTNode(context),  ExpressionNode(context) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class BaseAccessNode : public ExpressionNode {
@@ -535,8 +448,6 @@ public:
     SharedExpressionList expressionlist;
     BaseAccessNode(CodeGenContext& context, SharedIdentifier identifier) : ASTNode(context),  ExpressionNode(context), identifier(identifier) { }
     BaseAccessNode(CodeGenContext& context, SharedExpressionList expressionlist) : ASTNode(context),  ExpressionNode(context), expressionlist(expressionlist) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class SimpleUnaryExpressionNode : public ExpressionNode {
@@ -545,8 +456,6 @@ public:
     SharedExpression expression;
     SimpleUnaryExpressionNode(CodeGenContext& context, int token, SharedExpression expression) 
         : ASTNode(context),  ExpressionNode(context), token(token), expression(expression) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class CastNode : public ExpressionNode {
@@ -557,8 +466,6 @@ public:
         : ASTNode(context),  ExpressionNode(context)
         , type(type)
         , unaryExpression(unaryExpression) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class BinaryExpressionNode : public ExpressionNode {
@@ -568,8 +475,6 @@ public:
     SharedExpression RHS;
     BinaryExpressionNode(CodeGenContext& context, int token, SharedExpression LHS, SharedExpression RHS)
         : ASTNode(context),  ExpressionNode(context), token(token), LHS(LHS), RHS(RHS) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class LogicalAndOrNode : public ExpressionNode {
@@ -579,8 +484,6 @@ public:
     SharedExpression RHS;
     LogicalAndOrNode(CodeGenContext& context, int token, SharedExpression LHS, SharedExpression RHS)
         : ASTNode(context),  ExpressionNode(context), token(token), LHS(LHS), RHS(RHS) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class TernaryExpressionNode : public ExpressionNode {
@@ -590,8 +493,6 @@ public:
     SharedExpression RHS;
     TernaryExpressionNode(CodeGenContext& context, SharedExpression condition, SharedExpression LHS, SharedExpression RHS)
         : ASTNode(context),  ExpressionNode(context), condition(condition), LHS(LHS), RHS(RHS) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -609,8 +510,6 @@ public:
         , token(token)
         , expression(expression) { }
     virtual ~AssignmentNode(){}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ObjectCreationNode : public ExpressionStatementNode {
@@ -621,8 +520,6 @@ public:
         : ASTNode(context),  ExpressionStatementNode(context)
         , type(type)
         , args(args) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class InvocationNode : public ExpressionStatementNode {
@@ -638,8 +535,6 @@ public:
         : ASTNode(context),  ExpressionStatementNode(context)
         , identifier(identifier)
         , args(args) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class PreIncrDecrNode : public ExpressionStatementNode {
@@ -650,8 +545,6 @@ public:
         : ASTNode(context),  ExpressionStatementNode(context)
         , token(token)
         , expression(expression) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class PostIncrDecrNode : public ExpressionStatementNode {
@@ -662,8 +555,6 @@ public:
         : ASTNode(context),  ExpressionStatementNode(context)
         , token(token)
         , expression(expression) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -685,8 +576,6 @@ public:
         , name(name)
         , baseTypes(baseTypes)
         , members(members) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassBaseDeclarationNode : public StatementNode {
@@ -697,15 +586,11 @@ public:
         : ASTNode(context),  StatementNode(context)
         , base(base)
         , interfaces(interfaces) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassMemberDeclarationNode : public StatementNode {
 public:
     ClassMemberDeclarationNode(CodeGenContext& context) : ASTNode(context),  StatementNode(context) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassConstDeclarationNode : public ClassMemberDeclarationNode {
@@ -720,8 +605,6 @@ public:
     , modifiers(modifiers)
     , type(type)
     , declarators(declarators) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassFieldDeclarationNode : public ClassMemberDeclarationNode {
@@ -736,8 +619,6 @@ public:
             , modifiers(modifiers)
             , type(type)
             , declarators(declarators) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassMethodDeclarationNode : public ClassMemberDeclarationNode {
@@ -758,8 +639,6 @@ public:
     , name(name)
     , params(params)
     , body(body) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassOperatorDeclarationNode : public ClassMemberDeclarationNode {
@@ -772,8 +651,6 @@ public:
             , modifiers(modifiers)
             , operatorDeclarator(operatorDeclarator)
             , body(body) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassOperatorDeclaratorNode : public StatementNode {
@@ -797,8 +674,6 @@ public:
         , param1Name(param1Name)
         , param2Type(param2Type)
         , param2Name(param2Name) {}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassConstructorDeclarationNode : public ClassMemberDeclarationNode {
@@ -813,8 +688,6 @@ public:
         , modifiers(modifiers)
         , declarator(declarator)
         , body(body) {}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassConstructorDeclaratorNode : public StatementNode {
@@ -829,16 +702,12 @@ public:
             , constructorName(constructorName)
             , params(params)
             , initializer(initializer) {}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassConstructorInitializerNode : public StatementNode {
 public:
     SharedArgumentList args;
     ClassConstructorInitializerNode(CodeGenContext& context, SharedArgumentList args) : ASTNode(context),  StatementNode(context), args(args) {}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class ClassDestructorDeclarationNode : public ClassMemberDeclarationNode {
@@ -853,8 +722,6 @@ public:
         , modifiers(modifiers)
         , destructorName(destructorName)
         , body(body) {}
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -871,8 +738,6 @@ public:
         , modifiers(modifiers)
         , identifier(identifier)
         , body(body) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 class EnumMemberDeclarationNode : public StatementNode {
@@ -881,8 +746,6 @@ public:
     SharedExpression constantExpression;
     EnumMemberDeclarationNode(CodeGenContext& context, SharedIdentifier identifier, SharedExpression constantExpression)
         : ASTNode(context),  StatementNode(context), identifier(identifier), constantExpression(constantExpression) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 //------------------------------------------------------------------------------ 
@@ -904,8 +767,6 @@ public:
         , identifier(identifier)
         , baseTypes(baseTypes)
         , body(body) { }
-    virtual CodeGenRtn codeGenInternal(CodeGenContext& context);
-    virtual void debugPrintInternal(std::ostream& stream, CodeGenContext& context, const llvm::Twine& prefix);
 };
 
 

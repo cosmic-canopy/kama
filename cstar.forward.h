@@ -95,15 +95,6 @@ typedef std::shared_ptr<ClassMemberDeclarationList> SharedClassMemberDeclaration
 
 typedef std::shared_ptr<CompilationUnit> SharedCompilationUnit;
 typedef std::shared_ptr<CodeGenContext> SharedCodeGenContext;
-typedef llvm::Value* CodeGenRtn;
-
-class CodeGenBlock;
-class SymbolEntry;
-
-typedef std::shared_ptr<SymbolEntry> SharedSymbolEntry;
-typedef std::shared_ptr<CodeGenBlock> SharedCodeGenBlock;
-typedef std::map<std::string, SharedSymbolEntry > NameValueMap;
-typedef std::vector<SharedCodeGenBlock > CodeGenBlockList;
 
 #define CreateCompilationUnit std::make_shared<CompilationUnit>
 #define CreateCodegenContext std::make_shared<CodeGenContext>

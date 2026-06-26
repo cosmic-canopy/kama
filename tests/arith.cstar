@@ -1,0 +1,7 @@
+int main()
+{
+    int a = 20;
+    int b = 22;
+    int sum = a + b;
+    return sum;
+}
