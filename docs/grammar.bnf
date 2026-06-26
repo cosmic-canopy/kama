@@ -1,4 +1,5 @@
-// cstar grammar (BNF) — GENERATED from cstar.y by tools/gen-grammar. Do not edit.
+wrote /Users/matt/Documents/cstar/docs/grammar.bnf
+y tools/gen-grammar. Do not edit.
 // The Bison grammar is the source of truth; regenerate after any grammar change.
 
 
@@ -91,7 +92,7 @@ qualifier
   ;
 basic_identifier
   : IDENTIFIER
-  | IDENTIFIER LT IDENTIFIER GT
+  | IDENTIFIER LT type GT
   ;
 
 qualified_identifier_no_generic

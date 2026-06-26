@@ -23,7 +23,32 @@ implicit (see [../GOALS.md](../GOALS.md)).
 | `void` | `void` |
 | user `class` | `struct` (value semantics) |
 
-No raw arrays **by design** — collections are generic library types (`List<T>`/`Array<T>`), 🚧 post-v1.
+No raw arrays and **no raw pointers — by design** (no `unsafe`). Collections are generic library types.
+
+## Collections & strings ✅ (M9)
+
+Built-in generics, monomorphized per element type and backed by the C runtime (unsafe internals, safe API
+— the Rust-`Vec` model); **indexing is bounds-checked** (a clean trap, not UB).
+
+```cstar
+Array<int32> a = new Array<int32>(size: 4);   // fixed buffer, zero-initialized
+a[0] = 10;  a[1] = 20;                          // bounds-checked []
+int32 first = a[0];
+foreach (int32 x in a) { /* ... */ }            // iterate
+
+List<Point> ps = new List<Point>();             // growable
+ps.add(item: p);   int n = ps.length();   Point q = ps[0];
+
+string s = "ab";                                // borrowed literal (no alloc)
+string t = s.concat(other: "cd");               // heap-owned, RAII-freed
+bool eq = s.equals(other: t);   int len = s.length();
+```
+
+All collections own their storage and free it via RAII (with element-destructor chaining). Only the
+`(collection, element-type)` pairs the program actually uses are emitted (pay-for-what-you-use). `Map<K,V>`
++ multi-parameter/nested generics, and a smart-pointer family (`Owned`/`Shared`/`Weak`), are 🚧 post-M9.
+M9 limits: `add`/index take elements **by value** (no move yet) — don't separately destruct an added
+source; don't return or inline-use a temp-owned string without binding it to a local.
 
 ## Functions ✅
 
