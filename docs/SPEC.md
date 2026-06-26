@@ -148,9 +148,19 @@ Color c = Color.Blue;
 Lowers to a C `enum` (members mangled `Color_Red`…). Enum values are integers — usable in `switch`,
 comparisons, and `cast`.
 
-## Namespaces & modules 🚧
+## Modules / multi-file builds ✅ (M13)
 
-`namespace a.b;` and `using` parse; full multi-file modules are planned (M7+).
+Pass several source files to one build — every top-level declaration is visible to all files (one **flat
+global namespace** for now; names must be unique across the project):
+
+```sh
+cstar build math.cstar shapes.cstar main.cstar -o app
+```
+
+The compiler emits one shared header (`<out>.gen.h`, all type/prototype declarations) plus one `.c` of
+definitions per source file, then compiles + links them. `namespace a.b;` / `using` still parse but are
+**not yet semantic** — real namespace scoping/mangling + a `using`→file resolver, plus an incremental
+`.o` build cache, are the fast-follow (the per-module `.c` structure is built for them). 🚧
 
 ## Building & debugging ✅
 

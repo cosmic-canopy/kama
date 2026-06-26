@@ -12,9 +12,10 @@ Goal: a portable, lightweight WebGPU game engine with no .NET/runtime baggage.
 > **enums**, **generic collections** (`Array<T>`/`List<T>`/`String`, with
 > `foreach` + bounds-checked `[]`), and the full **smart-pointer family**
 > (`Owned<T>` unique, `Shared<T>` ref-counted, `Weak<T>` non-owning, with
-> move/retain semantics + auto-deref) — building for **native** and **WASM**,
-> with debug/release builds and **IDE breakpoint debugging**. No raw pointers /
-> no `unsafe` by design. New? See **[GETTING_STARTED.md](GETTING_STARTED.md)**.
+> move/retain semantics + auto-deref), and **multi-file builds** — building for
+> **native** and **WASM**, with debug/release builds and **IDE breakpoint
+> debugging**. No raw pointers / no `unsafe` by design. New? See
+> **[GETTING_STARTED.md](GETTING_STARTED.md)**.
 
 ## Toolchain
 
@@ -45,6 +46,9 @@ cstar transpile tests/arith.cstar -o arith.c
 
 # Build a native executable:
 cstar build tests/arith.cstar -o arith && ./arith
+
+# Build a multi-file program (every file shares one global namespace):
+cstar build math.cstar shapes.cstar main.cstar -o app && ./app
 
 # Build for the browser (WASM). Default output is an HTML harness:
 cstar build tests/arith.cstar --target wasm          # -> arith.html + .js + .wasm

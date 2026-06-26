@@ -29,8 +29,10 @@ Implemented: functions, primitives, control flow, named-parameter calls, ref/out
 destructors, single inheritance + virtual dispatch, interfaces, enums; **generic collections**
 (`Array<T>`/`List<T>`/`String`, monomorphized + RAII, `foreach`, bounds-checked `[]`); the full
 **smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted, `Weak<T>` non-owning, with
-move/retain semantics, auto-deref, RAII); native + WASM + debug/release builds; IDE breakpoint debugging
-(VSCode extension in `editor/vscode/`). No raw pointers / no `unsafe` by design (collection/pointer
-internals are confined to the C runtime). Planned: `Map<K,V>` + multi-param generics, a module system,
-FFI/extern-struct interop, function pointers/closures, tagged unions + match — see the engine-readiness
-gap analysis; then cstar-level WebGPU bindings.
+move/retain semantics, auto-deref, RAII); **multi-file builds** (flat global namespace; shared header +
+per-module .c); native + WASM + debug/release builds; IDE breakpoint debugging (VSCode extension in
+`editor/vscode/`). No raw pointers / no `unsafe` by design (collection/pointer internals are confined to
+the C runtime). Planned (see `docs/ENGINE_READINESS.md`): real namespaces, FFI/extern-struct interop +
+function pointers (the WebGPU keystone), math types + operator overloading, `Map<K,V>` + general generics,
+tagged unions + match, an attribute system + reflection (for declarative serialization); then cstar-level
+WebGPU bindings.

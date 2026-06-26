@@ -193,8 +193,9 @@ void usage()
     fprintf(stderr,
         "usage:\n"
         "  cstar transpile <in.cstar> [-o out.c] [--no-line]\n"
-        "  cstar build     <in.cstar> [-o out] [--target native|wasm] [--release|--debug]\n"
-        "                             [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n");
+        "  cstar build     <in.cstar>... [-o out] [--target native|wasm] [--release|--debug]\n"
+        "                             [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
+        "                  (pass multiple .cstar files to build a multi-file program)\n");
 }
 
 } // namespace
