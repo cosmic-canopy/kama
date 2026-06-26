@@ -46,7 +46,7 @@ struct MethodInfo {
 
 // A built-in generic collection / smart-pointer kind (M9/M10). Backed by a C
 // runtime template. Owned<T> (M10) is a 4th kind: a unique heap-owning pointer.
-enum class CollKind { Array, List, String, Owned, Shared };
+enum class CollKind { Array, List, String, Owned, Shared, Weak };
 
 struct ClassInfo {
     std::string                       name;       // struct name (== cstar class name in M4)
@@ -159,6 +159,7 @@ private:
     bool isCollectionType(SharedIdentifier t) const;
     std::string mangleElem(SharedIdentifier elem);
     void registerCollection(SharedIdentifier collType);
+    void registerSmartPtr(CollKind kind, SharedIdentifier elem);   // Owned/Shared/Weak (M10-12)
     void emitCollectionDefs();   // pass C: the CSTAR_*_DEFINE(...) macro lines
     // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
@@ -172,6 +173,10 @@ private:
     bool isSmartPtrExpr(SharedExpression e);             // e's static class is a smart pointer
     bool isSmartPtrLValue(SharedExpression e);           // e is a bare identifier of smart-ptr type
     std::string smartPtrInvalidate(const std::string& expr, CollKind kind);  // null the dtor's guard field
+    // Dispatch `recv.method(args)` on a smart-pointer receiver: an intrinsic
+    // (lock/expired/valid) on the pointer itself, else auto-deref to the pointee.
+    std::string emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
+                                 const std::string& method, SharedArgumentList args, int srcLine);
 
     void linkBases();
     void buildVtables();

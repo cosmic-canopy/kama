@@ -1,0 +1,26 @@
+// Weak<T> RAII: a weak doesn't keep the pointee alive and doesn't double-free or
+// leak the control block. One construction, one destruction despite the weak ref.
+extern void cstar_trace(int code);
+extern int cstar_trace_get();
+
+class Probe
+{
+    int32 id;
+    Probe(int32 id) { this.id = id; cstar_trace(code: 1); }
+    ~Probe() { cstar_trace(code: 2); }
+}
+
+int build()
+{
+    Shared<Probe> a = new Shared<Probe>(id: 9);   // construct -> 1 (strong=1)
+    Weak<Probe> w = a;                             // weak=1 (does not keep alive)
+    return 0;
+    // scope exit: ~w (weak 1->0, strong still 1: ctrl kept, pointee untouched),
+    //             ~a (strong 1->0: ~Probe -> 2; weak==0: free ctrl)
+}
+
+int main()
+{
+    int r = build();
+    return cstar_trace_get();   // fold(1,2) = 33
+}

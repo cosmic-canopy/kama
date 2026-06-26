@@ -1,0 +1,23 @@
+// Weak<T> does NOT keep the pointee alive: after the last Shared drops, the weak
+// is expired and lock() safely returns an empty Shared.
+class Counter
+{
+    int32 value;
+    Counter(int32 start) { this.value = start; }
+    int32 get() { return this.value; }
+}
+
+int main()
+{
+    Weak<Counter> w;   // default-empty
+    {
+        Shared<Counter> s = new Shared<Counter>(start: 7);
+        w = s;          // weak ref
+    }                   // s drops -> Counter freed (strong 1->0); ctrl kept (weak=1)
+
+    int32 r = 0;
+    if (w.expired()) { r = r + 5; }        // expired (strong==0) -> +5
+    Shared<Counter> s2 = w.lock();          // empty (cannot upgrade a dead weak)
+    if (s2.valid()) { r = r + 100; }        // not taken
+    return r;                               // 5
+}

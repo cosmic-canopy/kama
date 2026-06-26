@@ -46,10 +46,10 @@ std::string CEmitter::cType(SharedIdentifier type)
     if (!type) return "void";
     // Collection / smart-pointer types spell their mangled struct name:
     // Array<int32> -> Array_int32 (M9); Owned<Node> -> Owned_Node (M10);
-    // Shared<Tex> -> Shared_Tex (M11).
+    // Shared<Tex> -> Shared_Tex (M11); Weak<Tex> -> Weak_Tex (M12).
     if (type->genericArg && type->value &&
-        (*type->value == "Array" || *type->value == "List" ||
-         *type->value == "Owned" || *type->value == "Shared"))
+        (*type->value == "Array" || *type->value == "List" || *type->value == "Owned" ||
+         *type->value == "Shared" || *type->value == "Weak"))
         return *type->value + "_" + mangleElem(type->genericArg);
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "int8_t";
@@ -435,19 +435,28 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         unsupported("`new` of a non-class type", n->line);
                     }
                     // class with no ctor: left default-initialized
+                } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
+                           && isSmartPtrLValue(d->initializer) && exprClass(d->initializer) != ty) {
+                    // Shared->Weak conversion (different C structs, same layout):
+                    // field-copy + weak retain. The source Shared stays valid.
+                    line(n->line); indent(depth);
+                    std::string src = emitExpression(d->initializer);
+                    _out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
+                    indent(depth); _out << "if (" << nm << ".ctrl) " << nm << ".ctrl->weak++;\n";
                 } else {
                     // Copy-initialize from another expression.
                     line(n->line); indent(depth);
                     _out << nm << " = " << emitExpression(d->initializer) << ";\n";
-                    // Smart-pointer copy from an lvalue: Owned MOVES (invalidate
-                    // the source so only `nm` drops it); Shared RETAINS (refcount++
+                    // Smart-pointer copy from an lvalue: Owned MOVES (invalidate the
+                    // source so only `nm` drops it); Shared/Weak RETAIN (strong/weak++
                     // — both handles stay valid).
                     if (isSmartPtrLValue(d->initializer)) {
+                        CollKind k = smartKind(ty);
                         indent(depth);
-                        if (smartKind(exprClass(d->initializer)) == CollKind::Shared)
-                            _out << nm << ".ctrl->strong++;\n";
+                        if (k == CollKind::Owned)
+                            _out << smartPtrInvalidate(emitExpression(d->initializer), k) << "\n";
                         else
-                            _out << smartPtrInvalidate(emitExpression(d->initializer), CollKind::Owned) << "\n";
+                            _out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
                     }
                 }
             }
@@ -620,15 +629,23 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
         if (as->token == EQ && isSmartPtrExpr(as->unaryExpression)) {
             std::string b   = emitExpression(as->unaryExpression);
-            std::string ty  = exprClass(as->unaryExpression);      // Owned_T / Shared_T
+            std::string ty  = exprClass(as->unaryExpression);      // Owned_T / Shared_T / Weak_T
             CollKind    knd = smartKind(ty);
+            SharedExpression rhs = as->expression;
             line(n->line);
             indent(depth); _out << ty << "__dtor(&" << b << ");\n";       // release b's old
-            indent(depth); _out << b << " = " << emitExpression(as->expression) << ";\n";
-            if (isSmartPtrLValue(as->expression)) {                       // copy from a local
-                indent(depth);
-                if (knd == CollKind::Shared) _out << b << ".ctrl->strong++;\n";
-                else _out << smartPtrInvalidate(emitExpression(as->expression), CollKind::Owned) << "\n";
+            if (knd == CollKind::Weak && isSmartPtrLValue(rhs) && exprClass(rhs) != ty) {
+                // Shared->Weak reseat: field-copy + weak retain.
+                std::string src = emitExpression(rhs);
+                indent(depth); _out << b << ".ptr = (" << src << ").ptr; " << b << ".ctrl = (" << src << ").ctrl;\n";
+                indent(depth); _out << "if (" << b << ".ctrl) " << b << ".ctrl->weak++;\n";
+            } else {
+                indent(depth); _out << b << " = " << emitExpression(rhs) << ";\n";
+                if (isSmartPtrLValue(rhs)) {                              // copy from a local
+                    indent(depth);
+                    if (knd == CollKind::Owned) _out << smartPtrInvalidate(emitExpression(rhs), knd) << "\n";
+                    else _out << b << ".ctrl->" << (knd == CollKind::Weak ? "weak" : "strong") << "++;\n";
+                }
             }
             return;
         }
@@ -911,8 +928,8 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
     if (!t) return false;
     if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string / String
     return t->genericArg && t->value &&
-           (*t->value == "Array" || *t->value == "List" ||
-            *t->value == "Owned" || *t->value == "Shared");
+           (*t->value == "Array" || *t->value == "List" || *t->value == "Owned" ||
+            *t->value == "Shared" || *t->value == "Weak");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -924,26 +941,32 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     bool isStr    = collType->builtInVal == IDENTIFIER_STRING_VAL;
     bool isOwned  = !isStr && collType->value && *collType->value == "Owned";
     bool isShared = !isStr && collType->value && *collType->value == "Shared";
-    bool isSmart  = isOwned || isShared;
+    bool isWeak   = !isStr && collType->value && *collType->value == "Weak";
+    bool isSmart  = isOwned || isShared || isWeak;
     CollKind kind = isStr    ? CollKind::String
                   : isOwned  ? CollKind::Owned
                   : isShared ? CollKind::Shared
+                  : isWeak   ? CollKind::Weak
                   : (*collType->value == "List") ? CollKind::List : CollKind::Array;
     SharedIdentifier elem = isStr ? SharedIdentifier() : collType->genericArg;
     std::string elemCType  = isStr ? "" : cType(elem);
     std::string elemMangle = isStr ? "" : mangleElem(elem);
     std::string elemClass  = (!isStr && isClass(elemCType)) ? elemCType : "";
-    std::string cName = isStr    ? "cstar_string"
-                      : isOwned  ? "Owned_"  + elemMangle
-                      : isShared ? "Shared_" + elemMangle
-                      : (kind == CollKind::List ? "List_" : "Array_") + elemMangle;
 
-    // Smart pointers require a class element type (construction needs a ctor /
-    // auto-deref needs a ClassInfo for field/method lookup).
-    if (isSmart && elemClass.empty()) {
-        unsupported("a smart pointer requires a class element type", collType->line);
+    // Smart pointers (Owned/Shared/Weak) — registered via the shared helper.
+    if (isSmart) {
+        if (elemClass.empty()) {
+            unsupported("a smart pointer requires a class element type", collType->line);
+            return;
+        }
+        // A Weak needs its Shared (lock()'s return type + the source of a weak).
+        if (isWeak) registerSmartPtr(CollKind::Shared, elem);
+        registerSmartPtr(kind, elem);
         return;
     }
+
+    std::string cName = isStr ? "cstar_string"
+                      : (kind == CollKind::List ? "List_" : "Array_") + elemMangle;
 
     if (_collections.count(cName)) return;    // dedup
 
@@ -960,9 +983,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     ci.collKind = kind;
     ci.collElemClass = elemClass;
     ci.destructible = true;                    // owns heap -> RAII frees
-    // Smart-pointer construction is the inline heap-ctor lowering, not a
-    // <ptr>__ctor; strings come from literals/concat; Array/List have a real ctor.
-    ci.hasCtor = !isStr && !isSmart;
+    ci.hasCtor = !isStr;                        // strings come from literals/concat
     ci.ctorParams = (kind == CollKind::Array)
                         ? std::vector<ParamSig>{ ParamSig{"size", false, ""} }
                         : std::vector<ParamSig>{};
@@ -975,9 +996,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.isIntrinsic = true;
         ci.methods[mname] = mi;
     };
-    if (kind == CollKind::Owned || kind == CollKind::Shared) {
-        // No intrinsic methods — auto-deref forwards to T's real methods.
-    } else if (kind == CollKind::String) {
+    if (kind == CollKind::String) {
         addMethod("length", {}, SharedIdentifier());
         addMethod("equals", { ParamSig{"other", false, ""} }, SharedIdentifier());
         addMethod("concat", { ParamSig{"other", false, ""} }, collType);   // returns a string
@@ -989,6 +1008,39 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("length", {}, SharedIdentifier());
     }
 
+    _classes[cName] = ci;
+}
+
+// Register a smart pointer (Owned/Shared/Weak) as a synthetic ClassInfo backed by
+// a runtime macro. Smart pointers expose a T* `ptr` (auto-deref) and have no real
+// ctor (construction is inline). Shared/Weak carry a few intrinsic methods.
+void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
+{
+    std::string elemCType  = cType(elem);
+    std::string elemMangle = mangleElem(elem);
+    std::string elemClass  = isClass(elemCType) ? elemCType : "";
+    if (elemClass.empty()) return;              // caller diagnosed
+    std::string cName = (kind == CollKind::Owned  ? "Owned_"
+                       : kind == CollKind::Shared ? "Shared_" : "Weak_") + elemMangle;
+    if (_collections.count(cName)) return;      // dedup
+
+    CollectionInfo info;
+    info.kind = kind; info.cName = cName;
+    info.elemCType = elemCType; info.elemMangle = elemMangle; info.elemClass = elemClass;
+    info.elemDestructible = _classes.count(elemClass) && _classes[elemClass].destructible;
+    _collections[cName] = info;
+
+    ClassInfo ci;
+    ci.name = cName; ci.isCollection = true; ci.collKind = kind;
+    ci.collElemClass = elemClass; ci.destructible = true; ci.hasCtor = false;
+    auto addM = [&](const std::string& m, std::vector<ParamSig> p) {
+        MethodInfo mi; mi.cName = cName + "__" + m; mi.params = std::move(p);
+        mi.isIntrinsic = true; ci.methods[m] = mi;
+    };
+    // Intrinsics (not auto-deref forwarded): Owned has none; Shared has valid();
+    // Weak has lock() (-> Shared) and expired().
+    if (kind == CollKind::Shared) addM("valid", {});
+    if (kind == CollKind::Weak) { addM("lock", {}); addM("expired", {}); }
     _classes[cName] = ci;
 }
 
@@ -1120,6 +1172,10 @@ void CEmitter::emitCollectionDefs()
         } else if (info.kind == CollKind::Shared) {
             _out << "CSTAR_SHARED_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", " << elemDtor << ")\n";
+        } else if (info.kind == CollKind::Weak) {
+            // lock() returns the matching Shared (emitted earlier — map order Shared_ < Weak_).
+            _out << "CSTAR_WEAK_DEFINE(" << info.elemCType << ", " << info.cName
+                 << ", Shared_" << info.elemMangle << ")\n";
         }
     }
     if (!_collections.empty()) _out << "\n";
@@ -1148,7 +1204,8 @@ bool CEmitter::isSmartPtrClass(const std::string& cls) const
 {
     auto it = _classes.find(cls);
     return it != _classes.end() && it->second.isCollection &&
-           (it->second.collKind == CollKind::Owned || it->second.collKind == CollKind::Shared);
+           (it->second.collKind == CollKind::Owned || it->second.collKind == CollKind::Shared ||
+            it->second.collKind == CollKind::Weak);
 }
 
 CollKind CEmitter::smartKind(const std::string& cls) const
@@ -1181,8 +1238,21 @@ bool CEmitter::isSmartPtrLValue(SharedExpression e)
 // the source's drop becomes a no-op (the ref/ownership transfers to the dest).
 std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind)
 {
-    return (kind == CollKind::Shared) ? (expr + ".ctrl = NULL; " + expr + ".ptr = NULL;")
-                                      : (expr + ".ptr = NULL;");
+    return (kind == CollKind::Owned) ? (expr + ".ptr = NULL;")          // Owned dtor guards on ptr
+                                     : (expr + ".ctrl = NULL; " + expr + ".ptr = NULL;");  // Shared/Weak guard on ctrl
+}
+
+std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
+                                       const std::string& method, SharedArgumentList args, int srcLine)
+{
+    // An intrinsic on the pointer itself (lock/expired/valid)?
+    if (_classes[cls].methods.count(method))
+        return emitDispatch(cls, "&(" + recvExpr + ")", method, args, srcLine);
+    // Otherwise auto-deref to the pointee T (Owned/Shared expose a T* ptr).
+    if (smartKind(cls) != CollKind::Weak)
+        return emitDispatch(_classes[cls].collElemClass, "(" + recvExpr + ").ptr", method, args, srcLine);
+    unsupported(("Weak<T> has no member '" + method + "'; call .lock() to upgrade").c_str(), srcLine);
+    return "0";
 }
 
 // Resolve `extends` names to ClassInfo pointers; error on unknown/cycle.
@@ -1415,10 +1485,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             recvClass = fcls;
         }
 
-        // Auto-deref a smart-pointer receiver: dispatch on T with its T* (no &).
+        // Smart-pointer receiver: an intrinsic (lock/expired/valid) or auto-deref to T.
         if (isSmartPtrClass(recvClass))
-            return emitDispatch(_classes[recvClass].collElemClass, "(" + recvExpr + ").ptr",
-                                name, call->args, call->line);
+            return emitSmartPtrCall(recvClass, recvExpr, name, call->args, call->line);
         if (isInterface(recvClass))
             return emitInterfaceDispatch(recvExpr, recvClass, name, call->args, call->line);
         if (recvClass.empty() || !_classes.count(recvClass)) {
@@ -1855,8 +1924,13 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         return field;
     }
     std::string cls = exprClass(ma->expression);
-    // Auto-deref a smart pointer: `n.field` -> `(n).ptr->[base]field` (T*).
+    // Auto-deref an Owned/Shared: `n.field` -> `(n).ptr->[base]field` (T*).
+    // A Weak can't be dereffed — it must be upgraded with lock() first.
     if (isSmartPtrClass(cls)) {
+        if (smartKind(cls) == CollKind::Weak) {
+            unsupported("cannot access a field through Weak<T>; call .lock() to upgrade", ma->line);
+            return field;
+        }
         std::string T = _classes[cls].collElemClass;
         std::string basePath;
         ClassInfo* owner = findFieldOwner(&_classes[T], field);
@@ -1904,11 +1978,9 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
     SharedExpression receiver = recv->expression;
     std::string cls = exprClass(receiver);
-    // Auto-deref a smart pointer: dispatch on T with the held T* as the receiver.
-    if (isSmartPtrClass(cls)) {
-        std::string ptr = "(" + emitExpression(receiver) + ").ptr";   // already a T*
-        return emitDispatch(_classes[cls].collElemClass, ptr, method, call->args, call->line);
-    }
+    // Smart-pointer receiver: an intrinsic (lock/expired/valid) or auto-deref to T.
+    if (isSmartPtrClass(cls))
+        return emitSmartPtrCall(cls, emitExpression(receiver), method, call->args, call->line);
     if (isInterface(cls))
         return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line);
     if (cls.empty() || !_classes.count(cls)) {
