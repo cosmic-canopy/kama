@@ -1,0 +1,16 @@
+// Owned UTF-8 String: borrowed literals (cap==0), heap-owned concat (cap>0),
+// length/equals, RAII frees only the owned result.
+int main()
+{
+    string a = "ab";
+    string b = "ab";
+    string c = "cd";
+    string ab = a.concat(other: b);   // "abab", heap-owned
+
+    int32 r = 0;
+    if (a.equals(other: b)) { r = r + 100; }    // equal
+    if (a.equals(other: c)) { r = r + 1000; }   // not equal -> skipped
+    r = r + ab.length();   // 4
+    r = r + a.length();    // 2
+    return r;              // 100 + 4 + 2 = 106
+}

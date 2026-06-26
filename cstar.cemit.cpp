@@ -848,8 +848,9 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
 
 bool CEmitter::isCollectionType(SharedIdentifier t) const
 {
-    // Array + List. String (stage 4) joins here.
-    return t && t->genericArg && t->value && (*t->value == "Array" || *t->value == "List");
+    if (!t) return false;
+    if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string / String
+    return t->genericArg && t->value && (*t->value == "Array" || *t->value == "List");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -858,12 +859,15 @@ void CEmitter::registerCollection(SharedIdentifier collType)
 {
     if (!isCollectionType(collType)) return;
 
-    CollKind kind = (*collType->value == "List") ? CollKind::List : CollKind::Array;
-    SharedIdentifier elem = collType->genericArg;
-    std::string elemCType  = cType(elem);
-    std::string elemMangle = mangleElem(elem);
-    std::string elemClass  = isClass(elemCType) ? elemCType : "";
-    std::string cName = (kind == CollKind::List ? "List_" : "Array_") + elemMangle;
+    bool isStr = collType->builtInVal == IDENTIFIER_STRING_VAL;
+    CollKind kind = isStr ? CollKind::String
+                  : (*collType->value == "List") ? CollKind::List : CollKind::Array;
+    SharedIdentifier elem = isStr ? SharedIdentifier() : collType->genericArg;
+    std::string elemCType  = isStr ? "" : cType(elem);
+    std::string elemMangle = isStr ? "" : mangleElem(elem);
+    std::string elemClass  = (!isStr && isClass(elemCType)) ? elemCType : "";
+    std::string cName = isStr ? "cstar_string"
+                      : (kind == CollKind::List ? "List_" : "Array_") + elemMangle;
 
     if (_collections.count(cName)) return;    // dedup
 
@@ -873,15 +877,15 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     info.elemDestructible = !elemClass.empty() && _classes.count(elemClass) && _classes[elemClass].destructible;
     _collections[cName] = info;
 
-    // Synthetic ClassInfo: a struct with a ctor, a dtor, and intrinsic methods.
+    // Synthetic ClassInfo: a struct with a dtor, and intrinsic methods.
     ClassInfo ci;
     ci.name = cName;
     ci.isCollection = true;
     ci.collKind = kind;
     ci.collElemClass = elemClass;
-    ci.destructible = true;                    // owns heap -> RAII frees the buffer
-    ci.hasCtor = true;
-    ci.ctorParams = (kind == CollKind::Array)   // Array(size:); List()
+    ci.destructible = true;                    // owns heap -> RAII frees (string: only if cap>0)
+    ci.hasCtor = !isStr;                        // Array(size:)/List(); strings come from literals/concat
+    ci.ctorParams = (kind == CollKind::Array)
                         ? std::vector<ParamSig>{ ParamSig{"size", false, ""} }
                         : std::vector<ParamSig>{};
 
@@ -893,11 +897,17 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.isIntrinsic = true;
         ci.methods[mname] = mi;
     };
-    if (kind == CollKind::List)
-        addMethod("add", { ParamSig{"item", false, elemClass} }, SharedIdentifier());
-    addMethod("get",    { ParamSig{"index", false, ""} }, elem);
-    addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} }, SharedIdentifier());
-    addMethod("length", {}, SharedIdentifier());
+    if (kind == CollKind::String) {
+        addMethod("length", {}, SharedIdentifier());
+        addMethod("equals", { ParamSig{"other", false, ""} }, SharedIdentifier());
+        addMethod("concat", { ParamSig{"other", false, ""} }, collType);   // returns a string
+    } else {
+        if (kind == CollKind::List)
+            addMethod("add", { ParamSig{"item", false, elemClass} }, SharedIdentifier());
+        addMethod("get",    { ParamSig{"index", false, ""} }, elem);
+        addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} }, SharedIdentifier());
+        addMethod("length", {}, SharedIdentifier());
+    }
 
     _classes[cName] = ci;
 }

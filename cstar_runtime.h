@@ -76,21 +76,44 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 static inline size_t NAME##__length(NAME* self) { return self->len; }
 
 
-// cstar `string` lowers to a fat, length-prefixed view. `cap == 0` means the
-// bytes are borrowed (e.g. a C string literal) and must not be freed; `cap > 0`
-// will mean heap-owned once mutable strings land (RAII frees it).
+// cstar `string` lowers to a fat, length-prefixed value (M9). `cap == 0` means
+// the bytes are BORROWED (e.g. a C string literal in static storage) and must
+// never be written or freed; `cap > 0` means HEAP-OWNED (NUL-terminated) and is
+// freed by RAII. All string ops read uniformly; only concat allocates. Raw
+// memory stays confined here — the cstar surface sees only a safe `string`.
 typedef struct cstar_string {
-    const char* data;  // UTF-8 bytes, not necessarily NUL terminated
-    size_t      len;   // byte length
-    size_t      cap;   // 0 => borrowed/literal, >0 => heap-owned
+    char*  data;   // UTF-8 bytes; borrowed (cap==0) bytes are never mutated/freed
+    size_t len;    // byte length
+    size_t cap;    // 0 => borrowed/literal, >0 => heap-owned
 } cstar_string;
 
+// Borrowed view of a string literal (static storage; valid for the whole run).
 static inline cstar_string cstar_string_lit(const char* s, size_t n) {
     cstar_string r;
-    r.data = s;
+    r.data = (char*)s;   // never written/freed while cap==0
     r.len  = n;
     r.cap  = 0;
     return r;
+}
+
+// RAII: free only heap-owned strings; borrowed views are a no-op.
+static inline void cstar_string__dtor(cstar_string* self) {
+    if (self->cap) free(self->data);
+    self->data = NULL; self->len = 0; self->cap = 0;
+}
+static inline size_t cstar_string__length(cstar_string* self) { return self->len; }
+static inline bool cstar_string__equals(cstar_string* self, cstar_string other) {
+    return self->len == other.len &&
+           (self->len == 0 || memcmp(self->data, other.data, self->len) == 0);
+}
+// Returns a fresh heap-owned string (the caller binds it -> RAII frees it).
+static inline cstar_string cstar_string__concat(cstar_string* self, cstar_string other) {
+    size_t n = self->len + other.len;
+    char*  buf = (char*)malloc(n + 1);
+    if (self->len) memcpy(buf, self->data, self->len);
+    if (other.len) memcpy(buf + self->len, other.data, other.len);
+    buf[n] = '\0';
+    cstar_string r; r.data = buf; r.len = n; r.cap = n + 1; return r;
 }
 
 // Tiny tracing hook for tests/debugging: a folding accumulator that records a
