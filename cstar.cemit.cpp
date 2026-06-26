@@ -90,6 +90,24 @@ std::string CEmitter::binaryOperator(int token)
     }
 }
 
+std::string CEmitter::assignmentOperator(int token)
+{
+    switch (token) {
+        case EQ:      return "=";
+        case PLUSEQ:  return "+=";
+        case MINUSEQ: return "-=";
+        case STAREQ:  return "*=";
+        case DIVEQ:   return "/=";
+        case MODEQ:   return "%=";
+        case XOREQ:   return "^=";
+        case ANDEQ:   return "&=";
+        case OREQ:    return "|=";
+        case GTGTEQ:  return ">>=";
+        case LTLTEQ:  return "<<=";
+        default:      return "/*?assign*/=";
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Expressions
 // ---------------------------------------------------------------------------
@@ -168,6 +186,37 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return emitInvocation(v);
     }
 
+    if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
+        return "(" + emitExpression(v->unaryExpression) + " "
+                   + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
+    }
+
+    if (auto* v = dynamic_cast<PreIncrDecrNode*>(n)) {
+        std::string op = (v->token == PLUSPLUS) ? "++" : "--";
+        return "(" + op + emitExpression(v->expression) + ")";
+    }
+
+    if (auto* v = dynamic_cast<PostIncrDecrNode*>(n)) {
+        std::string op = (v->token == PLUSPLUS) ? "++" : "--";
+        return "(" + emitExpression(v->expression) + op + ")";
+    }
+
+    if (auto* v = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        std::string op;
+        switch (v->token) {
+            case EXCLAMATION: op = "!"; break;
+            case TILDE:       op = "~"; break;
+            case PLUS:        op = "+"; break;
+            case MINUS:       op = "-"; break;
+            default:          op = "/*?unary*/"; break;
+        }
+        return "(" + op + emitExpression(v->expression) + ")";
+    }
+
+    if (auto* v = dynamic_cast<CastNode*>(n)) {
+        return "((" + cType(v->type) + ")(" + emitExpression(v->unaryExpression) + "))";
+    }
+
     unsupported("expression", n->line);
     return "0";
 }
@@ -225,6 +274,74 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         return;
     }
 
+    if (auto* f = dynamic_cast<IfNode*>(n)) {
+        line(n->line); indent(depth);
+        _out << "if (" << emitExpression(f->booleanExpression) << ") ";
+        emitBody(f->ifStatement, depth);
+        if (f->elseStatement) { _out << " else "; emitBody(f->elseStatement, depth); }
+        _out << "\n";
+        return;
+    }
+
+    if (auto* w = dynamic_cast<WhileNode*>(n)) {
+        line(n->line); indent(depth);
+        _out << "while (" << emitExpression(w->booleanExpression) << ") ";
+        emitBody(w->whileStatement, depth);
+        _out << "\n";
+        return;
+    }
+
+    if (auto* d = dynamic_cast<DoWhileNode*>(n)) {
+        line(n->line); indent(depth);
+        _out << "do ";
+        emitBody(d->doWhileStatement, depth);
+        _out << " while (" << emitExpression(d->booleanExpression) << ");\n";
+        return;
+    }
+
+    if (auto* f = dynamic_cast<ForNode*>(n)) {
+        line(n->line); indent(depth);
+        _out << "for (" << emitForClause(f->initializerStatements) << "; "
+             << (f->booleanExpression ? emitExpression(f->booleanExpression) : std::string()) << "; "
+             << emitForClause(f->iteratorStatements) << ") ";
+        emitBody(f->body, depth);
+        _out << "\n";
+        return;
+    }
+
+    if (dynamic_cast<BreakNode*>(n))    { line(n->line); indent(depth); _out << "break;\n"; return; }
+    if (dynamic_cast<ContinueNode*>(n)) { line(n->line); indent(depth); _out << "continue;\n"; return; }
+
+    if (auto* sw = dynamic_cast<SwitchNode*>(n)) {
+        line(n->line); indent(depth);
+        _out << "switch (" << emitExpression(sw->expression) << ") {\n";
+        if (sw->switchsections) {
+            for (auto& sec : *sw->switchsections) {
+                if (sec->labels) {
+                    for (auto& lbl : *sec->labels) {
+                        indent(depth + 1);
+                        if (lbl->isDefault())
+                            _out << "default:\n";
+                        else
+                            _out << "case " << emitExpression(lbl->constantExpression) << ":\n";
+                    }
+                }
+                SharedStatement last;
+                if (sec->statementList) {
+                    for (auto& st : *sec->statementList) { emitStatement(st, depth + 2); last = st; }
+                }
+                // cstar switch sections don't fall through; add break unless the
+                // section already ends in a break/return.
+                bool ends = last && (dynamic_cast<BreakNode*>(last.get()) ||
+                                     dynamic_cast<ReturnNode*>(last.get()));
+                if (!ends) { indent(depth + 2); _out << "break;\n"; }
+            }
+        }
+        indent(depth);
+        _out << "}\n";
+        return;
+    }
+
     // Bare expression statement (e.g. an assignment or call used as a statement).
     if (dynamic_cast<ExpressionStatementNode*>(n)) {
         line(n->line);
@@ -237,6 +354,59 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     indent(depth);
     unsupported("statement", n->line);
     _out << "\n";
+}
+
+// A brace-wrapped body for if/while/for/do. Reuses an existing block as-is.
+void CEmitter::emitBody(SharedStatement stmt, int depth)
+{
+    if (auto* b = dynamic_cast<BlockNode*>(stmt.get())) {
+        emitBlock(b, depth);
+    } else {
+        _out << "{\n";
+        emitStatement(stmt, depth + 1);
+        indent(depth);
+        _out << "}";
+    }
+}
+
+// A statement rendered for a for-clause: no trailing semicolon or newline.
+std::string CEmitter::inlineStatement(SharedStatement stmt)
+{
+    if (!stmt) return "";
+    ASTNode* n = stmt.get();
+
+    if (auto* decl = dynamic_cast<LocalVariableDeclaration*>(n)) {
+        std::string s = cType(decl->type) + " ";
+        bool first = true;
+        if (decl->variables) {
+            for (auto& d : *decl->variables) {
+                if (!first) s += ", ";
+                first = false;
+                s += (d->name && d->name->value) ? *d->name->value : "";
+                if (d->initializer) s += " = " + emitExpression(d->initializer);
+            }
+        }
+        return s;
+    }
+
+    if (dynamic_cast<ExpressionStatementNode*>(n))
+        return emitExpression(std::dynamic_pointer_cast<ExpressionNode>(stmt));
+
+    unsupported("for-clause statement", n->line);
+    return "";
+}
+
+std::string CEmitter::emitForClause(SharedStatementList list)
+{
+    if (!list || list->empty()) return "";
+    std::string s;
+    bool first = true;
+    for (auto& st : *list) {
+        if (!first) s += ", ";
+        first = false;
+        s += inlineStatement(st);
+    }
+    return s;
 }
 
 // ---------------------------------------------------------------------------

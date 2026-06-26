@@ -1,0 +1,23 @@
+int pick(int x)
+{
+    switch (x)
+    {
+        case 1:
+            return 10;
+        case 2:
+            return 20;
+        default:
+            return 0;
+    }
+}
+int main()
+{
+    int total = 0;
+    int i = 0;
+    do
+    {
+        total += pick(x: i);
+        i++;
+    } while (i < 4);
+    return total;
+}

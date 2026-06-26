@@ -1,0 +1,13 @@
+int main()
+{
+    int sum = 0;
+    int i = 0;
+    while (true)
+    {
+        i++;
+        if (i > 20) { break; }
+        if ((i % 2) == 0) { continue; }
+        sum += i;
+    }
+    return sum;
+}

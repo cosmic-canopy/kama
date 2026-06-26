@@ -56,6 +56,9 @@ private:
     // Statements
     void emitStatement(SharedStatement stmt, int depth);
     void emitBlock(BlockNode* block, int depth);
+    void emitBody(SharedStatement stmt, int depth);            // brace-wrapped control-flow body
+    std::string inlineStatement(SharedStatement stmt);         // for-clause form (no ; / newline)
+    std::string emitForClause(SharedStatementList list);       // comma-joined inlineStatements
 
     // Expressions -> C expression text
     std::string emitExpression(SharedExpression expr);
@@ -66,6 +69,7 @@ private:
     std::string cFunctionName(const std::string& cstarName);   // main -> cstar_main
     std::string mangledFunctionName(FunctionDeclarationNode* fn, bool& isEntryPoint);
     std::string binaryOperator(int token);
+    std::string assignmentOperator(int token);
 
     void unsupported(const char* what, int srcLine);
 };
