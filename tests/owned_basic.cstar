@@ -1,0 +1,16 @@
+// Owned<T>: heap construction, auto-deref method calls, RAII free.
+class Counter
+{
+    int32 value;
+    Counter(int32 start) { this.value = start; }
+    void bump() { this.value = this.value + 1; }
+    int32 get() { return this.value; }
+}
+
+int main()
+{
+    Owned<Counter> c = new Owned<Counter>(start: 40);
+    c.bump();
+    c.bump();
+    return c.get();   // 42
+}

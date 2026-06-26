@@ -1,0 +1,22 @@
+// Owned<T> RAII: the heap pointee's destructor fires exactly once on drop.
+extern void cstar_trace(int code);
+extern int cstar_trace_get();
+
+class Probe
+{
+    int32 id;
+    Probe(int32 id) { this.id = id; }
+    ~Probe() { cstar_trace(code: 7); }
+}
+
+int build()
+{
+    Owned<Probe> p = new Owned<Probe>(id: 1);
+    return 0;   // p drops -> Owned_Probe__dtor -> Probe__dtor + free
+}
+
+int main()
+{
+    int r = build();
+    return cstar_trace_get();   // fold(7) = 7
+}

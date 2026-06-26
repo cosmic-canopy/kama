@@ -21,6 +21,17 @@
 // A no-op per-element destructor, used when the element type isn't destructible.
 #define CSTAR_ELEM_NODTOR(p) ((void)(p))
 
+// Owned<T> — unique heap ownership (Box / unique_ptr). Move-only; RAII frees.
+// The struct + dtor live here; the heap alloc + T's constructor are emitted
+// INLINE by the compiler (it knows T's ctor + named-arg order). ELEM_DTOR runs
+// T's destructor on the pointee before free. A moved-from Owned has ptr==NULL,
+// so its dtor is a safe no-op — the single surviving owner frees exactly once.
+#define CSTAR_OWNED_DEFINE(T, NAME, ELEM_DTOR)                                  \
+typedef struct NAME { T* ptr; } NAME;                                          \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    if (self->ptr) { ELEM_DTOR(self->ptr); free(self->ptr); self->ptr = NULL; } \
+}
+
 // Bounds-check trap: a clean panic (not undefined behavior) on out-of-range.
 static inline void cstar_bounds_fail(size_t i, size_t len) {
     fprintf(stderr, "cstar: index %zu out of bounds (length %zu)\n",

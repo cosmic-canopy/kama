@@ -44,8 +44,10 @@ void CEmitter::unsupported(const char* what, int srcLine)
 std::string CEmitter::cType(SharedIdentifier type)
 {
     if (!type) return "void";
-    // Collection types (M9) spell their mangled struct name: Array<int32> -> Array_int32.
-    if (type->genericArg && type->value && (*type->value == "Array" || *type->value == "List"))
+    // Collection / smart-pointer types spell their mangled struct name:
+    // Array<int32> -> Array_int32 (M9); Owned<Node> -> Owned_Node (M10).
+    if (type->genericArg && type->value &&
+        (*type->value == "Array" || *type->value == "List" || *type->value == "Owned"))
         return *type->value + "_" + mangleElem(type->genericArg);
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "int8_t";
@@ -408,7 +410,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(d->initializer.get())) {
                     std::string octy = cType(oc->type);
-                    if (isClass(octy) && _classes[octy].hasCtor) {
+                    if (isOwnedClass(octy)) {
+                        // new Owned<T>(args): box T on the heap and run T's ctor in place.
+                        std::string T = _classes[octy].collElemClass;
+                        line(n->line); indent(depth);
+                        _out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
+                        if (isClass(T) && _classes[T].hasCtor) {
+                            line(n->line); indent(depth);
+                            _out << emitReorderedCall(T + "__ctor", nm + ".ptr",
+                                                      _classes[T].ctorParams, oc->args, n->line) << ";\n";
+                        }
+                        // T with no ctor: malloc leaves it default (callers init fields).
+                    } else if (isClass(octy) && _classes[octy].hasCtor) {
                         line(n->line); indent(depth);
                         _out << emitCtorCall(nm, _classes[octy], oc->args, n->line) << ";\n";
                     } else if (!isClass(octy)) {
@@ -850,7 +863,8 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
 {
     if (!t) return false;
     if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string / String
-    return t->genericArg && t->value && (*t->value == "Array" || *t->value == "List");
+    return t->genericArg && t->value &&
+           (*t->value == "Array" || *t->value == "List" || *t->value == "Owned");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -859,15 +873,25 @@ void CEmitter::registerCollection(SharedIdentifier collType)
 {
     if (!isCollectionType(collType)) return;
 
-    bool isStr = collType->builtInVal == IDENTIFIER_STRING_VAL;
-    CollKind kind = isStr ? CollKind::String
+    bool isStr   = collType->builtInVal == IDENTIFIER_STRING_VAL;
+    bool isOwned = !isStr && collType->value && *collType->value == "Owned";
+    CollKind kind = isStr   ? CollKind::String
+                  : isOwned ? CollKind::Owned
                   : (*collType->value == "List") ? CollKind::List : CollKind::Array;
     SharedIdentifier elem = isStr ? SharedIdentifier() : collType->genericArg;
     std::string elemCType  = isStr ? "" : cType(elem);
     std::string elemMangle = isStr ? "" : mangleElem(elem);
     std::string elemClass  = (!isStr && isClass(elemCType)) ? elemCType : "";
-    std::string cName = isStr ? "cstar_string"
+    std::string cName = isStr   ? "cstar_string"
+                      : isOwned ? "Owned_" + elemMangle
                       : (kind == CollKind::List ? "List_" : "Array_") + elemMangle;
+
+    // M10: Owned<T> requires a class element type (construction needs a ctor /
+    // zero-init; auto-deref needs a ClassInfo for field/method lookup).
+    if (isOwned && elemClass.empty()) {
+        unsupported("Owned<T> requires a class element type in M10", collType->line);
+        return;
+    }
 
     if (_collections.count(cName)) return;    // dedup
 
@@ -877,14 +901,16 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     info.elemDestructible = !elemClass.empty() && _classes.count(elemClass) && _classes[elemClass].destructible;
     _collections[cName] = info;
 
-    // Synthetic ClassInfo: a struct with a dtor, and intrinsic methods.
+    // Synthetic ClassInfo: a struct with a dtor, and (collections only) intrinsic methods.
     ClassInfo ci;
     ci.name = cName;
     ci.isCollection = true;
     ci.collKind = kind;
     ci.collElemClass = elemClass;
-    ci.destructible = true;                    // owns heap -> RAII frees (string: only if cap>0)
-    ci.hasCtor = !isStr;                        // Array(size:)/List(); strings come from literals/concat
+    ci.destructible = true;                    // owns heap -> RAII frees
+    // Owned construction is the inline heap-ctor lowering, not an Owned_T__ctor;
+    // strings come from literals/concat; Array/List have a real ctor.
+    ci.hasCtor = !isStr && !isOwned;
     ci.ctorParams = (kind == CollKind::Array)
                         ? std::vector<ParamSig>{ ParamSig{"size", false, ""} }
                         : std::vector<ParamSig>{};
@@ -897,7 +923,9 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.isIntrinsic = true;
         ci.methods[mname] = mi;
     };
-    if (kind == CollKind::String) {
+    if (kind == CollKind::Owned) {
+        // No intrinsic methods — auto-deref forwards to T's real methods.
+    } else if (kind == CollKind::String) {
         addMethod("length", {}, SharedIdentifier());
         addMethod("equals", { ParamSig{"other", false, ""} }, SharedIdentifier());
         addMethod("concat", { ParamSig{"other", false, ""} }, collType);   // returns a string
@@ -1034,6 +1062,9 @@ void CEmitter::emitCollectionDefs()
         } else if (info.kind == CollKind::List) {
             _out << "CSTAR_LIST_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", " << elemDtor << ")\n";
+        } else if (info.kind == CollKind::Owned) {
+            _out << "CSTAR_OWNED_DEFINE(" << info.elemCType << ", " << info.cName
+                 << ", " << elemDtor << ")\n";
         }
     }
     if (!_collections.empty()) _out << "\n";
@@ -1054,6 +1085,35 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     idx      = (ea->expressionlist && !ea->expressionlist->empty())
                    ? emitExpression((*ea->expressionlist)[0]) : "0";
     return true;
+}
+
+// ---- Smart pointers (M10) -------------------------------------------------
+
+bool CEmitter::isOwnedClass(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.isCollection && it->second.collKind == CollKind::Owned;
+}
+
+bool CEmitter::derefSmartPtr(std::string& cls, std::string& recvExpr)
+{
+    if (!isOwnedClass(cls)) return false;
+    recvExpr = "(" + recvExpr + ").ptr";        // a T*
+    cls      = _classes[cls].collElemClass;     // effective class = pointee T
+    return true;
+}
+
+bool CEmitter::isOwnedExpr(SharedExpression e)
+{
+    return e && isOwnedClass(exprClass(e));
+}
+
+// A plain movable lvalue: a bare identifier naming an Owned local/param. A
+// `new Owned<T>(...)` initializer is NOT an lvalue, so it never nulls a source.
+bool CEmitter::isOwnedLValue(SharedExpression e)
+{
+    auto* id = dynamic_cast<IdentifierNode*>(e.get());
+    return id && id->value && isOwnedExpr(e);
 }
 
 // Resolve `extends` names to ClassInfo pointers; error on unknown/cycle.
@@ -1279,6 +1339,10 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             recvClass = fcls;
         }
 
+        // Auto-deref a smart-pointer receiver: dispatch on T with its T* (no &).
+        if (isOwnedClass(recvClass))
+            return emitDispatch(_classes[recvClass].collElemClass, "(" + recvExpr + ").ptr",
+                                name, call->args, call->line);
         if (isInterface(recvClass))
             return emitInterfaceDispatch(recvExpr, recvClass, name, call->args, call->line);
         if (recvClass.empty() || !_classes.count(recvClass)) {
@@ -1693,6 +1757,7 @@ std::string CEmitter::exprClass(SharedExpression e)
 
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
+        if (isOwnedClass(recv)) recv = _classes[recv].collElemClass;   // auto-deref: look up on T
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)
@@ -1714,6 +1779,14 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         return field;
     }
     std::string cls = exprClass(ma->expression);
+    // Auto-deref a smart pointer: `n.field` -> `(n).ptr->[base]field` (T*).
+    if (isOwnedClass(cls)) {
+        std::string T = _classes[cls].collElemClass;
+        std::string basePath;
+        ClassInfo* owner = findFieldOwner(&_classes[T], field);
+        if (owner) basePath = basePathTo(&_classes[T], owner);
+        return "(" + emitExpression(ma->expression) + ").ptr->" + basePath + field;
+    }
     std::string basePath;
     if (!cls.empty() && _classes.count(cls)) {
         ClassInfo* owner = findFieldOwner(&_classes[cls], field);
@@ -1755,6 +1828,11 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
     SharedExpression receiver = recv->expression;
     std::string cls = exprClass(receiver);
+    // Auto-deref a smart pointer: dispatch on T with the held T* as the receiver.
+    if (isOwnedClass(cls)) {
+        std::string ptr = "(" + emitExpression(receiver) + ").ptr";   // already a T*
+        return emitDispatch(_classes[cls].collElemClass, ptr, method, call->args, call->line);
+    }
     if (isInterface(cls))
         return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line);
     if (cls.empty() || !_classes.count(cls)) {

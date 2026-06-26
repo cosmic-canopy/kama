@@ -44,8 +44,9 @@ struct MethodInfo {
     bool                         isIntrinsic = false; // collection op: body is in cstar_runtime.h, not AST
 };
 
-// A built-in generic collection kind (M9). Backed by a C runtime template.
-enum class CollKind { Array, List, String };
+// A built-in generic collection / smart-pointer kind (M9/M10). Backed by a C
+// runtime template. Owned<T> (M10) is a 4th kind: a unique heap-owning pointer.
+enum class CollKind { Array, List, String, Owned };
 
 struct ClassInfo {
     std::string                       name;       // struct name (== cstar class name in M4)
@@ -162,6 +163,13 @@ private:
     // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
                               std::string& recvExpr, std::string& idx);
+
+    // Smart pointers (M10). If `cls` is an Owned_T, rewrite `cls` -> pointee T and
+    // `recvExpr` -> "(recv).ptr" (a T*); return true (auto-deref).
+    bool derefSmartPtr(std::string& cls, std::string& recvExpr);
+    bool isOwnedClass(const std::string& cls) const;   // cls is a registered Owned_T
+    bool isOwnedExpr(SharedExpression e);              // e's static class is Owned_T
+    bool isOwnedLValue(SharedExpression e);            // e is a bare identifier of Owned type
 
     void linkBases();
     void buildVtables();
