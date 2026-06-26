@@ -1,0 +1,26 @@
+extern void cstar_trace(int code);
+extern int cstar_trace_get();
+
+class Res
+{
+    int id;
+    Res(int id) { this.id = id; }
+    ~Res() { cstar_trace(code: id); }
+}
+
+int f(bool c)
+{
+    Res a = new Res(id: 1);
+    if (c)
+    {
+        Res b = new Res(id: 2);
+        return 0;
+    }
+    return 9;
+}
+
+int main()
+{
+    int r = f(c: true);
+    return cstar_trace_get();
+}

@@ -1,0 +1,26 @@
+extern void cstar_trace(int code);
+extern int cstar_trace_get();
+
+class Res
+{
+    int id;
+    Res(int id) { this.id = id; }
+    ~Res() { cstar_trace(code: id); }
+}
+
+int f()
+{
+    Res outer = new Res(id: 1);
+    while (true)
+    {
+        Res inner = new Res(id: 2);
+        break;
+    }
+    return 0;
+}
+
+int main()
+{
+    int r = f();
+    return cstar_trace_get();
+}

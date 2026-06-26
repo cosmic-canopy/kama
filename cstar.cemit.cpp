@@ -243,15 +243,69 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 // Statements
 // ---------------------------------------------------------------------------
 
+// --- RAII cleanup helpers (M5) ---------------------------------------------
+
+bool CEmitter::stmtIsJump(SharedStatement s)
+{
+    ASTNode* n = s.get();
+    return dynamic_cast<ReturnNode*>(n) || dynamic_cast<BreakNode*>(n) || dynamic_cast<ContinueNode*>(n);
+}
+
+void CEmitter::emitScopeCleanup(const Scope& s, int depth)
+{
+    for (auto it = s.locals.rbegin(); it != s.locals.rend(); ++it) {
+        indent(depth);
+        _out << it->className << "__dtor(&" << it->cVar << ");\n";
+    }
+}
+
+// Destroy scopes from innermost up to & including the nearest loop boundary.
+void CEmitter::emitUnwindToLoop(int depth)
+{
+    for (size_t i = _scopes.size(); i-- > 0; ) {
+        emitScopeCleanup(_scopes[i], depth);
+        if (_scopes[i].isLoopBoundary) break;
+    }
+}
+
+// Destroy all scopes from innermost down to the function root (for return).
+void CEmitter::emitUnwindAll(int depth)
+{
+    for (size_t i = _scopes.size(); i-- > 0; )
+        emitScopeCleanup(_scopes[i], depth);
+}
+
+void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::string& className)
+{
+    if (!_scopes.empty())
+        _scopes.back().locals.push_back({cVar, className});
+}
+
+// --- Blocks ----------------------------------------------------------------
+
 void CEmitter::emitBlock(BlockNode* block, int depth)
 {
+    emitBlockScoped(block, depth, /*loopBoundary=*/false, /*functionRoot=*/false);
+}
+
+void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot)
+{
+    Scope sc; sc.isLoopBoundary = loopBoundary; sc.isFunctionRoot = functionRoot;
+    _scopes.push_back(sc);
+
     _out << "{\n";
+    SharedStatement last;
     if (block && block->statements) {
-        for (auto& stmt : *block->statements)
-            emitStatement(stmt, depth + 1);
+        for (auto& stmt : *block->statements) { emitStatement(stmt, depth + 1); last = stmt; }
     }
+    // Fall-through cleanup, unless the block already exited via a jump (which
+    // ran its own cleanup) — the double-destruction guard.
+    if (!(last && stmtIsJump(last)))
+        emitScopeCleanup(_scopes.back(), depth + 1);
+
     indent(depth);
     _out << "}";
+    _scopes.pop_back();
 }
 
 void CEmitter::emitStatement(SharedStatement stmt, int depth)
@@ -273,7 +327,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (decl->variables) {
             for (auto& d : *decl->variables) {
                 std::string nm = (d->name && d->name->value) ? *d->name->value : "";
-                if (cls) _localTypes[nm] = ty;
+                _localTypes[nm] = cls ? ty : "";   // record all names (shadow fields)
 
                 if (!cls) {
                     line(n->line); indent(depth);
@@ -286,6 +340,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // Class-typed local: declare the value, then construct in place.
                 line(n->line); indent(depth);
                 _out << ty << " " << nm << ";\n";
+                // Track for RAII cleanup at scope exit (assumes init-at-decl).
+                if (_classes[ty].destructible) recordDestructibleLocal(nm, ty);
                 if (!d->initializer) continue;
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(d->initializer.get())) {
@@ -309,19 +365,27 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
         line(n->line);
-        indent(depth);
-        if (ret->expression)
-            _out << "return " << emitExpression(ret->expression) << ";\n";
-        else
-            _out << "return;\n";
+        // Capture the return value BEFORE running any destructors (it may
+        // reference locals about to be destroyed), then unwind, then return.
+        if (ret->expression && _currentReturnCType != "void") {
+            std::string tmp = "__ret_" + std::to_string(_tempCounter++);
+            indent(depth);
+            _out << _currentReturnCType << " " << tmp << " = " << emitExpression(ret->expression) << ";\n";
+            emitUnwindAll(depth);
+            indent(depth); _out << "return " << tmp << ";\n";
+        } else {
+            if (ret->expression) { indent(depth); _out << emitExpression(ret->expression) << ";\n"; }
+            emitUnwindAll(depth);
+            indent(depth); _out << "return;\n";
+        }
         return;
     }
 
     if (auto* f = dynamic_cast<IfNode*>(n)) {
         line(n->line); indent(depth);
         _out << "if (" << emitExpression(f->booleanExpression) << ") ";
-        emitBody(f->ifStatement, depth);
-        if (f->elseStatement) { _out << " else "; emitBody(f->elseStatement, depth); }
+        emitBody(f->ifStatement, depth, /*loopBoundary=*/false);
+        if (f->elseStatement) { _out << " else "; emitBody(f->elseStatement, depth, false); }
         _out << "\n";
         return;
     }
@@ -329,7 +393,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* w = dynamic_cast<WhileNode*>(n)) {
         line(n->line); indent(depth);
         _out << "while (" << emitExpression(w->booleanExpression) << ") ";
-        emitBody(w->whileStatement, depth);
+        emitBody(w->whileStatement, depth, /*loopBoundary=*/true);
         _out << "\n";
         return;
     }
@@ -337,7 +401,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* d = dynamic_cast<DoWhileNode*>(n)) {
         line(n->line); indent(depth);
         _out << "do ";
-        emitBody(d->doWhileStatement, depth);
+        emitBody(d->doWhileStatement, depth, /*loopBoundary=*/true);
         _out << " while (" << emitExpression(d->booleanExpression) << ");\n";
         return;
     }
@@ -347,13 +411,23 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         _out << "for (" << emitForClause(f->initializerStatements) << "; "
              << (f->booleanExpression ? emitExpression(f->booleanExpression) : std::string()) << "; "
              << emitForClause(f->iteratorStatements) << ") ";
-        emitBody(f->body, depth);
+        emitBody(f->body, depth, /*loopBoundary=*/true);
         _out << "\n";
         return;
     }
 
-    if (dynamic_cast<BreakNode*>(n))    { line(n->line); indent(depth); _out << "break;\n"; return; }
-    if (dynamic_cast<ContinueNode*>(n)) { line(n->line); indent(depth); _out << "continue;\n"; return; }
+    if (dynamic_cast<BreakNode*>(n)) {
+        line(n->line);
+        emitUnwindToLoop(depth);   // dtors must run before the break keyword
+        indent(depth); _out << "break;\n";
+        return;
+    }
+    if (dynamic_cast<ContinueNode*>(n)) {
+        line(n->line);
+        emitUnwindToLoop(depth);
+        indent(depth); _out << "continue;\n";
+        return;
+    }
 
     if (auto* sw = dynamic_cast<SwitchNode*>(n)) {
         line(n->line); indent(depth);
@@ -400,15 +474,22 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 }
 
 // A brace-wrapped body for if/while/for/do. Reuses an existing block as-is.
-void CEmitter::emitBody(SharedStatement stmt, int depth)
+// Always introduces a scope (even for a single-statement body) so RAII cleanup
+// and the loop boundary are tracked correctly.
+void CEmitter::emitBody(SharedStatement stmt, int depth, bool loopBoundary)
 {
     if (auto* b = dynamic_cast<BlockNode*>(stmt.get())) {
-        emitBlock(b, depth);
+        emitBlockScoped(b, depth, loopBoundary, /*functionRoot=*/false);
     } else {
+        Scope sc; sc.isLoopBoundary = loopBoundary;
+        _scopes.push_back(sc);
         _out << "{\n";
         emitStatement(stmt, depth + 1);
+        if (!stmtIsJump(stmt))
+            emitScopeCleanup(_scopes.back(), depth + 1);
         indent(depth);
         _out << "}";
+        _scopes.pop_back();
     }
 }
 
@@ -543,8 +624,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     ci.hasCtor   = true;
                     ci.ctorNode  = cc;
                     if (cc->declarator) ci.ctorParams = paramSigsOf(cc->declarator->params);
-                } else if (dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
-                    unsupported("destructor — deferred to M5", mn->line);
+                } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
+                    ci.hasDtor  = true;
+                    ci.dtorNode = dd;
                 } else if (dynamic_cast<ClassConstDeclarationNode*>(mn)) {
                     unsupported("class const member", mn->line);
                 } else if (dynamic_cast<ClassOperatorDeclarationNode*>(mn)) {
@@ -554,6 +636,34 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         }
         _classes[ci.name] = ci;
     }
+}
+
+// A class is destructible if it declares a dtor or has a destructible field
+// (transitive). Fixed-point pass — cycle-safe by construction.
+void CEmitter::computeDestructible()
+{
+    for (auto& kv : _classes) kv.second.destructible = kv.second.hasDtor;
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& kv : _classes) {
+            ClassInfo& ci = kv.second;
+            if (ci.destructible) continue;
+            for (auto& f : ci.fields) {
+                auto it = _classes.find(cType(f.type));
+                if (it != _classes.end() && it->second.destructible) {
+                    ci.destructible = true;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+bool CEmitter::isExtern(FunctionDeclarationNode* fn)
+{
+    return fn && fn->modifier && fn->modifier->value && *fn->modifier->value == "extern";
 }
 
 // Emit `cName(leadArg, <args reordered to declared param order>)`.
@@ -697,15 +807,20 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
-            if (p->type && isClass(cType(p->type))) _localTypes[pn] = cType(p->type);
+            std::string pty = p->type ? cType(p->type) : "";
+            _localTypes[pn] = isClass(pty) ? pty : "";   // record all names (shadow fields)
         }
     }
+
+    _currentReturnCType = cType(fn->returnType);
+    _tempCounter = 0;
+    _scopes.clear();
 
     line(fn->line);
     _out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ")\n";
 
     if (fn->block) {
-        emitBlock(fn->block.get(), 0);
+        emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
     } else {
         _out << "{\n}";
     }
@@ -746,11 +861,50 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
         _out << "void " << ci.name << "__ctor("
              << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
+    if (ci.destructible)
+        _out << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         _out << cType(mi.returnType) << " " << mi.cName << "("
              << paramListC(mi.node->params, ci.name.c_str()) << ");\n";
     }
+}
+
+// void Name__dtor(Name* self): user body first, then destructible fields in
+// reverse declaration order. (Early return inside a dtor body is unsupported.)
+void CEmitter::emitDtorDefinition(ClassInfo& ci)
+{
+    line(ci.dtorNode ? ci.dtorNode->line : ci.node->line);
+    _currentClass = &ci;
+    _refParams.clear();
+    _localTypes.clear();
+    _currentReturnCType = "void";
+    _tempCounter = 0;
+    _scopes.clear();
+    Scope root; root.isFunctionRoot = true;
+    _scopes.push_back(root);
+
+    _out << "void " << ci.name << "__dtor(" << ci.name << "* self)\n{\n";
+
+    SharedStatement last;
+    if (ci.dtorNode && ci.dtorNode->body && ci.dtorNode->body->statements) {
+        for (auto& st : *ci.dtorNode->body->statements) { emitStatement(st, 1); last = st; }
+    }
+    if (!(last && stmtIsJump(last)))
+        emitScopeCleanup(_scopes.back(), 1);
+
+    // Field destructors, reverse declaration order.
+    for (auto it = ci.fields.rbegin(); it != ci.fields.rend(); ++it) {
+        auto cit = _classes.find(cType(it->type));
+        if (cit != _classes.end() && cit->second.destructible) {
+            indent(1);
+            _out << cit->second.name << "__dtor(&self->" << it->name << ");\n";
+        }
+    }
+    _out << "}\n\n";
+
+    _scopes.clear();
+    _currentClass = nullptr;
 }
 
 // Emit a method or constructor body with `self`/field/param context set up.
@@ -761,12 +915,18 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentClass = &owner;
     _refParams.clear();
     _localTypes.clear();
+    _currentReturnCType = retType;
+    _tempCounter = 0;
+    _scopes.clear();
+    Scope root; root.isFunctionRoot = true;
+    _scopes.push_back(root);
     if (params) {
         for (auto& p : *params) {
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
-            if (p->type && isClass(cType(p->type))) _localTypes[pn] = cType(p->type);
+            std::string pty = p->type ? cType(p->type) : "";
+            _localTypes[pn] = isClass(pty) ? pty : "";   // record all names (shadow fields)
         }
     }
 
@@ -780,12 +940,15 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             }
         }
     }
+    SharedStatement last;
     if (body && body->statements) {
-        for (auto& st : *body->statements)
-            emitStatement(st, 1);
+        for (auto& st : *body->statements) { emitStatement(st, 1); last = st; }
     }
+    if (!(last && stmtIsJump(last)))
+        emitScopeCleanup(_scopes.back(), 1);
     _out << "}\n\n";
 
+    _scopes.clear();
     _currentClass = nullptr;
     _refParams.clear();
     _localTypes.clear();
@@ -804,6 +967,8 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         std::string ret = cType(mi.returnType);
         emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false);
     }
+    if (ci.destructible)
+        emitDtorDefinition(ci);
 }
 
 // The static class type of an expression ("" if primitive/unknown).
@@ -895,17 +1060,20 @@ int CEmitter::emit(SharedCompilationUnit unit)
     // Pass 0: collect function signatures and the class table.
     collectSignatures(unit);
     collectClasses(unit);
+    computeDestructible();
 
     // Pass S: struct typedefs for all classes (so prototypes can use them).
     // NOTE: emitted in map order; a class holding another class by value would
-    // need a topological sort (deferred — not exercised by M4 fixtures).
+    // need a topological sort (deferred — not exercised by current fixtures).
     for (auto& kv : _classes) emitStruct(kv.second);
 
     // Pass A: prototypes — class ctors/methods, then free functions.
+    // extern functions are provided by C (runtime/linked) — no prototype/def.
     for (auto& kv : _classes) emitClassPrototypes(kv.second);
     bool any = false;
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+            if (isExtern(fn)) continue;
             emitFunctionPrototype(fn);
             any = true;
         }
@@ -916,6 +1084,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     for (auto& kv : _classes) emitClassDefinitions(kv.second);
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+            if (isExtern(fn)) continue;   // provided externally
             emitFunction(fn);
         } else if (dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // already emitted via the class passes

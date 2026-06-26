@@ -48,6 +48,11 @@ struct ClassInfo {
     std::vector<ParamSig>             ctorParams;
     ClassConstructorDeclarationNode*  ctorNode = nullptr;
     ClassDeclarationNode*             node    = nullptr;
+
+    // RAII (M5)
+    bool                              hasDtor = false;   // declares its own ~dtor
+    ClassDestructorDeclarationNode*   dtorNode = nullptr;
+    bool                              destructible = false; // own dtor OR a destructible field (transitive)
 };
 
 class CEmitter {
@@ -71,13 +76,22 @@ private:
     std::map<std::string, std::string> _localTypes;  // local/param -> class name ("" if primitive)
     ClassInfo*                         _currentClass = nullptr;  // when emitting a method/ctor
 
+    // RAII scope stack (M5): live destructible locals per lexical scope.
+    struct LiveLocal { std::string cVar; std::string className; };
+    struct Scope { std::vector<LiveLocal> locals; bool isLoopBoundary = false; bool isFunctionRoot = false; };
+    std::vector<Scope> _scopes;
+    std::string        _currentReturnCType = "void";  // for return-temp
+    int                _tempCounter = 0;
+
     void line(int srcLine);                          // emit a #line directive
     void indent(int depth);
 
     // Pre-pass
     void collectSignatures(SharedCompilationUnit unit);
     void collectClasses(SharedCompilationUnit unit);
+    void computeDestructible();
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
+    static bool isExtern(FunctionDeclarationNode* fn);
 
     // Declarations / top level
     bool paramByRef(FunctionParameterNode* p);
@@ -102,9 +116,18 @@ private:
     // Statements
     void emitStatement(SharedStatement stmt, int depth);
     void emitBlock(BlockNode* block, int depth);
-    void emitBody(SharedStatement stmt, int depth);            // brace-wrapped control-flow body
+    void emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot);
+    void emitBody(SharedStatement stmt, int depth, bool loopBoundary);  // brace-wrapped control-flow body
     std::string inlineStatement(SharedStatement stmt);         // for-clause form (no ; / newline)
     std::string emitForClause(SharedStatementList list);       // comma-joined inlineStatements
+
+    // RAII cleanup (M5)
+    void emitScopeCleanup(const Scope& s, int depth);          // reverse-order dtors for one scope
+    void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
+    void emitUnwindAll(int depth);                             // return: innermost..function root
+    void recordDestructibleLocal(const std::string& cVar, const std::string& className);
+    static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue
+    void emitDtorDefinition(ClassInfo& ci);
 
     // Expressions -> C expression text
     std::string emitExpression(SharedExpression expr);

@@ -27,4 +27,12 @@ static inline cstar_string cstar_string_lit(const char* s, size_t n) {
     return r;
 }
 
+// Tiny tracing hook for tests/debugging: a folding accumulator that records a
+// sequence of integer events (e.g. constructor/destructor order). Declare in
+// cstar with `extern void cstar_trace(int code);` / `extern int cstar_trace_get();`.
+// Single-TU builds only (definition lives in this header).
+static int cstar_trace_acc = 0;
+static inline void cstar_trace(int code) { cstar_trace_acc = cstar_trace_acc * 31 + code; }
+static inline int  cstar_trace_get(void) { return cstar_trace_acc; }
+
 #endif // CSTAR_RUNTIME_H
