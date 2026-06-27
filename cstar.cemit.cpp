@@ -1674,6 +1674,19 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         && call->args && call->args->size() == 1)
         return "&(" + emitExpression((*call->args)[0]->expression) + ")";
 
+    // FFI (M18): `funcptr(of: fn)` — a cstar free function as a C function pointer,
+    // for passing a callback to a C API (GPU/async/input). The C function name
+    // decays to a function pointer. A controlled op (a real function), no `unsafe`.
+    if (name == "funcptr" && (!call->identifier->qualifier || call->identifier->qualifier->empty())
+        && call->args && call->args->size() == 1) {
+        if (auto* id = dynamic_cast<IdentifierNode*>((*call->args)[0]->expression.get())) {
+            auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
+            if (fit != _funcs.end()) return fit->second.cName;
+        }
+        unsupported("funcptr(of:) expects the name of a free function", call->line);
+        return "0";
+    }
+
     // A qualified callee `recv.method` parses as identifier{value=method,
     // qualifier=[recv...]}. The head may be an object (receiver), or — if it's a
     // known namespace and not a local/field — a namespace-qualified free call

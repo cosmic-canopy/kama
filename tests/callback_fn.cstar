@@ -1,0 +1,9 @@
+// M18: pass a cstar free function to C as a function-pointer callback; C invokes it.
+extern int32 cstar_apply_i32(Ptr fn, int32 x);
+
+int32 dbl(int32 v) { return v * 2; }
+
+int main()
+{
+    return cstar_apply_i32(fn: funcptr(of: dbl), x: 21);   // C calls dbl(21) -> 42
+}

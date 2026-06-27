@@ -211,4 +211,10 @@ static int cstar_trace_acc = 0;
 static inline void cstar_trace(int code) { cstar_trace_acc = cstar_trace_acc * 31 + code; }
 static inline int  cstar_trace_get(void) { return cstar_trace_acc; }
 
+// Callback test helper (M18): a C function that invokes a cstar function passed
+// as a function pointer — verifies function-pointer FFI end-to-end (mirrors how a
+// C API calls back into your code). Declare in cstar with
+// `extern int32 cstar_apply_i32(Ptr fn, int32 x);` and pass `funcptr(of: yourFn)`.
+static inline int32_t cstar_apply_i32(int32_t (*fn)(int32_t), int32_t x) { return fn(x); }
+
 #endif // CSTAR_RUNTIME_H
