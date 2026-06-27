@@ -177,7 +177,28 @@ Ptr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule); usi
 `a.dataPtr()`/`a.byteLen()` bridge a collection's buffer to C (safe to call; the returned `Ptr` is valid
 only while the collection is alive + unmodified, and dereferencing it requires `unsafe`). An unlowered
 construct (including a safety-gate violation) is a **hard build error** — cstar never emits incomplete C
-and claims success. 🚧 next: **M18** = function-pointer callbacks; then cstar-level WebGPU bindings.
+and claims success.
+
+### Callbacks — `funcptr(of: fn)` (M18)
+
+Hand a cstar **free function** to a C API as a function pointer (GPU adapter/device/buffer-map callbacks,
+input handlers). A *controlled* op (it names a real function) — no `unsafe`.
+
+```cstar
+extern "<webgpu.h>";
+extern void wgpuBufferMapAsync(WGPUBuffer b, ..., WGPUBufferMapCallback cb, Ptr userdata);
+void onMapped(int32 status, Ptr userdata) { ... }   // signature must match the C callback type
+...
+wgpuBufferMapAsync(b: buf, ..., cb: funcptr(of: onMapped), userdata: null);
+```
+
+`funcptr(of: fn)` lowers to the function's C name (which decays to a function pointer); the callback's
+parameter type comes from the included header, and your cstar function's emitted signature must match it
+(the same ABI contract as `extern` structs). Free functions only — a method would need an implicit
+receiver; C callbacks pass state via a `userdata`/`Ptr` argument instead. (Note: libc callbacks declared
+with `const` pointers — e.g. `qsort`'s `int(const void*, const void*)` — aren't expressible yet, since
+cstar has no `const`; headers whose callback typedefs match a cstar signature, like WebGPU's, work
+directly.) 🚧 next: math types + operator overloading → cstar-level WebGPU bindings.
 
 ## Control flow ✅
 
