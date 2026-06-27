@@ -194,7 +194,7 @@ void usage()
         "usage:\n"
         "  cstar transpile <in.cstar> [-o out.c] [--no-line]\n"
         "  cstar build     <in.cstar>... [-o out] [--target native|wasm] [--release|--debug]\n"
-        "                             [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
+        "                             [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
         "                  (pass multiple .cstar files to build a multi-file program)\n");
 }
 
@@ -213,6 +213,7 @@ int main(int argc, char** argv)
     std::string output;
     std::string cc;                       // empty => pick default per target
     std::string target     = "native";    // native | wasm
+    std::vector<std::string> links;        // -l libraries (FFI, M15)
     bool        emitLines  = true;
     bool        keepC      = false;
     bool        webgpu     = false;
@@ -223,6 +224,7 @@ int main(int argc, char** argv)
         std::string a = argv[i];
         if (a == "-o" && i + 1 < argc)            output = argv[++i];
         else if (a == "--cc" && i + 1 < argc)     cc = argv[++i];
+        else if (a == "--link" && i + 1 < argc)   links.push_back(argv[++i]);
         else if (a == "--target" && i + 1 < argc) target = argv[++i];
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
@@ -328,6 +330,7 @@ int main(int argc, char** argv)
         if (!headerDir.empty()) cmd << "-I" << headerDir << " ";   // the shared generated header
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
         for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
+        for (auto& lib : links) cmd << "-l" << lib << " ";       // FFI link flags (M15)
         cmd << "-o \"" << outPath << "\"";
         int rc = runCmd(cmd.str());
 

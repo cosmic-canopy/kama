@@ -156,6 +156,16 @@ std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qual
 std::string CEmitter::cType(SharedIdentifier type)
 {
     if (!type) return "void";
+    // FFI (M15): a raw C pointer carrier (opaque). Bare `Ptr` -> void* (the
+    // universal handle / opaque pointer); `Ptr<T>` -> T*. usize/isize map to the
+    // C size types. These are the explicit, extern-marked unsafe boundary.
+    if (type->value && *type->value == "Ptr")
+        return type->genericArg ? (cType(type->genericArg) + "*") : "void*";
+    if (type->value && !type->genericArg) {
+        if (*type->value == "usize") return "size_t";
+        if (*type->value == "isize") return "ptrdiff_t";
+    }
+
     // Collection / smart-pointer types spell their mangled struct name:
     // Array<int32> -> Array_int32 (M9); Owned<Node> -> Owned_Node (M10);
     // Shared<Tex> -> Shared_Tex (M11); Weak<Tex> -> Weak_Tex (M12).
@@ -2244,6 +2254,21 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn)) continue;
                 emitFunctionPrototype(fn);
+                any = true;
+            }
+    }
+    // FFI (M15): prototypes for extern C functions so calls type-check + link.
+    // Skip `cstar_`-prefixed names — those are runtime-provided static inlines
+    // (e.g. cstar_trace); a non-static prototype would conflict with them.
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
+        for (auto& decl : *u->codeDeclarationList)
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+                if (!isExtern(fn) || !fn->name || !fn->name->value) continue;
+                if (fn->name->value->rfind("cstar_", 0) == 0) continue;   // reserved/runtime
+                *_out << cType(fn->returnType) << " " << *fn->name->value << "("
+                      << paramListC(fn->parameters, nullptr) << ");\n";
                 any = true;
             }
     }

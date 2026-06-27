@@ -1,0 +1,3 @@
+// FFI core: call a libc primitive function (prototype emitted by cstar).
+extern int32 abs(int32 x);
+int main() { int32 n = 0 - 42; return abs(x: n); }   // |-42| = 42

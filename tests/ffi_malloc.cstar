@@ -1,0 +1,11 @@
+// FFI core: call libc malloc/free, hold an opaque Ptr (void*), size_t, null-check.
+extern Ptr malloc(usize n);
+extern void free(Ptr p);
+
+int main()
+{
+    Ptr p = malloc(n: 64);
+    if (p == null) { return 1; }   // allocation failed
+    free(p: p);
+    return 42;
+}
