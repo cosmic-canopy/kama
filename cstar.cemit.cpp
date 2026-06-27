@@ -2290,6 +2290,12 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // collection/smart-pointer type in their signature).
     for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings); emitClassPrototypes(*ci); }
     emitCollectionDefs();
+    // Prototypes for cstar's OWN free functions. cstar never emits prototypes for
+    // `extern` C functions: an `extern` decl is purely cstar's call signature
+    // (name + named params, for lowering) — the C prototype comes from the header
+    // you `extern "<…>";` (or one the runtime already includes). This keeps the
+    // FFI rule a single explicit sentence and makes redeclaration conflicts
+    // impossible (cstar can't always spell a C type exactly, e.g. const char*).
     bool any = false;
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
@@ -2298,30 +2304,6 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn)) continue;
                 emitFunctionPrototype(fn);
-                any = true;
-            }
-    }
-    // FFI prototypes for extern C functions so calls type-check + link. Skip when
-    // the program includes any header (M16): the headers are then the source of
-    // truth (cstar can't always express the exact C signature, e.g. const char*),
-    // so emitting a prototype could conflict. Header-less FFI (M15: malloc/sqrt/abs)
-    // still emits prototypes. Also skip `cstar_`-prefixed names (runtime static
-    // inlines — e.g. cstar_trace — a non-static prototype would conflict).
-    bool hasIncludes = false;
-    for (auto& u : units)
-        if (u && u->codeDeclarationList)
-            for (auto& decl : *u->codeDeclarationList)
-                if (dynamic_cast<IncludeNode*>(decl.get())) hasIncludes = true;
-    for (auto& u : units) {
-        if (hasIncludes) break;
-        if (!u || !u->codeDeclarationList) continue;
-        _nsCtx = _unitCtx[u.get()];
-        for (auto& decl : *u->codeDeclarationList)
-            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
-                if (!isExtern(fn) || !fn->name || !fn->name->value) continue;
-                if (fn->name->value->rfind("cstar_", 0) == 0) continue;   // reserved/runtime
-                *_out << cType(fn->returnType) << " " << *fn->name->value << "("
-                      << paramListC(fn->parameters, nullptr) << ");\n";
                 any = true;
             }
     }
