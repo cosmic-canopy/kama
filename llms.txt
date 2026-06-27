@@ -38,7 +38,9 @@ includes, opaque `Ptr`/`Ptr<T>` = void*/T*, `usize`, `addr(of:)` out-params, `st
 entire unsafe surface, greppable), with a safe `dataPtr()`/`byteLen()` collection→buffer bridge. An
 unlowered construct is a hard build error. **Function-pointer callbacks** (M18): `funcptr(of: freeFn)`
 hands a cstar function to a C API as a function pointer (the callback type comes from the header; the
-cstar signature must match its ABI) — controlled, no `unsafe`. Planned (see `docs/ENGINE_READINESS.md`):
+cstar signature must match its ABI) — controlled, no `unsafe`. When the C type isn't exactly spellable in
+cstar (e.g. a `const` pointer), cast to the header's callback typedef: `cast<Cb>(funcptr(of: fn))` —
+explicit, general (real libc `qsort` works this way). Planned (see `docs/ENGINE_READINESS.md`):
 math types + operator overloading, `Map<K,V>` + general generics, tagged unions + match, an attribute
 system + reflection (for declarative serialization), file I/O + networking; then cstar-level WebGPU
 bindings.

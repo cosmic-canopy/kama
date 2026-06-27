@@ -192,13 +192,32 @@ void onMapped(int32 status, Ptr userdata) { ... }   // signature must match the 
 wgpuBufferMapAsync(b: buf, ..., cb: funcptr(of: onMapped), userdata: null);
 ```
 
-`funcptr(of: fn)` lowers to the function's C name (which decays to a function pointer); the callback's
-parameter type comes from the included header, and your cstar function's emitted signature must match it
-(the same ABI contract as `extern` structs). Free functions only — a method would need an implicit
-receiver; C callbacks pass state via a `userdata`/`Ptr` argument instead. (Note: libc callbacks declared
-with `const` pointers — e.g. `qsort`'s `int(const void*, const void*)` — aren't expressible yet, since
-cstar has no `const`; headers whose callback typedefs match a cstar signature, like WebGPU's, work
-directly.) 🚧 next: math types + operator overloading → cstar-level WebGPU bindings.
+`funcptr(of: fn)` lowers to the function's C name (which decays to a function pointer). Free functions
+only — a method would need an implicit receiver; C callbacks pass state via a `userdata`/`Ptr` argument
+instead. Your cstar function's emitted signature must satisfy the C callback type (the same ABI contract
+as `extern` structs).
+
+When the two match exactly (as above), `funcptr` is all you need. When the C type is one cstar can't spell
+exactly — most commonly a `const`-qualified pointer, since cstar has no `const` — name the callback type
+(a header `typedef`) and **cast to it explicitly**: `cast<CallbackType>(funcptr(of: fn))`. The explicit
+cast is C's sanctioned conversion and stays true to cstar's *explicit-over-implicit* philosophy — cstar
+never silently coerces a function pointer. This is fully general; e.g. the real libc `qsort`
+(`int(const void*, const void*)`) works end-to-end:
+
+```cstar
+extern "<stdlib.h>";
+extern "cb.h";   // typedef int (*CompareFn)(const void*, const void*);
+extern void qsort(Ptr buf, usize nmemb, usize size, CompareFn compar);
+int32 cmp(Ptr<int32> a, Ptr<int32> b) { int32 r = 0; unsafe { r = a[0] - b[0]; } return r; }
+...
+qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(funcptr(of: cmp)));
+```
+
+The callback type comes from a header — APIs that already `typedef` their callbacks (WebGPU, most GUI/game
+libraries) need no extra file; only a bare-signature API like standard `qsort` needs a one-line `typedef`.
+(A first-class function-pointer *type* in cstar — letting you write that signature inline without a header
+— is a possible future addition; the cast idiom covers it today.) 🚧 next: math types + operator
+overloading → cstar-level WebGPU bindings.
 
 ## Control flow ✅
 
