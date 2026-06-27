@@ -6,17 +6,26 @@
 // for clang/emscripten wasm targets alike. Generated translation units include
 // this first, then their own module header.
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdlib.h>   // malloc/calloc/realloc/free/abort
-#include <string.h>   // memcpy/memcmp
-#include <stdio.h>    // fprintf (bounds trap)
+#include <stdint.h>    // int32_t … (types only — no callable C functions)
+#include <stdbool.h>   // bool       (type only)
+#include <stddef.h>    // size_t, NULL (types only)
+
+// The runtime needs a few libc functions (malloc/free/memcpy/…) for collections,
+// strings, and the bounds trap. It declares them at BLOCK scope inside these
+// wrappers, NOT via <stdlib.h>/<string.h>/<stdio.h> — so those declarations stay
+// invisible to user code. Consequence (and the point): EVERY C function a cstar
+// program calls must be brought in explicitly with `extern "<header.h>";`. The
+// runtime's own dependencies never leak. (All raw memory access is confined here.)
+static inline void* cstar_alloc(size_t n)              { extern void* malloc(size_t);                  return malloc(n); }
+static inline void* cstar_calloc(size_t count, size_t size) { extern void* calloc(size_t, size_t);     return calloc(count, size); }
+static inline void* cstar_realloc(void* p, size_t n)   { extern void* realloc(void*, size_t);          return realloc(p, n); }
+static inline void  cstar_free(void* p)                { extern void  free(void*);                     free(p); }
+static inline void  cstar_copy(void* d, const void* s, size_t n) { extern void* memcpy(void*, const void*, size_t); memcpy(d, s, n); }
+static inline int   cstar_cmp(const void* a, const void* b, size_t n) { extern int memcmp(const void*, const void*, size_t); return memcmp(a, b, n); }
 
 // ---- Collections (M9) -----------------------------------------------------
 // Generic collections are monomorphized per element type from these templates.
-// All raw-pointer / heap access is confined HERE (trusted compiler runtime) —
-// the cstar surface stays pointer-free and safe. Indexing is bounds-checked.
+// The cstar surface stays pointer-free and safe. Indexing is bounds-checked.
 
 // A no-op per-element destructor, used when the element type isn't destructible.
 #define CSTAR_ELEM_NODTOR(p) ((void)(p))
@@ -29,7 +38,7 @@
 #define CSTAR_OWNED_DEFINE(T, NAME, ELEM_DTOR)                                  \
 typedef struct NAME { T* ptr; } NAME;                                          \
 static inline void NAME##__dtor(NAME* self) {                                  \
-    if (self->ptr) { ELEM_DTOR(self->ptr); free(self->ptr); self->ptr = NULL; } \
+    if (self->ptr) { ELEM_DTOR(self->ptr); cstar_free(self->ptr); self->ptr = NULL; } \
 }
 
 // Shared<T> — ref-counted shared ownership (shared_ptr / Rc). Copy retains;
@@ -38,7 +47,7 @@ static inline void NAME##__dtor(NAME* self) {                                  \
 // Weak<T> can outlive the T. `ptr` mirrors Owned's, so auto-deref is identical.
 typedef struct cstar_ctrl { size_t strong; size_t weak; } cstar_ctrl;   // weak: reserved for Weak<T>
 static inline cstar_ctrl* cstar_ctrl_new(void) {
-    cstar_ctrl* c = (cstar_ctrl*)malloc(sizeof(cstar_ctrl));
+    cstar_ctrl* c = (cstar_ctrl*)cstar_alloc(sizeof(cstar_ctrl));
     c->strong = 1; c->weak = 0;
     return c;
 }
@@ -47,8 +56,8 @@ typedef struct NAME { T* ptr; cstar_ctrl* ctrl; } NAME;                        \
 static inline void NAME##__dtor(NAME* self) {                                  \
     if (self->ctrl) {                                                          \
         if (--self->ctrl->strong == 0) {                                       \
-            ELEM_DTOR(self->ptr); free(self->ptr);                            \
-            if (self->ctrl->weak == 0) free(self->ctrl);                       \
+            ELEM_DTOR(self->ptr); cstar_free(self->ptr);                            \
+            if (self->ctrl->weak == 0) cstar_free(self->ctrl);                       \
         }                                                                      \
         self->ptr = NULL; self->ctrl = NULL;                                  \
     }                                                                          \
@@ -64,7 +73,7 @@ static inline bool NAME##__valid(NAME* self) { return self->ptr != NULL; }
 typedef struct NAME { T* ptr; cstar_ctrl* ctrl; } NAME;                        \
 static inline void NAME##__dtor(NAME* self) {                                  \
     if (self->ctrl) {                                                          \
-        if (--self->ctrl->weak == 0 && self->ctrl->strong == 0) free(self->ctrl); \
+        if (--self->ctrl->weak == 0 && self->ctrl->strong == 0) cstar_free(self->ctrl); \
         self->ptr = NULL; self->ctrl = NULL;                                  \
     }                                                                          \
 }                                                                              \
@@ -80,9 +89,23 @@ static inline SHARED_NAME NAME##__lock(NAME* self) {                          \
 }
 
 // Bounds-check trap: a clean panic (not undefined behavior) on out-of-range.
+// Formats its own message and writes to stderr (fd 2) so it needs no <stdio.h>.
+static inline void cstar_u64_to_buf(char* buf, size_t* p, size_t v) {
+    char tmp[20]; int t = 0;
+    if (v == 0) tmp[t++] = '0';
+    while (v) { tmp[t++] = (char)('0' + (v % 10)); v /= 10; }
+    while (t) buf[(*p)++] = tmp[--t];
+}
 static inline void cstar_bounds_fail(size_t i, size_t len) {
-    fprintf(stderr, "cstar: index %zu out of bounds (length %zu)\n",
-            (size_t)i, (size_t)len);
+    extern long write(int, const void*, size_t);   // POSIX/emscripten — block scope
+    extern void abort(void);
+    char buf[96]; size_t p = 0;
+    const char* a = "cstar: index ";              while (*a) buf[p++] = *a++;
+    cstar_u64_to_buf(buf, &p, i);
+    const char* b = " out of bounds (length ";    while (*b) buf[p++] = *b++;
+    cstar_u64_to_buf(buf, &p, len);
+    const char* c = ")\n";                        while (*c) buf[p++] = *c++;
+    (void)write(2, buf, p);
     abort();
 }
 
@@ -91,11 +114,11 @@ static inline void cstar_bounds_fail(size_t i, size_t len) {
 typedef struct NAME { T* data; size_t len; } NAME;                             \
 static inline void NAME##__ctor(NAME* self, size_t n) {                        \
     self->len  = n;                                                            \
-    self->data = (n ? (T*)calloc(n, sizeof(T)) : NULL);                        \
+    self->data = (n ? (T*)cstar_calloc(n, sizeof(T)) : NULL);                        \
 }                                                                              \
 static inline void NAME##__dtor(NAME* self) {                                  \
     for (size_t i = 0; i < self->len; ++i) { T* e = &self->data[i]; ELEM_DTOR(e); } \
-    free(self->data); self->data = NULL; self->len = 0;                        \
+    cstar_free(self->data); self->data = NULL; self->len = 0;                        \
 }                                                                              \
 static inline T      NAME##__get(NAME* self, size_t i) {                       \
     if (i >= self->len) cstar_bounds_fail(i, self->len);                       \
@@ -113,12 +136,12 @@ typedef struct NAME { T* data; size_t len; size_t cap; } NAME;                 \
 static inline void NAME##__ctor(NAME* self) { self->data=NULL; self->len=0; self->cap=0; } \
 static inline void NAME##__dtor(NAME* self) {                                  \
     for (size_t i = 0; i < self->len; ++i) { T* e = &self->data[i]; ELEM_DTOR(e); } \
-    free(self->data); self->data = NULL; self->len = 0; self->cap = 0;         \
+    cstar_free(self->data); self->data = NULL; self->len = 0; self->cap = 0;         \
 }                                                                              \
 static inline void   NAME##__add(NAME* self, T v) {                            \
     if (self->len == self->cap) {                                             \
         size_t nc = self->cap ? self->cap * 2 : 4;                            \
-        self->data = (T*)realloc(self->data, nc * sizeof(T));                 \
+        self->data = (T*)cstar_realloc(self->data, nc * sizeof(T));                 \
         self->cap  = nc;                                                      \
     }                                                                         \
     self->data[self->len++] = v;                                             \
@@ -156,7 +179,7 @@ static inline cstar_string cstar_string_lit(const char* s, size_t n) {
 
 // RAII: free only heap-owned strings; borrowed views are a no-op.
 static inline void cstar_string__dtor(cstar_string* self) {
-    if (self->cap) free(self->data);
+    if (self->cap) cstar_free(self->data);
     self->data = NULL; self->len = 0; self->cap = 0;
 }
 static inline size_t cstar_string__length(cstar_string* self) { return self->len; }
@@ -164,14 +187,14 @@ static inline size_t cstar_string__length(cstar_string* self) { return self->len
 static inline char* cstar_string__cstr(cstar_string* self) { return self->data; }
 static inline bool cstar_string__equals(cstar_string* self, cstar_string other) {
     return self->len == other.len &&
-           (self->len == 0 || memcmp(self->data, other.data, self->len) == 0);
+           (self->len == 0 || cstar_cmp(self->data, other.data, self->len) == 0);
 }
 // Returns a fresh heap-owned string (the caller binds it -> RAII frees it).
 static inline cstar_string cstar_string__concat(cstar_string* self, cstar_string other) {
     size_t n = self->len + other.len;
-    char*  buf = (char*)malloc(n + 1);
-    if (self->len) memcpy(buf, self->data, self->len);
-    if (other.len) memcpy(buf + self->len, other.data, other.len);
+    char*  buf = (char*)cstar_alloc(n + 1);
+    if (self->len) cstar_copy(buf, self->data, self->len);
+    if (other.len) cstar_copy(buf + self->len, other.data, other.len);
     buf[n] = '\0';
     cstar_string r; r.data = buf; r.len = n; r.cap = n + 1; return r;
 }

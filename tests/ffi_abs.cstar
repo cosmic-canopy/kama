@@ -1,3 +1,4 @@
-// FFI core: call a libc primitive function (prototype emitted by cstar).
+// FFI core: call a libc primitive function (declared by its header).
+extern "<stdlib.h>";
 extern int32 abs(int32 x);
-int main() { int32 n = 0 - 42; return abs(x: n); }   // |-42| = 42
+int main() { int32 n = 0 - 42; return abs(x: n); }

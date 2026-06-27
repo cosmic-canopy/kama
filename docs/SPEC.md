@@ -107,9 +107,10 @@ int main() { return add(b: 20, a: 10); }   // named args; reordered to declared 
 libraries with `--link`. The FFI boundary is the language's only "unsafe" seam (explicitly `extern`):
 
 ```cstar
+extern "<stdlib.h>";             // every C function comes from an explicit header
+extern "<math.h>";
 extern Ptr  malloc(usize n);     // Ptr = void* (opaque pointer/handle); usize = size_t
-extern void free(Ptr p);         // malloc/free: declared by a header the runtime already includes
-extern "<math.h>";               // sqrt's header — see the rule below
+extern void free(Ptr p);
 extern float64 sqrt(float64 x);  // build with: --link m
 
 int main() {
@@ -122,9 +123,10 @@ int main() {
 
 **The FFI rule (one sentence): declare C types/functions by `extern`-including their header.** An `extern`
 declaration is purely cstar's call-signature (name + named params, so it can lower the call) — the actual
-C prototype comes from a header you include with `extern "<header.h>";` (or one the runtime already pulls
-in, like `<stdlib.h>`/`<string.h>`). cstar never emits a C prototype for an extern function, so there are
-no redeclaration conflicts; a missing include is a plain C error, never a silent guess.
+C prototype comes from the header you include with `extern "<header.h>";`. cstar never emits a C prototype
+for an extern function, so there are no redeclaration conflicts; and the runtime hides its own libc
+dependencies (block-scope declarations), so **no** C function (not even `malloc`) is available without its
+header — a missing include is a plain C error, never a silent guess. Fully consistent.
 
 `Ptr` is `void*`; `Ptr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
 **no dereference** in cstar yet). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning `cstar_`
