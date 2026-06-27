@@ -71,6 +71,14 @@ public:
         : ASTNode(context),  StatementNode(context), name(name) { }
 };
 
+// `extern "<header.h>";` — emit a C `#include` for FFI (M16).
+class IncludeNode : public StatementNode {
+public:
+    SharedString header;   // the raw string, e.g. <stdlib.h> or math.h
+    IncludeNode(CodeGenContext& context, SharedString header)
+        : ASTNode(context),  StatementNode(context), header(header) { }
+};
+
 class UsingDeclarationNode : public StatementNode {
 public:
     SharedIdentifier identifier;

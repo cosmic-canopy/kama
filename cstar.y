@@ -412,7 +412,10 @@ function_modifier_opt
 ------------------------------------------------------------------------------*/
 
 function_declaration
-  : EXTERN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
+  : EXTERN STRING_LITERAL SEMICOLON   {
+      $$ = std::make_shared<IncludeNode>(SCANNER_CODEGENCONTEXT, $2);   /* extern "<header.h>"; (FFI #include) */
+   }
+  | EXTERN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
       $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() );
    }
   | function_modifier_opt function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block   {

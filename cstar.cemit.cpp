@@ -102,6 +102,8 @@ std::string CEmitter::resolveUserName(const std::string& value, SharedStringList
     auto known = [&](const std::string& n) {
         return _classes.count(n) || _enums.count(n) || _interfaces.count(n);
     };
+    // FFI (M16): extern struct/handle names are global literal C names.
+    if ((!qualifier || qualifier->empty()) && _externNames.count(value)) return value;
     if (qualifier && !qualifier->empty()) {
         // Qualified `A.B...value` — a namespace path (alias-expand a 1-segment head).
         std::string nsMangled;
@@ -301,6 +303,22 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             for (size_t i = 0; i + 1 < v->qualifier->size(); ++i) enumQual->push_back((*v->qualifier)[i]);
             std::string en = resolveUserName(*v->qualifier->back(), enumQual);
             if (_enums.count(en)) return en + "_" + nm;
+            // Object field access `obj.field[.field…]` (qualifier=[obj,…], value=field).
+            const std::string& head = *(*v->qualifier)[0];
+            if (_localTypes.count(head) && !_localTypes[head].empty()) {
+                std::string e = _refParams.count(head) ? ("(*" + head + ")") : head;
+                e = "(" + e + ")";
+                for (size_t i = 1; i < v->qualifier->size(); ++i) e += "." + *(*v->qualifier)[i];
+                return e + "." + nm;
+            }
+            if (_currentClass) {
+                ClassInfo* owner = findFieldOwner(_currentClass, head);
+                if (owner) {
+                    std::string e = "self->" + basePathTo(_currentClass, owner) + head;
+                    for (size_t i = 1; i < v->qualifier->size(); ++i) e += "." + *(*v->qualifier)[i];
+                    return e + "." + nm;
+                }
+            }
         }
         // A ref/out parameter is a pointer in C; reads dereference it.
         if (_refParams.count(nm)) return "(*" + nm + ")";
@@ -532,9 +550,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 }
 
                 // Class-typed local: declare the value, then construct in place.
-                // Collections zero-init so an unconstructed one frees safely (free(NULL)).
+                // Collections zero-init so an unconstructed one frees safely; extern
+                // structs zero-init so unset descriptor fields are well-defined.
                 line(n->line); indent(depth);
-                *_out << ty << " " << nm << (_classes[ty].isCollection ? " = {0}" : "") << ";\n";
+                bool zeroInit = _classes[ty].isCollection || _classes[ty].isExternStruct;
+                *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible) recordDestructibleLocal(nm, ty);
                 if (!d->initializer) continue;
@@ -967,10 +987,19 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
         if (!cd || !cd->name || !cd->name->value) continue;
 
+        // FFI (M16): an `extern class` is an external C struct — keep its literal
+        // C name (not namespace-mangled) and don't emit/own it.
+        bool isExt = false;
+        if (cd->modifiers)
+            for (auto& mod : *cd->modifiers)
+                if (mod->value && *mod->value == "extern") isExt = true;
+
         ClassInfo ci;
-        ci.name  = qualify(*cd->name->value);       // namespace-mangled (M14)
+        ci.name  = isExt ? *cd->name->value : qualify(*cd->name->value);   // M14 mangle / M16 literal
         ci.scope = _nsCtx.scope;
         ci.usings = _nsCtx.usings;
+        ci.isExternStruct = isExt;
+        if (isExt) _externNames.insert(ci.name);
         ci.node = cd;
 
         // Single inheritance (extends). Base/interface names are RESOLVED in
@@ -1139,6 +1168,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("length", {}, SharedIdentifier());
         addMethod("equals", { ParamSig{"other", false, ""} }, SharedIdentifier());
         addMethod("concat", { ParamSig{"other", false, ""} }, collType);   // returns a string
+        addMethod("cstr",   {}, SharedIdentifier());                        // FFI: const char*
     } else {
         if (kind == CollKind::List)
             addMethod("add", { ParamSig{"item", false, elemClass} }, SharedIdentifier());
@@ -1483,7 +1513,7 @@ void CEmitter::computeDestructible()
         changed = false;
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
-            if (ci.destructible) continue;
+            if (ci.destructible || ci.isExternStruct) continue;   // cstar doesn't own external structs
             _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;   // resolve field types in ci's scope
             bool d = (ci.base && ci.base->destructible);
             if (!d)
@@ -1605,6 +1635,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     }
 
     std::string name = *call->identifier->value;
+
+    // FFI (M16): `addr(x)` is a builtin — the address of a local/value (`&(x)`),
+    // for out-params and passing a descriptor by pointer. A controlled operation
+    // (it addresses a real value), so it needs no `unsafe`.
+    if (name == "addr" && (!call->identifier->qualifier || call->identifier->qualifier->empty())
+        && call->args && call->args->size() == 1)
+        return "&(" + emitExpression((*call->args)[0]->expression) + ")";
 
     // A qualified callee `recv.method` parses as identifier{value=method,
     // qualifier=[recv...]}. The head may be an object (receiver), or — if it's a
@@ -1897,7 +1934,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
 
 void CEmitter::emitClassPrototypes(ClassInfo& ci)
 {
-    if (ci.isCollection) return;   // the C macro already declared ctor/dtor/methods
+    if (ci.isCollection || ci.isExternStruct) return;   // macro / header provides these
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
         *_out << "void " << ci.name << "__ctor("
              << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
@@ -2021,7 +2058,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 
 void CEmitter::emitClassDefinitions(ClassInfo& ci)
 {
-    if (ci.isCollection) return;   // the C macro already defined ctor/dtor/methods
+    if (ci.isCollection || ci.isExternStruct) return;   // macro / header provides these
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator) {
         line(ci.ctorNode->line);
         emitMethodOrCtorBody(ci.name + "__ctor", "void",
@@ -2183,7 +2220,14 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
         for (auto& decl : *u->codeDeclarationList) {
             ASTNode* d = decl.get();
             if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d)) {
-                if (cd->name && cd->name->value) { std::string n = qualify(*cd->name->value); _classes[n].name = n; }
+                if (cd->name && cd->name->value) {
+                    bool ext = false;
+                    if (cd->modifiers) for (auto& mod : *cd->modifiers)
+                        if (mod->value && *mod->value == "extern") ext = true;
+                    std::string n = ext ? *cd->name->value : qualify(*cd->name->value);
+                    _classes[n].name = n;
+                    if (ext) { _classes[n].isExternStruct = true; _externNames.insert(n); }
+                }
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(d)) {
                 if (ed->identifier && ed->identifier->value) { std::string n = qualify(*ed->identifier->value); _enums[n].name = n; }
             } else if (auto* id = dynamic_cast<InterfaceDeclarationNode*>(d)) {
@@ -2214,7 +2258,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
 
     // Forward typedefs so bodies can reference each other and any class.
     for (ClassInfo* ci : classes) {
-        if (ci->isCollection) continue;   // the C macro emits the collection's typedef
+        if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
         *_out << "typedef struct " << ci->name << " " << ci->name << ";\n";
         if (ci->hasVtable && ci->vtableRoot == ci->name)
             *_out << "typedef struct " << ci->name << "_vtable " << ci->name << "_vtable;\n";
@@ -2234,7 +2278,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
 
     // vtable struct types + struct bodies (topological), then interface types.
     for (ClassInfo* ci : classes) {
-        if (ci->isCollection) continue;   // the C macro emits the collection's struct
+        if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
         scopeOf(ci->scope, ci->usings);
         if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
         emitStruct(*ci);
@@ -2257,10 +2301,19 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 any = true;
             }
     }
-    // FFI (M15): prototypes for extern C functions so calls type-check + link.
-    // Skip `cstar_`-prefixed names — those are runtime-provided static inlines
-    // (e.g. cstar_trace); a non-static prototype would conflict with them.
+    // FFI prototypes for extern C functions so calls type-check + link. Skip when
+    // the program includes any header (M16): the headers are then the source of
+    // truth (cstar can't always express the exact C signature, e.g. const char*),
+    // so emitting a prototype could conflict. Header-less FFI (M15: malloc/sqrt/abs)
+    // still emits prototypes. Also skip `cstar_`-prefixed names (runtime static
+    // inlines — e.g. cstar_trace — a non-static prototype would conflict).
+    bool hasIncludes = false;
+    for (auto& u : units)
+        if (u && u->codeDeclarationList)
+            for (auto& decl : *u->codeDeclarationList)
+                if (dynamic_cast<IncludeNode*>(decl.get())) hasIncludes = true;
     for (auto& u : units) {
+        if (hasIncludes) break;
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
         for (auto& decl : *u->codeDeclarationList)
@@ -2306,6 +2359,8 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             // type-only (header)
         } else if (dynamic_cast<EnumDeclarationNode*>(decl.get())) {
             // emitted in the header
+        } else if (dynamic_cast<IncludeNode*>(decl.get())) {
+            // FFI #include — emitted in the header by emitIncludes
         } else if (decl) {
             unsupported("top-level declaration", decl->line);
             *_out << "\n";
@@ -2313,14 +2368,33 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     }
 }
 
+// FFI (M16): emit a C `#include` per `extern "<header>";` directive, deduped.
+void CEmitter::emitIncludes(const std::vector<SharedCompilationUnit>& units)
+{
+    std::set<std::string> seen;
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        for (auto& decl : *u->codeDeclarationList)
+            if (auto* inc = dynamic_cast<IncludeNode*>(decl.get())) {
+                std::string h = inc->header ? *inc->header : "";
+                if (h.empty() || seen.count(h)) continue;
+                seen.insert(h);
+                if (h[0] == '<') *_out << "#include " << h << "\n";       // <stdlib.h>
+                else             *_out << "#include \"" << h << "\"\n";    // "my.h"
+            }
+    }
+    *_out << "\n";
+}
+
 // Single self-contained TU (transpile / single-file build): header content +
 // module definitions in one stream.
 int CEmitter::emit(SharedCompilationUnit unit)
 {
     *_out << "/* Generated by cstar. Do not edit. */\n";
-    *_out << "#include \"cstar_runtime.h\"\n\n";
+    *_out << "#include \"cstar_runtime.h\"\n";
     if (!unit || !unit->codeDeclarationList)
         return _unsupported;
+    emitIncludes({unit});           // FFI #include directives
     collectProgram({unit});
     emitHeaderContent({unit});
     emitModuleContent(unit);
@@ -2342,7 +2416,8 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     _out = &header;
     header << "/* Generated by cstar. Do not edit. */\n";
     header << "#ifndef " << guard << "\n#define " << guard << "\n";
-    header << "#include \"cstar_runtime.h\"\n\n";
+    header << "#include \"cstar_runtime.h\"\n";
+    emitIncludes(units);        // FFI #include directives (before any type decls)
     emitHeaderContent(units);   // declarations only — no bodies, so no #line needed
     header << "#endif /* " << guard << " */\n";
 

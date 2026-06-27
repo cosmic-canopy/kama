@@ -95,6 +95,11 @@ struct ClassInfo {
     // type's field/base/method references during header emission.
     std::string                       scope;                 // mangle prefix ("" for collections)
     std::vector<std::string>          usings;
+
+    // FFI (M16): an `extern class` is an external C struct — cstar uses its
+    // fields for access but never emits it (a header/linked code provides it),
+    // keeps its literal C name, and never manages its lifetime.
+    bool                              isExternStruct = false;
 };
 
 // A monomorphized collection instantiation (e.g. Array<int32> -> Array_int32).
@@ -166,6 +171,8 @@ private:
     // Namespaces (M14): current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
     std::set<std::string> _namespaces;   // registered public namespaces (mangled)
+    std::set<std::string> _externNames;  // FFI (M16): literal C names of extern structs
+    void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)
     NsCtx ctxOf(SharedCompilationUnit unit, int fileIndex);      // build a file's NsCtx
     static std::string qualifiedName(SharedIdentifier id);       // dotted "a.b.c" from value+qualifier

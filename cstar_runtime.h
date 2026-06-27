@@ -160,6 +160,8 @@ static inline void cstar_string__dtor(cstar_string* self) {
     self->data = NULL; self->len = 0; self->cap = 0;
 }
 static inline size_t cstar_string__length(cstar_string* self) { return self->len; }
+// FFI (M16): the underlying NUL-terminated bytes, for passing to a C `const char*`.
+static inline char* cstar_string__cstr(cstar_string* self) { return self->data; }
 static inline bool cstar_string__equals(cstar_string* self, cstar_string other) {
     return self->len == other.len &&
            (self->len == 0 || memcmp(self->data, other.data, self->len) == 0);

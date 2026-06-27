@@ -1,0 +1,10 @@
+// FFI data: include a C header, bind an external struct, call a struct-returning C fn.
+extern "<stdlib.h>";
+extern class div_t { int32 quot; int32 rem; }
+extern div_t div(int32 numer, int32 denom);
+
+int main()
+{
+    div_t r = div(numer: 17, denom: 5);   // quot 3, rem 2
+    return r.quot + r.rem;                 // 5
+}
