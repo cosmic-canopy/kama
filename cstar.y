@@ -120,7 +120,7 @@ struct cstaryystype {
 %token <string> REF RETURN STATIC STRING
 %token <string> SWITCH THIS TRUE
 %token <string> UINT8 UINT16 UINT32 UINT64
-%token <string> USING VIRTUAL VOID
+%token <string> UNSAFE USING VIRTUAL VOID
 %token <string> VOLATILE WHILE
 
 /* PUNCTUATION AND SINGLE CHARACTER OPERATORS */
@@ -172,7 +172,7 @@ struct cstaryystype {
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> switch_statement while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration interface_declaration
-%type <statement> class_declaration
+%type <statement> class_declaration unsafe_statement
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <namespacedeclaration> namespace_opt
@@ -497,6 +497,10 @@ embedded_statement
   | selection_statement
   | iteration_statement
   | jump_statement
+  | unsafe_statement
+  ;
+unsafe_statement
+  : UNSAFE block   { $$ = std::make_shared<UnsafeNode>(SCANNER_CODEGENCONTEXT, $2); }
   ;
 empty_statement
   : SEMICOLON   {  }

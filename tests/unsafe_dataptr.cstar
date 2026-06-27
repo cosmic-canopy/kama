@@ -1,0 +1,10 @@
+// M17: the safe Array->pointer bridge (dataPtr() needs no unsafe); deref needs unsafe.
+int main()
+{
+    Array<int32> a = new Array<int32>(size: 3);
+    a[0] = 40; a[1] = 1; a[2] = 1;
+    Ptr<int32> p = a.dataPtr();        // safe to obtain
+    int32 s = 0;
+    unsafe { s = p[0] + p[1] + p[2]; } // raw read needs unsafe
+    return s;   // 42
+}

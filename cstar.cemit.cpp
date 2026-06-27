@@ -389,6 +389,17 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 return coll + "__set(&(" + recvExpr + "), " + idx + ", "
                             + coll + "__get(&(" + recvExpr + "), " + idx + ") " + op + " (" + rhs + "))";
             }
+            // Raw pointer store `p[i] = v` (M17) — only inside `unsafe { }`.
+            SharedExpression recv = ea->expression ? ea->expression
+                                  : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+            std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
+                             ? emitExpression((*ea->expressionlist)[0]) : "0";
+            if (!_inUnsafe) {
+                unsupported("raw pointer access requires an `unsafe { }` block", ea->line);
+                return "0";
+            }
+            return "((" + emitExpression(recv) + ")[" + ridx + "] "
+                       + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
         }
         return "(" + emitExpression(v->unaryExpression) + " "
                    + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
@@ -398,8 +409,16 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx))
             return coll + "__get(&(" + recvExpr + "), " + idx + ")";
-        unsupported("index on a non-collection", ea->line);
-        return "0";
+        // Raw pointer read `p[i]` (M17) — only inside `unsafe { }`.
+        SharedExpression recv = ea->expression ? ea->expression
+                              : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
+                         ? emitExpression((*ea->expressionlist)[0]) : "0";
+        if (!_inUnsafe) {
+            unsupported("raw pointer access requires an `unsafe { }` block", ea->line);
+            return "0";
+        }
+        return "(" + emitExpression(recv) + ")[" + ridx + "]";
     }
 
     if (auto* v = dynamic_cast<PreIncrDecrNode*>(n)) {
@@ -511,6 +530,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         indent(depth);
         emitBlock(block, depth);
         *_out << "\n";
+        return;
+    }
+
+    // `unsafe { ... }` (M17): permit raw pointer index/store inside; otherwise a
+    // plain scoped block. The single, explicit, greppable unsafe surface.
+    if (auto* u = dynamic_cast<UnsafeNode*>(n)) {
+        bool prev = _inUnsafe;
+        _inUnsafe = true;
+        emitStatement(u->body, depth);   // the BlockNode -> a normal scoped { … }
+        _inUnsafe = prev;
         return;
     }
 
@@ -1175,6 +1204,8 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("get",    { ParamSig{"index", false, ""} }, elem);
         addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} }, SharedIdentifier());
         addMethod("length", {}, SharedIdentifier());
+        addMethod("dataPtr", {}, SharedIdentifier());   // FFI bridge (M17): Ptr<T> to the buffer
+        addMethod("byteLen", {}, SharedIdentifier());   // len * sizeof(T)
     }
 
     _classes[cName] = ci;

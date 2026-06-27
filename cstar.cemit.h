@@ -188,6 +188,7 @@ private:
     std::vector<Scope> _scopes;
     std::string        _currentReturnCType = "void";  // for return-temp
     int                _tempCounter = 0;
+    bool               _inUnsafe = false;             // M17: inside an `unsafe { }` block
 
     void line(int srcLine);                          // emit a #line directive
     void indent(int depth);

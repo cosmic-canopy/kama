@@ -264,6 +264,15 @@ public:
         : ASTNode(context),  StatementNode(context), statements(statements) { }
 };
 
+// `unsafe { ... }` (M17): a scoped block inside which raw pointer index/store is
+// permitted. The single, explicit, greppable unsafe surface of the language.
+class UnsafeNode : public StatementNode {
+public:
+    SharedStatement body;   // a BlockNode
+    UnsafeNode(CodeGenContext& context, SharedStatement body)
+        : ASTNode(context),  StatementNode(context), body(body) { }
+};
+
 class VariableDeclarator : public StatementNode {
 public:
     SharedIdentifier name;

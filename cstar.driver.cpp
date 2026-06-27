@@ -137,9 +137,10 @@ int transpileToFile(const std::string& inputFile, const std::string& outPath, bo
     int unsupported = emitter.emit(unit);
     out.close();
 
-    if (unsupported > 0)
-        fprintf(stderr, "cstar: %d construct(s) not yet lowered; generated C may be incomplete.\n",
-                unsupported);
+    if (unsupported > 0) {
+        fprintf(stderr, "cstar: %d unlowered construct(s) — see the warnings above.\n", unsupported);
+        return 1;   // a construct cstar couldn't lower (incl. a safety-gate violation) is a hard error
+    }
     return 0;
 }
 
@@ -176,9 +177,10 @@ int transpileProgram(const std::vector<std::string>& inputs,
     header.close();
     for (auto& f : moduleFiles) f->close();
 
-    if (unsupported > 0)
-        fprintf(stderr, "cstar: %d construct(s) not yet lowered; generated C may be incomplete.\n",
-                unsupported);
+    if (unsupported > 0) {
+        fprintf(stderr, "cstar: %d unlowered construct(s) — see the warnings above.\n", unsupported);
+        return 1;
+    }
     return 0;
 }
 

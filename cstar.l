@@ -307,6 +307,7 @@ static struct name_value keywords [] = {
     {"uint32",      UINT32},
     {"uint64",      UINT64},
     {"uint8",       UINT8},
+    {"unsafe",      UNSAFE},
     {"using",       USING},
     {"virtual",     VIRTUAL},
     {"void",        VOID},

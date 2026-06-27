@@ -128,7 +128,9 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
     if (i >= self->len) cstar_bounds_fail(i, self->len);                       \
     self->data[i] = v;                                                         \
 }                                                                              \
-static inline size_t NAME##__length(NAME* self) { return self->len; }
+static inline size_t NAME##__length(NAME* self) { return self->len; }\
+ static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
+ static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }
 
 // List<T> — growable (capacity doubling), owns its buffer (RAII frees).
 #define CSTAR_LIST_DEFINE(T, NAME, ELEM_DTOR)                                   \
@@ -154,7 +156,9 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
     if (i >= self->len) cstar_bounds_fail(i, self->len);                       \
     self->data[i] = v;                                                         \
 }                                                                              \
-static inline size_t NAME##__length(NAME* self) { return self->len; }
+static inline size_t NAME##__length(NAME* self) { return self->len; }\
+ static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
+ static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }
 
 
 // cstar `string` lowers to a fat, length-prefixed value (M9). `cap == 0` means
