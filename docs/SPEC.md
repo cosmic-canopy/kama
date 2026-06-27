@@ -100,7 +100,30 @@ int add(int a, int b) { return a + b; }
 int main() { return add(b: 20, a: 10); }   // named args; reordered to declared order
 ```
 `ref`/`out` parameters pass by pointer: `void set(out int dst) { dst = 42; }` … `set(dst: ref x);`.
-`extern Ret name(params);` declares a function provided by C (no body emitted) — the FFI seam. ✅
+
+## FFI — calling C ✅ (M15)
+
+`extern Ret name(params);` declares a C function; cstar emits its prototype and lowers calls to it. Link
+libraries with `--link`. The FFI boundary is the language's only "unsafe" seam (explicitly `extern`):
+
+```cstar
+extern Ptr  malloc(usize n);     // Ptr = void* (opaque pointer/handle); usize = size_t
+extern void free(Ptr p);
+extern float64 sqrt(float64 x);  // build with: --link m
+
+int main() {
+    Ptr p = malloc(n: 64);
+    if (p == null) { return 1; }  // hold / null-check / compare — but no deref yet
+    free(p: p);
+    return cast<int>(sqrt(x: 1764.0));   // 42
+}
+```
+
+`Ptr` is `void*`; `Ptr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
+**no dereference** in cstar yet). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning `cstar_`
+are reserved (runtime-provided). 🚧 next (M16): pointer deref / out-params / indexing, `extern struct`
+(descriptors), opaque named handle types, function-pointer callbacks, `cinclude "<header>"`, and
+string→`const char*` — then cstar-level WebGPU bindings.
 
 ## Control flow ✅
 
