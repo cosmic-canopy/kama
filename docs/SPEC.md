@@ -148,19 +148,39 @@ Color c = Color.Blue;
 Lowers to a C `enum` (members mangled `Color_Red`…). Enum values are integers — usable in `switch`,
 comparisons, and `cast`.
 
-## Modules / multi-file builds ✅ (M13)
+## Modules / namespaces ✅ (M13–M14)
 
-Pass several source files to one build — every top-level declaration is visible to all files (one **flat
-global namespace** for now; names must be unique across the project):
+Pass several source files to one build; the compiler emits a shared header (`<out>.gen.h`) + one `.c` of
+definitions per file, then compiles + links them:
 
 ```sh
-cstar build math.cstar shapes.cstar main.cstar -o app
+cstar build graphics.cstar physics.cstar main.cstar -o app
 ```
 
-The compiler emits one shared header (`<out>.gen.h`, all type/prototype declarations) plus one `.c` of
-definitions per source file, then compiles + links them. `namespace a.b;` / `using` still parse but are
-**not yet semantic** — real namespace scoping/mangling + a `using`→file resolver, plus an incremental
-`.o` build cache, are the fast-follow (the per-module `.c` structure is built for them). 🚧
+**Private-by-default.** A file with no `namespace` keeps its top-level symbols **file-private** (invisible
+to other files) — so single-file programs/scripts need no boilerplate and you can never accidentally call
+another file's helper. To share across files, declare a namespace:
+
+```cstar
+// graphics.cstar
+namespace Graphics;
+class Texture { ... }        // Graphics.Texture
+int32 scale(int32 x) { ... } // Graphics.scale
+
+// main.cstar
+using Graphics;              // import unqualified
+using Phys = Physics;        // alias
+int main() {
+    Texture t = ...;             // Graphics.Texture (via using)
+    Physics.Texture p = ...;     // qualified — distinct type, no collision
+    int n = Graphics.scale(x: 3);// qualified namespaced call
+}
+```
+
+`namespace a.b;` (dotted) is allowed. Object/field names shadow a namespace in `A.B` resolution. `main` is
+the global entry point (unmangled). Deferred: per-symbol `public`/`private` access modifiers (a file is
+wholly public if it declares a namespace, wholly private otherwise), nested `namespace { }` blocks, and an
+incremental `.o` build cache. 🚧
 
 ## Building & debugging ✅
 
