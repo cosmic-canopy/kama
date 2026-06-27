@@ -13,8 +13,9 @@ Goal: a portable, lightweight WebGPU game engine with no .NET/runtime baggage.
 > `foreach` + bounds-checked `[]`), and the full **smart-pointer family**
 > (`Owned<T>` unique, `Shared<T>` ref-counted, `Weak<T>` non-owning, with
 > move/retain semantics + auto-deref), **multi-file builds with
-> private-by-default namespaces**, and **C FFI** (`extern` functions, opaque
-> `Ptr`/`usize`, `--link`) — building for **native** and **WASM**, with
+> private-by-default namespaces**, and **C FFI** (`extern` functions + structs,
+> `#include`, opaque `Ptr`/`usize`, out-params, `--link`) — building for
+> **native** and **WASM**, with
 > debug/release builds and **IDE breakpoint debugging**. No raw pointers / no
 > `unsafe` outside the explicit FFI seam. New? See
 > **[GETTING_STARTED.md](GETTING_STARTED.md)**.

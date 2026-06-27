@@ -121,9 +121,32 @@ int main() {
 
 `Ptr` is `void*`; `Ptr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
 **no dereference** in cstar yet). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning `cstar_`
-are reserved (runtime-provided). 🚧 next (M16): pointer deref / out-params / indexing, `extern struct`
-(descriptors), opaque named handle types, function-pointer callbacks, `cinclude "<header>"`, and
-string→`const char*` — then cstar-level WebGPU bindings.
+are reserved (runtime-provided).
+
+**FFI data (M16) — all controlled, no `unsafe` needed:**
+
+```cstar
+extern "<stdlib.h>";                       // a C #include
+extern class div_t { int32 quot; int32 rem; }   // bind an external C struct (not re-emitted)
+extern div_t div(int32 numer, int32 denom);
+
+extern float64 frexp(float64 value, Ptr<int32> exp);
+
+int main() {
+    div_t r = div(numer: 17, denom: 5);    // r.quot=3, r.rem=2  (field access on a C struct)
+    int32 e = 0;
+    frexp(value: 1764.0, exp: addr(of: e));// addr(of: x) = &x  — controlled out-param
+    return r.quot + r.rem + e;             // 5 + 11 = 16
+}
+```
+
+`extern class Foo { ... }` is an **external** struct provided by an included header / linked code — cstar
+uses its fields but never re-emits it (so no redefinition), and its name is the literal C name.
+`addr(of: x)` takes the address of a real local (out-params, descriptor pointers) — a *controlled* op, no
+`unsafe`. `s.cstr()` yields a C `const char*`. When a program `extern`-includes any header, the headers
+are the source of truth (cstar skips emitting extern-function prototypes). 🚧 next: **M17** = an explicit
+`unsafe { }` block gating raw `Ptr` deref / index / store (+ an `Array→(ptr,len)` buffer bridge); **M18**
+= function-pointer callbacks; then cstar-level WebGPU bindings.
 
 ## Control flow ✅
 

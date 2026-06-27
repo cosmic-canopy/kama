@@ -32,9 +32,10 @@ destructors, single inheritance + virtual dispatch, interfaces, enums; **generic
 move/retain semantics, auto-deref, RAII); **multi-file builds with private-by-default namespaces**
 (`namespace X;` + `using`/aliases/qualified access; no-namespace files are file-private; shared header +
 per-module .c); native + WASM + debug/release builds; IDE breakpoint debugging (VSCode extension in
-`editor/vscode/`); **C FFI core** (`extern` functions with emitted prototypes, opaque `Ptr`/`Ptr<T>` =
-void*/T*, `usize`, `--link <lib>`). No raw pointers / no `unsafe` outside the explicit `extern` FFI seam.
-Planned (see `docs/ENGINE_READINESS.md`): FFI data + callbacks (extern structs, pointer deref/out-params,
-function pointers, cinclude), math types + operator overloading, `Map<K,V>` + general generics, tagged
-unions + match, an attribute system + reflection (for declarative serialization), file I/O + networking;
-then cstar-level WebGPU bindings.
+`editor/vscode/`); **C FFI** (`extern` functions + `extern class` external structs, `extern "<header>"`
+includes, opaque `Ptr`/`Ptr<T>` = void*/T*, `usize`, `addr(of:)` out-params, `string.cstr()`, `--link
+<lib>`) — all controlled, no raw deref yet. No raw pointers / no `unsafe` outside the explicit `extern`
+FFI seam. Planned (see `docs/ENGINE_READINESS.md`): an explicit `unsafe { }` block for raw Ptr
+deref/index, function-pointer callbacks, math types + operator overloading, `Map<K,V>` + general generics,
+tagged unions + match, an attribute system + reflection (for declarative serialization), file I/O +
+networking; then cstar-level WebGPU bindings.

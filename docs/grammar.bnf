@@ -195,7 +195,9 @@ function_modifier_opt
 ------------------------------------------------------------------------------*/
 
 function_declaration
-  : EXTERN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
+  : EXTERN STRING_LITERAL SEMICOLON
+
+  | EXTERN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
   | function_modifier_opt function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
 
