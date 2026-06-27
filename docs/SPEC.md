@@ -152,10 +152,32 @@ int main() {
 `extern class Foo { ... }` is an **external** struct provided by an included header / linked code — cstar
 uses its fields but never re-emits it (so no redefinition), and its name is the literal C name.
 `addr(of: x)` takes the address of a real local (out-params, descriptor pointers) — a *controlled* op, no
-`unsafe`. `s.cstr()` yields a C `const char*`. When a program `extern`-includes any header, the headers
-are the source of truth (cstar skips emitting extern-function prototypes). 🚧 next: **M17** = an explicit
-`unsafe { }` block gating raw `Ptr` deref / index / store (+ an `Array→(ptr,len)` buffer bridge); **M18**
-= function-pointer callbacks; then cstar-level WebGPU bindings.
+`unsafe`. `s.cstr()` yields a C `const char*`.
+
+### `unsafe { }` — raw pointer memory access (M17)
+
+The **only** place cstar can touch arbitrary memory through a raw pointer. Raw `Ptr<T>` index/store is a
+**compile error outside** an `unsafe { }` block — so the entire dangerous surface is explicit and
+greppable (`grep -rn 'unsafe {'`). Everything else (collections, smart pointers, FFI structs/handles/
+out-params, `addr`) stays safe.
+
+```cstar
+Ptr<int32> p = malloc(n: 16);    // void* -> int32_t* (implicit)
+unsafe {
+    p[0] = 10;  p[1] = 32;       // raw store  (p[0] is *p)
+    int32 v = p[0] + p[1];       // raw read
+}
+// p[0] = 1;                     // ERROR outside unsafe: "raw pointer access requires an `unsafe { }` block"
+
+Array<float32> verts = ...;
+Ptr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule); usize n = verts.byteLen();
+// ... pass (data, n) to a C upload fn; dereferencing `data` still needs `unsafe`
+```
+
+`a.dataPtr()`/`a.byteLen()` bridge a collection's buffer to C (safe to call; the returned `Ptr` is valid
+only while the collection is alive + unmodified, and dereferencing it requires `unsafe`). An unlowered
+construct (including a safety-gate violation) is a **hard build error** — cstar never emits incomplete C
+and claims success. 🚧 next: **M18** = function-pointer callbacks; then cstar-level WebGPU bindings.
 
 ## Control flow ✅
 
