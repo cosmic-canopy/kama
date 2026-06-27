@@ -1,0 +1,8 @@
+using Graphics;
+int main()
+{
+    Texture g = new Texture(id: 10);            // Graphics.Texture (via using)
+    Physics.Texture p = new Physics.Texture(m: 7);  // qualified, distinct type
+    int32 s = Graphics.scale(x: 3);             // qualified namespaced call -> 6
+    return g.get() + p.get() + s;               // 10 + 7 + 6 = 23
+}

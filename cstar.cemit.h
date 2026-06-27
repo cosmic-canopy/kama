@@ -48,6 +48,17 @@ struct MethodInfo {
 // runtime template. Owned<T> (M10) is a 4th kind: a unique heap-owning pointer.
 enum class CollKind { Array, List, String, Owned, Shared, Weak };
 
+// Per-file namespace context (M14). A file with `namespace X;` is public (scope
+// = mangled X); a file without one is private (scope = "_F<idx>"). Bare names
+// resolve to the file's own scope, then its `using`s — never another file's
+// private symbols (private-by-default).
+struct NsCtx {
+    std::string scope;        // mangle prefix: "Graphics" or "_F3"
+    bool        isPublic = false;
+    std::vector<std::string> usings;                  // imported public namespaces (mangled)
+    std::map<std::string, std::string> aliases;       // alias -> mangled namespace
+};
+
 struct ClassInfo {
     std::string                       name;       // struct name (== cstar class name in M4)
     std::vector<FieldInfo>            fields;      // declaration order
@@ -79,6 +90,11 @@ struct ClassInfo {
     bool                              isCollection = false;
     CollKind                          collKind = CollKind::Array;
     std::string                       collElemClass;         // element class name ("" if primitive)
+
+    // Namespaces (M14): the declaring file's scope/usings, for resolving this
+    // type's field/base/method references during header emission.
+    std::string                       scope;                 // mangle prefix ("" for collections)
+    std::vector<std::string>          usings;
 };
 
 // A monomorphized collection instantiation (e.g. Array<int32> -> Array_int32).
@@ -97,11 +113,18 @@ struct InterfaceMethod { std::string name; FunctionDeclarationNode* node; };
 struct InterfaceInfo {
     std::string                  name;
     std::vector<InterfaceMethod> methods;
+    std::string                  scope;        // M14
+    std::vector<std::string>     usings;
 };
 
 // An enum (M7): lowered to a C `enum` with members mangled `Enum_Member`.
 struct EnumMember { std::string name; SharedExpression value; };  // value optional
-struct EnumInfo   { std::string name; std::vector<EnumMember> members; };
+struct EnumInfo   {
+    std::string name;
+    std::vector<EnumMember> members;
+    std::string scope;                          // M14
+    std::vector<std::string> usings;
+};
 
 class CEmitter {
 public:
@@ -139,6 +162,18 @@ private:
     std::map<std::string, InterfaceInfo> _interfaces;        // interface name -> info (M6b)
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info (M7)
     std::map<std::string, CollectionInfo> _collections;      // cName -> info (M9)
+
+    // Namespaces (M14): current-file scope + the helpers that mangle/resolve names.
+    NsCtx _nsCtx;
+    std::set<std::string> _namespaces;   // registered public namespaces (mangled)
+    std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)
+    NsCtx ctxOf(SharedCompilationUnit unit, int fileIndex);      // build a file's NsCtx
+    static std::string qualifiedName(SharedIdentifier id);       // dotted "a.b.c" from value+qualifier
+    static std::string mangleNs(const std::string& ns);          // "a.b" -> "a__b"
+    std::string qualify(const std::string& name) const;          // scope-prefix a declared name
+    std::string resolveUserName(const std::string& value, SharedStringList qualifier);  // class/enum/iface ref
+    std::string resolveFunc(const std::string& name, SharedStringList qualifier);       // function ref
+    bool isNamespace(const std::string& name) const;             // a known public namespace (or alias)
 
     // RAII scope stack (M5): live destructible locals per lexical scope.
     struct LiveLocal { std::string cVar; std::string className; };

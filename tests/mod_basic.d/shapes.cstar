@@ -1,4 +1,5 @@
-// Module: a class used both directly and through Owned<Box> from main.cstar.
+namespace Shapes;
+
 class Box
 {
     int32 w;

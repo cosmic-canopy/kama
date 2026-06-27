@@ -1,4 +1,5 @@
-// Module: a free function + a class, used from main.cstar.
+namespace Math;
+
 int32 add(int32 a, int32 b) { return a + b; }
 
 class Counter

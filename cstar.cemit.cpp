@@ -39,6 +39,117 @@ void CEmitter::unsupported(const char* what, int srcLine)
 }
 
 // ---------------------------------------------------------------------------
+// Namespaces (M14): scope prefixes + name resolution
+// ---------------------------------------------------------------------------
+
+// "a.b.c" — the dotted source name from an identifier's qualifier + value.
+std::string CEmitter::qualifiedName(SharedIdentifier id)
+{
+    std::string s;
+    if (id->qualifier)
+        for (auto& seg : *id->qualifier) s += *seg + ".";
+    s += id->value ? *id->value : "";
+    return s;
+}
+
+std::string CEmitter::mangleNs(const std::string& ns)
+{
+    std::string r = ns;
+    for (size_t p; (p = r.find('.')) != std::string::npos; ) r.replace(p, 1, "__");
+    return r;
+}
+
+// Build a file's namespace context: public (mangled `namespace X;`) or private
+// (`_F<idx>`); collect its `using`s and aliases.
+NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
+{
+    NsCtx ctx;
+    if (unit->nameSpace && unit->nameSpace->name) {
+        ctx.scope = mangleNs(qualifiedName(unit->nameSpace->name));
+        ctx.isPublic = true;
+    } else {
+        ctx.scope = "_F" + std::to_string(fileIndex);
+        ctx.isPublic = false;
+    }
+    if (unit->usingDeclarationList)
+        for (auto& u : *unit->usingDeclarationList) {
+            if (!u || !u->identifier) continue;
+            std::string mangled = mangleNs(qualifiedName(u->identifier));
+            if (u->alias && u->alias->value) ctx.aliases[*u->alias->value] = mangled;
+            else ctx.usings.push_back(mangled);
+        }
+    return ctx;
+}
+
+// Scope-prefix a declared name (registration). `main` stays the global entry.
+std::string CEmitter::qualify(const std::string& name) const
+{
+    if (name == "main") return "cstar_main";
+    return _nsCtx.scope + "__" + name;
+}
+
+bool CEmitter::isNamespace(const std::string& name) const
+{
+    if (_nsCtx.aliases.count(name)) return true;
+    return _namespaces.count(mangleNs(name)) != 0;
+}
+
+// Resolve a class/enum/interface reference (bare or qualified) to its registered
+// mangled name. Bare names search the file's own scope, then its `using`s — never
+// another file's private symbols. Returns the bare name if unresolved.
+std::string CEmitter::resolveUserName(const std::string& value, SharedStringList qualifier)
+{
+    auto known = [&](const std::string& n) {
+        return _classes.count(n) || _enums.count(n) || _interfaces.count(n);
+    };
+    if (qualifier && !qualifier->empty()) {
+        // Qualified `A.B...value` — a namespace path (alias-expand a 1-segment head).
+        std::string nsMangled;
+        if (qualifier->size() == 1 && _nsCtx.aliases.count(*(*qualifier)[0]))
+            nsMangled = _nsCtx.aliases[*(*qualifier)[0]];
+        else {
+            std::string path;
+            for (auto& seg : *qualifier) path += (path.empty() ? "" : ".") + *seg;
+            nsMangled = mangleNs(path);
+        }
+        std::string cand = nsMangled + "__" + value;
+        return known(cand) ? cand : value;
+    }
+    std::string own = _nsCtx.scope + "__" + value;     // file's own scope
+    if (known(own)) return own;
+    for (auto& u : _nsCtx.usings) {                    // imported public namespaces
+        std::string cand = u + "__" + value;
+        if (known(cand)) return cand;
+    }
+    return value;   // builtin/forward/unresolved — caller handles
+}
+
+// Resolve a function reference to its mangled cName (same search as types).
+std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qualifier)
+{
+    if (name == "main") return "cstar_main";
+    if (qualifier && !qualifier->empty()) {
+        std::string nsMangled;
+        if (qualifier->size() == 1 && _nsCtx.aliases.count(*(*qualifier)[0]))
+            nsMangled = _nsCtx.aliases[*(*qualifier)[0]];
+        else {
+            std::string path;
+            for (auto& seg : *qualifier) path += (path.empty() ? "" : ".") + *seg;
+            nsMangled = mangleNs(path);
+        }
+        std::string cand = nsMangled + "__" + name;
+        return _funcs.count(cand) ? cand : name;
+    }
+    std::string own = _nsCtx.scope + "__" + name;
+    if (_funcs.count(own)) return own;
+    for (auto& u : _nsCtx.usings) {
+        std::string cand = u + "__" + name;
+        if (_funcs.count(cand)) return cand;
+    }
+    return name;
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -67,8 +178,10 @@ std::string CEmitter::cType(SharedIdentifier type)
         case IDENTIFIER_STRING_VAL:  return "cstar_string";
         case IDENTIFIER_VOID_VAL:    return "void";
         default:
-            // User-defined type (class/enum). Real mangling arrives with M4.
-            return type->value ? *type->value : "void";
+            // User-defined type (class/enum/interface) — resolve through the
+            // current file's namespace scope + usings to its mangled C name.
+            if (!type->value) return "void";
+            return resolveUserName(*type->value, type->qualifier);
     }
 }
 
@@ -171,9 +284,14 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<IdentifierNode*>(n)) {
         // Variable/parameter reference. Qualified/member resolution is later.
         std::string nm = v->value ? *v->value : "";
-        // Enum member: `Enum.Member` parses as value=Member, qualifier=[Enum].
-        if (v->qualifier && !v->qualifier->empty() && isEnum(*(*v->qualifier)[0]))
-            return *(*v->qualifier)[0] + "_" + nm;
+        // Enum member `[Ns.]Enum.Member` (value=Member, qualifier=[…,Enum]) —
+        // resolve the enum name (last qualifier segment) through the file's scope.
+        if (v->qualifier && !v->qualifier->empty()) {
+            auto enumQual = std::make_shared<StringList>();
+            for (size_t i = 0; i + 1 < v->qualifier->size(); ++i) enumQual->push_back((*v->qualifier)[i]);
+            std::string en = resolveUserName(*v->qualifier->back(), enumQual);
+            if (_enums.count(en)) return en + "_" + nm;
+        }
         // A ref/out parameter is a pointer in C; reads dereference it.
         if (_refParams.count(nm)) return "(*" + nm + ")";
         // An unqualified name that is a field of the enclosing class (or an
@@ -740,7 +858,7 @@ std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isE
 {
     std::string name = (fn->name && fn->name->value) ? *fn->name->value : "anon";
     isEntryPoint = (name == "main");
-    return cFunctionName(name);
+    return qualify(name);   // scope-prefixed (main -> cstar_main); _nsCtx set per file
 }
 
 std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
@@ -770,9 +888,11 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         if (!fn || !fn->name || !fn->name->value) continue;
 
         FuncSig sig;
-        sig.cName  = cFunctionName(*fn->name->value);
+        // extern functions are the FFI seam — keep their literal C name (never
+        // namespace-mangle). Others are scope-prefixed (main -> cstar_main).
+        sig.cName  = isExtern(fn) ? *fn->name->value : qualify(*fn->name->value);
         sig.params = paramSigsOf(fn->parameters);
-        _funcs[*fn->name->value] = sig;
+        _funcs[sig.cName] = sig;
     }
 }
 
@@ -786,7 +906,9 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (id->baseTypes && !id->baseTypes->empty())
             unsupported("interface inheritance (interface : interface) — deferred", id->line);
         InterfaceInfo ii;
-        ii.name = *id->identifier->value;
+        ii.name  = qualify(*id->identifier->value);   // M14
+        ii.scope = _nsCtx.scope;
+        ii.usings = _nsCtx.usings;
         if (id->body)
             for (auto& m : *id->body)
                 if (m->name && m->name->value)
@@ -803,7 +925,9 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
         if (!ed || !ed->identifier || !ed->identifier->value) continue;
         EnumInfo ei;
-        ei.name = *ed->identifier->value;
+        ei.name  = qualify(*ed->identifier->value);   // M14
+        ei.scope = _nsCtx.scope;
+        ei.usings = _nsCtx.usings;
         if (ed->body)
             for (auto& m : *ed->body)
                 if (m->identifier && m->identifier->value)
@@ -834,16 +958,19 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         if (!cd || !cd->name || !cd->name->value) continue;
 
         ClassInfo ci;
-        ci.name = *cd->name->value;
+        ci.name  = qualify(*cd->name->value);       // namespace-mangled (M14)
+        ci.scope = _nsCtx.scope;
+        ci.usings = _nsCtx.usings;
         ci.node = cd;
 
-        // Single inheritance (extends). Interfaces (implements) are M6b.
+        // Single inheritance (extends). Base/interface names are RESOLVED in
+        // linkBases() once every file's declarations are registered.
         if (cd->baseTypes) {
             if (cd->baseTypes->base && cd->baseTypes->base->value)
-                ci.baseName = *cd->baseTypes->base->value;
+                ci.baseName = *cd->baseTypes->base->value;   // bare; resolved in linkBases
             if (cd->baseTypes->interfaces)
                 for (auto& itf : *cd->baseTypes->interfaces)
-                    if (itf && itf->value) ci.interfaces.push_back(*itf->value);
+                    if (itf && itf->value) ci.interfaces.push_back(*itf->value);  // bare; resolved in linkBases
         }
         // Class-level `abstract` modifier.
         if (cd->modifiers)
@@ -920,7 +1047,8 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         case IDENTIFIER_BOOL_VAL:    return "bool";
         case IDENTIFIER_FLOAT32_VAL: return "float32";
         case IDENTIFIER_FLOAT64_VAL: return "float64";
-        default:                     return elem->value ? *elem->value : "void";
+        default:  // class element — resolve to its mangled name (the suffix)
+            return elem->value ? resolveUserName(*elem->value, elem->qualifier) : "void";
     }
 }
 
@@ -1259,6 +1387,17 @@ std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string
 // Resolve `extends` names to ClassInfo pointers; error on unknown/cycle.
 void CEmitter::linkBases()
 {
+    // Now every file's declarations are registered: resolve each class's base +
+    // interface references (bare/qualified) to their mangled names, in the
+    // class's own namespace context.
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.isCollection) continue;
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;
+        if (ci.node && ci.node->baseTypes && ci.node->baseTypes->base && ci.node->baseTypes->base->value)
+            ci.baseName = resolveUserName(*ci.node->baseTypes->base->value, ci.node->baseTypes->base->qualifier);
+        for (auto& itf : ci.interfaces) itf = resolveUserName(itf, nullptr);
+    }
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.baseName.empty()) continue;
@@ -1335,6 +1474,7 @@ void CEmitter::computeDestructible()
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
             if (ci.destructible) continue;
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;   // resolve field types in ci's scope
             bool d = (ci.base && ci.base->destructible);
             if (!d)
                 for (auto& f : ci.fields) {
@@ -1457,12 +1597,21 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     std::string name = *call->identifier->value;
 
     // A qualified callee `recv.method` parses as identifier{value=method,
-    // qualifier=[recv...]}. (No namespaces yet, so a qualifier means a method
-    // receiver.) Build the receiver C-expression + class from the qualifier chain.
+    // qualifier=[recv...]}. The head may be an object (receiver), or — if it's a
+    // known namespace and not a local/field — a namespace-qualified free call
+    // (`Graphics.fn(...)`). Object/field shadows a namespace (M14 precedence).
     SharedStringList qual = call->identifier->qualifier;
     if (qual && !qual->empty()) {
         std::string recvExpr, recvClass;
         const std::string& head = *(*qual)[0];
+        bool headIsObject = (_localTypes.count(head) && !_localTypes[head].empty())
+                          || (_currentClass && findFieldOwner(_currentClass, head));
+        if (!headIsObject && (isNamespace(head))) {
+            std::string fn = resolveFunc(name, qual);
+            auto fit = _funcs.find(fn);
+            if (fit != _funcs.end())
+                return emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line);
+        }
         if (_localTypes.count(head) && !_localTypes[head].empty()) {
             // A ref/out param is already a pointer; deref so &(recv) is the pointer.
             recvExpr = _refParams.count(head) ? ("(*" + head + ")") : head;
@@ -1497,8 +1646,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return emitDispatch(recvClass, "&(" + recvExpr + ")", name, call->args, call->line);
     }
 
-    // Free-function call.
-    auto it = _funcs.find(name);
+    // Free-function call — resolve the name through the file's scope + usings.
+    auto it = _funcs.find(resolveFunc(name, call->identifier->qualifier));
     if (it == _funcs.end()) {
         unsupported("call to unknown function (args kept in source order)", call->line);
         std::string s = cFunctionName(name) + "(";
@@ -2007,8 +2156,34 @@ std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, Share
 // to the shared maps), then resolve inheritance/vtables/destructibility once.
 void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
 {
+    // Assign each file its namespace context (public namespace or _F<idx> private)
+    // and register public namespaces, before any name resolution.
+    for (size_t i = 0; i < units.size(); ++i) {
+        if (!units[i]) continue;
+        NsCtx ctx = ctxOf(units[i], (int)i);
+        _unitCtx[units[i].get()] = ctx;
+        if (ctx.isPublic) _namespaces.insert(ctx.scope);
+    }
+    // Pre-register every type's mangled NAME so references resolve regardless of
+    // file/declaration order (a class method param may reference a type declared
+    // later, or in another file). The full collect below overwrites these.
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
+        for (auto& decl : *u->codeDeclarationList) {
+            ASTNode* d = decl.get();
+            if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d)) {
+                if (cd->name && cd->name->value) { std::string n = qualify(*cd->name->value); _classes[n].name = n; }
+            } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(d)) {
+                if (ed->identifier && ed->identifier->value) { std::string n = qualify(*ed->identifier->value); _enums[n].name = n; }
+            } else if (auto* id = dynamic_cast<InterfaceDeclarationNode*>(d)) {
+                if (id->identifier && id->identifier->value) { std::string n = qualify(*id->identifier->value); _interfaces[n].name = n; }
+            }
+        }
+    }
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
         collectSignatures(u);
         collectEnums(u);
         collectInterfaces(u);
@@ -2018,7 +2193,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
     buildVtables();
     computeDestructible();
     for (auto& u : units)
-        if (u && u->codeDeclarationList) collectCollections(u);
+        if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectCollections(u); }
 }
 
 // All DECLARATIONS (the shared header): typedefs, enums, struct/vtable types,
@@ -2040,29 +2215,38 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     if (!classes.empty() || !_interfaces.empty()) *_out << "\n";
 
-    for (auto& kv : _enums) emitEnum(kv.second);
+    // Set the name-resolution scope from the type/file being emitted (M14).
+    auto scopeOf = [&](const std::string& scope, const std::vector<std::string>& usings) {
+        _nsCtx = NsCtx{}; _nsCtx.scope = scope; _nsCtx.usings = usings;
+    };
+
+    for (auto& kv : _enums) { scopeOf(kv.second.scope, kv.second.usings); emitEnum(kv.second); }
 
     // vtable struct types + struct bodies (topological), then interface types.
     for (ClassInfo* ci : classes) {
         if (ci->isCollection) continue;   // the C macro emits the collection's struct
+        scopeOf(ci->scope, ci->usings);
         if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
         emitStruct(*ci);
     }
-    for (auto& kv : _interfaces) emitInterfaceTypes(kv.second);
+    for (auto& kv : _interfaces) { scopeOf(kv.second.scope, kv.second.usings); emitInterfaceTypes(kv.second); }
 
     // Class prototypes, then the collection/smart-pointer macros (which reference
     // element struct/dtor decls), then free-function prototypes (which may use a
     // collection/smart-pointer type in their signature).
-    for (ClassInfo* ci : classes) emitClassPrototypes(*ci);
+    for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings); emitClassPrototypes(*ci); }
     emitCollectionDefs();
     bool any = false;
-    for (auto& u : units)
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
         for (auto& decl : *u->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn)) continue;
                 emitFunctionPrototype(fn);
                 any = true;
             }
+    }
     if (any) *_out << "\n";
 }
 
@@ -2071,10 +2255,13 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
 // referenced across files live in the shared header.
 void CEmitter::emitModuleContent(SharedCompilationUnit unit)
 {
+    _nsCtx = _unitCtx[unit.get()];   // resolve this file's body references in its scope (M14)
     auto classOf = [&](ASTNode* d) -> ClassInfo* {
         auto* cd = dynamic_cast<ClassDeclarationNode*>(d);
-        if (cd && cd->name && cd->name->value && _classes.count(*cd->name->value))
-            return &_classes[*cd->name->value];
+        if (cd && cd->name && cd->name->value) {
+            std::string mangled = qualify(*cd->name->value);
+            if (_classes.count(mangled)) return &_classes[mangled];
+        }
         return nullptr;
     };
     // vtable instances + interface vtables first (referenced by ctor bodies).
