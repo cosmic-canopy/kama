@@ -485,6 +485,7 @@ constant_declarators
   ;
 constant_declarator
   : IDENTIFIER EQ constant_expression   { $$ = std::make_shared<ConstVariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); }
+  | IDENTIFIER                          { $$ = std::make_shared<ConstVariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression()); }
   ;
 block
   : LEFT_BRACE statement_list_opt RIGHT_BRACE   { $$ = std::make_shared<BlockNode>(SCANNER_CODEGENCONTEXT, $2); }

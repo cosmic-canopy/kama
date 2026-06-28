@@ -1177,8 +1177,20 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
                     ci.hasDtor  = true;
                     ci.dtorNode = dd;
-                } else if (dynamic_cast<ClassConstDeclarationNode*>(mn)) {
-                    unsupported("class const member", mn->line);
+                } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(mn)) {
+                    // M24d: a `const` data member — a normal struct field, written
+                    // ONCE in the constructor (inline init or `this.f = …`), then
+                    // immutable. Enforcement is at the cstar level; the C field is plain.
+                    if (kd->declarators)
+                        for (auto& d : *kd->declarators) {
+                            FieldInfo fi;
+                            fi.name        = (d->name && d->name->value) ? *d->name->value : "";
+                            fi.type        = kd->type;
+                            fi.initializer = d->initializer;
+                            ci.fields.push_back(fi);
+                            ci.fieldNames.insert(fi.name);
+                            ci.constFields.insert(fi.name);
+                        }
                 } else if (dynamic_cast<ClassOperatorDeclarationNode*>(mn)) {
                     unsupported("operator overload — deferred", mn->line);
                 }
@@ -1470,6 +1482,8 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
                 ASTNode* mn = m.get();
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
                     scanTypeForCollections(fd->type);
+                } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(mn)) {
+                    scanTypeForCollections(kd->type);   // const field of a collection type (M24d)
                 } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
                     scanTypeForCollections(md->returnType);
                     if (md->params) for (auto& p : *md->params) if (p) scanTypeForCollections(p->type);
@@ -1826,8 +1840,33 @@ bool CEmitter::rootIsConst(const std::string& root) const
     return false;
 }
 
-// M24a: writing TO or THROUGH a `const` binding is a hard error. Deep const, so
-// `c.field = …` and `c[i] = …` are caught too — not just a bare reassignment.
+// M24d: is `target` a write to a `const` data member? (`this.f`, bare `f`, or `obj.f`
+// where f is declared const). Used to forbid such writes outside the constructor.
+bool CEmitter::isConstFieldWrite(SharedExpression target)
+{
+    ASTNode* n = target.get();
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        std::string field = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+        std::string cls;
+        if (ma->expression) {
+            cls = dynamic_cast<ThisAccessNode*>(ma->expression.get())
+                ? (_currentClass ? _currentClass->name : "")
+                : exprClass(ma->expression);
+        }
+        if (!cls.empty() && isSmartPtrClass(cls)) cls = _classes.at(cls).collElemClass;   // pointee
+        auto it = _classes.find(cls);
+        return it != _classes.end() && it->second.constFields.count(field);
+    }
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {       // bare field inside a method
+        return id->value && (!id->qualifier || id->qualifier->empty()) && _currentClass
+            && !_localTypes.count(*id->value) && _currentClass->constFields.count(*id->value);
+    }
+    return false;
+}
+
+// M24a/d: writing TO or THROUGH a `const` binding is a hard error (deep const, so
+// `c.field = …` / `c[i] = …` are caught too), and a `const` data member may only be
+// written in the constructor.
 void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
 {
     if (!target) return;
@@ -1835,6 +1874,8 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
     if (rootIsConst(root))
         unsupported(("cannot write to `const " + root + "` (const is deep — neither the "
                      "binding nor anything reached through it may be mutated)").c_str(), srcLine);
+    else if (!_inCtor && isConstFieldWrite(target))
+        unsupported("cannot assign to a `const` field outside the constructor", srcLine);
 }
 
 // M24b: a non-const method may not be invoked on a const receiver (it could mutate).
@@ -2127,7 +2168,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
 
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
-    _localTypes.clear(); _constLocals.clear();
+    _localTypes.clear(); _constLocals.clear(); _inCtor = false;
     _currentClass = nullptr;
     if (fn->parameters) {
         for (auto& p : *fn->parameters) {
@@ -2337,7 +2378,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     line(ci.dtorNode ? ci.dtorNode->line : ci.node->line);
     _currentClass = &ci;
     _refParams.clear();
-    _localTypes.clear(); _constLocals.clear();
+    _localTypes.clear(); _constLocals.clear(); _inCtor = false;
     _currentReturnCType = "void";
     _tempCounter = 0;
     _scopes.clear();
@@ -2379,7 +2420,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 {
     _currentClass = &owner;
     _refParams.clear();
-    _localTypes.clear(); _constLocals.clear();
+    _localTypes.clear(); _constLocals.clear(); _inCtor = false;
+    _inCtor = isCtor;   // M24d: const fields are writable only here
     if (isConstMethod) _constLocals.insert("this");   // M24b: `this` is immutable (deep)
     _currentReturnCType = retType;
     _tempCounter = 0;
@@ -2441,7 +2483,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _scopes.clear();
     _currentClass = nullptr;
     _refParams.clear();
-    _localTypes.clear(); _constLocals.clear();
+    _localTypes.clear(); _constLocals.clear(); _inCtor = false;
 }
 
 void CEmitter::emitClassDefinitions(ClassInfo& ci)

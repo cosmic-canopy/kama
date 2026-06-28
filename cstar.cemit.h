@@ -73,6 +73,7 @@ struct ClassInfo {
     std::string                       name;       // struct name (== cstar class name in M4)
     std::vector<FieldInfo>            fields;      // declaration order
     std::set<std::string>            fieldNames;
+    std::set<std::string>            constFields;   // `const` data members — write-once in the ctor (M24d)
     std::map<std::string, MethodInfo> methods;    // by cstar method name
     bool                              hasCtor = false;
     bool                              synthCtor = false;  // M19: default ctor synthesized (vtable init)
@@ -202,6 +203,7 @@ private:
     std::string        _currentReturnCType = "void";  // for return-temp
     int                _tempCounter = 0;
     bool               _inUnsafe = false;             // M17: inside an `unsafe { }` block
+    bool               _inCtor   = false;             // M24d: emitting a ctor (const fields writable here)
 
     void line(int srcLine);                          // emit a #line directive
     void indent(int depth);
@@ -317,6 +319,7 @@ private:
     std::set<std::string> _constLocals;                       // const local names in scope
     std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
     bool        rootIsConst(const std::string& root) const;   // const local/param/this/field
+    bool        isConstFieldWrite(SharedExpression target);   // writing a const data member (M24d)
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
     bool        isConstReceiver(SharedExpression receiver) const;       // const-call restriction (M24b)
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);  // M21
