@@ -1,0 +1,15 @@
+fn int main()
+{
+    float64 pi = 0.0;
+    float64 sign = 1.0;
+    for (uint64 i = 0; i < 20000000; i++)
+    {
+        uint64 d = 2 * i + 1;
+        pi += sign / cast<float64>(d);
+        sign = -sign;
+    }
+    float64 scaled = pi * 4000000000.0;
+    uint64 check = cast<uint64>(scaled);
+    uint64 m = check % 256;
+    return cast<int>(m);
+}

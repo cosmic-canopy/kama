@@ -1,6 +1,6 @@
 # cstar benchmark results
 
-_Generated: 2026-06-26 19:06 · arch: aarch64 (Linux) · in the `cstar-bench` container_
+_Generated: 2026-06-28 05:58 · arch: aarch64 (Linux) · in the `cstar-bench` container_
 
 Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
 Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median). Peak RSS: `/usr/bin/time -v`.
@@ -46,11 +46,11 @@ diverged:
 
 | workload | cstar | C | C++ | Rust | Go | C# (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|
-| fib | 7.36 | 7.33 | 7.51 | 6.03 | 10.32 | 27.4 | 90.53 | 211.46 |
-| pi | 11.79 | 11.8 | 11.97 | 11.93 | 14.06 | 32.95 | 120.18 | 1648.48 |
-| collatz | 65.57 | 65.57 | 66.29 | 65.85 | 91.41 | 123.87 | 968.4 | 2941.17 |
-| dispatch | 6.65 | 6.21 | 6.36 | 1.23 | 5.08 | 25.99 | 141.75 | 701.61 |
-| alloc | 1.17 | 1.16 | 1.57 | 2.22 | 6.97 | 22.73 | 24.34 | 107.56 |
+| fib | 7.35 | 7.4 | 7.63 | 6.12 | 10.29 | 30.9 | 88.66 | 208.77 |
+| pi | 11.75 | 11.78 | 12.13 | 11.97 | 13.97 | 33.4 | 117.23 | 1647.32 |
+| collatz | 65.51 | 65.68 | 66.48 | 65.75 | 91.47 | 121.84 | 955.71 | 2927.68 |
+| dispatch | 6.18 | 6.17 | 6.4 | 1.19 | 5.07 | 25.34 | 140.48 | 695.8 |
+| alloc | 1.18 | 1.16 | 1.64 | 2.29 | 7.05 | 26.84 | 24.41 | 106.85 |
 
 ## NATIVE — peak resident memory (MB)
 
@@ -77,19 +77,19 @@ diverged:
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 20.53 | 27.2 | 27.4 |
-| pi | 43.1 | 25.59 | 25.93 |
-| collatz | 189.67 | 418.47 | 409.88 |
-| dispatch | 28.16 | 20.89 | 20.7 |
-| alloc | 14.53 | 16.26 | 15.67 |
+| fib | 20.15 | 28.34 | 27.76 |
+| pi | 42.71 | 26.35 | 26.57 |
+| collatz | 190.28 | 410.88 | 406.79 |
+| dispatch | 28.77 | 21.2 | 20.56 |
+| alloc | 14.6 | 15.92 | 15.97 |
 
 ## WASM track — peak resident memory (MB)
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 42 | 44 | 44 |
-| pi | 43 | 45 | 45 |
-| collatz | 43 | 44 | 45 |
+| fib | 43 | 44 | 44 |
+| pi | 42 | 45 | 45 |
+| collatz | 43 | 45 | 45 |
 | dispatch | 43 | 45 | 45 |
 | alloc | 45 | 46 | 46 |
 

@@ -7,7 +7,8 @@ bison_report
 # all build artifacts (objects + generated parser/lexer) live here
 build/
 
-cstar
+# the root compiler binary (anchored to root so it doesn't also ignore bench/src/cstar/)
+/cstar
 
 # build output / generated transpiler artifacts
 out/
