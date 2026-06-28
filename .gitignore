@@ -31,3 +31,5 @@ bench/src/csharp/obj/
 
 # benchmark JS sources are real (override the global *.js ignore)
 !bench/src/js/*.js
+# the VSCode extension's hand-written JS is real, too
+!editor/vscode/*.js
