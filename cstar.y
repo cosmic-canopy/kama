@@ -121,7 +121,7 @@ struct cstaryystype {
 %token <string> SWITCH THIS TRUE
 %token <string> UINT8 UINT16 UINT32 UINT64
 %token <string> UNSAFE USING VIRTUAL VOID
-%token <string> VOLATILE WHILE
+%token <string> WHILE
 
 /* PUNCTUATION AND SINGLE CHARACTER OPERATORS */
 %token <token> COMMA ","
@@ -393,7 +393,6 @@ modifier
   | FINAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | STATIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | VIRTUAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | VOLATILE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | EXPORT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   ;
 

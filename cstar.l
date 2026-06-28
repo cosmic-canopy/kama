@@ -311,7 +311,6 @@ static struct name_value keywords [] = {
     {"using",       USING},
     {"virtual",     VIRTUAL},
     {"void",        VOID},
-    {"volatile",    VOLATILE},
     {"while",       WHILE},
   };
 

@@ -946,6 +946,9 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
         if (!fn || !fn->name || !fn->name->value) continue;
 
+        if (fn->modifier && fn->modifier->value && *fn->modifier->value == "export")
+            unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fn->line);
+
         FuncSig sig;
         // extern functions are the FFI seam — keep their literal C name (never
         // namespace-mangle). Others are scope-prefixed (main -> cstar_main).
@@ -1042,8 +1045,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         }
         // Class-level `abstract` modifier.
         if (cd->modifiers)
-            for (auto& mod : *cd->modifiers)
+            for (auto& mod : *cd->modifiers) {
                 if (mod->value && *mod->value == "abstract") ci.isAbstractClass = true;
+                if (mod->value && *mod->value == "export")
+                    unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", cd->line);
+            }
 
         if (cd->members) {
             for (auto& m : *cd->members) {
@@ -1072,6 +1078,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (*mod->value == "virtual")  mi.isVirtual = true;
                                 if (*mod->value == "override") { mi.isVirtual = true; mi.isOverride = true; }
                                 if (*mod->value == "abstract") { mi.isVirtual = true; mi.isAbstract = true; }
+                                if (*mod->value == "export")
+                                    unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", md->line);
                             }
                         if (!md->body) mi.isAbstract = mi.isVirtual = true;   // null body => pure
                         ci.methods[*md->name->value] = mi;
@@ -1531,6 +1539,15 @@ void CEmitter::buildVtables()
         }
         // A class is abstract if marked, or any slot still resolves to a pure impl.
         if (ci->isAbstractClass) { /* keep */ }
+
+        // Bug 1 fix: a polymorphic class without an explicit constructor must still
+        // get one synthesized, or `new` leaves __vptr uninitialized and the first
+        // virtual call crashes. Topo order means the base is flagged first, so a
+        // derived synth ctor sees base->hasCtor and chains it.
+        if (ci->hasVtable && !ci->hasCtor && !ci->isCollection && !ci->isExternStruct) {
+            ci->synthCtor = true;
+            ci->hasCtor   = true;   // `new` now calls the ctor; prototype gets emitted
+        }
     }
 }
 
@@ -1982,6 +1999,8 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
         *_out << "void " << ci.name << "__ctor("
              << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
+    else if (ci.synthCtor)                                // M19: synthesized default ctor
+        *_out << "void " << ci.name << "__ctor(" << paramListC(nullptr, ci.name.c_str()) << ");\n";
     if (ci.destructible)
         *_out << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
     for (auto& kv : ci.methods) {
@@ -2065,7 +2084,11 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             SharedArgumentList baseArgs;
             if (owner.ctorNode && owner.ctorNode->declarator && owner.ctorNode->declarator->initializer)
                 baseArgs = owner.ctorNode->declarator->initializer->args;
-            if (owner.base->hasCtor) {
+            if (owner.synthCtor && owner.base->ctorNode && !owner.base->ctorParams.empty()) {
+                // A synthesized default ctor can't supply the base's required args.
+                unsupported(("'" + owner.name + "' needs an explicit constructor to pass arguments to base '"
+                             + owner.baseName + "'").c_str(), owner.node ? owner.node->line : 0);
+            } else if (owner.base->hasCtor) {
                 indent(1);
                 *_out << emitReorderedCall(owner.baseName + "__ctor", "&self->__base",
                                           owner.base->ctorParams, baseArgs, owner.node->line) << ";\n";
@@ -2107,6 +2130,9 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         line(ci.ctorNode->line);
         emitMethodOrCtorBody(ci.name + "__ctor", "void",
                              ci.ctorNode->declarator->params, ci.ctorNode->body, ci, true);
+    } else if (ci.synthCtor) {                            // M19: emit the synthesized default ctor
+        emitMethodOrCtorBody(ci.name + "__ctor", "void",
+                             SharedParameterList(), SharedBlock(), ci, true);
     }
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;

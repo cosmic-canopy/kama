@@ -11,6 +11,7 @@ the grammar; for semantics, read the spec; for runnable examples, read the test 
 ## Language
 - [Specification (semantics overview)](docs/SPEC.md): types, named params, RAII, classes, inheritance, build/debug.
 - [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `cstar.y` by `tools/gen-grammar`.
+- [Keyword status](docs/KEYWORDS.md): per-keyword audit (implemented / reserved / planned).
 - [Goals & design philosophy](GOALS.md): no-GC, one-way/simplicity, explicit>implicit, self-describing, LLM-discoverable.
 
 ## Examples

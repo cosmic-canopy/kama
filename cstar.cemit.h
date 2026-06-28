@@ -65,6 +65,7 @@ struct ClassInfo {
     std::set<std::string>            fieldNames;
     std::map<std::string, MethodInfo> methods;    // by cstar method name
     bool                              hasCtor = false;
+    bool                              synthCtor = false;  // M19: default ctor synthesized (vtable init)
     std::vector<ParamSig>             ctorParams;
     ClassConstructorDeclarationNode*  ctorNode = nullptr;
     ClassDeclarationNode*             node    = nullptr;
