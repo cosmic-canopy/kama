@@ -38,6 +38,11 @@ lightweight WebGPU game engine.
 
 5. **Explicit over implicit.** Named parameters, explicit `ref`/`out`, explicit types, explicit casts
    for narrowing. Prefer surfacing intent over inferring it.
+   - **Greppable / self-describing syntax.** Every declaration and dangerous operation is marked by a
+     keyword or operator you can search for: `fn` on every function/method, `unsafe { }` for raw memory,
+     the `…Ptr`/smart-pointer families for pointers (and `::` for scope resolution vs `.` for instance
+     access, planned). Intent is visible to a human, a tool, or an LLM at a glance — no guessing which
+     `Type name(` is a declaration vs a call, or which `.` crosses a namespace vs an object.
 
 6. **Scripting / no-compile iteration eventually.** A `cstar run` that transpiles and runs instantly
    (e.g. via TinyCC) gives sub-second iteration while reusing the single C backend — preferred over a

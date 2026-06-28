@@ -197,9 +197,9 @@ function_modifier_opt
 function_declaration
   : EXTERN STRING_LITERAL SEMICOLON
 
-  | EXTERN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
+  | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
-  | function_modifier_opt function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
+  | function_modifier_opt FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
 
   ;
 function_return_type
@@ -618,8 +618,8 @@ field_declaration
   : modifiers_opt type variable_declarators SEMICOLON
   ;
 method_declaration
-  : modifiers_opt type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
-  | modifiers_opt VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
+  : modifiers_opt FN type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
+  | modifiers_opt FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
   ;
 method_body
   : block
@@ -742,7 +742,7 @@ interface_member_declaration
   : interface_method_declaration
   ;
 interface_method_declaration
-  : type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
-  | VOID IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
+  : FN type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
+  | FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
   ;
 

@@ -59,7 +59,7 @@ runtime. Use it for heap objects, recursive data structures, and (later) polymor
 Owned<Counter> c = new Owned<Counter>(start: 40);  // heap-allocate + run Counter's ctor
 c.bump();  int n = c.get();                          // auto-deref: . reaches the pointee
 Owned<Counter> d = c;                                // MOVE: c is now empty (moved-from)
-Owned<Node> make(int v) { Owned<Node> n = new Owned<Node>(id: v); return n; }  // factory: moves out
+fn Owned<Node> make(int v) { Owned<Node> n = new Owned<Node>(id: v); return n; }  // factory: moves out
 ```
 
 Move-only: copying/initializing/returning an `Owned` transfers ownership and invalidates the source, so
@@ -96,10 +96,10 @@ copy doesn't retain/move). `Map<K,V>` + multi-param/nested generics are 🚧.
 ## Functions ✅
 
 ```cstar
-int add(int a, int b) { return a + b; }
-int main() { return add(b: 20, a: 10); }   // named args; reordered to declared order
+fn int add(int a, int b) { return a + b; }
+fn int main() { return add(b: 20, a: 10); }   // named args; reordered to declared order
 ```
-`ref`/`out` parameters pass by pointer: `void set(out int dst) { dst = 42; }` … `set(dst: ref x);`.
+`ref`/`out` parameters pass by pointer: `fn void set(out int dst) { dst = 42; }` … `set(dst: ref x);`.
 
 ## FFI — calling C ✅ (M15)
 
@@ -109,11 +109,11 @@ libraries with `--link`. The FFI boundary is the language's only "unsafe" seam (
 ```cstar
 extern "<stdlib.h>";             // every C function comes from an explicit header
 extern "<math.h>";
-extern Ptr  malloc(usize n);     // Ptr = void* (opaque pointer/handle); usize = size_t
-extern void free(Ptr p);
-extern float64 sqrt(float64 x);  // build with: --link m
+extern fn Ptr  malloc(usize n);     // Ptr = void* (opaque pointer/handle); usize = size_t
+extern fn void free(Ptr p);
+extern fn float64 sqrt(float64 x);  // build with: --link m
 
-int main() {
+fn int main() {
     Ptr p = malloc(n: 64);
     if (p == null) { return 1; }  // hold / null-check / compare — but no deref yet
     free(p: p);
@@ -137,11 +137,11 @@ are reserved (runtime-provided).
 ```cstar
 extern "<stdlib.h>";                       // a C #include
 extern class div_t { int32 quot; int32 rem; }   // bind an external C struct (not re-emitted)
-extern div_t div(int32 numer, int32 denom);
+extern fn div_t div(int32 numer, int32 denom);
 
-extern float64 frexp(float64 value, Ptr<int32> exp);
+extern fn float64 frexp(float64 value, Ptr<int32> exp);
 
-int main() {
+fn int main() {
     div_t r = div(numer: 17, denom: 5);    // r.quot=3, r.rem=2  (field access on a C struct)
     int32 e = 0;
     frexp(value: 1764.0, exp: addr(of: e));// addr(of: x) = &x  — controlled out-param
@@ -186,8 +186,8 @@ input handlers). A *controlled* op (it names a real function) — no `unsafe`.
 
 ```cstar
 extern "<webgpu.h>";
-extern void wgpuBufferMapAsync(WGPUBuffer b, ..., WGPUBufferMapCallback cb, Ptr userdata);
-void onMapped(int32 status, Ptr userdata) { ... }   // signature must match the C callback type
+extern fn void wgpuBufferMapAsync(WGPUBuffer b, ..., WGPUBufferMapCallback cb, Ptr userdata);
+fn void onMapped(int32 status, Ptr userdata) { ... }   // signature must match the C callback type
 ...
 wgpuBufferMapAsync(b: buf, ..., cb: funcptr(of: onMapped), userdata: null);
 ```
@@ -207,8 +207,8 @@ never silently coerces a function pointer. This is fully general; e.g. the real 
 ```cstar
 extern "<stdlib.h>";
 extern "cb.h";   // typedef int (*CompareFn)(const void*, const void*);
-extern void qsort(Ptr buf, usize nmemb, usize size, CompareFn compar);
-int32 cmp(Ptr<int32> a, Ptr<int32> b) { int32 r = 0; unsafe { r = a[0] - b[0]; } return r; }
+extern fn void qsort(Ptr buf, usize nmemb, usize size, CompareFn compar);
+fn int32 cmp(Ptr<int32> a, Ptr<int32> b) { int32 r = 0; unsafe { r = a[0] - b[0]; } return r; }
 ...
 qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(funcptr(of: cmp)));
 ```
@@ -231,8 +231,8 @@ assignment ops (`= += …`), `++`/`--`, casts.
 class Counter {
     int value;
     Counter(int start) { value = start; }   // constructor
-    void add(int n) { value = value + n; }   // method (implicit self)
-    int get() { return value; }
+    fn void add(int n) { value = value + n; }   // method (implicit self)
+    fn int get() { return value; }
 }
 Counter c = new Counter(start: 40);   // constructs in place
 c.add(n: 2);
@@ -249,8 +249,8 @@ declaration order. No GC; allocation/deallocation is predictable.
 ## Inheritance & virtual dispatch ✅ (M6)
 
 ```cstar
-class Shape { int describe() { return this.area(); }  virtual int area() { return 0; } }
-class Circle extends Shape { override int area() { return 42; } }
+class Shape { fn int describe() { return this.area(); }  virtual fn int area() { return 0; } }
+class Circle extends Shape { override fn int area() { return 42; } }
 ```
 Single inheritance (`extends`), base embedded by value (upcast is offset-0), base ctor via `: base(...)`,
 `base.m()` for non-virtual upcalls. `virtual`/`override` methods dispatch through a vtable. `interface`/
@@ -282,12 +282,12 @@ another file's helper. To share across files, declare a namespace:
 // graphics.cstar
 namespace Graphics;
 class Texture { ... }        // Graphics.Texture
-int32 scale(int32 x) { ... } // Graphics.scale
+fn int32 scale(int32 x) { ... } // Graphics.scale
 
 // main.cstar
 using Graphics;              // import unqualified
 using Phys = Physics;        // alias
-int main() {
+fn int main() {
     Texture t = ...;             // Graphics.Texture (via using)
     Physics.Texture p = ...;     // qualified — distinct type, no collision
     int n = Graphics.scale(x: 3);// qualified namespaced call

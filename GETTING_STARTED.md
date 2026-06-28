@@ -35,9 +35,9 @@ make
 `hello.cstar`:
 
 ```cstar
-int add(int a, int b) { return a + b; }
+fn int add(int a, int b) { return a + b; }
 
-int main()
+fn int main()
 {
     int x = add(a: 40, b: 2);   // named arguments
     return x;                    // exit code
