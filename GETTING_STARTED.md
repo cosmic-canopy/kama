@@ -73,6 +73,25 @@ real source-level debugging.
 4. Execution stops **in your `.cstar` source**; the Variables panel shows your locals and the Call Stack
    shows cstar frames.
 
+### Debug in the browser (WebAssembly)
+
+The same source-level debugging works for `--target wasm`. A debug wasm build emits **DWARF** plus a
+`.wasm.map` source map that reference your `.cstar` (via the `#line` directives):
+
+```sh
+cstar build app.cstar --target wasm -o app.html   # debug is the default; emits app.{html,js,wasm,wasm.map}
+```
+
+1. In **Chrome/Edge**, install the **C/C++ DevTools Support (DWARF)** extension (`ms-vscode.wasm-dwarf-debugging`
+   in DevTools' extension list).
+2. Serve the output over HTTP (DevTools needs the `.cstar` reachable next to the artifacts), e.g.
+   `python3 -m http.server` in the output directory, and open `app.html`.
+3. Open **DevTools → Sources**: your `.cstar` appears in the tree. Set a breakpoint in it, reload, and
+   execution stops **in the `.cstar`** with the call stack and `Scope` variables by their cstar names.
+
+> Release wasm builds (`--release`) strip DWARF/source-map and optimize, so debug in the default build and
+> ship the release one.
+
 ## Next
 
 - Language reference: [docs/SPEC.md](docs/SPEC.md) · grammar: [docs/grammar.bnf](docs/grammar.bnf)
