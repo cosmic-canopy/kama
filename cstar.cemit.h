@@ -10,6 +10,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <cstdint>     // fixed-width ints — not transitive on all libcs (e.g. Windows UCRT)
 #include "cstar.forward.h"
 
 // A function parameter, in declared order. Named cstar arguments are matched

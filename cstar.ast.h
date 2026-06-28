@@ -2,6 +2,7 @@
 #define __CSTAR_AST_H__
 
 #include <iostream>
+#include <cstdint>      // int8_t … uint64_t (not transitively available on all libcs, e.g. Windows UCRT)
 #include "cstar.forward.h"
 
 enum SymbolType {
