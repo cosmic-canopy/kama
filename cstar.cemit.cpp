@@ -1791,9 +1791,22 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                                         SharedArgumentList args, int srcLine)
 {
     std::map<std::string, ArgumentNode*> byName;
+    size_t named = 0;
     if (args)
         for (auto& a : *args)
-            if (a->name && a->name->value) byName[*a->name->value] = a.get();
+            if (a->name && a->name->value) { byName[*a->name->value] = a.get(); named++; }
+
+    // Step 5: named arguments ARE cstar's calling convention — validate them so a typo or
+    // a duplicate can't silently do the wrong thing. (Missing args are caught per-param below.)
+    if (named != byName.size())
+        unsupported("duplicate named argument in call", srcLine);   // map collapsed a repeat
+    {
+        std::set<std::string> paramNames;
+        for (auto& p : params) paramNames.insert(p.name);
+        for (auto& kv : byName)
+            if (!paramNames.count(kv.first))
+                unsupported(("unknown argument name '" + kv.first + "' in call").c_str(), srcLine);
+    }
 
     std::string s = cName + "(";
     bool first = true;
