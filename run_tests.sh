@@ -64,6 +64,24 @@ for dir in "$TESTS_DIR"/*.d; do
     fi
 done
 
+# Negative fixtures: tests/xfail/<name>.cstar MUST FAIL to build (a clear compile-time
+# rejection — this is how we guard "reject bad code" guarantees like const-correctness,
+# access control, and use-after-move). Optional tests/xfail/<name>.msg holds a substring
+# the compiler's error output must contain, so we assert the RIGHT error, not any failure.
+for src in "$TESTS_DIR"/xfail/*.cstar; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src" .cstar)"
+    err="$TMP/xf_$name.err"
+    if "$CSTAR" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; then
+        echo "FAIL xfail/$name (compiled, but must be REJECTED)"; fail=$((fail+1)); continue
+    fi
+    msg_file="$TESTS_DIR/xfail/$name.msg"
+    if [ -f "$msg_file" ] && ! grep -qF "$(cat "$msg_file")" "$err"; then
+        echo "FAIL xfail/$name (rejected, but error missing \"$(cat "$msg_file")\")"; head -2 "$err"; fail=$((fail+1)); continue
+    fi
+    echo "PASS xfail/$name (rejected)"; pass=$((pass+1))
+done
+
 echo "----"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

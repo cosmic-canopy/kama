@@ -1,0 +1,4 @@
+// a const OBJECT must not be mutated through a non-const ref param.
+class B { int32 v; B(int32 v){ this.v = v; } }
+fn void wreck(ref B b) { b.v = 999; }
+fn int main() { const B b = new B(v: 1); wreck(b: ref b); return b.v; }

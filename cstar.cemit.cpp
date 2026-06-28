@@ -1783,6 +1783,10 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             std::string c = exprClass(f->second->expression);
             s += (!c.empty() && isClass(c)) ? fatPointer(p.className, c, val) : val;
         } else if (p.byRef) {
+            // M24 soundness: a non-const `ref`/`out` param can MUTATE its argument, so a
+            // const binding (or a const field outside its ctor) may not be passed to one
+            // — that would silently launder away const. (A `const ref` borrow is fine.)
+            if (!p.isConst) checkConstWrite(f->second->expression, srcLine);
             s += isClass(p.className) ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base
                                       : ("&(" + val + ")");
         } else {
