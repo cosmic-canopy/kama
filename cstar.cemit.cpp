@@ -632,6 +632,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // new Owned/Shared<T>(args): box T on the heap, run T's
                         // ctor in place, and (Shared) allocate the control block.
                         std::string T = _classes[octy].collElemClass;
+                        if (isClass(T) && _classes[T].isAbstractClass)   // Step 3: no abstract heap-alloc either
+                            unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), n->line);
                         line(n->line); indent(depth);
                         *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
                         if (isClass(T) && _classes[T].hasCtor) {
@@ -1664,10 +1666,23 @@ void CEmitter::buildVtables()
             ci->vtableRoot = ci->base->vtableRoot;
             ci->slotImpl   = ci->base->slotImpl;   // inherited impls
         }
+        auto baseHasVirtual = [](ClassInfo* c, const std::string& m) {
+            for (ClassInfo* b = c->base; b; b = b->base) {
+                auto it = b->methods.find(m);
+                if (it != b->methods.end() && it->second.isVirtual) return true;
+            }
+            return false;
+        };
         for (auto& kv : ci->methods) {
             MethodInfo& mi = kv.second;
             const std::string& mname = kv.first;
             if (!mi.isVirtual) continue;
+            // Step 3: `override` must override an actual virtual method in a base class —
+            // otherwise there is no vtable slot to re-seat and the emitted C is malformed.
+            if (mi.isOverride && !baseHasVirtual(ci, mname))
+                unsupported(("'override fn " + mname + "' overrides no virtual method in any base class "
+                             "(the base method must be `virtual`/`abstract`)").c_str(),
+                            mi.node ? mi.node->line : 0);
             if (mi.isOverride || ci->slotImpl.count(mname)) {
                 // Re-slot an inherited virtual with this class's implementation.
                 if (!mi.isAbstract) ci->slotImpl[mname] = mi.cName;
@@ -1679,8 +1694,13 @@ void CEmitter::buildVtables()
                 _rootVtables[ci->vtableRoot].push_back(vs);
             }
         }
-        // A class is abstract if marked, or any slot still resolves to a pure impl.
-        if (ci->isAbstractClass) { /* keep */ }
+        // A class is abstract if marked OR any virtual slot still has no implementation
+        // (an inherited pure method left un-overridden). Either way it cannot be `new`ed —
+        // instantiating it would leave a NULL vtable slot and crash on the first call.
+        if (ci->hasVtable && !ci->isAbstractClass) {
+            for (auto& vs : _rootVtables[ci->vtableRoot])
+                if (!ci->slotImpl.count(vs.name)) { ci->isAbstractClass = true; break; }
+        }
 
         // Bug 1 fix: a polymorphic class without an explicit constructor must still
         // get one synthesized, or `new` leaves __vptr uninitialized and the first
@@ -2645,6 +2665,9 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
 
 std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine)
 {
+    if (ci.isAbstractClass)   // M25/Step 3: instantiating one crashes on a NULL vtable slot
+        unsupported(("cannot instantiate abstract class '" + ci.name
+                     + "' (it has an unimplemented method)").c_str(), srcLine);
     return emitReorderedCall(ci.name + "__ctor", "&" + cVar, ci.ctorParams, args, srcLine);
 }
 

@@ -1,0 +1,4 @@
+// `override` requires a virtual method in a base class (Step 3) — else malformed vtable.
+class Base { int32 x; Base(int32 x){ this.x = x; } fn int32 plain(){ return this.x; } }
+class Derived extends Base { Derived(int32 x){ this.x = x; } override fn int32 plain(){ return this.x * 2; } }
+fn int main() { Derived d = new Derived(x: 21); return d.plain(); }
