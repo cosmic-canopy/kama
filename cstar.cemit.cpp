@@ -1049,12 +1049,22 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (mod->value && *mod->value == "abstract") ci.isAbstractClass = true;
                 if (mod->value && *mod->value == "export")
                     unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", cd->line);
+                if (mod->value && *mod->value == "volatile")
+                    unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", cd->line);
             }
 
         if (cd->members) {
             for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
+                    if (fd->modifiers)
+                        for (auto& mod : *fd->modifiers) {
+                            if (!mod->value) continue;
+                            if (*mod->value == "volatile")
+                                unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", fd->line);
+                            if (*mod->value == "export")
+                                unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fd->line);
+                        }
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
                             FieldInfo fi;
@@ -1080,6 +1090,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (*mod->value == "abstract") { mi.isVirtual = true; mi.isAbstract = true; }
                                 if (*mod->value == "export")
                                     unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", md->line);
+                                if (*mod->value == "volatile")
+                                    unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", md->line);
                             }
                         if (!md->body) mi.isAbstract = mi.isVirtual = true;   // null body => pure
                         ci.methods[*md->name->value] = mi;

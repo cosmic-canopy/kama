@@ -23,8 +23,8 @@ Status of all **59 reserved keywords**, established by exercising each through `
 | `if` `else` `switch` `case` `default` `do` `while` `for` `foreach` `in` `break` `continue` `return` | ✅ | |
 | `using` `true` `false` `null` `cast` `unsafe` `extern` | ✅ | |
 | `static` | ⚠️ | a static method is callable via an **instance** (`c.foo()`), but class-level `C::foo()` is `unsupported`, and `static` adds no real static semantics (the method still takes `self`) |
-| `volatile` | 🪦 | parsed as a modifier, **never emitted** to C — a silent no-op |
-| `export` | 🪦 | parsed as a modifier, **never emitted**, no effect — redundant with namespace visibility |
+| `volatile` | ❌ | **reserved** for the embedded/MMIO scope (ISR↔loop shared flags, peripheral registers) — using it is a clear error, not a silent no-op; implemented when cstar targets embedded |
+| `export` | ❌ | **reserved** for the cstar→host boundary (WASM module exports, scripting host interface) — clear error on use, not a silent no-op |
 | `public` `private` `protected` | 🔒 | parsed, but **no access enforcement** — a `private` field is readable from outside the class |
 | `friend` | 🔒 | `friend(list)` parses, but enforces nothing (access control itself is unenforced) |
 | `abstract` | 🔒 | method dispatch works, but instantiating an abstract class (`new AbstractType()`) is **not prevented** |
@@ -46,7 +46,7 @@ tracked as a focused codegen follow-up.
 | Item | Decision | Status |
 |---|---|---|
 | `const` | implement in **M24** (const-correctness); stays a hard error until then | deferred |
-| `volatile` | **removed** — no use in cstar's scope (WASM/native engine + scripting): no MMIO/registers/signals, and concurrency wants *atomics* not `volatile`. Reintroduce properly (emit C `volatile`) only if cstar ever targets embedded. | ✅ done (lexer + grammar) |
+| `volatile` | **reserved** — genuinely needed for the **embedded/Arduino** scope the user works in (ISR↔main-loop shared flags and memory-mapped peripheral registers, where `volatile` is the *correct* tool on a single-core MCU — not the multicore-atomics misconception). Using it today is a clear error; implement properly (emit C `volatile`) when cstar targets embedded — alongside the bigger embedded needs (globals/statics, ISR attributes, no-heap mode, MCU toolchains). | ✅ done (reserved + errors on use) |
 | `export` | **kept reserved** — it has a real future role at the cstar→host boundary (WASM module exports for the browser engine; the scripting host interface), which is distinct from in-language `public`/`private`. Using it today is a **clear hard error**, never a silent no-op. | ✅ done (errors on use) |
 | `public` `private` `protected` `friend` `abstract` `final` | enforcement is the **Access-Control milestone** (backlog) — they parse today but their guarantees aren't checked; documented here so the gap is explicit, not silent. The milestone also evaluates: *abstract*/*virtual* ≤ protected, and granular/mandatory `friend` member lists. | deferred (documented) |
 | `static` | full static (class-level `C::foo()`, no implicit `self`) deferred; pairs naturally with the `::` operator (M20). Callable via an instance today. | deferred (documented) |

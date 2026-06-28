@@ -176,6 +176,7 @@ modifier
   | FINAL
   | STATIC
   | VIRTUAL
+  | VOLATILE
   | EXPORT
   ;
 
