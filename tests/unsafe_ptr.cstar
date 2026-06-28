@@ -1,9 +1,9 @@
 // M17: raw pointer write/read through a malloc'd buffer, gated by `unsafe { }`.
 extern "<stdlib.h>";
-extern Ptr malloc(usize n);
-extern void free(Ptr p);
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
 
-int main()
+fn int main()
 {
     Ptr<int32> p = malloc(n: 16);   // void* -> int32_t* (implicit in C)
     if (p == null) { return 1; }

@@ -10,9 +10,9 @@ class Derived extends Base
     {
         this.y = y;
     }
-    int sum() { return x + y; }
+    fn int sum() { return x + y; }
 }
-int main()
+fn int main()
 {
     Derived d = new Derived(x: 30, y: 12);
     return d.sum();

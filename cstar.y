@@ -112,7 +112,7 @@ struct cstaryystype {
 %token <string> CASE CAST CLASS CONST CONTINUE
 %token <string> DEFAULT DO DOUBLE ELSE ENUM EXPORT EXTERN EXTENDS IMPLEMENTS
 %token <string> FALSE FINAL FLOAT32 FLOAT64
-%token <string> FOR FOREACH IF IN
+%token <string> FN FOR FOREACH IF IN
 %token <string> INT INT8 INT16 INT32 INT64
 %token <string> INTERFACE NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT
@@ -415,11 +415,11 @@ function_declaration
   : EXTERN STRING_LITERAL SEMICOLON   {
       $$ = std::make_shared<IncludeNode>(SCANNER_CODEGENCONTEXT, $2);   /* extern "<header.h>"; (FFI #include) */
    }
-  | EXTERN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
-      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() );
+  | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
+      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, SharedBlock() );
    }
-  | function_modifier_opt function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block   {
-      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $7 );
+  | function_modifier_opt FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block   {
+      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8 );
   }
   ;
 function_return_type
@@ -838,8 +838,8 @@ field_declaration
   : modifiers_opt type variable_declarators SEMICOLON   { $$ = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
   ;
 method_declaration
-  : modifiers_opt type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { $$ = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $7); }
-  | modifiers_opt VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { $$ = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $7); }
+  : modifiers_opt FN type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { $$ = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); }
+  | modifiers_opt FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { $$ = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); }
   ;
 method_body
   : block
@@ -962,8 +962,8 @@ interface_member_declaration
   : interface_method_declaration
   ;
 interface_method_declaration
-  : type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   { $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2), $4, SharedBlock() ); }
-  | VOID IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   { $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2), $4, SharedBlock() ); }
+  : FN type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   { $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() ); }
+  | FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   { $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() ); }
   ;
 
 %%

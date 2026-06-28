@@ -275,6 +275,7 @@ static struct name_value keywords [] = {
     {"final",       FINAL},
     {"float32",     FLOAT32},
     {"float64",     FLOAT64},
+    {"fn",          FN},
     {"for",         FOR},
     {"foreach",     FOREACH},
     {"friend",      FRIEND},

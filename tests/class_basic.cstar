@@ -5,16 +5,16 @@ class Counter
     {
         value = start;
     }
-    void add(int n)
+    fn void add(int n)
     {
         value = value + n;
     }
-    int get()
+    fn int get()
     {
         return value;
     }
 }
-int main()
+fn int main()
 {
     Counter c = new Counter(start: 40);
     c.add(n: 2);

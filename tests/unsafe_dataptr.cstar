@@ -1,5 +1,5 @@
 // M17: the safe Array->pointer bridge (dataPtr() needs no unsafe); deref needs unsafe.
-int main()
+fn int main()
 {
     Array<int32> a = new Array<int32>(size: 3);
     a[0] = 40; a[1] = 1; a[2] = 1;

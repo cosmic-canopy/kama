@@ -5,12 +5,12 @@ class Box
     Box()
     {
     }
-    int area()
+    fn int area()
     {
         return w * h;
     }
 }
-int main()
+fn int main()
 {
     Box b = new Box();
     return b.area();

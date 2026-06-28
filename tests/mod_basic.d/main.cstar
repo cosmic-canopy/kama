@@ -2,7 +2,7 @@
 using Math;
 using Shapes;
 
-int main()
+fn int main()
 {
     int32 s = add(a: 10, b: 5);            // 15  (Math.add via using)
     Counter c = new Counter(start: 0);     // Math.Counter via using

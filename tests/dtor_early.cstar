@@ -1,5 +1,5 @@
-extern void cstar_trace(int code);
-extern int cstar_trace_get();
+extern fn void cstar_trace(int code);
+extern fn int cstar_trace_get();
 
 class Res
 {
@@ -8,7 +8,7 @@ class Res
     ~Res() { cstar_trace(code: id); }
 }
 
-int f(bool c)
+fn int f(bool c)
 {
     Res a = new Res(id: 1);
     if (c)
@@ -19,7 +19,7 @@ int f(bool c)
     return 9;
 }
 
-int main()
+fn int main()
 {
     int r = f(c: true);
     return cstar_trace_get();

@@ -1,5 +1,5 @@
 // Array<T>: fixed buffer, indexed assignment, foreach iteration, RAII free.
-int main()
+fn int main()
 {
     Array<int32> a = new Array<int32>(size: 5);
     a[0] = 10;

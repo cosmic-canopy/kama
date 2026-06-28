@@ -1,18 +1,18 @@
 class Shape
 {
-    virtual int area() { return 1; }
+    virtual fn int area() { return 1; }
 }
 class Square extends Shape
 {
     int s;
     Square(int s) { this.s = s; }
-    override int area() { return s * s; }
+    override fn int area() { return s * s; }
 }
-int measure(ref Shape sh)
+fn int measure(ref Shape sh)
 {
     return sh.area();
 }
-int main()
+fn int main()
 {
     Square sq = new Square(s: 6);
     return measure(sh: ref sq);

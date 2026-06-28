@@ -3,11 +3,11 @@ class Counter
 {
     int32 value;
     Counter(int32 start) { this.value = start; }
-    void bump() { this.value = this.value + 1; }
-    int32 get() { return this.value; }
+    fn void bump() { this.value = this.value + 1; }
+    fn int32 get() { return this.value; }
 }
 
-int main()
+fn int main()
 {
     Shared<Counter> c = new Shared<Counter>(start: 40);
     c.bump();

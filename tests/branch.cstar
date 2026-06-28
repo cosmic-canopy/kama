@@ -1,9 +1,9 @@
-int classify(int n)
+fn int classify(int n)
 {
     if (n > 0) { return 1; }
     else { return 0; }
 }
-int main()
+fn int main()
 {
     int i = 0;
     int count = 0;

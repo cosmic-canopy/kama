@@ -1,8 +1,8 @@
-int sub(int a, int b)
+fn int sub(int a, int b)
 {
     return a - b;
 }
-int main()
+fn int main()
 {
     return sub(b: 8, a: 50);
 }

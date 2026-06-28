@@ -1,4 +1,4 @@
-int pick(int x)
+fn int pick(int x)
 {
     switch (x)
     {
@@ -10,7 +10,7 @@ int pick(int x)
             return 0;
     }
 }
-int main()
+fn int main()
 {
     int total = 0;
     int i = 0;

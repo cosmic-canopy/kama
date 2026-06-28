@@ -1,8 +1,8 @@
 // Owned<T> factory: a function that returns an Owned<T> moves ownership out to
 // the caller — the pointee survives the callee's unwind and is freed exactly
 // once at the caller's scope exit (no callee-free, no leak, no double-free).
-extern void cstar_trace(int code);
-extern int cstar_trace_get();
+extern fn void cstar_trace(int code);
+extern fn int cstar_trace_get();
 
 class Node
 {
@@ -11,13 +11,13 @@ class Node
     ~Node() { cstar_trace(code: 6); }
 }
 
-Owned<Node> make(int32 v)
+fn Owned<Node> make(int32 v)
 {
     Owned<Node> n = new Owned<Node>(id: v);   // construct -> 5
     return n;                                  // MOVE OUT (make's unwind no-ops)
 }
 
-int main()
+fn int main()
 {
     {
         Owned<Node> p = make(v: 7);   // p owns the Node

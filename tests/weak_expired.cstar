@@ -4,10 +4,10 @@ class Counter
 {
     int32 value;
     Counter(int32 start) { this.value = start; }
-    int32 get() { return this.value; }
+    fn int32 get() { return this.value; }
 }
 
-int main()
+fn int main()
 {
     Weak<Counter> w;   // default-empty
     {

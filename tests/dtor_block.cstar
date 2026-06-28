@@ -1,5 +1,5 @@
-extern void cstar_trace(int code);
-extern int cstar_trace_get();
+extern fn void cstar_trace(int code);
+extern fn int cstar_trace_get();
 
 class Res
 {
@@ -14,7 +14,7 @@ class Res
     }
 }
 
-int main()
+fn int main()
 {
     {
         Res a = new Res(id: 1);

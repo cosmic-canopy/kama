@@ -1,6 +1,6 @@
 // Owned UTF-8 String: borrowed literals (cap==0), heap-owned concat (cap>0),
 // length/equals, RAII frees only the owned result.
-int main()
+fn int main()
 {
     string a = "ab";
     string b = "ab";

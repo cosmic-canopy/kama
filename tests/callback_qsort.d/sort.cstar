@@ -3,11 +3,11 @@
 // no implicit/incompatible function-pointer conversion.
 extern "<stdlib.h>";
 extern "cb.h";
-extern void qsort(Ptr buf, usize nmemb, usize size, CompareFn compar);
+extern fn void qsort(Ptr buf, usize nmemb, usize size, CompareFn compar);
 
-int32 cmp(Ptr<int32> a, Ptr<int32> b) { int32 r = 0; unsafe { r = a[0] - b[0]; } return r; }
+fn int32 cmp(Ptr<int32> a, Ptr<int32> b) { int32 r = 0; unsafe { r = a[0] - b[0]; } return r; }
 
-int main()
+fn int main()
 {
     Array<int32> a = new Array<int32>(size: 4);
     a[0] = 30; a[1] = 10; a[2] = 2; a[3] = 99;

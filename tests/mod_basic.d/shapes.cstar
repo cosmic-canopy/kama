@@ -5,5 +5,5 @@ class Box
     int32 w;
     int32 h;
     Box(int32 w, int32 h) { this.w = w; this.h = h; }
-    int32 area() { return this.w * this.h; }
+    fn int32 area() { return this.w * this.h; }
 }

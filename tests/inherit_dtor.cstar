@@ -1,5 +1,5 @@
-extern void cstar_trace(int code);
-extern int cstar_trace_get();
+extern fn void cstar_trace(int code);
+extern fn int cstar_trace_get();
 
 class Base
 {
@@ -11,7 +11,7 @@ class Derived extends Base
     Derived() { }
     ~Derived() { cstar_trace(code: 2); }
 }
-int main()
+fn int main()
 {
     {
         Derived d = new Derived();

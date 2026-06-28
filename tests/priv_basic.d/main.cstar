@@ -1,3 +1,3 @@
 // Private file: `helper` is file-local; another file's `helper` is invisible here.
-int helper() { return 7; }
-int main() { return helper(); }   // resolves to THIS file's helper -> 7
+fn int helper() { return 7; }
+fn int main() { return helper(); }   // resolves to THIS file's helper -> 7

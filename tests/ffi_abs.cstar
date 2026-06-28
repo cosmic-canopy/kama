@@ -1,4 +1,4 @@
 // FFI core: call a libc primitive function (declared by its header).
 extern "<stdlib.h>";
-extern int32 abs(int32 x);
-int main() { int32 n = 0 - 42; return abs(x: n); }
+extern fn int32 abs(int32 x);
+fn int main() { int32 n = 0 - 42; return abs(x: n); }

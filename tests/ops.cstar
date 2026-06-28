@@ -1,4 +1,4 @@
-int main()
+fn int main()
 {
     int a = 100;
     int b = 7;

@@ -1,14 +1,14 @@
 // M19 regression (Bug 1): a polymorphic class with NO explicit constructor must
 // still get its vtable initialized, or the first virtual call segfaults.
 class Shape {
-    virtual int32 val() { return 0; }
-    int32 plus1() { return this.val() + 1; }   // base method dispatches virtually
+    virtual fn int32 val() { return 0; }
+    fn int32 plus1() { return this.val() + 1; }   // base method dispatches virtually
 }
 class Box extends Shape {
     int32 n;
-    override int32 val() { return this.n; }
+    override fn int32 val() { return this.n; }
 }
-int32 main() {
+fn int32 main() {
     Box b = new Box();   // ctor-less derived class
     b.n = 41;
     return b.plus1();    // virtual dispatch -> Box.val() = 41, +1 = 42

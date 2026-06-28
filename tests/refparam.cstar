@@ -1,8 +1,8 @@
-int firstOf(ref int a, int b)
+fn int firstOf(ref int a, int b)
 {
     return a;
 }
-int main()
+fn int main()
 {
     int x = 42;
     return firstOf(a: ref x, b: 7);

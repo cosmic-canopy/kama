@@ -5,17 +5,17 @@ class Accum
     {
         total = init;
     }
-    void bump()
+    fn void bump()
     {
         this.total = this.total + 1;
     }
-    int run()
+    fn int run()
     {
         this.bump();
         return this.total;
     }
 }
-int main()
+fn int main()
 {
     Accum a = new Accum(init: 40);
     a.bump();

@@ -1,5 +1,5 @@
 using Graphics;
-int main()
+fn int main()
 {
     Texture g = new Texture(id: 10);            // Graphics.Texture (via using)
     Physics.Texture p = new Physics.Texture(m: 7);  // qualified, distinct type

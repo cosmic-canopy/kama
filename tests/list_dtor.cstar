@@ -4,8 +4,8 @@
 // NB (M9 limitation): `add(item:)` takes the element BY VALUE, so each source
 // local (a,b,c) and its list copy both destruct — the trace below counts both.
 // Move semantics (one owner) is future work.
-extern void cstar_trace(int code);
-extern int cstar_trace_get();
+extern fn void cstar_trace(int code);
+extern fn int cstar_trace_get();
 
 class Probe
 {
@@ -14,7 +14,7 @@ class Probe
     ~Probe() { cstar_trace(code: id); }
 }
 
-int build()
+fn int build()
 {
     List<Probe> xs = new List<Probe>();
     Probe a = new Probe(id: 1);
@@ -27,7 +27,7 @@ int build()
     // scope exit (reverse decl order): ~c(4) ~b(2) ~a(1), then xs -> ~[1,2,4]
 }
 
-int main()
+fn int main()
 {
     int r = build();
     return cstar_trace_get();
