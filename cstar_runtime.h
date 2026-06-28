@@ -120,7 +120,6 @@ static inline void cstar_u64_to_buf(char* buf, size_t* p, size_t v) {
     while (t) buf[(*p)++] = tmp[--t];
 }
 static inline void cstar_bounds_fail(size_t i, size_t len) {
-    extern long write(int, const void*, size_t);   // POSIX/emscripten — block scope
     extern void abort(void);
     char buf[96]; size_t p = 0;
     const char* a = "cstar: index ";              while (*a) buf[p++] = *a++;
@@ -128,7 +127,13 @@ static inline void cstar_bounds_fail(size_t i, size_t len) {
     const char* b = " out of bounds (length ";    while (*b) buf[p++] = *b++;
     cstar_u64_to_buf(buf, &p, len);
     const char* c = ")\n";                        while (*c) buf[p++] = *c++;
-    (void)write(2, buf, p);
+    // Raw stderr write (no <stdio.h>): POSIX/emscripten spell it `write`, Windows
+    // (MSVC/UCRT/MinGW) spell it `_write`.
+#if defined(_WIN32)
+    { extern int _write(int, const void*, unsigned int); (void)_write(2, buf, (unsigned int)p); }
+#else
+    { extern long write(int, const void*, size_t);       (void)write(2, buf, p); }
+#endif
     abort();
 }
 
