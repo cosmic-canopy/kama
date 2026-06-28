@@ -112,7 +112,7 @@ struct cstaryystype {
 %token <string> CASE CAST CLASS CONST CONTINUE
 %token <string> DEFAULT DO DOUBLE ELSE ENUM EXPORT EXTERN EXTENDS IMPLEMENTS
 %token <string> FALSE FINAL FLOAT32 FLOAT64
-%token <string> FN FOR FOREACH IF IN
+%token <string> FN FNPTR FOR FOREACH IF IN
 %token <string> INT INT8 INT16 INT32 INT64
 %token <string> INTERFACE NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT
@@ -421,6 +421,11 @@ function_declaration
    }
   | function_modifier_opt FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block   {
       $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8 );
+  }
+  | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
+      /* `fnptr ret Name(params);` — an explicit function-pointer TYPE (M21).
+         A null body marks it as a signature type (collectSignatures -> _sigs). */
+      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() );
   }
   ;
 function_return_type

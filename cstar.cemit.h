@@ -22,7 +22,16 @@ struct ParamSig {
 
 struct FuncSig {
     std::string            cName;    // mangled C name (e.g. main -> cstar_main)
+    std::string            retCType; // resolved C return type (M21 signature check)
     std::vector<ParamSig>  params;
+};
+
+// A function-pointer signature type (M21): a bodiless `fn ret Name(params);`.
+// Lowers to `typedef ret (*cName)(paramtypes);`. FunctionPtr<Name> spells `cName`.
+struct SigInfo {
+    std::string            cName;       // typedef name (namespace-mangled)
+    std::string            retCType;    // resolved C return type (for the typedef)
+    std::vector<ParamSig>  params;      // names (named-arg invoke) + C types (className)
 };
 
 // ---- Class model (M4) -----------------------------------------------------
@@ -155,6 +164,8 @@ private:
     int           _unsupported;      // count of nodes we could not lower
 
     std::map<std::string, FuncSig> _funcs;   // cstar function name -> signature
+    std::map<std::string, SigInfo> _sigs;    // M21: function-pointer signature types
+    bool isSigType(const std::string& name) const { return _sigs.count(name) != 0; }
     std::set<std::string> _refParams;        // by-ref params of the function being emitted
 
     std::map<std::string, ClassInfo>   _classes;     // class name -> info
@@ -299,6 +310,8 @@ private:
     // Expressions -> C expression text
     std::string emitExpression(SharedExpression expr);
     std::string emitInvocation(InvocationNode* call);
+    std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);  // M21
+    bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
     // Emit `cName(leadArg, <args reordered to params>)`. leadArg "" omits self.
     std::string emitReorderedCall(const std::string& cName, const std::string& leadArg,
                                   const std::vector<ParamSig>& params, SharedArgumentList args, int srcLine);

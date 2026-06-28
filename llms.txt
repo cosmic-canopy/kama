@@ -37,11 +37,13 @@ per-module .c); native + WASM + debug/release builds; IDE breakpoint debugging (
 includes, opaque `Ptr`/`Ptr<T>` = void*/T*, `usize`, `addr(of:)` out-params, `string.cstr()`, `--link
 <lib>`); raw pointer memory access is confined to an explicit **`unsafe { }`** block (M17 — the language's
 entire unsafe surface, greppable), with a safe `dataPtr()`/`byteLen()` collection→buffer bridge. An
-unlowered construct is a hard build error. **Function-pointer callbacks** (M18): `funcptr(of: freeFn)`
-hands a cstar function to a C API as a function pointer (the callback type comes from the header; the
-cstar signature must match its ABI) — controlled, no `unsafe`. When the C type isn't exactly spellable in
-cstar (e.g. a `const` pointer), cast to the header's callback typedef: `cast<Cb>(funcptr(of: fn))` —
-explicit, general (real libc `qsort` works this way). Planned (see `docs/ENGINE_READINESS.md`):
+unlowered construct is a hard build error. **`fn` keyword** on every function/method (M20); **`::`** for
+scope resolution vs `.` for instance access (M20b). **Function pointers** (M21): **`fnptr int32 Sig(...)`**
+declares an explicit, named function-pointer TYPE — zero-cost (a bare C fn-ptr), non-null, signature-checked,
+used directly (`Sig c = cmp;`). A bare function name is its pointer (`c = cmp`), so `funcptr(of:)` is retired;
+a bodiless `fn` is an error (no silent type). Pass to C directly (cast to a header typedef when the C type
+needs `const`, until M24). `Type::method` unbound refs + **`BindableFunctionPtr<Sig>`** (bound, object+RAII —
+the generic `<>` wrapper only where it adds an object) are next. Planned (see `docs/ENGINE_READINESS.md`):
 math types + operator overloading, `Map<K,V>` + general generics, tagged unions + match, an attribute
 system + reflection (for declarative serialization), file I/O + networking; then cstar-level WebGPU
 bindings.

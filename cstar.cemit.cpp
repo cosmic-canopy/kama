@@ -100,7 +100,7 @@ bool CEmitter::isNamespace(const std::string& name) const
 std::string CEmitter::resolveUserName(const std::string& value, SharedStringList qualifier)
 {
     auto known = [&](const std::string& n) {
-        return _classes.count(n) || _enums.count(n) || _interfaces.count(n);
+        return _classes.count(n) || _enums.count(n) || _interfaces.count(n) || _sigs.count(n);
     };
     // FFI (M16): extern struct/handle names are global literal C names.
     if ((!qualifier || qualifier->empty()) && _externNames.count(value)) return value;
@@ -327,6 +327,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (_currentClass && !_localTypes.count(nm)) {
             ClassInfo* owner = findFieldOwner(_currentClass, nm);
             if (owner) return "self->" + basePathTo(_currentClass, owner) + nm;
+        }
+        // A bare **function name** used as a value (not a call) → its C function
+        // pointer (M21) — enables binding/passing a free function to a FunctionPtr.
+        if (!_localTypes.count(nm)) {
+            auto fit = _funcs.find(resolveFunc(nm, v->qualifier));
+            if (fit != _funcs.end()) return fit->second.cName;
         }
         return nm;
     }
@@ -566,6 +572,21 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         else
                             unsupported("interface initializer must be a concrete object lvalue", n->line);
                     }
+                    *_out << ";\n";
+                    continue;
+                }
+
+                // FunctionPtr<Sig> binding (M21): a signature-typed local — track the
+                // sig (drives invoke), bind a free function (resolve + signature-check)
+                // or another FunctionPtr; must be initialized (non-null).
+                if (isSigType(ty)) {
+                    _localTypes[nm] = ty;
+                    line(n->line); indent(depth);
+                    *_out << ty << " " << nm;
+                    if (!d->initializer)
+                        unsupported("a FunctionPtr must be initialized (it is non-null)", n->line);
+                    else
+                        *_out << " = " << emitFnPtrBind(ty, d->initializer, n->line);
                     *_out << ";\n";
                     continue;
                 }
@@ -949,11 +970,23 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         if (fn->modifier && fn->modifier->value && *fn->modifier->value == "export")
             unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fn->line);
 
+        // A bodiless top-level `fn ret Name(params);` (no body, not extern) is a
+        // function-pointer SIGNATURE type (M21), not a callable — register in _sigs.
+        if (!fn->block && !isExtern(fn)) {
+            SigInfo si;
+            si.cName    = qualify(*fn->name->value);
+            si.retCType = cType(fn->returnType);
+            si.params   = paramSigsOf(fn->parameters);
+            _sigs[si.cName] = si;
+            continue;
+        }
+
         FuncSig sig;
         // extern functions are the FFI seam — keep their literal C name (never
         // namespace-mangle). Others are scope-prefixed (main -> cstar_main).
-        sig.cName  = isExtern(fn) ? *fn->name->value : qualify(*fn->name->value);
-        sig.params = paramSigsOf(fn->parameters);
+        sig.cName   = isExtern(fn) ? *fn->name->value : qualify(*fn->name->value);
+        sig.retCType = cType(fn->returnType);
+        sig.params  = paramSigsOf(fn->parameters);
         _funcs[sig.cName] = sig;
     }
 }
@@ -1669,6 +1702,38 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
     return s + ")";
 }
 
+// M21: does a free function match a FunctionPtr signature? Positional, by C type.
+bool CEmitter::sigMatches(const SigInfo& sig, const FuncSig& fn) const
+{
+    if (sig.retCType != fn.retCType) return false;
+    if (sig.params.size() != fn.params.size()) return false;
+    for (size_t i = 0; i < sig.params.size(); ++i) {
+        if (sig.params[i].className != fn.params[i].className) return false;
+        if (sig.params[i].byRef    != fn.params[i].byRef)    return false;
+    }
+    return true;
+}
+
+// M21: bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
+// signature-check) or another FunctionPtr (copy). Non-null: `null`/unknown is an error.
+std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line)
+{
+    if (auto* id = dynamic_cast<IdentifierNode*>(init.get())) {
+        if (id->value) {
+            auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
+            if (fit != _funcs.end()) {
+                if (!sigMatches(_sigs.at(sigCName), fit->second))
+                    unsupported(("function '" + *id->value + "' does not match the FunctionPtr signature").c_str(), line);
+                return fit->second.cName;   // the C function name decays to a pointer
+            }
+        }
+    }
+    if (isSigType(exprClass(init)))         // copy from another FunctionPtr
+        return emitExpression(init);
+    unsupported("a FunctionPtr binds a free function name or another FunctionPtr (and may not be null)", line);
+    return "0";
+}
+
 // Lower a call, reordering named arguments to the callee's declared order.
 std::string CEmitter::emitInvocation(InvocationNode* call)
 {
@@ -1696,6 +1761,15 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
 
     std::string name = *call->identifier->value;
 
+    // FunctionPtr invoke (M21): a bare local whose type is a signature → an indirect
+    // call `c(reordered args)` (c IS the function pointer). Named-arg reorder off the sig.
+    if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
+        && _localTypes.count(name) && isSigType(_localTypes[name])) {
+        const SigInfo& sig = _sigs.at(_localTypes[name]);
+        std::string callee = _refParams.count(name) ? ("(*" + name + ")") : name;
+        return emitReorderedCall(callee, "", sig.params, call->args, call->line);
+    }
+
     // FFI (M16): `addr(x)` is a builtin — the address of a local/value (`&(x)`),
     // for out-params and passing a descriptor by pointer. A controlled operation
     // (it addresses a real value), so it needs no `unsafe`.
@@ -1703,18 +1777,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         && call->args && call->args->size() == 1)
         return "&(" + emitExpression((*call->args)[0]->expression) + ")";
 
-    // FFI (M18): `funcptr(of: fn)` — a cstar free function as a C function pointer,
-    // for passing a callback to a C API (GPU/async/input). The C function name
-    // decays to a function pointer. A controlled op (a real function), no `unsafe`.
-    if (name == "funcptr" && (!call->identifier->qualifier || call->identifier->qualifier->empty())
-        && call->args && call->args->size() == 1) {
-        if (auto* id = dynamic_cast<IdentifierNode*>((*call->args)[0]->expression.get())) {
-            auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
-            if (fit != _funcs.end()) return fit->second.cName;
-        }
-        unsupported("funcptr(of:) expects the name of a free function", call->line);
-        return "0";
-    }
+    // (M21 retired the M18 `funcptr(of: fn)` builtin: a bare function name is now a
+    // value — its C function pointer — so `FunctionPtr<Sig> c = fn;` / passing `fn`
+    // directly replaces it.)
 
     // A `::`-qualified callee is **scope resolution**: `Namespace::fn(...)`. After
     // M20b, the head of a `::` is always a type/namespace — never an object (object
@@ -2315,6 +2380,18 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     if (!classes.empty() || !_interfaces.empty()) *_out << "\n";
 
+    // Function-pointer signature typedefs (M21): `typedef ret (*Name)(params);`.
+    // After the class forward-typedefs so a signature may take/return a class.
+    for (auto& kv : _sigs) {
+        SigInfo& si = kv.second;
+        *_out << "typedef " << si.retCType << " (*" << si.cName << ")(";
+        if (si.params.empty()) *_out << "void";
+        for (size_t i = 0; i < si.params.size(); ++i)
+            *_out << (i ? ", " : "") << si.params[i].className << (si.params[i].byRef ? "*" : "");
+        *_out << ");\n";
+    }
+    if (!_sigs.empty()) *_out << "\n";
+
     // Set the name-resolution scope from the type/file being emitted (M14).
     auto scopeOf = [&](const std::string& scope, const std::vector<std::string>& usings) {
         _nsCtx = NsCtx{}; _nsCtx.scope = scope; _nsCtx.usings = usings;
@@ -2348,7 +2425,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _nsCtx = _unitCtx[u.get()];
         for (auto& decl : *u->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
-                if (isExtern(fn)) continue;
+                if (isExtern(fn) || !fn->block) continue;   // skip extern + signature types
                 emitFunctionPrototype(fn);
                 any = true;
             }
@@ -2380,7 +2457,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         if (ClassInfo* ci = classOf(decl.get())) emitClassDefinitions(*ci);
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
-            if (!isExtern(fn)) emitFunction(fn);
+            if (!isExtern(fn) && fn->block) emitFunction(fn);   // skip signature types (no body)
         } else if (dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // emitted above
         } else if (dynamic_cast<InterfaceDeclarationNode*>(decl.get())) {

@@ -179,45 +179,42 @@ only while the collection is alive + unmodified, and dereferencing it requires `
 construct (including a safety-gate violation) is a **hard build error** — cstar never emits incomplete C
 and claims success.
 
-### Callbacks — `funcptr(of: fn)` (M18)
+### Function pointers — `fnptr` (M21) ✅
 
-Hand a cstar **free function** to a C API as a function pointer (GPU adapter/device/buffer-map callbacks,
-input handlers). A *controlled* op (it names a real function) — no `unsafe`.
+cstar has no naked function pointers. **`fnptr`** declares an explicit, named function-pointer **type**
+(class-agnostic) — **zero-cost** (a bare C function pointer, no wrapper). It is **non-null** (must be bound;
+no `null`, no null-check at the call), and binding a free function is **signature-checked**. (A bodiless
+`fn` is *not* a function pointer — a forgotten body is a clear error, never a silent type.)
 
 ```cstar
-extern "<webgpu.h>";
-extern fn void wgpuBufferMapAsync(WGPUBuffer b, ..., WGPUBufferMapCallback cb, Ptr userdata);
-fn void onMapped(int32 status, Ptr userdata) { ... }   // signature must match the C callback type
-...
-wgpuBufferMapAsync(b: buf, ..., cb: funcptr(of: onMapped), userdata: null);
+fnptr int32 Comparator(int32 a, int32 b);       // an explicit function-pointer TYPE
+fn int32 cmp(int32 a, int32 b) { return a - b; }
+
+Comparator c = cmp;                             // bind by name (positional, type-checked) — used directly
+int32 r = c(a: 9, b: 2);                        // named invoke through the pointer
 ```
 
-`funcptr(of: fn)` lowers to the function's C name (which decays to a function pointer). Free functions
-only — a method would need an implicit receiver; C callbacks pass state via a `userdata`/`Ptr` argument
-instead. Your cstar function's emitted signature must satisfy the C callback type (the same ABI contract
-as `extern` structs).
+A bare **function name used as a value** is its function pointer (Rust-like), so binding and passing need no
+operator — `c = cmp` and `f(cb: cmp)` just work. (This **retires the old `funcptr(of:)`** builtin.) Free
+functions only here; binding an instance method (`Type::method`) and capturing an object are
+`BindableFunctionPtr<Sig>` (a later milestone — the generic `<>` wrapper appears only where it adds an
+object + RAII; the zero-cost free pointer is the bare type).
 
-When the two match exactly (as above), `funcptr` is all you need. When the C type is one cstar can't spell
-exactly — most commonly a `const`-qualified pointer, since cstar has no `const` — name the callback type
-(a header `typedef`) and **cast to it explicitly**: `cast<CallbackType>(funcptr(of: fn))`. The explicit
-cast is C's sanctioned conversion and stays true to cstar's *explicit-over-implicit* philosophy — cstar
-never silently coerces a function pointer. This is fully general; e.g. the real libc `qsort`
-(`int(const void*, const void*)`) works end-to-end:
+**FFI**: an `extern fn` may take an `fnptr` type as a param; passing it hands C the raw pointer. When the C
+callback type is one cstar can't yet spell exactly — most commonly a `const`-qualified pointer (cstar has
+no `const` until M24) — name it via a header `typedef` and **cast** at the edge:
 
 ```cstar
 extern "<stdlib.h>";
 extern "cb.h";   // typedef int (*CompareFn)(const void*, const void*);
+fnptr int32 Comparator(Ptr<int32> a, Ptr<int32> b);
 extern fn void qsort(Ptr buf, usize nmemb, usize size, CompareFn compar);
-fn int32 cmp(Ptr<int32> a, Ptr<int32> b) { int32 r = 0; unsafe { r = a[0] - b[0]; } return r; }
 ...
-qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(funcptr(of: cmp)));
+Comparator c = cmp;
+qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // cast for const, drops in M24
 ```
 
-The callback type comes from a header — APIs that already `typedef` their callbacks (WebGPU, most GUI/game
-libraries) need no extra file; only a bare-signature API like standard `qsort` needs a one-line `typedef`.
-(A first-class function-pointer *type* in cstar — letting you write that signature inline without a header
-— is a possible future addition; the cast idiom covers it today.) 🚧 next: math types + operator
-overloading → cstar-level WebGPU bindings.
+🚧 next: `Type::method` unbound refs + `BindableFunctionPtr`; then math types → cstar-level WebGPU bindings.
 
 ## Control flow ✅
 

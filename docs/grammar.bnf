@@ -201,6 +201,8 @@ function_declaration
 
   | function_modifier_opt FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
 
+  | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
+
   ;
 function_return_type
   : type

@@ -1,0 +1,10 @@
+// M21: a zero-cost function pointer. `fnptr` declares a function-pointer TYPE
+// (explicit, greppable); a free function binds to it by name (signature-checked)
+// and is invoked with named args through the pointer. Non-null (no null-check).
+fnptr int32 Comparator(int32 a, int32 b);
+fn int32 cmp(int32 a, int32 b) { return a - b; }
+
+fn int32 main() {
+    Comparator c = cmp;                  // bind, used directly (no wrapper) — zero-cost
+    return c(a: 9, b: 2) + 35;           // named invoke: (9-2)+35 = 42
+}

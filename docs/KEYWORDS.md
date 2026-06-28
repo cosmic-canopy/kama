@@ -1,5 +1,8 @@
 # cstar keyword audit (M19)
 
+> **Keywords added since the audit**: `fn` (M20 — every function/method declaration), `fnptr` (M21 — an
+> explicit function-pointer type), and the `::` scope-resolution operator (M20b). All three are implemented.
+
 Status of all **59 reserved keywords**, established by exercising each through `cstar transpile`/`build`
 (the emitter dispatches on AST nodes, not tokens, so this is empirical). Legend:
 
