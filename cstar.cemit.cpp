@@ -382,6 +382,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
+        checkConstWrite(v->unaryExpression, v->line);   // M24a: no write to/through const
         // Indexed assignment to a collection lowers to __set, not `lhs = rhs`.
         if (auto* ea = dynamic_cast<ElementAccessNode*>(v->unaryExpression.get())) {
             std::string coll, recvExpr, idx;
@@ -428,11 +429,13 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<PreIncrDecrNode*>(n)) {
+        checkConstWrite(v->expression, v->line);   // M24a
         std::string op = (v->token == PLUSPLUS) ? "++" : "--";
         return "(" + op + emitExpression(v->expression) + ")";
     }
 
     if (auto* v = dynamic_cast<PostIncrDecrNode*>(n)) {
+        checkConstWrite(v->expression, v->line);   // M24a
         std::string op = (v->token == PLUSPLUS) ? "++" : "--";
         return "(" + emitExpression(v->expression) + op + ")";
     }
@@ -549,14 +552,28 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         return;
     }
 
-    if (auto* decl = dynamic_cast<LocalVariableDeclaration*>(n)) {
-        std::string ty = cType(decl->type);
-        bool cls = isClass(ty);
-        bool iface = isInterface(ty);
-        if (decl->variables) {
-            for (auto& d : *decl->variables) {
+    {
+        // Local declaration — plain or `const` (M24a). The two declarator node types
+        // are structurally identical (name + initializer), so one generic body serves
+        // both; a const decl additionally records each name as immutable (no
+        // reassignment, and — deep const — no writes THROUGH the binding either).
+        LocalVariableDeclaration* lvd = dynamic_cast<LocalVariableDeclaration*>(n);
+        ConstLocalVariableDeclaration* cvd = lvd ? nullptr
+                                            : dynamic_cast<ConstLocalVariableDeclaration*>(n);
+        SharedIdentifier declType = lvd ? lvd->type : (cvd ? cvd->type : SharedIdentifier());
+        bool isConstDecl = (cvd != nullptr);
+        if (declType) {
+            std::string ty = cType(declType);
+            bool cls = isClass(ty);
+            bool iface = isInterface(ty);
+            auto emitDeclarator = [&](auto& d) {
                 std::string nm = (d->name && d->name->value) ? *d->name->value : "";
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
+                if (isConstDecl) {
+                    if (!d->initializer)
+                        unsupported("a const must be initialized (it is immutable)", n->line);
+                    _constLocals.insert(nm);
+                }
 
                 // Interface-typed local: `I s = concrete;` -> a fat pointer borrowing
                 // the concrete object (which must be an lvalue that outlives `s`).
@@ -573,7 +590,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             unsupported("interface initializer must be a concrete object lvalue", n->line);
                     }
                     *_out << ";\n";
-                    continue;
+                    return;
                 }
 
                 // FunctionPtr<Sig> binding (M21): a signature-typed local — track the
@@ -588,7 +605,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     else
                         *_out << " = " << emitFnPtrBind(ty, d->initializer, n->line);
                     *_out << ";\n";
-                    continue;
+                    return;
                 }
 
                 if (!cls) {
@@ -596,7 +613,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     *_out << ty << " " << nm;
                     if (d->initializer) *_out << " = " << emitExpression(d->initializer);
                     *_out << ";\n";
-                    continue;
+                    return;
                 }
 
                 // Class-typed local: declare the value, then construct in place.
@@ -607,7 +624,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible) recordDestructibleLocal(nm, ty);
-                if (!d->initializer) continue;
+                if (!d->initializer) return;   // declared but uninitialized (non-const)
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(d->initializer.get())) {
                     std::string octy = cType(oc->type);
@@ -664,9 +681,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
                     }
                 }
-            }
+            };
+            if (lvd && lvd->variables)
+                for (auto& d : *lvd->variables) { if (d) emitDeclarator(d); }
+            else if (cvd && cvd->variables)
+                for (auto& d : *cvd->variables) { if (d) emitDeclarator(d); }
+            return;
         }
-        return;
     }
 
     if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
@@ -843,6 +864,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // an expression.
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
         if (as->token == EQ && isSmartPtrExpr(as->unaryExpression)) {
+            checkConstWrite(as->unaryExpression, n->line);   // M24a: no reseating a const smart ptr
             std::string b   = emitExpression(as->unaryExpression);
             std::string ty  = exprClass(as->unaryExpression);      // Owned_T / Shared_T / Weak_T
             CollKind    knd = smartKind(ty);
@@ -1773,6 +1795,33 @@ bool CEmitter::sigMatches(const SigInfo& sig, const FuncSig& fn) const
     return true;
 }
 
+// M24a: the root identifier a write ultimately targets, for deep-const checks.
+// `x` -> "x";  `x.f`, `x[i]`, `x.f.g` -> "x";  a non-binding target -> "".
+std::string CEmitter::rootBinding(SharedExpression e) const
+{
+    ASTNode* n = e.get();
+    if (auto* id = dynamic_cast<IdentifierNode*>(n))
+        return (id->value && (!id->qualifier || id->qualifier->empty())) ? *id->value : "";
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n))
+        return ma->expression ? rootBinding(ma->expression) : "";
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        if (ea->expression) return rootBinding(ea->expression);
+        return (ea->identifier && ea->identifier->value) ? *ea->identifier->value : "";
+    }
+    return "";
+}
+
+// M24a: writing TO or THROUGH a `const` binding is a hard error. Deep const, so
+// `c.field = …` and `c[i] = …` are caught too — not just a bare reassignment.
+void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
+{
+    if (!target) return;
+    std::string root = rootBinding(target);
+    if (!root.empty() && _constLocals.count(root))
+        unsupported(("cannot write to `const " + root + "` (const is deep — neither the "
+                     "binding nor anything reached through it may be mutated)").c_str(), srcLine);
+}
+
 // M21: bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
 // signature-check) or another FunctionPtr (copy). Non-null: `null`/unknown is an error.
 std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line)
@@ -2057,7 +2106,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
 
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
-    _localTypes.clear();
+    _localTypes.clear(); _constLocals.clear();
     _currentClass = nullptr;
     if (fn->parameters) {
         for (auto& p : *fn->parameters) {
@@ -2266,7 +2315,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     line(ci.dtorNode ? ci.dtorNode->line : ci.node->line);
     _currentClass = &ci;
     _refParams.clear();
-    _localTypes.clear();
+    _localTypes.clear(); _constLocals.clear();
     _currentReturnCType = "void";
     _tempCounter = 0;
     _scopes.clear();
@@ -2308,7 +2357,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 {
     _currentClass = &owner;
     _refParams.clear();
-    _localTypes.clear();
+    _localTypes.clear(); _constLocals.clear();
     _currentReturnCType = retType;
     _tempCounter = 0;
     _scopes.clear();
@@ -2368,7 +2417,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _scopes.clear();
     _currentClass = nullptr;
     _refParams.clear();
-    _localTypes.clear();
+    _localTypes.clear(); _constLocals.clear();
 }
 
 void CEmitter::emitClassDefinitions(ClassInfo& ci)

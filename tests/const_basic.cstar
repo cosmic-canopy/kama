@@ -1,0 +1,18 @@
+// M24a: a `const` local is immutable (deep) but fully usable as a value — read it,
+// call read-only methods on it, deref a const smart pointer. Reassigning it, writing
+// through it (c.field = …, c[i] = …), or ++/-- on it are compile-time errors
+// (verified separately; the suite asserts the positive path here).
+class Box {
+    int32 v;
+    Box(int32 v) { this.v = v; }
+    fn int32 get() { return this.v; }
+}
+fn int32 main() {
+    const int32 BASE = 30;
+    const Box b = new Box(v: 5);
+    const Owned<Box> p = new Owned<Box>(v: 7);
+    int32 sum = BASE;                 // read a const primitive
+    sum = sum + b.get();              // read through a const object
+    sum = sum + p.get();              // read through a const Owned (auto-deref)
+    return sum;                       // 30 + 5 + 7 = 42
+}

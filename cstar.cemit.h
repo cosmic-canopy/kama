@@ -312,6 +312,10 @@ private:
     // Expressions -> C expression text
     std::string emitExpression(SharedExpression expr);
     std::string emitInvocation(InvocationNode* call);
+    // M24a — const-correctness (deep): a const binding is immutable.
+    std::set<std::string> _constLocals;                       // const local names in scope
+    std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
+    void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);  // M21
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
     // BindableFunctionPtr<Sig> (M22) — construct/promote/invoke a bindable callable.
