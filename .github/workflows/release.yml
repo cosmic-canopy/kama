@@ -16,8 +16,12 @@ jobs:
         include:
           - { os: ubuntu-latest,    name: linux-x64 }
           - { os: ubuntu-24.04-arm, name: linux-arm64 }
-          - { os: macos-13,         name: macos-x64 }   # last Intel image
-          - { os: macos-14,         name: macos-arm64 }
+          - { os: macos-14,         name: macos-arm64 }   # Intel (macos-13) dropped: image
+                                                          # is deprecated/unschedulable and was
+                                                          # hanging the release. Apple Silicon
+                                                          # only; revisit a universal2 build
+                                                          # (clang -arch arm64 -arch x86_64 on
+                                                          # this runner) if Intel Macs matter.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
