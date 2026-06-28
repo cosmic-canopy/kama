@@ -6,6 +6,10 @@ debuggable `.cstar` program.
 
 ## 1. Install
 
+Prebuilt packages are published for **Linux** (x64 + arm64), **macOS** (one universal binary for Intel +
+Apple Silicon), and **Windows** (x64). On **\*BSD** (FreeBSD etc.) build from source — it's the same
+`flex`/`bison`/`clang` toolchain (`pkg install`) and the standard `make` below.
+
 **From a release** (recommended): download the package for your platform from the
 [Releases](https://github.com/cosmic-canopy/cstar/releases) page, then:
 
