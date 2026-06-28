@@ -67,11 +67,13 @@ cstar debug builds embed `#line` directives back to your `.cstar` and keep your 
 real source-level debugging.
 
 1. Install the **cstar** VSCode extension (the `.vsix` from Releases, or `editor/vscode/` from source).
-   It pulls in **CodeLLDB** (`vadimcn.vscode-lldb`).
-2. Copy the repo's [`.vscode/`](.vscode) (tasks + launch config) into your project, or create your own.
-3. Open a `.cstar`, set a breakpoint, press **F5**.
-4. Execution stops **in your `.cstar` source**; the Variables panel shows your locals and the Call Stack
+   It auto-installs **CodeLLDB** (`vadimcn.vscode-lldb`) and wires up **F5** — no `launch.json`/`tasks.json`
+   to copy.
+2. Open a `.cstar`, set a breakpoint, press **F5**. The extension builds a debug binary and launches it.
+3. Execution stops **in your `.cstar` source**; the Variables panel shows your locals and the Call Stack
    shows cstar frames.
+
+> Prefer to wire it yourself? The repo's [`.vscode/`](.vscode) has an equivalent `tasks.json` + `launch.json`.
 
 ### Debug in the browser (WebAssembly)
 

@@ -1,20 +1,21 @@
 {
   "name": "cstar",
   "displayName": "cstar",
-  "description": "Syntax highlighting and language support for the cstar language (.cstar). Debug .cstar with CodeLLDB.",
-  "version": "0.1.0",
+  "description": "Syntax highlighting and zero-config debugging for the cstar language (.cstar). Press F5 in a .cstar to build + debug via CodeLLDB.",
+  "version": "0.2.0",
   "publisher": "cosmic-canopy",
   "license": "MIT",
   "engines": { "vscode": "^1.75.0" },
-  "categories": ["Programming Languages"],
+  "categories": ["Programming Languages", "Debuggers"],
   "keywords": ["cstar", "transpiler", "c", "wasm"],
   "repository": { "type": "git", "url": "https://github.com/cosmic-canopy/cstar" },
+  "main": "./extension.js",
   "contributes": {
     "languages": [
       {
         "id": "cstar",
         "aliases": ["cstar", "Cstar"],
-        "extensions": [".cstar", ".str"],
+        "extensions": [".cstar"],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -23,6 +24,20 @@
         "language": "cstar",
         "scopeName": "source.cstar",
         "path": "./syntaxes/cstar.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "cstar.debugCurrentFile",
+        "title": "Debug Current File",
+        "category": "cstar"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "cstar.debugCurrentFile",
+        "key": "f5",
+        "when": "editorLangId == cstar && !inDebugMode"
       }
     ]
   },
