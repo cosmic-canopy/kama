@@ -1726,6 +1726,30 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
                     unsupported(("function '" + *id->value + "' does not match the FunctionPtr signature").c_str(), line);
                 return fit->second.cName;   // the C function name decays to a pointer
             }
+            // `Type::method` — an unbound method reference (M21b). The method lowers
+            // to `Class__method(Class* self, …)`, so it's a function pointer over a
+            // signature whose FIRST param is the receiver (`ref Class self`).
+            if (id->qualifier && !id->qualifier->empty()) {
+                auto prefix = std::make_shared<StringList>();
+                for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) prefix->push_back((*id->qualifier)[i]);
+                std::string cls = resolveUserName(*id->qualifier->back(), prefix);
+                if (_classes.count(cls)) {
+                    ClassInfo* owner = nullptr;
+                    MethodInfo* mi = findMethod(&_classes[cls], *id->value, &owner);
+                    if (mi) {
+                        FuncSig full;                          // receiver-first signature
+                        full.cName    = mi->cName;
+                        full.retCType = cType(mi->returnType);
+                        full.params.push_back(ParamSig{"self", true, cls});
+                        for (auto& p : mi->params) full.params.push_back(p);
+                        if (!sigMatches(_sigs.at(sigCName), full))
+                            unsupported(("method '" + cls + "::" + *id->value
+                                         + "' does not match the fnptr signature (its first param must be `ref "
+                                         + cls + "`)").c_str(), line);
+                        return mi->cName;   // the method's C name decays to a fn pointer
+                    }
+                }
+            }
         }
     }
     if (isSigType(exprClass(init)))         // copy from another FunctionPtr

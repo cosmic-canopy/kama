@@ -195,10 +195,23 @@ int32 r = c(a: 9, b: 2);                        // named invoke through the poin
 ```
 
 A bare **function name used as a value** is its function pointer (Rust-like), so binding and passing need no
-operator — `c = cmp` and `f(cb: cmp)` just work. (This **retires the old `funcptr(of:)`** builtin.) Free
-functions only here; binding an instance method (`Type::method`) and capturing an object are
+operator — `c = cmp` and `f(cb: cmp)` just work. (This **retires the old `funcptr(of:)`** builtin.) An
+`fnptr` can also be a **parameter** (`fn run(Op op, …) { op(…) }` — the core callback shape).
+
+**Unbound method references** — `Type::method` (zero-cost). A method lowers to `Class__method(Class* self,
+…)`, so it's a function pointer whose **first parameter is the receiver**; the object is passed explicitly:
+
+```cstar
+class Vec2 { int32 x; int32 y; fn int32 dot(ref Vec2 o) { return this.x*o.x + this.y*o.y; } }
+fnptr int32 DotFn(ref Vec2 self, ref Vec2 o);   // receiver is an explicit first param
+
+DotFn d = Vec2::dot;            // unbound (`::` = no instance, no binding) — zero-cost
+int32 n = d(self: ref u, o: ref v);
+```
+
+*Capturing* an object so you don't pass it each call (`obj.method` bound, with RAII) is
 `BindableFunctionPtr<Sig>` (a later milestone — the generic `<>` wrapper appears only where it adds an
-object + RAII; the zero-cost free pointer is the bare type).
+object; the zero-cost free/unbound pointer is the bare `fnptr` type).
 
 **FFI**: an `extern fn` may take an `fnptr` type as a param; passing it hands C the raw pointer. When the C
 callback type is one cstar can't yet spell exactly — most commonly a `const`-qualified pointer (cstar has
