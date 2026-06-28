@@ -12,7 +12,7 @@ TSV = os.path.join(ROOT, "bench/build/results.tsv")
 OUT_MD = os.path.join(ROOT, "docs/benchmarks/RESULTS.md")
 OUT_JSON = os.path.join(ROOT, "docs/benchmarks/results.json")
 
-WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc"]
+WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr"]
 NATIVE = ["cstar", "c", "cpp", "rust", "go", "csharp", "lua", "python"]
 WASM = ["cstar-wasm", "js", "ts"]
 LABEL = {"cstar": "cstar", "c": "C", "cpp": "C++", "rust": "Rust", "go": "Go",
@@ -138,6 +138,10 @@ diverged:
 - **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
   (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — cstar `List<int32>`,
   C++ `vector`, Rust `Vec`, Go slice, C# `List`, Lua table, Python/JS array, C manual realloc).
+- **fnptr** — 8×10⁶ indirect calls through a function pointer, routed through a function boundary
+  (`apply(op, x)`) so the call stays genuinely indirect (the fnptr analog of `dispatch`'s virtual calls).
+  Each language uses its idiomatic callable — cstar `fnptr` (a bare C function pointer, zero-cost), C/C++
+  function pointers, Rust `fn` pointers, Go func values, **C# `Func<>` delegates**, Lua/Python/JS functions.
 
 ## NATIVE — execution time (median, ms)
 

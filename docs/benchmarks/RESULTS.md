@@ -1,6 +1,6 @@
 # cstar benchmark results
 
-_Generated: 2026-06-28 05:58 · arch: aarch64 (Linux) · in the `cstar-bench` container_
+_Generated: 2026-06-28 13:58 · arch: aarch64 (Linux) · in the `cstar-bench` container_
 
 Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
 Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median). Peak RSS: `/usr/bin/time -v`.
@@ -32,6 +32,7 @@ diverged:
 - `collatz`: checksum = 2 (exit code) — ✓ all match
 - `dispatch`: checksum = 0 (exit code) — ✓ all match
 - `alloc`: checksum = 64 (exit code) — ✓ all match
+- `fnptr`: checksum = 0 (exit code) — ✓ all match
 
 ## Workloads
 - **fib** — naive recursive Fibonacci summed over 0..31 (function-call / stack-frame cost).
@@ -41,16 +42,21 @@ diverged:
 - **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
   (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — cstar `List<int32>`,
   C++ `vector`, Rust `Vec`, Go slice, C# `List`, Lua table, Python/JS array, C manual realloc).
+- **fnptr** — 8×10⁶ indirect calls through a function pointer, routed through a function boundary
+  (`apply(op, x)`) so the call stays genuinely indirect (the fnptr analog of `dispatch`'s virtual calls).
+  Each language uses its idiomatic callable — cstar `fnptr` (a bare C function pointer, zero-cost), C/C++
+  function pointers, Rust `fn` pointers, Go func values, **C# `Func<>` delegates**, Lua/Python/JS functions.
 
 ## NATIVE — execution time (median, ms)
 
 | workload | cstar | C | C++ | Rust | Go | C# (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|
-| fib | 7.35 | 7.4 | 7.63 | 6.12 | 10.29 | 30.9 | 88.66 | 208.77 |
-| pi | 11.75 | 11.78 | 12.13 | 11.97 | 13.97 | 33.4 | 117.23 | 1647.32 |
-| collatz | 65.51 | 65.68 | 66.48 | 65.75 | 91.47 | 121.84 | 955.71 | 2927.68 |
-| dispatch | 6.18 | 6.17 | 6.4 | 1.19 | 5.07 | 25.34 | 140.48 | 695.8 |
-| alloc | 1.18 | 1.16 | 1.64 | 2.29 | 7.05 | 26.84 | 24.41 | 106.85 |
+| fib | 7.39 | 7.31 | 7.63 | 6.08 | 10.19 | 31.16 | 89.4 | 213.2 |
+| pi | 11.76 | 11.79 | 12.0 | 11.99 | 14.06 | 31.74 | 118.75 | 1658.27 |
+| collatz | 65.68 | 65.51 | 65.62 | 65.65 | 91.08 | 120.34 | 964.72 | 2932.4 |
+| dispatch | 6.13 | 6.13 | 6.4 | 1.2 | 5.07 | 24.59 | 141.84 | 695.37 |
+| alloc | 1.2 | 1.18 | 1.59 | 2.28 | 6.59 | 26.3 | 24.28 | 108.06 |
+| fnptr | 2.53 | 2.52 | 2.79 | 2.66 | 5.08 | 29.84 | 138.68 | 729.13 |
 
 ## NATIVE — peak resident memory (MB)
 
@@ -60,7 +66,8 @@ diverged:
 | pi | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
 | collatz | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
 | dispatch | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
-| alloc | 2 | 2 | 3 | 2 | 6 | 24 | 2 | 8 |
+| alloc | 2 | 2 | 3 | 2 | 6 | 25 | 2 | 8 |
+| fnptr | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
 
 ## NATIVE — artifact size
 
@@ -71,27 +78,29 @@ diverged:
 | C++ | 66.1 KB |
 | Rust | 322.3 KB |
 | Go | 1604.8 KB |
-| C# (JIT) | 5.5 KB |
+| C# (JIT) | 6.0 KB |
 
 ## WASM track — execution time under node (median, ms)
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 20.15 | 28.34 | 27.76 |
-| pi | 42.71 | 26.35 | 26.57 |
-| collatz | 190.28 | 410.88 | 406.79 |
-| dispatch | 28.77 | 21.2 | 20.56 |
-| alloc | 14.6 | 15.92 | 15.97 |
+| fib | 19.44 | 27.06 | 26.79 |
+| pi | 41.98 | 28.11 | 25.96 |
+| collatz | 188.01 | 418.83 | 413.08 |
+| dispatch | 27.73 | 20.95 | 20.63 |
+| alloc | 14.53 | 16.65 | 15.89 |
+| fnptr | 13.26 | 41.65 | 40.99 |
 
 ## WASM track — peak resident memory (MB)
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
 | fib | 43 | 44 | 44 |
-| pi | 42 | 45 | 45 |
+| pi | 43 | 45 | 45 |
 | collatz | 43 | 45 | 45 |
 | dispatch | 43 | 45 | 45 |
 | alloc | 45 | 46 | 46 |
+| fnptr | 43 | 45 | 45 |
 
 ## WASM track — module size
 

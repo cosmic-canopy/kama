@@ -5,7 +5,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."   # repo root (/work)
 
 mkdir -p bench/build/{cstar,c,cpp,rust,go,wasm,csharp}
-WORKLOADS="fib pi collatz dispatch alloc"
+WORKLOADS="fib pi collatz dispatch alloc fnptr"
 
 echo "== building cstar compiler (clean, to match this image's toolchain) =="
 make clean >/dev/null 2>&1

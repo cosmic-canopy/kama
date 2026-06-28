@@ -5,6 +5,9 @@ class P {
   class Circle : Shape { long r; public Circle(long r){this.r=r;} public override long Area()=>r*r; }
   class Square : Shape { long s; public Square(long s){this.s=s;} public override long Area()=>s*s; }
   static long Measure(Shape sh)=>sh.Area();
+  static long Add1(long x)=>x+1;
+  static long Mul3(long x)=>x*3;
+  static long Apply(System.Func<long,long> op, long x)=>op(x);
   static int Main(string[] args){
     string w = args.Length>0?args[0]:"fib";
     ulong sum=0;
@@ -13,6 +16,7 @@ class P {
     else if(w=="collatz"){ for(ulong i=1;i<700000;i++) sum+=Clen(i); }
     else if(w=="dispatch"){ Shape c=new Circle(3), q=new Square(4); for(ulong i=0;i<8000000;i++){ if(i%2==0) sum+=(ulong)Measure(c); else sum+=(ulong)Measure(q); } }
     else if(w=="alloc"){ for(int iter=0;iter<2000;iter++){ var xs=new System.Collections.Generic.List<int>(); for(int j=1;j<=1000;j++) xs.Add(j); ulong s=0; foreach(var v in xs) s+=(ulong)v; sum+=s; } }
+    else if(w=="fnptr"){ System.Func<long,long> a=Add1, b=Mul3; for(ulong i=0;i<8000000;i++){ if(i%2==0) sum+=(ulong)Apply(a,(long)i); else sum+=(ulong)Apply(b,(long)i); } }
     return (int)(sum%256);
   }
 }
