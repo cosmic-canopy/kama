@@ -1,7 +1,10 @@
 // M21: a real libc callback driven through an `fnptr` type. `fnptr Comparator(...)`
-// declares a zero-cost function-pointer type; a free function binds by name. cstar
-// has no `const` yet (M24), so it's cast to the header's exact const-typed comparator
-// at the C edge — the cast disappears once const-correctness lands.
+// declares a zero-cost function-pointer type; a free function binds by name. The cast
+// to the header's comparator is INTRINSIC to C's `void*`-based qsort API (the
+// comparator is `int(*)(const void*, const void*)`, so the typed pointer must be
+// bridged at the edge) — it is the correct idiom, not a missing feature. cstar can
+// spell `const T*` since M24e; for a const-pointer C API that needs NO cast, see
+// tests/const_ffi.d.
 extern "<stdlib.h>";
 extern "cb.h";
 fnptr int32 Comparator(Ptr<int32> a, Ptr<int32> b);   // a function-pointer type

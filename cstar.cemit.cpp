@@ -987,6 +987,7 @@ std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
             ParamSig ps;
             ps.name  = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             ps.byRef = paramByRef(p.get());
+            ps.isConst = p->isConst;
             // Store the C type spelling; whether it's a class is checked at the
             // call site (paramSigsOf may run before the class table is built).
             ps.className = p->type ? cType(p->type) : "";
@@ -2147,7 +2148,12 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
             if (!first) s += ", ";
             first = false;
             std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
-            s += cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + nm;
+            // M24e: `const Ptr<T>`/`const Ptr` emits `const T*`/`const void*` (FFI const
+            // pointers — to match C const callback/API signatures). Only pointer types:
+            // a `const ref <class>` stays plain (its methods take a non-const `self`).
+            bool constPtr = p->isConst && p->type && p->type->value && *p->type->value == "Ptr";
+            s += std::string(constPtr ? "const " : "") + cType(p->type)
+               + (paramByRef(p.get()) ? "* " : " ") + nm;
         }
     }
     if (s.empty()) s = "void";
@@ -2718,8 +2724,13 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         SigInfo& si = kv.second;
         *_out << "typedef " << si.retCType << " (*" << si.cName << ")(";
         if (si.params.empty()) *_out << "void";
-        for (size_t i = 0; i < si.params.size(); ++i)
-            *_out << (i ? ", " : "") << si.params[i].className << (si.params[i].byRef ? "*" : "");
+        for (size_t i = 0; i < si.params.size(); ++i) {
+            const ParamSig& p = si.params[i];
+            // M24e: const pointer params -> `const T*` (FFI). className already ends
+            // in `*` for a Ptr<T>/Ptr; a const-ref class param keeps its self mutable.
+            bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*';
+            *_out << (i ? ", " : "") << (constPtr ? "const " : "") << p.className << (p.byRef ? "*" : "");
+        }
         *_out << ");\n";
     }
     if (!_sigs.empty()) *_out << "\n";

@@ -32,7 +32,7 @@ Status of all **59 reserved keywords**, established by exercising each through `
 | `friend` | 🔒 | `friend(list)` parses, but enforces nothing (access control itself is unenforced) |
 | `abstract` | 🔒 | method dispatch works, but instantiating an abstract class (`new AbstractType()`) is **not prevented** |
 | `final` | 🔒 | **not enforced** — `extends` a `final` class and `override` of a `final` method are both allowed |
-| `const` | 🚧 | **const locals (M24a) + methods (M24b) + params (M24c) + fields (M24d)** work. A `const` binding is deeply immutable (no reassign, no write *through* it, no `++`/`--`); `const fn` is non-mutating and the only kind callable on a const receiver; params take `const T` / `const ref T` (read-only borrow); a `const` field is write-once (constructor only). Only **`const T*` for FFI** (retire the `cast<>` callback hack) remains |
+| `const` | ✅ | **const-correctness complete (M24a–e).** A `const` binding is deeply immutable (no reassign, no write *through* it, no `++`/`--`); `const fn` is non-mutating and the only kind callable on a const receiver; params take `const T` / `const ref T` (read-only borrow); a `const` field is write-once (constructor only); `const Ptr<T>` lowers to `const T*` for const-correct FFI |
 
 ## Bugs found
 

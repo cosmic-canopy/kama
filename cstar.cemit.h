@@ -19,6 +19,7 @@ struct ParamSig {
     std::string name;
     bool        byRef;        // ref/out => passed as a pointer (call site emits &arg)
     std::string className;    // class type (for ref upcast at call sites), "" if primitive
+    bool        isConst = false;   // `const` param — emits `const T*` for FFI pointers (M24e)
 };
 
 struct FuncSig {
