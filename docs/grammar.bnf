@@ -87,8 +87,8 @@ qualified_identifier
   | qualifier basic_identifier
   ;
 qualifier
-  : IDENTIFIER DOT
-  | qualifier IDENTIFIER DOT
+  : IDENTIFIER COLONCOLON
+  | qualifier IDENTIFIER COLONCOLON
   ;
 basic_identifier
   : IDENTIFIER
@@ -440,6 +440,7 @@ parenthesized_expression
   ;
 member_access
   : primary_expression DOT IDENTIFIER
+  | qualified_identifier_no_generic DOT IDENTIFIER
   | class_type DOT IDENTIFIER
   ;
 invocation_expression

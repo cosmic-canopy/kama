@@ -260,7 +260,7 @@ Single inheritance (`extends`), base embedded by value (upcast is offset-0), bas
 
 ```cstar
 enum Color { Red, Green = 5, Blue }   // Red=0, Green=5, Blue=6
-Color c = Color.Blue;
+Color c = Color::Blue;       // enum members are scope-resolved with ::
 ```
 Lowers to a C `enum` (members mangled `Color_Red`…). Enum values are integers — usable in `switch`,
 comparisons, and `cast`.
@@ -281,20 +281,23 @@ another file's helper. To share across files, declare a namespace:
 ```cstar
 // graphics.cstar
 namespace Graphics;
-class Texture { ... }        // Graphics.Texture
-fn int32 scale(int32 x) { ... } // Graphics.scale
+class Texture { ... }        // Graphics::Texture
+fn int32 scale(int32 x) { ... } // Graphics::scale
 
 // main.cstar
 using Graphics;              // import unqualified
 using Phys = Physics;        // alias
 fn int main() {
-    Texture t = ...;             // Graphics.Texture (via using)
-    Physics.Texture p = ...;     // qualified — distinct type, no collision
-    int n = Graphics.scale(x: 3);// qualified namespaced call
+    Texture t = ...;              // Graphics::Texture (via using)
+    Physics::Texture p = ...;     // qualified — distinct type, no collision
+    int n = Graphics::scale(x: 3);// qualified namespaced call
 }
 ```
 
-`namespace a.b;` (dotted) is allowed. Object/field names shadow a namespace in `A.B` resolution. `main` is
+**Scope resolution uses `::`** (namespaces, qualified types, enum members: `Color::Blue`); `.` is
+**instance/value access only** (`obj.field`, `obj.method()`). The two are now *syntactically* distinct, so
+there's no namespace-vs-object precedence rule — a `::` head is always a type/namespace, a `.` head always a
+value. `main` is
 the global entry point (unmangled). Deferred: per-symbol `public`/`private` access modifiers (a file is
 wholly public if it declares a namespace, wholly private otherwise), nested `namespace { }` blocks, and an
 incremental `.o` build cache. 🚧

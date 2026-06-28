@@ -140,6 +140,7 @@ struct cstaryystype {
 %token <token> MINUS "-"
 %token <token> DOT "."
 %token <token> SLASH "/"
+%token <token> COLONCOLON "::"
 %token <token> COLON ":"
 %token <token> SEMICOLON ";"
 %token <token> LT "<"
@@ -304,8 +305,8 @@ qualified_identifier
   | qualifier basic_identifier   { $$ = $2; $$->setQualifier($1); }
   ;
 qualifier
-  : IDENTIFIER DOT { $$ = std::make_shared<StringList>(); $$->push_back($1); }
-  | qualifier IDENTIFIER DOT { $1->push_back($2); }
+  : IDENTIFIER COLONCOLON { $$ = std::make_shared<StringList>(); $$->push_back($1); }
+  | qualifier IDENTIFIER COLONCOLON { $1->push_back($2); }
   ;
 basic_identifier
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
@@ -660,6 +661,7 @@ parenthesized_expression
   ;
 member_access
   : primary_expression DOT IDENTIFIER   { $$ = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); }
+  | qualified_identifier_no_generic DOT IDENTIFIER   { $$ = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); }
   | class_type DOT IDENTIFIER   { $$ = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); }
   ;
 invocation_expression

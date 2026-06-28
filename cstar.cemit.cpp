@@ -1716,54 +1716,18 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return "0";
     }
 
-    // A qualified callee `recv.method` parses as identifier{value=method,
-    // qualifier=[recv...]}. The head may be an object (receiver), or — if it's a
-    // known namespace and not a local/field — a namespace-qualified free call
-    // (`Graphics.fn(...)`). Object/field shadows a namespace (M14 precedence).
+    // A `::`-qualified callee is **scope resolution**: `Namespace::fn(...)`. After
+    // M20b, the head of a `::` is always a type/namespace — never an object (object
+    // access is `.`/member_access) — so the old namespace-vs-object precedence hack
+    // is gone. `resolveFunc` handles namespace + `using` + alias resolution.
     SharedStringList qual = call->identifier->qualifier;
     if (qual && !qual->empty()) {
-        std::string recvExpr, recvClass;
-        const std::string& head = *(*qual)[0];
-        bool headIsObject = (_localTypes.count(head) && !_localTypes[head].empty())
-                          || (_currentClass && findFieldOwner(_currentClass, head));
-        if (!headIsObject && (isNamespace(head))) {
-            std::string fn = resolveFunc(name, qual);
-            auto fit = _funcs.find(fn);
-            if (fit != _funcs.end())
-                return emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line);
-        }
-        if (_localTypes.count(head) && !_localTypes[head].empty()) {
-            // A ref/out param is already a pointer; deref so &(recv) is the pointer.
-            recvExpr = _refParams.count(head) ? ("(*" + head + ")") : head;
-            recvClass = _localTypes[head];
-        } else if (_currentClass) {
-            ClassInfo* fo = findFieldOwner(_currentClass, head);
-            if (!fo) { unsupported("method receiver not a known object", call->line); return "0"; }
-            recvExpr = "self->" + basePathTo(_currentClass, fo) + head;
-            for (auto& f : fo->fields) if (f.name == head && f.type) recvClass = cType(f.type);
-        } else { unsupported("method receiver not a known object", call->line); return "0"; }
-
-        for (size_t i = 1; i < qual->size(); ++i) {
-            if (recvClass.empty() || !_classes.count(recvClass)) {
-                unsupported("method receiver chain not resolvable", call->line); return "0";
-            }
-            const std::string& fld = *(*qual)[i];
-            ClassInfo* fo = findFieldOwner(&_classes[recvClass], fld);
-            std::string fcls;
-            if (fo) for (auto& f : fo->fields) if (f.name == fld && f.type) fcls = cType(f.type);
-            recvExpr  = "(" + recvExpr + ")." + (fo ? basePathTo(&_classes[recvClass], fo) : "") + fld;
-            recvClass = fcls;
-        }
-
-        // Smart-pointer receiver: an intrinsic (lock/expired/valid) or auto-deref to T.
-        if (isSmartPtrClass(recvClass))
-            return emitSmartPtrCall(recvClass, recvExpr, name, call->args, call->line);
-        if (isInterface(recvClass))
-            return emitInterfaceDispatch(recvExpr, recvClass, name, call->args, call->line);
-        if (recvClass.empty() || !_classes.count(recvClass)) {
-            unsupported("method call on unresolved receiver", call->line); return "0";
-        }
-        return emitDispatch(recvClass, "&(" + recvExpr + ")", name, call->args, call->line);
+        auto fit = _funcs.find(resolveFunc(name, qual));
+        if (fit != _funcs.end())
+            return emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line);
+        unsupported("scope-qualified call resolves to no known function "
+                    "(static `Type::method()` is not yet supported)", call->line);
+        return "0";
     }
 
     // Free-function call — resolve the name through the file's scope + usings.

@@ -6,6 +6,6 @@ enum Color
 }
 fn int main()
 {
-    Color c = Color.Blue;
+    Color c = Color::Blue;
     return cast<int>(c);
 }
