@@ -442,7 +442,7 @@ parameter_list
   | parameter_list COMMA parameter   { $1->push_back($3); }
   ;
 parameter
-  : parameter_modifier_opt type IDENTIFIER   { $$ = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $1, $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); }
+  : const_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $2, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4)); p->isConst = ($1 != nullptr); $$ = p; }
   ;
 parameter_modifier_opt
   : /* Nothing */ {  }

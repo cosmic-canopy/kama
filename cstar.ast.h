@@ -249,7 +249,8 @@ public:
     SharedModifier modifier;
     SharedIdentifier type;
     SharedIdentifier identifier;
-    FunctionParameterNode(CodeGenContext& context, SharedModifier modifier, SharedIdentifier type, SharedIdentifier identifier) 
+    bool isConst = false;   // `const [ref] T x` — immutable param (M24c)
+    FunctionParameterNode(CodeGenContext& context, SharedModifier modifier, SharedIdentifier type, SharedIdentifier identifier)
         : ASTNode(context),  ExpressionNode(context), modifier(modifier), type(type), identifier(identifier) { }
 };
 

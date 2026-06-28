@@ -1,0 +1,16 @@
+// M24c: const params. `const ref T` is a read-only borrow (pass a big object without
+// copying, can't mutate it); `const T` is an immutable value param. Only const methods
+// are callable on them, and writing to/through them is a compile error (verified
+// separately). Mirrors the same deep-const rules as const locals.
+class Vec2 {
+    int32 x; int32 y;
+    Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
+    const fn int32 lenSq() { return this.x * this.x + this.y * this.y; }
+}
+fn int32 dist2(const ref Vec2 a, const int32 bias) {   // read-only borrow + const value
+    return a.lenSq() + bias;                            // const method call on a const borrow: OK
+}
+fn int32 main() {
+    Vec2 v = new Vec2(x: 3, y: 4);
+    return dist2(a: ref v, bias: 17);                   // 25 + 17 = 42
+}

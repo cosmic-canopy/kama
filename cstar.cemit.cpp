@@ -2134,6 +2134,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
+            if (p->isConst) _constLocals.insert(pn);   // M24c: const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
         }
@@ -2390,6 +2391,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
+            if (p->isConst) _constLocals.insert(pn);   // M24c: const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
         }
