@@ -213,6 +213,7 @@ struct cstaryystype {
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
 %type <constructordeclarator> constructor_declarator
 %type <constructorinitializer> constructor_initializer_opt constructor_initializer
+%type <string> const_opt
 
 %start compilation_unit
 
@@ -845,8 +846,16 @@ field_declaration
   : modifiers_opt type variable_declarators SEMICOLON   { $$ = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
   ;
 method_declaration
-  : modifiers_opt FN type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { $$ = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); }
-  | modifiers_opt FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { $$ = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); }
+  : modifiers_opt const_opt FN type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
+  | modifiers_opt const_opt FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
+  ;
+
+/* `const fn …` — an optional const qualifier on a method (M24b). A dedicated slot
+   (not a general modifier) so it can't collide with the const-field / const-local
+   declaration forms that also begin with CONST. */
+const_opt
+  : /* Nothing */   { $$ = SharedString(); }
+  | CONST           { $$ = $1; }
   ;
 method_body
   : block

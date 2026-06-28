@@ -1153,6 +1153,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.returnType = md->returnType;
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
+                        mi.isConst    = md->isConst;   // `const fn …` (M24b)
                         if (md->modifiers)
                             for (auto& mod : *md->modifiers) {
                                 if (!mod->value) continue;
@@ -1796,10 +1797,11 @@ bool CEmitter::sigMatches(const SigInfo& sig, const FuncSig& fn) const
 }
 
 // M24a: the root identifier a write ultimately targets, for deep-const checks.
-// `x` -> "x";  `x.f`, `x[i]`, `x.f.g` -> "x";  a non-binding target -> "".
+// `x` -> "x";  `x.f`, `x[i]`, `x.f.g` -> "x";  `this`/`this.f` -> "this";  else "".
 std::string CEmitter::rootBinding(SharedExpression e) const
 {
     ASTNode* n = e.get();
+    if (dynamic_cast<ThisAccessNode*>(n)) return "this";
     if (auto* id = dynamic_cast<IdentifierNode*>(n))
         return (id->value && (!id->qualifier || id->qualifier->empty())) ? *id->value : "";
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n))
@@ -1811,15 +1813,34 @@ std::string CEmitter::rootBinding(SharedExpression e) const
     return "";
 }
 
+// M24a/b: is a write/call root `const`? A const local/param, `this` inside a const
+// method (recorded as "this" in _constLocals), or — in a const method — a bare field
+// of the current class (a write to `f` is really `self->f`).
+bool CEmitter::rootIsConst(const std::string& root) const
+{
+    if (root.empty()) return false;
+    if (_constLocals.count(root)) return true;
+    if (_constLocals.count("this") && _currentClass && !_localTypes.count(root)
+        && const_cast<CEmitter*>(this)->findFieldOwner(_currentClass, root))
+        return true;
+    return false;
+}
+
 // M24a: writing TO or THROUGH a `const` binding is a hard error. Deep const, so
 // `c.field = …` and `c[i] = …` are caught too — not just a bare reassignment.
 void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
 {
     if (!target) return;
     std::string root = rootBinding(target);
-    if (!root.empty() && _constLocals.count(root))
+    if (rootIsConst(root))
         unsupported(("cannot write to `const " + root + "` (const is deep — neither the "
                      "binding nor anything reached through it may be mutated)").c_str(), srcLine);
+}
+
+// M24b: a non-const method may not be invoked on a const receiver (it could mutate).
+bool CEmitter::isConstReceiver(SharedExpression receiver) const
+{
+    return receiver && rootIsConst(rootBinding(receiver));
 }
 
 // M21: bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
@@ -2353,11 +2374,12 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
 // Emit a method or constructor body with `self`/field/param context set up.
 void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retType,
                                     SharedParameterList params, SharedBlock body,
-                                    ClassInfo& owner, bool isCtor)
+                                    ClassInfo& owner, bool isCtor, bool isConstMethod)
 {
     _currentClass = &owner;
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear();
+    if (isConstMethod) _constLocals.insert("this");   // M24b: `this` is immutable (deep)
     _currentReturnCType = retType;
     _tempCounter = 0;
     _scopes.clear();
@@ -2436,7 +2458,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         if (mi.isAbstract) continue;   // pure: no body to emit
         line(mi.node->line);
         std::string ret = cType(mi.returnType);
-        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false);
+        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false, mi.isConst);
     }
     if (ci.destructible)
         emitDtorDefinition(ci);
@@ -2542,6 +2564,16 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
     SharedExpression receiver = recv->expression;
     std::string cls = exprClass(receiver);
+    // M24b: a non-const method may not be called on a const receiver (deep const).
+    // The method lives on the pointee for a smart-pointer receiver (auto-deref).
+    if (isConstReceiver(receiver)) {
+        std::string mcls = isSmartPtrClass(cls) ? _classes[cls].collElemClass : cls;
+        ClassInfo* owner = nullptr;
+        MethodInfo* mi = _classes.count(mcls) ? findMethod(&_classes[mcls], method, &owner) : nullptr;
+        if (mi && !mi->isConst && !mi->isIntrinsic)
+            unsupported(("cannot call non-const method `" + method + "` on a const receiver "
+                         "(declare it `const fn` if it does not mutate)").c_str(), call->line);
+    }
     // Smart-pointer receiver: an intrinsic (lock/expired/valid) or auto-deref to T.
     if (isSmartPtrClass(cls))
         return emitSmartPtrCall(cls, emitExpression(receiver), method, call->args, call->line);

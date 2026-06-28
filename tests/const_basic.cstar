@@ -5,7 +5,7 @@
 class Box {
     int32 v;
     Box(int32 v) { this.v = v; }
-    fn int32 get() { return this.v; }
+    const fn int32 get() { return this.v; }   // read-only -> callable on a const receiver
 }
 fn int32 main() {
     const int32 BASE = 30;

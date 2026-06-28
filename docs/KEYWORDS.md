@@ -32,7 +32,7 @@ Status of all **59 reserved keywords**, established by exercising each through `
 | `friend` | 🔒 | `friend(list)` parses, but enforces nothing (access control itself is unenforced) |
 | `abstract` | 🔒 | method dispatch works, but instantiating an abstract class (`new AbstractType()`) is **not prevented** |
 | `final` | 🔒 | **not enforced** — `extends` a `final` class and `override` of a `final` method are both allowed |
-| `const` | 🚧 | **const locals work (M24a)** — `const int32 x = 5;` is immutable (deep): no reassignment, no write *through* it (`c.f =`, `c[i] =`), no `++`/`--`. const **fields/params/methods** + `const T*` land in M24b |
+| `const` | 🚧 | **const locals (M24a) + const methods (M24b)** work. A `const` local is deeply immutable (no reassign, no write *through* it, no `++`/`--`); a `const fn` method is non-mutating (`this` is const inside it) and is the *only* kind callable on a const receiver. const **params/fields** + `const T*` (FFI) land in M24c/M24d |
 
 ## Bugs found
 

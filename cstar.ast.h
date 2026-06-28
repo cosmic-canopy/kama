@@ -650,6 +650,7 @@ public:
     SharedIdentifier name;
     SharedParameterList params;
     SharedBlock body;
+    bool isConst = false;   // `const fn …` — a non-mutating method (M24b)
     ClassMethodDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
             SharedIdentifier returnType,
             SharedIdentifier name,

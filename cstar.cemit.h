@@ -51,6 +51,7 @@ struct MethodInfo {
     bool                         isOverride = false;
     bool                         isAbstract = false;  // null body
     bool                         isIntrinsic = false; // collection op: body is in cstar_runtime.h, not AST
+    bool                         isConst = false;     // `const fn …` — non-mutating (M24b)
 };
 
 // A built-in generic collection / smart-pointer kind (M9/M10). Backed by a C
@@ -283,7 +284,7 @@ private:
     void emitClassDefinitions(ClassInfo& ci);
     void emitMethodOrCtorBody(const std::string& cName, const char* retType,
                               SharedParameterList params, SharedBlock body,
-                              ClassInfo& owner, bool isCtor);
+                              ClassInfo& owner, bool isCtor, bool isConstMethod = false);
     std::string emitMemberAccess(MemberAccessNode* ma);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     // Dispatch a call on a receiver of static class `clsName`, given the C pointer
@@ -315,7 +316,9 @@ private:
     // M24a — const-correctness (deep): a const binding is immutable.
     std::set<std::string> _constLocals;                       // const local names in scope
     std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
+    bool        rootIsConst(const std::string& root) const;   // const local/param/this/field
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
+    bool        isConstReceiver(SharedExpression receiver) const;       // const-call restriction (M24b)
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);  // M21
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
     // BindableFunctionPtr<Sig> (M22) — construct/promote/invoke a bindable callable.
