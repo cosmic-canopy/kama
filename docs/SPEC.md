@@ -209,9 +209,30 @@ DotFn d = Vec2::dot;            // unbound (`::` = no instance, no binding) — 
 int32 n = d(self: ref u, o: ref v);
 ```
 
-*Capturing* an object so you don't pass it each call (`obj.method` bound, with RAII) is
-`BindableFunctionPtr<Sig>` (a later milestone — the generic `<>` wrapper appears only where it adds an
-object; the zero-cost free/unbound pointer is the bare `fnptr` type).
+**`BindableFunctionPtr<Sig>`** — a callable that *captures* a receiver so you don't pass it each call. Unlike
+the zero-cost `fnptr`, it carries an object (opt-in cost) and is **RAII-managed**. It's constructed like any
+other object, and **the ownership model follows the pointer type you hand in** — no separate keyword:
+
+```cstar
+fnptr int32 Compare(int32 a, int32 b);   // NB: receiver is HIDDEN here (the inverse of an unbound fnptr)
+class Scaler { int32 k; Scaler(int32 k){ this.k = k; }
+               fn int32 apply(int32 a, int32 b){ return (a - b) * this.k; } }
+
+Owned<Scaler>  s  = new Scaler(k: 3);     // (constructed as Owned)
+BindableFunctionPtr<Compare> c  = new BindableFunctionPtr<Compare>(obj: s,  method: Scaler::apply);  // MOVE-in (sole owner)
+Shared<Scaler> s2 = new Scaler(k: 2);
+BindableFunctionPtr<Compare> c2 = new BindableFunctionPtr<Compare>(obj: s2, method: Scaler::apply);  // RETAIN (shared owner)
+BindableFunctionPtr<Compare> c3 = sub;   // free-function PROMOTION (no object) — so this type "accepts either"
+
+int32 r = c(a: 9, b: 2);                 // -> Scaler::apply(boundObj, 9, 2) = (9-2)*3 = 21
+```
+
+An `Owned` `obj:` **moves in** (the bindable becomes the sole owner, drops it via the element dtor); a
+`Shared` `obj:` is **retained** (refcount; the object lives while any owner holds it). A bare `fnptr` /
+free function **promotes** in with a null object — so a `BindableFunctionPtr<Sig>` parameter accepts both
+free and bound callables, while `fnptr` stays the zero-cost free-only form. It is **move-only** (it may
+uniquely own its object): returning one from a factory transfers ownership; the captured object's
+destructor runs **exactly once** when the bindable finally drops.
 
 **FFI**: an `extern fn` may take an `fnptr` type as a param; passing it hands C the raw pointer. When the C
 callback type is one cstar can't yet spell exactly — most commonly a `const`-qualified pointer (cstar has
@@ -227,7 +248,7 @@ Comparator c = cmp;
 qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // cast for const, drops in M24
 ```
 
-🚧 next: `Type::method` unbound refs + `BindableFunctionPtr`; then math types → cstar-level WebGPU bindings.
+🚧 next: full user-defined generics (`Map<K,V>`, `>>`); then math types → cstar-level WebGPU bindings.
 
 ## Control flow ✅
 

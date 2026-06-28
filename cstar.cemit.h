@@ -55,7 +55,7 @@ struct MethodInfo {
 
 // A built-in generic collection / smart-pointer kind (M9/M10). Backed by a C
 // runtime template. Owned<T> (M10) is a 4th kind: a unique heap-owning pointer.
-enum class CollKind { Array, List, String, Owned, Shared, Weak };
+enum class CollKind { Array, List, String, Owned, Shared, Weak, Bindable };
 
 // Per-file namespace context (M14). A file with `namespace X;` is public (scope
 // = mangled X); a file without one is private (scope = "_F<idx>"). Bare names
@@ -223,6 +223,7 @@ private:
     std::string mangleElem(SharedIdentifier elem);
     void registerCollection(SharedIdentifier collType);
     void registerSmartPtr(CollKind kind, SharedIdentifier elem);   // Owned/Shared/Weak (M10-12)
+    void registerBindable(SharedIdentifier elem);                  // BindableFunctionPtr<Sig> (M22)
     void emitCollectionDefs();   // pass C: the CSTAR_*_DEFINE(...) macro lines
     // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
@@ -232,6 +233,7 @@ private:
     // rewrite `cls` -> pointee T and `recvExpr` -> "(recv).ptr" (a T*) (auto-deref).
     bool derefSmartPtr(std::string& cls, std::string& recvExpr);
     bool isSmartPtrClass(const std::string& cls) const;  // Owned_T or Shared_T
+    bool isBindableClass(const std::string& cls) const;  // BindableFunctionPtr_Sig (M22)
     CollKind smartKind(const std::string& cls) const;    // Owned/Shared (precond: isSmartPtrClass)
     bool isSmartPtrExpr(SharedExpression e);             // e's static class is a smart pointer
     bool isSmartPtrLValue(SharedExpression e);           // e is a bare identifier of smart-ptr type
@@ -312,6 +314,13 @@ private:
     std::string emitInvocation(InvocationNode* call);
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);  // M21
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
+    // BindableFunctionPtr<Sig> (M22) — construct/promote/invoke a bindable callable.
+    void        emitBindableNew(const std::string& nm, const std::string& octy,
+                                ObjectCreationNode* oc, int depth);
+    void        emitBindablePromote(const std::string& nm, const std::string& ty,
+                                    SharedExpression init, int depth);
+    std::string emitBindableInvoke(const std::string& recv, const std::string& cls,
+                                   SharedArgumentList args, int line);
     // Emit `cName(leadArg, <args reordered to params>)`. leadArg "" omits self.
     std::string emitReorderedCall(const std::string& cName, const std::string& leadArg,
                                   const std::vector<ParamSig>& params, SharedArgumentList args, int srcLine);

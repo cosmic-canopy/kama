@@ -88,6 +88,29 @@ static inline SHARED_NAME NAME##__lock(NAME* self) {                          \
     return s;                                                                 \
 }
 
+// BindableFunctionPtr<Sig> (M22) — a callable that optionally OWNS its bound
+// receiver (RAII). Fully type-erased, so one definition serves every signature:
+//   obj      — the bound receiver (NULL => a free function, no object)
+//   ctrl     — refcount block, set only when the object was bound from a Shared<T>
+//   fn       — the callable, stored type-erased; invoked as ret(void*,P…) when
+//              obj!=NULL (a bound method, object passed first) else ret(P…) (free)
+//   elemdtor — the bound object's destructor (NULL if trivially destructible/free)
+// Move-only (it may uniquely own the object). Drop releases per ownership kind.
+#define CSTAR_BINDABLE_DEFINE(NAME)                                            \
+typedef struct NAME { void* obj; cstar_ctrl* ctrl;                            \
+                      void (*fn)(void); void (*elemdtor)(void*); } NAME;       \
+static inline void NAME##__dtor(NAME* self) {                                 \
+    if (self->ctrl) {                          /* Shared: refcount */         \
+        if (--self->ctrl->strong == 0) {                                      \
+            if (self->elemdtor) self->elemdtor(self->obj); cstar_free(self->obj); \
+            if (self->ctrl->weak == 0) cstar_free(self->ctrl);                \
+        }                                                                     \
+    } else if (self->obj) {                    /* Owned: sole owner */        \
+        if (self->elemdtor) self->elemdtor(self->obj); cstar_free(self->obj); \
+    }                                          /* free fn: nothing to drop */ \
+    self->obj = NULL; self->ctrl = NULL; self->fn = NULL; self->elemdtor = NULL; \
+}
+
 // Bounds-check trap: a clean panic (not undefined behavior) on out-of-range.
 // Formats its own message and writes to stderr (fd 2) so it needs no <stdio.h>.
 static inline void cstar_u64_to_buf(char* buf, size_t* p, size_t v) {

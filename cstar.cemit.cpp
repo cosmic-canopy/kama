@@ -173,7 +173,7 @@ std::string CEmitter::cType(SharedIdentifier type)
     // Shared<Tex> -> Shared_Tex (M11); Weak<Tex> -> Weak_Tex (M12).
     if (type->genericArg && type->value &&
         (*type->value == "Array" || *type->value == "List" || *type->value == "Owned" ||
-         *type->value == "Shared" || *type->value == "Weak"))
+         *type->value == "Shared" || *type->value == "Weak" || *type->value == "BindableFunctionPtr"))
         return *type->value + "_" + mangleElem(type->genericArg);
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "int8_t";
@@ -627,6 +627,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             *_out << nm << ".ctrl = cstar_ctrl_new();\n";
                         }
                         // T with no ctor: malloc leaves it default (callers init fields).
+                    } else if (isBindableClass(octy)) {
+                        emitBindableNew(nm, octy, oc, depth);   // bind obj + method (M22)
                     } else if (isClass(octy) && _classes[octy].hasCtor) {
                         line(n->line); indent(depth);
                         *_out << emitCtorCall(nm, _classes[octy], oc->args, n->line) << ";\n";
@@ -642,6 +644,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     std::string src = emitExpression(d->initializer);
                     *_out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
                     indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->weak++;\n";
+                } else if (isBindableClass(ty)) {
+                    // BindableFunctionPtr <- free function (promote) or another bindable (move).
+                    line(n->line);
+                    emitBindablePromote(nm, ty, d->initializer, depth);
                 } else {
                     // Copy-initialize from another expression.
                     line(n->line); indent(depth);
@@ -679,6 +685,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 indent(depth);
                 *_out << smartPtrInvalidate(emitExpression(ret->expression),
                                            smartKind(exprClass(ret->expression))) << "\n";
+            }
+            // Same move-out for a returned BindableFunctionPtr (M22): it may own its
+            // bound object, so the scope dtor must NOT drop what the caller now owns.
+            else if (auto* rid = dynamic_cast<IdentifierNode*>(ret->expression.get())) {
+                if (rid->value && isBindableClass(exprClass(ret->expression))) {
+                    std::string e = emitExpression(ret->expression);
+                    indent(depth);
+                    *_out << "(" << e << ").obj = NULL; (" << e << ").ctrl = NULL; ("
+                          << e << ").fn = NULL; (" << e << ").elemdtor = NULL;\n";
+                }
             }
             emitUnwindAll(depth);
             indent(depth); *_out << "return " << tmp << ";\n";
@@ -1179,7 +1195,7 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
     if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string / String
     return t->genericArg && t->value &&
            (*t->value == "Array" || *t->value == "List" || *t->value == "Owned" ||
-            *t->value == "Shared" || *t->value == "Weak");
+            *t->value == "Shared" || *t->value == "Weak" || *t->value == "BindableFunctionPtr");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -1202,6 +1218,12 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     std::string elemCType  = isStr ? "" : cType(elem);
     std::string elemMangle = isStr ? "" : mangleElem(elem);
     std::string elemClass  = (!isStr && isClass(elemCType)) ? elemCType : "";
+
+    // BindableFunctionPtr<Sig> (M22) — element is a function SIGNATURE, not a class.
+    if (!isStr && collType->value && *collType->value == "BindableFunctionPtr") {
+        registerBindable(elem);
+        return;
+    }
 
     // Smart pointers (Owned/Shared/Weak) — registered via the shared helper.
     if (isSmart) {
@@ -1295,6 +1317,40 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
     if (kind == CollKind::Shared) addM("valid", {});
     if (kind == CollKind::Weak) { addM("lock", {}); addM("expired", {}); }
     _classes[cName] = ci;
+}
+
+// Register a BindableFunctionPtr<Sig> (M22) — a callable that may own a bound
+// receiver. Element is a signature type (from `fnptr`), not a class. Backed by the
+// fully type-erased CSTAR_BINDABLE_DEFINE struct; the sig drives only the invoke.
+void CEmitter::registerBindable(SharedIdentifier elem)
+{
+    std::string sigCName = cType(elem);
+    if (!isSigType(sigCName)) {
+        unsupported("BindableFunctionPtr<Sig> requires a function-signature type (declared with `fnptr`)",
+                    elem ? elem->line : 0);
+        return;
+    }
+    std::string cName = "BindableFunctionPtr_" + mangleElem(elem);
+    if (_collections.count(cName)) return;            // dedup
+
+    CollectionInfo info;
+    info.kind = CollKind::Bindable; info.cName = cName;
+    info.elemCType = sigCName; info.elemMangle = mangleElem(elem); info.elemClass = "";
+    info.elemDestructible = false;
+    _collections[cName] = info;
+
+    ClassInfo ci;
+    ci.name = cName; ci.isCollection = true; ci.collKind = CollKind::Bindable;
+    ci.collElemClass = sigCName;       // reused at invoke: the bound signature's cName
+    ci.destructible = true;            // owns heap (when bound) -> RAII drop
+    ci.hasCtor = false;                // constructed via the dedicated bind path, not a ctor
+    _classes[cName] = ci;
+}
+
+bool CEmitter::isBindableClass(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.isCollection && it->second.collKind == CollKind::Bindable;
 }
 
 void CEmitter::scanTypeForCollections(SharedIdentifier t)
@@ -1429,6 +1485,9 @@ void CEmitter::emitCollectionDefs()
             // lock() returns the matching Shared (emitted earlier — map order Shared_ < Weak_).
             *_out << "CSTAR_WEAK_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", Shared_" << info.elemMangle << ")\n";
+        } else if (info.kind == CollKind::Bindable) {
+            // Fully type-erased — the signature drives only the invoke, not the layout.
+            *_out << "CSTAR_BINDABLE_DEFINE(" << info.cName << ")\n";
         }
     }
     if (!_collections.empty()) *_out << "\n";
@@ -1758,6 +1817,123 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
     return "0";
 }
 
+// M22: `new BindableFunctionPtr<Sig>(obj: x, method: T::m)` — bind an object + a
+// method. Ownership follows x's pointer type: Owned MOVES in (sole owner), Shared
+// RETAINS (shared owner). The receiver is hidden, so Sig excludes it.
+void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
+                               ObjectCreationNode* oc, int depth)
+{
+    int ln = oc->type ? oc->type->line : 0;
+    const std::string& sigCName = _classes[octy].collElemClass;
+
+    SharedExpression objArg, methodArg;
+    if (oc->args)
+        for (auto& a : *oc->args) {
+            if (!a || !a->name || !a->name->value) continue;
+            if (*a->name->value == "obj")    objArg = a->expression;
+            else if (*a->name->value == "method") methodArg = a->expression;
+        }
+    if (!objArg || !methodArg) {
+        unsupported("BindableFunctionPtr needs obj: <Owned/Shared> and method: <Type::method>", ln); return;
+    }
+
+    // The object: a smart-pointer lvalue (Owned/Shared, not Weak).
+    std::string objCls = exprClass(objArg);
+    if (!isSmartPtrClass(objCls) || smartKind(objCls) == CollKind::Weak) {
+        unsupported("BindableFunctionPtr obj: must be an Owned<T> or Shared<T>", ln); return;
+    }
+    CollKind ok = smartKind(objCls);
+    std::string T = _classes[objCls].collElemClass;
+    std::string objE = emitExpression(objArg);
+
+    // The method: a `Type::method` unbound reference.
+    auto* mid = dynamic_cast<IdentifierNode*>(methodArg.get());
+    if (!mid || !mid->value || !mid->qualifier || mid->qualifier->empty()) {
+        unsupported("BindableFunctionPtr method: must be a `Type::method` reference", ln); return;
+    }
+    auto prefix = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < mid->qualifier->size(); ++i) prefix->push_back((*mid->qualifier)[i]);
+    std::string cls = resolveUserName(*mid->qualifier->back(), prefix);
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = _classes.count(cls) ? findMethod(&_classes[cls], *mid->value, &owner) : nullptr;
+    if (!mi) { unsupported("unknown method in BindableFunctionPtr method:", ln); return; }
+    if (cls != T) {
+        unsupported("BindableFunctionPtr obj: type does not match the method's class", ln); return;
+    }
+
+    // Signature check: the method's params + return (receiver HIDDEN) must equal Sig.
+    FuncSig stripped;
+    stripped.cName = mi->cName; stripped.retCType = cType(mi->returnType); stripped.params = mi->params;
+    if (!sigMatches(_sigs.at(sigCName), stripped))
+        unsupported("the method does not match the BindableFunctionPtr signature (the receiver is hidden)", ln);
+
+    bool destr = _classes.count(T) && _classes[T].destructible;
+    indent(depth); *_out << nm << ".obj = (void*)(" << objE << ").ptr;\n";
+    if (ok == CollKind::Shared) { indent(depth); *_out << nm << ".ctrl = (" << objE << ").ctrl;\n"; }
+    indent(depth); *_out << nm << ".fn = (void (*)(void))" << mi->cName << ";\n";
+    indent(depth); *_out << nm << ".elemdtor = "
+                         << (destr ? ("(void (*)(void*))" + T + "__dtor") : "0") << ";\n";
+    // Ownership transfer: Owned MOVES (invalidate the source); Shared RETAINS.
+    if (ok == CollKind::Owned) { indent(depth); *_out << "(" << objE << ").ptr = NULL;\n"; }
+    else { indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->strong++;\n"; }
+}
+
+// M22: `BindableFunctionPtr<Sig> b = <free fn | another bindable>;` — promote a free
+// function (no object) or MOVE another bindable.
+void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
+                                   SharedExpression init, int depth)
+{
+    const std::string& sigCName = _classes[ty].collElemClass;
+
+    if (auto* id = dynamic_cast<IdentifierNode*>(init.get())) {
+        if (id->value) {
+            // Another BindableFunctionPtr lvalue -> move (copy + invalidate the source).
+            if (isBindableClass(exprClass(init))) {
+                std::string src = emitExpression(init);
+                indent(depth); *_out << nm << " = " << src << ";\n";
+                indent(depth);
+                *_out << "(" << src << ").obj = NULL; (" << src << ").ctrl = NULL; ("
+                      << src << ").fn = NULL; (" << src << ").elemdtor = NULL;\n";
+                return;
+            }
+            // A free function -> promote (obj = NULL; no RAII).
+            auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
+            if (fit != _funcs.end()) {
+                if (!sigMatches(_sigs.at(sigCName), fit->second))
+                    unsupported("function does not match the BindableFunctionPtr signature", init->line);
+                indent(depth);
+                *_out << nm << ".obj = NULL; " << nm << ".ctrl = NULL; " << nm << ".fn = (void (*)(void))"
+                      << fit->second.cName << "; " << nm << ".elemdtor = NULL;\n";
+                return;
+            }
+            unsupported("a BindableFunctionPtr binds via `new BindableFunctionPtr<Sig>(obj:, method:)`, "
+                        "a free function, or another BindableFunctionPtr", init->line);
+            return;
+        }
+    }
+    // A bindable-valued rvalue (e.g. a factory call) is already moved out — plain copy.
+    std::string src = emitExpression(init);
+    indent(depth); *_out << nm << " = " << src << ";\n";
+}
+
+// M22: invoke a bindable — branch on obj (bound: pass it first; free: call directly).
+// The signature drives the fn-pointer casts and the named-arg reorder.
+std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::string& cls,
+                                         SharedArgumentList args, int line)
+{
+    const SigInfo& sig = _sigs.at(_classes[cls].collElemClass);
+    std::string plist;
+    for (size_t i = 0; i < sig.params.size(); ++i)
+        plist += (i ? ", " : "") + sig.params[i].className + (sig.params[i].byRef ? "*" : "");
+    std::string boundT = sig.retCType + " (*)(void*" + (sig.params.empty() ? "" : ", " + plist) + ")";
+    std::string freeT  = sig.retCType + " (*)(" + (sig.params.empty() ? std::string("void") : plist) + ")";
+    std::string boundCall = emitReorderedCall("((" + boundT + ")" + recv + ".fn)", recv + ".obj",
+                                              sig.params, args, line);
+    std::string freeCall  = emitReorderedCall("((" + freeT + ")" + recv + ".fn)", "",
+                                              sig.params, args, line);
+    return "(" + recv + ".obj ? " + boundCall + " : " + freeCall + ")";
+}
+
 // Lower a call, reordering named arguments to the callee's declared order.
 std::string CEmitter::emitInvocation(InvocationNode* call)
 {
@@ -1792,6 +1968,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         const SigInfo& sig = _sigs.at(_localTypes[name]);
         std::string callee = _refParams.count(name) ? ("(*" + name + ")") : name;
         return emitReorderedCall(callee, "", sig.params, call->args, call->line);
+    }
+
+    // BindableFunctionPtr invoke (M22): a bare local of bindable type → branch on the
+    // bound object (call the method with it, or the free fn directly).
+    if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
+        && _localTypes.count(name) && isBindableClass(_localTypes[name])) {
+        return emitBindableInvoke(name, _localTypes[name], call->args, call->line);
     }
 
     // FFI (M16): `addr(x)` is a builtin — the address of a local/value (`&(x)`),

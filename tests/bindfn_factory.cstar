@@ -1,0 +1,17 @@
+// M22: a bindable returned from a factory MOVES out to the caller (the local must
+// not also drop the object it just transferred).
+fnptr int32 Get(int32 d);
+class Probe {
+    int32 id;
+    Probe(int32 id) { this.id = id; }
+    fn int32 read(int32 d) { return this.id + d; }
+}
+fn BindableFunctionPtr<Get> make(int32 id) {
+    Owned<Probe> p = new Owned<Probe>(id: id);
+    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    return g;
+}
+fn int32 main() {
+    BindableFunctionPtr<Get> g = make(id: 1);
+    return g(d: 41);                                 // 1 + 41 = 42
+}

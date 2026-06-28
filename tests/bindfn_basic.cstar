@@ -1,0 +1,16 @@
+// M22: BindableFunctionPtr<Sig> — bind an object+method (Owned moves in) and invoke
+// through the captured receiver; a free function promotes into the same type
+// (null object, no capture). Receiver is HIDDEN in the signature.
+fnptr int32 Compare(int32 a, int32 b);
+class Scaler {
+    int32 k;
+    Scaler(int32 k) { this.k = k; }
+    fn int32 apply(int32 a, int32 b) { return (a - b) * this.k; }
+}
+fn int32 sub(int32 a, int32 b) { return a - b; }
+fn int32 main() {
+    Owned<Scaler> s = new Owned<Scaler>(k: 3);
+    BindableFunctionPtr<Compare> c = new BindableFunctionPtr<Compare>(obj: s, method: Scaler::apply);
+    BindableFunctionPtr<Compare> f = sub;            // free-fn promotion
+    return c(a: 9, b: 2) + f(a: 30, b: 9);           // (9-2)*3 + (30-9) = 21 + 21 = 42
+}
