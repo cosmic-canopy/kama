@@ -27,6 +27,7 @@
   #endif
 #else
   #include <unistd.h>
+  #include <sys/wait.h>         // WEXITSTATUS
 #endif
 
 #include "cstar.parser.hpp"
@@ -188,7 +189,12 @@ int transpileProgram(const std::vector<std::string>& inputs,
 int runCmd(const std::string& cmd)
 {
     int rc = system(cmd.c_str());
-    return (rc == -1) ? 1 : WEXITSTATUS(rc);
+    if (rc == -1) return 1;
+#if defined(_WIN32)
+    return rc;                 // Windows: system() returns the child's exit code directly
+#else
+    return WEXITSTATUS(rc);    // POSIX: extract it from the wait status (<sys/wait.h>)
+#endif
 }
 
 void usage()
