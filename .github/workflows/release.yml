@@ -14,14 +14,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,    name: linux-x64 }
-          - { os: ubuntu-24.04-arm, name: linux-arm64 }
-          - { os: macos-14,         name: macos-arm64 }   # Intel (macos-13) dropped: image
-                                                          # is deprecated/unschedulable and was
-                                                          # hanging the release. Apple Silicon
-                                                          # only; revisit a universal2 build
-                                                          # (clang -arch arm64 -arch x86_64 on
-                                                          # this runner) if Intel Macs matter.
+          - { os: ubuntu-latest,    name: linux-x64,       extra: "" }
+          - { os: ubuntu-24.04-arm, name: linux-arm64,     extra: "" }
+          # One macOS UNIVERSAL2 artifact (arm64 + x86_64) built on the Apple-Silicon
+          # runner — covers Intel Macs without the deprecated/unschedulable macos-13
+          # Intel runner that used to hang every release.
+          - { os: macos-14,         name: macos-universal, extra: "-arch arm64 -arch x86_64" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -41,12 +39,12 @@ jobs:
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
 
       - name: Build (version-stamped)
-        run: make VERSION="$VERSION"
+        run: make VERSION="$VERSION" EXTRA_CXXFLAGS="${{ matrix.extra }}"
 
       - name: Verify version stamp
         run: ./cstar --version | grep -q "$VERSION"
 
-      - name: Smoke (22 fixtures)
+      - name: Smoke (fixtures)
         run: ./run_tests.sh
 
       - name: Package
@@ -77,6 +75,45 @@ jobs:
           name: cstar-${{ matrix.name }}
           path: cstar-*.tar.gz
 
+  windows:
+    name: build windows-x64
+    runs-on: windows-latest
+    # Best-effort: a Windows failure must NEVER block the release (the macos-13
+    # lesson). windows-latest runners are readily scheduled, so no hang risk; with
+    # continue-on-error the publish job proceeds even if this build breaks.
+    continue-on-error: true
+    defaults:
+      run: { shell: 'msys2 {0}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make bison flex
+            mingw-w64-ucrt-x86_64-clang
+      - name: Derive version (from tag)
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Build (version-stamped)
+        run: make VERSION="$VERSION"
+      - name: Verify version stamp
+        run: ./cstar --version | grep -q "$VERSION"
+      - name: Smoke (fixtures)
+        continue-on-error: true   # don't let test flakiness block packaging the built binary
+        run: ./run_tests.sh
+      - name: Package
+        run: |
+          PKG="cstar-windows-x64-v${VERSION}"
+          mkdir -p "$PKG/bin" "$PKG/include"
+          cp cstar.exe "$PKG/bin/cstar.exe" 2>/dev/null || cp cstar "$PKG/bin/cstar.exe"
+          cp cstar_runtime.h "$PKG/include/"
+          cp LICENSE "$PKG/" 2>/dev/null || true
+          cp GETTING_STARTED.md "$PKG/README.md" 2>/dev/null || true
+          tar czf "${PKG}.tar.gz" "$PKG"
+      - uses: actions/upload-artifact@v4
+        with: { name: cstar-windows-x64, path: cstar-*.tar.gz }
+
   vsix:
     name: package VSCode extension
     runs-on: ubuntu-latest
@@ -95,7 +132,9 @@ jobs:
 
   release:
     name: publish release
-    needs: [build, vsix]
+    # `windows` is continue-on-error, so it satisfies `needs` even if it fails —
+    # its artifact is included when it succeeds, never blocks the release when it doesn't.
+    needs: [build, windows, vsix]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

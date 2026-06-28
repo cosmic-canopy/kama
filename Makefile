@@ -5,6 +5,9 @@ VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0-dev)
 
 CXX      = clang++
 CXXFLAGS = -std=c++14 -g -Wall -Wno-deprecated-register -DCSTAR_VERSION='"$(VERSION)"'
+# Appended to both compile and link (the link rule reuses CXXFLAGS). CI sets this to
+# build a macOS universal binary: EXTRA_CXXFLAGS="-arch arm64 -arch x86_64".
+CXXFLAGS += $(EXTRA_CXXFLAGS)
 
 # All build artifacts live under build/ (objects + generated parser/lexer), so
 # the repo root stays sources-only and host(mach-o)/container(ELF) objects can't
