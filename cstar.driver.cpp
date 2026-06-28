@@ -311,7 +311,11 @@ int main(int argc, char** argv)
         }
 
         std::ostringstream cmd;
-        cmd << compiler << " -std=c11 ";
+        // Promote two silent-UB classes to hard errors (the front end has no return-path
+        // / definite-assignment analysis yet): a non-void function that falls off the end,
+        // and a read of an uninitialized local. The #line directives map these back to the
+        // .cstar source. (Audit Step 2 — "no silent surprises".)
+        cmd << compiler << " -std=c11 -Werror=return-type -Werror=uninitialized ";
         if (release) {
             // Optimized, no debug info, asserts off. -ffunction/data-sections +
             // --gc-sections let the linker drop unused (std)library code — the

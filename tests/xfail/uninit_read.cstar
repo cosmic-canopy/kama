@@ -1,0 +1,2 @@
+// Reading an uninitialized local must be rejected (was: silent garbage).
+fn int main() { int32 x; return x; }

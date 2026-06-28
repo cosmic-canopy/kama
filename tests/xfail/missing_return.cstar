@@ -1,0 +1,3 @@
+// A non-void function that falls off the end must be rejected (was: garbage exit code).
+fn int32 compute(int32 a) { int32 y = a + 1; }
+fn int main() { return compute(a: 41); }
