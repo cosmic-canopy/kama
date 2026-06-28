@@ -871,21 +871,28 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             std::string ty  = exprClass(as->unaryExpression);      // Owned_T / Shared_T / Weak_T
             CollKind    knd = smartKind(ty);
             SharedExpression rhs = as->expression;
+            bool rhsLval = isSmartPtrLValue(rhs);
+            std::string src = emitExpression(rhs);                  // evaluate the RHS once
             line(n->line);
-            indent(depth); *_out << ty << "__dtor(&" << b << ");\n";       // release b's old
-            if (knd == CollKind::Weak && isSmartPtrLValue(rhs) && exprClass(rhs) != ty) {
+            // Step 4: self-assignment (`a = a`) would release a's pointee, then "copy" it
+            // back onto the freed memory -> use-after-free. When the RHS is an lvalue, guard
+            // the whole release-and-reseat with an address check (a no-op for `a = a`).
+            int d2 = depth;
+            if (rhsLval) { indent(depth); *_out << "if (&" << b << " != &(" << src << ")) {\n"; d2 = depth + 1; }
+            indent(d2); *_out << ty << "__dtor(&" << b << ");\n";   // release b's old
+            if (knd == CollKind::Weak && rhsLval && exprClass(rhs) != ty) {
                 // Shared->Weak reseat: field-copy + weak retain.
-                std::string src = emitExpression(rhs);
-                indent(depth); *_out << b << ".ptr = (" << src << ").ptr; " << b << ".ctrl = (" << src << ").ctrl;\n";
-                indent(depth); *_out << "if (" << b << ".ctrl) " << b << ".ctrl->weak++;\n";
+                indent(d2); *_out << b << ".ptr = (" << src << ").ptr; " << b << ".ctrl = (" << src << ").ctrl;\n";
+                indent(d2); *_out << "if (" << b << ".ctrl) " << b << ".ctrl->weak++;\n";
             } else {
-                indent(depth); *_out << b << " = " << emitExpression(rhs) << ";\n";
-                if (isSmartPtrLValue(rhs)) {                              // copy from a local
-                    indent(depth);
-                    if (knd == CollKind::Owned) *_out << smartPtrInvalidate(emitExpression(rhs), knd) << "\n";
+                indent(d2); *_out << b << " = " << src << ";\n";
+                if (rhsLval) {                                       // copy from a local
+                    indent(d2);
+                    if (knd == CollKind::Owned) *_out << smartPtrInvalidate(src, knd) << "\n";
                     else *_out << b << ".ctrl->" << (knd == CollKind::Weak ? "weak" : "strong") << "++;\n";
                 }
             }
+            if (rhsLval) { indent(depth); *_out << "}\n"; }
             return;
         }
     }
