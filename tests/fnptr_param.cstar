@@ -1,0 +1,8 @@
+// M21: pass an `fnptr` to a function and invoke it (the core callback shape).
+fnptr int32 Op(int32 x);
+fn int32 inc(int32 x) { return x + 1; }
+fn int32 twice(int32 x) { return x * 2; }
+fn int32 apply(Op op, int32 x) { return op(x: x); }   // invoke an fnptr PARAMETER
+fn int32 main() {
+    return apply(op: inc, x: 19) + apply(op: twice, x: 11);   // 20 + 22 = 42
+}

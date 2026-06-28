@@ -1858,7 +1858,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
             std::string pty = p->type ? cType(p->type) : "";
-            _localTypes[pn] = (isClass(pty) || isInterface(pty)) ? pty : "";   // record all names (shadow fields)
+            _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
         }
     }
 
@@ -2113,7 +2113,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
             std::string pty = p->type ? cType(p->type) : "";
-            _localTypes[pn] = (isClass(pty) || isInterface(pty)) ? pty : "";   // record all names (shadow fields)
+            _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
         }
     }
 
