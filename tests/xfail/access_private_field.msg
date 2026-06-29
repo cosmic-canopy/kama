@@ -1,0 +1,1 @@
+'balance' is private

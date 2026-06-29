@@ -2,10 +2,10 @@ class Box
 {
     int w = 6;
     int h = 7;
-    Box()
+    public Box()
     {
     }
-    fn int area()
+    public fn int area()
     {
         return w * h;
     }

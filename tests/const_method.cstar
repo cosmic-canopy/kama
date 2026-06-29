@@ -4,10 +4,10 @@
 // separately). Mutable receivers keep full access.
 class Counter {
     int32 n;
-    Counter(int32 n) { this.n = n; }
-    const fn int32 value() { return this.n; }              // read-only
-    const fn int32 doubled() { return this.value() * 2; }  // const calling const: OK
-    fn void bump() { this.n = this.n + 1; }                // mutating
+    public Counter(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }              // read-only
+    public const fn int32 doubled() { return this.value() * 2; }  // const calling const: OK
+    public fn void bump() { this.n = this.n + 1; }                // mutating
 }
 fn int32 main() {
     const Counter c = new Counter(n: 9);

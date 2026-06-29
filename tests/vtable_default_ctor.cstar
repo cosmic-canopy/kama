@@ -2,10 +2,10 @@
 // still get its vtable initialized, or the first virtual call segfaults.
 class Shape {
     virtual fn int32 val() { return 0; }
-    fn int32 plus1() { return this.val() + 1; }   // base method dispatches virtually
+    public fn int32 plus1() { return this.val() + 1; }   // base method dispatches virtually
 }
 class Box extends Shape {
-    int32 n;
+    public int32 n;
     override fn int32 val() { return this.n; }
 }
 fn int32 main() {

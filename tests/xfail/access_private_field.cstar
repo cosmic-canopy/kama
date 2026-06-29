@@ -1,0 +1,3 @@
+// A private field is not readable from outside the class (M25 — private by default).
+class Account { int32 balance; public Account(int32 b){ this.balance = b; } }
+fn int main() { Account a = new Account(b: 100); return a.balance; }   // balance is private

@@ -116,7 +116,7 @@ struct cstaryystype {
 %token <string> INT INT8 INT16 INT32 INT64
 %token <string> INTERFACE NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT
-%token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
+%token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND POD
 %token <string> REF RETURN STATIC STRING
 %token <string> SWITCH THIS TRUE
 %token <string> UINT8 UINT16 UINT32 UINT64
@@ -393,6 +393,7 @@ modifier
   | PUBLIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | FRIEND LPAREN friend_list RPAREN   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
   | FINAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | POD   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | STATIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | VIRTUAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | VOLATILE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }

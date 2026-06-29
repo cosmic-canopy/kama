@@ -1,15 +1,15 @@
 class Counter
 {
     int value;
-    Counter(int start)
+    public Counter(int start)
     {
         value = start;
     }
-    fn void add(int n)
+    public fn void add(int n)
     {
         value = value + n;
     }
-    fn int get()
+    public fn int get()
     {
         return value;
     }

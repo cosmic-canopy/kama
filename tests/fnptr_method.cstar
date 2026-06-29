@@ -3,7 +3,7 @@
 // the receiver (`ref Vec2 self`). The object is passed explicitly at the call.
 class Vec2 {
     int32 x; int32 y;
-    Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
+    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
     fn int32 dot(ref Vec2 o) { return this.x * o.x + this.y * o.y; }
 }
 fnptr int32 DotFn(ref Vec2 self, ref Vec2 o);   // receiver is an explicit first param

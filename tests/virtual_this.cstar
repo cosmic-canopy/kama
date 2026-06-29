@@ -1,12 +1,12 @@
 class Shape
 {
-    fn int describe() { return this.area(); }
+    public fn int describe() { return this.area(); }
     virtual fn int area() { return 1; }
 }
 class Circle extends Shape
 {
     int r;
-    Circle(int r) { this.r = r; }
+    public Circle(int r) { this.r = r; }
     override fn int area() { return r * r; }
 }
 fn int main()

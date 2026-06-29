@@ -4,7 +4,7 @@ extern fn int cstar_trace_get();
 class Res
 {
     int id;
-    Res(int id) { this.id = id; }
+    public Res(int id) { this.id = id; }
     ~Res() { cstar_trace(code: id); }
 }
 

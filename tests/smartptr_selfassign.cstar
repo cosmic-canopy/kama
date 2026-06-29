@@ -1,6 +1,6 @@
 // Step 4: self-assignment on a smart pointer must be a no-op, not a use-after-free
 // (it used to release the pointee then "copy" it back onto freed memory).
-class Probe { int32 id; Probe(int32 id){ this.id = id; } fn int32 get(){ return this.id; } }
+class Probe { int32 id; public Probe(int32 id){ this.id = id; } public fn int32 get(){ return this.id; } }
 fn int main() {
     Owned<Probe> o = new Owned<Probe>(id: 20);
     o = o;                                  // no-op (guarded), pointee stays alive

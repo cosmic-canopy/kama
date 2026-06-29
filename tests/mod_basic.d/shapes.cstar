@@ -4,6 +4,6 @@ class Box
 {
     int32 w;
     int32 h;
-    Box(int32 w, int32 h) { this.w = w; this.h = h; }
-    fn int32 area() { return this.w * this.h; }
+    public Box(int32 w, int32 h) { this.w = w; this.h = h; }
+    public fn int32 area() { return this.w * this.h; }
 }

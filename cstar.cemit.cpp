@@ -314,6 +314,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (_currentClass) {
                 ClassInfo* owner = findFieldOwner(_currentClass, head);
                 if (owner) {
+                    checkFieldAccess(owner, head, v->line);   // M25
                     std::string e = "self->" + basePathTo(_currentClass, owner) + head;
                     for (size_t i = 1; i < v->qualifier->size(); ++i) e += "." + *(*v->qualifier)[i];
                     return e + "." + nm;
@@ -326,7 +327,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // ancestor) and not a local/param resolves to self->[__base.]…field.
         if (_currentClass && !_localTypes.count(nm)) {
             ClassInfo* owner = findFieldOwner(_currentClass, nm);
-            if (owner) return "self->" + basePathTo(_currentClass, owner) + nm;
+            if (owner) { checkFieldAccess(owner, nm, v->line); return "self->" + basePathTo(_currentClass, owner) + nm; }  // M25
         }
         // A bare **function name** used as a value (not a call) → its C function
         // pointer (M21) — enables binding/passing a free function to a FunctionPtr.
@@ -348,7 +349,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string name = (ba->identifier && ba->identifier->value) ? *ba->identifier->value : "";
         if (_currentClass && _currentClass->base) {
             ClassInfo* owner = findFieldOwner(_currentClass->base, name);
-            if (owner) return "self->__base." + basePathTo(_currentClass->base, owner) + name;
+            if (owner) { checkFieldAccess(owner, name, ba->line); return "self->__base." + basePathTo(_currentClass->base, owner) + name; }  // M25
         }
         unsupported("base access", ba->line);
         return name;
@@ -1124,13 +1125,18 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 for (auto& itf : *cd->baseTypes->interfaces)
                     if (itf && itf->value) ci.interfaces.push_back(*itf->value);  // bare; resolved in linkBases
         }
-        // Class-level `abstract` modifier.
+        // Class-level KIND modifier (M25): pod | virtual | abstract | final.
         if (cd->modifiers)
             for (auto& mod : *cd->modifiers) {
-                if (mod->value && *mod->value == "abstract") ci.isAbstractClass = true;
-                if (mod->value && *mod->value == "export")
+                if (!mod->value) continue;
+                const std::string& mv = *mod->value;
+                if (mv == "abstract") ci.isAbstractClass = true;
+                else if (mv == "pod")      ci.isPod = true;
+                else if (mv == "virtual")  ci.isVirtualClass = true;
+                else if (mv == "final")    ci.isFinalClass = true;
+                else if (mv == "export")
                     unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", cd->line);
-                if (mod->value && *mod->value == "volatile")
+                else if (mv == "volatile")
                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", cd->line);
             }
 
@@ -1146,12 +1152,15 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             if (*mod->value == "export")
                                 unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fd->line);
                         }
+                    Visibility fvis = visibilityOf(fd->modifiers,
+                                          (ci.isPod || ci.isExternStruct) ? Visibility::Public : Visibility::Private, fd->line);
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
                             FieldInfo fi;
                             fi.name        = (d->name && d->name->value) ? *d->name->value : "";
                             fi.type        = fd->type;
                             fi.initializer = d->initializer;
+                            fi.visibility  = fvis;
                             ci.fields.push_back(fi);
                             ci.fieldNames.insert(fi.name);
                         }
@@ -1164,6 +1173,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …` (M24b)
+                        mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);  // M25
+                        mi.isFinal    = modHas(md->modifiers, "final");                              // M25
                         if (md->modifiers)
                             for (auto& mod : *md->modifiers) {
                                 if (!mod->value) continue;
@@ -1183,6 +1194,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         unsupported("multiple constructors (no overloading yet)", cc->line);
                     ci.hasCtor   = true;
                     ci.ctorNode  = cc;
+                    ci.ctorVisibility = visibilityOf(cc->modifiers, Visibility::Private, cc->line);  // M25
                     if (cc->declarator) ci.ctorParams = paramSigsOf(cc->declarator->params);
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
                     ci.hasDtor  = true;
@@ -1191,12 +1203,15 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // M24d: a `const` data member — a normal struct field, written
                     // ONCE in the constructor (inline init or `this.f = …`), then
                     // immutable. Enforcement is at the cstar level; the C field is plain.
+                    Visibility kvis = visibilityOf(kd->modifiers,
+                                          (ci.isPod || ci.isExternStruct) ? Visibility::Public : Visibility::Private, kd->line);
                     if (kd->declarators)
                         for (auto& d : *kd->declarators) {
                             FieldInfo fi;
                             fi.name        = (d->name && d->name->value) ? *d->name->value : "";
                             fi.type        = kd->type;
                             fi.initializer = d->initializer;
+                            fi.visibility  = kvis;
                             ci.fields.push_back(fi);
                             ci.fieldNames.insert(fi.name);
                             ci.constFields.insert(fi.name);
@@ -1929,6 +1944,50 @@ bool CEmitter::isConstReceiver(SharedExpression receiver) const
     return receiver && rootIsConst(rootBinding(receiver));
 }
 
+// M25 — access control --------------------------------------------------------
+bool CEmitter::modHas(SharedModifierList mods, const char* name)
+{
+    if (mods) for (auto& m : *mods) if (m->value && *m->value == name) return true;
+    return false;
+}
+
+// At most one of public/protected/private; default `dflt` when none is written.
+Visibility CEmitter::visibilityOf(SharedModifierList mods, Visibility dflt, int line)
+{
+    Visibility v = dflt; int count = 0;
+    if (mods) for (auto& m : *mods) {
+        if (!m->value) continue;
+        if      (*m->value == "public")    { v = Visibility::Public;    count++; }
+        else if (*m->value == "protected") { v = Visibility::Protected; count++; }
+        else if (*m->value == "private")   { v = Visibility::Private;   count++; }
+    }
+    if (count > 1) unsupported("a member may have at most one of public/protected/private", line);
+    return v;
+}
+
+// Is a member (declared on `owner`, visibility `vis`) accessible from the current
+// emission context (`_currentClass`; null = external/free function)? Compile error if not.
+bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& member, int line)
+{
+    if (vis == Visibility::Public || !owner) return true;
+    if (vis == Visibility::Protected) {                 // owner or any subclass of owner
+        for (ClassInfo* c = _currentClass; c; c = c->base) if (c == owner) return true;
+    } else {                                            // Private — owner itself only (M25c adds friends)
+        if (_currentClass == owner) return true;
+    }
+    const char* vs = (vis == Visibility::Private) ? "private" : "protected";
+    unsupported(("'" + member + "' is " + vs + " in '" + owner->name + "'").c_str(), line);
+    return false;
+}
+
+// Field access through a resolved owner (looks up the field's visibility, then checks).
+void CEmitter::checkFieldAccess(ClassInfo* owner, const std::string& field, int line)
+{
+    if (!owner) return;
+    for (auto& f : owner->fields)
+        if (f.name == field) { canAccess(owner, f.visibility, field, line); return; }
+}
+
 // M21: bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
 // signature-check) or another FunctionPtr (copy). Non-null: `null`/unknown is an error.
 std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line)
@@ -2614,13 +2673,13 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         std::string T = _classes[cls].collElemClass;
         std::string basePath;
         ClassInfo* owner = findFieldOwner(&_classes[T], field);
-        if (owner) basePath = basePathTo(&_classes[T], owner);
+        if (owner) { basePath = basePathTo(&_classes[T], owner); checkFieldAccess(owner, field, ma->line); }  // M25
         return "(" + emitExpression(ma->expression) + ").ptr->" + basePath + field;
     }
     std::string basePath;
     if (!cls.empty() && _classes.count(cls)) {
         ClassInfo* owner = findFieldOwner(&_classes[cls], field);
-        if (owner) basePath = basePathTo(&_classes[cls], owner);
+        if (owner) { basePath = basePathTo(&_classes[cls], owner); checkFieldAccess(owner, field, ma->line); }  // M25
     }
     if (dynamic_cast<ThisAccessNode*>(ma->expression.get()))
         return "self->" + basePath + field;
@@ -2635,6 +2694,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(&_classes[clsName], method, &owner);
     if (!mi) { unsupported("unknown method", srcLine); return "0"; }
+    if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);   // M25
 
     if (mi->isVirtual) {
         // Dynamic dispatch through the vptr (at offset 0 via the vtable root).
@@ -2688,6 +2748,8 @@ std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, Share
     if (ci.isAbstractClass)   // M25/Step 3: instantiating one crashes on a NULL vtable slot
         unsupported(("cannot instantiate abstract class '" + ci.name
                      + "' (it has an unimplemented method)").c_str(), srcLine);
+    if (ci.hasCtor && !ci.isCollection)   // M25: private ctor blocks external `new` (intrinsics exempt)
+        canAccess(&ci, ci.ctorVisibility, "constructor", srcLine);
     return emitReorderedCall(ci.name + "__ctor", "&" + cVar, ci.ctorParams, args, srcLine);
 }
 

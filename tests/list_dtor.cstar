@@ -10,7 +10,7 @@ extern fn int cstar_trace_get();
 class Probe
 {
     int id;
-    Probe(int id) { this.id = id; }
+    public Probe(int id) { this.id = id; }
     ~Probe() { cstar_trace(code: id); }
 }
 

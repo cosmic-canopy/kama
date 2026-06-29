@@ -5,7 +5,7 @@ interface IShape
 class Circle implements IShape
 {
     int64 r;
-    Circle(int64 r) { this.r = r; }
+    public Circle(int64 r) { this.r = r; }
     fn int64 area() { return r * r; }
 }
 fn int main()

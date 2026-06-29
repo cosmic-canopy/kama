@@ -1,16 +1,16 @@
 class Base
 {
-    int x;
+    public int x;
     Base(int x) { this.x = x; }
 }
 class Derived extends Base
 {
     int y;
-    Derived(int x, int y) : base(x: x)
+    public Derived(int x, int y) : base(x: x)
     {
         this.y = y;
     }
-    fn int sum() { return x + y; }
+    public fn int sum() { return x + y; }
 }
 fn int main()
 {

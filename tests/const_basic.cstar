@@ -4,8 +4,8 @@
 // (verified separately; the suite asserts the positive path here).
 class Box {
     int32 v;
-    Box(int32 v) { this.v = v; }
-    const fn int32 get() { return this.v; }   // read-only -> callable on a const receiver
+    public Box(int32 v) { this.v = v; }
+    public const fn int32 get() { return this.v; }   // read-only -> callable on a const receiver
 }
 fn int32 main() {
     const int32 BASE = 30;

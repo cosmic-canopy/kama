@@ -38,10 +38,14 @@ struct SigInfo {
 
 // ---- Class model (M4) -----------------------------------------------------
 
+// Member access level (M25). Default Private; `pod` fields are forced Public.
+enum class Visibility { Private, Protected, Public };
+
 struct FieldInfo {
     std::string      name;
     SharedIdentifier type;
     SharedExpression initializer;    // optional; applied in the constructor
+    Visibility       visibility = Visibility::Private;   // M25
 };
 
 struct MethodInfo {
@@ -54,6 +58,8 @@ struct MethodInfo {
     bool                         isAbstract = false;  // null body
     bool                         isIntrinsic = false; // collection op: body is in cstar_runtime.h, not AST
     bool                         isConst = false;     // `const fn …` — non-mutating (M24b)
+    Visibility                   visibility = Visibility::Private;   // M25
+    bool                         isFinal = false;     // `final fn` — seals a virtual slot (M25)
 };
 
 // A built-in generic collection / smart-pointer kind (M9/M10). Backed by a C
@@ -92,6 +98,11 @@ struct ClassInfo {
     std::string                       baseName;        // "" if no base
     ClassInfo*                        base = nullptr;  // resolved by linkBases()
     bool                              isAbstractClass = false;
+    // M25 — class kind + access. Kinds: plain (none) | pod | virtual | abstract | final.
+    bool                              isPod = false;          // `pod class` — public data, no vtable/dtor
+    bool                              isVirtualClass = false; // `virtual class` — extensible
+    bool                              isFinalClass = false;   // `final class` — sealed leaf
+    Visibility                        ctorVisibility = Visibility::Public;   // synth/default ctor is public; an EXPLICIT ctor defaults private
     bool                              hasVtable = false;     // this or an ancestor has a virtual
     std::string                       vtableRoot;            // class owning the __vptr member
     std::map<std::string,std::string> slotImpl;             // virtual slot name -> impl cName (most-derived here)
@@ -322,6 +333,11 @@ private:
     std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
     bool        rootIsConst(const std::string& root) const;   // const local/param/this/field
     bool        isConstFieldWrite(SharedExpression target);   // writing a const data member (M24d)
+    // M25 — access control.
+    Visibility  visibilityOf(SharedModifierList mods, Visibility dflt, int line);
+    bool        modHas(SharedModifierList mods, const char* name);
+    bool        canAccess(ClassInfo* owner, Visibility vis, const std::string& member, int line);
+    void        checkFieldAccess(ClassInfo* owner, const std::string& field, int line);
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
     bool        isConstReceiver(SharedExpression receiver) const;       // const-call restriction (M24b)
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);  // M21

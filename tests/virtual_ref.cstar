@@ -1,11 +1,11 @@
 class Shape
 {
-    virtual fn int area() { return 1; }
+    public virtual fn int area() { return 1; }
 }
 class Square extends Shape
 {
     int s;
-    Square(int s) { this.s = s; }
+    public Square(int s) { this.s = s; }
     override fn int area() { return s * s; }
 }
 fn int measure(ref Shape sh)

@@ -1,2 +1,2 @@
 namespace Physics;
-class Texture { int32 mass; Texture(int32 m) { this.mass = m; } fn int32 get() { return this.mass; } }
+class Texture { int32 mass; public Texture(int32 m) { this.mass = m; } public fn int32 get() { return this.mass; } }

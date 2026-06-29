@@ -1,15 +1,15 @@
 class Accum
 {
     int total;
-    Accum(int init)
+    public Accum(int init)
     {
         total = init;
     }
-    fn void bump()
+    public fn void bump()
     {
         this.total = this.total + 1;
     }
-    fn int run()
+    public fn int run()
     {
         this.bump();
         return this.total;

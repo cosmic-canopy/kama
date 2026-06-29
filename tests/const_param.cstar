@@ -4,8 +4,8 @@
 // separately). Mirrors the same deep-const rules as const locals.
 class Vec2 {
     int32 x; int32 y;
-    Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
-    const fn int32 lenSq() { return this.x * this.x + this.y * this.y; }
+    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
+    public const fn int32 lenSq() { return this.x * this.x + this.y * this.y; }
 }
 fn int32 dist2(const ref Vec2 a, const int32 bias) {   // read-only borrow + const value
     return a.lenSq() + bias;                            // const method call on a const borrow: OK

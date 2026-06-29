@@ -9,7 +9,7 @@ class Probe {
     int32 id;
     Probe(int32 id) { this.id = id; }
     ~Probe() { cstar_trace(code: 9); }
-    fn int32 read(int32 d) { return this.id + d; }
+    public fn int32 read(int32 d) { return this.id + d; }
 }
 fn int use() {
     Shared<Probe> p = new Shared<Probe>(id: 1);

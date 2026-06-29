@@ -5,7 +5,7 @@ fn int32 add(int32 a, int32 b) { return a + b; }
 class Counter
 {
     int32 value;
-    Counter(int32 start) { this.value = start; }
-    fn void bump() { this.value = this.value + 1; }
-    fn int32 get() { return this.value; }
+    public Counter(int32 start) { this.value = start; }
+    public fn void bump() { this.value = this.value + 1; }
+    public fn int32 get() { return this.value; }
 }
