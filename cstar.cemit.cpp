@@ -1252,6 +1252,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         }
                 } else if (dynamic_cast<ClassOperatorDeclarationNode*>(mn)) {
                     unsupported("operator overload — deferred", mn->line);
+                } else if (auto* fg = dynamic_cast<FriendGrantNode*>(mn)) {
+                    // M25c — capture the grant raw; the accessor is resolved (against the
+                    // full function/class tables) in resolveFriends() once all units load.
+                    RawFriendGrant rg; rg.accessor = fg->accessor; rg.line = fg->line;
+                    if (fg->members)                                  // null => `[...]` (all privates)
+                        for (auto& m : *fg->members)
+                            if (m && m->value) rg.members.insert(*m->value);
+                    ci.friendGrantsRaw.push_back(rg);
                 }
             }
         }
@@ -2049,8 +2057,15 @@ bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& me
     if (vis == Visibility::Public || !owner) return true;
     if (vis == Visibility::Protected) {                 // owner or any subclass of owner
         for (ClassInfo* c = _currentClass; c; c = c->base) if (c == owner) return true;
-    } else {                                            // Private — owner itself only (M25c adds friends)
+    } else {                                            // Private — owner itself, or a friend grant
         if (_currentClass == owner) return true;
+        // M25c: an owner-granted `friend` may touch the named members. The accessing
+        // context is the current class (any of its methods) or the current function/method.
+        for (auto& g : owner->friendGrants) {
+            if (!g.members.empty() && !g.members.count(member)) continue;   // empty => all privates
+            if (g.accessorIsClass) { if (_currentClass && _currentClass->name == g.accessor) return true; }
+            else                   { if (!_currentFunc.empty() && _currentFunc == g.accessor) return true; }
+        }
     }
     const char* vs = (vis == Visibility::Private) ? "private" : "protected";
     unsupported(("'" + member + "' is " + vs + " in '" + owner->name + "'").c_str(), line);
@@ -2063,6 +2078,59 @@ void CEmitter::checkFieldAccess(ClassInfo* owner, const std::string& field, int 
     if (!owner) return;
     for (auto& f : owner->fields)
         if (f.name == field) { canAccess(owner, f.visibility, field, line); return; }
+}
+
+// M25c — resolve each class's raw `friend` grants to match keys, once every unit's
+// functions/classes are registered. An accessor is a class (matched vs _currentClass),
+// a free function, or a `Class::method` (both matched vs _currentFunc's C-name).
+void CEmitter::resolveFriends()
+{
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.friendGrantsRaw.empty()) continue;
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;
+        for (auto& rg : ci.friendGrantsRaw) {
+            FriendGrant g; g.members = rg.members;
+            SharedIdentifier acc = rg.accessor;
+            std::string     val  = (acc && acc->value) ? *acc->value : "";
+            SharedStringList qual = acc ? acc->qualifier : nullptr;
+            bool resolved = false;
+
+            if (qual && !qual->empty()) {
+                // `Class::method` — the qualifier names a class, `val` is its method.
+                std::string clsName = resolveUserName(*qual->back(), nullptr);
+                auto cit = _classes.find(clsName);
+                if (cit != _classes.end() && cit->second.methods.count(val)) {
+                    g.accessor = cit->second.methods[val].cName; g.accessorIsClass = false; resolved = true;
+                }
+                if (!resolved) {                                   // `Ns::func` — namespaced free function
+                    std::string fk = resolveFunc(val, qual);
+                    if (_funcs.count(fk)) { g.accessor = _funcs[fk].cName; g.accessorIsClass = false; resolved = true; }
+                }
+            } else {
+                std::string clsName = resolveUserName(val, nullptr);   // a class
+                if (_classes.count(clsName)) { g.accessor = clsName; g.accessorIsClass = true; resolved = true; }
+                if (!resolved) {                                       // a free function
+                    std::string fk = resolveFunc(val, nullptr);
+                    if (_funcs.count(fk)) { g.accessor = _funcs[fk].cName; g.accessorIsClass = false; resolved = true; }
+                }
+            }
+            if (!resolved) { unsupported(("unknown `friend` accessor '" + val + "' in '" + ci.name + "'").c_str(), rg.line); continue; }
+
+            // Granted members must exist and be private (a grant on a public member, or a
+            // typo'd name, is a mistake — keep grants honest and greppable).
+            for (auto& m : g.members) {
+                Visibility v = Visibility::Public; bool found = false;
+                for (auto& f : ci.fields) if (f.name == m) { v = f.visibility; found = true; break; }
+                if (!found) { auto mit = ci.methods.find(m); if (mit != ci.methods.end()) { v = mit->second.visibility; found = true; } }
+                if (!found)
+                    unsupported(("`friend` grant names unknown member '" + m + "' in '" + ci.name + "'").c_str(), rg.line);
+                else if (v == Visibility::Public)
+                    unsupported(("`friend` grant on public member '" + m + "' in '" + ci.name + "' is redundant").c_str(), rg.line);
+            }
+            ci.friendGrants.push_back(g);
+        }
+    }
 }
 
 // M21: bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
@@ -2356,6 +2424,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
     _currentClass = nullptr;
+    _currentFunc  = name;   // M25c — a free function may be a `friend` accessor
     if (fn->parameters) {
         for (auto& p : *fn->parameters) {
             if (!p->identifier || !p->identifier->value) continue;
@@ -2611,6 +2680,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
                                     ClassInfo& owner, bool isCtor, bool isConstMethod)
 {
     _currentClass = &owner;
+    _currentFunc  = cName;   // M25c — a method may be a `Class::method` friend accessor
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
     _inCtor = isCtor;   // M24d: const fields are writable only here
@@ -2886,6 +2956,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
     }
     linkBases();
     buildVtables();
+    resolveFriends();   // M25c — after all classes/functions are registered
     computeDestructible();
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectCollections(u); }

@@ -1,0 +1,21 @@
+class Account {
+    int64 balance;
+    public Account(int64 b) { this.balance = b; }
+    friend readBalance[balance];     // a free function
+    friend Bank[balance];            // a whole class
+    friend Ledger::post[balance];    // a single method
+}
+fn int64 readBalance(ref Account a) { return a.balance; }   // free-fn friend reaches in
+class Bank {
+    public fn int64 viaBank(ref Account a) { return a.balance; }   // any Bank method may
+}
+class Ledger {
+    public fn int64 post(ref Account a) { return a.balance; }      // granted method
+}
+fn int main() {
+    Account acc = new Account(b: 14);
+    Bank bk = new Bank();
+    Ledger lg = new Ledger();
+    int64 total = readBalance(a: ref acc) + bk.viaBank(a: ref acc) + lg.post(a: ref acc);
+    return cast<int>(total);   // 14 * 3 = 42
+}

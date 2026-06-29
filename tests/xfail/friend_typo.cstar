@@ -1,0 +1,4 @@
+// A grant must name real members (catches typos).
+class Account { int64 balance; public Account(int64 b){ this.balance = b; } friend audit[blance]; }
+fn int64 audit(ref Account a) { return a.balance; }
+fn int main() { Account acc = new Account(b: 1); return cast<int>(audit(a: ref acc)); }

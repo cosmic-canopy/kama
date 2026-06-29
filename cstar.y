@@ -139,6 +139,7 @@ struct cstaryystype {
 %token <token> PLUS "+"
 %token <token> MINUS "-"
 %token <token> DOT "."
+%token <token> ELLIPSIS "..."
 %token <token> SLASH "/"
 %token <token> COLONCOLON "::"
 %token <token> COLON ":"
@@ -181,7 +182,7 @@ struct cstaryystype {
 %type <usingdeclarationlist> using_directives_opt using_directives
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
-%type <identifierlist> friend_list interface_base_opt interface_base interface_type_list
+%type <identifierlist> friend_member_list interface_base_opt interface_base interface_type_list
 %type <modifier> modifier function_modifier_opt parameter_modifier_opt
 %type <modifierlist> modifiers modifiers_opt
 %type <parameter> parameter
@@ -207,7 +208,7 @@ struct cstaryystype {
 %type <functiondecl> interface_member_declaration interface_method_declaration
 %type <functiondecllist> interface_body interface_member_declarations_opt interface_member_declarations
 %type <classbasedecl> class_base_opt class_base
-%type <classmemberdecl> class_member_declaration constant_declaration field_declaration method_declaration
+%type <classmemberdecl> class_member_declaration constant_declaration field_declaration method_declaration friend_declaration
 %type <classmemberdecl> operator_declaration constructor_declaration destructor_declaration
 %type <classmemberdecllist> class_body class_member_declarations_opt class_member_declarations
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
@@ -391,7 +392,6 @@ modifier
   | PRIVATE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | PROTECTED   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | PUBLIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | FRIEND LPAREN friend_list RPAREN   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
   | FINAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | POD   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | STATIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
@@ -400,9 +400,15 @@ modifier
   | EXPORT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   ;
 
-friend_list
-  : qualified_identifier   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
-  | friend_list qualified_identifier   { $1->push_back($2); }
+friend_declaration
+  : FRIEND qualified_identifier LEFT_BRACKET friend_member_list RIGHT_BRACKET SEMICOLON
+      { $$ = std::make_shared<FriendGrantNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
+  | FRIEND qualified_identifier LEFT_BRACKET ELLIPSIS RIGHT_BRACKET SEMICOLON
+      { $$ = std::make_shared<FriendGrantNode>(SCANNER_CODEGENCONTEXT, $2, nullptr); }   // [...] => all privates
+  ;
+friend_member_list
+  : IDENTIFIER   { $$ = std::make_shared<IdentifierList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
+  | friend_member_list COMMA IDENTIFIER   { $1->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); $$ = $1; }
   ;
 
 function_modifier_opt
@@ -840,6 +846,7 @@ class_member_declaration
   | operator_declaration   { $$ = $1; }
   | constructor_declaration   { $$ = $1; }
   | destructor_declaration   { $$ = $1; }
+  | friend_declaration   { $$ = $1; }
   ;
 constant_declaration
   : modifiers_opt CONST type constant_declarators SEMICOLON   { $$ = std::make_shared<ClassConstDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4); }

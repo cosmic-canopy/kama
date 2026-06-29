@@ -617,6 +617,18 @@ public:
     ClassMemberDeclarationNode(CodeGenContext& context) : ASTNode(context),  StatementNode(context) { }
 };
 
+// M25c — `friend <accessor>(member, …);` (or `friend <accessor>;` = all privates): the
+// OWNING class grants the named accessor (a class / free function / Class::method) access
+// to the named private members. Owner-granted, narrow, greppable.
+class FriendGrantNode : public ClassMemberDeclarationNode {
+public:
+    SharedIdentifier     accessor;   // class / free function / Class::method to grant to
+    SharedIdentifierList members;    // specific private members; empty => all privates
+    FriendGrantNode(CodeGenContext& context, SharedIdentifier accessor, SharedIdentifierList members)
+        : ASTNode(context), ClassMemberDeclarationNode(context)
+        , accessor(accessor), members(members) { }
+};
+
 class ClassConstDeclarationNode : public ClassMemberDeclarationNode {
 public:
     SharedModifierList modifiers;

@@ -224,6 +224,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 "*"     { RETURN_TOKEN(STAR, 1); }
 "+"     { RETURN_TOKEN(PLUS, 1); }
 "-"     { RETURN_TOKEN(MINUS, 1); }
+"..."   { RETURN_TOKEN(ELLIPSIS, 3); }
 "."     { RETURN_TOKEN(DOT, 1); }
 "/"     { RETURN_TOKEN(SLASH, 1); }
 "::"    { RETURN_TOKEN(COLONCOLON, 2); }

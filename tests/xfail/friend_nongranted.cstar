@@ -1,0 +1,9 @@
+// A friend may touch ONLY the granted members — not every private.
+class Account {
+    int64 balance;
+    int32 pin;
+    public Account(int64 b, int32 p) { this.balance = b; this.pin = p; }
+    friend audit[balance];   // granted balance only
+}
+fn int32 audit(ref Account a) { return a.pin; }   // ERROR: pin is not in the grant
+fn int main() { Account acc = new Account(b: 1, p: 2); return audit(a: ref acc); }

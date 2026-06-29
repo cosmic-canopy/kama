@@ -77,6 +77,21 @@ struct NsCtx {
     std::map<std::string, std::string> aliases;       // alias -> mangled namespace
 };
 
+// M25c — a resolved `friend` grant on the OWNING class. `accessor` is a resolved key:
+// a class name (accessorIsClass) or a function/method C-name (matched vs _currentFunc).
+// `members` empty => all private members.
+struct FriendGrant {
+    std::string            accessor;
+    bool                   accessorIsClass = false;
+    std::set<std::string>  members;
+};
+// Pre-resolution form captured at collection (accessor spelling + member names).
+struct RawFriendGrant {
+    SharedIdentifier       accessor;
+    std::set<std::string>  members;
+    int                    line = 0;
+};
+
 struct ClassInfo {
     std::string                       name;       // struct name (== cstar class name in M4)
     std::vector<FieldInfo>            fields;      // declaration order
@@ -103,6 +118,8 @@ struct ClassInfo {
     bool                              isVirtualClass = false; // `virtual class` — extensible
     bool                              isFinalClass = false;   // `final class` — sealed leaf
     Visibility                        ctorVisibility = Visibility::Public;   // synth/default ctor is public; an EXPLICIT ctor defaults private
+    std::vector<RawFriendGrant>       friendGrantsRaw;        // M25c — captured at collection
+    std::vector<FriendGrant>          friendGrants;           // M25c — resolved (resolveFriends)
     bool                              hasVtable = false;     // this or an ancestor has a virtual
     std::string                       vtableRoot;            // class owning the __vptr member
     std::map<std::string,std::string> slotImpl;             // virtual slot name -> impl cName (most-derived here)
@@ -186,6 +203,7 @@ private:
     std::map<std::string, ClassInfo>   _classes;     // class name -> info
     std::map<std::string, std::string> _localTypes;  // local/param -> class name ("" if primitive)
     ClassInfo*                         _currentClass = nullptr;  // when emitting a method/ctor
+    std::string                        _currentFunc;             // C-name of the function/method being emitted (M25c friend match)
 
     // Virtual dispatch (M6): per-root union of vtable slots, in introduction order.
     struct VSlot { std::string name; std::string owner; ClassMethodDeclarationNode* node; };
@@ -338,6 +356,7 @@ private:
     bool        modHas(SharedModifierList mods, const char* name);
     bool        canAccess(ClassInfo* owner, Visibility vis, const std::string& member, int line);
     void        checkFieldAccess(ClassInfo* owner, const std::string& field, int line);
+    void        resolveFriends();   // M25c — resolve each class's raw friend grants to keys
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
     bool        isConstReceiver(SharedExpression receiver) const;       // const-call restriction (M24b)
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);  // M21
