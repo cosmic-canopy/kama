@@ -277,15 +277,47 @@ A `~Type()` destructor runs deterministically at scope exit, in reverse construc
 path (block end, early `return`, `break`/`continue`). Destructible fields are destroyed in reverse
 declaration order. No GC; allocation/deallocation is predictable.
 
-## Inheritance & virtual dispatch ✅ (M6)
+## Inheritance & virtual dispatch ✅ (M6, M25b)
 
 ```cstar
-class Shape { fn int describe() { return this.area(); }  virtual fn int area() { return 0; } }
-class Circle extends Shape { override fn int area() { return 42; } }
+virtual class Shape {                                  // `virtual class` opts in to extension
+    public fn int describe() { return this.area(); }   // public surface
+    protected virtual fn int area() { return 0; }      // overridable hooks are written `protected`
+}
+final class Circle extends Shape {                     // `final class` = sealed leaf
+    protected override fn int area() { return 42; }
+}
 ```
 Single inheritance (`extends`), base embedded by value (upcast is offset-0), base ctor via `: base(...)`,
-`base.m()` for non-virtual upcalls. `virtual`/`override` methods dispatch through a vtable. `interface`/
-`implements` are 🚧 M6b.
+`base.m()` for non-virtual upcalls. `virtual`/`override` methods dispatch through a vtable. **M25b makes
+inheritance opt-in and one-way:** only a `virtual`/`abstract class` may be `extends`-ed (plain/`pod`/`final`
+are sealed); an overridable method is written `protected` (never public/private — public polymorphism is an
+`interface`'s job); `final class`/`final` method seal a leaf/slot. See `docs/KEYWORDS.md` for the full kind table.
+
+## Interfaces ✅ (M6b, M25)
+
+```cstar
+interface IShape { fn int64 area(); }                  // a public contract (a "type placeholder")
+class Circle implements IShape {                       // implement one base (extends) + many interfaces
+    int64 r;
+    public Circle(int64 r) { this.r = r; }
+    public fn int64 area() { return r * r; }           // a method satisfying IShape MUST be `public`
+}
+fn int64 measure(IShape sh) { return sh.area(); }      // accept "any shape" — by value = zero-copy dispatch
+```
+An interface is a *type placeholder* for "some type satisfying this contract." It is represented as a fat
+pointer `{obj, vtbl}` (an implementation detail of type erasure — never something you spell). A class
+`implements` any number of interfaces; a method that satisfies an interface method **must be declared
+`public`** (the contract is public — a hidden implementer would be reachable through the interface but not
+by name).
+
+**Passing an interface — by value vs. `ref`/`out`** (mirrors C#'s `ref` rule exactly):
+- `IShape sh` (by value) — "use it as a shape." A concrete `Circle` coerces in (IS-A); zero-copy dispatch.
+  This is the common path.
+- `ref IShape sh` / `out IShape sh` — "I may **reseat** your handle." Requires the argument to be an actual
+  `IShape` variable (its address is passed, so the reseat sticks). Passing a **concrete class** by `ref`/`out`
+  is a compile error — bind it first (`IShape s = c; measure(sh: ref s)`). Mutable references are *invariant*:
+  a `Circle` variable isn't a slot that could hold an arbitrary shape, so it can't back a `ref IShape`.
 
 ## Enums ✅
 
