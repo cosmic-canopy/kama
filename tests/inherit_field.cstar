@@ -1,16 +1,22 @@
-class Base
+// Base-field embedding: a derived class reaches inherited base data.
+// M25b: fields are private (kind-decides), so the base exposes `x` to subclasses via a
+// `protected` accessor — the sanctioned "private field, protected accessor" pattern.
+virtual class Base
 {
-    public int x;
-    Base(int x) { this.x = x; }
+    int x;                                       // private; embedded in the derived layout
+    public Base(int x) { this.x = x; }
+    protected fn int getX() { return this.x; }   // visible to subclasses, not to the world
+    protected virtual fn int tag() { return 0; }
 }
-class Derived extends Base
+final class Derived extends Base
 {
     int y;
     public Derived(int x, int y) : base(x: x)
     {
         this.y = y;
     }
-    public fn int sum() { return x + y; }
+    protected override fn int tag() { return 1; }
+    public fn int sum() { return this.getX() + y; }   // base data via the protected accessor
 }
 fn int main()
 {

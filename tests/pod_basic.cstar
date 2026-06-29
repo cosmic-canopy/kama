@@ -1,0 +1,9 @@
+// A `pod class` is plain public data: all fields public, no methods/vtable/dtor.
+// Fields are read AND written directly from outside (the kind grants the exposure).
+pod class Vec2 { int32 x; int32 y; }
+fn int32 main() {
+    Vec2 v = new Vec2();
+    v.x = 30;            // public field — external write OK
+    v.y = 12;
+    return v.x + v.y;    // 42
+}

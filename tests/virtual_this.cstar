@@ -1,13 +1,15 @@
-class Shape
+// M25b: a public method (`describe`) over a `protected virtual` hook (`area`) — the
+// sanctioned way to publish polymorphism from a class hierarchy (vs. an interface).
+virtual class Shape
 {
     public fn int describe() { return this.area(); }
-    virtual fn int area() { return 1; }
+    protected virtual fn int area() { return 1; }
 }
-class Circle extends Shape
+final class Circle extends Shape
 {
     int r;
     public Circle(int r) { this.r = r; }
-    override fn int area() { return r * r; }
+    protected override fn int area() { return r * r; }
 }
 fn int main()
 {

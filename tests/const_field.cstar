@@ -5,13 +5,14 @@
 class Widget {
     const int32 id;          // set from the ctor arg
     const int32 kind = 7;    // inline initializer
-    public int32 count;
+    int32 count;             // private (kind-decides); read via the accessor
     public Widget(int32 id) { this.id = id; this.count = 0; }
     public fn void tick() { this.count = this.count + 1; }    // mutating non-const field: OK
+    public const fn int32 count_() { return this.count; }
     public const fn int32 tag() { return this.id + this.kind; }
 }
 fn int32 main() {
     Widget w = new Widget(id: 33);
     w.tick(); w.tick();
-    return w.tag() + w.count;   // (33 + 7) + 2 = 42
+    return w.tag() + w.count_();   // (33 + 7) + 2 = 42
 }

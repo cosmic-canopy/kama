@@ -1,0 +1,1 @@
+only a `virtual`/`abstract class` may be extended

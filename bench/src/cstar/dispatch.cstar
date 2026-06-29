@@ -1,18 +1,23 @@
-class Shape
+// dispatch — dynamic-dispatch cost: virtual calls through a base reference.
+// M25b: polymorphism is opt-in (`virtual class`) with a `protected virtual` hook behind
+// a public `area()`. The trivial wrapper inlines under -O2, so the measured cost is the
+// vtable call itself (`compute`), unchanged from the pre-M25 version.
+virtual class Shape
 {
-    virtual fn int64 area() { return 0; }
+    public fn int64 area() { return this.compute(); }
+    protected virtual fn int64 compute() { return 0; }
 }
-class Circle extends Shape
+final class Circle extends Shape
 {
     int64 r;
-    Circle(int64 r) { this.r = r; }
-    override fn int64 area() { return r * r; }
+    public Circle(int64 r) { this.r = r; }
+    protected override fn int64 compute() { return r * r; }
 }
-class Square extends Shape
+final class Square extends Shape
 {
     int64 s;
-    Square(int64 s) { this.s = s; }
-    override fn int64 area() { return s * s; }
+    public Square(int64 s) { this.s = s; }
+    protected override fn int64 compute() { return s * s; }
 }
 fn int64 measure(ref Shape sh)
 {

@@ -1,4 +1,11 @@
 // `override` requires a virtual method in a base class (Step 3) — else malformed vtable.
-class Base { int32 x; Base(int32 x){ this.x = x; } fn int32 plain(){ return this.x; } }
-class Derived extends Base { Derived(int32 x){ this.x = x; } override fn int32 plain(){ return this.x * 2; } }
-fn int main() { Derived d = new Derived(x: 21); return d.plain(); }
+virtual class Base {
+    public Base() { }
+    public fn int32 plain() { return 1; }            // NON-virtual
+    protected virtual fn int32 hook() { return 0; }  // makes Base a valid virtual class
+}
+final class Derived extends Base {
+    public Derived() { }
+    protected override fn int32 plain() { return 2; }   // ERROR: plain is not virtual
+}
+fn int main() { Derived d = new Derived(); return 0; }

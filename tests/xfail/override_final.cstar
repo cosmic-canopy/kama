@@ -1,0 +1,5 @@
+// A `final` method seals its slot — no subclass may override it.
+virtual class Base { protected virtual fn int h() { return 0; } }
+virtual class Mid extends Base { protected final override fn int h() { return 1; } }   // seals h
+virtual class Leaf extends Mid { protected override fn int h() { return 2; } }          // ERROR: h is final
+fn int main() { return 0; }

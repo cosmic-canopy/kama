@@ -1,15 +1,18 @@
 // M19 regression (Bug 1): a polymorphic class with NO explicit constructor must
 // still get its vtable initialized, or the first virtual call segfaults.
-class Shape {
-    virtual fn int32 val() { return 0; }
-    public fn int32 plus1() { return this.val() + 1; }   // base method dispatches virtually
+// M25b: polymorphism is opt-in — `virtual class`, a `protected virtual` hook behind a
+// public method; the sealed leaf is a `final class`.
+virtual class Shape {
+    protected virtual fn int32 val() { return 0; }
+    public fn int32 plus1() { return this.val() + 1; }   // public surface dispatches virtually
 }
-class Box extends Shape {
-    public int32 n;
-    override fn int32 val() { return this.n; }
+final class Box extends Shape {
+    int32 n;                                          // private (kind-decides); set via accessor
+    public fn void put(int32 v) { this.n = v; }
+    protected override fn int32 val() { return this.n; }
 }
 fn int32 main() {
     Box b = new Box();   // ctor-less derived class
-    b.n = 41;
+    b.put(v: 41);
     return b.plus1();    // virtual dispatch -> Box.val() = 41, +1 = 42
 }

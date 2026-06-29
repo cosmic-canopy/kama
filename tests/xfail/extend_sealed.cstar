@@ -1,0 +1,4 @@
+// A plain (sealed) class cannot be extended; only virtual/abstract classes may.
+class Base { public Base() {} }
+virtual class Derived extends Base { protected virtual fn int h() { return 0; } }
+fn int main() { return 0; }

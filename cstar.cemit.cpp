@@ -1139,6 +1139,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (mv == "volatile")
                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", cd->line);
             }
+        // M25b — a plain/`pod` class is sealed: only virtual/abstract/final classes may extend a base.
+        // (The base must itself be extensible — checked in linkBases once names resolve.)
+        if (!ci.baseName.empty() && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
+            unsupported(("class '" + ci.name + "' extends '" + ci.baseName
+                         + "'; only a `virtual`/`abstract`/`final class` may extend").c_str(), cd->line);
 
         if (cd->members) {
             for (auto& m : *cd->members) {
@@ -1152,8 +1157,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             if (*mod->value == "export")
                                 unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fd->line);
                         }
-                    Visibility fvis = visibilityOf(fd->modifiers,
-                                          (ci.isPod || ci.isExternStruct) ? Visibility::Public : Visibility::Private, fd->line);
+                    // M25b — a field takes NO visibility modifier: exposure is the class
+                    // KIND (`pod`/extern struct = public; every other kind = private).
+                    if (modHas(fd->modifiers, "public") || modHas(fd->modifiers, "protected") || modHas(fd->modifiers, "private"))
+                        unsupported("a field takes no visibility modifier — data exposure is the class kind "
+                                    "(`pod class` = public, otherwise private); expose data with an accessor method", fd->line);
+                    Visibility fvis = (ci.isPod || ci.isExternStruct) ? Visibility::Public : Visibility::Private;
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
                             FieldInfo fi;
@@ -1187,6 +1196,28 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", md->line);
                             }
                         if (!md->body) mi.isAbstract = mi.isVirtual = true;   // null body => pure
+                        // M25b — polymorphism rules.
+                        if (mi.isVirtual) {
+                            const std::string& mname = *md->name->value;
+                            const char* kw = mi.isAbstract ? "abstract" : mi.isOverride ? "override" : "virtual";
+                            // (3) an overridable method is written `protected` (never public/private):
+                            //     a private virtual can't be overridden, a public one is the interface's job.
+                            if (mi.visibility != Visibility::Protected)
+                                unsupported(("overridable method '" + mname + "' must be declared `protected` (write `protected "
+                                    + kw + "`); public polymorphism belongs on an interface").c_str(), md->line);
+                            // (4a) the class kind must opt in to the method's polymorphism.
+                            if (mi.isAbstract && !ci.isAbstractClass)
+                                unsupported(("class '" + ci.name + "' declares an abstract method; declare it `abstract class`").c_str(), md->line);
+                            else if (mi.isOverride && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
+                                unsupported(("class '" + ci.name + "' overrides a method; declare it `virtual`/`abstract`/`final class`").c_str(), md->line);
+                            else if (!mi.isAbstract && !mi.isOverride && !ci.isVirtualClass && !ci.isAbstractClass)
+                                unsupported(("class '" + ci.name + "' declares a virtual method; declare it `virtual class`").c_str(), md->line);
+                        }
+                        // M25b — `final` seals a virtual slot; reject the meaningless/contradictory cases.
+                        if (mi.isFinal && mi.isAbstract)
+                            unsupported(("`final abstract` on '" + *md->name->value + "' is a contradiction (an abstract method must be overridden)").c_str(), md->line);
+                        else if (mi.isFinal && !mi.isVirtual)
+                            unsupported(("`final` on '" + *md->name->value + "' applies only to an overridable (virtual/override) method").c_str(), md->line);
                         ci.methods[*md->name->value] = mi;
                     }
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
@@ -1203,8 +1234,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // M24d: a `const` data member — a normal struct field, written
                     // ONCE in the constructor (inline init or `this.f = …`), then
                     // immutable. Enforcement is at the cstar level; the C field is plain.
-                    Visibility kvis = visibilityOf(kd->modifiers,
-                                          (ci.isPod || ci.isExternStruct) ? Visibility::Public : Visibility::Private, kd->line);
+                    // M25b — like any field, no visibility modifier; the kind decides exposure.
+                    if (modHas(kd->modifiers, "public") || modHas(kd->modifiers, "protected") || modHas(kd->modifiers, "private"))
+                        unsupported("a field takes no visibility modifier — data exposure is the class kind "
+                                    "(`pod class` = public, otherwise private); expose data with an accessor method", kd->line);
+                    Visibility kvis = (ci.isPod || ci.isExternStruct) ? Visibility::Public : Visibility::Private;
                     if (kd->declarators)
                         for (auto& d : *kd->declarators) {
                             FieldInfo fi;
@@ -1221,6 +1255,18 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 }
             }
         }
+        // M25b — a `virtual`/`abstract class` must actually declare an overridable method
+        // (else the qualifier is a lie); the reverse of rule 4a.
+        if (ci.isVirtualClass || ci.isAbstractClass) {
+            bool hasOverridable = false;
+            for (auto& kv : ci.methods) if (kv.second.isVirtual) { hasOverridable = true; break; }
+            if (!hasOverridable)
+                unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
+                             + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd->line);
+        }
+        // M25b — `pod class` is plain data: no methods, no base, no vtable.
+        if (ci.isPod && !ci.methods.empty())
+            unsupported(("`pod class` '" + ci.name + "' may not declare methods (operators/static only)").c_str(), cd->line);
         _classes[ci.name] = ci;
     }
 }
@@ -1652,6 +1698,14 @@ void CEmitter::linkBases()
             ci.baseName.clear();
         } else {
             ci.base = &it->second;
+            // M25b — the base must be extensible: a `virtual`/`abstract class`, never a
+            // plain/`pod`/`final` (sealed) class.
+            int bl = ci.node ? ci.node->line : 0;
+            if (ci.base->isFinalClass)
+                unsupported(("cannot extend '" + ci.base->name + "': it is a `final class` (a sealed leaf)").c_str(), bl);
+            else if (!(ci.base->isVirtualClass || ci.base->isAbstractClass))
+                unsupported(("cannot extend '" + ci.base->name
+                             + "': only a `virtual`/`abstract class` may be extended").c_str(), bl);
         }
     }
     // Break cycles defensively (A extends B extends A): cut the back-edge.
@@ -1705,6 +1759,17 @@ void CEmitter::buildVtables()
                 unsupported(("'override fn " + mname + "' overrides no virtual method in any base class "
                              "(the base method must be `virtual`/`abstract`)").c_str(),
                             mi.node ? mi.node->line : 0);
+            // M25b — a `final` slot may not be re-overridden by any subclass.
+            if (mi.isOverride)
+                for (ClassInfo* b = ci->base; b; b = b->base) {
+                    auto it = b->methods.find(mname);
+                    if (it != b->methods.end() && it->second.isVirtual) {
+                        if (it->second.isFinal)
+                            unsupported(("cannot override '" + mname + "': it is `final` in '" + b->name + "'").c_str(),
+                                        mi.node ? mi.node->line : 0);
+                        break;   // nearest declaring base wins
+                    }
+                }
             if (mi.isOverride || ci->slotImpl.count(mname)) {
                 // Re-slot an inherited virtual with this class's implementation.
                 if (!mi.isAbstract) ci->slotImpl[mname] = mi.cName;
