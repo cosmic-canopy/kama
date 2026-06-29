@@ -1,0 +1,9 @@
+// A method satisfying an interface must be public — the interface is a public contract,
+// so an implementer that hides it would be reachable through the interface but not by name.
+interface IShape { fn int64 area(); }
+class Circle implements IShape {
+    int64 r;
+    public Circle(int64 r) { this.r = r; }
+    fn int64 area() { return r * r; }   // ERROR: implements IShape.area but isn't public
+}
+fn int main() { return 0; }

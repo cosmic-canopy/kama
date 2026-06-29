@@ -6,13 +6,13 @@ class Circle implements IShape
 {
     int64 r;
     public Circle(int64 r) { this.r = r; }
-    fn int64 area() { return r * r; }
+    public fn int64 area() { return r * r; }
 }
 class Square implements IShape
 {
     int64 s;
     public Square(int64 s) { this.s = s; }
-    fn int64 area() { return s * s; }
+    public fn int64 area() { return s * s; }
 }
 fn int64 measure(IShape sh)
 {

@@ -1898,10 +1898,22 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         if (f == byName.end()) { unsupported("missing argument in call", srcLine); s += "0"; continue; }
         std::string val = emitExpression(f->second->expression);
         if (isInterface(p.className)) {
-            // Wrap a concrete object as an interface fat pointer; pass through an
-            // existing interface value.
             std::string c = exprClass(f->second->expression);
-            s += (!c.empty() && isClass(c)) ? fatPointer(p.className, c, val) : val;
+            if (p.byRef) {
+                // `ref`/`out` interface: the callee may reseat the caller's handle, so the
+                // argument must be an actual interface variable (pass its address). A
+                // concrete class would need a throwaway temp — reject it; bind first.
+                if (!c.empty() && isClass(c))
+                    unsupported(("cannot pass '" + c + "' by `ref`/`out` to interface parameter '" + p.name
+                                 + "'; bind it to an `" + p.className + "` first "
+                                 "(`" + p.className + " s = …; … ref s`)").c_str(), srcLine);
+                if (!p.isConst) checkConstWrite(f->second->expression, srcLine);
+                s += "&(" + val + ")";
+            } else {
+                // by value: wrap a concrete object as an interface fat pointer (the borrow);
+                // pass an existing interface value straight through.
+                s += (!c.empty() && isClass(c)) ? fatPointer(p.className, c, val) : val;
+            }
         } else if (p.byRef) {
             // M24 soundness: a non-const `ref`/`out` param can MUTATE its argument, so a
             // const binding (or a const field outside its ctor) may not be passed to one
@@ -2497,6 +2509,12 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&ci, m.name, &owner);
             if (!mi) { unsupported(("class missing interface method '" + m.name + "'").c_str(), ci.node->line); continue; }
+            // M25: an interface is a PUBLIC contract — a method that satisfies it must be
+            // public too (else it's reachable through the interface but not by name: a leak).
+            if (mi->visibility != Visibility::Public)
+                unsupported(("method '" + m.name + "' implements interface '" + ii.name
+                             + "' and must be declared `public`").c_str(),
+                            mi->node ? mi->node->line : ci.node->line);
             indent(1);
             *_out << "." << m.name << " = (" << cType(m.node->returnType) << "(*)" << ifaceSlotSig(m.node)
                  << ")&" << mi->cName << ",\n";
