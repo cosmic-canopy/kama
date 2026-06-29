@@ -11,13 +11,13 @@ fn int main()
 {
     Weak<Counter> w;   // default-empty
     {
-        Shared<Counter> s = new Shared<Counter>(start: 7);
+        Shared<Counter> s = new Counter(start: 7);
         w = s;          // weak ref
     }                   // s drops -> Counter freed (strong 1->0); ctrl kept (weak=1)
 
     int32 r = 0;
     if (w.expired()) { r = r + 5; }        // expired (strong==0) -> +5
-    Shared<Counter> s2 = w.lock();          // empty (cannot upgrade a dead weak)
+    Shared<Counter> s2 = w.upgrade();          // empty (cannot upgrade a dead weak)
     if (s2.valid()) { r = r + 100; }        // not taken
     return r;                               // 5
 }

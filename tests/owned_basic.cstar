@@ -9,7 +9,7 @@ class Counter
 
 fn int main()
 {
-    Owned<Counter> c = new Owned<Counter>(start: 40);
+    Owned<Counter> c = new Counter(start: 40);
     c.bump();
     c.bump();
     return c.get();   // 42

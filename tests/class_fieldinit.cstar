@@ -12,6 +12,6 @@ class Box
 }
 fn int main()
 {
-    Box b = new Box();
+    Box b = Box();
     return b.area();
 }

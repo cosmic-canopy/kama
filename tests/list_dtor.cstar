@@ -17,9 +17,9 @@ class Probe
 fn int build()
 {
     List<Probe> xs = new List<Probe>();
-    Probe a = new Probe(id: 1);
-    Probe b = new Probe(id: 2);
-    Probe c = new Probe(id: 4);
+    Probe a = Probe(id: 1);
+    Probe b = Probe(id: 2);
+    Probe c = Probe(id: 4);
     xs.add(item: a);
     xs.add(item: b);
     xs.add(item: c);

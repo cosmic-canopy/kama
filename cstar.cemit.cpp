@@ -627,33 +627,64 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 if (_classes[ty].destructible) recordDestructibleLocal(nm, ty);
                 if (!d->initializer) return;   // declared but uninitialized (non-const)
 
+                // M26a: `T(...)` with no `new` (an InvocationNode whose callee names the
+                // declared class) is STACK construction; `new` is reserved for the heap.
+                InvocationNode* stackCtor = nullptr;
+                if (auto* iv = dynamic_cast<InvocationNode*>(d->initializer.get()))
+                    if (iv->identifier && iv->identifier->value && isClass(ty)
+                        && resolveUserName(*iv->identifier->value, iv->identifier->qualifier) == ty)
+                        stackCtor = iv;
+
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(d->initializer.get())) {
+                    // M26a: `new` is the HEAP operator — it boxes a value into a smart
+                    // pointer (Owned/Shared/Weak), naming the element type directly:
+                    // `Owned<Box> p = new Box(...)`. (BindableFunctionPtr keeps `new` for
+                    // its bind.) `new` into a plain value type is an error — drop `new`.
                     std::string octy = cType(oc->type);
-                    if (isSmartPtrClass(octy)) {
-                        // new Owned/Shared<T>(args): box T on the heap, run T's
-                        // ctor in place, and (Shared) allocate the control block.
-                        std::string T = _classes[octy].collElemClass;
-                        if (isClass(T) && _classes[T].isAbstractClass)   // Step 3: no abstract heap-alloc either
-                            unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), n->line);
-                        line(n->line); indent(depth);
-                        *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
-                        if (isClass(T) && _classes[T].hasCtor) {
+                    if (isBindableClass(ty)) {
+                        emitBindableNew(nm, ty, oc, depth);   // bind obj + method (M22)
+                    } else if (isSmartPtrClass(ty)) {
+                        std::string T = _classes[ty].collElemClass;
+                        if (isSmartPtrClass(octy) || isBindableClass(octy))
+                            unsupported(("`new` now names the element type — write `new " + T
+                                         + "(...)`, not the wrapper").c_str(), n->line);
+                        else if (octy != T)
+                            unsupported(("`" + ty + "` boxes `" + T + "`, but got `new " + octy + "(...)`").c_str(), n->line);
+                        else {
+                            if (isClass(T) && _classes[T].isAbstractClass)
+                                unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), n->line);
                             line(n->line); indent(depth);
-                            *_out << emitReorderedCall(T + "__ctor", nm + ".ptr",
-                                                      _classes[T].ctorParams, oc->args, n->line) << ";\n";
+                            *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
+                            if (isClass(T) && _classes[T].hasCtor) {
+                                line(n->line); indent(depth);
+                                *_out << emitReorderedCall(T + "__ctor", nm + ".ptr",
+                                                          _classes[T].ctorParams, oc->args, n->line) << ";\n";
+                            }
+                            if (smartKind(ty) == CollKind::Shared) {
+                                indent(depth); *_out << nm << ".ctrl = cstar_ctrl_new();\n";
+                            }
+                            // T with no ctor: malloc leaves it default (callers init fields).
                         }
-                        if (smartKind(octy) == CollKind::Shared) {
-                            indent(depth);
-                            *_out << nm << ".ctrl = cstar_ctrl_new();\n";
+                    } else if (_classes.count(ty) && _classes[ty].isCollection) {
+                        // Array/List/String — a value type that manages its own heap buffer;
+                        // `new` constructs it in place (the generic `Array<T>(...)` call form
+                        // doesn't parse, so collections keep `new`).
+                        if (_classes[ty].hasCtor) {
+                            line(n->line); indent(depth);
+                            *_out << emitCtorCall(nm, _classes[ty], oc->args, n->line) << ";\n";
                         }
-                        // T with no ctor: malloc leaves it default (callers init fields).
-                    } else if (isBindableClass(octy)) {
-                        emitBindableNew(nm, octy, oc, depth);   // bind obj + method (M22)
-                    } else if (isClass(octy) && _classes[octy].hasCtor) {
+                    } else {
+                        unsupported(("`new` allocates on the heap — wrap it in `Owned<" + octy
+                                     + ">`/`Shared<" + octy + ">`, or drop `new` for a stack value "
+                                     "(`" + ty + " v = " + octy + "(...)`)").c_str(), n->line);
+                    }
+                } else if (stackCtor) {
+                    // STACK value, constructed in place (`Box b = Box(id: 5)`).
+                    if (_classes[ty].isAbstractClass)
+                        unsupported(("cannot instantiate abstract class '" + ty + "'").c_str(), n->line);
+                    if (_classes[ty].hasCtor) {
                         line(n->line); indent(depth);
-                        *_out << emitCtorCall(nm, _classes[octy], oc->args, n->line) << ";\n";
-                    } else if (!isClass(octy)) {
-                        unsupported("`new` of a non-class type", n->line);
+                        *_out << emitCtorCall(nm, _classes[ty], stackCtor->args, n->line) << ";\n";
                     }
                     // class with no ctor: left default-initialized
                 } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
@@ -1427,9 +1458,9 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
         mi.isIntrinsic = true; ci.methods[m] = mi;
     };
     // Intrinsics (not auto-deref forwarded): Owned has none; Shared has valid();
-    // Weak has lock() (-> Shared) and expired().
+    // Weak has upgrade() (-> Shared) and expired().
     if (kind == CollKind::Shared) addM("valid", {});
-    if (kind == CollKind::Weak) { addM("lock", {}); addM("expired", {}); }
+    if (kind == CollKind::Weak) { addM("upgrade", {}); addM("expired", {}); }
     _classes[cName] = ci;
 }
 
@@ -1598,7 +1629,7 @@ void CEmitter::emitCollectionDefs()
             *_out << "CSTAR_SHARED_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", " << elemDtor << ")\n";
         } else if (info.kind == CollKind::Weak) {
-            // lock() returns the matching Shared (emitted earlier — map order Shared_ < Weak_).
+            // upgrade() returns the matching Shared (emitted earlier — map order Shared_ < Weak_).
             *_out << "CSTAR_WEAK_DEFINE(" << info.elemCType << ", " << info.cName
                  << ", Shared_" << info.elemMangle << ")\n";
         } else if (info.kind == CollKind::Bindable) {
@@ -1679,7 +1710,7 @@ std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string
     // Otherwise auto-deref to the pointee T (Owned/Shared expose a T* ptr).
     if (smartKind(cls) != CollKind::Weak)
         return emitDispatch(_classes[cls].collElemClass, "(" + recvExpr + ").ptr", method, args, srcLine);
-    unsupported(("Weak<T> has no member '" + method + "'; call .lock() to upgrade").c_str(), srcLine);
+    unsupported(("Weak<T> has no member '" + method + "'; call .upgrade()").c_str(), srcLine);
     return "0";
 }
 
@@ -2817,10 +2848,10 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     }
     std::string cls = exprClass(ma->expression);
     // Auto-deref an Owned/Shared: `n.field` -> `(n).ptr->[base]field` (T*).
-    // A Weak can't be dereffed — it must be upgraded with lock() first.
+    // A Weak can't be dereffed — it must be upgraded with upgrade() first.
     if (isSmartPtrClass(cls)) {
         if (smartKind(cls) == CollKind::Weak) {
-            unsupported("cannot access a field through Weak<T>; call .lock() to upgrade", ma->line);
+            unsupported("cannot access a field through Weak<T>; call .upgrade()", ma->line);
             return field;
         }
         std::string T = _classes[cls].collElemClass;

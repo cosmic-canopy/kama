@@ -12,7 +12,7 @@ class Probe
 
 fn int build()
 {
-    Shared<Probe> a = new Shared<Probe>(id: 9);   // construct -> 1, strong=1
+    Shared<Probe> a = new Probe(id: 9);   // construct -> 1, strong=1
     Shared<Probe> b = a;                           // retain, strong=2
     return 0;
     // scope exit: ~b (strong 2->1, no dtor), ~a (strong 1->0, ~Probe -> 2)

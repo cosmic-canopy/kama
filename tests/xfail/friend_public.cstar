@@ -6,4 +6,4 @@ class Account {
     friend audit[get];   // get is already public
 }
 fn int64 audit(ref Account a) { return a.get(); }
-fn int main() { Account acc = new Account(b: 1); return cast<int>(audit(a: ref acc)); }
+fn int main() { Account acc = Account(b: 1); return cast<int>(audit(a: ref acc)); }

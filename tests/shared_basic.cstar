@@ -9,7 +9,7 @@ class Counter
 
 fn int main()
 {
-    Shared<Counter> c = new Shared<Counter>(start: 40);
+    Shared<Counter> c = new Counter(start: 40);
     c.bump();
     c.bump();
     return c.get();   // 42

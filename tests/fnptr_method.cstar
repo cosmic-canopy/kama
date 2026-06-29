@@ -9,8 +9,8 @@ class Vec2 {
 fnptr int32 DotFn(ref Vec2 self, ref Vec2 o);   // receiver is an explicit first param
 
 fn int32 main() {
-    Vec2 u = new Vec2(x: 3, y: 4);
-    Vec2 v = new Vec2(x: 6, y: 6);
+    Vec2 u = Vec2(x: 3, y: 4);
+    Vec2 v = Vec2(x: 6, y: 6);
     DotFn d = Vec2::dot;                          // unbound method ref (:: = no binding)
     return d(self: ref u, o: ref v);             // pass the object explicitly: 3*6+4*6 = 42
 }

@@ -10,10 +10,10 @@ class Res
 
 fn int f()
 {
-    Res outer = new Res(id: 1);
+    Res outer = Res(id: 1);
     while (true)
     {
-        Res inner = new Res(id: 2);
+        Res inner = Res(id: 2);
         break;
     }
     return 0;

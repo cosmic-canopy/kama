@@ -20,6 +20,6 @@ final class Derived extends Base
 }
 fn int main()
 {
-    Derived d = new Derived(x: 30, y: 12);
+    Derived d = Derived(x: 30, y: 12);
     return d.sum();
 }

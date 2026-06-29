@@ -12,7 +12,7 @@ final class Box extends Shape {
     protected override fn int32 val() { return this.n; }
 }
 fn int32 main() {
-    Box b = new Box();   // ctor-less derived class
+    Box b = Box();   // ctor-less derived class
     b.put(v: 41);
     return b.plus1();    // virtual dispatch -> Box.val() = 41, +1 = 42
 }

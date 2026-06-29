@@ -20,8 +20,8 @@ fn int64 measure(IShape sh)
 }
 fn int main()
 {
-    Circle c = new Circle(r: 7);
-    Square q = new Square(s: 5);
+    Circle c = Circle(r: 7);
+    Square q = Square(s: 5);
     int64 a = measure(sh: c);
     int64 b = measure(sh: q);
     uint64 sum = cast<uint64>(a) + cast<uint64>(b);

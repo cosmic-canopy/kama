@@ -7,7 +7,7 @@ class Probe {
     fn int32 read(int32 d) { return this.id + d; }
 }
 fn BindableFunctionPtr<Get> make(int32 id) {
-    Owned<Probe> p = new Owned<Probe>(id: id);
+    Owned<Probe> p = new Probe(id: id);
     BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
     return g;
 }

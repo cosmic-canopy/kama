@@ -12,8 +12,8 @@ class Square implements IShape {
 fn void swap_to(out IShape sh, IShape other) { sh = other; }   // reseat the caller's handle
 fn int64 read(ref IShape sh) { return sh.area(); }
 fn int main() {
-    Circle c = new Circle(r: 6);
-    Square q = new Square(s: 5);
+    Circle c = Circle(r: 6);
+    Square q = Square(s: 5);
     IShape s = c;
     int64 a = read(sh: ref s);     // 36
     swap_to(sh: ref s, other: q);  // now s holds the square

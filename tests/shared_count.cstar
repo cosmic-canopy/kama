@@ -10,7 +10,7 @@ class Counter
 
 fn int main()
 {
-    Shared<Counter> a = new Shared<Counter>(start: 40);
+    Shared<Counter> a = new Counter(start: 40);
     {
         Shared<Counter> b = a;   // retain (strong=2); shared state
         b.bump();                // a sees it too -> 41

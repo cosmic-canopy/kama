@@ -12,7 +12,7 @@ class Probe {
     public fn int32 read(int32 d) { return this.id + d; }
 }
 fn int use() {
-    Shared<Probe> p = new Shared<Probe>(id: 1);
+    Shared<Probe> p = new Probe(id: 1);
     BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
     return g(d: 41) + p.read(d: 0);                  // 42 (via bindable) + 1 (via shared) = 43
 }

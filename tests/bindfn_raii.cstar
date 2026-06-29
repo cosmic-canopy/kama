@@ -11,7 +11,7 @@ class Probe {
     fn int32 read(int32 d) { return this.id + d; }
 }
 fn int use() {
-    Owned<Probe> p = new Owned<Probe>(id: 1);
+    Owned<Probe> p = new Probe(id: 1);
     BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
     return g(d: 41);                                 // 42; on exit g drops -> Probe::~ once
 }

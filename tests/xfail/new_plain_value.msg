@@ -1,0 +1,1 @@
+drop `new` for a stack value

@@ -10,9 +10,9 @@ class Counter
 
 fn int main()
 {
-    Shared<Counter> s = new Shared<Counter>(start: 40);
+    Shared<Counter> s = new Counter(start: 40);
     Weak<Counter> w = s;            // weak ref (does not keep alive)
-    Shared<Counter> s2 = w.lock();  // upgrade -> valid (s is alive)
+    Shared<Counter> s2 = w.upgrade();  // upgrade -> valid (s is alive)
     int32 r = 0;
     if (s2.valid()) { r = 1; }      // confirm the upgrade succeeded
     s2.bump();

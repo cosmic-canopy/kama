@@ -12,7 +12,7 @@ class Widget {
     public const fn int32 tag() { return this.id + this.kind; }
 }
 fn int32 main() {
-    Widget w = new Widget(id: 33);
+    Widget w = Widget(id: 33);
     w.tick(); w.tick();
     return w.tag() + w.count_();   // (33 + 7) + 2 = 42
 }

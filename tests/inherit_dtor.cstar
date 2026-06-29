@@ -18,7 +18,7 @@ final class Derived extends Base
 fn int main()
 {
     {
-        Derived d = new Derived();
+        Derived d = Derived();
     }
     return cstar_trace_get();
 }

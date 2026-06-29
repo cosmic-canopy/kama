@@ -21,7 +21,8 @@ Status of all **59 reserved keywords**, established by exercising each through `
 | `int` | ✅ | alias → `int32` |
 | `double` | ✅ | alias → `float64` (C `double`) |
 | `class` `interface` `enum` `namespace` `operator` | ✅ | |
-| `extends` `implements` `new` `this` `base` `ref` `out` | ✅ | (`base(...)`/`base.m()` need **named** args) |
+| `extends` `implements` `this` `base` `ref` `out` | ✅ | (`base(...)`/`base.m()` need **named** args) |
+| `new` | ✅ | **M26a: the heap operator.** `Owned<Box> p = new Box(...)` boxes the **element type** on the heap; a stack value **drops `new`** (`Box b = Box(...)`). `new` into a plain value type is an error. (Collections keep `new Array<T>(...)` — the `Array<T>(...)` call form doesn't parse.) |
 | `virtual` `override` | ✅ | **M25b**: an overridable method is written `protected` (never public/private), and its class must opt in as `virtual class`/`abstract class`; `override` only re-seats a real base slot. (Bug 1 — ctor-less polymorphic class — fixed.) |
 | `pod` | ✅ | **M25**: `pod class` — plain public data (all fields public, no methods/vtable/dtor); the C-layout/`memcpy`/FFI-compatible kind. Methods on a `pod` are a hard error |
 | `if` `else` `switch` `case` `default` `do` `while` `for` `foreach` `in` `break` `continue` `return` | ✅ | |

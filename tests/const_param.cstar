@@ -11,6 +11,6 @@ fn int32 dist2(const ref Vec2 a, const int32 bias) {   // read-only borrow + con
     return a.lenSq() + bias;                            // const method call on a const borrow: OK
 }
 fn int32 main() {
-    Vec2 v = new Vec2(x: 3, y: 4);
+    Vec2 v = Vec2(x: 3, y: 4);
     return dist2(a: ref v, bias: 17);                   // 25 + 17 = 42
 }

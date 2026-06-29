@@ -17,7 +17,7 @@ class Accum
 }
 fn int main()
 {
-    Accum a = new Accum(init: 40);
+    Accum a = Accum(init: 40);
     a.bump();
     return a.run();
 }

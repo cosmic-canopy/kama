@@ -13,7 +13,7 @@ class Node
 
 fn Owned<Node> make(int32 v)
 {
-    Owned<Node> n = new Owned<Node>(id: v);   // construct -> 5
+    Owned<Node> n = new Node(id: v);   // construct -> 5
     return n;                                  // MOVE OUT (make's unwind no-ops)
 }
 

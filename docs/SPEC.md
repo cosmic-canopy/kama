@@ -56,10 +56,10 @@ source; don't return or inline-use a temp-owned string without binding it to a l
 runtime. Use it for heap objects, recursive data structures, and (later) polymorphic ownership.
 
 ```cstar
-Owned<Counter> c = new Owned<Counter>(start: 40);  // heap-allocate + run Counter's ctor
+Owned<Counter> c = new Counter(start: 40);  // M26a: `new` heap-boxes the ELEMENT type
 c.bump();  int n = c.get();                          // auto-deref: . reaches the pointee
 Owned<Counter> d = c;                                // MOVE: c is now empty (moved-from)
-fn Owned<Node> make(int v) { Owned<Node> n = new Owned<Node>(id: v); return n; }  // factory: moves out
+fn Owned<Node> make(int v) { Owned<Node> n = new Node(id: v); return n; }  // factory: moves out
 ```
 
 Move-only: copying/initializing/returning an `Owned` transfers ownership and invalidates the source, so
@@ -69,7 +69,7 @@ the pointee is freed exactly once (RAII, with the pointee's destructor).
 retains (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.
 
 ```cstar
-Shared<Tex> a = new Shared<Tex>(id: 7);
+Shared<Tex> a = new Tex(id: 7);
 Shared<Tex> b = a;     // retain — a and b share one Tex (both valid)
 b.use();  int n = a.id;
 // a, b drop in RAII order; the Tex is freed exactly once, with the last handle
@@ -77,11 +77,11 @@ b.use();  int n = a.id;
 
 `Weak<T>` — a non-owning weak reference to a `Shared<T>`'s pointee. It does **not** keep the pointee
 alive, so it **breaks reference cycles** that `Shared` alone would leak. You can't dereference a `Weak`
-(it may be dead) — **upgrade** it with a checked `lock()`:
+(it may be dead) — **upgrade** it with a checked `upgrade()`:
 
 ```cstar
-Weak<Tex>  w = s;          // make a weak ref from a Shared (does not keep Tex alive)
-Shared<Tex> up = w.lock();  // upgrade -> a valid Shared if the Tex is alive, else empty
+Weak<Tex>  w = s;             // make a weak ref from a Shared (does not keep Tex alive)
+Shared<Tex> up = w.upgrade();  // -> a valid Shared if the Tex is alive, else empty
 if (up.valid()) { up.use(); }       // .valid() = the upgraded Shared is non-empty
 bool dead = w.expired();    // true once the last Shared is gone
 Weak<Tex>  e;               // default-empty (expired)

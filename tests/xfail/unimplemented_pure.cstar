@@ -1,4 +1,4 @@
 // A subclass that leaves an inherited pure method un-overridden is itself abstract.
 abstract class Shape { protected abstract fn int32 area(); }
 final class Bad extends Shape { int32 x; public Bad(int32 x){ this.x = x; } }   // forgot to override area
-fn int main() { Bad b = new Bad(x: 1); return 0; }
+fn int main() { Bad b = Bad(x: 1); return 0; }

@@ -66,7 +66,7 @@ static inline bool NAME##__valid(NAME* self) { return self->ptr != NULL; }
 
 // Weak<T> — a non-owning reference to a Shared<T>'s pointee. Counts `weak`, not
 // `strong`, so it does NOT keep the pointee alive (it breaks Shared cycles). You
-// cannot deref a Weak directly; `lock()` upgrades to a Shared if still alive.
+// cannot deref a Weak directly; `upgrade()` upgrades to a Shared if still alive.
 // Same layout as Shared. Drop releases the weak count and frees the control
 // block only when BOTH counts reach 0 (never touches the pointee).
 #define CSTAR_WEAK_DEFINE(T, NAME, SHARED_NAME)                                 \
@@ -80,7 +80,7 @@ static inline void NAME##__dtor(NAME* self) {                                  \
 static inline bool NAME##__expired(NAME* self) {                              \
     return self->ctrl == NULL || self->ctrl->strong == 0;                     \
 }                                                                              \
-static inline SHARED_NAME NAME##__lock(NAME* self) {                          \
+static inline SHARED_NAME NAME##__upgrade(NAME* self) {                          \
     SHARED_NAME s;                                                            \
     if (self->ctrl && self->ctrl->strong > 0) {                              \
         self->ctrl->strong++; s.ptr = self->ptr; s.ctrl = self->ctrl;        \

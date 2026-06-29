@@ -8,4 +8,4 @@ final class Derived extends Base {
     public Derived() { }
     protected override fn int32 plain() { return 2; }   // ERROR: plain is not virtual
 }
-fn int main() { Derived d = new Derived(); return 0; }
+fn int main() { Derived d = Derived(); return 0; }

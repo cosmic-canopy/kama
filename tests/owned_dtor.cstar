@@ -11,7 +11,7 @@ class Probe
 
 fn int build()
 {
-    Owned<Probe> p = new Owned<Probe>(id: 1);
+    Owned<Probe> p = new Probe(id: 1);
     return 0;   // p drops -> Owned_Probe__dtor -> Probe__dtor + free
 }
 

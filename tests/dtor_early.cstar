@@ -10,10 +10,10 @@ class Res
 
 fn int f(bool c)
 {
-    Res a = new Res(id: 1);
+    Res a = Res(id: 1);
     if (c)
     {
-        Res b = new Res(id: 2);
+        Res b = Res(id: 2);
         return 0;
     }
     return 9;

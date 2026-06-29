@@ -8,6 +8,6 @@ class Circle implements IShape {
 }
 fn int64 read(ref IShape sh) { return sh.area(); }
 fn int main() {
-    Circle c = new Circle(r: 6);
+    Circle c = Circle(r: 6);
     return cast<int>(read(sh: ref c));   // ERROR: ref a concrete Circle to `ref IShape`
 }

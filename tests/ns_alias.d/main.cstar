@@ -1,6 +1,6 @@
 using Gfx = Graphics;
 fn int main()
 {
-    Gfx::Texture t = new Gfx::Texture(id: 20);   // alias-qualified type
+    Gfx::Texture t = Gfx::Texture(id: 20);   // alias-qualified type
     return t.get() + Gfx::scale(x: 11);          // 20 + 22 = 42
 }

@@ -10,8 +10,8 @@ class Counter {
     public fn void bump() { this.n = this.n + 1; }                // mutating
 }
 fn int32 main() {
-    const Counter c = new Counter(n: 9);
-    Counter m = new Counter(n: 14);
+    const Counter c = Counter(n: 9);
+    Counter m = Counter(n: 14);
     m.bump();                                       // mutable receiver: OK
     return c.value() + c.doubled() + m.value();     // 9 + 18 + 15 = 42
 }

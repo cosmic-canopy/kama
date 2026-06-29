@@ -12,7 +12,7 @@ class Probe
 
 fn int build()
 {
-    Shared<Probe> a = new Shared<Probe>(id: 9);   // construct -> 1 (strong=1)
+    Shared<Probe> a = new Probe(id: 9);   // construct -> 1 (strong=1)
     Weak<Probe> w = a;                             // weak=1 (does not keep alive)
     return 0;
     // scope exit: ~w (weak 1->0, strong still 1: ctrl kept, pointee untouched),

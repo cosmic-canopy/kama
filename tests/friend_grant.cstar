@@ -13,9 +13,9 @@ class Ledger {
     public fn int64 post(ref Account a) { return a.balance; }      // granted method
 }
 fn int main() {
-    Account acc = new Account(b: 14);
-    Bank bk = new Bank();
-    Ledger lg = new Ledger();
+    Account acc = Account(b: 14);
+    Bank bk = Bank();
+    Ledger lg = Ledger();
     int64 total = readBalance(a: ref acc) + bk.viaBank(a: ref acc) + lg.post(a: ref acc);
     return cast<int>(total);   // 14 * 3 = 42
 }

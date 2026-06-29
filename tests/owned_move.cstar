@@ -12,7 +12,7 @@ class Probe
 
 fn int build()
 {
-    Owned<Probe> a = new Owned<Probe>(id: 9);   // construct once -> 1
+    Owned<Probe> a = new Probe(id: 9);   // construct once -> 1
     Owned<Probe> b = a;                          // MOVE: a now null
     return 0;
     // scope exit: ~b (real -> 2), ~a (no-op, ptr null)

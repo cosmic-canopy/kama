@@ -10,7 +10,7 @@ class Circle implements IShape
 }
 fn int main()
 {
-    Circle c = new Circle(r: 6);
+    Circle c = Circle(r: 6);
     IShape s = c;
     int64 a = s.area();
     uint64 m = cast<uint64>(a) % 256;

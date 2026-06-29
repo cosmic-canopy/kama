@@ -1,3 +1,3 @@
 // A private method is not callable from outside (default visibility is private).
 class Counter { int32 n; public Counter(){ this.n = 0; } fn void bump(){ this.n = this.n + 1; } }
-fn int main() { Counter c = new Counter(); c.bump(); return 0; }   // bump is private
+fn int main() { Counter c = Counter(); c.bump(); return 0; }   // bump is private
