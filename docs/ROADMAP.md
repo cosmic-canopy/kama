@@ -18,10 +18,16 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 
 ## Road to 1.0 — language complete
 
-Recommended order: **M26e → M23 → M28 → M27 → Step 7 → tag.** Rationale: finish the borrow-safety
-arc (M26e, small), then the type-system push (generics → sum types, which is the dependency spine:
-`Optional<T>` *is* a generic tagged union), then operators, then docs. M27 is independent — pull it
-earlier if you want an engine-math demo sooner.
+Recommended order: **M26e → M27 → M28 → M29 → Step 7 → tag.** Rationale: close the borrow-safety
+arc first (M26e, small); then the type-system push (generics → sum types — the dependency spine,
+since `Optional<T>` *is* a generic tagged union — and generics is the biggest/riskiest piece, best
+done early with full runway); then operators as a visible engine-math finale; then docs. M29 is
+independent — pull it to right after M26e if validating engine-viability sooner beats de-risking
+generics early (recommended against).
+
+*Numbering note:* M0–M26 are historical (done/committed). The remaining work is numbered by build
+order, so generics — long reserved as "M23" but never built — becomes **M27**, and operators (a few
+notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) like M25/M26 did.
 
 1. **M26e — borrow escape check** (second-class borrows). Flow analysis proving a `ref`/`out`
    borrow can't outlive its referent. Closes the last memory-safety hole; with the no-null work
@@ -32,9 +38,10 @@ earlier if you want an engine-math demo sooner.
      annotations** (the simplicity bet, à la Hylo mutable value semantics)? Or do we want a richer
      escape analysis? What's the exact forbidden set, and is checking purely intraprocedural?
 
-2. **M23 — generics.** Full user-defined generics: `Map<K,V>`, multi-param + nested (`>>` lexing).
-   The foundational type-system feature — unblocks `Optional<T>`, `Map`, and every future library
-   type. *(Was slated to defer to 1.1; pulled back in for a language-complete 1.0.)*
+2. **M27 — generics** *(the long-reserved "M23", renumbered to its build order).* Full user-defined
+   generics: `Map<K,V>`, multi-param + nested (`>>` lexing). The foundational type-system feature —
+   unblocks `Optional<T>`, `Map`, and every future library type. *(Was slated to defer to 1.1;
+   pulled back in for a language-complete 1.0.)*
    - **Design Qs:** **Monomorphization** (consistent with today's collection/smart-ptr intrinsics —
      zero-cost, some code bloat) vs type-erasure — almost certainly mono, confirm. **Generic
      constraints** via interface bounds (`<K: IHashable>`) — `Map` needs key hashing/equality, so
@@ -53,9 +60,9 @@ earlier if you want an engine-math demo sooner.
      `_` wildcard, guards? Memory layout (tag + union) and **per-variant RAII** (drop the right
      payload). **Flow-typing** the matched binding (and the `tryUpgrade` result) to the narrowed
      variant. This is where "absence" lives now that there's no null — confirm `Optional` is the one
-     blessed mechanism (vs also `Result<T,E>`?). Depends on M23.
+     blessed mechanism (vs also `Result<T,E>`?). Depends on M27 (generics).
 
-4. **M27 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
+4. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already
    treats `Vec2 c = a + b` as a cheap pod copy. Validated by a first Vec2/3/4 + Mat4 library.
    - **Design Qs:** Operator-method **syntax** — operators are the *sanctioned exception* to
@@ -120,7 +127,7 @@ just the single C backend it has today.
 
 ## Engine track (product north star)
 
-A portable lightweight **WebGPU** game engine. Tiers: **math types** (Tier 0 — unblocked by M27)
+A portable lightweight **WebGPU** game engine. Tiers: **math types** (Tier 0 — unblocked by M29)
 → buffers/bindings → first triangle → scene/material. Depends on the 1.x systems (file I/O for
 assets, serialization for scenes). See `docs/ENGINE_READINESS.md`.
 
