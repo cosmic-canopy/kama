@@ -25,8 +25,8 @@ fn int64 measure(ref Shape sh)
 }
 fn int main()
 {
-    Circle c = new Circle(r: 3);
-    Square q = new Square(s: 4);
+    Circle c = Circle(r: 3);
+    Square q = Square(s: 4);
     uint64 sum = 0;
     for (uint64 i = 0; i < 8000000; i++)
     {
