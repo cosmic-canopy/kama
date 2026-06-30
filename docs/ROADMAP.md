@@ -18,8 +18,9 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 
 ## Road to 1.0 — language complete
 
-Recommended order: **M26e → M27 → M28 → M29 → Step 7 → tag.** Rationale: close the borrow-safety
-arc first (M26e, small); then the type-system push (generics → sum types — the dependency spine,
+Recommended order: **M26e → M26f → M27 → M28 → M29 → Step 7 → tag.** Rationale: close the
+borrow-safety arc first (M26e, small) and enable owned-interface storage (M26f — the engine needs
+it); then the type-system push (generics → sum types — the dependency spine,
 since `Optional<T>` *is* a generic tagged union — and generics is the biggest/riskiest piece, best
 done early with full runway); then operators as a visible engine-math finale; then docs. M29 is
 independent — pull it to right after M26e if validating engine-viability sooner beats de-risking
@@ -29,14 +30,30 @@ generics early (recommended against).
 order, so generics — long reserved as "M23" but never built — becomes **M27**, and operators (a few
 notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) like M25/M26 did.
 
-1. **M26e — borrow escape check** (second-class borrows). Flow analysis proving a `ref`/`out`
-   borrow can't outlive its referent. Closes the last memory-safety hole; with the no-null work
-   already shipped (M26a–d), fully delivers GOALS §3b. *(The `Weak` Try-pattern that was bundled
-   here moves to M28, where `Optional` exists — so it ships in final form, no churn.)*
-   - **Design Qs:** Is the rule strictly *second-class* (a borrow flows only DOWN the call stack —
-     never returned, stored in a field, or captured in a `Bindable`/closure) with **no lifetime
-     annotations** (the simplicity bet, à la Hylo mutable value semantics)? Or do we want a richer
-     escape analysis? What's the exact forbidden set, and is checking purely intraprocedural?
+1. **M26e — borrow escape check** (second-class borrows). Closes the last memory-safety hole;
+   with the no-null work already shipped (M26a–d), fully delivers GOALS §3b. *(The `Weak`
+   Try-pattern that was bundled here moves to M28, where `Optional` exists — so it ships in final
+   form, no churn.)*
+   - **DECIDED (2026-06-30):** The rule is **"borrow is parameter-only; storage requires
+     ownership"** — no lifetime annotations (the simplicity bet). A `ref`/`out` or a by-value
+     interface flows only DOWN the stack; to **store / return / collect** it, it must be *owned*
+     (`Shared<T>`/`Owned<T>`). Finding from the code: borrows are *already* second-class by
+     construction — `ref`/`out` is only a param/arg modifier (no `ref` return/local/field), and
+     interface fields/returns already fail to compile. So M26e stays **tight**: formalize +
+     xfail-test that nothing escapes, and reject a bare-borrow interface stored beyond a call with
+     a clear message (NOT an implicit box — explicit `Shared<IShape>`). **No `ref` returns** (so no
+     `ref T operator[]`); a returnable "reference" is always an owned smart-ptr **handle** (mutate
+     through auto-deref), and value-container elements are mutated by the owner's own methods
+     (tell-don't-ask; the owner may touch its own storage internally — only *escaping* a borrow is
+     banned). A future callback-lend (`grid.mutateAt(i:, with: (ref Cell c) => …)`) is the elegant
+     in-place path but needs inline closures → post-1.0.
+
+   **M26f — owned-interface storage** *(new; before 1.0, after M26e).* Smart-pointers over an
+   interface element (`Shared<IShape>` / `Owned<IShape>` — a fat-pointer element, a real extension
+   of the smart-ptr machinery) + interface fields / returns / collections, so polymorphism can be
+   *stored* (the engine's `List<IDrawable>` scene). Bare stored `IShape` stays a clear error;
+   ownership is explicit, never implicitly boxed. *(May instead fold into M27 generics — decide
+   when we get there.)*
 
 2. **M27 — generics** *(the long-reserved "M23", renumbered to its build order).* Full user-defined
    generics: `Map<K,V>`, multi-param + nested (`>>` lexing). The foundational type-system feature —
