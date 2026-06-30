@@ -87,11 +87,16 @@ bool dead = w.expired();    // true once the last Shared is gone
 Weak<Tex>  e;               // default-empty (expired)
 ```
 
-Smart-pointer limits (whole family): pointee must be a **class** type; **borrow** by passing `ref
-Owned<T>`/`ref Shared<T>`/`ref Weak<T>` (passing a smart pointer by value is rejected); `Owned`
-**use-after-move** is a runtime null-trap (no borrow checker yet); polymorphic `Smart<Base> = Derived` is
-deferred; storing a smart pointer in a collection or a bitwise-copied class field is deferred (aggregate
-copy doesn't retain/move). `Map<K,V>` + multi-param/nested generics are 🚧.
+**No null (safe surface) — see GOALS §3b.** A value, `Owned`/`Shared`, `ref`/`out` borrow, or interface is
+always valid: there is nothing to null-check. `== null` / `!= null` on a safe type is a **compile error**
+(the C habit checks the wrong thing here); `null` is only for `Ptr<T>` at the FFI boundary. A `Weak<T>`'s
+liveness is obtained through `tryUpgrade(out: s) -> bool` (🚧 planned; today: `upgrade()` + `.valid()`),
+whose result forces you to handle the dead case.
+
+Smart-pointer limits (whole family): pointee must be a **class** type; **borrow** by passing `ref T` (the
+object — storage-agnostic; 🚧 fixing the heap case); polymorphic `Smart<Base> = Derived` is deferred;
+storing a smart pointer in a collection or a bitwise-copied class field is deferred (aggregate copy doesn't
+retain/move). `Map<K,V>` + multi-param/nested generics are 🚧.
 
 ## Functions ✅
 

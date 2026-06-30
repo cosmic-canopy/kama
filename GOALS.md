@@ -32,6 +32,16 @@ lightweight WebGPU game engine.
    language goal. (Self-hosting the compiler in cstar — goal #1 — is the one case that may someday need a
    tightly-contained escape hatch; a separate, deferred decision.)
 
+3b. **No null in the safe surface.** A stack value, an `Owned<T>`/`Shared<T>`, a `ref`/`out` borrow, and an
+   interface value are **always valid** — there is nothing to null-check. Absence is encoded in the
+   type/flow, never a sentinel you can forget to test: ownership is valid by construction, *use-after-move*
+   is a compile error, a `Weak<T>` can only be reached through `tryUpgrade` (whose result forces you to
+   handle the dead case), and (with the escape check) a borrow can't dangle. So **`== null` / `!= null` on a
+   safe type is a compile error** with guidance — the C habit of null-checking a pointer is both unnecessary
+   and checks the wrong thing here. The `null` literal and nullability are confined to **`Ptr<T>` at the FFI
+   boundary** (checked inside `unsafe`), where you genuinely talk to C. This is the deliberate avoidance of
+   the null-reference "billion-dollar mistake."
+
 4. **One way to do a thing. Favor simplicity.** Unlike C++'s many syntaxes for one concept, cstar
    prefers a single, obvious construct. Resist redundant syntax. (Already: named args only — no
    positional; one form per construct.)
