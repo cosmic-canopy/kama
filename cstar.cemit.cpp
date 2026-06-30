@@ -1456,6 +1456,17 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         return;
     }
 
+    // M26e: an interface borrows its object — it can't be a collection element (a
+    // `List`/`Array` of interface fat pointers would dangle). Own the object: store an
+    // `Shared<I>` (a `List<Shared<I>>`) instead — M26f enables the smart-ptr-over-interface.
+    if (isInterface(elemCType)) {
+        std::string nm = (elem && elem->value) ? *elem->value : elemCType;
+        unsupported(("an interface (`" + nm + "`) borrows its object, so it can't be a collection "
+                     "element — it would dangle; store an owning `Shared<" + nm + ">` instead").c_str(),
+                    collType->line);
+        return;
+    }
+
     std::string cName = isStr ? "cstar_string"
                       : (kind == CollKind::List ? "List_" : "Array_") + elemMangle;
 
@@ -1766,6 +1777,18 @@ bool CEmitter::isNamedValue(ASTNode* e)
 {
     return dynamic_cast<IdentifierNode*>(e) || dynamic_cast<MemberAccessNode*>(e)
         || dynamic_cast<ElementAccessNode*>(e) || dynamic_cast<BaseAccessNode*>(e);
+}
+
+// M26e: an interface value borrows its object, so it's a second-class view — it may
+// be a parameter or local, but it can't be STORED beyond the call that produced it
+// (a field, a return, a collection element) without dangling. Reject the bare-interface
+// case with guidance toward owning the object (`Shared<I>` — M26f enables that).
+void CEmitter::rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line)
+{
+    if (!ty || !isInterface(cType(ty))) return;
+    std::string nm = (ty->value && !ty->value->empty()) ? *ty->value : cType(ty);
+    unsupported(("an interface (`" + nm + "`) borrows its object, so it can't be " + whereClause
+                 + " — it would dangle; own the object instead (e.g. `Shared<" + nm + ">`)").c_str(), line);
 }
 
 // A plain transferable lvalue: a bare identifier naming a smart-pointer local/
@@ -2577,6 +2600,7 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn)
 {
     bool isEntry = false;
     std::string name = mangledFunctionName(fn, isEntry);
+    rejectStoredInterface(fn->returnType, "returned from a function", fn->line);
     *_out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ");\n";
 }
 
@@ -2651,6 +2675,7 @@ void CEmitter::emitStruct(ClassInfo& ci)
         hasMember = true;
     }
     for (auto& f : ci.fields) {
+        rejectStoredInterface(f.type, "stored in a field", f.type ? f.type->line : (ci.node ? ci.node->line : 0));
         indent(1);
         *_out << cType(f.type) << " " << f.name << ";\n";
         hasMember = true;
@@ -2796,6 +2821,8 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
+        rejectStoredInterface(mi.returnType, "returned from a method",
+                              mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
         *_out << cType(mi.returnType) << " " << mi.cName << "("
              << paramListC(mi.node->params, ci.name.c_str()) << ");\n";
     }

@@ -30,23 +30,22 @@ generics early (recommended against).
 order, so generics — long reserved as "M23" but never built — becomes **M27**, and operators (a few
 notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) like M25/M26 did.
 
-1. **M26e — borrow escape check** (second-class borrows). Closes the last memory-safety hole;
-   with the no-null work already shipped (M26a–d), fully delivers GOALS §3b. *(The `Weak`
-   Try-pattern that was bundled here moves to M28, where `Optional` exists — so it ships in final
-   form, no churn.)*
-   - **DECIDED (2026-06-30):** The rule is **"borrow is parameter-only; storage requires
-     ownership"** — no lifetime annotations (the simplicity bet). A `ref`/`out` or a by-value
-     interface flows only DOWN the stack; to **store / return / collect** it, it must be *owned*
-     (`Shared<T>`/`Owned<T>`). Finding from the code: borrows are *already* second-class by
-     construction — `ref`/`out` is only a param/arg modifier (no `ref` return/local/field), and
-     interface fields/returns already fail to compile. So M26e stays **tight**: formalize +
-     xfail-test that nothing escapes, and reject a bare-borrow interface stored beyond a call with
-     a clear message (NOT an implicit box — explicit `Shared<IShape>`). **No `ref` returns** (so no
-     `ref T operator[]`); a returnable "reference" is always an owned smart-ptr **handle** (mutate
-     through auto-deref), and value-container elements are mutated by the owner's own methods
-     (tell-don't-ask; the owner may touch its own storage internally — only *escaping* a borrow is
-     banned). A future callback-lend (`grid.mutateAt(i:, with: (ref Cell c) => …)`) is the elegant
-     in-place path but needs inline closures → post-1.0.
+1. **M26e — borrow escape check** (second-class borrows). ✅ **DONE (v0.1.35).** Closed the last
+   memory-safety hole; with the no-null work already shipped (M26a–d), fully delivers GOALS §3b.
+   *(The `Weak` Try-pattern that was bundled here moves to M28, where `Optional` exists.)*
+   - **Rule (DECIDED 2026-06-30):** **"borrow is parameter-only; storage requires ownership"** — no
+     lifetime annotations (the simplicity bet). Finding: borrows are *already* second-class by
+     construction (`ref`/`out` is only a param/arg modifier — no `ref` return/local/field). So M26e
+     was tight: it turned the remaining escape vectors — a bare interface value (which borrows its
+     object) **stored in a field, returned, or used as a collection element** — from ugly C errors /
+     a silent `List<IShape>` hole into one clean, consistent cstar diagnostic guiding you to own the
+     object (`Shared<IShape>`, explicit, never an implicit box). Interface *params/locals* (borrows)
+     are unaffected. **No `ref` returns** (so no `ref T operator[]`); a returnable "reference" is
+     always an owned smart-ptr **handle** (mutate via auto-deref), and value-container elements are
+     mutated by the owner's own methods (tell-don't-ask; only *escaping* a borrow is banned). A
+     future callback-lend (`grid.mutateAt(i:, with: (ref Cell c) => …)`) needs inline closures →
+     post-1.0. Impl: `rejectStoredInterface` helper at emitStruct/prototype sites + registerCollection;
+     xfail iface_field/iface_return/iface_collection. 110/110.
 
    **M26f — owned-interface storage** *(new; before 1.0, after M26e).* Smart-pointers over an
    interface element (`Shared<IShape>` / `Owned<IShape>` — a fat-pointer element, a real extension

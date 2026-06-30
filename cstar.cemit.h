@@ -279,6 +279,11 @@ private:
     // as opposed to a FRESH rvalue (a `new`/constructor/call result/literal). A marker
     // (`give`/`copy`) rides a named value; a fresh rvalue is consumed in place, never marked.
     static bool isNamedValue(ASTNode* e);
+    // M26e: an interface value BORROWS its object (a fat pointer), so it's second-class —
+    // it can't be stored beyond the call that made it (it would dangle). Reject a bare
+    // interface in a stored/returned position; own the object instead (`Shared<I>`, M26f).
+    // `whereClause` completes "it can't be ___" (e.g. "stored in a field").
+    void rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line);
     std::string smartPtrInvalidate(const std::string& expr, CollKind kind);  // null the dtor's guard field
     // Dispatch `recv.method(args)` on a smart-pointer receiver: an intrinsic
     // (lock/expired/valid) on the pointer itself, else auto-deref to the pointee.

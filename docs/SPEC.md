@@ -324,6 +324,16 @@ by name).
   is a compile error — bind it first (`IShape s = c; measure(sh: ref s)`). Mutable references are *invariant*:
   a `Circle` variable isn't a slot that could hold an arbitrary shape, so it can't back a `ref IShape`.
 
+**Borrow vs. storage — an interface is second-class (M26e).** The fat pointer *borrows* its object, so an
+interface value is fine as a **parameter or local** (the zero-copy polymorphic view above) but **cannot be
+stored beyond the call that made it** — a bare `IShape` **field**, **return type**, or **collection element**
+(`List<IShape>`) is a compile error, because the borrowed object could die and leave it dangling. To keep
+polymorphism around, **own the object**: a smart pointer over the interface (`Shared<IShape>` / a
+`List<Shared<IShape>>`). Ownership is always written explicitly — never an implicit box. *(The owning form is
+enabled by M26f; until then the error guides you to it.)* This is the language-wide rule **"borrow is
+parameter-only; storage requires ownership"** — the same reason a `ref` parameter can't be returned and a
+returnable "reference" is always an owned smart-pointer handle.
+
 ## Enums ✅
 
 ```cstar
