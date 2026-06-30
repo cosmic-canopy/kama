@@ -1,0 +1,5 @@
+// A `ref` parameter may not name a smart pointer — borrow the object (`ref T`), or
+// transfer ownership by value. Borrowing the handle never makes sense.
+class Counter { int32 n; public Counter(int32 n){ this.n = n; } }
+fn void clear(ref Owned<Counter> h) { }
+fn int main() { return 0; }

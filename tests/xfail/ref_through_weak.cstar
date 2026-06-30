@@ -1,0 +1,8 @@
+// You can't borrow the object through a Weak (it may be dead) — tryUpgrade to a Shared first.
+class Counter { int32 n; public Counter(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
+fn int32 read(ref Counter c) { return c.get(); }
+fn int main() {
+    Shared<Counter> s = new Counter(n: 1);
+    Weak<Counter> w = s;
+    return cast<int>(read(c: ref w));   // ERROR: borrow through a Weak
+}

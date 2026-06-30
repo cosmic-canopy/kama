@@ -364,6 +364,20 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<BinaryExpressionNode*>(n)) {
+        // M26b / GOALS §3b: `== null` / `!= null` on a safe type is a compile error — a value,
+        // smart pointer, or interface is never null (the C habit checks the wrong thing here).
+        // `null` is only for `Ptr<T>` at the FFI boundary (exprClass is empty for those).
+        if (v->token == EQEQ || v->token == NOTEQ) {
+            bool lNull = dynamic_cast<NullNode*>(v->LHS.get()) != nullptr;
+            bool rNull = dynamic_cast<NullNode*>(v->RHS.get()) != nullptr;
+            if (lNull != rNull) {
+                std::string oc = exprClass((lNull ? v->RHS : v->LHS));
+                if (!oc.empty())
+                    unsupported(("'" + oc + "' is never null in safe code — don't null-check it "
+                                 "(a `Weak` uses `tryUpgrade`; `null` is only for `Ptr<T>` at the FFI boundary)").c_str(),
+                                v->line);
+            }
+        }
         return "(" + emitExpression(v->LHS) + " " + binaryOperator(v->token) + " "
                    + emitExpression(v->RHS) + ")";
     }
@@ -1958,8 +1972,19 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // const binding (or a const field outside its ctor) may not be passed to one
             // — that would silently launder away const. (A `const ref` borrow is fine.)
             if (!p.isConst) checkConstWrite(f->second->expression, srcLine);
-            s += isClass(p.className) ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base
-                                      : ("&(" + val + ")");
+            // M26b: a borrow names the OBJECT (`ref T`). If the argument is a smart pointer
+            // holding a T, auto-deref to its T* — `ref p` borrows the heap object, uniformly
+            // with `ref stackValue`. (Weak can't be borrowed — it may be dead; tryUpgrade.)
+            std::string argCls = exprClass(f->second->expression);
+            if (isSmartPtrClass(argCls) && _classes[argCls].collElemClass == p.className) {
+                if (smartKind(argCls) == CollKind::Weak)
+                    unsupported(("cannot borrow through a `Weak<" + p.className
+                                 + ">` (it may be dead) — `tryUpgrade` to a `Shared` first").c_str(), srcLine);
+                s += "(" + val + ").ptr";
+            } else {
+                s += isClass(p.className) ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base
+                                          : ("&(" + val + ")");
+            }
         } else {
             // Passing a smart pointer by value is not supported (the ownership
             // transfer / retain would need a statement, and a param isn't auto-
@@ -2431,6 +2456,15 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
             // pointers — to match C const callback/API signatures). Only pointer types:
             // a `const ref <class>` stays plain (its methods take a non-const `self`).
             bool constPtr = p->isConst && p->type && p->type->value && *p->type->value == "Ptr";
+            // M26b: a `ref`/`const ref` parameter may not name a smart pointer — you borrow
+            // the OBJECT (`ref T`), or transfer ownership by value (`give`/`copy`). Borrowing
+            // the handle never makes sense (and would make `ref p` ambiguous). `out` producing
+            // a handle (tryUpgrade / factory-out) stays legal.
+            if (paramByRef(p.get()) && p->modifier && p->modifier->value && *p->modifier->value == "ref"
+                && isSmartPtrClass(cType(p->type)))
+                unsupported(("a `ref` parameter may not name a smart pointer ('" + cType(p->type)
+                             + "') — borrow the object with `ref " + _classes[cType(p->type)].collElemClass
+                             + "`, or transfer ownership by value (`give`/`copy`)").c_str(), p->line);
             s += std::string(constPtr ? "const " : "") + cType(p->type)
                + (paramByRef(p.get()) ? "* " : " ") + nm;
         }
