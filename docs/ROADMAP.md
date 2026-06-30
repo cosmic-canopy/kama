@@ -42,20 +42,24 @@ than one target, not just the single C backend it has today.
 ## Performance (from the benchmark suite — `docs/benchmarks/RESULTS.md`)
 
 cstar is at **C/C++ parity** on native compute and wins decisively on footprint (2 MB RSS,
-66 KB binary) and the no-GC `alloc` workload. Two measured gaps are tracked here:
+66 KB binary) and the no-GC `alloc` workload. `cstar→wasm` (optimized — see below) **beats
+hand-written JS on fib/pi/collatz/fnptr (up to ~4.5×)** and ties on dispatch/alloc. One real
+native gap is tracked:
 
 - **Native dispatch — devirtualization.** On the `dispatch` workload cstar matches C
-  (≈6.15 ms, a real vtable indirect call ×8M) but **Rust is ~5× faster (1.22 ms)** because
+  (≈6.18 ms, a real vtable indirect call ×8M) but **Rust is ~5× faster (1.18 ms)** because
   its optimizer devirtualizes/inlines the monomorphic case. cstar does not yet. A
   devirtualization / speculative-inlining pass (or `final`-method static-call lowering —
   M25b already tracks `final`) would close it. Post-1.0 optimization.
-- **WASM float64 + indirect calls.** `cstar→wasm` beats hand-written JS on fib (1.4×),
-  collatz (2.2×), fnptr (3.1×) and ties alloc, but **lags JS on `pi` (float64 loop, ~1.6×)
-  and `dispatch` (indirect calls, ~1.4×)** — V8's JIT outdoes emcc's AOT wasm on those two
-  patterns. Native cstar `pi` is at C parity, so this is specifically the wasm lane.
-  Investigate emcc tuning (`-msimd128`, `call_indirect` lowering) — but **strict IEEE only**:
-  `-ffast-math` "fixes" `pi` by relaxing FP the C/Rust/JS baselines don't get, so it's out.
-  Verified clean (idle): the lag is real compute, ~15–20 ms, **not** a measurement artifact.
+- **WASM tiering (resolved — was an artifact, not a lag).** An earlier "cstar→wasm lags JS on
+  pi/dispatch" finding was wrong: it was V8 running the short-lived wasm in its **baseline
+  Liftoff** compiler (never tiering up to the optimizing **TurboFan** before the process
+  exited, especially under load) while JS got its auto-JIT. Measured at the optimizing tier
+  (`node --no-liftoff` — what a real long-running app gets automatically), cstar→wasm beats JS
+  on fib/pi/collatz/fnptr and ties dispatch/alloc (strict IEEE). The bench now forces TurboFan
+  for the wasm track. (Aside: `-ffast-math` is out — it would relax FP the baselines don't get.
+  Isolated/cool, optimized wasm is ~10 ms — even further ahead — but the bench measures hot, so
+  the committed numbers are the conservative, reproducible ones.)
 - **Bench methodology (verified, don't re-chase).** Short workloads are skewed badly by
   **parallel load** — run the bench with nothing else competing. The `/work` bind mount
   (virtiofs/9p on macOS/Windows) adds only **~0.3–1.7 ms** for native *and* wasm under a

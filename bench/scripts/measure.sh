@@ -14,10 +14,15 @@ WORKLOADS="${1:-all}"
 NATIVE="cstar c cpp rust go csharp lua python"
 WASM="cstar-wasm js ts"
 
-# Note: the repo is bind-mounted at /work (virtiofs/9p on macOS/Windows). A controlled idle
-# measurement showed that adds only ~0.3-1.7 ms for both native and wasm (negligible, within
-# run-to-run noise) — so artifacts are measured in place, no staging. The important rule is to
-# run the bench with NOTHING else competing for CPU/IO; parallel load skews short workloads.
+# Notes:
+# - Run the bench with NOTHING else competing for CPU/IO; parallel/thermal load skews short
+#   workloads. (The /work bind mount adds only ~0.3-1.7 ms — negligible; measured in place.)
+# - cstar-wasm runs under `node --no-liftoff`: by default V8 compiles short-lived wasm with the
+#   BASELINE tier (Liftoff — fast compile, slow code) and may never reach the optimizing tier
+#   (TurboFan) before the process exits, especially under load — which made wasm look 4x slower
+#   and wildly variable (sigma up to 9.8 ms). `--no-liftoff` forces TurboFan, so we measure
+#   OPTIMIZED wasm (stable, ~0.3 ms sigma) — what a real long-running app gets (its hot loops
+#   tier up on their own), and a fair compare vs V8's auto-JIT'd JS. The flag is a no-op for JS.
 cmd_for() {  # lang workload -> run command (empty if artifact missing)
   local l=$1 w=$2
   case $l in
@@ -29,7 +34,7 @@ cmd_for() {  # lang workload -> run command (empty if artifact missing)
     csharp)     [ -f bench/build/csharp/bench.dll ] && echo "dotnet bench/build/csharp/bench.dll $w" ;;
     lua)        echo "lua5.4 bench/src/lua/$w.lua" ;;
     python)     echo "python3 bench/src/python/$w.py" ;;
-    cstar-wasm) [ -f bench/build/wasm/$w.js ] && echo "node bench/build/wasm/$w.js" ;;
+    cstar-wasm) [ -f bench/build/wasm/$w.js ] && echo "node --no-liftoff bench/build/wasm/$w.js" ;;
     js)         echo "node bench/src/js/$w.js" ;;
     ts)         [ -f bench/build/ts/$w.js ]   && echo "node bench/build/ts/$w.js" ;;
   esac

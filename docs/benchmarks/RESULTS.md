@@ -1,6 +1,6 @@
 # cstar benchmark results
 
-_Generated: 2026-06-30 17:56 · arch: aarch64 (Linux) · in the `cstar-bench` container_
+_Generated: 2026-06-30 18:39 · arch: aarch64 (Linux) · in the `cstar-bench` container_
 
 Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
 Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median). Peak RSS: `/usr/bin/time -v`.
@@ -15,10 +15,16 @@ finding. The signals worth trusting here are:
 3. on the WASM track, **cstar→wasm vs hand-written JS/TS** under the same node.
 
 **Methodology — run isolated:** these are short workloads, so **parallel load badly skews them** — run the
-bench with nothing else competing for CPU/IO. (We verified the repo bind mount, `/work` via virtiofs/9p on
-macOS/Windows, adds only ~0.3–1.7 ms for native *and* wasm under a controlled idle measurement — negligible,
-within run-to-run noise — so artifacts are measured in place.) The wasm track is strict IEEE (no
-`-ffast-math`), matching the C/Rust/JS baselines.
+bench with nothing else competing for CPU/IO. (The `/work` bind mount, virtiofs/9p on macOS/Windows, adds
+only ~0.3–1.7 ms for native *and* wasm under a controlled idle measurement — negligible — so artifacts are
+measured in place.)
+
+**WASM is run under `node --no-liftoff`.** V8 compiles wasm in two tiers — **Liftoff** (baseline: fast to
+compile, slow to run) then **TurboFan** (optimizing). For these tiny single-shot processes V8 often never
+tiers up before exit (worse under load), so default `node` measured *Liftoff* wasm — ~4× slower and wildly
+variable (σ up to 9.8 ms), while JS always got its optimizing JIT. `--no-liftoff` forces TurboFan, giving
+**optimized, stable** wasm (σ ~0.3 ms) — what a real long-running app gets (its hot loops tier up on their
+own) and a fair compare vs V8's auto-JIT'd JS. Strict IEEE throughout (no `-ffast-math`).
 
 The compute workloads (fib/pi/collatz/dispatch) are tuned so the slow interpreters finish quickly; the
 fast compiled languages run in a few ms, so small absolute differences between them are noise. The
@@ -57,12 +63,12 @@ diverged:
 
 | workload | cstar | C | C++ | Rust | Go | C# (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|
-| fib | 7.39 | 7.32 | 7.59 | 6.36 | 10.18 | 28.05 | 88.8 | 212.32 |
-| pi | 11.75 | 11.74 | 12.0 | 11.96 | 14.12 | 30.92 | 118.98 | 1625.72 |
-| collatz | 65.65 | 65.93 | 65.71 | 65.76 | 91.81 | 122.99 | 965.82 | 2934.51 |
-| dispatch | 6.18 | 6.19 | 6.37 | 1.18 | 5.03 | 26.51 | 141.96 | 699.94 |
-| alloc | 1.19 | 1.19 | 1.63 | 2.24 | 6.59 | 24.33 | 24.22 | 109.48 |
-| fnptr | 2.5 | 2.49 | 2.69 | 2.68 | 5.08 | 34.08 | 138.01 | 712.48 |
+| fib | 7.41 | 7.33 | 7.54 | 6.37 | 10.26 | 28.48 | 89.23 | 210.11 |
+| pi | 11.79 | 11.74 | 12.04 | 11.97 | 13.97 | 32.34 | 117.58 | 1634.97 |
+| collatz | 65.64 | 65.54 | 66.1 | 65.74 | 91.9 | 123.73 | 961.1 | 2941.75 |
+| dispatch | 6.18 | 6.13 | 6.42 | 1.19 | 5.04 | 21.68 | 141.38 | 708.79 |
+| alloc | 1.18 | 1.21 | 1.53 | 2.26 | 6.45 | 24.65 | 24.01 | 109.23 |
+| fnptr | 2.49 | 2.52 | 2.73 | 2.66 | 5.04 | 33.08 | 138.81 | 717.81 |
 
 ## NATIVE — peak resident memory (MB)
 
@@ -72,7 +78,7 @@ diverged:
 | pi | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
 | collatz | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
 | dispatch | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
-| alloc | 2 | 2 | 3 | 2 | 6 | 25 | 2 | 8 |
+| alloc | 2 | 2 | 3 | 2 | 7 | 25 | 2 | 8 |
 | fnptr | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
 
 ## NATIVE — artifact size
@@ -90,23 +96,23 @@ diverged:
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 19.43 | 28.04 | 26.91 |
-| pi | 42.34 | 26.5 | 25.91 |
-| collatz | 188.91 | 415.85 | 411.09 |
-| dispatch | 27.86 | 20.75 | 20.36 |
-| alloc | 14.41 | 15.63 | 15.65 |
-| fnptr | 13.14 | 41.59 | 40.54 |
+| fib | 19.46 | 26.64 | 27.1 |
+| pi | 20.79 | 26.17 | 26.16 |
+| collatz | 92.42 | 417.5 | 414.1 |
+| dispatch | 21.92 | 20.59 | 20.57 |
+| alloc | 16.41 | 16.15 | 15.64 |
+| fnptr | 11.34 | 42.09 | 40.47 |
 
 ## WASM track — peak resident memory (MB)
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 43 | 44 | 44 |
-| pi | 43 | 45 | 45 |
-| collatz | 43 | 45 | 45 |
-| dispatch | 43 | 45 | 45 |
-| alloc | 45 | 46 | 46 |
-| fnptr | 43 | 45 | 45 |
+| fib | 42 | 44 | 44 |
+| pi | 42 | 45 | 45 |
+| collatz | 42 | 45 | 45 |
+| dispatch | 42 | 45 | 45 |
+| alloc | 44 | 46 | 46 |
+| fnptr | 42 | 45 | 45 |
 
 ## WASM track — module size
 

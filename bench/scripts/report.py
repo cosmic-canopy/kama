@@ -116,10 +116,16 @@ finding. The signals worth trusting here are:
 3. on the WASM track, **cstar→wasm vs hand-written JS/TS** under the same node.
 
 **Methodology — run isolated:** these are short workloads, so **parallel load badly skews them** — run the
-bench with nothing else competing for CPU/IO. (We verified the repo bind mount, `/work` via virtiofs/9p on
-macOS/Windows, adds only ~0.3–1.7 ms for native *and* wasm under a controlled idle measurement — negligible,
-within run-to-run noise — so artifacts are measured in place.) The wasm track is strict IEEE (no
-`-ffast-math`), matching the C/Rust/JS baselines.
+bench with nothing else competing for CPU/IO. (The `/work` bind mount, virtiofs/9p on macOS/Windows, adds
+only ~0.3–1.7 ms for native *and* wasm under a controlled idle measurement — negligible — so artifacts are
+measured in place.)
+
+**WASM is run under `node --no-liftoff`.** V8 compiles wasm in two tiers — **Liftoff** (baseline: fast to
+compile, slow to run) then **TurboFan** (optimizing). For these tiny single-shot processes V8 often never
+tiers up before exit (worse under load), so default `node` measured *Liftoff* wasm — ~4× slower and wildly
+variable (σ up to 9.8 ms), while JS always got its optimizing JIT. `--no-liftoff` forces TurboFan, giving
+**optimized, stable** wasm (σ ~0.3 ms) — what a real long-running app gets (its hot loops tier up on their
+own) and a fair compare vs V8's auto-JIT'd JS. Strict IEEE throughout (no `-ffast-math`).
 
 The compute workloads (fib/pi/collatz/dispatch) are tuned so the slow interpreters finish quickly; the
 fast compiled languages run in a few ms, so small absolute differences between them are noise. The
