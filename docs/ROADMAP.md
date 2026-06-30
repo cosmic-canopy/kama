@@ -6,11 +6,23 @@ decisions and post-1.0 backlog** so they aren't lost.
 
 ## Toward 1.0 (in progress)
 
-- **M26 — value & ownership model** (in progress): `give`/`copy` hand-off markers (M26c),
-  by-value smart-pointer params (M26d), second-class borrows / escape check + the `Weak`
-  `tryUpgrade(out:) -> bool` Try-pattern with flow-typed result (M26e).
-- **Step 7** — doc/SPEC reconciliation.
+- **M26 — value & ownership model**: `give`/`copy` hand-off markers (M26c ✅), by-value
+  smart-pointer params (M26d ✅), second-class borrows / escape check + the `Weak`
+  `tryUpgrade(out:) -> bool` Try-pattern with flow-typed result (M26e — remaining; completes
+  the no-null guarantee, GOALS §3b).
+- **M27 — operator overloading + full static methods** (pulled INTO 1.0, 2026-06-30 goalpost
+  decision: *engine-ready* over feature-complete-on-paper). Unblocks ergonomic `pod` math —
+  `Vec2 + Vec2`, `Vec2::dot(left:, right:)` — the Tier-0 engine dependency. The value model
+  (M26) already anticipates `Vec2 c = a + b` as a cheap pod copy. Open design Qs at start:
+  operator-method syntax (operators are the sanctioned exception to named-args-only), which
+  operators (arith/compare/index/unary), and the `static` method form (`Type::method`, no `self`).
+  Validated by a first math library (Vec2/3/4, Mat4).
+- **Step 7** — doc/SPEC reconciliation (incl. `give`/`copy` + by-value from M26c/d, operators).
 - **Step 8** — formally defer M23 generics to 1.1, then tag **1.0**.
+
+Order: **M26e → M27 → Step 7 → tag**. (M26e and M27 are independent; finish the M26 safety
+arc first.) Note: shipping M26e's `tryUpgrade(out:)` in 1.0 means it churns to `Optional<T>`
+when tagged-unions/`match` land in 1.1 — accepted (engine-ready chosen over stable-API).
 
 ## Dual-mode: compiled + scripting/REPL (flagship)
 
@@ -68,9 +80,8 @@ native gap is tracked:
 
 ## Language backlog (post-1.0)
 
-- **Operator overloading + full static methods** — unblocks `pod` math (`Vec2 + Vec2`,
-  `Vec2::dot(left:, right:)`); the value/ownership model (M26) already reserves the place.
 - **Generics (M23)** — `Map<K,V>`, multi-param/nested generics (`>>` lexing); deferred to 1.1.
+  (Operator overloading + full static methods moved UP into 1.0 as M27 — see "Toward 1.0".)
 - **Tagged unions + `match` → `Optional<T>`** — the general "forced unwrap" mechanism; makes
   `Weak::tryUpgrade` (and every fallible op) compiler-checked without an out-param.
 - **Naming/case convention pass** — settle the repo-wide convention (methods are lower-camel
