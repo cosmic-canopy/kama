@@ -16,8 +16,13 @@ for w in $WORKLOADS; do
   ./cstar build bench/src/cstar/$w.cstar -o bench/build/cstar/$w --release          >/dev/null 2>&1 && echo "  ok cstar"       || echo "  FAIL cstar"
   # cstar→wasm at -O3 (speed) for a fair compute comparison vs JS — note `cstar
   # build --release --target wasm` uses -Oz (size); here we transpile + emcc -O3.
+  # -ffast-math: emcc -O3 keeps strict IEEE FP (no reassociation), but V8's JIT freely
+  # reassociates FP in hot loops — so without it the wasm float loop (pi) was penalized for
+  # emcc's strictness, not for cstar. -ffast-math matches V8's behavior for a fair float
+  # compute compare; the per-workload checksum (fairness gate) confirms the result is
+  # unchanged (pi stays 27). Integer workloads are unaffected.
   ( ./cstar transpile bench/src/cstar/$w.cstar -o bench/build/wasm/$w.c --no-line >/dev/null 2>&1 \
-    && emcc -std=c11 -O3 -DNDEBUG -I. bench/build/wasm/$w.c -o bench/build/wasm/$w.js >/dev/null 2>&1 ) \
+    && emcc -std=c11 -O3 -ffast-math -DNDEBUG -I. bench/build/wasm/$w.c -o bench/build/wasm/$w.js >/dev/null 2>&1 ) \
     && echo "  ok cstar-wasm" || echo "  FAIL cstar-wasm"
   clang   -O2 -DNDEBUG -s bench/src/c/$w.c   -o bench/build/c/$w     2>/dev/null && echo "  ok c"   || echo "  FAIL c"
   clang++ -O2 -DNDEBUG -s bench/src/cpp/$w.cpp -o bench/build/cpp/$w 2>/dev/null && echo "  ok cpp" || echo "  FAIL cpp"

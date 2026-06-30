@@ -1,6 +1,6 @@
 # cstar benchmark results
 
-_Generated: 2026-06-30 16:39 · arch: aarch64 (Linux) · in the `cstar-bench` container_
+_Generated: 2026-06-30 17:31 · arch: aarch64 (Linux) · in the `cstar-bench` container_
 
 Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
 Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median). Peak RSS: `/usr/bin/time -v`.
@@ -51,12 +51,12 @@ diverged:
 
 | workload | cstar | C | C++ | Rust | Go | C# (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|
-| fib | 8.07 | 8.67 | 7.64 | 6.13 | 10.27 | 31.59 | 87.69 | 211.3 |
-| pi | 11.84 | 11.79 | 11.99 | 13.1 | 14.08 | 33.72 | 118.58 | 1614.3 |
-| collatz | 65.72 | 65.69 | 65.76 | 65.69 | 91.21 | 122.59 | 961.07 | 2935.49 |
-| dispatch | 6.15 | 6.17 | 6.34 | 1.22 | 5.02 | 23.88 | 142.84 | 695.93 |
-| alloc | 1.2 | 1.17 | 1.6 | 2.31 | 6.58 | 25.21 | 24.25 | 108.89 |
-| fnptr | 2.53 | 2.5 | 2.71 | 2.64 | 5.01 | 33.01 | 138.05 | 717.48 |
+| fib | 7.41 | 7.34 | 7.63 | 6.06 | 10.38 | 31.08 | 88.0 | 210.87 |
+| pi | 11.77 | 11.79 | 11.95 | 11.91 | 13.95 | 33.51 | 118.82 | 1633.05 |
+| collatz | 66.11 | 65.75 | 65.88 | 65.57 | 91.08 | 125.29 | 959.84 | 2943.07 |
+| dispatch | 6.17 | 6.98 | 6.41 | 1.23 | 5.1 | 24.64 | 141.64 | 702.5 |
+| alloc | 1.18 | 1.17 | 1.59 | 2.24 | 6.69 | 26.42 | 24.26 | 106.74 |
+| fnptr | 2.49 | 2.52 | 2.74 | 2.63 | 5.04 | 33.31 | 138.87 | 737.06 |
 
 ## NATIVE — peak resident memory (MB)
 
@@ -84,18 +84,18 @@ diverged:
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 18.86 | 27.15 | 26.86 |
-| pi | 42.44 | 25.96 | 28.1 |
-| collatz | 187.59 | 411.82 | 413.15 |
-| dispatch | 27.67 | 20.35 | 20.38 |
-| alloc | 14.09 | 15.9 | 15.99 |
-| fnptr | 13.16 | 41.34 | 40.26 |
+| fib | 19.41 | 28.51 | 27.03 |
+| pi | 22.89 | 25.72 | 26.1 |
+| collatz | 188.05 | 410.61 | 420.74 |
+| dispatch | 28.35 | 21.25 | 21.17 |
+| alloc | 14.65 | 15.83 | 15.96 |
+| fnptr | 13.28 | 42.69 | 40.71 |
 
 ## WASM track — peak resident memory (MB)
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 43 | 44 | 44 |
+| fib | 42 | 44 | 44 |
 | pi | 43 | 45 | 45 |
 | collatz | 43 | 45 | 45 |
 | dispatch | 43 | 45 | 45 |

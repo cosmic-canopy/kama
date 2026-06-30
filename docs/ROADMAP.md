@@ -12,6 +12,33 @@ decisions and post-1.0 backlog** so they aren't lost.
 - **Step 7** — doc/SPEC reconciliation.
 - **Step 8** — formally defer M23 generics to 1.1, then tag **1.0**.
 
+## Dual-mode: compiled + scripting/REPL (flagship)
+
+The end goal is **one language, two modes** — the *same* cstar syntax usable both as a
+compiled language and as a scripting language with a full REPL. This rests on a
+**multi-backend ("polymorphic") emitter**: a shared Flex/Bison/AST front end lowered to more
+than one target, not just the single C backend it has today.
+
+- **Compiled (today):** cstar → C (`cstar.cemit`) → clang (native) / emcc (wasm). The **web
+  target is wasm *via C*** (cstar→C→emcc) — there is no direct cstar→wasm; C is the portable
+  middle.
+- **Scripting / REPL (future):** the *same* front end + C emitter, but compiled and run
+  **in-memory** instead of written to disk:
+  - **Native fast path — TinyCC (TCC) JIT.** TCC compiles C in ~milliseconds in-process, so
+    `cstar run foo.cstar` and the REPL are **JIT-compiled, not tree-walked** — near-native
+    speed with instant startup. The REPL feeds each input through the front end, accumulates
+    definitions, and TCC-compiles-and-runs. This is the answer to "fast interpreter on the
+    native side": it's a JIT, not an interpreter.
+  - **Web — run the wasm.** Browser scripting/REPL = compile to wasm (emcc) and run it in the
+    browser's wasm runtime.
+  - A dedicated **bytecode VM** backend is the alternative if a more dynamic REPL is wanted;
+    the design leans **JIT/VM, never a slow tree-walker**.
+- **Why it can be much faster than other scripting languages:** Python/Ruby/Lua are bytecode
+  interpreters; cstar-as-script runs **compiled** (TCC-JIT native, or wasm) — at or near
+  native speed, i.e. orders of magnitude faster than a bytecode interpreter. A future
+  **cstar-script track** in the benchmark suite would measure this head-to-head (the suite
+  today measures cstar *compiled* vs the scripting langs, which already wins handily).
+
 ## Performance (from the benchmark suite — `docs/benchmarks/RESULTS.md`)
 
 cstar is at **C/C++ parity** on native compute and wins decisively on footprint (2 MB RSS,
