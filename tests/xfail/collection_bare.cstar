@@ -1,0 +1,6 @@
+// A collection hand-off must say `give` (move) or `copy` (deep) — a bare `=` is ambiguous.
+fn int main() {
+    Array<int32> a = new Array<int32>(size: 2);
+    Array<int32> b = a;   // ERROR: write `give a` or `copy a`
+    return 0;
+}

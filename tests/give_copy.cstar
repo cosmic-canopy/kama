@@ -1,0 +1,9 @@
+class Counter { int32 n; public Counter(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
+fn int32 main() {
+    Owned<Counter> a = new Counter(n: 20);
+    Owned<Counter> b = give a;       // move: a consumed
+    Shared<Counter> s = new Counter(n: 22);
+    Shared<Counter> t = s;           // bare -> copy/retain (default)
+    Shared<Counter> u = give s;      // opt-in move of the share
+    return b.get() + t.get() + u.get();   // 20 + 22 + 22 = 64
+}

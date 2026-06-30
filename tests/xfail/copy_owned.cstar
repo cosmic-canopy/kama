@@ -1,0 +1,3 @@
+// An Owned is unique — it can't be copied. Use `give` to move it.
+class C { int32 n; public C(int32 n){ this.n = n; } }
+fn int main() { Owned<C> a = new C(n: 1); Owned<C> b = copy a; return 0; }

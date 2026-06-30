@@ -446,6 +446,16 @@ public:
         , expression(expression) { }
 };
 
+// M26c — `give x` (move; source consumed) / `copy x` (duplicate). The explicit hand-off
+// marker that rides a NAMED value; a fresh rvalue never needs one.
+class HandoffNode : public ExpressionNode {
+public:
+    bool             isGive;   // true = give (move), false = copy
+    SharedExpression value;
+    HandoffNode(CodeGenContext& context, bool isGive, SharedExpression value)
+        : ASTNode(context), ExpressionNode(context), isGive(isGive), value(value) { }
+};
+
 class ElementAccessNode : public ExpressionNode {
 public:
     SharedIdentifier identifier;

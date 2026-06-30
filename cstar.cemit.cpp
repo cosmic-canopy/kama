@@ -273,6 +273,22 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<BooleanNode*>(n)) return v->value ? "true" : "false";
     if (dynamic_cast<NullNode*>(n))              return "NULL";
 
+    if (auto* h = dynamic_cast<HandoffNode*>(n)) {
+        // M26c: `give x` / `copy x`. The value emitted is the inner expression; the move
+        // (invalidate source) / retain side effects need a statement context, which the
+        // variable-initializer path handles (cstar.cemit.cpp ~emitDeclarator). In a bare
+        // expression position, only a pod/primitive `copy` (a plain value copy) is complete.
+        std::string ic = exprClass(h->value);
+        bool owned = isSmartPtrClass(ic) || (!ic.empty() && _classes.count(ic) && _classes[ic].isCollection);
+        if (!owned)
+            { if (h->isGive) unsupported("`give` applies to an owned value (a smart pointer or collection) — a plain value just copies", h->line); }
+        else if (h->isGive)
+            unsupported("`give` is supported as a variable initializer for now (more positions land with M26d)", h->line);
+        else
+            unsupported("`copy` of an owned value is supported as a variable initializer for now", h->line);
+        return emitExpression(h->value);
+    }
+
     if (auto* v = dynamic_cast<StringNode*>(n)) {
         // Lower to a borrowed runtime string. The lexer already produced the
         // raw bytes; emit them as a C string literal (escaping is a later pass).
@@ -641,15 +657,30 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 if (_classes[ty].destructible) recordDestructibleLocal(nm, ty);
                 if (!d->initializer) return;   // declared but uninitialized (non-const)
 
+                // M26c: unwrap a give/copy hand-off marker — the inner NAMED value drives
+                // move (give) vs duplicate (copy). A fresh rvalue never takes a marker.
+                SharedExpression init = d->initializer;
+                int handoff = 0;   // 0 none, 1 give, 2 copy
+                if (auto* h = dynamic_cast<HandoffNode*>(d->initializer.get())) { handoff = h->isGive ? 1 : 2; init = h->value; }
+                // A "named value" is an existing binding you can hand off (a variable / field /
+                // element) — as opposed to a FRESH rvalue (a `new`/constructor, a call result, a
+                // literal), which is consumed in place and never needs a marker.
+                auto isNamedValue = [](ASTNode* e) {
+                    return dynamic_cast<IdentifierNode*>(e) || dynamic_cast<MemberAccessNode*>(e)
+                        || dynamic_cast<ElementAccessNode*>(e) || dynamic_cast<BaseAccessNode*>(e);
+                };
+                if (handoff && !isNamedValue(init.get()))
+                    unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n->line);
+
                 // M26a: `T(...)` with no `new` (an InvocationNode whose callee names the
                 // declared class) is STACK construction; `new` is reserved for the heap.
                 InvocationNode* stackCtor = nullptr;
-                if (auto* iv = dynamic_cast<InvocationNode*>(d->initializer.get()))
+                if (auto* iv = dynamic_cast<InvocationNode*>(init.get()))
                     if (iv->identifier && iv->identifier->value && isClass(ty)
                         && resolveUserName(*iv->identifier->value, iv->identifier->qualifier) == ty)
                         stackCtor = iv;
 
-                if (auto* oc = dynamic_cast<ObjectCreationNode*>(d->initializer.get())) {
+                if (auto* oc = dynamic_cast<ObjectCreationNode*>(init.get())) {
                     // M26a: `new` is the HEAP operator — it boxes a value into a smart
                     // pointer (Owned/Shared/Weak), naming the element type directly:
                     // `Owned<Box> p = new Box(...)`. (BindableFunctionPtr keeps `new` for
@@ -702,32 +733,46 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     }
                     // class with no ctor: left default-initialized
                 } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
-                           && isSmartPtrLValue(d->initializer) && exprClass(d->initializer) != ty) {
+                           && isSmartPtrLValue(init) && exprClass(init) != ty) {
                     // Shared->Weak conversion (different C structs, same layout):
                     // field-copy + weak retain. The source Shared stays valid.
                     line(n->line); indent(depth);
-                    std::string src = emitExpression(d->initializer);
+                    std::string src = emitExpression(init);
                     *_out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
                     indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->weak++;\n";
                 } else if (isBindableClass(ty)) {
                     // BindableFunctionPtr <- free function (promote) or another bindable (move).
                     line(n->line);
-                    emitBindablePromote(nm, ty, d->initializer, depth);
+                    emitBindablePromote(nm, ty, init, depth);
                 } else {
-                    // Copy-initialize from another expression.
+                    // Copy-initialize from another named value. M26c: the give/copy marker
+                    // (or the type's default) decides move vs duplicate.
                     line(n->line); indent(depth);
-                    *_out << nm << " = " << emitExpression(d->initializer) << ";\n";
-                    // Smart-pointer copy from an lvalue: Owned MOVES (invalidate the
-                    // source so only `nm` drops it); Shared/Weak RETAIN (strong/weak++
-                    // — both handles stay valid).
-                    if (isSmartPtrLValue(d->initializer)) {
+                    *_out << nm << " = " << emitExpression(init) << ";\n";
+                    if (isSmartPtrClass(ty) && isSmartPtrLValue(init)) {
                         CollKind k = smartKind(ty);
+                        // Default: Owned -> give(move), Shared/Weak -> copy(retain). A marker overrides.
+                        bool doGive = (handoff == 1) || (handoff == 0 && k == CollKind::Owned);
+                        if (handoff == 2 && k == CollKind::Owned)
+                            unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
                         indent(depth);
-                        if (k == CollKind::Owned)
-                            *_out << smartPtrInvalidate(emitExpression(d->initializer), k) << "\n";
-                        else
-                            *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
+                        if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k) << "\n";
+                        else        *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
+                    } else if (_classes.count(ty) && _classes[ty].isCollection && isNamedValue(init.get())) {
+                        // M26c: a collection move/deep-copy isn't a plain `=` — require a marker
+                        // and (for now) only the cheap `give` (move) is wired; `copy` (deep) is 🚧.
+                        if (handoff == 0)
+                            unsupported(("a collection hand-off must say `give` (move) or `copy` (deep) — write "
+                                         "`" + ty + " v = give …`").c_str(), n->line);
+                        else if (handoff == 2)
+                            unsupported("`copy` of a collection (deep copy) is not yet implemented — use `give` (move) for now", n->line);
+                        // give: the plain `=` already transferred the struct; null the source's buffer.
+                        else { indent(depth); *_out << "(" << emitExpression(init) << ").data = NULL; ("
+                                                     << emitExpression(init) << ").len = 0;\n"; }
+                    } else if (handoff == 1) {
+                        unsupported("`give` applies to an owned value (a smart pointer or collection) — a plain value just copies", n->line);
                     }
+                    // handoff == 2 (copy) of a pod/primitive: the plain `=` above IS the copy.
                 }
             };
             if (lvd && lvd->variables)

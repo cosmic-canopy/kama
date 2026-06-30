@@ -140,6 +140,7 @@ struct cstaryystype {
 %token <token> MINUS "-"
 %token <token> DOT "."
 %token <token> ELLIPSIS "..."
+%token <string> GIVE COPY
 %token <token> SLASH "/"
 %token <token> COLONCOLON "::"
 %token <token> COLON ":"
@@ -640,6 +641,8 @@ semicolon_opt
 expression
   : conditional_expression
   | assignment   { $$ = $1; }
+  | GIVE variable_reference   { $$ = std::make_shared<HandoffNode>(SCANNER_CODEGENCONTEXT, true,  $2); }   // M26c: move
+  | COPY variable_reference   { $$ = std::make_shared<HandoffNode>(SCANNER_CODEGENCONTEXT, false, $2); }   // M26c: duplicate
   ;
 assignment
   : unary_expression assignment_operator expression   { $$ = std::make_shared<AssignmentNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
