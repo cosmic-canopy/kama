@@ -14,6 +14,10 @@ WORKLOADS="${1:-all}"
 NATIVE="cstar c cpp rust go csharp lua python"
 WASM="cstar-wasm js ts"
 
+# Note: the repo is bind-mounted at /work (virtiofs/9p on macOS/Windows). A controlled idle
+# measurement showed that adds only ~0.3-1.7 ms for both native and wasm (negligible, within
+# run-to-run noise) — so artifacts are measured in place, no staging. The important rule is to
+# run the bench with NOTHING else competing for CPU/IO; parallel load skews short workloads.
 cmd_for() {  # lang workload -> run command (empty if artifact missing)
   local l=$1 w=$2
   case $l in

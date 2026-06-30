@@ -53,8 +53,14 @@ cstar is at **C/C++ parity** on native compute and wins decisively on footprint 
   collatz (2.2×), fnptr (3.1×) and ties alloc, but **lags JS on `pi` (float64 loop, ~1.6×)
   and `dispatch` (indirect calls, ~1.4×)** — V8's JIT outdoes emcc's AOT wasm on those two
   patterns. Native cstar `pi` is at C parity, so this is specifically the wasm lane.
-  Investigate emcc tuning (`-msimd128`, FP scheduling/reassociation without breaking the
-  fairness checksum, `call_indirect` lowering). Pairs with the WebGPU/engine track.
+  Investigate emcc tuning (`-msimd128`, `call_indirect` lowering) — but **strict IEEE only**:
+  `-ffast-math` "fixes" `pi` by relaxing FP the C/Rust/JS baselines don't get, so it's out.
+  Verified clean (idle): the lag is real compute, ~15–20 ms, **not** a measurement artifact.
+- **Bench methodology (verified, don't re-chase).** Short workloads are skewed badly by
+  **parallel load** — run the bench with nothing else competing. The `/work` bind mount
+  (virtiofs/9p on macOS/Windows) adds only **~0.3–1.7 ms** for native *and* wasm under a
+  controlled idle measurement — negligible. A named volume / tmpfs build dir would speed up
+  *builds* on Mac/Windows but does **not** affect the measured numbers.
 
 ## Language backlog (post-1.0)
 
