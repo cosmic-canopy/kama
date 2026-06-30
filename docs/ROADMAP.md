@@ -75,12 +75,21 @@ notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) lik
        base-class bounds (use an interface). **Generic functions** too, not just types.
      - **give/copy** composes for free — the markers dispatch on the *concrete* type at each
        monomorphized site (a `T` that resolves to `Owned` moves, a pod copies). Confirm in impl.
-   - **OPEN — `Self`:** `Map`'s key needs "K equals K", so a contract must name the implementing type.
-     Choice: (a) F-bounded generic interface (`IEquatable<T>`, used as `K: IEquatable<K>` — no keyword,
-     but brain-bending) vs (b) a **`Self`** keyword (`IEquatable { fn bool equals(other: Self); }` —
-     Swift/Rust style, cleaner use sites, needs Self-substitution machinery). Lean (b). Ship named-method
-     contracts (`equals`/`compareTo`) in M27; they can *become* operators at M29.
-   - **Tech:** `>>` token split for nested generics (`Map<K, List<V>>`).
+   - **DECIDED — the `This` keyword** (a contract's self-type). When a contract must name its *own*
+     implementing type (`Map`'s key needs "K equals K"), use **`This`** — chosen over Rust/Swift's
+     `Self` because it pairs with cstar's `this` value (`this : This` = value : type), follows the case
+     convention (types PascalCase), and is self-documenting per GOALS §5/§7. `interface IEquatable { fn
+     bool equals(other: This); }` → used as `K: IEquatable`; also enables self-returning methods (`fn
+     This clone();`). Distinct from a generic-interface *param* (`ISequence<T>` = "some OTHER type") —
+     `This` = "my OWN type"; both can coexist. Resolved by a substitution pass at `implements` + each
+     monomorphization. Ship **named-method** contracts (`equals`/`compareTo`) in M27; they *become*
+     operators at M29. *(Lands in SPEC/KEYWORDS when M27 builds — per-milestone docs.)*
+   - **Tech:** `>>` token split for nested generics (`Map<K, List<V>>`, `List<Shared<T>>`).
+   - **Forward-compat (M27 build notes, from M28/M29 — neither changes M27's design):** make the
+     monomorphization engine general over type *declarations* (class **and** enum/variant), since
+     `Optional<T>`/`Result<T,E>` (M28) are generic tagged unions and the first consumers. M29's
+     operator-interfaces (generic math) will *reuse* this milestone's interface-bound + `This`
+     mechanism — M27 lays the groundwork, no conflict.
 
 3. **M28 — tagged unions + `match` + `Optional<T>`.** Sum types with exhaustive pattern matching;
    `Optional<T>` as a *library* tagged union (`enum Optional<T> { Some(T), None }`), **not** a
@@ -103,7 +112,10 @@ notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) lik
      it (`fn Vec2 operator+(Vec2 rhs)`? a special `operator` member? free-function form?). **Which
      operators** (arithmetic, comparison `== < >`, index `[]`, unary `-`/`!`, compound `+=`?). The
      **`static` method form** (`Type::method`, no `self` — `static` is only partial today, M19).
-     Should `==` tie into a structural-equality default for `pod`s?
+     Should `==` tie into a structural-equality default for `pod`s? **Operators-in-interfaces** for
+     generic math (`interface IArithmetic { fn This operator+(This rhs); }`) reuse M27's interface-bound
+     + `This` mechanism — so a generic `T: IArithmetic` gets `+`. (Does NOT impact M27's design; M27
+     ships the named-method form, M29 makes the methods operators.)
 
 5. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
    (give/copy + by-value from M26c/d, generics, `match`/`Optional`, operators; GOALS §3a unsafe
