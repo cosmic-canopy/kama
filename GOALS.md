@@ -14,6 +14,14 @@ lightweight WebGPU game engine.
 1. **Self-hosting eventually.** Developers should not need extra tooling; the compiler should ultimately
    be written in cstar and bootstrap through the C transpiler. *Long-term — requires strings, collections,
    maps, file I/O, and tagged unions in the language first.*
+   - *Tied to this:* the built-in containers/smart-pointers are currently compiler intrinsics with
+     hand-tuned **C** runtime bodies. Generics (M27) unify the *surface* but keep those C bodies
+     (option "C"). **Reimplementing them as cstar generic library types** (option "B" — the Rust-`Vec`
+     "unsafe core, safe API" model, in `unsafe`/`Ptr`) is a possible *later* step. It buys nothing for
+     runtime performance (monomorphization makes both identical) and isn't needed for the language to
+     be complete — its payoff is *this* goal, self-hosting (a cstar stdlib for a cstar compiler). The
+     M27 engine is built so (B) is a no-rework continuation (swap a generic type's body source from
+     C-macro to cstar), never a redo.
 
 2. **Fast compiles: single-pass, parallelizable.** Parsing stays essentially single-pass. Speed comes
    from per-file parallelism — parse + emit each translation unit independently, then compile the

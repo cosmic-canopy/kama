@@ -58,12 +58,29 @@ notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) lik
    generics: `Map<K,V>`, multi-param + nested (`>>` lexing). The foundational type-system feature —
    unblocks `Optional<T>`, `Map`, and every future library type. *(Was slated to defer to 1.1;
    pulled back in for a language-complete 1.0.)*
-   - **Design Qs:** **Monomorphization** (consistent with today's collection/smart-ptr intrinsics —
-     zero-cost, some code bloat) vs type-erasure — almost certainly mono, confirm. **Generic
-     constraints** via interface bounds (`<K: IHashable>`) — `Map` needs key hashing/equality, so
-     some bound mechanism is required; what's the syntax? The `>>` token split for nested generics
-     (`Map<K, List<V>>` — known lexer issue). How a generic type param composes with give/copy and
-     the smart-ptr family. Generic functions vs only generic types?
+   - **DECIDED (2026-06-30):**
+     - **Monomorphization**, not erasure — one specialized copy per concrete type (elements inline,
+       no boxing). **Zero runtime/memory cost**; identical layout to today's intrinsics. (Erasure
+       would box every element — rejected.)
+     - **Architecture = "C": one engine, pluggable bodies.** Generalize the existing intrinsic
+       monomorphization machinery so a generic type's method bodies come *either* from a C runtime
+       macro (the built-ins — `List`/`Owned`/… keep their hand-tuned bodies) *or* from cstar source
+       (user types). Full surface unification (`List<T>` and a user `Stack<T>` declared/used
+       identically), zero perf risk. Reimplementing the built-ins *in cstar* (option "B") is deferred
+       to self-hosting and is a no-rework continuation — see GOALS §1.
+     - **Constraints = interfaces only, inline syntax.** `class Map<K: IHashable + IComparable, V>`;
+       `+` means **AND** (all listed interfaces; no disjunction — static dispatch needs the exact
+       method set). An interface **bound** is compile-time only → calls monomorphize to **static
+       direct calls (zero-cost)**, distinct from an interface **value** (runtime fat pointer). No
+       base-class bounds (use an interface). **Generic functions** too, not just types.
+     - **give/copy** composes for free — the markers dispatch on the *concrete* type at each
+       monomorphized site (a `T` that resolves to `Owned` moves, a pod copies). Confirm in impl.
+   - **OPEN — `Self`:** `Map`'s key needs "K equals K", so a contract must name the implementing type.
+     Choice: (a) F-bounded generic interface (`IEquatable<T>`, used as `K: IEquatable<K>` — no keyword,
+     but brain-bending) vs (b) a **`Self`** keyword (`IEquatable { fn bool equals(other: Self); }` —
+     Swift/Rust style, cleaner use sites, needs Self-substitution machinery). Lean (b). Ship named-method
+     contracts (`equals`/`compareTo`) in M27; they can *become* operators at M29.
+   - **Tech:** `>>` token split for nested generics (`Map<K, List<V>>`).
 
 3. **M28 — tagged unions + `match` + `Optional<T>`.** Sum types with exhaustive pattern matching;
    `Optional<T>` as a *library* tagged union (`enum Optional<T> { Some(T), None }`), **not** a
