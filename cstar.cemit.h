@@ -231,6 +231,10 @@ private:
     struct LiveLocal { std::string cVar; std::string className; };
     struct Scope { std::vector<LiveLocal> locals; bool isLoopBoundary = false; bool isFunctionRoot = false; };
     std::vector<Scope> _scopes;
+    // M26d: by-value smart-ptr params the callee owns — dropped at fn-end. emitFunction
+    // records them here (its function-root scope is created later, in emitBlockScoped,
+    // which drains this); emitMethodOrCtorBody records them in its root scope directly.
+    std::vector<LiveLocal> _pendingParamDtors;
     std::string        _currentReturnCType = "void";  // for return-temp
     int                _tempCounter = 0;
     bool               _inUnsafe = false;             // M17: inside an `unsafe { }` block
@@ -271,6 +275,10 @@ private:
     CollKind smartKind(const std::string& cls) const;    // Owned/Shared (precond: isSmartPtrClass)
     bool isSmartPtrExpr(SharedExpression e);             // e's static class is a smart pointer
     bool isSmartPtrLValue(SharedExpression e);           // e is a bare identifier of smart-ptr type
+    // M26c/d: a NAMED value you can hand off (variable / field / element / base member),
+    // as opposed to a FRESH rvalue (a `new`/constructor/call result/literal). A marker
+    // (`give`/`copy`) rides a named value; a fresh rvalue is consumed in place, never marked.
+    static bool isNamedValue(ASTNode* e);
     std::string smartPtrInvalidate(const std::string& expr, CollKind kind);  // null the dtor's guard field
     // Dispatch `recv.method(args)` on a smart-pointer receiver: an intrinsic
     // (lock/expired/valid) on the pointer itself, else auto-deref to the pointee.

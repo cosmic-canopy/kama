@@ -1,0 +1,21 @@
+// M26d — smart pointers passed BY VALUE. The callee owns the param and drops it
+// at fn-end; `give` moves an Owned in, a bare Shared copies (retains), and a fresh
+// factory rvalue is moved in with no marker.
+class Counter { int32 n; public Counter(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
+
+// Consume an Owned by value — `sink` owns `c` and frees it on return.
+fn int32 sink(Owned<Counter> c) { return c.get(); }
+// Retain a Shared by value — the caller's handle stays valid.
+fn int32 peek(Shared<Counter> s) { return s.get(); }
+// Factory: a fresh Owned rvalue (no marker needed when passed on).
+fn Owned<Counter> make(int32 n) { Owned<Counter> c = new Counter(n: n); return c; }
+
+fn int32 main() {
+    Owned<Counter> a = new Counter(n: 20);
+    int32 w = sink(c: give a);            // move `a` into sink; `a` is consumed
+    int32 x = sink(c: make(n: 7));        // fresh rvalue handed straight in
+    Shared<Counter> s = new Counter(n: 22);
+    int32 y = peek(s: s);                 // copy/retain; `s` survives the call
+    int32 z = s.get();                    // still alive
+    return w + x + y + z;                 // 20 + 7 + 22 + 22 = 71
+}

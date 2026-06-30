@@ -544,6 +544,12 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
 {
     Scope sc; sc.isLoopBoundary = loopBoundary; sc.isFunctionRoot = functionRoot;
     _scopes.push_back(sc);
+    // M26d: by-value smart-ptr params the callee owns drop at fn-end. Recorded FIRST in
+    // the root scope, so they're destroyed LAST (after every local), at function exit.
+    if (functionRoot && !_pendingParamDtors.empty()) {
+        for (auto& l : _pendingParamDtors) _scopes.back().locals.push_back(l);
+        _pendingParamDtors.clear();
+    }
 
     *_out << "{\n";
     SharedStatement last;
@@ -662,13 +668,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 SharedExpression init = d->initializer;
                 int handoff = 0;   // 0 none, 1 give, 2 copy
                 if (auto* h = dynamic_cast<HandoffNode*>(d->initializer.get())) { handoff = h->isGive ? 1 : 2; init = h->value; }
-                // A "named value" is an existing binding you can hand off (a variable / field /
-                // element) — as opposed to a FRESH rvalue (a `new`/constructor, a call result, a
-                // literal), which is consumed in place and never needs a marker.
-                auto isNamedValue = [](ASTNode* e) {
-                    return dynamic_cast<IdentifierNode*>(e) || dynamic_cast<MemberAccessNode*>(e)
-                        || dynamic_cast<ElementAccessNode*>(e) || dynamic_cast<BaseAccessNode*>(e);
-                };
                 if (handoff && !isNamedValue(init.get()))
                     unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n->line);
 
@@ -785,26 +784,42 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
         line(n->line);
+        // M26c/d: unwrap a give/copy hand-off marker; the inner value is what we return.
+        SharedExpression retExpr = ret->expression;
+        int handoff = 0;   // 0 none, 1 give, 2 copy
+        if (retExpr)
+            if (auto* h = dynamic_cast<HandoffNode*>(retExpr.get())) { handoff = h->isGive ? 1 : 2; retExpr = h->value; }
         // Capture the return value BEFORE running any destructors (it may
         // reference locals about to be destroyed), then unwind, then return.
-        if (ret->expression && _currentReturnCType != "void") {
+        if (retExpr && _currentReturnCType != "void") {
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
             indent(depth);
-            *_out << _currentReturnCType << " " << tmp << " = " << emitExpression(ret->expression) << ";\n";
-            // Smart-pointer move-out: returning a smart-ptr local transfers the
-            // ref/ownership to the caller. Invalidate it BEFORE the unwind so the
-            // scope's dtor doesn't free/decrement what the caller now owns (the
-            // factory-function landmine).
-            if (isSmartPtrLValue(ret->expression)) {
+            *_out << _currentReturnCType << " " << tmp << " = " << emitExpression(retExpr) << ";\n";
+            // Smart-pointer hand-off to the caller: give (or a bare dying local/param) MOVES
+            // out — invalidate the source BEFORE the unwind so the scope's dtor doesn't free/
+            // decrement what the caller now owns (the factory landmine). `copy` RETAINS — the
+            // source survives (e.g. a field), so the caller's ref is a fresh one.
+            std::string rc = exprClass(retExpr);
+            if (isSmartPtrClass(rc) && isNamedValue(retExpr.get())) {
+                CollKind k = smartKind(rc);
+                bool doGive = true;
+                if (handoff == 1)      doGive = true;
+                else if (handoff == 2) { if (k == CollKind::Owned)
+                                             unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
+                                         doGive = false; }
+                else if (isSmartPtrLValue(retExpr)) doGive = true;   // bare local/param: it dies here, move it out
+                else unsupported("returning a smart-pointer field/element needs `give` (move it out) or "
+                                 "`copy` (retain — the source stays valid)", n->line);
                 indent(depth);
-                *_out << smartPtrInvalidate(emitExpression(ret->expression),
-                                           smartKind(exprClass(ret->expression))) << "\n";
+                if (doGive) *_out << smartPtrInvalidate(emitExpression(retExpr), k) << "\n";
+                else        *_out << "(" << emitExpression(retExpr) << ").ctrl->"
+                                  << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
             }
             // Same move-out for a returned BindableFunctionPtr (M22): it may own its
             // bound object, so the scope dtor must NOT drop what the caller now owns.
-            else if (auto* rid = dynamic_cast<IdentifierNode*>(ret->expression.get())) {
-                if (rid->value && isBindableClass(exprClass(ret->expression))) {
-                    std::string e = emitExpression(ret->expression);
+            else if (auto* rid = dynamic_cast<IdentifierNode*>(retExpr.get())) {
+                if (rid->value && isBindableClass(exprClass(retExpr))) {
+                    std::string e = emitExpression(retExpr);
                     indent(depth);
                     *_out << "(" << e << ").obj = NULL; (" << e << ").ctrl = NULL; ("
                           << e << ").fn = NULL; (" << e << ").elemdtor = NULL;\n";
@@ -813,7 +828,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             emitUnwindAll(depth);
             indent(depth); *_out << "return " << tmp << ";\n";
         } else {
-            if (ret->expression) { indent(depth); *_out << emitExpression(ret->expression) << ";\n"; }
+            if (retExpr) { indent(depth); *_out << emitExpression(retExpr) << ";\n"; }
             emitUnwindAll(depth);
             indent(depth); *_out << "return;\n";
         }
@@ -1744,6 +1759,15 @@ bool CEmitter::isSmartPtrExpr(SharedExpression e)
     return e && isSmartPtrClass(exprClass(e));
 }
 
+// A "named value" is an existing binding you can hand off (a variable / field /
+// element / base member) — as opposed to a FRESH rvalue (a `new`/constructor, a
+// call result, a literal), which is consumed in place and never needs a marker.
+bool CEmitter::isNamedValue(ASTNode* e)
+{
+    return dynamic_cast<IdentifierNode*>(e) || dynamic_cast<MemberAccessNode*>(e)
+        || dynamic_cast<ElementAccessNode*>(e) || dynamic_cast<BaseAccessNode*>(e);
+}
+
 // A plain transferable lvalue: a bare identifier naming a smart-pointer local/
 // param. A `new ...<T>(...)` initializer is NOT an lvalue (no source to touch).
 bool CEmitter::isSmartPtrLValue(SharedExpression e)
@@ -1994,9 +2018,18 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         first = false;
         auto f = byName.find(p.name);
         if (f == byName.end()) { unsupported("missing argument in call", srcLine); s += "0"; continue; }
-        std::string val = emitExpression(f->second->expression);
+        // M26c/d: unwrap a give/copy hand-off marker. The inner value is what we emit;
+        // the marker (give=move / copy=retain) only matters for a smart pointer passed
+        // BY VALUE (ownership transfer) — it's meaningless on a borrow.
+        SharedExpression argExpr = f->second->expression;
+        int handoff = 0;   // 0 none, 1 give, 2 copy
+        if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
+        std::string val = emitExpression(argExpr);
+        if (handoff && (p.byRef || isInterface(p.className)))
+            unsupported("`give`/`copy` transfer ownership by value — they don't apply to a `ref`/`out` "
+                        "or interface borrow", srcLine);
         if (isInterface(p.className)) {
-            std::string c = exprClass(f->second->expression);
+            std::string c = exprClass(argExpr);
             if (p.byRef) {
                 // `ref`/`out` interface: the callee may reseat the caller's handle, so the
                 // argument must be an actual interface variable (pass its address). A
@@ -2005,7 +2038,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     unsupported(("cannot pass '" + c + "' by `ref`/`out` to interface parameter '" + p.name
                                  + "'; bind it to an `" + p.className + "` first "
                                  "(`" + p.className + " s = …; … ref s`)").c_str(), srcLine);
-                if (!p.isConst) checkConstWrite(f->second->expression, srcLine);
+                if (!p.isConst) checkConstWrite(argExpr, srcLine);
                 s += "&(" + val + ")";
             } else {
                 // by value: wrap a concrete object as an interface fat pointer (the borrow);
@@ -2016,11 +2049,11 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // M24 soundness: a non-const `ref`/`out` param can MUTATE its argument, so a
             // const binding (or a const field outside its ctor) may not be passed to one
             // — that would silently launder away const. (A `const ref` borrow is fine.)
-            if (!p.isConst) checkConstWrite(f->second->expression, srcLine);
+            if (!p.isConst) checkConstWrite(argExpr, srcLine);
             // M26b: a borrow names the OBJECT (`ref T`). If the argument is a smart pointer
             // holding a T, auto-deref to its T* — `ref p` borrows the heap object, uniformly
             // with `ref stackValue`. (Weak can't be borrowed — it may be dead; tryUpgrade.)
-            std::string argCls = exprClass(f->second->expression);
+            std::string argCls = exprClass(argExpr);
             if (isSmartPtrClass(argCls) && _classes[argCls].collElemClass == p.className) {
                 if (smartKind(argCls) == CollKind::Weak)
                     unsupported(("cannot borrow through a `Weak<" + p.className
@@ -2031,14 +2064,36 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                                           : ("&(" + val + ")");
             }
         } else {
-            // Passing a smart pointer by value is not supported (the ownership
-            // transfer / retain would need a statement, and a param isn't auto-
-            // dropped). Pass by `ref` to borrow it, or return it to transfer.
-            // Flag rather than risk a silent double-free / refcount leak.
-            if (isSmartPtrLValue(f->second->expression))
-                unsupported("smart pointer passed by value (pass by `ref` to borrow, "
-                            "or return it to transfer)", srcLine);
-            s += val;
+            // M26d: by value. A *named* smart pointer TRANSFERS into the param, which the
+            // callee owns and drops at fn-end. The retain (copy) / invalidate (give) is a
+            // statement, so inline it with a GNU statement-expression: ({ T t=(x); <side>; t; }).
+            std::string argCls = exprClass(argExpr);
+            bool collArg = !argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection;
+            if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
+                CollKind k = smartKind(argCls);
+                // Default the natural op: Owned -> give (move; copy illegal), Shared/Weak -> copy
+                // (retain). A marker overrides (e.g. `give Shared` moves the handle).
+                bool doGive = (handoff == 1) || (handoff == 0 && k == CollKind::Owned);
+                if (handoff == 2 && k == CollKind::Owned)
+                    unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", srcLine);
+                std::string t = "__cstar_arg" + std::to_string(_tempCounter++);
+                std::string side = doGive ? smartPtrInvalidate("(" + val + ")", k)
+                                          : ("(" + val + ").ctrl->" + (k == CollKind::Weak ? "weak" : "strong") + "++;");
+                s += "({ " + p.className + " " + t + " = (" + val + "); " + side + " " + t + "; })";
+            } else if (isSmartPtrClass(argCls)) {
+                // A FRESH smart-ptr rvalue (factory/`new` result) — consumed in place, no source.
+                if (handoff)
+                    unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call "
+                                "result needs no marker", srcLine);
+                s += val;
+            } else if (collArg && handoff) {
+                unsupported("passing a collection by value is not yet supported — pass it by `ref` to borrow", srcLine);
+            } else {
+                if (handoff == 1)
+                    unsupported("`give` applies to an owned value (a smart pointer or collection) — "
+                                "a plain value just copies", srcLine);
+                s += val;   // plain value copy (primitive / pod / collection borrow)
+            }
         }
     }
     return s + ")";
@@ -2533,6 +2588,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
+    _pendingParamDtors.clear();
     _currentClass = nullptr;
     _currentFunc  = name;   // M25c — a free function may be a `friend` accessor
     if (fn->parameters) {
@@ -2543,6 +2599,9 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
             if (p->isConst) _constLocals.insert(pn);   // M24c: const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
+            // M26d: a by-value smart-ptr param is OWNED by the callee — drop it at fn-end.
+            // The function-root scope is created later (emitBlockScoped); stash it there.
+            if (!paramByRef(p.get()) && isSmartPtrClass(pty)) _pendingParamDtors.push_back({pn, pty});
         }
     }
 
@@ -2808,6 +2867,9 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             if (p->isConst) _constLocals.insert(pn);   // M24c: const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
+            // M26d: a by-value smart-ptr param is owned by the callee — drop it at fn-end.
+            // The root scope is already on the stack, so record it directly (dropped last).
+            if (!paramByRef(p.get()) && isSmartPtrClass(pty)) recordDestructibleLocal(pn, pty);
         }
     }
 
@@ -3124,11 +3186,16 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     for (auto& kv : _interfaces) { scopeOf(kv.second.scope, kv.second.usings); emitInterfaceTypes(kv.second); }
 
-    // Class prototypes, then the collection/smart-pointer macros (which reference
-    // element struct/dtor decls), then free-function prototypes (which may use a
-    // collection/smart-pointer type in their signature).
-    for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings); emitClassPrototypes(*ci); }
+    // Element destructor prototypes the collection/smart-pointer macros call, then the
+    // macros themselves, then class prototypes — so a method (M26d: or any class member)
+    // can pass a collection/smart-pointer wrapper BY VALUE in its signature, the wrapper
+    // type being complete by then. The dtor protos are re-declared (identically, harmless)
+    // by emitClassPrototypes. Free-function prototypes follow (they may use a wrapper too).
+    for (ClassInfo* ci : classes)
+        if (!ci->isCollection && !ci->isExternStruct && ci->destructible)
+            *_out << "void " << ci->name << "__dtor(" << ci->name << "* self);\n";
     emitCollectionDefs();
+    for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings); emitClassPrototypes(*ci); }
     // Prototypes for cstar's OWN free functions. cstar never emits prototypes for
     // `extern` C functions: an `extern` decl is purely cstar's call signature
     // (name + named params, for lowering) — the C prototype comes from the header
