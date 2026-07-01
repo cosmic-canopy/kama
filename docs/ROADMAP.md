@@ -18,13 +18,13 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 
 ## Road to 1.0 — language complete
 
-Recommended order: **M26e → M26f → M27 → M28 → M29 → Step 7 → tag.** Rationale: close the
-borrow-safety arc first (M26e, small) and enable owned-interface storage (M26f — the engine needs
-it); then the type-system push (generics → sum types — the dependency spine,
-since `Optional<T>` *is* a generic tagged union — and generics is the biggest/riskiest piece, best
-done early with full runway); then operators as a visible engine-math finale; then docs. M29 is
-independent — pull it to right after M26e if validating engine-viability sooner beats de-risking
-generics early (recommended against).
+Recommended order: **M26e → M26f → M26g → M27 → M28 → M29 → Step 7 → tag.** Rationale: close the
+borrow-safety arc (M26e, done), then *complete the value model* (M26f — non-pod move semantics,
+deep-copy, copy methods), then enable owned-interface storage (M26g — the engine needs it); then the
+type-system push (generics → sum types — the dependency spine, since `Optional<T>` *is* a generic
+tagged union — and generics is the biggest/riskiest piece, best done early with full runway); then
+operators as a visible engine-math finale; then docs. `Optional<T>` (M28) is also the documented
+escape hatch for genuinely-conditional ownership (see M26f).
 
 *Numbering note:* M0–M26 are historical (done/committed). The remaining work is numbered by build
 order, so generics — long reserved as "M23" but never built — becomes **M27**, and operators (a few
@@ -47,14 +47,43 @@ notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) lik
      post-1.0. Impl: `rejectStoredInterface` helper at emitStruct/prototype sites + registerCollection;
      xfail iface_field/iface_return/iface_collection. 110/110.
 
-   **M26f — owned-interface storage** *(new; before 1.0, after M26e).* Smart-pointers over an
-   interface element (`Shared<IShape>` / `Owned<IShape>` — a fat-pointer element, a real extension
-   of the smart-ptr machinery) + interface fields / returns / collections, so polymorphism can be
-   *stored* (the engine's `List<IDrawable>` scene). Bare stored `IShape` stays a clear error;
-   ownership is explicit, never implicitly boxed. *(May instead fold into M27 generics — decide
-   when we get there.)*
+2. **M26f — complete the value model** *(in progress).* The give/copy model was only partly built
+   (smart pointers, and collection `give`); this finishes it. **Sub-steps (order = safety first):**
+   - **M26f-1 — class holds a collection/smart-ptr field.** ✅ **DONE (v0.1.36).** Split each
+     `CSTAR_*_DEFINE` macro into `_TYPE` (struct, emitted before class bodies) + `_FUNCS`; zero-init
+     the field in the ctor. Fixture `coll_field`. *(This also made the non-pod double-drop reachable
+     — hence B is next.)*
+   - **M26f-2 — non-pod values move-only + use-after-move analysis (option "B").** Next; safety-
+     critical (closes the double-drop M26f-1 exposed). **DECIDED:** move-tracking is **compile-time
+     dataflow ("B")**, not runtime drop-flags — a *bounded structured-dataflow pre-pass* (per-local
+     move-state; merge at if/else/switch joins; loop fixpoint; break/continue feed their targets)
+     that the emitter consults to reject use-after-move and skip a definitely-moved local's dtor.
+     **Zero runtime overhead by construction**: it *rejects* any program where a drop's fate is only
+     knowable at runtime (moved-on-some-paths, live to scope-exit) — the exact case Rust handles with
+     a hidden drop-flag (ruled out by GOALS §3). **`Optional<T>` (M28) is the documented escape
+     hatch** for genuinely-conditional ownership — "the drop flag, made an explicit value." Also:
+     make non-pod class values move-only and **enforce the mandatory `give`/`copy` marker** on every
+     non-pod *named-value* hand-off (fresh rvalues stay bare). Scoped to non-pod values first; the
+     same analysis can later upgrade smart-ptr use-after-move (today a runtime null-trap) to a compile
+     error. Needs a migration sweep of existing non-pod-value copy sites.
+   - **M26f-3 — collection deep-`copy`.** The `copy` marker on `Array`/`List`/`String` → a real deep
+     copy (runtime + codegen); today it errors "not yet implemented".
+   - **M26f-4 — user-definable `copy` methods.** A class declares `copy`; its presence keeps the
+     marker mandatory (already true for non-pods), `copy x` calls it, `give x` moves; `copy` on a type
+     with no `copy` method errors with guidance ("add a `copy` method, or `give` to move").
+   - **M26f-5 — the comprehensive give/copy test matrix** (fixture per cell), built up as pieces land.
+   - **The marker rule (DECIDED):** a marker is required exactly when both *move* and *copy* are
+     plausible for the type — **collections** and **non-pod class values**. Silent where there's one
+     natural op: primitive/`pod` → copy, `Owned` → move, `Shared`/`Weak` → retain (give = opt-in).
 
-2. **M27 — generics** *(the long-reserved "M23", renumbered to its build order).* Full user-defined
+3. **M26g — owned-interface storage** *(was M26f; before 1.0).* Smart-pointers over an interface
+   element (`Shared<IShape>` / `Owned<IShape>` — a fat-pointer element, a real extension of the
+   smart-ptr machinery) + interface fields / returns / collections, so polymorphism can be *stored*
+   (the engine's `List<IDrawable>` scene). Bare stored `IShape` stays a clear error; ownership is
+   explicit, never implicitly boxed. *(May instead fold into M27 generics — decide when we get
+   there.)*
+
+4. **M27 — generics** *(the long-reserved "M23", renumbered to its build order).* Full user-defined
    generics: `Map<K,V>`, multi-param + nested (`>>` lexing). The foundational type-system feature —
    unblocks `Optional<T>`, `Map`, and every future library type. *(Was slated to defer to 1.1;
    pulled back in for a language-complete 1.0.)*
@@ -91,7 +120,7 @@ notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) lik
      operator-interfaces (generic math) will *reuse* this milestone's interface-bound + `This`
      mechanism — M27 lays the groundwork, no conflict.
 
-3. **M28 — tagged unions + `match` + `Optional<T>`.** Sum types with exhaustive pattern matching;
+5. **M28 — tagged unions + `match` + `Optional<T>`.** Sum types with exhaustive pattern matching;
    `Optional<T>` as a *library* tagged union (`enum Optional<T> { Some(T), None }`), **not** a
    compiler intrinsic — one way to do a thing. The "no forgotten case" capstone. Migrates
    `Weak.tryUpgrade() -> Optional<Shared<T>>` to its final form (no out-param). Every fallible op
@@ -104,7 +133,7 @@ notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) lik
      variant. This is where "absence" lives now that there's no null — confirm `Optional` is the one
      blessed mechanism (vs also `Result<T,E>`?). Depends on M27 (generics).
 
-4. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
+6. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already
    treats `Vec2 c = a + b` as a cheap pod copy. Validated by a first Vec2/3/4 + Mat4 library.
    - **Design Qs:** Operator-method **syntax** — operators are the *sanctioned exception* to
@@ -117,13 +146,13 @@ notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) lik
      + `This` mechanism — so a generic `T: IArithmetic` gets `+`. (Does NOT impact M27's design; M27
      ships the named-method form, M29 makes the methods operators.)
 
-5. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
+7. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
    (give/copy + by-value from M26c/d, generics, `match`/`Optional`, operators; GOALS §3a unsafe
    wording vs shipped `unsafe{}`/`Ptr`). **Fold in the repo-wide naming/case convention pass**
    (lower-camel methods, PascalCase types) — 1.0 is the API-stability point, and post-1.0 renames
    are breaking, so settle it *now*.
 
-6. **Step 8 — tag 1.0.** Nothing deferred — the language is complete.
+8. **Step 8 — tag 1.0.** Nothing deferred — the language is complete.
 
 ## 1.x — systems & runtime (post-1.0)
 
