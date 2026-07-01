@@ -65,6 +65,22 @@ fn Owned<Node> make(int v) { Owned<Node> n = new Node(id: v); return n; }  // fa
 Move-only: copying/initializing/returning an `Owned` transfers ownership and invalidates the source, so
 the pointee is freed exactly once (RAII, with the pointee's destructor).
 
+**Ownership hand-off — `give` / `copy` ✅ (M26c/d).** When a *named* owned value is handed off — in an
+initializer, assignment, argument, or return — an explicit marker states the intent, uniformly in all four
+positions: **`give`** moves (invalidates the source), **`copy`** retains (`Shared`/`Weak`) or duplicates.
+The natural op is the default, so a marker is only required where a silent copy would be surprising: `Owned`
+defaults to `give` (and `copy Owned` is an error — it's unique); `Shared`/`Weak` default to `copy`/retain,
+with **`give` as the opt-in move** of the handle; a pod/primitive just copies (and `give` on one is an
+error). A fresh `new`/constructor/call result needs no marker. Smart pointers also **pass by value** (M26d):
+the callee *owns* the argument and drops it at function end — `fn int use(Owned<T> p)` consumes it (`use(p:
+give x)`), `fn int peek(Shared<T> s)` retains it (`peek(s: x)`, `x` stays valid).
+```cstar
+Owned<Counter> b = give a;   // explicit move (a consumed)
+Shared<Counter> t = s;       // copy/retain (default) — both valid
+Shared<Counter> u = give s;  // opt-in move of the share (no retain)
+```
+*(🚧 `copy` of a collection — a deep copy — is not yet implemented; use `give` to move.)*
+
 `Shared<T>` — ref-counted shared ownership (= C++ `shared_ptr` / Rust `Rc`). **Copyable**: each copy
 retains (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.
 
@@ -93,10 +109,14 @@ always valid: there is nothing to null-check. `== null` / `!= null` on a safe ty
 liveness is obtained through `tryUpgrade(out: s) -> bool` (🚧 planned; today: `upgrade()` + `.valid()`),
 whose result forces you to handle the dead case.
 
-Smart-pointer limits (whole family): pointee must be a **class** type; **borrow** by passing `ref T` (the
-object — storage-agnostic; 🚧 fixing the heap case); polymorphic `Smart<Base> = Derived` is deferred;
-storing a smart pointer in a collection or a bitwise-copied class field is deferred (aggregate copy doesn't
-retain/move). `Map<K,V>` + multi-param/nested generics are 🚧.
+Passing a smart pointer: **borrow** it by passing `ref T` — the borrow names the *object* (`ref T`, storage-
+agnostic; a `ref` may not name the smart pointer itself), which auto-derefs to the held object; or **transfer
+by value** (M26d), where the callee owns the argument and drops it at function end (`Owned` moves in, `Shared`
+retains). Limits (whole family): pointee must be a **class** type; polymorphic `Smart<Base> = Derived` is
+deferred; storing a smart pointer in a bitwise-copied class field is deferred (aggregate copy doesn't
+retain/move) — but a `List<Shared<T>>` is the intended way to store owned polymorphism (once user generics
+compose here). User-defined generics — `Map<K,V>`, `class Foo<T>`, multi-param/nested — are the next
+milestone (M27).
 
 ## Functions ✅
 
@@ -108,7 +128,9 @@ fn int main() { return add(b: 20, a: 10); }   // named args; reordered to declar
 
 ## FFI — calling C ✅ (M15)
 
-`extern Ret name(params);` declares a C function; cstar emits its prototype and lowers calls to it. Link
+`extern fn Ret name(params);` declares a C function's call signature (name + named params for lowering);
+the C **prototype comes from the header** you `extern "<header.h>";` — cstar never emits a prototype for an
+extern function (so there's no redeclaration conflict, and a missing include is a plain C error). Link
 libraries with `--link`. The FFI boundary is the language's only "unsafe" seam (explicitly `extern`):
 
 ```cstar
@@ -239,9 +261,10 @@ free and bound callables, while `fnptr` stays the zero-cost free-only form. It i
 uniquely own its object): returning one from a factory transfers ownership; the captured object's
 destructor runs **exactly once** when the bindable finally drops.
 
-**FFI**: an `extern fn` may take an `fnptr` type as a param; passing it hands C the raw pointer. When the C
-callback type is one cstar can't yet spell exactly — most commonly a `const`-qualified pointer (cstar has
-no `const` until M24) — name it via a header `typedef` and **cast** at the edge:
+**FFI**: an `extern fn` may take an `fnptr` type as a param; passing it hands C the raw pointer. C requires
+an *exact* function-pointer-type match (incompatible fn-pointer types are a hard error), so when the C
+callback signature is one cstar's `fnptr` doesn't spell identically — most commonly `const`-qualified
+parameters — name the callback via a header `typedef` and **cast** to it at the edge:
 
 ```cstar
 extern "<stdlib.h>";
@@ -250,7 +273,7 @@ fnptr int32 Comparator(Ptr<int32> a, Ptr<int32> b);
 extern fn void qsort(Ptr buf, usize nmemb, usize size, CompareFn compar);
 ...
 Comparator c = cmp;
-qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // cast for const, drops in M24
+qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // cast to the header's fn-ptr type
 ```
 
 🚧 next: full user-defined generics (`Map<K,V>`, `>>`); then math types → cstar-level WebGPU bindings.
@@ -265,16 +288,18 @@ assignment ops (`= += …`), `++`/`--`, casts.
 
 ```cstar
 class Counter {
-    int value;
-    Counter(int start) { value = start; }   // constructor
-    fn void add(int n) { value = value + n; }   // method (implicit self)
-    fn int get() { return value; }
+    int value;                                       // fields are private by default (M25)
+    public Counter(int start) { value = start; }     // constructor (mark `public` to call from outside)
+    public fn void add(int n) { value = value + n; } // method (implicit self)
+    public fn int get() { return value; }
 }
-Counter c = new Counter(start: 40);   // constructs in place
+Counter c = Counter(start: 40);   // stack value — a stack value DROPS `new` (M26a)
 c.add(n: 2);
 ```
 Fields, methods (take an implicit `self`), one constructor, field initializers (run in the ctor),
 `this.field`, `obj.method(args)`. Lowers to a `struct` + `Counter__method(Counter* self, …)` functions.
+Members are **private by default** (M25 — see below); `new` is reserved for the heap (`Owned`/`Shared`
+element construction), so a stack value uses `Counter(start: 40)`, not `new Counter(...)`.
 
 ## RAII / destructors ✅
 
@@ -333,6 +358,21 @@ polymorphism around, **own the object**: a smart pointer over the interface (`Sh
 enabled by M26f; until then the error guides you to it.)* This is the language-wide rule **"borrow is
 parameter-only; storage requires ownership"** — the same reason a `ref` parameter can't be returned and a
 returnable "reference" is always an owned smart-pointer handle.
+
+## Access control ✅ (M25)
+
+Encapsulation is compile-time only (the emitted C is unchanged) and stricter than C#:
+- **Private by default.** A member with no modifier is private; `public`/`protected`/`private` set it
+  explicitly. `protected` = the owner or a subclass; external code sees `public` only.
+- **A field takes no visibility modifier** — data exposure is the class *kind*: a `pod class` is plain
+  public data (no methods/vtable/dtor; C-layout/FFI-compatible), while every other kind keeps its fields
+  private, reached through accessor methods.
+- **Overridable methods are written `protected`** (public polymorphism is an `interface`'s job); a class
+  opts into extension as a `virtual`/`abstract class` and seals as a plain/`final class`.
+- **`friend`** grants are granular and owner-declared: `friend <accessor>[members];` (or `[...]` for all
+  privates), where the accessor is a class, a free function, or a `Class::method` — greppable and explicit.
+
+See `docs/KEYWORDS.md` for the full class-kind × visibility table.
 
 ## Enums ✅
 

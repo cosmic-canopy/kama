@@ -31,14 +31,16 @@ lightweight WebGPU game engine.
 3. **Predictable allocation/deallocation, no GC.** Lifetimes are deterministic (RAII). Allocation is
    explicit in the generated C. Arena/pool allocators arrive as library types for the engine.
 
-3a. **No unsafe code; no raw pointers in the language.** The cstar surface never exposes raw pointers or
-   raw memory. Heap and buffers are reached only through safe abstractions: **collections** (`Array<T>`/
-   `List<T>`/`String`) now, and a **smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted,
-   `Weak<T>`) later. These are compiler-known intrinsics whose unsafe internals (raw pointers, `malloc`/
-   `free`) live ONLY in `cstar_runtime.h` — the Rust-`Vec`/Swift-`Array` model: unsafe core, safe API.
-   Indexing is **bounds-checked** (traps, not UB). A raw pointer / `unsafe` block is explicitly NOT a
-   language goal. (Self-hosting the compiler in cstar — goal #1 — is the one case that may someday need a
-   tightly-contained escape hatch; a separate, deferred decision.)
+3a. **No raw pointers in the *safe* surface.** The safe cstar surface never exposes raw pointers or raw
+   memory. Heap and buffers are reached only through safe abstractions: **collections** (`Array<T>`/
+   `List<T>`/`String`) and the **smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted,
+   `Weak<T>`) — both shipped. These are compiler-known intrinsics whose unsafe internals (raw pointers,
+   `malloc`/`free`) live ONLY in `cstar_runtime.h` — the Rust-`Vec`/Swift-`Array` model: unsafe core, safe
+   API. Indexing is **bounds-checked** (traps, not UB). The one deliberately contained exception is the
+   **`unsafe { }`** block + `Ptr<T>` at the **FFI boundary** (M17): a narrow, greppable seam for talking to C
+   (GPU/OS APIs — the whole point of transpiling to C), never general-purpose escape, and the safe surface
+   never sees it. (Self-hosting the compiler in cstar — goal #1 — is the other place a contained escape may
+   matter.)
 
 3b. **No null in the safe surface.** A stack value, an `Owned<T>`/`Shared<T>`, a `ref`/`out` borrow, and an
    interface value are **always valid** — there is nothing to null-check. Absence is encoded in the
@@ -95,6 +97,8 @@ Development of cstar follows two vendored guidance skills that reinforce goals #
 
 ## Current status
 
-See `README.md` and the milestone plan. Core language is being built up M0→M7; RAII (no-GC) is the
-in-progress milestone (M5). Collections (`List<T>`/`Array<T>`, no raw arrays — by design) are the first
-post-v1 workstream and the gating feature for real engine code.
+The single source of truth for status is `README.md` (feature summary) and `docs/ROADMAP.md` (the
+milestone plan). As of v0.1.35 (through M26e), the core language, OO, RAII, collections, the smart-pointer
+family, the full value/ownership model, `const`-correctness, and access control are all shipped; user-defined
+generics, sum types + pattern matching, and operator overloading are the remaining language milestones on the
+road to a language-complete 1.0. This section is intentionally brief so it doesn't drift — see those files.

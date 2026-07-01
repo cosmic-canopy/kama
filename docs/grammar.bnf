@@ -1,5 +1,4 @@
-wrote /Users/matt/Documents/cstar/docs/grammar.bnf
-y tools/gen-grammar. Do not edit.
+// cstar grammar (BNF) — GENERATED from cstar.y by tools/gen-grammar. Do not edit.
 // The Bison grammar is the source of truth; regenerate after any grammar change.
 
 
@@ -172,17 +171,23 @@ modifier
   | PRIVATE
   | PROTECTED
   | PUBLIC
-  | FRIEND LPAREN friend_list RPAREN
   | FINAL
+  | POD
   | STATIC
   | VIRTUAL
   | VOLATILE
   | EXPORT
   ;
 
-friend_list
-  : qualified_identifier
-  | friend_list qualified_identifier
+friend_declaration
+  : FRIEND qualified_identifier LEFT_BRACKET friend_member_list RIGHT_BRACKET SEMICOLON
+
+  | FRIEND qualified_identifier LEFT_BRACKET ELLIPSIS RIGHT_BRACKET SEMICOLON
+         // [...] => all privates
+  ;
+friend_member_list
+  : IDENTIFIER
+  | friend_member_list COMMA IDENTIFIER
   ;
 
 function_modifier_opt
@@ -217,7 +222,7 @@ parameter_list
   | parameter_list COMMA parameter
   ;
 parameter
-  : parameter_modifier_opt type IDENTIFIER
+  : const_opt parameter_modifier_opt type IDENTIFIER
   ;
 parameter_modifier_opt
   : /* Nothing */
@@ -260,6 +265,7 @@ constant_declarators
   ;
 constant_declarator
   : IDENTIFIER EQ constant_expression
+  | IDENTIFIER
   ;
 block
   : LEFT_BRACE statement_list_opt RIGHT_BRACE
@@ -407,6 +413,8 @@ semicolon_opt
 expression
   : conditional_expression
   | assignment
+  | GIVE variable_reference      // M26c: move
+  | COPY variable_reference      // M26c: duplicate
   ;
 assignment
   : unary_expression assignment_operator expression
@@ -613,6 +621,7 @@ class_member_declaration
   | operator_declaration
   | constructor_declaration
   | destructor_declaration
+  | friend_declaration
   ;
 constant_declaration
   : modifiers_opt CONST type constant_declarators SEMICOLON
@@ -621,8 +630,16 @@ field_declaration
   : modifiers_opt type variable_declarators SEMICOLON
   ;
 method_declaration
-  : modifiers_opt FN type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
-  | modifiers_opt FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
+  : modifiers_opt const_opt FN type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
+  | modifiers_opt const_opt FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
+  ;
+
+/* `const fn …` — an optional const qualifier on a method (M24b). A dedicated slot
+   (not a general modifier) so it can't collide with the const-field / const-local
+   declaration forms that also begin with CONST. */
+const_opt
+  : /* Nothing */
+  | CONST
   ;
 method_body
   : block

@@ -29,8 +29,12 @@ the grammar; for semantics, read the spec; for runnable examples, read the test 
 Implemented: functions, primitives, control flow, named-parameter calls, ref/out, classes, RAII
 destructors, single inheritance + virtual dispatch, interfaces, enums; **generic collections**
 (`Array<T>`/`List<T>`/`String`, monomorphized + RAII, `foreach`, bounds-checked `[]`); the full
-**smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted, `Weak<T>` non-owning, with
-move/retain semantics, auto-deref, RAII); **multi-file builds with private-by-default namespaces**
+**smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted, `Weak<T>` non-owning) with
+**auto-deref** and the **`give`/`copy` ownership model** (M26 — `give`=move, `copy`=retain/duplicate;
+smart pointers pass **by value**; **no null** in the safe surface, so `==null` on a safe type is a compile
+error; borrows are parameter-only, storage requires ownership); **`const`-correctness** (M24); **enforced
+access control** (M25 — private-by-default, `public`/`protected`/`friend`, `pod` plain-data classes);
+**multi-file builds with private-by-default namespaces**
 (`namespace X;` + `using`/aliases/qualified access; no-namespace files are file-private; shared header +
 per-module .c); native + WASM + debug/release builds; IDE breakpoint debugging (VSCode extension in
 `editor/vscode/`); **C FFI** (`extern` functions + `extern class` external structs, `extern "<header>"`
@@ -41,9 +45,10 @@ unlowered construct is a hard build error. **`fn` keyword** on every function/me
 scope resolution vs `.` for instance access (M20b). **Function pointers** (M21): **`fnptr int32 Sig(...)`**
 declares an explicit, named function-pointer TYPE — zero-cost (a bare C fn-ptr), non-null, signature-checked,
 used directly (`Sig c = cmp;`). A bare function name is its pointer (`c = cmp`), so `funcptr(of:)` is retired;
-a bodiless `fn` is an error (no silent type). Pass to C directly (cast to a header typedef when the C type
-needs `const`, until M24). `Type::method` unbound refs + **`BindableFunctionPtr<Sig>`** (bound, object+RAII —
-the generic `<>` wrapper only where it adds an object) are next. Planned (see `docs/ENGINE_READINESS.md`):
-math types + operator overloading, `Map<K,V>` + general generics, tagged unions + match, an attribute
-system + reflection (for declarative serialization), file I/O + networking; then cstar-level WebGPU
+a bodiless `fn` is an error (no silent type). Pass to C directly (cast to a header typedef when the C
+callback's exact fn-pointer type differs, e.g. `const` params). **`Type::method`** unbound refs and
+**`BindableFunctionPtr<Sig>`** (bound, object+RAII — the generic `<>` wrapper only where it adds an object)
+are shipped (M22). Planned — the road to 1.0 (see `docs/ROADMAP.md`): user-defined generics (`Map<K,V>`,
+`class Foo<T>`; M27), tagged unions + `match` + `Optional` (M28), operator overloading + full static methods
+(M29). Post-1.0: reflection + declarative serialization, file I/O, networking, then cstar-level WebGPU
 bindings.
