@@ -274,18 +274,19 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (dynamic_cast<NullNode*>(n))              return "NULL";
 
     if (auto* h = dynamic_cast<HandoffNode*>(n)) {
-        // M26c: `give x` / `copy x`. The value emitted is the inner expression; the move
-        // (invalidate source) / retain side effects need a statement context, which the
-        // variable-initializer path handles (cstar.cemit.cpp ~emitDeclarator). In a bare
-        // expression position, only a pod/primitive `copy` (a plain value copy) is complete.
+        // M26c/d: `give x` / `copy x`. The move (invalidate source) / retain side effects
+        // need a statement context — handled where a value is HANDED OFF: an initializer,
+        // assignment, argument, or return (emitDeclarator / the assignment arm / emitReorderedCall
+        // / the return arm all unwrap the marker). Reaching here means the marker rides a bare
+        // sub-expression (e.g. `give x` used as a statement or inside a larger expression), which
+        // isn't a hand-off position — only a plain-value `copy` (a value copy) would be complete.
         std::string ic = exprClass(h->value);
         bool owned = isSmartPtrClass(ic) || (!ic.empty() && _classes.count(ic) && _classes[ic].isCollection);
         if (!owned)
             { if (h->isGive) unsupported("`give` applies to an owned value (a smart pointer or collection) — a plain value just copies", h->line); }
-        else if (h->isGive)
-            unsupported("`give` is supported as a variable initializer for now (more positions land with M26d)", h->line);
         else
-            unsupported("`copy` of an owned value is supported as a variable initializer for now", h->line);
+            unsupported("`give`/`copy` mark a value being handed off — an initializer, assignment, argument, "
+                        "or return — not a bare sub-expression", h->line);
         return emitExpression(h->value);
     }
 
@@ -967,9 +968,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     }
 
     // Smart-pointer assignment `b = a;` — release b's current pointee first (no
-    // leak), copy, then either invalidate the source (Owned: move) or retain
-    // (Shared: refcount++). The null/retain is a statement, so it can't live in
-    // an expression.
+    // leak), copy, then either invalidate the source (give: move) or retain
+    // (copy: refcount++). The null/retain is a statement, so it can't live in
+    // an expression. M26c/d: a give/copy marker on the RHS overrides the default,
+    // uniformly with init / argument / return.
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
         if (as->token == EQ && isSmartPtrExpr(as->unaryExpression)) {
             checkConstWrite(as->unaryExpression, n->line);   // M24a: no reseating a const smart ptr
@@ -977,7 +979,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             std::string ty  = exprClass(as->unaryExpression);      // Owned_T / Shared_T / Weak_T
             CollKind    knd = smartKind(ty);
             SharedExpression rhs = as->expression;
+            int handoff = 0;   // 0 none, 1 give, 2 copy
+            if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
             bool rhsLval = isSmartPtrLValue(rhs);
+            if (handoff && !rhsLval)
+                unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n->line);
             std::string src = emitExpression(rhs);                  // evaluate the RHS once
             line(n->line);
             // Step 4: self-assignment (`a = a`) would release a's pointee, then "copy" it
@@ -992,9 +998,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 indent(d2); *_out << "if (" << b << ".ctrl) " << b << ".ctrl->weak++;\n";
             } else {
                 indent(d2); *_out << b << " = " << src << ";\n";
-                if (rhsLval) {                                       // copy from a local
+                if (rhsLval) {                                       // reseat from a named smart ptr
+                    // Default the natural op (Owned -> give, Shared/Weak -> copy); a marker overrides.
+                    bool doGive = (handoff == 1) || (handoff == 0 && knd == CollKind::Owned);
+                    if (handoff == 2 && knd == CollKind::Owned)
+                        unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
                     indent(d2);
-                    if (knd == CollKind::Owned) *_out << smartPtrInvalidate(src, knd) << "\n";
+                    if (doGive) *_out << smartPtrInvalidate(src, knd) << "\n";
                     else *_out << b << ".ctrl->" << (knd == CollKind::Weak ? "weak" : "strong") << "++;\n";
                 }
             }
