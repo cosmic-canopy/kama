@@ -262,7 +262,10 @@ private:
     void registerCollection(SharedIdentifier collType);
     void registerSmartPtr(CollKind kind, SharedIdentifier elem);   // Owned/Shared/Weak (M10-12)
     void registerBindable(SharedIdentifier elem);                  // BindableFunctionPtr<Sig> (M22)
-    void emitCollectionDefs();   // pass C: the CSTAR_*_DEFINE(...) macro lines
+    // The CSTAR_*_DEFINE macros, split: typesOnly emits the struct typedefs (`_TYPE`,
+    // before class struct bodies so a class may hold one BY VALUE); else the funcs
+    // (`_FUNCS`, after class prototypes where element dtors are declared).
+    void emitCollectionDefs(bool typesOnly);
     // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
                               std::string& recvExpr, std::string& idx);

@@ -35,11 +35,16 @@ static inline int   cstar_cmp(const void* a, const void* b, size_t n) { extern i
 // INLINE by the compiler (it knows T's ctor + named-arg order). ELEM_DTOR runs
 // T's destructor on the pointee before free. A moved-from Owned has ptr==NULL,
 // so its dtor is a safe no-op — the single surviving owner frees exactly once.
-#define CSTAR_OWNED_DEFINE(T, NAME, ELEM_DTOR)                                  \
-typedef struct NAME { T* ptr; } NAME;                                          \
+// Split into _TYPE (the struct — needs only T forward-declared, since it stores T*)
+// and _FUNCS (the dtor — needs T's dtor). The emitter emits all _TYPEs before class
+// struct bodies (so a class may hold a collection/smart-ptr BY VALUE as a field) and
+// all _FUNCS after class prototypes (where element dtors are declared).
+#define CSTAR_OWNED_TYPE(T, NAME) typedef struct NAME { T* ptr; } NAME;
+#define CSTAR_OWNED_FUNCS(T, NAME, ELEM_DTOR)                                   \
 static inline void NAME##__dtor(NAME* self) {                                  \
     if (self->ptr) { ELEM_DTOR(self->ptr); cstar_free(self->ptr); self->ptr = NULL; } \
 }
+#define CSTAR_OWNED_DEFINE(T, NAME, ELEM_DTOR) CSTAR_OWNED_TYPE(T, NAME) CSTAR_OWNED_FUNCS(T, NAME, ELEM_DTOR)
 
 // Shared<T> — ref-counted shared ownership (shared_ptr / Rc). Copy retains;
 // drop releases; the pointee is destroyed + freed when the last strong handle
@@ -51,8 +56,8 @@ static inline cstar_ctrl* cstar_ctrl_new(void) {
     c->strong = 1; c->weak = 0;
     return c;
 }
-#define CSTAR_SHARED_DEFINE(T, NAME, ELEM_DTOR)                                 \
-typedef struct NAME { T* ptr; cstar_ctrl* ctrl; } NAME;                        \
+#define CSTAR_SHARED_TYPE(T, NAME) typedef struct NAME { T* ptr; cstar_ctrl* ctrl; } NAME;
+#define CSTAR_SHARED_FUNCS(T, NAME, ELEM_DTOR)                                  \
 static inline void NAME##__dtor(NAME* self) {                                  \
     if (self->ctrl) {                                                          \
         if (--self->ctrl->strong == 0) {                                       \
@@ -63,14 +68,15 @@ static inline void NAME##__dtor(NAME* self) {                                  \
     }                                                                          \
 }                                                                              \
 static inline bool NAME##__valid(NAME* self) { return self->ptr != NULL; }
+#define CSTAR_SHARED_DEFINE(T, NAME, ELEM_DTOR) CSTAR_SHARED_TYPE(T, NAME) CSTAR_SHARED_FUNCS(T, NAME, ELEM_DTOR)
 
 // Weak<T> — a non-owning reference to a Shared<T>'s pointee. Counts `weak`, not
 // `strong`, so it does NOT keep the pointee alive (it breaks Shared cycles). You
 // cannot deref a Weak directly; `upgrade()` upgrades to a Shared if still alive.
 // Same layout as Shared. Drop releases the weak count and frees the control
 // block only when BOTH counts reach 0 (never touches the pointee).
-#define CSTAR_WEAK_DEFINE(T, NAME, SHARED_NAME)                                 \
-typedef struct NAME { T* ptr; cstar_ctrl* ctrl; } NAME;                        \
+#define CSTAR_WEAK_TYPE(T, NAME) typedef struct NAME { T* ptr; cstar_ctrl* ctrl; } NAME;
+#define CSTAR_WEAK_FUNCS(T, NAME, SHARED_NAME)                                  \
 static inline void NAME##__dtor(NAME* self) {                                  \
     if (self->ctrl) {                                                          \
         if (--self->ctrl->weak == 0 && self->ctrl->strong == 0) cstar_free(self->ctrl); \
@@ -87,6 +93,7 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                         
     } else { s.ptr = NULL; s.ctrl = NULL; }                                   \
     return s;                                                                 \
 }
+#define CSTAR_WEAK_DEFINE(T, NAME, SHARED_NAME) CSTAR_WEAK_TYPE(T, NAME) CSTAR_WEAK_FUNCS(T, NAME, SHARED_NAME)
 
 // BindableFunctionPtr<Sig> (M22) — a callable that optionally OWNS its bound
 // receiver (RAII). Fully type-erased, so one definition serves every signature:
@@ -96,9 +103,10 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                         
 //              obj!=NULL (a bound method, object passed first) else ret(P…) (free)
 //   elemdtor — the bound object's destructor (NULL if trivially destructible/free)
 // Move-only (it may uniquely own the object). Drop releases per ownership kind.
-#define CSTAR_BINDABLE_DEFINE(NAME)                                            \
+#define CSTAR_BINDABLE_TYPE(NAME)                                              \
 typedef struct NAME { void* obj; cstar_ctrl* ctrl;                            \
-                      void (*fn)(void); void (*elemdtor)(void*); } NAME;       \
+                      void (*fn)(void); void (*elemdtor)(void*); } NAME;
+#define CSTAR_BINDABLE_FUNCS(NAME)                                            \
 static inline void NAME##__dtor(NAME* self) {                                 \
     if (self->ctrl) {                          /* Shared: refcount */         \
         if (--self->ctrl->strong == 0) {                                      \
@@ -110,6 +118,7 @@ static inline void NAME##__dtor(NAME* self) {                                 \
     }                                          /* free fn: nothing to drop */ \
     self->obj = NULL; self->ctrl = NULL; self->fn = NULL; self->elemdtor = NULL; \
 }
+#define CSTAR_BINDABLE_DEFINE(NAME) CSTAR_BINDABLE_TYPE(NAME) CSTAR_BINDABLE_FUNCS(NAME)
 
 // Bounds-check trap: a clean panic (not undefined behavior) on out-of-range.
 // Formats its own message and writes to stderr (fd 2) so it needs no <stdio.h>.
@@ -138,8 +147,8 @@ static inline void cstar_bounds_fail(size_t i, size_t len) {
 }
 
 // Array<T> — fixed-size, owns a zero-initialized contiguous buffer (RAII frees).
-#define CSTAR_ARRAY_DEFINE(T, NAME, ELEM_DTOR)                                  \
-typedef struct NAME { T* data; size_t len; } NAME;                             \
+#define CSTAR_ARRAY_TYPE(T, NAME) typedef struct NAME { T* data; size_t len; } NAME;
+#define CSTAR_ARRAY_FUNCS(T, NAME, ELEM_DTOR)                                   \
 static inline void NAME##__ctor(NAME* self, size_t n) {                        \
     self->len  = n;                                                            \
     self->data = (n ? (T*)cstar_calloc(n, sizeof(T)) : NULL);                        \
@@ -159,10 +168,11 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
  static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }
+#define CSTAR_ARRAY_DEFINE(T, NAME, ELEM_DTOR) CSTAR_ARRAY_TYPE(T, NAME) CSTAR_ARRAY_FUNCS(T, NAME, ELEM_DTOR)
 
 // List<T> — growable (capacity doubling), owns its buffer (RAII frees).
-#define CSTAR_LIST_DEFINE(T, NAME, ELEM_DTOR)                                   \
-typedef struct NAME { T* data; size_t len; size_t cap; } NAME;                 \
+#define CSTAR_LIST_TYPE(T, NAME) typedef struct NAME { T* data; size_t len; size_t cap; } NAME;
+#define CSTAR_LIST_FUNCS(T, NAME, ELEM_DTOR)                                    \
 static inline void NAME##__ctor(NAME* self) { self->data=NULL; self->len=0; self->cap=0; } \
 static inline void NAME##__dtor(NAME* self) {                                  \
     for (size_t i = 0; i < self->len; ++i) { T* e = &self->data[i]; ELEM_DTOR(e); } \
@@ -187,6 +197,7 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
  static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }
+#define CSTAR_LIST_DEFINE(T, NAME, ELEM_DTOR) CSTAR_LIST_TYPE(T, NAME) CSTAR_LIST_FUNCS(T, NAME, ELEM_DTOR)
 
 
 // cstar `string` lowers to a fat, length-prefixed value (M9). `cap == 0` means

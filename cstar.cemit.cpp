@@ -1705,32 +1705,33 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
     }
 }
 
-// Pass C: emit the CSTAR_*_DEFINE(...) macro line per registered instantiation.
-void CEmitter::emitCollectionDefs()
+// Emit the CSTAR_*_{TYPE,FUNCS}(...) macro line per registered instantiation.
+// `typesOnly` picks the struct-typedef half (emitted before class struct bodies so a
+// class may hold a collection/smart-ptr BY VALUE) vs the funcs half (after class
+// prototypes, where element dtors are declared).
+void CEmitter::emitCollectionDefs(bool typesOnly)
 {
+    const char* suf = typesOnly ? "TYPE" : "FUNCS";
     for (auto& kv : _collections) {
         CollectionInfo& info = kv.second;
         std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "CSTAR_ELEM_NODTOR";
-        if (info.kind == CollKind::Array) {
-            *_out << "CSTAR_ARRAY_DEFINE(" << info.elemCType << ", " << info.cName
-                 << ", " << elemDtor << ")\n";
-        } else if (info.kind == CollKind::List) {
-            *_out << "CSTAR_LIST_DEFINE(" << info.elemCType << ", " << info.cName
-                 << ", " << elemDtor << ")\n";
-        } else if (info.kind == CollKind::Owned) {
-            *_out << "CSTAR_OWNED_DEFINE(" << info.elemCType << ", " << info.cName
-                 << ", " << elemDtor << ")\n";
-        } else if (info.kind == CollKind::Shared) {
-            *_out << "CSTAR_SHARED_DEFINE(" << info.elemCType << ", " << info.cName
-                 << ", " << elemDtor << ")\n";
-        } else if (info.kind == CollKind::Weak) {
-            // upgrade() returns the matching Shared (emitted earlier — map order Shared_ < Weak_).
-            *_out << "CSTAR_WEAK_DEFINE(" << info.elemCType << ", " << info.cName
-                 << ", Shared_" << info.elemMangle << ")\n";
-        } else if (info.kind == CollKind::Bindable) {
+        std::string tail = typesOnly ? ")\n"                          // _TYPE(T, NAME)
+                                     : (", " + elemDtor + ")\n");     // _FUNCS(T, NAME, ELEM_DTOR)
+        if (info.kind == CollKind::Array)
+            *_out << "CSTAR_ARRAY_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
+        else if (info.kind == CollKind::List)
+            *_out << "CSTAR_LIST_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
+        else if (info.kind == CollKind::Owned)
+            *_out << "CSTAR_OWNED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
+        else if (info.kind == CollKind::Shared)
+            *_out << "CSTAR_SHARED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
+        else if (info.kind == CollKind::Weak)
+            // upgrade() returns the matching Shared (its _TYPE is emitted in the same pass).
+            *_out << "CSTAR_WEAK_" << suf << "(" << info.elemCType << ", " << info.cName
+                 << (typesOnly ? ")\n" : (", Shared_" + info.elemMangle + ")\n"));
+        else if (info.kind == CollKind::Bindable)
             // Fully type-erased — the signature drives only the invoke, not the layout.
-            *_out << "CSTAR_BINDABLE_DEFINE(" << info.cName << ")\n";
-        }
+            *_out << "CSTAR_BINDABLE_" << suf << "(" << info.cName << ")\n";
     }
     if (!_collections.empty()) *_out << "\n";
 }
@@ -2940,6 +2941,16 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             if (f.initializer) {
                 indent(1);
                 *_out << "self->" << f.name << " = " << emitExpression(f.initializer) << ";\n";
+            } else {
+                // A collection / smart-pointer field with no initializer must start as a
+                // valid EMPTY value (zero = NULL buffer / null handle), or its first use
+                // (`.add(...)`) and its RAII drop would touch garbage. (Plain class-value
+                // fields still need their own ctor — a separate, deferred gap.)
+                std::string fct = cType(f.type);
+                if (_classes.count(fct) && _classes[fct].isCollection) {
+                    indent(1);
+                    *_out << "self->" << f.name << " = (" << fct << "){0};\n";
+                }
             }
         }
     }
@@ -3214,6 +3225,11 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
 
     for (auto& kv : _enums) { scopeOf(kv.second.scope, kv.second.usings); emitEnum(kv.second); }
 
+    // Collection/smart-pointer STRUCT typedefs (the `_TYPE` half) — before class struct
+    // bodies, so a class may hold a collection/smart-pointer BY VALUE as a field. They
+    // store only `T*`, so the element being forward-declared (above) is enough.
+    emitCollectionDefs(/*typesOnly=*/true);
+
     // vtable struct types + struct bodies (topological), then interface types.
     for (ClassInfo* ci : classes) {
         if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
@@ -3231,7 +3247,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     for (ClassInfo* ci : classes)
         if (!ci->isCollection && !ci->isExternStruct && ci->destructible)
             *_out << "void " << ci->name << "__dtor(" << ci->name << "* self);\n";
-    emitCollectionDefs();
+    emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
     for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings); emitClassPrototypes(*ci); }
     // Prototypes for cstar's OWN free functions. cstar never emits prototypes for
     // `extern` C functions: an `extern` decl is purely cstar's call signature
