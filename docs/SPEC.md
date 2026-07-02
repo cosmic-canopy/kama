@@ -79,7 +79,7 @@ Owned<Counter> b = give a;   // explicit move (a consumed)
 Shared<Counter> t = s;       // copy/retain (default) — both valid
 Shared<Counter> u = give s;  // opt-in move of the share (no retain)
 ```
-*(`copy` of a collection is a deep copy — a fresh buffer (M26f-3); valid when the element is bitwise-copyable.)*
+*(`copy` of a collection is a deep copy — a fresh buffer (M26f-3), element-wise: a bitwise-copyable element is copied memberwise, a `Copyable`-resource element is deep-copied via its own `copy()` (M26f-5). A resource element that is not `Copyable` is rejected. `give` of a collection **moves** the buffer.)*
 
 **Move-only `resource` values + the `Copyable` contract ✅ (M26f-2 / M26f-4).** A destructible class *value*
 (a `resource` — it owns something) is **move-only**: a bare named hand-off *moves* (the source is consumed,
@@ -101,6 +101,28 @@ Res b = copy a;   // deep copy — a stays valid, b has its own buffer
 Res c = give b;   // move — b consumed
 Res d = a;        // ERROR: a is copyable — say `give` or `copy`
 ```
+
+**The give/copy behavior matrix (M26f).** A marker is required exactly when *both* move and copy are
+plausible ("silent default, scream when ambiguous"); otherwise the one natural op is silent. The rule is
+uniform across all four hand-off positions — **initializer, assignment, argument, return** — and a *fresh*
+rvalue (`new`/constructor/call result) never takes a marker. Every cell is covered by a fixture (`tests/`,
+`✗` = an `xfail/` rejection):
+
+| kind | bare hand-off | `give` | `copy` | fixtures |
+|---|---|---|---|---|
+| primitive / `pod` / value | **copy** (cheap) | ⛔ "applies to an owned value" | copy (redundant, allowed) | give_value ✗ |
+| `Owned<T>` (unique) | **move** | move (emphasis) | ⛔ "is unique" | give_copy, give_param, give_return, copy_owned ✗ |
+| `Shared<T>` (ref-counted) | **retain** (strong++) | opt-in move | retain | give_copy, give_param, give_return |
+| `Weak<T>` | **retain** (weak++) | opt-in move | retain | weak_dtor |
+| collection (`Array`/`List`/`String`) | ⛔ marker required | **move** (buffer) | **deep copy** (fresh buffer) | coll_give, coll_copy, string_copy, collection_bare ✗ |
+| plain `resource` (move-only value) | **move** | move (emphasis) | ⛔ "opt into `Copyable`" | move_value, move_return, copy_value ✗ |
+| `Copyable` resource (has `copy()`) | ⛔ ambiguous | move | **deep copy** via `copy()` | copy_resource, copy_bare_ambiguous ✗ |
+| collection of `Copyable` elements | ⛔ marker required | move | **deep copy** (element-wise `copy()`) | coll_copy_resource, copy_resource_coll ✗ |
+
+A marker on a fresh rvalue is an error (handoff_fresh ✗). Move tracking is compile-time: reading a moved
+value (use_after_move ✗), moving out of a field/element (move_field ✗), moving inside a loop a value
+declared outside it (move_in_loop ✗), and a conditional move that is still live at scope exit
+(cond_move_live ✗, switch_partial_move ✗) are all rejected — there is no runtime drop flag.
 
 `Shared<T>` — ref-counted shared ownership (= C++ `shared_ptr` / Rust `Rc`). **Copyable**: each copy
 retains (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.

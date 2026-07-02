@@ -156,6 +156,7 @@ struct CollectionInfo {
     std::string  elemClass;        // element class name ("" if primitive)
     std::string  elemMangle;       // "int32" / "Point" (mangling suffix)
     bool         elemDestructible = false;
+    bool         elemCopyable = false;   // M26f-5: element is a `Copyable` resource -> deep-copy each
 };
 
 // An interface (M6b): a set of method prototypes, lowered to a vtable struct

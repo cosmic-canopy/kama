@@ -1,0 +1,10 @@
+// M26f-5 — `give` of a collection MOVES its buffer (the counterpart to `copy`'s deep copy):
+// the source is emptied (data/len nulled) so only the destination owns and frees the buffer.
+// ASan-clean proves the single ownership (a bare copy of the struct would double-free the buffer).
+fn int32 sum(ref List<int32> xs) { int32 s = 0; foreach (int32 v in xs) { s = s + v; } return s; }
+fn int32 main() {
+    List<int32> a = new List<int32>();
+    a.add(item: 20); a.add(item: 22);
+    List<int32> b = give a;     // move the buffer into b; a is emptied
+    return sum(xs: ref b);      // 42;  only b frees the buffer
+}

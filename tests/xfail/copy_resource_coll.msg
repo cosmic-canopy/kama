@@ -1,1 +1,1 @@
-own resources
+aren't `Copyable`

@@ -785,14 +785,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             unsupported(("a collection hand-off must say `give` (move) or `copy` (deep) — write "
                                          "`" + ty + " v = give …`").c_str(), n->line);
                         else if (handoff == 2) {
-                            // M26f-3: `copy` = a real deep copy (fresh buffer). Valid iff the element is
-                            // bitwise-copyable (owns nothing); a destructible element needs a per-element
-                            // copy (deferred to M26f-4). The blit above is overwritten by the deep copy.
+                            // M26f-3/5: `copy` = a real deep copy (fresh buffer), element-wise. Valid iff
+                            // each element is copyable — bitwise-copyable (owns nothing), OR a resource that
+                            // opted into `Copyable` (M26f-5: `__copy` calls the element's `copy()`). A
+                            // resource element WITHOUT the contract is rejected. Overwrites the blit above.
                             auto ci = _collections.find(ty);
-                            if (ci != _collections.end() && ci->second.elemDestructible)
-                                unsupported(("`copy` of a `" + ty + "` isn't available yet — its elements own "
-                                             "resources, so each needs its own copy (a later milestone); use "
-                                             "`give` to move").c_str(), n->line);
+                            if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
+                                unsupported(("`copy` of a `" + ty + "` needs copyable elements — its elements own "
+                                             "resources but aren't `Copyable` (add a `copy` method to the element, "
+                                             "or use `give` to move)").c_str(), n->line);
                             else { indent(depth); *_out << nm << " = " << ty << "__copy(&(" << emitExpression(init) << "));\n"; }
                         }
                         // give: the plain `=` already transferred the struct; null the source's buffer.
@@ -1881,10 +1882,14 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
         std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "CSTAR_ELEM_NODTOR";
         std::string tail = typesOnly ? ")\n"                          // _TYPE(T, NAME)
                                      : (", " + elemDtor + ")\n");     // _FUNCS(T, NAME, ELEM_DTOR)
+        // M26f-5: Array/List `__copy` deep-copies each element — a `Copyable` resource via its own
+        // `Elem__copy`, else a memberwise (bitwise) copy. (Only these two kinds have `__copy`.)
+        std::string elemCopy = info.elemCopyable ? (info.elemClass + "__copy") : "CSTAR_ELEM_MEMBERWISE";
+        std::string collTail = typesOnly ? ")\n" : (", " + elemDtor + ", " + elemCopy + ")\n");
         if (info.kind == CollKind::Array)
-            *_out << "CSTAR_ARRAY_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
+            *_out << "CSTAR_ARRAY_" << suf << "(" << info.elemCType << ", " << info.cName << collTail;
         else if (info.kind == CollKind::List)
-            *_out << "CSTAR_LIST_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
+            *_out << "CSTAR_LIST_" << suf << "(" << info.elemCType << ", " << info.cName << collTail;
         else if (info.kind == CollKind::Owned)
             *_out << "CSTAR_OWNED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Shared)
@@ -2184,7 +2189,10 @@ void CEmitter::buildVtables()
 // its base is destructible (transitive). Fixed-point — cycle-safe.
 void CEmitter::computeDestructible()
 {
-    for (auto& kv : _classes) kv.second.destructible = kv.second.hasDtor;
+    // Seed: an explicit `~dtor` OR a collection/smart-ptr (always owns heap → RAII-dropped; its
+    // ClassInfo carries destructible=true, which this reset must preserve — collections are
+    // registered before this pass now, M26f-5).
+    for (auto& kv : _classes) kv.second.destructible = kv.second.hasDtor || kv.second.isCollection;
     bool changed = true;
     while (changed) {
         changed = false;
@@ -2200,6 +2208,17 @@ void CEmitter::computeDestructible()
                 }
             if (d) { ci.destructible = true; changed = true; }
         }
+    }
+    // Re-derive each collection's elemDestructible from the FINAL class destructibility — a
+    // collection registered before the fixpoint saw only `~dtor`-based destructibility, so a
+    // transitively-destructible element class would have been missed (element drops skipped → leak).
+    for (auto& kv : _collections) {
+        CollectionInfo& info = kv.second;
+        if (info.kind == CollKind::Bindable) continue;   // fully type-erased; no element dtor
+        auto it = _classes.find(info.elemClass);
+        bool known = !info.elemClass.empty() && it != _classes.end();
+        info.elemDestructible = known && it->second.destructible;
+        info.elemCopyable     = known && it->second.copyable;   // M26f-5: deep-copy each element
     }
 }
 
@@ -3423,9 +3442,13 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
     linkBases();
     buildVtables();
     resolveFriends();   // M25c — after all classes/functions are registered
-    computeDestructible();
+    // M26f-5: register collections BEFORE the destructibility fixpoint, so a class whose only
+    // owning member is a collection field (`List<T>` etc., no explicit `~dtor`) is correctly seen
+    // as a resource (destructible + move-only). computeDestructible then re-derives each
+    // collection's elemDestructible from the final class destructibility.
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectCollections(u); }
+    computeDestructible();
 }
 
 // All DECLARATIONS (the shared header): typedefs, enums, struct/vtable types,
@@ -3493,6 +3516,12 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     for (ClassInfo* ci : classes)
         if (!ci->isCollection && !ci->isExternStruct && ci->destructible)
             *_out << "void " << ci->name << "__dtor(" << ci->name << "* self);\n";
+    // M26f-5: a collection of `Copyable` elements deep-copies via the element's `copy()`, so its
+    // prototype must precede the `_FUNCS` macro that calls it (re-declared identically by
+    // emitClassPrototypes). The C signature is `Elem Elem__copy(Elem* self)` (nullary; paramListC).
+    for (ClassInfo* ci : classes)
+        if (!ci->isCollection && !ci->isExternStruct && ci->copyable)
+            *_out << ci->name << " " << ci->name << "__copy(" << ci->name << "* self);\n";
     emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
     for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings); emitClassPrototypes(*ci); }
     // Prototypes for cstar's OWN free functions. cstar never emits prototypes for

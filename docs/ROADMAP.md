@@ -95,7 +95,18 @@ their names/numbers.
      resources — `copy_resource_coll` stays rejected; and a latent pre-existing ordering bug —
      `computeDestructible` runs before `collectCollections`, so a class owning ONLY a collection
      field with no explicit `~dtor` isn't seen as a resource. Both orthogonal to the copy contract.)*
-   - **M26f-5 — the comprehensive give/copy test matrix** (fixture per cell), built up as pieces land.
+   - **M26f-5 — the comprehensive give/copy test matrix + two follow-ons.** ✅ **DONE (v0.1.40).**
+     Three pieces: **(5a)** fixed a pre-existing ordering bug — `collectCollections` now runs BEFORE
+     `computeDestructible` (which seeds `destructible = hasDtor || isCollection` and re-derives each
+     collection's `elemDestructible`/`elemCopyable` from the final class destructibility), so a class
+     owning ONLY a collection field (no explicit `~dtor`) is correctly a resource (move-only, its
+     buffer freed — was a silent leak + shallow-copy hole). **(5b)** collection deep-`copy` of
+     `Copyable`-resource elements: the `Array`/`List` `__copy` macro gained an `ELEM_COPY` param
+     (bitwise `CSTAR_ELEM_MEMBERWISE` for POD, else the element's `Elem__copy`), so `copy` of a
+     `List<CopyableRes>` deep-copies each element (fixture `coll_copy_resource`, ASan-clean); a
+     collection of *non*-`Copyable` resource elements stays rejected (`copy_resource_coll`).
+     **(5c)** the behavior matrix documented as a table in [SPEC.md](SPEC.md) (every cell → its
+     fixture) + the missing `coll_give` (collection move) fixture. 130/130.
    - **The marker rule (RESOLVED):** a marker is required exactly when both *move* and *copy* are
      plausible — a **`resource` that has opted into a copy contract**, and **collections** (both ops
      real). Silent where there's one natural op: `value`/primitive → copy (`give` errors), a plain

@@ -30,6 +30,11 @@ static inline int   cstar_cmp(const void* a, const void* b, size_t n) { extern i
 // A no-op per-element destructor, used when the element type isn't destructible.
 #define CSTAR_ELEM_NODTOR(p) ((void)(p))
 
+// Per-element copy (M26f-5). A bitwise-copyable element (owns nothing) copies memberwise; a
+// `Copyable` resource element deep-copies via its own `Elem__copy(&e)`. Given an element POINTER,
+// both yield the copied element BY VALUE, so `NAME##__copy` assigns `r.data[i] = ELEM_COPY(&src[i])`.
+#define CSTAR_ELEM_MEMBERWISE(e) (*(e))
+
 // Owned<T> — unique heap ownership (Box / unique_ptr). Move-only; RAII frees.
 // The struct + dtor live here; the heap alloc + T's constructor are emitted
 // INLINE by the compiler (it knows T's ctor + named-arg order). ELEM_DTOR runs
@@ -148,7 +153,7 @@ static inline void cstar_bounds_fail(size_t i, size_t len) {
 
 // Array<T> — fixed-size, owns a zero-initialized contiguous buffer (RAII frees).
 #define CSTAR_ARRAY_TYPE(T, NAME) typedef struct NAME { T* data; size_t len; } NAME;
-#define CSTAR_ARRAY_FUNCS(T, NAME, ELEM_DTOR)                                   \
+#define CSTAR_ARRAY_FUNCS(T, NAME, ELEM_DTOR, ELEM_COPY)                        \
 static inline void NAME##__ctor(NAME* self, size_t n) {                        \
     self->len  = n;                                                            \
     self->data = (n ? (T*)cstar_calloc(n, sizeof(T)) : NULL);                        \
@@ -168,17 +173,17 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
  static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }  \
- static inline NAME   NAME##__copy(const NAME* self) {  /* M26f-3: deep copy (fresh buffer) */ \
+ static inline NAME   NAME##__copy(NAME* self) {  /* M26f-3/5: deep copy (fresh buffer) */        \
     NAME r; r.len = self->len;                                                       \
     r.data = (self->len ? (T*)cstar_alloc(self->len * sizeof(T)) : NULL);            \
-    if (self->len) cstar_copy(r.data, self->data, self->len * sizeof(T));            \
+    for (size_t i = 0; i < self->len; ++i) r.data[i] = ELEM_COPY(&self->data[i]);    \
     return r;                                                                        \
  }
-#define CSTAR_ARRAY_DEFINE(T, NAME, ELEM_DTOR) CSTAR_ARRAY_TYPE(T, NAME) CSTAR_ARRAY_FUNCS(T, NAME, ELEM_DTOR)
+#define CSTAR_ARRAY_DEFINE(T, NAME, ELEM_DTOR, ELEM_COPY) CSTAR_ARRAY_TYPE(T, NAME) CSTAR_ARRAY_FUNCS(T, NAME, ELEM_DTOR, ELEM_COPY)
 
 // List<T> — growable (capacity doubling), owns its buffer (RAII frees).
 #define CSTAR_LIST_TYPE(T, NAME) typedef struct NAME { T* data; size_t len; size_t cap; } NAME;
-#define CSTAR_LIST_FUNCS(T, NAME, ELEM_DTOR)                                    \
+#define CSTAR_LIST_FUNCS(T, NAME, ELEM_DTOR, ELEM_COPY)                         \
 static inline void NAME##__ctor(NAME* self) { self->data=NULL; self->len=0; self->cap=0; } \
 static inline void NAME##__dtor(NAME* self) {                                  \
     for (size_t i = 0; i < self->len; ++i) { T* e = &self->data[i]; ELEM_DTOR(e); } \
@@ -203,13 +208,13 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
  static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }  \
- static inline NAME   NAME##__copy(const NAME* self) {  /* M26f-3: deep copy (fresh buffer, cap=len) */ \
+ static inline NAME   NAME##__copy(NAME* self) {  /* M26f-3/5: deep copy (fresh buffer, cap=len) */  \
     NAME r; r.len = self->len; r.cap = self->len;                                    \
     r.data = (self->len ? (T*)cstar_alloc(self->len * sizeof(T)) : NULL);            \
-    if (self->len) cstar_copy(r.data, self->data, self->len * sizeof(T));            \
+    for (size_t i = 0; i < self->len; ++i) r.data[i] = ELEM_COPY(&self->data[i]);    \
     return r;                                                                        \
  }
-#define CSTAR_LIST_DEFINE(T, NAME, ELEM_DTOR) CSTAR_LIST_TYPE(T, NAME) CSTAR_LIST_FUNCS(T, NAME, ELEM_DTOR)
+#define CSTAR_LIST_DEFINE(T, NAME, ELEM_DTOR, ELEM_COPY) CSTAR_LIST_TYPE(T, NAME) CSTAR_LIST_FUNCS(T, NAME, ELEM_DTOR, ELEM_COPY)
 
 
 // cstar `string` lowers to a fat, length-prefixed value (M9). `cap == 0` means
