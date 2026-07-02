@@ -155,11 +155,11 @@ whose result forces you to handle the dead case.
 Passing a smart pointer: **borrow** it by passing `ref T` — the borrow names the *object* (`ref T`, storage-
 agnostic; a `ref` may not name the smart pointer itself), which auto-derefs to the held object; or **transfer
 by value** (M26d), where the callee owns the argument and drops it at function end (`Owned` moves in, `Shared`
-retains). Limits (whole family): pointee must be a **class** type; polymorphic `Smart<Base> = Derived` is
-deferred; storing a smart pointer in a bitwise-copied class field is deferred (aggregate copy doesn't
-retain/move) — but a `List<Shared<T>>` is the intended way to store owned polymorphism (once user generics
-compose here). User-defined generics — `Map<K,V>`, `class Foo<T>`, multi-param/nested — are the next
-milestone (M27).
+retains). The pointee is a **class** or (M26g) an **interface** — `Owned`/`Shared`/`Weak<IShape>` own a
+concrete implementer behind a fat handle and dispatch polymorphically (see Interfaces below). Limits:
+storing a smart pointer as a *collection element* (`List<Shared<T>>`) is deferred to M27 (it needs the
+general smart-pointer-in-collection support + the `>>` split); a smart-pointer *field* / *return* works.
+User-defined generics — `Map<K,V>`, `class Foo<T>`, multi-param/nested — are the next milestone (M27).
 
 ## Functions ✅
 
@@ -392,15 +392,27 @@ by name).
   is a compile error — bind it first (`IShape s = c; measure(sh: ref s)`). Mutable references are *invariant*:
   a `Circle` variable isn't a slot that could hold an arbitrary shape, so it can't back a `ref IShape`.
 
-**Borrow vs. storage — an interface is second-class (M26e).** The fat pointer *borrows* its object, so an
-interface value is fine as a **parameter or local** (the zero-copy polymorphic view above) but **cannot be
-stored beyond the call that made it** — a bare `IShape` **field**, **return type**, or **collection element**
-(`List<IShape>`) is a compile error, because the borrowed object could die and leave it dangling. To keep
-polymorphism around, **own the object**: a smart pointer over the interface (`Shared<IShape>` / a
-`List<Shared<IShape>>`). Ownership is always written explicitly — never an implicit box. *(The owning form is
-enabled by M26f; until then the error guides you to it.)* This is the language-wide rule **"borrow is
-parameter-only; storage requires ownership"** — the same reason a `ref` parameter can't be returned and a
-returnable "reference" is always an owned smart-pointer handle.
+**Borrow vs. storage — an interface is second-class (M26e).** The fat pointer *borrows* its object, so a
+bare interface value is fine as a **parameter or local** (the zero-copy polymorphic view above) but **cannot
+be stored beyond the call that made it** — a bare `IShape` **field**, **return type**, or **collection
+element** is a compile error, because the borrowed object could die and leave it dangling. To keep
+polymorphism around, **own the object** with a smart pointer over the interface (below). Ownership is always
+written explicitly — never an implicit box. This is the language-wide rule **"borrow is parameter-only;
+storage requires ownership"** — the same reason a `ref` parameter can't be returned and a returnable
+"reference" is always an owned smart-pointer handle.
+
+**Owned interfaces — `Owned`/`Shared`/`Weak<IShape>` ✅ (M26g).** A smart pointer *over an interface* owns
+the concrete object behind a fat handle `{obj, vtbl}` (`Shared`/`Weak` add a `ctrl` block). `new Circle(...)`
+boxes a concrete implementer into it; `p.draw()` dispatches polymorphically through the vtable; dropping the
+handle runs the concrete destructor through a **virtual-destructor slot in the interface vtable**, then frees
+the object. `Owned<I>` is move-only; `Shared<I>` retains/releases (`Weak<I>.upgrade() -> Shared<I>`). Because
+the handle is an ordinary value type, it **stores** — as a class field or a function return:
+```cstar
+class Holder { Shared<IShape> shape;  public fn int64 area() { return this.shape.area(); } }
+fn Owned<IShape> make(int64 s) { Owned<IShape> o = new Square(s: s); return give o; }
+```
+A `List<Shared<IShape> >` (the engine's scene) needs the general smart-pointer-in-collection support and the
+`>>` token split — that arrives with generics (M27).
 
 ## Access control ✅ (M25)
 

@@ -128,11 +128,19 @@ their names/numbers.
      `emitSmartPtrCall` routes an interface handle to `emitInterfaceDispatch`. Fixture `owned_iface`
      (polymorphism + a destructible impl freed via the vtbl slot + move, ASan-clean) + xfail
      `owned_iface_nonimpl`. 132/132.
-   - **M26g-2 — `Shared<IShape>` + `Weak<IShape>`** *(next).* The refcounted variants: the fat element
-     plus a `ctrl` block; retain/release; `Weak<I>.upgrade() -> Shared<I>`.
-   - **M26g-3 — storage.** Interface smart-ptrs in fields / returns / collections
-     (`List<Shared<IDrawable>>`) — largely falls out (a `Shared_IShape` is an ordinary value type;
-     `rejectStoredInterface` only fires on a *bare* interface). *(May instead fold into M27 generics.)*
+   - **M26g-2 — `Shared<IShape>` + `Weak<IShape>`.** ✅ **DONE (v0.1.42).** The refcounted variants:
+     the fat element `{obj, vtbl, ctrl}`; retain/release on the shared count (last strong handle drops
+     the concrete via the vtbl `__dtor`); `Weak<I>` observes without holding, `upgrade() -> Shared<I>`
+     (empty when expired), `valid()`/`expired()`. New macros `CSTAR_{SHARED,WEAK}_IFACE_{TYPE,FUNCS}`;
+     the Shared→Weak reseat + `smartPtrInvalidate` learned the fat `.obj`/`.vtbl` layout. Fixture
+     `shared_iface` (retain + weak + upgrade-alive + expired-after-death, ASan-clean).
+   - **M26g-3 — storage.** ✅ **DONE (v0.1.42)** for **fields + returns** — an interface smart-ptr is
+     an ordinary value type, so `Shared<IShape>` as a class field and `Owned`/`Shared<IShape>` as a
+     return work directly (`rejectStoredInterface` only fires on a *bare* interface). Fixture
+     `iface_ptr_store`. **Collections (`List<Shared<IDrawable>>`) DEFERRED to M27:** they need the
+     general smart-pointer-in-collection support (nested-generic element mangling — `mangleElem` drops
+     the inner `<…>` today — and foreach dispatch on a smart-ptr element) plus the `>>` token split,
+     all of which are generics work. Not M26g-specific (a `List<Shared<Circle>>` hits the same gap).
 
 4. **M26h — type-model reframe** *(the vocabulary milestone; before generics).* Rename the type kinds
    to the ownership model — **`value`** (owns nothing, copies), **`resource`** (owns/identity, moves),

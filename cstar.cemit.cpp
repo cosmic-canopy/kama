@@ -735,6 +735,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                                               _classes[octy].ctorParams, oc->args, n->line) << ";\n";
                                 }
                                 indent(depth); *_out << nm << ".vtbl = &" << octy << "__as_" << T << ";\n";
+                                if (smartKind(ty) == CollKind::Shared) {   // M26g-2: ref-counted owned interface
+                                    indent(depth); *_out << nm << ".ctrl = cstar_ctrl_new();\n";
+                                }
                             }
                         }
                         else if (octy != T)
@@ -779,10 +782,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
                            && isSmartPtrLValue(init) && exprClass(init) != ty) {
                     // Shared->Weak conversion (different C structs, same layout):
-                    // field-copy + weak retain. The source Shared stays valid.
+                    // field-copy + weak retain. The source Shared stays valid. M26g: a fat
+                    // interface Weak copies {obj, vtbl}; a thin Weak copies {ptr}.
                     line(n->line); indent(depth);
                     std::string src = emitExpression(init);
-                    *_out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
+                    if (isInterface(_classes[ty].collElemClass))
+                        *_out << nm << ".obj = (" << src << ").obj; " << nm << ".vtbl = (" << src << ").vtbl; "
+                             << nm << ".ctrl = (" << src << ").ctrl;\n";
+                    else
+                        *_out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
                     indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->weak++;\n";
                 } else if (isBindableClass(ty)) {
                     // BindableFunctionPtr <- free function (promote) or another bindable (move).
@@ -1128,8 +1136,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (rhsLval) { indent(depth); *_out << "if (&" << b << " != &(" << src << ")) {\n"; d2 = depth + 1; }
             indent(d2); *_out << ty << "__dtor(&" << b << ");\n";   // release b's old
             if (knd == CollKind::Weak && rhsLval && exprClass(rhs) != ty) {
-                // Shared->Weak reseat: field-copy + weak retain.
-                indent(d2); *_out << b << ".ptr = (" << src << ").ptr; " << b << ".ctrl = (" << src << ").ctrl;\n";
+                // Shared->Weak reseat: field-copy + weak retain. M26g: a fat interface Weak
+                // copies {obj, vtbl}; a thin Weak copies {ptr}.
+                indent(d2);
+                if (isInterface(_classes[ty].collElemClass))
+                    *_out << b << ".obj = (" << src << ").obj; " << b << ".vtbl = (" << src << ").vtbl; "
+                         << b << ".ctrl = (" << src << ").ctrl;\n";
+                else
+                    *_out << b << ".ptr = (" << src << ").ptr; " << b << ".ctrl = (" << src << ").ctrl;\n";
                 indent(d2); *_out << "if (" << b << ".ctrl) " << b << ".ctrl->weak++;\n";
             } else {
                 indent(d2); *_out << b << " = " << src << ";\n";
@@ -1646,12 +1660,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     if (isSmart) {
         // M26g: a smart pointer over an INTERFACE owns the concrete object behind a fat element.
         if (isInterface(elemCType)) {
-            if (kind != CollKind::Owned) {
-                std::string nm = (elem && elem->value) ? *elem->value : elemCType;
-                unsupported(("only `Owned<" + nm + ">` over an interface is supported so far "
-                             "(`Shared`/`Weak` over an interface is a later step)").c_str(), collType->line);
-                return;
-            }
+            if (isWeak) registerSmartPtr(CollKind::Shared, elem);   // upgrade()'s Shared<I> return
             registerSmartPtr(kind, elem);   // interface-element variant (elemClass = the interface)
             return;
         }
@@ -1934,8 +1943,15 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                  << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : ")\n");
         else if (info.kind == CollKind::Owned)
             *_out << "CSTAR_OWNED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
+        else if (info.kind == CollKind::Shared && info.elemIsInterface)
+            *_out << "CSTAR_SHARED_IFACE_" << suf << "(" << info.cName
+                 << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : ")\n");
         else if (info.kind == CollKind::Shared)
             *_out << "CSTAR_SHARED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
+        else if (info.kind == CollKind::Weak && info.elemIsInterface)
+            // upgrade() returns the matching Shared<I> (its _TYPE is emitted in the same pass).
+            *_out << "CSTAR_WEAK_IFACE_" << suf << "(" << info.cName
+                 << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : (", Shared_" + info.elemMangle + ")\n"));
         else if (info.kind == CollKind::Weak)
             // upgrade() returns the matching Shared (its _TYPE is emitted in the same pass).
             *_out << "CSTAR_WEAK_" << suf << "(" << info.elemCType << ", " << info.cName
@@ -2025,9 +2041,9 @@ bool CEmitter::isSmartPtrLValue(SharedExpression e)
 // the source's drop becomes a no-op (the ref/ownership transfers to the dest).
 std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem)
 {
-    // M26g: an owned INTERFACE handle guards its drop on `.obj` (the fat pointer), not `.ptr`.
+    // M26g: an owned INTERFACE handle's value field is the fat pointer `.obj`, not `.ptr`.
     if (kind == CollKind::Owned) return expr + (ifaceElem ? ".obj = NULL;" : ".ptr = NULL;");
-    return expr + ".ctrl = NULL; " + expr + ".ptr = NULL;";  // Shared/Weak guard on ctrl
+    return expr + ".ctrl = NULL; " + expr + (ifaceElem ? ".obj = NULL;" : ".ptr = NULL;");  // Shared/Weak guard on ctrl
 }
 
 // ---- M26f-2: resource-value move analysis ---------------------------------

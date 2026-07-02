@@ -87,6 +87,22 @@ static inline void NAME##__dtor(NAME* self) {                                  \
 static inline bool NAME##__valid(NAME* self) { return self->ptr != NULL; }
 #define CSTAR_SHARED_DEFINE(T, NAME, ELEM_DTOR) CSTAR_SHARED_TYPE(T, NAME) CSTAR_SHARED_FUNCS(T, NAME, ELEM_DTOR)
 
+// Shared<I> over an INTERFACE (M26g) — ref-counted fat pointer {obj, vtbl} + ctrl. Retain/release
+// on the shared count; the last strong handle drops the concrete object via the vtable's `__dtor`.
+#define CSTAR_SHARED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; cstar_ctrl* ctrl; } NAME;
+#define CSTAR_SHARED_IFACE_FUNCS(NAME)                                         \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    if (self->ctrl) {                                                          \
+        if (--self->ctrl->strong == 0) {                                       \
+            if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj); \
+            cstar_free(self->obj);                                            \
+            if (self->ctrl->weak == 0) cstar_free(self->ctrl);                     \
+        }                                                                      \
+        self->obj = NULL; self->ctrl = NULL;                                  \
+    }                                                                          \
+}                                                                              \
+static inline bool NAME##__valid(NAME* self) { return self->obj != NULL; }
+
 // Weak<T> — a non-owning reference to a Shared<T>'s pointee. Counts `weak`, not
 // `strong`, so it does NOT keep the pointee alive (it breaks Shared cycles). You
 // cannot deref a Weak directly; `upgrade()` upgrades to a Shared if still alive.
@@ -111,6 +127,27 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                         
     return s;                                                                 \
 }
 #define CSTAR_WEAK_DEFINE(T, NAME, SHARED_NAME) CSTAR_WEAK_TYPE(T, NAME) CSTAR_WEAK_FUNCS(T, NAME, SHARED_NAME)
+
+// Weak<I> over an INTERFACE (M26g) — same fat layout as Shared<I>; counts `weak`, never touches
+// the concrete object. `upgrade()` yields a live Shared<I> (obj/vtbl/ctrl) or an empty one.
+#define CSTAR_WEAK_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; cstar_ctrl* ctrl; } NAME;
+#define CSTAR_WEAK_IFACE_FUNCS(NAME, SHARED_NAME)                              \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    if (self->ctrl) {                                                          \
+        if (--self->ctrl->weak == 0 && self->ctrl->strong == 0) cstar_free(self->ctrl); \
+        self->obj = NULL; self->ctrl = NULL;                                  \
+    }                                                                          \
+}                                                                              \
+static inline bool NAME##__expired(NAME* self) {                              \
+    return self->ctrl == NULL || self->ctrl->strong == 0;                     \
+}                                                                              \
+static inline SHARED_NAME NAME##__upgrade(NAME* self) {                          \
+    SHARED_NAME s;                                                            \
+    if (self->ctrl && self->ctrl->strong > 0) {                              \
+        self->ctrl->strong++; s.obj = self->obj; s.vtbl = self->vtbl; s.ctrl = self->ctrl; \
+    } else { s.obj = NULL; s.vtbl = NULL; s.ctrl = NULL; }                     \
+    return s;                                                                 \
+}
 
 // BindableFunctionPtr<Sig> (M22) — a callable that optionally OWNS its bound
 // receiver (RAII). Fully type-erased, so one definition serves every signature:
