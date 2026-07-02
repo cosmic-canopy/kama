@@ -19,7 +19,7 @@ Engine auto-detected (podman preferred); override with `CSTAR_ENGINE=docker`.
 
 ## What's compared
 
-- **Native:** cstar vs C, C++, Rust, Go, C# (JIT), Lua, Python.
+- **Native:** cstar vs C, C++, Rust, Go, C# (JIT), Java (JIT), Lua, Python.
 - **WASM (under node):** cstar→wasm (`-O3`) vs JavaScript, TypeScript.
 - **Workloads:** `fib` (recursion), `pi` (float64), `collatz` (integer), `dispatch` (virtual calls) —
   compute-bound, since cstar has no arrays/heap yet. Each emits a checksum as its exit code; the runner
@@ -30,7 +30,7 @@ Engine auto-detected (podman preferred); override with `CSTAR_ENGINE=docker`.
 
 ```
 bench/
-  Dockerfile          multi-language toolchain image (emsdk + dotnet/rust/go/lua/ts/hyperfine)
+  Dockerfile          multi-language toolchain image (emsdk + dotnet/rust/go/jdk/lua/ts/hyperfine)
   run                 podman/docker wrapper
   scripts/            build.sh, measure.sh, report.py
   src/<lang>/         identical workloads per language

@@ -1,7 +1,7 @@
 # bench/Dockerfile — full multi-language benchmark toolchain.
 #
 # Separate from the dev image (../Dockerfile): much heavier (~3-4 GB) because it
-# installs .NET, Rust, and Go on top of the cstar build toolchain. Based on the
+# installs .NET, Rust, Go, and a JDK on top of the cstar build toolchain. Based on the
 # Emscripten SDK image (multi-arch: builds on Apple-Silicon podman) which already
 # provides node + clang + python3 + emcc.
 #
@@ -15,11 +15,15 @@ FROM emscripten/emsdk:latest
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
 
-# cstar build deps + native toolchains + Lua + measurement tools.
+# cstar build deps + native toolchains + Lua + JDK + measurement tools.
+# OpenJDK apt packages are arch-aware, so no TARGETARCH handling is needed. Java 21 is the
+# LTS bundled by current Minecraft (Java Edition, 1.20.5+) — the standard HotSpot JVM we
+# benchmark. If the base distro's repos ever lack openjdk-21, fall back to default-jdk-headless.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bison flex make clang \
       gcc g++ \
       lua5.4 \
+      openjdk-21-jdk-headless \
       time hyperfine \
       curl ca-certificates xz-utils \
  && rm -rf /var/lib/apt/lists/*

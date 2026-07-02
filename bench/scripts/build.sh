@@ -4,7 +4,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."   # repo root (/work)
 
-mkdir -p bench/build/{cstar,c,cpp,rust,go,wasm,csharp}
+mkdir -p bench/build/{cstar,c,cpp,rust,go,wasm,csharp,java}
 WORKLOADS="fib pi collatz dispatch alloc fnptr"
 
 echo "== building cstar compiler (clean, to match this image's toolchain) =="
@@ -34,6 +34,9 @@ dotnet publish bench/src/csharp -c Release -o bench/build/csharp >/dev/null 2>&1
 
 echo "== csharp (Native AOT, best-effort) =="
 dotnet publish bench/src/csharp -c Release -p:PublishAot=true -o bench/build/csharp-aot >/dev/null 2>&1 && echo "  ok csharp-aot" || echo "  skip csharp-aot"
+
+echo "== java (HotSpot JIT) =="
+javac -d bench/build/java bench/src/java/Bench.java 2>/dev/null && echo "  ok java" || echo "  FAIL java"
 
 echo "== typescript -> js =="
 ( cd bench/src/ts && tsc -p tsconfig.json ) 2>/dev/null && echo "  ok ts" || echo "  FAIL ts"

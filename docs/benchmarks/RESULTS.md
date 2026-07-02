@@ -1,8 +1,8 @@
 # cstar benchmark results
 
-_Generated: 2026-07-02 02:59 · arch: aarch64 (Linux) · in the `cstar-bench` container_
+_Generated: 2026-07-02 15:19 · arch: aarch64 (Linux) · in the `cstar-bench` container_
 
-Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
+Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · openjdk version "21.0.11" 2026-04-21 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
 Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after each time is relative to cstar for that workload (native → cstar, wasm → cstar→wasm). Peak RSS: `/usr/bin/time -v`.
 
 ## How to read this (please read before drawing conclusions)
@@ -10,7 +10,7 @@ Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after
 cstar transpiles to C and is compiled by the **same clang** as the C baseline, so on native compute
 workloads cstar is expected to be **within measurement noise of C/C++** — that is the design, not a
 finding. The signals worth trusting here are:
-1. cstar (native) vs **managed/interpreted** languages (C#, Go, Lua, Python),
+1. cstar (native) vs **managed/interpreted** languages (C#, Java, Go, Lua, Python),
 2. **peak RSS** and **artifact size** (the low-footprint goal),
 3. on the WASM track, **cstar→wasm vs hand-written JS/TS** under the same node.
 
@@ -30,9 +30,9 @@ The compute workloads (fib/pi/collatz/dispatch) are tuned so the slow interprete
 fast compiled languages run in a few ms, so small absolute differences between them are noise. The
 **`alloc`** workload (added once `List<T>` landed in M9) is the one to watch for the no-GC story: it
 churns ~2M growable-list appends and 2000 collection lifetimes, so it contrasts cstar's deterministic
-**RAII** free against the **garbage collectors** (Go, C#, Lua, Python, JS) and against the RAII peers
-(C++ `vector`, Rust `Vec`). Watch its **peak RSS** in particular — GC runtimes keep dead allocations
-resident until a collection runs.
+**RAII** free against the **garbage collectors** (Go, C#, Java, Lua, Python, JS) and against the RAII
+peers (C++ `vector`, Rust `Vec`). Watch its **peak RSS** in particular — GC runtimes keep dead
+allocations resident until a collection runs.
 
 ## Fairness gate (checksum equality)
 
@@ -53,33 +53,34 @@ diverged:
 - **dispatch** — 8×10⁶ virtual-method calls through a base reference (dynamic-dispatch cost).
 - **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
   (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — cstar `List<int32>`,
-  C++ `vector`, Rust `Vec`, Go slice, C# `List`, Lua table, Python/JS array, C manual realloc).
+  C++ `vector`, Rust `Vec`, Go slice, C# `List`, Java `ArrayList`, Lua table, Python/JS array, C manual realloc).
 - **fnptr** — 8×10⁶ indirect calls through a function pointer, routed through a function boundary
   (`apply(op, x)`) so the call stays genuinely indirect (the fnptr analog of `dispatch`'s virtual calls).
   Each language uses its idiomatic callable — cstar `fnptr` (a bare C function pointer, zero-cost), C/C++
-  function pointers, Rust `fn` pointers, Go func values, **C# `Func<>` delegates**, Lua/Python/JS functions.
+  function pointers, Rust `fn` pointers, Go func values, **C# `Func<>` delegates**, **Java
+  `LongUnaryOperator` method refs**, Lua/Python/JS functions.
 
 ## NATIVE — execution time (median, ms)
 
-| workload | cstar | C | C++ | Rust | Go | C# (JIT) | Lua | Python |
-|---|---|---|---|---|---|---|---|---|
-| fib | 7.26 (1.0×) | 7.4 (1.0×) | 8.32 (1.1×) | 6.09 (0.8×) | 10.26 (1.4×) | 30.42 (4.2×) | 88.13 (12.1×) | 211.38 (29.1×) |
-| pi | 11.83 (1.0×) | 11.8 (1.0×) | 11.98 (1.0×) | 11.96 (1.0×) | 13.97 (1.2×) | 33.05 (2.8×) | 118.18 (10.0×) | 1631.15 (137.9×) |
-| collatz | 65.61 (1.0×) | 65.6 (1.0×) | 66.18 (1.0×) | 66.04 (1.0×) | 90.92 (1.4×) | 123.05 (1.9×) | 959.31 (14.6×) | 2934.22 (44.7×) |
-| dispatch | 6.17 (1.0×) | 6.18 (1.0×) | 6.38 (1.0×) | 1.21 (0.2×) | 5.07 (0.8×) | 20.3 (3.3×) | 141.64 (23.0×) | 695.55 (112.7×) |
-| alloc | 1.26 (1.0×) | 1.16 (0.9×) | 1.61 (1.3×) | 2.25 (1.8×) | 6.7 (5.3×) | 23.4 (18.6×) | 24.08 (19.1×) | 111.8 (88.7×) |
-| fnptr | 2.5 (1.0×) | 2.53 (1.0×) | 2.72 (1.1×) | 2.65 (1.1×) | 5.05 (2.0×) | 31.5 (12.6×) | 138.14 (55.3×) | 697.49 (279.0×) |
+| workload | cstar | C | C++ | Rust | Go | C# (JIT) | Java (JIT) | Lua | Python |
+|---|---|---|---|---|---|---|---|---|---|
+| fib | 7.47 (1.0×) | 7.37 (1.0×) | 7.89 (1.1×) | 6.08 (0.8×) | 10.05 (1.3×) | 33.7 (4.5×) | 26.01 (3.5×) | 91.13 (12.2×) | 214.52 (28.7×) |
+| pi | 11.76 (1.0×) | 11.81 (1.0×) | 13.04 (1.1×) | 13.66 (1.2×) | 14.09 (1.2×) | 36.98 (3.1×) | 36.97 (3.1×) | 121.07 (10.3×) | 1652.3 (140.5×) |
+| collatz | 65.59 (1.0×) | 65.99 (1.0×) | 65.93 (1.0×) | 65.75 (1.0×) | 91.22 (1.4×) | 122.84 (1.9×) | 136.11 (2.1×) | 972.95 (14.8×) | 2942.07 (44.9×) |
+| dispatch | 6.21 (1.0×) | 6.16 (1.0×) | 6.42 (1.0×) | 1.22 (0.2×) | 4.94 (0.8×) | 23.81 (3.8×) | 26.59 (4.3×) | 142.32 (22.9×) | 714.23 (115.0×) |
+| alloc | 1.2 (1.0×) | 1.33 (1.1×) | 1.77 (1.5×) | 2.27 (1.9×) | 6.73 (5.6×) | 22.24 (18.5×) | 41.65 (34.7×) | 25.45 (21.2×) | 108.27 (90.2×) |
+| fnptr | 2.49 (1.0×) | 2.5 (1.0×) | 2.72 (1.1×) | 2.7 (1.1×) | 5.1 (2.0×) | 31.93 (12.8×) | 28.92 (11.6×) | 138.64 (55.7×) | 703.78 (282.6×) |
 
 ## NATIVE — peak resident memory (MB)
 
-| workload | cstar | C | C++ | Rust | Go | C# (JIT) | Lua | Python |
-|---|---|---|---|---|---|---|---|---|
-| fib | 2 | 2 | 3 | 2 | 2 | 19 | 2 | 8 |
-| pi | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
-| collatz | 2 | 2 | 2 | 2 | 2 | 20 | 2 | 8 |
-| dispatch | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
-| alloc | 2 | 2 | 3 | 2 | 7 | 25 | 2 | 8 |
-| fnptr | 2 | 2 | 3 | 2 | 2 | 20 | 2 | 8 |
+| workload | cstar | C | C++ | Rust | Go | C# (JIT) | Java (JIT) | Lua | Python |
+|---|---|---|---|---|---|---|---|---|---|
+| fib | 2 | 2 | 3 | 2 | 2 | 19 | 39 | 2 | 8 |
+| pi | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
+| collatz | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
+| dispatch | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
+| alloc | 2 | 2 | 3 | 2 | 6 | 25 | 78 | 2 | 8 |
+| fnptr | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
 
 ## NATIVE — artifact size
 
@@ -91,17 +92,18 @@ diverged:
 | Rust | 322.3 KB |
 | Go | 1604.8 KB |
 | C# (JIT) | 6.0 KB |
+| Java (JIT) | 2.6 KB |
 
 ## WASM track — execution time under node (median, ms)
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 19.53 (1.0×) | 27.22 (1.4×) | 27.41 (1.4×) |
-| pi | 20.71 (1.0×) | 25.67 (1.2×) | 26.2 (1.3×) |
-| collatz | 92.83 (1.0×) | 415.27 (4.5×) | 414.06 (4.5×) |
-| dispatch | 22.8 (1.0×) | 20.73 (0.9×) | 20.72 (0.9×) |
-| alloc | 16.7 (1.0×) | 16.26 (1.0×) | 16.24 (1.0×) |
-| fnptr | 11.28 (1.0×) | 41.75 (3.7×) | 40.95 (3.6×) |
+| fib | 19.39 (1.0×) | 27.69 (1.4×) | 27.49 (1.4×) |
+| pi | 21.26 (1.0×) | 26.15 (1.2×) | 26.33 (1.2×) |
+| collatz | 94.54 (1.0×) | 420.56 (4.4×) | 426.39 (4.5×) |
+| dispatch | 22.28 (1.0×) | 20.95 (0.9×) | 21.02 (0.9×) |
+| alloc | 16.25 (1.0×) | 15.78 (1.0×) | 15.96 (1.0×) |
+| fnptr | 11.22 (1.0×) | 41.83 (3.7×) | 41.63 (3.7×) |
 
 ## WASM track — peak resident memory (MB)
 
@@ -122,7 +124,10 @@ diverged:
 
 ## Caveats
 - **arm64 results** — not comparable to x86 runs (arch recorded above).
-- **JIT warmup** (C#, node): mitigated by hyperfine warmups; tiny workloads still partly reflect startup.
+- **JIT warmup** (C#, Java, node): mitigated by hyperfine warmups; tiny workloads still partly reflect
+  startup. Java (HotSpot) has the heaviest fixed startup here, so startup-dominated workloads (e.g. `fib`)
+  understate the warmed-up steady-state a **long-running app like Minecraft** gets from HotSpot's C2 tier;
+  the longer compute loops (pi/collatz/dispatch/fnptr) still tier up within a run.
 - **Container overhead** applies equally to all languages, so relative numbers are fair; absolute numbers
   carry slight overhead.
 - **C# AOT** is built best-effort (`bench/build/csharp-aot`); the table shows the JIT runtime.

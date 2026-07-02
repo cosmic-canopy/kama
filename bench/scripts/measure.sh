@@ -11,7 +11,7 @@ printf "track\tlang\tworkload\ttime_ms\trss_kb\tsize_bytes\texit\n" > "$OUT"
 WORKLOADS="${1:-all}"
 [ "$WORKLOADS" = "all" ] && WORKLOADS="fib pi collatz dispatch alloc fnptr"
 
-NATIVE="cstar c cpp rust go csharp lua python"
+NATIVE="cstar c cpp rust go csharp java lua python"
 WASM="cstar-wasm js ts"
 
 # Notes:
@@ -32,6 +32,7 @@ cmd_for() {  # lang workload -> run command (empty if artifact missing)
     rust)       [ -x bench/build/rust/$w ]     && echo "bench/build/rust/$w" ;;
     go)         [ -x bench/build/go/$w ]       && echo "bench/build/go/$w" ;;
     csharp)     [ -f bench/build/csharp/bench.dll ] && echo "dotnet bench/build/csharp/bench.dll $w" ;;
+    java)       [ -f bench/build/java/Bench.class ] && echo "java -cp bench/build/java Bench $w" ;;
     lua)        echo "lua5.4 bench/src/lua/$w.lua" ;;
     python)     echo "python3 bench/src/python/$w.py" ;;
     cstar-wasm) [ -f bench/build/wasm/$w.js ] && echo "node --no-liftoff bench/build/wasm/$w.js" ;;
@@ -46,6 +47,7 @@ size_for() {  # lang workload -> artifact size (bytes) or 0
     cstar) f=bench/build/cstar/$w ;;  c) f=bench/build/c/$w ;;  cpp) f=bench/build/cpp/$w ;;
     rust) f=bench/build/rust/$w ;;    go) f=bench/build/go/$w ;;
     csharp) f=bench/build/csharp/bench.dll ;;  cstar-wasm) f=bench/build/wasm/$w.wasm ;;
+    java) f=bench/build/java/Bench.class ;;  # primary class only (javac also emits Bench$*.class)
   esac
   [ -n "$f" ] && [ -f "$f" ] && stat -c %s "$f" 2>/dev/null || echo 0
 }
