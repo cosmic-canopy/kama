@@ -250,9 +250,9 @@ private:
     // M27b — generic TYPES (`type value Box<T>`). The TEMPLATE is kept OUT of _classes (so the normal
     // class loops never see it); each reachable `Box<Arg>` becomes a synthetic specialized ClassInfo
     // (`Box_int32`, isGenericInst=true) registered in _classes and emitted under _typeSubst.
-    struct GenericTypeInst { std::string templateKey; std::string mangledName; SharedIdentifier typeArg; };
+    struct GenericTypeInst { std::string templateKey; std::string mangledName; std::vector<SharedIdentifier> typeArgs; };
     std::map<std::string, ClassInfo>          _genericTypes;        // template name -> ClassInfo shape (NOT in _classes)
-    std::map<std::string, std::string>        _genericTypeParam;    // template name -> single type-param name
+    std::map<std::string, std::vector<std::string>> _genericTypeParams;  // template name -> type-param names [A, B]
     std::map<std::string, NsCtx>              _genericTypeCtx;      // template name -> home namespace ctx
     std::map<std::string, GenericTypeInst>    _genericTypeInsts;    // mangled name -> instantiation (dedup)
     std::map<std::string, std::string>        _genericTypeInstOf;   // mangled name -> template name (construction)
@@ -327,8 +327,8 @@ private:
 
     // Generic TYPES (M27b): discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
     void scanTypeForGenericTypes(SharedIdentifier t);
-    void registerGenericTypeInst(const std::string& tmpl, SharedIdentifier arg);
-    std::string genericTypeMangle(const std::string& tmpl, SharedIdentifier arg);   // "Box" + "_" + mangleElem(arg)
+    void registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args);
+    std::string genericTypeMangle(const std::string& tmpl, SharedIdentifierList args);  // "Pair" + "_int32" + "_string"
     void emitGenericTypeInst(const GenericTypeInst& gi, int phase);   // 0=struct typedef, 1=protos, 2=bodies
 
     // Generics (M27a): discover reachable generic-function instantiations, infer their

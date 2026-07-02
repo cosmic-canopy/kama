@@ -183,7 +183,7 @@ struct cstaryystype {
 %type <usingdeclarationlist> using_directives_opt using_directives
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
-%type <identifierlist> friend_member_list interface_type_list
+%type <identifierlist> friend_member_list interface_type_list type_arg_list
 %type <modifier> modifier function_modifier_opt parameter_modifier_opt
 %type <modifierlist> modifiers modifiers_opt
 %type <parameter> parameter
@@ -311,7 +311,19 @@ qualifier
   ;
 basic_identifier
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | IDENTIFIER LT type GT   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), $3); }
+  | IDENTIFIER LT type_arg_list GT   {
+        /* M27b-beta: `Name<A, B, …>` — the type args are a LIST. `genericArg` mirrors [0] so every
+           single-arg consumer (Ptr/collections/guards) is untouched; multi-arg sites read genericArgs. */
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$3)[0]);
+        id->genericArgs = $3;
+        $$ = id;
+    }
+  ;
+/* Comma-separated type arguments: `int32`, `int32, string`, `int32, List<int>` — mirrors
+   interface_type_list. Always length ≥ 1 (the `<…>` syntax requires at least one). */
+type_arg_list
+  : type   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | type_arg_list COMMA type   { $1->push_back($3); $$ = $1; }
   ;
 
 qualified_identifier_no_generic
@@ -378,12 +390,13 @@ type_declaration
 marked_type_declaration
   : TYPE modifiers_opt IDENTIFIER basic_identifier class_base_opt class_body semicolon_opt
     { auto n = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6); n->typeKind = $3;
-      /* M27b: `type value Box<T> { … }` — the name parsed as Box<T> (genericArg = T). Capture the
-         type-parameter name and strip it, so the class NAME stays bare `Box`. Single param only (alpha). */
-      if ($4->genericArg && $4->genericArg->value) {
+      /* M27b: `type value Pair<A, B> { … }` — the name parsed as Pair<A, B> (genericArgs = [A, B]).
+         Capture each type-parameter name and strip them, so the class NAME stays bare `Pair`. */
+      if ($4->genericArgs && !$4->genericArgs->empty()) {
           n->typeParams = std::make_shared<StringList>();
-          n->typeParams->push_back($4->genericArg->value);
-          $4->genericArg = SharedIdentifier();
+          for (auto& a : *$4->genericArgs) if (a && a->value) n->typeParams->push_back(a->value);
+          $4->genericArgs = SharedIdentifierList();
+          $4->genericArg  = SharedIdentifier();
       }
       $$ = n; }
   ;

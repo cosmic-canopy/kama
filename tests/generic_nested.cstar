@@ -1,0 +1,23 @@
+// M27b-beta: a NESTED generic argument — `Box<Pair<int32,int32>>` — proves the recursive mangler
+// (the inner `Pair<int32,int32>` is mangled INTO the name, not dropped, so no collision). Nested
+// generics parse today with a SPACE before the final `>` (`… > >`); the `>>` split is a later slice.
+type value Pair<A, B>
+{
+    public A a;
+    public B b;
+    public Pair(A x, B y) { this.a = x; this.b = y; }
+    public fn A first() { return this.a; }
+}
+type value Box<T>
+{
+    public T value;
+    public Box(T v) { this.value = v; }
+    public fn T unbox() { return this.value; }
+}
+fn int main()
+{
+    Pair<int32, int32> p = Pair(x: 3, y: 4);
+    Box<Pair<int32, int32> > b = Box(v: p);   // nested arg; note the space before the final `>`
+    Pair<int32, int32> q = b.unbox();
+    return q.first() + 5;                      // 3 + 5 = 8
+}

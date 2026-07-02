@@ -197,7 +197,8 @@ public:
     SharedString value;
     SharedStringList qualifier;
     SharedString generic;          // legacy bare-name generic (kept for compat)
-    SharedIdentifier genericArg;   // element type for Coll<T> (a full type) — M9
+    SharedIdentifier genericArg;   // element type for Coll<T> (a full type) — M9; == genericArgs[0]
+    SharedIdentifierList genericArgs;  // M27b-beta: all type args for Pair<A,B> etc.; genericArg mirrors [0]
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
     IdentifierNode(CodeGenContext& context, SharedString value, int builtInVal = IDENTIFIER_NONE_VAL)

@@ -91,7 +91,14 @@ qualifier
   ;
 basic_identifier
   : IDENTIFIER
-  | IDENTIFIER LT type GT
+  | IDENTIFIER LT type_arg_list GT
+
+  ;
+/* Comma-separated type arguments: `int32`, `int32, string`, `int32, List<int>` — mirrors
+   interface_type_list. Always length ≥ 1 (the `<…>` syntax requires at least one). */
+type_arg_list
+  : type
+  | type_arg_list COMMA type
   ;
 
 qualified_identifier_no_generic

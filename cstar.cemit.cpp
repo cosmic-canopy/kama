@@ -187,9 +187,9 @@ std::string CEmitter::cType(SharedIdentifier type)
         return *type->value + "_" + mangleElem(type->genericArg);
     // M27b: a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box_int32`).
     // Reached only for a non-reserved name with a type arg; under _typeSubst the arg's `T` resolves.
-    if (type->genericArg && type->value) {
+    if (type->genericArg && type->value) {   // genericArg mirrors genericArgs[0] (non-null iff there are args)
         std::string tmpl = resolveUserName(*type->value, type->qualifier);
-        if (_genericTypes.count(tmpl)) return genericTypeMangle(tmpl, type->genericArg);
+        if (_genericTypes.count(tmpl)) return genericTypeMangle(tmpl, type->genericArgs);
     }
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "int8_t";
@@ -1719,9 +1719,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
         // methods) is parked in _genericTypes; the specialized instances are the real classes.
         if (cd->typeParams && !cd->typeParams->empty()) {
-            _genericTypeParam[ci.name] = *(*cd->typeParams)[0];   // single type-param (alpha)
-            _genericTypeCtx[ci.name]   = _nsCtx;
-            _genericTypes[ci.name]     = ci;
+            std::vector<std::string> ps;
+            for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);   // [A, B, …]
+            _genericTypeParams[ci.name] = ps;
+            _genericTypeCtx[ci.name]    = _nsCtx;
+            _genericTypes[ci.name]      = ci;
         } else {
             _classes[ci.name] = ci;
         }
@@ -1753,17 +1755,26 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         case IDENTIFIER_BOOL_VAL:    return "bool";
         case IDENTIFIER_FLOAT32_VAL: return "float32";
         case IDENTIFIER_FLOAT64_VAL: return "float64";
-        default:  // class element — resolve to its mangled name (the suffix)
-            return elem->value ? resolveUserName(*elem->value, elem->qualifier) : "void";
+        default: {  // class / generic element — resolve to its mangled name (the suffix)
+            if (!elem->value) return "void";
+            std::string base = resolveUserName(*elem->value, elem->qualifier);
+            // M27b-beta: recurse into a nested generic arg so `Shared<Circle>` mangles to
+            // `Shared_Circle` (not just `Shared`) — fixes the `List<Shared<Circle>>` collision.
+            if (elem->genericArgs) for (auto& a : *elem->genericArgs) base += "_" + mangleElem(a);
+            else if (elem->genericArg) base += "_" + mangleElem(elem->genericArg);
+            return base;
+        }
     }
 }
 
-// M27b: the mangled struct name for `Box<Arg>` — the template's scoped name + "_" + the arg's
-// mangle suffix. `mangleElem` resolves a bound `T` under _typeSubst, so this is used identically at
-// discovery (concrete arg), at cType (field/decl arg under subst), and to name the specialized ClassInfo.
-std::string CEmitter::genericTypeMangle(const std::string& tmpl, SharedIdentifier arg)
+// M27b: the mangled struct name for `Pair<A, B, …>` — the template's scoped name + one "_<mangle>"
+// suffix per type arg. `mangleElem` resolves a bound `T` under _typeSubst, so this is used identically
+// at discovery (concrete args), at cType (field/decl args under subst), and to name the specialized ClassInfo.
+std::string CEmitter::genericTypeMangle(const std::string& tmpl, SharedIdentifierList args)
 {
-    return tmpl + "_" + mangleElem(arg);
+    std::string m = tmpl;
+    if (args) for (auto& a : *args) m += "_" + mangleElem(a);
+    return m;
 }
 
 bool CEmitter::isCollectionType(SharedIdentifier t) const
@@ -1954,37 +1965,56 @@ bool CEmitter::isBindableClass(const std::string& cls) const
 void CEmitter::scanTypeForCollections(SharedIdentifier t)
 {
     if (!t) return;
-    scanTypeForGenericTypes(t);                                 // M27b: also discover Box<Arg> here
+    scanTypeForGenericTypes(t);                                 // M27b: also discover Pair<A,B> here
     if (isCollectionType(t)) registerCollection(t);
-    if (t->genericArg) scanTypeForCollections(t->genericArg);   // nested (harmless)
+    // Recurse ALL type args (M27b-beta), so a collection/generic in a 2nd+ position
+    // (`Pair<int, List<int>>`) is discovered — not just the first arg.
+    if (t->genericArgs) for (auto& a : *t->genericArgs) scanTypeForCollections(a);
+    else if (t->genericArg) scanTypeForCollections(t->genericArg);
 }
 
-// M27b: register the specialized instance for a user generic-type reference `Box<Arg>`. The
-// recursion into the arg is driven by scanTypeForCollections (which calls this at each type node).
+// M27b: register the specialized instance for a user generic-type reference `Pair<A, B>`. The
+// recursion into the args is driven by scanTypeForCollections (which calls this at each type node).
 void CEmitter::scanTypeForGenericTypes(SharedIdentifier t)
 {
-    if (!t || !t->value || !t->genericArg) return;
+    if (!t || !t->value || !t->genericArg) return;             // genericArg mirrors genericArgs[0]
     std::string tmpl = resolveUserName(*t->value, t->qualifier);
-    if (_genericTypes.count(tmpl)) registerGenericTypeInst(tmpl, t->genericArg);
+    if (_genericTypes.count(tmpl)) registerGenericTypeInst(tmpl, t->genericArgs);
 }
 
 // Build one synthetic specialized ClassInfo per `Box<Arg>` (mirrors registerCollection): copy the
 // template shape, rewrite identity (struct name + method cNames), re-derive param signatures under
 // _typeSubst, register in _classes, and transitively scan its substituted member types so a
 // `Box<T>` holding `List<T>` registers `List_int32`. Deduped by the mangled name.
-void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier arg)
+void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args)
 {
-    // Resolve a bare-`T` arg (the nested/transitive case) to its concrete binding before use.
-    SharedIdentifier concreteArg = arg;
-    if (!_typeSubst.empty() && arg->value && !arg->genericArg) {
-        auto s = _typeSubst.find(*arg->value);
-        if (s != _typeSubst.end()) concreteArg = s->second;
+    if (!args || args->empty()) return;
+    const std::vector<std::string>& params = _genericTypeParams[tmpl];
+
+    // Resolve each bare-`T` arg (the nested/transitive case) to its concrete binding.
+    std::vector<SharedIdentifier> concrete;
+    for (auto& a : *args) {
+        SharedIdentifier c = a;
+        if (a && !_typeSubst.empty() && a->value && !a->genericArg) {
+            auto s = _typeSubst.find(*a->value);
+            if (s != _typeSubst.end()) c = s->second;
+        }
+        concrete.push_back(c);
     }
-    std::string mangled = genericTypeMangle(tmpl, concreteArg);
+    // Arity: N type arguments must match the template's N type parameters.
+    if (concrete.size() != params.size()) {
+        unsupported(("wrong number of type arguments for generic type `" + tmpl + "` (expected "
+                     + std::to_string(params.size()) + ", got " + std::to_string(concrete.size()) + ")").c_str(),
+                    args->front() ? args->front()->line : 0);
+        return;
+    }
+
+    std::string mangled = tmpl;
+    for (auto& c : concrete) mangled += "_" + mangleElem(c);
     if (_genericTypeInsts.count(mangled)) return;               // dedup
 
     // Register the KEY first so the transitive scan below can't recurse into this same instance.
-    _genericTypeInsts[mangled] = { tmpl, mangled, concreteArg };
+    _genericTypeInsts[mangled] = { tmpl, mangled, concrete };
     _genericTypeInstOf[mangled] = tmpl;
     _genericTypeInstOrder.push_back(mangled);
 
@@ -1992,7 +2022,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
     _nsCtx = _genericTypeCtx[tmpl];
     _typeSubst.clear();
-    _typeSubst[_genericTypeParam[tmpl]] = concreteArg;
+    for (size_t i = 0; i < params.size(); ++i) _typeSubst[params[i]] = concrete[i];   // zip params -> args
 
     ClassInfo ci = _genericTypes[tmpl];                         // copy the template shape
     ci.name = mangled;
@@ -2749,7 +2779,9 @@ void CEmitter::computeDestructible()
             if (inst) {
                 const GenericTypeInst& gi = _genericTypeInsts[ci.name];
                 _nsCtx = _genericTypeCtx[gi.templateKey];
-                _typeSubst.clear(); _typeSubst[_genericTypeParam[gi.templateKey]] = gi.typeArg;
+                _typeSubst.clear();
+                const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+                for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
             } else {
                 _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;   // resolve field types in ci's scope
             }
@@ -3915,7 +3947,8 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     NsCtx savedCtx = _nsCtx;
     _nsCtx = _genericTypeCtx[gi.templateKey];
     _typeSubst.clear();
-    _typeSubst[_genericTypeParam[gi.templateKey]] = gi.typeArg;
+    const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
     _emitStaticClass = true;
     if      (phase == 0) { *_out << "typedef struct " << ci.name << " " << ci.name << ";\n"; emitStruct(ci); }
     else if (phase == 1) emitClassPrototypes(ci);

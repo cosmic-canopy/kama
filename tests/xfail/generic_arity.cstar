@@ -1,0 +1,4 @@
+// M27b-beta: a generic type must be given exactly as many type arguments as it has parameters.
+// `Pair<int32>` supplies one argument to a two-parameter template — a compile-time error.
+type value Pair<A, B> { public A a; public B b; public Pair(A x, B y) { this.a = x; this.b = y; } }
+fn int main() { Pair<int32> p = Pair(x: 1, y: 2); return 0; }
