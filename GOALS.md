@@ -52,6 +52,19 @@ lightweight WebGPU game engine.
    boundary** (checked inside `unsafe`), where you genuinely talk to C. This is the deliberate avoidance of
    the null-reference "billion-dollar mistake."
 
+3c. **Ownership is the type axis — `value` / `resource` / `contract`.** cstar organizes types by
+   *what they own*, not the C/C++ `class`/`struct`/`pod` legacy. A **`value`** owns nothing (raw
+   data, **copied**; the stricter cousin of a "value type" — no smuggled shared refs; may still
+   encapsulate private fields to guard an invariant). A **`resource`** owns something, or has
+   identity (**moved**, RAII-dropped). A **`contract`** is a public-only guarantee a type satisfies
+   — cstar's word for an interface. Polymorphism's goal is **substitutability, not reuse**:
+   inheritance bundles the two, so cstar unbundles them — **generics** give reuse (zero-cost
+   monomorphization), **contracts** give substitutability, and `virtual`/`abstract resource` is only
+   for sharing *implementation* up an owned hierarchy. Hand-offs follow **"silent default, scream
+   when ambiguous"**: a `give`/`copy` marker is required exactly when *both* move and copy are
+   plausible (a `resource` that has opted into a copy contract), and silent otherwise. *(The
+   `value`/`resource`/`contract` vocabulary lands in **M26h**; full model in `docs/TYPE_MODEL.md`.)*
+
 4. **One way to do a thing. Favor simplicity.** Unlike C++'s many syntaxes for one concept, cstar
    prefers a single, obvious construct. Resist redundant syntax. (Already: named args only — no
    positional; one form per construct.)
@@ -99,6 +112,6 @@ Development of cstar follows two vendored guidance skills that reinforce goals #
 
 The single source of truth for status is `README.md` (feature summary) and `docs/ROADMAP.md` (the
 milestone plan). As of v0.1.35 (through M26e), the core language, OO, RAII, collections, the smart-pointer
-family, the full value/ownership model, `const`-correctness, and access control are all shipped; user-defined
-generics, sum types + pattern matching, and operator overloading are the remaining language milestones on the
-road to a language-complete 1.0. This section is intentionally brief so it doesn't drift — see those files.
+family, the full value/ownership model, `const`-correctness, and access control are all shipped; the type-model
+vocabulary reframe (`value`/`resource`/`contract`, M26h), user-defined generics, sum types + pattern matching,
+and operator overloading are the remaining language milestones on the road to a language-complete 1.0. This section is intentionally brief so it doesn't drift — see those files.
