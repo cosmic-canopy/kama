@@ -1,0 +1,23 @@
+// M26g-1 — `Owned<IShape>`: a UNIQUE-owning smart pointer over an INTERFACE. `new Rect(...)` boxes a
+// concrete class implementing the interface into a fat handle {obj, vtbl}; `s.area()` dispatches
+// polymorphically through the vtable; dropping the handle destroys the concrete object via the
+// vtable's `__dtor` slot (so a destructible impl's own heap is freed) then frees it. Move-only, like
+// `Owned<T>`. ASan-clean: the destructible `Square`'s `List` is freed exactly once.
+interface IShape { fn int32 area(); }
+class Rect implements IShape {
+    int32 w; int32 h;
+    public Rect(int32 w, int32 h) { this.w = w; this.h = h; }
+    public fn int32 area() { return this.w * this.h; }         // non-destructible impl
+}
+class Square implements IShape {
+    List<int32> side;                                          // owns heap -> destructible impl
+    public Square(int32 s) { this.side.add(item: s); }
+    public fn int32 area() { return this.side[0] * this.side[0]; }
+}
+fn int32 areaOf(Owned<IShape> s) { return s.area(); }          // callee owns s, drops it at fn-end
+fn int32 main() {
+    Owned<IShape> a = new Rect(w: 3, h: 4);                    // boxed Rect  -> area 12
+    Owned<IShape> b = new Square(s: 5);                        // boxed Square -> area 25 (owns a List)
+    int32 total = a.area() + areaOf(s: give b);                // 12 + 25 = 37; b moved into the callee
+    return total;                                              // a drops here (Rect freed)
+}

@@ -113,12 +113,26 @@ their names/numbers.
      `resource`/`Owned` → move (a bare hand-off moves; `give` optional), `Shared`/`Weak` → retain
      (`give` = opt-in move). See [TYPE_MODEL.md](TYPE_MODEL.md).
 
-3. **M26g — owned-interface storage** *(was M26f; before 1.0).* Smart-pointers over an interface
-   element (`Shared<IShape>` / `Owned<IShape>` — a fat-pointer element, a real extension of the
-   smart-ptr machinery) + interface fields / returns / collections, so polymorphism can be *stored*
+3. **M26g — owned-interface storage** *(was M26f; before 1.0; in progress).* Smart-pointers over an
+   interface element (`Shared<IShape>` / `Owned<IShape>` — a fat-pointer element, a real extension of
+   the smart-ptr machinery) + interface fields / returns / collections, so polymorphism can be *stored*
    (the engine's `List<IDrawable>` scene). Bare stored `IShape` stays a clear error; ownership is
-   explicit, never implicitly boxed. *(May instead fold into M27 generics — decide when we get
-   there.)*
+   explicit, never implicitly boxed. **Drop mechanism (DECIDED): a virtual-destructor slot in the
+   interface vtable** (`void (*__dtor)(void*)`, set per impl / NULL when nothing to free) — lean
+   handles, the standard C++ model, per-type static cost. Sub-steps:
+   - **M26g-1 — `Owned<IShape>`.** ✅ **DONE (v0.1.41).** The handle IS the fat pointer
+     `{void* obj; const I_vtbl* vtbl}`, `obj` heap-owned. `new Circle(...)` boxes a concrete impl
+     (malloc → ctor → set obj/vtbl); `s.m()` dispatches through the vtbl; drop runs `vtbl->__dtor(obj)`
+     then frees. Move-only (`give` nulls `.obj`). New runtime macros `CSTAR_OWNED_IFACE_{TYPE,FUNCS}`;
+     `registerSmartPtr` accepts an interface element (`CollectionInfo.elemIsInterface`);
+     `emitSmartPtrCall` routes an interface handle to `emitInterfaceDispatch`. Fixture `owned_iface`
+     (polymorphism + a destructible impl freed via the vtbl slot + move, ASan-clean) + xfail
+     `owned_iface_nonimpl`. 132/132.
+   - **M26g-2 — `Shared<IShape>` + `Weak<IShape>`** *(next).* The refcounted variants: the fat element
+     plus a `ctrl` block; retain/release; `Weak<I>.upgrade() -> Shared<I>`.
+   - **M26g-3 — storage.** Interface smart-ptrs in fields / returns / collections
+     (`List<Shared<IDrawable>>`) — largely falls out (a `Shared_IShape` is an ordinary value type;
+     `rejectStoredInterface` only fires on a *bare* interface). *(May instead fold into M27 generics.)*
 
 4. **M26h — type-model reframe** *(the vocabulary milestone; before generics).* Rename the type kinds
    to the ownership model — **`value`** (owns nothing, copies), **`resource`** (owns/identity, moves),

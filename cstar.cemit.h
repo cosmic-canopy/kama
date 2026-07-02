@@ -157,6 +157,7 @@ struct CollectionInfo {
     std::string  elemMangle;       // "int32" / "Point" (mangling suffix)
     bool         elemDestructible = false;
     bool         elemCopyable = false;   // M26f-5: element is a `Copyable` resource -> deep-copy each
+    bool         elemIsInterface = false;   // M26g: owned-interface smart ptr (fat {obj, vtbl} element)
 };
 
 // An interface (M6b): a set of method prototypes, lowered to a vtable struct
@@ -299,7 +300,7 @@ private:
     // interface in a stored/returned position; own the object instead (`Shared<I>`, M26f).
     // `whereClause` completes "it can't be ___" (e.g. "stored in a field").
     void rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line);
-    std::string smartPtrInvalidate(const std::string& expr, CollKind kind);  // null the dtor's guard field
+    std::string smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem = false);  // null the dtor's guard field
     // M26f-2: a move-only VALUE — a destructible class value that isn't a smart-ptr/collection/
     // extern struct. It MOVES on hand-off (its dtor is suppressed) and is never silently copied.
     bool isMoveOnlyValue(const std::string& cls) const;

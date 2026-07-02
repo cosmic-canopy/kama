@@ -51,6 +51,18 @@ static inline void NAME##__dtor(NAME* self) {                                  \
 }
 #define CSTAR_OWNED_DEFINE(T, NAME, ELEM_DTOR) CSTAR_OWNED_TYPE(T, NAME) CSTAR_OWNED_FUNCS(T, NAME, ELEM_DTOR)
 
+// Owned<I> over an INTERFACE (M26g) — a unique-owning fat pointer: the handle IS the interface
+// fat pointer {obj, vtbl}, with `obj` the heap-owned CONCRETE object. Drop dispatches the concrete
+// destructor through the vtable's `__dtor` slot (NULL for a non-destructible impl), then frees obj.
+#define CSTAR_OWNED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; } NAME;
+#define CSTAR_OWNED_IFACE_FUNCS(NAME)                                          \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    if (self->obj) {                                                           \
+        if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj);   \
+        cstar_free(self->obj); self->obj = NULL;                              \
+    }                                                                          \
+}
+
 // Shared<T> — ref-counted shared ownership (shared_ptr / Rc). Copy retains;
 // drop releases; the pointee is destroyed + freed when the last strong handle
 // goes away. The control block (counts) is a SEPARATE allocation so a future

@@ -714,6 +714,29 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         if (isSmartPtrClass(octy) || isBindableClass(octy))
                             unsupported(("`new` now names the element type — write `new " + T
                                          + "(...)`, not the wrapper").c_str(), n->line);
+                        else if (isInterface(T)) {
+                            // M26g: box a concrete class that implements interface T into an owned
+                            // interface handle — malloc the concrete, ctor it, set {obj, vtbl}.
+                            auto cit = _classes.find(octy);
+                            bool implementsT = false;
+                            if (cit != _classes.end())
+                                for (auto& i : cit->second.interfaces) if (i == T) { implementsT = true; break; }
+                            if (!implementsT)
+                                unsupported(("`new " + octy + "` does not implement `" + T + "` — `" + ty
+                                             + "` owns a class that satisfies the interface").c_str(), n->line);
+                            else if (_classes[octy].isAbstractClass)
+                                unsupported(("cannot instantiate abstract class '" + octy + "'").c_str(), n->line);
+                            else {
+                                line(n->line); indent(depth);
+                                *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
+                                if (_classes[octy].hasCtor) {
+                                    line(n->line); indent(depth);
+                                    *_out << emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + nm + ".obj",
+                                                              _classes[octy].ctorParams, oc->args, n->line) << ";\n";
+                                }
+                                indent(depth); *_out << nm << ".vtbl = &" << octy << "__as_" << T << ";\n";
+                            }
+                        }
                         else if (octy != T)
                             unsupported(("`" + ty + "` boxes `" + T + "`, but got `new " + octy + "(...)`").c_str(), n->line);
                         else {
@@ -777,7 +800,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         if (handoff == 2 && k == CollKind::Owned)
                             unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
                         indent(depth);
-                        if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k) << "\n";
+                        if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k, isInterface(_classes[ty].collElemClass)) << "\n";
                         else        *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
                     } else if (_classes.count(ty) && _classes[ty].isCollection && isNamedValue(init.get())) {
                         // M26c/f-3: a collection move/deep-copy isn't a plain `=` — require a marker.
@@ -860,7 +883,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 else unsupported("returning a smart-pointer field/element needs `give` (move it out) or "
                                  "`copy` (retain — the source stays valid)", n->line);
                 indent(depth);
-                if (doGive) *_out << smartPtrInvalidate(emitExpression(retExpr), k) << "\n";
+                if (doGive) *_out << smartPtrInvalidate(emitExpression(retExpr), k, isInterface(_classes[rc].collElemClass)) << "\n";
                 else        *_out << "(" << emitExpression(retExpr) << ").ctrl->"
                                   << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
             }
@@ -1116,7 +1139,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (handoff == 2 && knd == CollKind::Owned)
                         unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
                     indent(d2);
-                    if (doGive) *_out << smartPtrInvalidate(src, knd) << "\n";
+                    if (doGive) *_out << smartPtrInvalidate(src, knd, isInterface(_classes[ty].collElemClass)) << "\n";
                     else *_out << b << ".ctrl->" << (knd == CollKind::Weak ? "weak" : "strong") << "++;\n";
                 }
             }
@@ -1621,8 +1644,19 @@ void CEmitter::registerCollection(SharedIdentifier collType)
 
     // Smart pointers (Owned/Shared/Weak) — registered via the shared helper.
     if (isSmart) {
+        // M26g: a smart pointer over an INTERFACE owns the concrete object behind a fat element.
+        if (isInterface(elemCType)) {
+            if (kind != CollKind::Owned) {
+                std::string nm = (elem && elem->value) ? *elem->value : elemCType;
+                unsupported(("only `Owned<" + nm + ">` over an interface is supported so far "
+                             "(`Shared`/`Weak` over an interface is a later step)").c_str(), collType->line);
+                return;
+            }
+            registerSmartPtr(kind, elem);   // interface-element variant (elemClass = the interface)
+            return;
+        }
         if (elemClass.empty()) {
-            unsupported("a smart pointer requires a class element type", collType->line);
+            unsupported("a smart pointer requires a class or interface element type", collType->line);
             return;
         }
         // A Weak needs its Shared (lock()'s return type + the source of a weak).
@@ -1631,9 +1665,9 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         return;
     }
 
-    // M26e: an interface borrows its object — it can't be a collection element (a
+    // M26e: an interface borrows its object — it can't be a BARE collection element (a
     // `List`/`Array` of interface fat pointers would dangle). Own the object: store an
-    // `Shared<I>` (a `List<Shared<I>>`) instead — M26f enables the smart-ptr-over-interface.
+    // `Owned<I>`/`Shared<I>` (a `List<Shared<I>>`) instead — the smart-ptr-over-interface (M26g).
     if (isInterface(elemCType)) {
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
         unsupported(("an interface (`" + nm + "`) borrows its object, so it can't be a collection "
@@ -1698,7 +1732,8 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
 {
     std::string elemCType  = cType(elem);
     std::string elemMangle = mangleElem(elem);
-    std::string elemClass  = isClass(elemCType) ? elemCType : "";
+    bool elemIface = isInterface(elemCType);                          // M26g: fat-element variant
+    std::string elemClass  = (isClass(elemCType) || elemIface) ? elemCType : "";
     if (elemClass.empty()) return;              // caller diagnosed
     std::string cName = (kind == CollKind::Owned  ? "Owned_"
                        : kind == CollKind::Shared ? "Shared_" : "Weak_") + elemMangle;
@@ -1707,7 +1742,10 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
     CollectionInfo info;
     info.kind = kind; info.cName = cName;
     info.elemCType = elemCType; info.elemMangle = elemMangle; info.elemClass = elemClass;
-    info.elemDestructible = _classes.count(elemClass) && _classes[elemClass].destructible;
+    info.elemIsInterface = elemIface;
+    // An interface element's concrete object is dropped via its vtable's __dtor slot, not the
+    // collection's ELEM_DTOR machinery, so elemDestructible stays false here.
+    info.elemDestructible = !elemIface && _classes.count(elemClass) && _classes[elemClass].destructible;
     _collections[cName] = info;
 
     ClassInfo ci;
@@ -1890,6 +1928,10 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
             *_out << "CSTAR_ARRAY_" << suf << "(" << info.elemCType << ", " << info.cName << collTail;
         else if (info.kind == CollKind::List)
             *_out << "CSTAR_LIST_" << suf << "(" << info.elemCType << ", " << info.cName << collTail;
+        else if (info.kind == CollKind::Owned && info.elemIsInterface)
+            // M26g: fat-element `Owned<I>` — TYPE takes the vtbl type, FUNCS drops via the vtbl slot.
+            *_out << "CSTAR_OWNED_IFACE_" << suf << "(" << info.cName
+                 << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : ")\n");
         else if (info.kind == CollKind::Owned)
             *_out << "CSTAR_OWNED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Shared)
@@ -1981,10 +2023,11 @@ bool CEmitter::isSmartPtrLValue(SharedExpression e)
 
 // Invalidate a moved-from smart pointer: null the field its dtor guards on, so
 // the source's drop becomes a no-op (the ref/ownership transfers to the dest).
-std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind)
+std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem)
 {
-    return (kind == CollKind::Owned) ? (expr + ".ptr = NULL;")          // Owned dtor guards on ptr
-                                     : (expr + ".ctrl = NULL; " + expr + ".ptr = NULL;");  // Shared/Weak guard on ctrl
+    // M26g: an owned INTERFACE handle guards its drop on `.obj` (the fat pointer), not `.ptr`.
+    if (kind == CollKind::Owned) return expr + (ifaceElem ? ".obj = NULL;" : ".ptr = NULL;");
+    return expr + ".ctrl = NULL; " + expr + ".ptr = NULL;";  // Shared/Weak guard on ctrl
 }
 
 // ---- M26f-2: resource-value move analysis ---------------------------------
@@ -2053,6 +2096,9 @@ std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string
     // An intrinsic on the pointer itself (lock/expired/valid)?
     if (_classes[cls].methods.count(method))
         return emitDispatch(cls, "&(" + recvExpr + ")", method, args, srcLine);
+    // M26g: an owned INTERFACE handle dispatches polymorphically through its own {obj, vtbl}.
+    if (isInterface(_classes[cls].collElemClass) && smartKind(cls) != CollKind::Weak)
+        return emitInterfaceDispatch(recvExpr, _classes[cls].collElemClass, method, args, srcLine);
     // Otherwise auto-deref to the pointee T (Owned/Shared expose a T* ptr).
     if (smartKind(cls) != CollKind::Weak)
         return emitDispatch(_classes[cls].collElemClass, "(" + recvExpr + ").ptr", method, args, srcLine);
@@ -2354,7 +2400,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 if (handoff == 2 && k == CollKind::Owned)
                     unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", srcLine);
                 std::string t = "__cstar_arg" + std::to_string(_tempCounter++);
-                std::string side = doGive ? smartPtrInvalidate("(" + val + ")", k)
+                std::string side = doGive ? smartPtrInvalidate("(" + val + ")", k, isInterface(_classes[argCls].collElemClass))
                                           : ("(" + val + ").ctrl->" + (k == CollKind::Weak ? "weak" : "strong") + "++;");
                 s += "({ " + p.className + " " + t + " = (" + val + "); " + side + " " + t + "; })";
             } else if (isSmartPtrClass(argCls)) {
@@ -3030,6 +3076,9 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
         indent(1);
         *_out << cType(m.node->returnType) << " (*" << m.name << ")" << ifaceSlotSig(m.node) << ";\n";
     }
+    // M26g: a virtual-destructor slot so an OWNED interface (`Owned`/`Shared<I>`) can drop its
+    // concrete object polymorphically. NULL for a non-destructible impl (drop just frees the obj).
+    indent(1); *_out << "void (*__dtor)(void*);\n";
     *_out << "};\n";
     *_out << "struct " << ii.name << " { void* obj; const " << ii.name << "_vtbl* vtbl; };\n\n";
 }
@@ -3057,6 +3106,11 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
             *_out << "." << m.name << " = (" << cType(m.node->returnType) << "(*)" << ifaceSlotSig(m.node)
                  << ")&" << mi->cName << ",\n";
         }
+        // M26g: the virtual-destructor slot — the concrete dtor (cast to the erased signature),
+        // or NULL when this impl owns nothing to free.
+        indent(1);
+        if (ci.destructible) *_out << ".__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
+        else                 *_out << ".__dtor = (void(*)(void*))0,\n";
         *_out << "};\n\n";
     }
 }

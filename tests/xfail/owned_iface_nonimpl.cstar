@@ -1,0 +1,8 @@
+// M26g — `Owned<I>` owns a concrete class that SATISFIES the interface. Boxing a class that does
+// not implement the interface is a compile error (there'd be no valid vtable to dispatch through).
+interface IShape { fn int32 area(); }
+class Blob { int32 n; public Blob(int32 n){ this.n = n; } }   // does NOT implement IShape
+fn int32 main() {
+    Owned<IShape> s = new Blob(n: 5);   // ERROR: Blob does not implement IShape
+    return s.area();
+}
