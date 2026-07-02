@@ -404,6 +404,7 @@ private:
     bool        isConstFieldWrite(SharedExpression target);   // writing a const data member (M24d)
     // M25 — access control.
     Visibility  visibilityOf(SharedModifierList mods, Visibility dflt, int line);
+    Visibility  fieldVisibility(const ClassInfo& ci, SharedModifierList mods, int line);   // M26h per-field
     bool        modHas(SharedModifierList mods, const char* name);
     bool        canAccess(ClassInfo* owner, Visibility vis, const std::string& member, int line);
     void        checkFieldAccess(ClassInfo* owner, const std::string& field, int line);

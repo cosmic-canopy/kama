@@ -1,0 +1,1 @@
+transitively owns a resource

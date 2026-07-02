@@ -161,12 +161,18 @@ their names/numbers.
      `interface` still work as aliases (suite stays green). Fixtures `type_kinds` (value copies +
      resource + contract dispatch + `value`/`resource`/`contract` as identifiers) + `type_resource_move`.
      136/136, ASan-clean.
-   - **M26h-2 — enforce the access-control / ownership grid** *(next).* Rules on the new-spelling kinds:
-     private-by-default; **`protected` only on an extensible `resource`**; **`virtual`/`abstract` are
-     protected-only** (NVI); `~dtor` ⟺ `resource`; **a `value` that transitively owns a resource is a
-     compile error** ("declare `resource`" — reuses the `computeDestructible` fixpoint); per-field
-     visibility on a `value` (default private, `public` allowed; `resource` fields private-only); a
-     `contract` has no fields/bodies/ctor-dtor. ~10 xfails, one per rule.
+   - **M26h-2 — enforce the access-control / ownership grid.** ✅ **DONE (v0.1.44).** Rules on the
+     new-spelling kinds (legacy `class` stays lenient until h-3): `~dtor` ⟺ `resource`; **a `value`
+     that transitively owns a resource is a compile error** (reuses the `computeDestructible` fixpoint —
+     a destructible `value` = owns something → "declare `type resource`"); per-field visibility on a
+     `value` (default private, `public` allowed, `protected` rejected) via a `fieldVisibility` helper;
+     a `resource` field is private-only; **`protected` only on an extensible `resource`**;
+     `virtual`/`abstract`/`final` reject on a `value`; a `contract` has no fields/bodies/ctor-dtor;
+     a bad kind word errors. Also: an **empty `resource`** is move-only but has no dtor — tracked for
+     move analysis, drop skipped (fix: record move-only-but-not-destructible locals; guard the cleanup
+     dtor on destructibility). Positives `value_public_field`/`empty_resource` + 8 xfails
+     (`dtor_on_value`, `value_owns_resource`, `public_field_on_resource`, `protected_on_value`,
+     `virtual_on_value`, `contract_with_field`, `contract_with_body`, `bad_type_kind`). 146/146, ASan-clean.
    - **M26h-3 — migrate all fixtures + docs, hard-cut.** Rewrite every fixture to `type value`/
      `type resource`/`type contract` (`pod` → `type value` + explicit `public` fields); remove
      `class`/`pod`/`interface` from grammar + lexer + emitter legacy branches; rewrite the docs;

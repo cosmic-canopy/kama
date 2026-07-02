@@ -1,0 +1,3 @@
+// M26h — the kind word after `type` must be value/resource/contract.
+type widget Bad { int32 n; }
+fn int32 main() { return 0; }

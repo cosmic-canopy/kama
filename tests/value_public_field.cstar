@@ -1,0 +1,14 @@
+// M26h — a `type value` picks field visibility PER FIELD: `public` fields are externally
+// accessible (like the old `pod`), default fields stay private (reached via methods).
+type value Vec2 {
+    public int32 x;
+    public int32 y;
+    int32 tag;                                   // default private
+    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; this.tag = 100; }
+    public fn int32 getTag() { return this.tag; }
+}
+fn int32 main() {
+    Vec2 v = Vec2(x: 3, y: 4);
+    v.x = 30;                                    // public field: external write OK
+    return v.x + v.y + v.getTag();               // 30 + 4 + 100 = 134
+}

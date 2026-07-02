@@ -527,6 +527,10 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
                 unsupported(("`" + it->cVar + "` is moved on some paths but not others and is still live at "
                              "scope exit — move it on all paths or none, or use Optional<T> (M28)").c_str(), _curLine);
         }
+        // M26h: a move-only value that owns nothing (an empty `resource`/token) is tracked for move
+        // analysis but has no destructor — skip the drop.
+        auto ci = _classes.find(it->className);
+        if (ci != _classes.end() && !ci->second.destructible) continue;
         indent(depth);
         *_out << it->className << "__dtor(&" << it->cVar << ");\n";
     }
@@ -682,7 +686,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 bool zeroInit = _classes[ty].isCollection || _classes[ty].isExternStruct;
                 *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
-                if (_classes[ty].destructible) recordDestructibleLocal(nm, ty);
+                if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // M26h: track empty resources for move analysis
                 if (!d->initializer) return;   // declared but uninitialized (non-const)
 
                 // M26c: unwrap a give/copy hand-off marker — the inner NAMED value drives
@@ -1373,10 +1377,21 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         InterfaceInfo ii;
         ii.name = qualify(*cd->name->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
         if (cd->members)
-            for (auto& m : *cd->members)
-                if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+            for (auto& m : *cd->members) {
+                // M26h — a `contract` is a public guarantee: methods only, no bodies, no fields, no
+                // ctor/dtor (it holds no state and constructs nothing).
+                if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                    if (md->body)
+                        unsupported(("a `contract` method (`" + (md->name && md->name->value ? *md->name->value : std::string())
+                                     + "`) has no body — it is a guarantee, not an implementation").c_str(), md->line);
                     if (md->name && md->name->value)
                         ii.methods.push_back({*md->name->value, md->returnType, md->params});
+                } else if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()) || dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
+                    unsupported(("a `contract` holds no state — remove the field from `" + ii.name + "`").c_str(), m->line);
+                } else if (dynamic_cast<ClassConstructorDeclarationNode*>(m.get()) || dynamic_cast<ClassDestructorDeclarationNode*>(m.get())) {
+                    unsupported(("a `contract` has no constructor/destructor — `" + ii.name + "` is a guarantee").c_str(), m->line);
+                }
+            }
         _interfaces[ii.name] = ii;
     }
 }
@@ -1476,6 +1491,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         if (!ci.baseName.empty() && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
             unsupported(("class '" + ci.name + "' extends '" + ci.baseName
                          + "'; only a `virtual`/`abstract`/`final class` may extend").c_str(), cd->line);
+        // M26h — `virtual`/`abstract`/`final` are qualifiers on a `resource` (extensible owned
+        // hierarchy). A `value` is sealed — for polymorphism use a `contract`.
+        if (ci.kind == TypeKind::Value && (ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
+            unsupported("a `value` is sealed — `virtual`/`abstract`/`final` apply to a `resource`; "
+                        "for polymorphism declare a `contract`", cd->line);
 
         if (cd->members) {
             for (auto& m : *cd->members) {
@@ -1489,12 +1509,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             if (*mod->value == "export")
                                 unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fd->line);
                         }
-                    // M25b — a field takes NO visibility modifier: exposure is the class
-                    // KIND (`pod`/extern struct = public; every other kind = private).
-                    if (modHas(fd->modifiers, "public") || modHas(fd->modifiers, "protected") || modHas(fd->modifiers, "private"))
-                        unsupported("a field takes no visibility modifier — data exposure is the class kind "
-                                    "(`pod class` = public, otherwise private); expose data with an accessor method", fd->line);
-                    Visibility fvis = (ci.isPod || ci.isExternStruct) ? Visibility::Public : Visibility::Private;
+                    // M26h — a `value` picks field visibility PER FIELD (default private, `public`
+                    // allowed; `protected` belongs to an extensible `resource`). A `resource` field is
+                    // always private (ownership encapsulated). Legacy/`pod`/extern keep kind-driven
+                    // exposure. (extern struct fields are public — the FFI struct owns its layout.)
+                    Visibility fvis = fieldVisibility(ci, fd->modifiers, fd->line);
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
                             FieldInfo fi;
@@ -1515,6 +1534,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …` (M24b)
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);  // M25
+                        // M26h — `protected` ⟺ an extensible `resource` (virtual/abstract). It's
+                        // meaningless on a `value` or a sealed `resource`; those members are private/public.
+                        if (ci.kind != TypeKind::Legacy && mi.visibility == Visibility::Protected
+                            && !(ci.isVirtualClass || ci.isAbstractClass))
+                            unsupported(("`protected` belongs to an extensible `resource` — `" + ci.name
+                                         + "` is not `virtual`/`abstract`, so its members are `private` or `public`").c_str(), md->line);
                         mi.isFinal    = modHas(md->modifiers, "final");                              // M25
                         if (md->modifiers)
                             for (auto& mod : *md->modifiers) {
@@ -1570,17 +1595,19 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     ci.ctorVisibility = visibilityOf(cc->modifiers, Visibility::Private, cc->line);  // M25
                     if (cc->declarator) ci.ctorParams = paramSigsOf(cc->declarator->params);
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
+                    // M26h — `~dtor` ⟺ `resource`. A `value` owns nothing, so a destructor makes it
+                    // a resource; that disagreement is the lesson in the message.
+                    if (ci.kind == TypeKind::Value)
+                        unsupported("a `value` owns nothing — a `~dtor` makes it a `resource`; "
+                                    "declare it `type resource`", dd->line);
                     ci.hasDtor  = true;
                     ci.dtorNode = dd;
                 } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(mn)) {
                     // M24d: a `const` data member — a normal struct field, written
                     // ONCE in the constructor (inline init or `this.f = …`), then
                     // immutable. Enforcement is at the cstar level; the C field is plain.
-                    // M25b — like any field, no visibility modifier; the kind decides exposure.
-                    if (modHas(kd->modifiers, "public") || modHas(kd->modifiers, "protected") || modHas(kd->modifiers, "private"))
-                        unsupported("a field takes no visibility modifier — data exposure is the class kind "
-                                    "(`pod class` = public, otherwise private); expose data with an accessor method", kd->line);
-                    Visibility kvis = (ci.isPod || ci.isExternStruct) ? Visibility::Public : Visibility::Private;
+                    // M26h — visibility follows the same per-field rule (see fieldVisibility).
+                    Visibility kvis = fieldVisibility(ci, kd->modifiers, kd->line);
                     if (kd->declarators)
                         for (auto& d : *kd->declarators) {
                             FieldInfo fi;
@@ -2314,6 +2341,16 @@ void CEmitter::computeDestructible()
         info.elemDestructible = known && it->second.destructible;
         info.elemCopyable     = known && it->second.copyable;   // M26f-5: deep-copy each element
     }
+    // M26h — a `value` owns nothing. `destructible` (computed above, transitively over base + owned
+    // fields + collections + smart-ptrs) is exactly "owns something to drop", so a destructible
+    // `value` is a design/field disagreement: declare it a `resource`. (A raw `Ptr`/borrowed
+    // contract confers no ownership → not destructible → correctly still a value.)
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.kind == TypeKind::Value && ci.destructible && !ci.isExternStruct)
+            unsupported(("a `value` owns nothing, but `" + ci.name + "` transitively owns a resource "
+                         "— declare it `type resource`").c_str(), ci.node ? ci.node->line : 0);
+    }
 }
 
 // The class in ci's ancestry that declares `field` (or nullptr).
@@ -2592,6 +2629,28 @@ Visibility CEmitter::visibilityOf(SharedModifierList mods, Visibility dflt, int 
     }
     if (count > 1) unsupported("a member may have at most one of public/protected/private", line);
     return v;
+}
+
+// M26h — a field's visibility. A `value` picks it per field (default private, `public` allowed,
+// `protected` rejected — protected belongs to an extensible resource). A `resource` field is always
+// private (ownership encapsulated). An extern struct is public (FFI owns its layout). A legacy
+// `class`/`pod` keeps the kind-driven all-or-nothing rule (pod public, else private).
+Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mods, int line)
+{
+    if (ci.isExternStruct) return Visibility::Public;
+    if (ci.kind == TypeKind::Value) {
+        if (modHas(mods, "protected"))
+            unsupported("a `value` field can't be `protected` — protected belongs to an extensible `resource`", line);
+        return visibilityOf(mods, Visibility::Private, line);
+    }
+    if (modHas(mods, "public") || modHas(mods, "protected") || modHas(mods, "private")) {
+        if (ci.kind == TypeKind::Resource)
+            unsupported("a `resource` field is always private — expose behavior through methods", line);
+        else
+            unsupported("a field takes no visibility modifier — data exposure is the class kind "
+                        "(`pod class` = public, otherwise private); expose data with an accessor method", line);
+    }
+    return ci.isPod ? Visibility::Public : Visibility::Private;
 }
 
 // Is a member (declared on `owner`, visibility `vis`) accessible from the current

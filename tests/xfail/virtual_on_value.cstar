@@ -1,0 +1,3 @@
+// M26h — `virtual`/`abstract`/`final` are qualifiers on a `resource`; a value is sealed.
+type virtual value Bad { int32 n; public Bad(int32 n){ this.n = n; } }
+fn int32 main() { return 0; }
