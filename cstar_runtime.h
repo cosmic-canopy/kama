@@ -222,6 +222,7 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
  static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }  \
+ static inline T*     NAME##__at(NAME* self, size_t i) { if (i >= self->len) cstar_bounds_fail(i, self->len); return &self->data[i]; } \
  static inline NAME   NAME##__copy(NAME* self) {  /* M26f-3/5: deep copy (fresh buffer) */        \
     NAME r; r.len = self->len;                                                       \
     r.data = (self->len ? (T*)cstar_alloc(self->len * sizeof(T)) : NULL);            \
@@ -257,6 +258,7 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
  static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }  \
+ static inline T*     NAME##__at(NAME* self, size_t i) { if (i >= self->len) cstar_bounds_fail(i, self->len); return &self->data[i]; } \
  static inline NAME   NAME##__copy(NAME* self) {  /* M26f-3/5: deep copy (fresh buffer, cap=len) */  \
     NAME r; r.len = self->len; r.cap = self->len;                                    \
     r.data = (self->len ? (T*)cstar_alloc(self->len * sizeof(T)) : NULL);            \

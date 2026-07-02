@@ -46,8 +46,11 @@ bool eq = s.equals(other: t);   int len = s.length();
 
 All collections own their storage and free it via RAII (with element-destructor chaining). Only the
 `(collection, element-type)` pairs the program actually uses are emitted (pay-for-what-you-use).
-M9 limits: `add`/index take elements **by value** (no move yet) — don't separately destruct an added
-source; don't return or inline-use a temp-owned string without binding it to a local.
+A **method call on an element** works directly — `list[i].method()` borrows the element *in place*
+(M26i), so a mutating method mutates the stored element; a `const` collection allows only const
+methods on its elements. M9 limits: `add`/index take elements **by value** (no move yet) — don't
+separately destruct an added source; don't return or inline-use a temp-owned string without binding
+it to a local.
 
 ## Smart pointers ✅ (M10) / 🚧
 
@@ -361,7 +364,10 @@ c.add(n: 2);                       // a `value` copies on hand-off
 Fields, methods (take an implicit `self`), one constructor, field initializers (run in the ctor),
 `this.field`, `obj.method(args)`. Lowers to a `struct` + `Counter__method(Counter* self, …)` functions.
 Members are **private by default** (M25 — see below); `new` is reserved for the heap (`Owned`/`Shared`
-element construction), so a stack value uses `Counter(start: 40)`, not `new Counter(...)`.
+element construction), so a stack value uses `Counter(start: 40)`, not `new Counter(...)`. A stack
+constructor may also be written **inline in a call argument** — `f(x: Counter(start: 5))` (M26i) — it
+materializes a temporary passed by value (a `value` copies, a `resource` moves); use a local for a
+`ref`/`out` parameter.
 
 A type that owns a heap resource (a collection, an `Owned`/`Shared`/`Weak`, or another `resource`) is
 declared **`type resource`** and is move-only:

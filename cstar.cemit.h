@@ -257,6 +257,14 @@ private:
     std::vector<LiveLocal> _pendingParamDtors;
     std::string        _currentReturnCType = "void";  // for return-temp
     int                _tempCounter = 0;
+    // M26i: temp-hoist buffer. An inline constructor in argument position materializes into an
+    // ordinary local ("Cls __tmp; Cls__ctor(&__tmp, …);") pushed here and flushed by the enclosing
+    // leaf statement BEFORE its own line — pure ISO C, no GNU statement-expression. `_hoistOK` gates
+    // hoisting to the wired statement sites (expression-stmt / return / local-init); elsewhere an
+    // inline ctor cleanly falls back to the existing rejection rather than emit a dangling temp.
+    std::vector<std::string> _hoisted;
+    bool                     _hoistOK = false;
+    void flushHoisted(int depth);
     int                _curLine = 0;                   // M26f-2: last source line seen (conditional-drop diagnostics)
     bool               _inUnsafe = false;             // M17: inside an `unsafe { }` block
     bool               _inCtor   = false;             // M24d: emitting a ctor (const fields writable here)

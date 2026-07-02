@@ -1,0 +1,34 @@
+// M26i — method call on a collection element access: `list[i].m()` / `a[i].m()`.
+// The element is borrowed IN PLACE (bounds-checked `__at`), so a const method reads the
+// stored element and a mutating method mutates it (uniform with every other `x.m()`).
+type value Counter {
+    int32 n;                                     // default private
+    public Counter(int32 start) { this.n = start; }
+    public fn int32 get() { return this.n; }     // read-only
+    public fn void bump(int32 by) { this.n = this.n + by; }   // mutates the stored element
+}
+
+fn int32 main()
+{
+    List<Counter> xs = new List<Counter>();
+    Counter a = Counter(start: 10);
+    Counter b = Counter(start: 20);
+    xs.add(item: a);
+    xs.add(item: b);
+
+    // read-only method through list[i]
+    int32 sum = xs[0].get() + xs[1].get();       // 10 + 20 = 30
+
+    // mutating method through list[i] — must persist to the stored element (in-place borrow)
+    xs[1].bump(by: 5);                            // stored xs[1].n: 20 -> 25
+    sum = sum + xs[1].get();                      // 30 + 25 = 55
+
+    // same for a fixed Array
+    Array<Counter> ar = new Array<Counter>(size: 2);
+    Counter z = Counter(start: 3);
+    ar[0] = z;
+    ar[0].bump(by: 4);                            // 3 -> 7
+    sum = sum + ar[0].get();                      // 55 + 7 = 62
+
+    return sum;                                  // 62
+}

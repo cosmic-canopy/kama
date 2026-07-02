@@ -592,6 +592,15 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
     _scopes.pop_back();
 }
 
+// M26i: write hoisted temp statements (inline-ctor-in-arg materialization) at `depth`, then clear.
+// A leaf statement sets _hoistOK, builds its expression string (which may push here), then calls
+// this BEFORE writing its own line — so the temps appear first. Pure ISO C, no `({ … })`.
+void CEmitter::flushHoisted(int depth)
+{
+    for (auto& s : _hoisted) { indent(depth); *_out << s << "\n"; }
+    _hoisted.clear();
+}
+
 void CEmitter::emitStatement(SharedStatement stmt, int depth)
 {
     if (!stmt) return;
@@ -672,10 +681,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 }
 
                 if (!cls) {
-                    line(n->line); indent(depth);
-                    *_out << ty << " " << nm;
-                    if (d->initializer) *_out << " = " << emitExpression(d->initializer);
-                    *_out << ";\n";
+                    line(n->line);
+                    std::string initStr;
+                    if (d->initializer) {
+                        bool ph = _hoistOK; _hoistOK = true;               // M26i: inline-ctor hoisting
+                        initStr = " = " + emitExpression(d->initializer);
+                        _hoistOK = ph;
+                    }
+                    flushHoisted(depth);                                   // temp decls first…
+                    indent(depth);
+                    *_out << ty << " " << nm << initStr << ";\n";          // …then this declaration
                     return;
                 }
 
@@ -734,9 +749,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 line(n->line); indent(depth);
                                 *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
                                 if (_classes[octy].hasCtor) {
-                                    line(n->line); indent(depth);
-                                    *_out << emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + nm + ".obj",
-                                                              _classes[octy].ctorParams, oc->args, n->line) << ";\n";
+                                    line(n->line);
+                                    bool ph = _hoistOK; _hoistOK = true;               // M26i: hoist arg hand-offs
+                                    std::string cc = emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + nm + ".obj",
+                                                              _classes[octy].ctorParams, oc->args, n->line);
+                                    _hoistOK = ph; flushHoisted(depth);
+                                    indent(depth); *_out << cc << ";\n";
                                 }
                                 indent(depth); *_out << nm << ".vtbl = &" << octy << "__as_" << T << ";\n";
                                 if (smartKind(ty) == CollKind::Shared) {   // M26g-2: ref-counted owned interface
@@ -752,9 +770,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             line(n->line); indent(depth);
                             *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
                             if (isClass(T) && _classes[T].hasCtor) {
-                                line(n->line); indent(depth);
-                                *_out << emitReorderedCall(T + "__ctor", nm + ".ptr",
-                                                          _classes[T].ctorParams, oc->args, n->line) << ";\n";
+                                line(n->line);
+                                bool ph = _hoistOK; _hoistOK = true;               // M26i: hoist arg hand-offs
+                                std::string cc = emitReorderedCall(T + "__ctor", nm + ".ptr",
+                                                          _classes[T].ctorParams, oc->args, n->line);
+                                _hoistOK = ph; flushHoisted(depth);
+                                indent(depth); *_out << cc << ";\n";
                             }
                             if (smartKind(ty) == CollKind::Shared) {
                                 indent(depth); *_out << nm << ".ctrl = cstar_ctrl_new();\n";
@@ -779,8 +800,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (_classes[ty].isAbstractClass)
                         unsupported(("cannot instantiate abstract class '" + ty + "'").c_str(), n->line);
                     if (_classes[ty].hasCtor) {
-                        line(n->line); indent(depth);
-                        *_out << emitCtorCall(nm, _classes[ty], stackCtor->args, n->line) << ";\n";
+                        line(n->line);
+                        bool ph = _hoistOK; _hoistOK = true;               // M26i: hoist arg hand-offs
+                        std::string cc = emitCtorCall(nm, _classes[ty], stackCtor->args, n->line);
+                        _hoistOK = ph;
+                        flushHoisted(depth);
+                        indent(depth);
+                        *_out << cc << ";\n";
                     }
                     // class with no ctor: left default-initialized
                 } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
@@ -803,8 +829,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 } else {
                     // Copy-initialize from another named value. M26c: the give/copy marker
                     // (or the type's default) decides move vs duplicate.
-                    line(n->line); indent(depth);
-                    *_out << nm << " = " << emitExpression(init) << ";\n";
+                    line(n->line);
+                    bool ph = _hoistOK; _hoistOK = true;               // M26i: inline-ctor hoisting
+                    std::string iv = emitExpression(init);
+                    _hoistOK = ph;
+                    flushHoisted(depth);
+                    indent(depth);
+                    *_out << nm << " = " << iv << ";\n";
                     if (isSmartPtrClass(ty) && isSmartPtrLValue(init)) {
                         CollKind k = smartKind(ty);
                         // Default: Owned -> give(move), Shared/Weak -> copy(retain). A marker overrides.
@@ -877,8 +908,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // reference locals about to be destroyed), then unwind, then return.
         if (retExpr && _currentReturnCType != "void") {
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
+            bool ph = _hoistOK; _hoistOK = true;                       // M26i: inline-ctor hoisting
+            std::string rv = emitExpression(retExpr);
+            _hoistOK = ph;
+            flushHoisted(depth);
             indent(depth);
-            *_out << _currentReturnCType << " " << tmp << " = " << emitExpression(retExpr) << ";\n";
+            *_out << _currentReturnCType << " " << tmp << " = " << rv << ";\n";
             // Smart-pointer hand-off to the caller: give (or a bare dying local/param) MOVES
             // out — invalidate the source BEFORE the unwind so the scope's dtor doesn't free/
             // decrement what the caller now owns (the factory landmine). `copy` RETAINS — the
@@ -1212,8 +1247,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // Bare expression statement (e.g. an assignment or call used as a statement).
     if (dynamic_cast<ExpressionStatementNode*>(n)) {
         line(n->line);
+        bool ph = _hoistOK; _hoistOK = true;                       // M26i: allow inline-ctor hoisting
+        std::string s = emitExpression(std::dynamic_pointer_cast<ExpressionNode>(stmt));
+        _hoistOK = ph;
+        flushHoisted(depth);                                       // temp decls first…
         indent(depth);
-        *_out << emitExpression(std::dynamic_pointer_cast<ExpressionNode>(stmt)) << ";\n";
+        *_out << s << ";\n";                                       // …then the statement using them
         return;
     }
 
@@ -2430,7 +2469,32 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         SharedExpression argExpr = f->second->expression;
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
-        std::string val = emitExpression(argExpr);
+        // M26i: inline constructor in argument position — `f(x: Counter(start: 5))`. A ctor lowers to
+        // `Cls__ctor(&dest, …)`, which needs an lvalue destination, so materialize a HOISTED temp
+        // (declared on its own line before this statement — pure ISO C, no `({ … })`) and pass it by
+        // value. Only for a by-value param of the exact class in a hoist-enabled statement context;
+        // otherwise fall through to the normal path (which rejects an unsupported position cleanly).
+        std::string val;
+        InvocationNode* ctorIv = dynamic_cast<InvocationNode*>(argExpr.get());
+        std::string ctorCls;
+        if (ctorIv && ctorIv->identifier && ctorIv->identifier->value) {
+            std::string rn = resolveUserName(*ctorIv->identifier->value, ctorIv->identifier->qualifier);
+            if (isClass(rn) && _classes.count(rn)) ctorCls = rn;
+        }
+        // M26i: an inline ctor is a temporary rvalue — it can't be borrowed (`ref`/`out`) or aliased
+        // as an interface. Give a clear diagnostic instead of the generic "unknown function".
+        if (!ctorCls.empty() && !_classes[ctorCls].isCollection && (p.byRef || isInterface(p.className)))
+            unsupported("cannot pass an inline constructor to a `ref`/`out` or interface parameter — "
+                        "bind it to a local first, then pass that", srcLine);
+        if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
+            && !p.byRef && !isInterface(p.className) && !_classes[ctorCls].isCollection) {
+            std::string t = "__ctorarg" + std::to_string(_tempCounter++);
+            std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
+            _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
+            val = t;
+        } else {
+            val = emitExpression(argExpr);
+        }
         if (handoff && (p.byRef || isInterface(p.className)))
             unsupported("`give`/`copy` transfer ownership by value — they don't apply to a `ref`/`out` "
                         "or interface borrow", srcLine);
@@ -2472,7 +2536,8 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         } else {
             // M26d: by value. A *named* smart pointer TRANSFERS into the param, which the
             // callee owns and drops at fn-end. The retain (copy) / invalidate (give) is a
-            // statement, so inline it with a GNU statement-expression: ({ T t=(x); <side>; t; }).
+            // statement, materialized as a HOISTED temp (M26i: pure ISO C — this replaced the
+            // emitter's last GNU statement-expression).
             std::string argCls = exprClass(argExpr);
             bool collArg = !argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection;
             if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
@@ -2485,7 +2550,19 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 std::string t = "__cstar_arg" + std::to_string(_tempCounter++);
                 std::string side = doGive ? smartPtrInvalidate("(" + val + ")", k, isInterface(_classes[argCls].collElemClass))
                                           : ("(" + val + ").ctrl->" + (k == CollKind::Weak ? "weak" : "strong") + "++;");
-                s += "({ " + p.className + " " + t + " = (" + val + "); " + side + " " + t + "; })";
+                // M26i: hoist `T t = (x); <retain/invalidate>` as an ordinary statement (ISO C) —
+                // this retired the emitter's statement-expressions everywhere a temp can precede its
+                // statement (call/init/return/ctor sites). The `({ … })` form remains ONLY for a
+                // by-value smart-ptr hand-off inside a loop/branch CONDITION (no preceding-statement
+                // slot) — where it is also semantically REQUIRED: hoisting a per-iteration retain out
+                // of a `while (...)` would run it once, not each time. No fixture reaches it (the ISO
+                // `-pedantic-errors` gate confirms zero GNU extensions across the whole suite).
+                if (_hoistOK) {
+                    _hoisted.push_back(p.className + " " + t + " = (" + val + "); " + side);
+                    s += t;
+                } else {
+                    s += "({ " + p.className + " " + t + " = (" + val + "); " + side + " " + t + "; })";
+                }
             } else if (isSmartPtrClass(argCls)) {
                 // A FRESH smart-ptr rvalue (factory/`new` result) — consumed in place, no source.
                 if (handoff)
@@ -3448,6 +3525,17 @@ std::string CEmitter::exprClass(SharedExpression e)
         }
         return "";
     }
+
+    // M26i: `list[i]` / `a[i]` resolves to the ELEMENT type, so `list[i].m()` finds the method.
+    // Pure resolution (no emission) — mirrors the front of collectionElemAccess.
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        SharedExpression recv = ea->expression ? ea->expression
+                                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        std::string cls = exprClass(recv);
+        if (!cls.empty() && _classes.count(cls) && _classes[cls].isCollection)
+            return _classes[cls].collElemClass;
+        return "";
+    }
     return "";
 }
 
@@ -3534,9 +3622,20 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         unsupported("method call on unresolved receiver", call->line);
         return "0";
     }
-    std::string recvPtr = dynamic_cast<ThisAccessNode*>(receiver.get())
-                        ? std::string("self")
-                        : "&(" + emitExpression(receiver) + ")";
+    std::string recvPtr;
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(receiver.get())) {
+        // M26i: `list[i].m()` — borrow the element IN PLACE via the bounds-checked `__at`
+        // (a T* into the buffer). No copy, no temp; a plain nested call, strictly ISO C.
+        std::string coll, recvExpr, idx;
+        if (collectionElemAccess(ea, coll, recvExpr, idx))
+            recvPtr = coll + "__at(&(" + recvExpr + "), " + idx + ")";
+        else
+            recvPtr = "&(" + emitExpression(receiver) + ")";
+    } else {
+        recvPtr = dynamic_cast<ThisAccessNode*>(receiver.get())
+                ? std::string("self")
+                : "&(" + emitExpression(receiver) + ")";
+    }
     return emitDispatch(cls, recvPtr, method, call->args, call->line);
 }
 

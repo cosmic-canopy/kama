@@ -185,7 +185,26 @@ their names/numbers.
      SPEC/KEYWORDS/TYPE_MODEL updated next.)* Full model in [TYPE_MODEL.md](TYPE_MODEL.md). *(Sequenced
      before M27 so generics is authored in the new vocabulary — a `contract` bound, not `interface`.)*
 
-5. **M27 — generics** *(the long-reserved "M23", renumbered to its build order).* Full user-defined
+5. **M26i — expression & temporary ergonomics + ISO-C conformance.** ✅ **DONE (v0.1.46).** Two small
+   emitter fixes that clear the last everyday papercuts before generics, plus a portability win.
+   **(a) `list[i].m()`** — a method call on a collection element now works: the element is borrowed
+   *in place* via a bounds-checked `NAME__at` accessor (`T*` into the buffer), so a const method reads
+   it and a mutating one mutates the *stored* element — uniform with every other `x.m()`, no copy, no
+   temp, works for `value` and `resource` elements. **(b) inline constructor in argument position** —
+   `f(x: Counter(start: 5))` now materializes a hoisted temp (`Counter __t; Counter__ctor(&__t, 5);
+   f(x: __t);`), passed by value (a `value` copies, a `resource` moves — the temp is consumed by the
+   callee, dropped once; nested inline ctors compose). **(c) ISO-C11 conformance** — building (b) added
+   the **temp-hoisting pass** the emitter always anticipated, which let us **retire the emitter's one
+   GNU statement-expression** (`({…})` at the by-value smart-ptr hand-off). The emitter now emits
+   **strictly-conforming ISO C11** across the whole suite (a `-std=c11 -pedantic-errors` gate proves
+   it); a single `({…})` survives only for a by-value smart-ptr hand-off inside a *loop condition*,
+   where inline per-iteration evaluation is semantically required. Performance-neutral (same machine
+   code as the manual workarounds). Fixtures `elem_method`/`ctor_in_arg` (+ resource-move, nested) +
+   xfails `elem_method_const` (deep-const preserved) / `ctor_in_arg_ref`. 148/148. *(Resolves the two
+   ergonomics limitations; the remaining untracked limitations are dispositioned under "Tracked
+   limitations & non-goals" below.)*
+
+6. **M27 — generics** *(the long-reserved "M23", renumbered to its build order).* Full user-defined
    generics: `Map<K,V>`, multi-param + nested (`>>` lexing). The foundational type-system feature —
    unblocks `Optional<T>`, `Map`, and every future library type. *(Was slated to defer to 1.1;
    pulled back in for a language-complete 1.0.)*
@@ -222,7 +241,7 @@ their names/numbers.
      operator-interfaces (generic math) will *reuse* this milestone's interface-bound + `This`
      mechanism — M27 lays the groundwork, no conflict.
 
-6. **M28 — tagged unions + `match` + `Optional<T>`.** Sum types with exhaustive pattern matching;
+7. **M28 — tagged unions + `match` + `Optional<T>`.** Sum types with exhaustive pattern matching;
    `Optional<T>` as a *library* tagged union (`enum Optional<T> { Some(T), None }`), **not** a
    compiler intrinsic — one way to do a thing. The "no forgotten case" capstone. Migrates
    `Weak.tryUpgrade() -> Optional<Shared<T>>` to its final form (no out-param). Every fallible op
@@ -235,7 +254,7 @@ their names/numbers.
      variant. This is where "absence" lives now that there's no null — confirm `Optional` is the one
      blessed mechanism (vs also `Result<T,E>`?). Depends on M27 (generics).
 
-7. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
+8. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already
    treats `Vec2 c = a + b` as a cheap pod copy. Validated by a first Vec2/3/4 + Mat4 library.
    - **Design Qs:** Operator-method **syntax** — operators are the *sanctioned exception* to
@@ -248,13 +267,35 @@ their names/numbers.
      + `This` mechanism — so a generic `T: IArithmetic` gets `+`. (Does NOT impact M27's design; M27
      ships the named-method form, M29 makes the methods operators.)
 
-8. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
+9. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
    (give/copy + by-value from M26c/d, generics, `match`/`Optional`, operators; GOALS §3a unsafe
    wording vs shipped `unsafe{}`/`Ptr`). **Fold in the repo-wide naming/case convention pass**
    (lower-camel methods, PascalCase types) — 1.0 is the API-stability point, and post-1.0 renames
    are breaking, so settle it *now*.
 
-9. **Step 8 — tag 1.0.** Nothing deferred — the language is complete.
+10. **Step 8 — tag 1.0.** Nothing deferred — the language is complete.
+
+## Tracked limitations & non-goals
+
+Policy: **no known limitation stays untracked** — each is either fixed, tied to a milestone, or
+declared a deliberate non-goal. The current inventory (swept from SPEC/KEYWORDS/emitter, M26i):
+
+- **`list[i].m()` / inline ctor in arg** — ✅ **fixed (M26i).**
+- **`export` keyword** — reserved, hard-errors today; **tracked to 2.0** (the cstar→host boundary —
+  WASM module exports for the browser engine, and the scripting host interface). The engine's wasm
+  build may pull a minimal `export` earlier. *(Was previously in KEYWORDS.md only, not the roadmap.)*
+- **`volatile` keyword** — reserved, hard-errors today; **tracked to 1.x → Embedded/MCU target**
+  (below): emit C `volatile` for ISR↔loop flags / MMIO registers.
+- **`operator` / full `static` (`Type::method`)** — hard-error today; **tracked to M29.**
+- **Collection passed by value (params/returns)** — today pass a collection by `ref`; general
+  by-value (move/deep-copy of the whole container) **tracked to M27** (the generics by-value work).
+- **`List<Shared<T>>` (smart-ptr-in-collection) + nested-generic `>>`** — **tracked to M27.**
+- **`contract` refining a `contract`** (`type contract A : B`) parses today; deeper multi-level
+  contract inheritance is **tracked to M27** (alongside interface bounds + `This`).
+- **Non-goal — function / constructor overloading.** Deliberately *not* planned: it conflicts with
+  GOALS "one way to do a thing," and cstar's **named parameters** already cover the disambiguation
+  overloading is usually reached for. Not a limitation to fix — a design decision. *(Reopen only if a
+  concrete case shows named params can't express it.)*
 
 ## 1.x — systems & runtime (post-1.0)
 

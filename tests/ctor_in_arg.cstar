@@ -1,0 +1,36 @@
+// M26i — inline constructor in argument position: `f(x: Ctor(...))`. Materialized as a HOISTED
+// temporary (pure ISO C, no GNU statement-expression), passed by value: a `value` copies, a
+// `resource` moves (the temp is consumed by the callee and dropped at fn-end — no double-free).
+// Nested inline ctors compose (inner constructed before outer).
+type value Counter {
+    int32 n;
+    public Counter(int32 start) { this.n = start; }
+    public fn int32 get() { return this.n; }
+}
+type value Pair {
+    int32 a; int32 b;
+    public Pair(int32 a, int32 b) { this.a = a; this.b = b; }
+    public fn int32 sum() { return this.a + this.b; }
+}
+type value Wrap {
+    int32 v;
+    public Wrap(Counter c) { this.v = c.get(); }        // ctor takes a value param
+    public fn int32 val() { return this.v; }
+}
+type resource Res {
+    List<int32> data;                                   // owns a heap buffer -> destructible
+    public Res(int32 v) { this.data.add(item: v); }
+    public fn int32 get() { return this.data[0]; }
+}
+fn int32 useIt(Counter c) { return c.get(); }
+fn int32 pairSum(Pair p) { return p.sum(); }
+fn int32 wrapVal(Wrap w) { return w.val(); }
+fn int32 consume(Res r) { return r.get(); }             // by-value MOVE; r's List freed at fn-end
+
+fn int32 main() {
+    int32 x = useIt(c: Counter(start: 5));              // value ctor, local-init: 5
+    int32 y = pairSum(p: Pair(a: 3, b: 4));             // multi-arg value ctor: 7
+    int32 z = wrapVal(w: Wrap(c: Counter(start: 6)));   // NESTED inline ctor: 6
+    int32 r = consume(r: Res(v: 42));                   // inline RESOURCE ctor moved by value: 42
+    return x + y + z + r;                               // 5 + 7 + 6 + 42 = 60
+}
