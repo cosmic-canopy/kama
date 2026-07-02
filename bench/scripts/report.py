@@ -40,10 +40,17 @@ def cell(v, unit=""):
     return f"{v}{unit}"
 
 def time_table(track, langs):
+    base = langs[0]   # cstar / cstar-wasm — the per-workload baseline for the xN multiplier
     out = ["| workload | " + " | ".join(LABEL[l] for l in langs) + " |",
            "|" + "---|" * (len(langs) + 1)]
     for w in WORKLOADS:
-        out.append("| " + w + " | " + " | ".join(cell(get(track, l, w, "time_ms")) for l in langs) + " |")
+        b = get(track, base, w, "time_ms")
+        cells = []
+        for l in langs:
+            v = get(track, l, w, "time_ms")
+            try:    cells.append(f"{v} ({float(v)/float(b):.1f}×)")
+            except (TypeError, ValueError, ZeroDivisionError): cells.append(cell(v))
+        out.append("| " + w + " | " + " | ".join(cells) + " |")
     return "\n".join(out)
 
 def rss_table(track, langs):
@@ -104,7 +111,7 @@ md = f"""# cstar benchmark results
 _Generated: {env['generated']} · arch: {env['arch']} ({env['kernel']}) · in the `cstar-bench` container_
 
 Toolchains: clang `{env['clang']}` · {env['rustc']} · {env['go']} · dotnet {env['dotnet']} · node {env['node']} · {env['lua']} · {env['python']}
-Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median). Peak RSS: `/usr/bin/time -v`.
+Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after each time is relative to cstar for that workload (native → cstar, wasm → cstar→wasm). Peak RSS: `/usr/bin/time -v`.
 
 ## How to read this (please read before drawing conclusions)
 
