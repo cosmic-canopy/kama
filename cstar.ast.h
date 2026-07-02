@@ -601,6 +601,9 @@ public:
     SharedIdentifier name;
     SharedClassBaseDeclaration baseTypes;
     SharedClassMemberDeclarationList members;
+    // M26h: the kind word from a `type <kind> Name { … }` declaration ("value"/"resource"/
+    // "contract"); null for a legacy `class`/`pod class`. Drives the ownership/access model.
+    SharedString typeKind;
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
                         SharedIdentifier name,
                         SharedClassBaseDeclaration baseTypes,

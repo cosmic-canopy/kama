@@ -118,7 +118,7 @@ struct cstaryystype {
 %token <string> NEW NULL_LITERAL OPERATOR OUT
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND POD
 %token <string> REF RETURN STATIC STRING
-%token <string> SWITCH THIS TRUE
+%token <string> SWITCH THIS TRUE TYPE
 %token <string> UINT8 UINT16 UINT32 UINT64
 %token <string> UNSAFE USING VIRTUAL VOID
 %token <string> VOLATILE WHILE
@@ -175,7 +175,7 @@ struct cstaryystype {
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> switch_statement while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration interface_declaration
-%type <statement> class_declaration unsafe_statement
+%type <statement> class_declaration marked_type_declaration unsafe_statement
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <namespacedeclaration> namespace_opt
@@ -372,6 +372,16 @@ type_declaration
   : class_declaration
   | interface_declaration
   | enum_declaration
+  | marked_type_declaration
+  ;
+
+/* M26h: `type <kind> Name { … }` — the ownership-model declaration. The kind word
+   (`value`/`resource`/`contract`) is an ordinary IDENTIFIER checked by the emitter, so it
+   is never reserved. `type` marks every type declaration (greppable, like `fn`). All three
+   kinds share the class body; the emitter routes `contract` to the interface path. */
+marked_type_declaration
+  : TYPE modifiers_opt IDENTIFIER basic_identifier class_base_opt class_body semicolon_opt
+    { auto n = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6); n->typeKind = $3; $$ = n; }
   ;
 
 /*------------------------------------------------------------------------------ 

@@ -142,17 +142,36 @@ their names/numbers.
      the inner `<…>` today — and foreach dispatch on a smart-ptr element) plus the `>>` token split,
      all of which are generics work. Not M26g-specific (a `List<Shared<Circle>>` hits the same gap).
 
-4. **M26h — type-model reframe** *(the vocabulary milestone; before generics).* Rename the type kinds
-   to the ownership model — **`value`** (owns nothing, copies), **`resource`** (owns/identity, moves),
-   **`contract`** (was `interface`) — and drop **`pod`** (a `value` picks field visibility per field).
-   Apply the finalized access-control rules: private-by-default; **`protected` only on an extensible
-   `resource`**; **`virtual`/`abstract` are protected-only** (NVI — the public polymorphic face is a
-   `contract`); `~dtor` ⟺ `resource`; a `value` that transitively owns a resource is a compile error
-   ("declare `resource`"); an empty `resource` is a valid move-only identity type. Likely **contextual
-   keywords** so `value`/`resource`/`contract` don't reserve common identifiers. Large: touches the
-   grammar (`cstar.l`/`cstar.y`), the emitter, **every fixture**, and the docs. Full model in
-   [TYPE_MODEL.md](TYPE_MODEL.md). *(Sequenced before M27 so generics is authored in the new
-   vocabulary — a `contract` bound, not an `interface` bound.)*
+4. **M26h — type-model reframe** *(the vocabulary milestone; before generics; in progress).* Rename the
+   type kinds to the ownership model — **`value`** (owns nothing, copies), **`resource`** (owns/identity,
+   moves), **`contract`** (was `interface`) — and drop **`pod`** (a `value` picks field visibility per
+   field). **Every type declaration is marked by a `type` keyword** — `type value Vec2`,
+   `type resource Buffer`, `type contract Drawable` — parallel to `fn` on every function (GOALS §5,
+   greppable/self-describing). The marker means the kind word appears only in a fixed position, so
+   `value`/`resource`/`contract` are **never reserved** (they stay ordinary identifiers) — no
+   contextual-keyword machinery, no grammar-conflict risk. `type` itself is reserved (collision-free).
+   Sub-steps:
+   - **M26h-1 — `type` marker + kind plumbing.** ✅ **DONE (v0.1.43).** Lexer `type` keyword; one
+     `marked_type_declaration : TYPE modifiers_opt IDENTIFIER basic_identifier class_base_opt class_body`
+     production (`%expect 1` unchanged — no new conflict); `ClassDeclarationNode.typeKind` + emitter
+     `TypeKind {Legacy,Value,Resource,Contract}` on `ClassInfo`. `value`/`resource` route to `ClassInfo`,
+     `contract` to `InterfaceInfo` (`InterfaceMethod` refactored to hold returnType+params so it builds
+     from either an `interface` or a `type contract`); `isMoveOnlyValue` = **declared `resource`**
+     (empty resource is move-only), legacy `class` keeps the destructibility proxy. Old `class`/`pod`/
+     `interface` still work as aliases (suite stays green). Fixtures `type_kinds` (value copies +
+     resource + contract dispatch + `value`/`resource`/`contract` as identifiers) + `type_resource_move`.
+     136/136, ASan-clean.
+   - **M26h-2 — enforce the access-control / ownership grid** *(next).* Rules on the new-spelling kinds:
+     private-by-default; **`protected` only on an extensible `resource`**; **`virtual`/`abstract` are
+     protected-only** (NVI); `~dtor` ⟺ `resource`; **a `value` that transitively owns a resource is a
+     compile error** ("declare `resource`" — reuses the `computeDestructible` fixpoint); per-field
+     visibility on a `value` (default private, `public` allowed; `resource` fields private-only); a
+     `contract` has no fields/bodies/ctor-dtor. ~10 xfails, one per rule.
+   - **M26h-3 — migrate all fixtures + docs, hard-cut.** Rewrite every fixture to `type value`/
+     `type resource`/`type contract` (`pod` → `type value` + explicit `public` fields); remove
+     `class`/`pod`/`interface` from grammar + lexer + emitter legacy branches; rewrite the docs;
+     regenerate `docs/grammar.bnf`. Full model in [TYPE_MODEL.md](TYPE_MODEL.md). *(Sequenced before
+     M27 so generics is authored in the new vocabulary — a `contract` bound, not an `interface` bound.)*
 
 5. **M27 — generics** *(the long-reserved "M23", renumbered to its build order).* Full user-defined
    generics: `Map<K,V>`, multi-param + nested (`>>` lexing). The foundational type-system feature —

@@ -1352,18 +1352,31 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
     for (auto& decl : *unit->codeDeclarationList) {
-        auto* id = dynamic_cast<InterfaceDeclarationNode*>(decl.get());
-        if (!id || !id->identifier || !id->identifier->value) continue;
-        if (id->baseTypes && !id->baseTypes->empty())
-            unsupported("interface inheritance (interface : interface) — deferred", id->line);
+        // Legacy `interface I { … }`.
+        if (auto* id = dynamic_cast<InterfaceDeclarationNode*>(decl.get())) {
+            if (!id->identifier || !id->identifier->value) continue;
+            if (id->baseTypes && !id->baseTypes->empty())
+                unsupported("interface inheritance (interface : interface) — deferred", id->line);
+            InterfaceInfo ii;
+            ii.name = qualify(*id->identifier->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
+            if (id->body)
+                for (auto& m : *id->body)
+                    if (m->name && m->name->value)
+                        ii.methods.push_back({*m->name->value, m->returnType, m->parameters});
+            _interfaces[ii.name] = ii;
+            continue;
+        }
+        // M26h: `type contract C { … }` — a ClassDeclarationNode whose kind word is "contract".
+        // Its methods parse as (bodiless) class methods; register them as a contract's slots.
+        auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
+        if (!cd || !cd->typeKind || *cd->typeKind != "contract" || !cd->name || !cd->name->value) continue;
         InterfaceInfo ii;
-        ii.name  = qualify(*id->identifier->value);   // M14
-        ii.scope = _nsCtx.scope;
-        ii.usings = _nsCtx.usings;
-        if (id->body)
-            for (auto& m : *id->body)
-                if (m->name && m->name->value)
-                    ii.methods.push_back({*m->name->value, m.get()});
+        ii.name = qualify(*cd->name->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
+        if (cd->members)
+            for (auto& m : *cd->members)
+                if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                    if (md->name && md->name->value)
+                        ii.methods.push_back({*md->name->value, md->returnType, md->params});
         _interfaces[ii.name] = ii;
     }
 }
@@ -1408,7 +1421,18 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
         if (!cd || !cd->name || !cd->name->value) continue;
 
-        // FFI (M16): an `extern class` is an external C struct — keep its literal
+        // M26h: `type <kind> Name` — map the kind word. `contract` is registered as an interface
+        // (collectInterfaces), so skip it here; a bad kind word is a clear error.
+        TypeKind kind = TypeKind::Legacy;
+        if (cd->typeKind) {
+            if      (*cd->typeKind == "value")    kind = TypeKind::Value;
+            else if (*cd->typeKind == "resource") kind = TypeKind::Resource;
+            else if (*cd->typeKind == "contract") continue;   // handled as an interface
+            else unsupported(("unknown type kind `" + *cd->typeKind
+                              + "` — expected `value`, `resource`, or `contract`").c_str(), cd->line);
+        }
+
+        // FFI (M16): an `extern class`/`extern value` is an external C struct — keep its literal
         // C name (not namespace-mangled) and don't emit/own it.
         bool isExt = false;
         if (cd->modifiers)
@@ -1417,6 +1441,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
 
         ClassInfo ci;
         ci.name  = isExt ? *cd->name->value : qualify(*cd->name->value);   // M14 mangle / M16 literal
+        ci.kind  = kind;
         ci.scope = _nsCtx.scope;
         ci.usings = _nsCtx.usings;
         ci.isExternStruct = isExt;
@@ -2054,8 +2079,15 @@ std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind,
 bool CEmitter::isMoveOnlyValue(const std::string& cls) const
 {
     auto it = _classes.find(cls);
-    return it != _classes.end() && it->second.destructible && !it->second.isCollection
-        && !it->second.isExternStruct && !isSmartPtrClass(cls);
+    if (it == _classes.end() || it->second.isCollection || it->second.isExternStruct || isSmartPtrClass(cls))
+        return false;
+    const ClassInfo& ci = it->second;
+    // M26h: move-only-ness is the DECLARED kind. A `resource` moves even if it owns nothing (an
+    // empty resource is a move-only identity/token); a `value` copies. A legacy `class` (pre-marker)
+    // keeps the interim destructibility proxy until the fixtures migrate (h-3).
+    if (ci.kind == TypeKind::Resource) return true;
+    if (ci.kind == TypeKind::Value)    return false;
+    return ci.destructible;
 }
 
 // M26f-4: has this type opted into the `Copyable` contract? (Detected structurally at collection
@@ -3073,11 +3105,11 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
 // ---- Interfaces (M6b) -----------------------------------------------------
 
 // "(void* self, T a, U b)" — an interface slot's C signature (self is type-erased).
-std::string CEmitter::ifaceSlotSig(FunctionDeclarationNode* m)
+std::string CEmitter::ifaceSlotSig(SharedParameterList params)
 {
     std::string sig = "(void* self";
-    if (m->parameters)
-        for (auto& p : *m->parameters) {
+    if (params)
+        for (auto& p : *params) {
             std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             sig += ", " + cType(p->type) + (paramByRef(p.get()) ? "* " : " ") + nm;
         }
@@ -3090,7 +3122,7 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     *_out << "struct " << ii.name << "_vtbl {\n";
     for (auto& m : ii.methods) {
         indent(1);
-        *_out << cType(m.node->returnType) << " (*" << m.name << ")" << ifaceSlotSig(m.node) << ";\n";
+        *_out << cType(m.returnType) << " (*" << m.name << ")" << ifaceSlotSig(m.params) << ";\n";
     }
     // M26g: a virtual-destructor slot so an OWNED interface (`Owned`/`Shared<I>`) can drop its
     // concrete object polymorphically. NULL for a non-destructible impl (drop just frees the obj).
@@ -3119,7 +3151,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                              + "' and must be declared `public`").c_str(),
                             mi->node ? mi->node->line : ci.node->line);
             indent(1);
-            *_out << "." << m.name << " = (" << cType(m.node->returnType) << "(*)" << ifaceSlotSig(m.node)
+            *_out << "." << m.name << " = (" << cType(m.returnType) << "(*)" << ifaceSlotSig(m.params)
                  << ")&" << mi->cName << ",\n";
         }
         // M26g: the virtual-destructor slot — the concrete dtor (cast to the erased signature),
@@ -3145,7 +3177,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
     if (it == _interfaces.end()) { unsupported("dispatch on unknown interface", srcLine); return "0"; }
     for (auto& m : it->second.methods) {
         if (m.name != method) continue;
-        std::vector<ParamSig> params = paramSigsOf(m.node->parameters);
+        std::vector<ParamSig> params = paramSigsOf(m.params);
         return emitReorderedCall("(" + fatExpr + ").vtbl->" + method, "(" + fatExpr + ").obj",
                                  params, args, srcLine);
     }
@@ -3487,12 +3519,17 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
             ASTNode* d = decl.get();
             if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d)) {
                 if (cd->name && cd->name->value) {
-                    bool ext = false;
-                    if (cd->modifiers) for (auto& mod : *cd->modifiers)
-                        if (mod->value && *mod->value == "extern") ext = true;
-                    std::string n = ext ? *cd->name->value : qualify(*cd->name->value);
-                    _classes[n].name = n;
-                    if (ext) { _classes[n].isExternStruct = true; _externNames.insert(n); }
+                    // M26h: `type contract` pre-registers as an interface name, not a class.
+                    if (cd->typeKind && *cd->typeKind == "contract") {
+                        std::string n = qualify(*cd->name->value); _interfaces[n].name = n;
+                    } else {
+                        bool ext = false;
+                        if (cd->modifiers) for (auto& mod : *cd->modifiers)
+                            if (mod->value && *mod->value == "extern") ext = true;
+                        std::string n = ext ? *cd->name->value : qualify(*cd->name->value);
+                        _classes[n].name = n;
+                        if (ext) { _classes[n].isExternStruct = true; _externNames.insert(n); }
+                    }
                 }
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(d)) {
                 if (ed->identifier && ed->identifier->value) { std::string n = qualify(*ed->identifier->value); _enums[n].name = n; }

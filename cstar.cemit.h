@@ -48,6 +48,12 @@ struct FieldInfo {
     Visibility       visibility = Visibility::Private;   // M25
 };
 
+// M26h — a type's declared ownership kind. `Value` owns nothing (copies); `Resource` owns/has
+// identity (moves, RAII-dropped); `Contract` is the interface path (handled via InterfaceInfo).
+// `Legacy` = an old `class`/`pod class` (no `type` marker) — behaves exactly as before M26h until
+// the fixtures migrate (h-3), at which point `Legacy` is retired.
+enum class TypeKind { Legacy, Value, Resource, Contract };
+
 struct MethodInfo {
     std::string                  cName;   // Class__method (declaring class)
     SharedIdentifier             returnType;
@@ -94,6 +100,7 @@ struct RawFriendGrant {
 
 struct ClassInfo {
     std::string                       name;       // struct name (== cstar class name in M4)
+    TypeKind                          kind = TypeKind::Legacy;   // M26h: value/resource (contract → InterfaceInfo)
     std::vector<FieldInfo>            fields;      // declaration order
     std::set<std::string>            fieldNames;
     std::set<std::string>            constFields;   // `const` data members — write-once in the ctor (M24d)
@@ -160,9 +167,11 @@ struct CollectionInfo {
     bool         elemIsInterface = false;   // M26g: owned-interface smart ptr (fat {obj, vtbl} element)
 };
 
-// An interface (M6b): a set of method prototypes, lowered to a vtable struct
-// type + a fat-pointer value type. Implemented by classes via a C__as_I vtable.
-struct InterfaceMethod { std::string name; FunctionDeclarationNode* node; };
+// An interface (M6b) / `contract` (M26h): a set of method prototypes, lowered to a vtable struct
+// type + a fat-pointer value type. Implemented by classes via a C__as_I vtable. The method's
+// return type + params are stored directly (not a node pointer) so it can be built from either an
+// `interface` (FunctionDeclarationNode) or a `type contract` (ClassMethodDeclarationNode).
+struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedParameterList params; };
 struct InterfaceInfo {
     std::string                  name;
     std::vector<InterfaceMethod> methods;
@@ -336,7 +345,7 @@ private:
 
     // Interfaces (M6b)
     bool isInterface(const std::string& name) const { return _interfaces.count(name) != 0; }
-    std::string ifaceSlotSig(FunctionDeclarationNode* m);     // "(void* self, T a, ...)"
+    std::string ifaceSlotSig(SharedParameterList params);     // "(void* self, T a, ...)"
     void emitInterfaceTypes(InterfaceInfo& ii);               // vtbl struct + fat-pointer struct
     void emitClassInterfaceVtables(ClassInfo& ci);            // the C__as_I instances
     // (I){ (void*)&<obj>, &<C>__as_I } — wrap a concrete lvalue as an interface value

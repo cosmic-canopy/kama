@@ -310,6 +310,7 @@ static struct name_value keywords [] = {
     {"switch",      SWITCH},
     {"this",        THIS},
     {"true",        TRUE},
+    {"type",        TYPE},
     {"uint16",      UINT16},
     {"uint32",      UINT32},
     {"uint64",      UINT64},
