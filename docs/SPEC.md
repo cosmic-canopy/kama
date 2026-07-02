@@ -21,7 +21,7 @@ implicit (see [../GOALS.md](../GOALS.md)).
 | `bool` | `bool` |
 | `string` | `cstar_string` (runtime; literals borrow) |
 | `void` | `void` |
-| user `class` | `struct` (value semantics) |
+| user `type value`/`type resource` | `struct` (value semantics) |
 
 No raw arrays and **no raw pointers — by design** (no `unsafe`). Collections are generic library types.
 
@@ -70,7 +70,7 @@ initializer, assignment, argument, or return — an explicit marker states the i
 positions: **`give`** moves (invalidates the source), **`copy`** retains (`Shared`/`Weak`) or duplicates.
 The natural op is the default, so a marker is only required where a silent copy would be surprising: `Owned`
 defaults to `give` (and `copy Owned` is an error — it's unique); `Shared`/`Weak` default to `copy`/retain,
-with **`give` as the opt-in move** of the handle; a pod/primitive just copies (and `give` on one is an
+with **`give` as the opt-in move** of the handle; a `value`/primitive just copies (and `give` on one is an
 error). A fresh `new`/constructor/call result needs no marker. Smart pointers also **pass by value** (M26d):
 the callee *owns* the argument and drops it at function end — `fn int use(Owned<T> p)` consumes it (`use(p:
 give x)`), `fn int peek(Shared<T> s)` retains it (`peek(s: x)`, `x` stays valid).
@@ -81,18 +81,18 @@ Shared<Counter> u = give s;  // opt-in move of the share (no retain)
 ```
 *(`copy` of a collection is a deep copy — a fresh buffer (M26f-3), element-wise: a bitwise-copyable element is copied memberwise, a `Copyable`-resource element is deep-copied via its own `copy()` (M26f-5). A resource element that is not `Copyable` is rejected. `give` of a collection **moves** the buffer.)*
 
-**Move-only `resource` values + the `Copyable` contract ✅ (M26f-2 / M26f-4).** A destructible class *value*
-(a `resource` — it owns something) is **move-only**: a bare named hand-off *moves* (the source is consumed,
-its destructor suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would
-double-free). `give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts
-into copy** by declaring a **public nullary `copy` returning its own type** (the interim spelling of the
-internal **`Copyable`** contract; the explicit `: Copyable` form needs `This`, so it arrives with M26h/M27).
-Once copyable, the marker is **mandatory** — both move and copy are plausible, so a *bare* hand-off is a
-compile error and you must write **`give x`** (move) or **`copy x`** (deep-copy via `copy()`; the source
-stays valid). Because `copy`/`give` are markers only in expression position, they're **contextual keywords**
-— usable as method names, so the opt-in method is literally named `copy`.
+**Move-only `resource` values + the `Copyable` contract ✅ (M26f-2 / M26f-4).** A **`type resource`**
+value (it owns something, or has identity) is **move-only**: a bare named hand-off *moves* (the source is
+consumed, its destructor suppressed), so its heap is freed exactly once — a silent copy is never emitted
+(that would double-free). `give` is optional emphasis; `copy` is an error unless the type opts in. A
+`resource` **opts into copy** by declaring a **public nullary `copy` returning its own type** (the interim
+spelling of the internal **`Copyable`** contract; the explicit `: Copyable` form needs `This`, so it
+arrives with M27). Once copyable, the marker is **mandatory** — both move and copy are plausible, so a
+*bare* hand-off is a compile error and you must write **`give x`** (move) or **`copy x`** (deep-copy via
+`copy()`; the source stays valid). Because `copy`/`give` are markers only in expression position, they're
+**contextual keywords** — usable as method names, so the opt-in method is literally named `copy`.
 ```cstar
-resource Res {                          // (interim: any destructible class value)
+type resource Res {
     List<int32> items;
     ~Res() { }
     public fn Res copy() { Res r = Res(v: this.items[0]); return give r; }   // opt into Copyable
@@ -110,7 +110,7 @@ rvalue (`new`/constructor/call result) never takes a marker. Every cell is cover
 
 | kind | bare hand-off | `give` | `copy` | fixtures |
 |---|---|---|---|---|
-| primitive / `pod` / value | **copy** (cheap) | ⛔ "applies to an owned value" | copy (redundant, allowed) | give_value ✗ |
+| primitive / `value` | **copy** (cheap) | ⛔ "applies to an owned value" | copy (redundant, allowed) | give_value ✗ |
 | `Owned<T>` (unique) | **move** | move (emphasis) | ⛔ "is unique" | give_copy, give_param, give_return, copy_owned ✗ |
 | `Shared<T>` (ref-counted) | **retain** (strong++) | opt-in move | retain | give_copy, give_param, give_return |
 | `Weak<T>` | **retain** (weak++) | opt-in move | retain | weak_dtor |
@@ -146,8 +146,8 @@ bool dead = w.expired();    // true once the last Shared is gone
 Weak<Tex>  e;               // default-empty (expired)
 ```
 
-**No null (safe surface) — see GOALS §3b.** A value, `Owned`/`Shared`, `ref`/`out` borrow, or interface is
-always valid: there is nothing to null-check. `== null` / `!= null` on a safe type is a **compile error**
+**No null (safe surface) — see GOALS §3b.** A value, `Owned`/`Shared`, `ref`/`out` borrow, or contract value
+is always valid: there is nothing to null-check. `== null` / `!= null` on a safe type is a **compile error**
 (the C habit checks the wrong thing here); `null` is only for `Ptr<T>` at the FFI boundary. A `Weak<T>`'s
 liveness is obtained through `tryUpgrade(out: s) -> bool` (🚧 planned; today: `upgrade()` + `.valid()`),
 whose result forces you to handle the dead case.
@@ -155,11 +155,11 @@ whose result forces you to handle the dead case.
 Passing a smart pointer: **borrow** it by passing `ref T` — the borrow names the *object* (`ref T`, storage-
 agnostic; a `ref` may not name the smart pointer itself), which auto-derefs to the held object; or **transfer
 by value** (M26d), where the callee owns the argument and drops it at function end (`Owned` moves in, `Shared`
-retains). The pointee is a **class** or (M26g) an **interface** — `Owned`/`Shared`/`Weak<IShape>` own a
-concrete implementer behind a fat handle and dispatch polymorphically (see Interfaces below). Limits:
+retains). The pointee is a **`value`/`resource`** or (M26g) a **contract** — `Owned`/`Shared`/`Weak<IShape>`
+own a concrete implementer behind a fat handle and dispatch polymorphically (see Contracts below). Limits:
 storing a smart pointer as a *collection element* (`List<Shared<T>>`) is deferred to M27 (it needs the
 general smart-pointer-in-collection support + the `>>` split); a smart-pointer *field* / *return* works.
-User-defined generics — `Map<K,V>`, `class Foo<T>`, multi-param/nested — are the next milestone (M27).
+User-defined generics — `Map<K,V>`, `type value Foo<T>`, multi-param/nested — are the next milestone (M27).
 
 ## Functions ✅
 
@@ -206,7 +206,7 @@ are reserved (runtime-provided).
 
 ```cstar
 extern "<stdlib.h>";                       // a C #include
-extern class div_t { int32 quot; int32 rem; }   // bind an external C struct (not re-emitted)
+type extern value div_t { int32 quot; int32 rem; }   // bind an external C struct (not re-emitted)
 extern fn div_t div(int32 numer, int32 denom);
 
 extern fn float64 frexp(float64 value, Ptr<int32> exp);
@@ -219,8 +219,9 @@ fn int main() {
 }
 ```
 
-`extern class Foo { ... }` is an **external** struct provided by an included header / linked code — cstar
-uses its fields but never re-emits it (so no redefinition), and its name is the literal C name.
+`type extern value Foo { ... }` (was `extern class`) is an **external** struct provided by an included
+header / linked code — cstar uses its fields (all public, the C layout) but never re-emits it (so no
+redefinition), and its name is the literal C name.
 `addr(of: x)` takes the address of a real local (out-params, descriptor pointers) — a *controlled* op, no
 `unsafe`. `s.cstr()` yields a C `const char*`.
 
@@ -252,7 +253,7 @@ and claims success.
 ### Function pointers — `fnptr` (M21) ✅
 
 cstar has no naked function pointers. **`fnptr`** declares an explicit, named function-pointer **type**
-(class-agnostic) — **zero-cost** (a bare C function pointer, no wrapper). It is **non-null** (must be bound;
+(independent of any user type) — **zero-cost** (a bare C function pointer, no wrapper). It is **non-null** (must be bound;
 no `null`, no null-check at the call), and binding a free function is **signature-checked**. (A bodiless
 `fn` is *not* a function pointer — a forgotten body is a clear error, never a silent type.)
 
@@ -272,7 +273,7 @@ operator — `c = cmp` and `f(cb: cmp)` just work. (This **retires the old `func
 …)`, so it's a function pointer whose **first parameter is the receiver**; the object is passed explicitly:
 
 ```cstar
-class Vec2 { int32 x; int32 y; fn int32 dot(ref Vec2 o) { return this.x*o.x + this.y*o.y; } }
+type value Vec2 { public int32 x; public int32 y; fn int32 dot(ref Vec2 o) { return this.x*o.x + this.y*o.y; } }
 fnptr int32 DotFn(ref Vec2 self, ref Vec2 o);   // receiver is an explicit first param
 
 DotFn d = Vec2::dot;            // unbound (`::` = no instance, no binding) — zero-cost
@@ -285,8 +286,8 @@ other object, and **the ownership model follows the pointer type you hand in** �
 
 ```cstar
 fnptr int32 Compare(int32 a, int32 b);   // NB: receiver is HIDDEN here (the inverse of an unbound fnptr)
-class Scaler { int32 k; Scaler(int32 k){ this.k = k; }
-               fn int32 apply(int32 a, int32 b){ return (a - b) * this.k; } }
+type value Scaler { int32 k; public Scaler(int32 k){ this.k = k; }
+               public fn int32 apply(int32 a, int32 b){ return (a - b) * this.k; } }
 
 Owned<Scaler>  s  = new Scaler(k: 3);     // (constructed as Owned)
 BindableFunctionPtr<Compare> c  = new BindableFunctionPtr<Compare>(obj: s,  method: Scaler::apply);  // MOVE-in (sole owner)
@@ -327,22 +328,53 @@ qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // cas
 `return`; full operator set (`+ - * / %`, bitwise, shifts, comparisons, `&& || !`, ternary `?:`),
 assignment ops (`= += …`), `++`/`--`, casts.
 
-## Classes ✅
+## Type declarations — `value` / `resource` / `contract` ✅ (M26h)
+
+Every type declaration is introduced by the **`type` marker** followed by a *kind* — parallel to `fn`
+on every function, so declarations are greppable and self-describing:
+
+- **`type value Name { … }`** — owns nothing, **copies** freely (a `memcpy`; no hidden shared refs).
+  Sealed (no `virtual`/`abstract`/`final`), no destructor. Fields default **private**; mark a field
+  `public` per field (a `value` with all-public fields is what used to be a `pod`).
+- **`type resource Name { … }`** — owns something, or has identity: **move-only**, RAII-dropped.
+  Fields are **private only** (ownership stays encapsulated). An empty `type resource Token { }` is a
+  valid move-only identity/token. Extensible variants add a qualifier after `type`: `type virtual
+  resource`, `type abstract resource`, `type final resource`.
+- **`type contract Name { … }`** — a public-only guarantee (replaces the old `interface`); methods
+  only, no bodies, no fields, no ctor/dtor. Types satisfy it via `implements`; it may refine another
+  (`type contract Animated : Drawable { … }`).
+
+The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words `value` / `resource` /
+`contract` are **contextual, not reserved** — because they appear only right after `type`, they remain
+ordinary identifiers everywhere else (`int32 value = 5;`). Only `type` is a keyword.
 
 ```cstar
-class Counter {
+type value Counter {
     int value;                                       // fields are private by default (M25)
     public Counter(int start) { value = start; }     // constructor (mark `public` to call from outside)
     public fn void add(int n) { value = value + n; } // method (implicit self)
     public fn int get() { return value; }
 }
 Counter c = Counter(start: 40);   // stack value — a stack value DROPS `new` (M26a)
-c.add(n: 2);
+c.add(n: 2);                       // a `value` copies on hand-off
 ```
 Fields, methods (take an implicit `self`), one constructor, field initializers (run in the ctor),
 `this.field`, `obj.method(args)`. Lowers to a `struct` + `Counter__method(Counter* self, …)` functions.
 Members are **private by default** (M25 — see below); `new` is reserved for the heap (`Owned`/`Shared`
 element construction), so a stack value uses `Counter(start: 40)`, not `new Counter(...)`.
+
+A type that owns a heap resource (a collection, an `Owned`/`Shared`/`Weak`, or another `resource`) is
+declared **`type resource`** and is move-only:
+
+```cstar
+type resource Buffer {
+    List<byte> data;                                 // owns heap → resource; fields stay private
+    public Buffer(int n) { … }
+    public fn int32 size() { return this.data.length(); }
+}
+```
+A `value` that transitively owns a resource is a **compile error** ("declare `type resource`"), and a
+`~dtor` is allowed only on a `resource` (`~dtor` ⟺ `resource` — a `value` owns nothing to free).
 
 ## RAII / destructors ✅
 
@@ -350,84 +382,97 @@ A `~Type()` destructor runs deterministically at scope exit, in reverse construc
 path (block end, early `return`, `break`/`continue`). Destructible fields are destroyed in reverse
 declaration order. No GC; allocation/deallocation is predictable.
 
-## Inheritance & virtual dispatch ✅ (M6, M25b)
+## Inheritance & virtual dispatch ✅ (M6, M25b, M26h)
+
+Extensible hierarchies are a **`resource`** concern (an embedded vtable breaks a `value`'s free copy).
+The extensible base opts in with a qualifier after `type`:
 
 ```cstar
-virtual class Shape {                                  // `virtual class` opts in to extension
+type virtual resource Shape {                          // `type virtual resource` opts in to extension
     public fn int describe() { return this.area(); }   // public surface
     protected virtual fn int area() { return 0; }      // overridable hooks are written `protected`
 }
-final class Circle extends Shape {                     // `final class` = sealed leaf
+type final resource Circle extends Shape {             // `type final resource` = sealed leaf
     protected override fn int area() { return 42; }
 }
 ```
 Single inheritance (`extends`), base embedded by value (upcast is offset-0), base ctor via `: base(...)`,
-`base.m()` for non-virtual upcalls. `virtual`/`override` methods dispatch through a vtable. **M25b makes
-inheritance opt-in and one-way:** only a `virtual`/`abstract class` may be `extends`-ed (plain/`pod`/`final`
-are sealed); an overridable method is written `protected` (never public/private — public polymorphism is an
-`interface`'s job); `final class`/`final` method seal a leaf/slot. See `docs/KEYWORDS.md` for the full kind table.
+`base.m()` for non-virtual upcalls. `virtual`/`override` methods dispatch through a vtable. **Inheritance
+is opt-in and one-way:** only a `type virtual resource`/`type abstract resource` may be `extends`-ed (a
+`value`, a plain `resource`, and a `type final resource` are sealed); an overridable method is written
+`protected` (never public/private — public polymorphism is a `contract`'s job); `type final resource`/`final`
+method seal a leaf/slot. `virtual`/`abstract`/`final` and `protected` are meaningless outside an extensible
+`resource` — they are errors on a `value`, a plain `resource`, or a `contract`. See `docs/KEYWORDS.md` for
+the full kind table.
 
-## Interfaces ✅ (M6b, M25)
+## Contracts ✅ (M6b, M25, M26h)
+
+A **`contract`** (this replaces the old `interface`) is a public-only guarantee — "some type satisfying
+this contract." It has methods only: no bodies, no fields, no ctor/dtor.
 
 ```cstar
-interface IShape { fn int64 area(); }                  // a public contract (a "type placeholder")
-class Circle implements IShape {                       // implement one base (extends) + many interfaces
+type contract IShape { fn int64 area(); }              // a public guarantee (a "type placeholder")
+type value Circle implements IShape {                  // a value satisfies a contract, too
     int64 r;
     public Circle(int64 r) { this.r = r; }
     public fn int64 area() { return r * r; }           // a method satisfying IShape MUST be `public`
 }
 fn int64 measure(IShape sh) { return sh.area(); }      // accept "any shape" — by value = zero-copy dispatch
 ```
-An interface is a *type placeholder* for "some type satisfying this contract." It is represented as a fat
-pointer `{obj, vtbl}` (an implementation detail of type erasure — never something you spell). A class
-`implements` any number of interfaces; a method that satisfies an interface method **must be declared
-`public`** (the contract is public — a hidden implementer would be reachable through the interface but not
-by name).
+A contract is represented as a fat pointer `{obj, vtbl}` (an implementation detail of type erasure — never
+something you spell). Both a `value` and a `resource` may `implements` any number of contracts; a method
+that satisfies a contract method **must be declared `public`** (the contract is public — a hidden
+implementer would be reachable through the contract but not by name). A contract may **refine** another
+(`type contract Animated : Drawable { … }`) for capability layering, without inheritance.
 
-**Passing an interface — by value vs. `ref`/`out`** (mirrors C#'s `ref` rule exactly):
+**Passing a contract — by value vs. `ref`/`out`** (mirrors C#'s `ref` rule exactly):
 - `IShape sh` (by value) — "use it as a shape." A concrete `Circle` coerces in (IS-A); zero-copy dispatch.
   This is the common path.
 - `ref IShape sh` / `out IShape sh` — "I may **reseat** your handle." Requires the argument to be an actual
-  `IShape` variable (its address is passed, so the reseat sticks). Passing a **concrete class** by `ref`/`out`
+  `IShape` variable (its address is passed, so the reseat sticks). Passing a **concrete type** by `ref`/`out`
   is a compile error — bind it first (`IShape s = c; measure(sh: ref s)`). Mutable references are *invariant*:
   a `Circle` variable isn't a slot that could hold an arbitrary shape, so it can't back a `ref IShape`.
 
-**Borrow vs. storage — an interface is second-class (M26e).** The fat pointer *borrows* its object, so a
-bare interface value is fine as a **parameter or local** (the zero-copy polymorphic view above) but **cannot
+**Borrow vs. storage — a contract value is second-class (M26e).** The fat pointer *borrows* its object, so a
+bare contract value is fine as a **parameter or local** (the zero-copy polymorphic view above) but **cannot
 be stored beyond the call that made it** — a bare `IShape` **field**, **return type**, or **collection
 element** is a compile error, because the borrowed object could die and leave it dangling. To keep
-polymorphism around, **own the object** with a smart pointer over the interface (below). Ownership is always
+polymorphism around, **own the object** with a smart pointer over the contract (below). Ownership is always
 written explicitly — never an implicit box. This is the language-wide rule **"borrow is parameter-only;
 storage requires ownership"** — the same reason a `ref` parameter can't be returned and a returnable
 "reference" is always an owned smart-pointer handle.
 
-**Owned interfaces — `Owned`/`Shared`/`Weak<IShape>` ✅ (M26g).** A smart pointer *over an interface* owns
-the concrete object behind a fat handle `{obj, vtbl}` (`Shared`/`Weak` add a `ctrl` block). `new Circle(...)`
+**Owned contracts — `Owned`/`Shared`/`Weak<IShape>` ✅ (M26g).** A smart pointer *over a contract* owns the
+concrete object behind a fat handle `{obj, vtbl}` (`Shared`/`Weak` add a `ctrl` block). `new Circle(...)`
 boxes a concrete implementer into it; `p.draw()` dispatches polymorphically through the vtable; dropping the
-handle runs the concrete destructor through a **virtual-destructor slot in the interface vtable**, then frees
+handle runs the concrete destructor through a **virtual-destructor slot in the contract vtable**, then frees
 the object. `Owned<I>` is move-only; `Shared<I>` retains/releases (`Weak<I>.upgrade() -> Shared<I>`). Because
-the handle is an ordinary value type, it **stores** — as a class field or a function return:
+the handle is an ordinary value type, it **stores** — as a field or a function return:
 ```cstar
-class Holder { Shared<IShape> shape;  public fn int64 area() { return this.shape.area(); } }
+type resource Holder { Shared<IShape> shape;  public fn int64 area() { return this.shape.area(); } }
 fn Owned<IShape> make(int64 s) { Owned<IShape> o = new Square(s: s); return give o; }
 ```
 A `List<Shared<IShape> >` (the engine's scene) needs the general smart-pointer-in-collection support and the
 `>>` token split — that arrives with generics (M27).
 
-## Access control ✅ (M25)
+## Access control ✅ (M25, M26h)
 
 Encapsulation is compile-time only (the emitted C is unchanged) and stricter than C#:
 - **Private by default.** A member with no modifier is private; `public`/`protected`/`private` set it
   explicitly. `protected` = the owner or a subclass; external code sees `public` only.
-- **A field takes no visibility modifier** — data exposure is the class *kind*: a `pod class` is plain
-  public data (no methods/vtable/dtor; C-layout/FFI-compatible), while every other kind keeps its fields
-  private, reached through accessor methods.
-- **Overridable methods are written `protected`** (public polymorphism is an `interface`'s job); a class
-  opts into extension as a `virtual`/`abstract class` and seals as a plain/`final class`.
+- **Field visibility is per field on a `value`.** A `type value` marks each field `public` (externally
+  accessible) or leaves it private (default, reached through accessors) — a `value` with all-public
+  fields is the old "pod." A `type resource` keeps **all fields private** (ownership stays encapsulated);
+  a `type contract` has no fields at all.
+- **Overridable methods are written `protected`** (public polymorphism is a `contract`'s job); a type
+  opts into extension as a `type virtual resource`/`type abstract resource` and seals as a plain
+  `resource`/`type final resource`. `protected` and `virtual`/`abstract`/`final` are errors outside an
+  extensible `resource`.
+- **`~dtor` ⟺ `resource`** — a destructor is allowed only on a `resource` (a `value` owns nothing).
 - **`friend`** grants are granular and owner-declared: `friend <accessor>[members];` (or `[...]` for all
-  privates), where the accessor is a class, a free function, or a `Class::method` — greppable and explicit.
+  privates), where the accessor is a type, a free function, or a `Type::method` — greppable and explicit.
 
-See `docs/KEYWORDS.md` for the full class-kind × visibility table.
+See `docs/KEYWORDS.md` for the full kind × visibility table.
 
 ## Enums ✅
 
@@ -454,7 +499,7 @@ another file's helper. To share across files, declare a namespace:
 ```cstar
 // graphics.cstar
 namespace Graphics;
-class Texture { ... }        // Graphics::Texture
+type resource Texture { ... }   // Graphics::Texture (owns a GPU handle → resource)
 fn int32 scale(int32 x) { ... } // Graphics::scale
 
 // main.cstar

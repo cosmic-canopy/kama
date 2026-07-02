@@ -42,8 +42,8 @@ lightweight WebGPU game engine.
    never sees it. (Self-hosting the compiler in cstar — goal #1 — is the other place a contained escape may
    matter.)
 
-3b. **No null in the safe surface.** A stack value, an `Owned<T>`/`Shared<T>`, a `ref`/`out` borrow, and an
-   interface value are **always valid** — there is nothing to null-check. Absence is encoded in the
+3b. **No null in the safe surface.** A stack value, an `Owned<T>`/`Shared<T>`, a `ref`/`out` borrow, and a
+   contract value are **always valid** — there is nothing to null-check. Absence is encoded in the
    type/flow, never a sentinel you can forget to test: ownership is valid by construction, *use-after-move*
    is a compile error, a `Weak<T>` can only be reached through `tryUpgrade` (whose result forces you to
    handle the dead case), and (with the escape check) a borrow can't dangle. So **`== null` / `!= null` on a
@@ -53,17 +53,19 @@ lightweight WebGPU game engine.
    the null-reference "billion-dollar mistake."
 
 3c. **Ownership is the type axis — `value` / `resource` / `contract`.** cstar organizes types by
-   *what they own*, not the C/C++ `class`/`struct`/`pod` legacy. A **`value`** owns nothing (raw
-   data, **copied**; the stricter cousin of a "value type" — no smuggled shared refs; may still
-   encapsulate private fields to guard an invariant). A **`resource`** owns something, or has
-   identity (**moved**, RAII-dropped). A **`contract`** is a public-only guarantee a type satisfies
-   — cstar's word for an interface. Polymorphism's goal is **substitutability, not reuse**:
-   inheritance bundles the two, so cstar unbundles them — **generics** give reuse (zero-cost
-   monomorphization), **contracts** give substitutability, and `virtual`/`abstract resource` is only
-   for sharing *implementation* up an owned hierarchy. Hand-offs follow **"silent default, scream
-   when ambiguous"**: a `give`/`copy` marker is required exactly when *both* move and copy are
-   plausible (a `resource` that has opted into a copy contract), and silent otherwise. *(The
-   `value`/`resource`/`contract` vocabulary lands in **M26h**; full model in `docs/TYPE_MODEL.md`.)*
+   *what they own*, not the C/C++ `class`/`struct`/`pod` legacy. Every declaration is `type <kind>
+   Name` (the `type` marker, parallel to `fn`): a **`type value`** owns nothing (raw data, **copied**;
+   the stricter cousin of a "value type" — no smuggled shared refs; may still encapsulate private
+   fields to guard an invariant). A **`type resource`** owns something, or has identity (**moved**,
+   RAII-dropped). A **`type contract`** is a public-only guarantee a type satisfies — cstar's word for
+   an interface. Polymorphism's goal is **substitutability, not reuse**: inheritance bundles the two,
+   so cstar unbundles them — **generics** give reuse (zero-cost monomorphization), **contracts** give
+   substitutability, and `type virtual`/`abstract resource` is only for sharing *implementation* up an
+   owned hierarchy. Hand-offs follow **"silent default, scream when ambiguous"**: a `give`/`copy`
+   marker is required exactly when *both* move and copy are plausible (a `resource` that has opted into
+   a copy contract), and silent otherwise. The kind words `value`/`resource`/`contract` are
+   **contextual** (they name a kind only right after `type`), so they stay ordinary identifiers
+   everywhere else. *(Shipped in **M26h**; full model in `docs/TYPE_MODEL.md`.)*
 
 4. **One way to do a thing. Favor simplicity.** Unlike C++'s many syntaxes for one concept, cstar
    prefers a single, obvious construct. Resist redundant syntax. (Already: named args only — no
@@ -111,7 +113,8 @@ Development of cstar follows two vendored guidance skills that reinforce goals #
 ## Current status
 
 The single source of truth for status is `README.md` (feature summary) and `docs/ROADMAP.md` (the
-milestone plan). As of v0.1.35 (through M26e), the core language, OO, RAII, collections, the smart-pointer
-family, the full value/ownership model, `const`-correctness, and access control are all shipped; the type-model
-vocabulary reframe (`value`/`resource`/`contract`, M26h), user-defined generics, sum types + pattern matching,
-and operator overloading are the remaining language milestones on the road to a language-complete 1.0. This section is intentionally brief so it doesn't drift — see those files.
+milestone plan). Through M26h, the core language, OO, RAII, collections, the smart-pointer family, the
+full value/ownership model, `const`-correctness, access control, and the type-model vocabulary reframe
+(`type value`/`type resource`/`type contract`, M26h) are all shipped; user-defined generics, sum types +
+pattern matching, and operator overloading are the remaining language milestones on the road to a
+language-complete 1.0. This section is intentionally brief so it doesn't drift — see those files.

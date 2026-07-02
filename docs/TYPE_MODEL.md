@@ -1,10 +1,24 @@
 # cstar type model — `value` / `resource` / `contract`
 
-> **Status:** design (the vocabulary + access-control rules land as milestone **M26h**). The
-> *semantics* below are the target; today's compiler still spells these with `class`/`struct`/`pod`/
-> `interface`, and the move-only behavior (below) uses **destructibility** as the interim proxy for
-> `resource` (see M26f-2 in [ROADMAP.md](ROADMAP.md)). This doc is the durable rationale — see also
-> [GOALS.md §3c](../GOALS.md).
+> **Status:** SHIPPED in **M26h**. The vocabulary + access-control rules below are enforced by the
+> compiler: every type declaration is introduced by a `type` marker (`type value` / `type resource` /
+> `type contract`) — the old `class` / `pod class` / `interface` keywords no longer exist. This doc is
+> the durable rationale — see also [GOALS.md §3c](../GOALS.md).
+
+## The `type` marker
+
+Every type declaration begins with the reserved keyword **`type`**, followed by a *kind* — exactly
+parallel to `fn` on every function. This makes declarations greppable and self-describing (`grep -n
+'^type '`). The kind words `value` / `resource` / `contract` (and the qualifiers `virtual` /
+`abstract` / `final`) appear *only* right after `type`, so they are **contextual, not reserved** — they
+stay ordinary identifiers everywhere else (`int32 value = 5;`, a field or method named `resource`, etc.).
+Only `type` itself is a keyword.
+
+```cstar
+type value Name    { … }   // owns nothing — copies
+type resource Name { … }   // owns / has identity — moves, RAII-dropped
+type contract Name { … }   // a public-only guarantee (was `interface`)
+```
 
 ## Why reframe
 
@@ -31,13 +45,13 @@ stricter cousin of a "value type" — where a C# `struct` can smuggle a heap ref
 shares that object), a cstar `value` owns **nothing**, so its copy has no hidden shared ownership.
 
 ```cstar
-value Vec2 {
+type value Vec2 {
     public float x;         // fields choose visibility per field
     public float y;
     public fn float length() { return sqrt(this.x*this.x + this.y*this.y); }
 }
 
-value Rect {
+type value Rect {
     float x; float y; float w; float h;    // private (default) — guards its own invariant
     public fn bool contains(Vec2 p) { ... }
 }                                          // still copies freely — it owns nothing
@@ -48,7 +62,7 @@ value Rect {
   semantics hold either way.
 - **Checked intent:** a `value` that (transitively) owns a resource is a **compile error** ("declare
   `resource`"). Like `override` — derivable, but a checked assertion that catches a design/field
-  disagreement, and it closes a latent hole (a `pod` holding an `Owned` → double-free).
+  disagreement, and it closes a latent hole (the old `pod` holding an `Owned` → double-free).
 - A `value` is **sealed** and has **no destructor** — declaring `~dtor` on a value is an error whose
   message *is* the lesson: "a value owns nothing — a `~dtor` makes it a `resource`."
 
@@ -59,12 +73,12 @@ A `resource` is moved by default and RAII-dropped. It becomes destructible by de
 members (`Owned`/`Shared`/`Weak`/collections).
 
 ```cstar
-resource Buffer {
+type resource Buffer {
     List<byte> data;                       // owned → Buffer is a resource; fields stay private
     public fn int32 size() { return this.data.length(); }
 }
 
-resource Token { }   // owns nothing, but move-only by *identity* — a capability / linear token
+type resource Token { }   // owns nothing, but move-only by *identity* — a capability / linear token
 ```
 
 - `resource` fields are **private-only** — ownership (owned handles, invariants) stays encapsulated;
@@ -82,8 +96,8 @@ is the abstract thing: a public-only guarantee a type promises to satisfy. A typ
 are just "its API."
 
 ```cstar
-contract Drawable { fn void draw(); }
-contract Animated : Drawable { fn void step(float dt); }   // refinement: requires Drawable + more
+type contract Drawable { fn void draw(); }
+type contract Animated : Drawable { fn void step(float dt); }   // refinement: requires Drawable + more
 ```
 
 - All methods are **public** (a contract *is* public) — no visibility modifiers, no fields, no bodies
@@ -182,7 +196,7 @@ Because public-virtual is banned, a `contract` method that must vary per subclas
 **public non-virtual** method that delegates to a **protected virtual/abstract** customization point:
 
 ```cstar
-abstract resource Polygon : Shape {
+type abstract resource Polygon : Shape {
     public fn float area() { return this.computeArea(); }   // public, non-virtual: the stable face
     protected abstract fn float computeArea();              // the protected customization point
 }

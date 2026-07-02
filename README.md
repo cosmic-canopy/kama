@@ -7,15 +7,17 @@ platform, and in the browser as WebAssembly via Emscripten.
 
 Goal: a portable, lightweight WebGPU game engine with no .NET/runtime baggage.
 
-> Status: usable (v0.1.35). Functions, control flow, named-parameter calls, classes,
-> **RAII** (no GC), single inheritance + **virtual dispatch**, **interfaces**,
+> Status: usable (v0.1.45). Functions, control flow, named-parameter calls, the
+> **ownership type model** (`type value` copies / `type resource` moves / `type
+> contract` = the polymorphic guarantee, each on the greppable `type` marker),
+> **RAII** (no GC), single inheritance + **virtual dispatch**, **contracts**,
 > **enums**, **generic collections** (`Array<T>`/`List<T>`/`String`, with
 > `foreach` + bounds-checked `[]`), the full **smart-pointer family**
 > (`Owned<T>` unique, `Shared<T>` ref-counted, `Weak<T>` non-owning) with
 > **auto-deref** and the **`give`/`copy` ownership model** (by-value transfer;
 > **no null** in the safe surface), **`const`-correctness**, **enforced access
-> control** (private-by-default; `public`/`protected`/`friend`; `pod`),
-> **multi-file builds with private-by-default namespaces**, and **C FFI**
+> control** (private-by-default; `public`/`protected`/`friend`; per-field `public`
+> on a `value`), **multi-file builds with private-by-default namespaces**, and **C FFI**
 > (`extern` functions + structs, `#include`, `Ptr`/`usize`, out-params, `--link`,
 > raw memory access confined to an explicit `unsafe { }` block, and `fnptr`
 > callbacks) — building for **native** and **WASM**, with debug/release builds and

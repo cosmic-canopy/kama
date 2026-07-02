@@ -6,12 +6,13 @@ write a **modern game engine**, and recommends a sequence. Status: ✅ have · �
 
 ## What cstar already has (the foundation)
 Functions + named params + `ref`/`out`; full control flow (`if`/`while`/`do`/`for`/`switch`/`foreach`/
-`break`/`continue`) + the full operator set + `cast<T>`; classes with **RAII destructors**, single
-inheritance + **virtual dispatch**, **interfaces**, **enums**; generic **collections** (`Array<T>`/
+`break`/`continue`) + the full operator set + `cast<T>`; the **ownership type model** (`type value`/`type
+resource`/`type contract`) with **RAII destructors**, single inheritance + **virtual dispatch** (`type
+virtual`/`abstract resource`), **contracts**, **enums**; generic **collections** (`Array<T>`/
 `List<T>`/owned `String`, bounds-checked, monomorphized); the full **smart-pointer family** (`Owned`/
 `Shared`/`Weak`) with the **value/ownership model** (`give`/`copy` hand-off, by-value transfer, no null in
 the safe surface, borrow-vs-storage rule); **`const`-correctness**; **enforced access control**
-(private-by-default; `pod`/`virtual`/`abstract`/`final` kinds; `friend`); **multi-file builds +
+(private-by-default; `value`/`resource`/`contract` + `virtual`/`abstract`/`final` resource kinds; `friend`); **multi-file builds +
 private-by-default namespaces**; **C FFI** (`extern` functions **and structs**, `extern "<header>"`
 includes, opaque `Ptr<T>`, `addr(of:)`, `--link`) with raw pointers confined to an explicit **`unsafe { }`**
 block at the FFI boundary; **function pointers** (`fnptr` free + `BindableFunctionPtr` bound); **native +
@@ -39,7 +40,7 @@ landed. The remaining gaps are mostly **the math layer** (operator overloading +
 | Feature | Status | Why | Effort |
 |---|---|---|---|
 | **Operator overloading** | 🟡 parses, **deferred** in the emitter | `a + b` for the math types above; without it the math layer is unusable. | M |
-| **`Map<K,V>` / hash maps** + **general user generics** (`class Foo<T>`) | 🟡 partial (built-in generics only) | Entity/resource/asset registries, caches, string→handle lookup. | M (Map) + L (general monomorphization) |
+| **`Map<K,V>` / hash maps** + **general user generics** (`type value Foo<T>`) | 🟡 partial (built-in generics only) | Entity/resource/asset registries, caches, string→handle lookup. | M (Map) + L (general monomorphization) |
 | **Slices / spans** (non-owning views over `Array`/`List`/buffers) | ❌ | Iterate a subrange, pass a buffer to a system or a GPU upload without copying or transferring ownership. | M |
 | **Tagged unions / sum types + pattern matching** | ❌ | Events, messages, render commands, animation/state machines, asset variants. | L |
 | **Allocator control**: arenas / pools / frame & stack allocators | ❌ (GOALS #3 wants these as library types) | Deterministic per-frame perf, zero mid-frame `malloc`, bump-reset allocators. Needs a placement-construct hook + the runtime unsafe core. | M–L |
@@ -70,7 +71,7 @@ params/methods — once a Tier-3 item — shipped in M24.)*
 2. ~~**Module system**~~ — ✅ landed (M13–M14).
 3. **Finish the type system** (1.0): user generics (M27) → sum types + `match`/`Optional` (M28) →
    **operator overloading + full static methods** (M29) — the last unlocks ergonomic math types.
-4. **Math types** (`Vec2/3/4`, `Mat4`) as `pod`s with operators + `::` static methods — the numeric core
+4. **Math types** (`Vec2/3/4`, `Mat4`) as `type value`s (public fields) with operators + `::` static methods — the numeric core
    (Tier-0 math, unblocked by step 3's operators).
 5. **WebGPU bindings** (FFI is ready) → **a triangle on screen** → the engine spine + a real demo.
 6. Iterate as the engine grows: `Map`/slices/arenas/tagged unions/error model, then threading.
