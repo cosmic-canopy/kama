@@ -630,8 +630,16 @@ field_declaration
   : modifiers_opt type variable_declarators SEMICOLON
   ;
 method_declaration
-  : modifiers_opt const_opt FN type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
-  | modifiers_opt const_opt FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body
+  : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_body
+  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_body
+  ;
+/* A method name is an identifier — but `copy`/`give` are hand-off markers only in expression
+   position, so we let them name a member too (contextual keywords). This is what lets a `resource`
+   opt into the `Copyable` contract with a method literally named `copy` (M26f-4). */
+method_name
+  : IDENTIFIER
+  | COPY
+  | GIVE
   ;
 
 /* `const fn …` — an optional const qualifier on a method (M24b). A dedicated slot

@@ -1,1 +1,1 @@
-not yet implemented
+opt into `Copyable`

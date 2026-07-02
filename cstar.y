@@ -215,7 +215,7 @@ struct cstaryystype {
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
 %type <constructordeclarator> constructor_declarator
 %type <constructorinitializer> constructor_initializer_opt constructor_initializer
-%type <string> const_opt
+%type <string> const_opt method_name
 
 %start compilation_unit
 
@@ -858,8 +858,16 @@ field_declaration
   : modifiers_opt type variable_declarators SEMICOLON   { $$ = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
   ;
 method_declaration
-  : modifiers_opt const_opt FN type IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
-  | modifiers_opt const_opt FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
+  : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
+  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
+  ;
+/* A method name is an identifier — but `copy`/`give` are hand-off markers only in expression
+   position, so we let them name a member too (contextual keywords). This is what lets a `resource`
+   opt into the `Copyable` contract with a method literally named `copy` (M26f-4). */
+method_name
+  : IDENTIFIER   { $$ = $1; }
+  | COPY         { $$ = $1; }
+  | GIVE         { $$ = $1; }
   ;
 
 /* `const fn …` — an optional const qualifier on a method (M24b). A dedicated slot

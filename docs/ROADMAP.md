@@ -79,12 +79,22 @@ their names/numbers.
      (owns nothing) — a collection of resource-owning elements needs a per-element copy, deferred to
      M26f-4. Fixtures `coll_copy`/`string_copy` (independent buffers, ASan-clean) + xfail
      `copy_resource_coll`.
-   - **M26f-4 — the `Copyable` contract (opt-in copy).** A `resource` opts into copy by satisfying an
-     internal **`Copyable`** contract (its `copy` method). Its presence makes the `give`/`copy` marker
-     **mandatory** for that type ("scream when ambiguous" — both move and copy are now plausible):
-     `copy x` invokes the contract, `give x` moves, and a *bare* hand-off becomes an error. `copy` on a
-     `resource` without the contract errors with guidance ("add a `copy` method / `Copyable`, or `give`
-     to move").
+   - **M26f-4 — the `Copyable` contract (opt-in copy).** ✅ **DONE (v0.1.39).** A `resource`
+     (move-only value) opts into copy by declaring a **public nullary `copy` returning its own type**
+     — the interim spelling of the internal **`Copyable`** contract (the explicit `: Copyable` form
+     needs `This`, so it lands with M26h/M27). Its presence makes the `give`/`copy` marker **mandatory**
+     for that type ("scream when ambiguous" — both move and copy are now plausible): a *bare* hand-off
+     is a compile error, `copy x` deep-copies via `copy()` (the source stays valid), `give x` moves.
+     Handled at all four hand-off sites (init / argument / return / assignment). `copy` on a `resource`
+     *without* the contract errors with guidance ("add a `copy` method to opt into `Copyable`, or `give`
+     to move"). Since `copy`/`give` were hard keywords, they're now **contextual** — usable as method
+     names (a `method_name` grammar rule) so a resource can literally name its opt-in method `copy`.
+     Fixture `copy_resource` (all four sites + give/copy split, ASan/UBSan-clean) + xfail
+     `copy_bare_ambiguous`; updated xfail `copy_value` (non-copyable → guidance). 128/128.
+     *(Deferred to M26f-5: element-wise deep-copy of a collection whose elements are `Copyable`
+     resources — `copy_resource_coll` stays rejected; and a latent pre-existing ordering bug —
+     `computeDestructible` runs before `collectCollections`, so a class owning ONLY a collection
+     field with no explicit `~dtor` isn't seen as a resource. Both orthogonal to the copy contract.)*
    - **M26f-5 — the comprehensive give/copy test matrix** (fixture per cell), built up as pieces land.
    - **The marker rule (RESOLVED):** a marker is required exactly when both *move* and *copy* are
      plausible — a **`resource` that has opted into a copy contract**, and **collections** (both ops

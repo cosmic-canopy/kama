@@ -79,7 +79,28 @@ Owned<Counter> b = give a;   // explicit move (a consumed)
 Shared<Counter> t = s;       // copy/retain (default) — both valid
 Shared<Counter> u = give s;  // opt-in move of the share (no retain)
 ```
-*(`copy` of a collection is a deep copy — a fresh buffer (M26f-3); valid when the element is bitwise-copyable, else M26f-4.)*
+*(`copy` of a collection is a deep copy — a fresh buffer (M26f-3); valid when the element is bitwise-copyable.)*
+
+**Move-only `resource` values + the `Copyable` contract ✅ (M26f-2 / M26f-4).** A destructible class *value*
+(a `resource` — it owns something) is **move-only**: a bare named hand-off *moves* (the source is consumed,
+its destructor suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would
+double-free). `give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts
+into copy** by declaring a **public nullary `copy` returning its own type** (the interim spelling of the
+internal **`Copyable`** contract; the explicit `: Copyable` form needs `This`, so it arrives with M26h/M27).
+Once copyable, the marker is **mandatory** — both move and copy are plausible, so a *bare* hand-off is a
+compile error and you must write **`give x`** (move) or **`copy x`** (deep-copy via `copy()`; the source
+stays valid). Because `copy`/`give` are markers only in expression position, they're **contextual keywords**
+— usable as method names, so the opt-in method is literally named `copy`.
+```cstar
+resource Res {                          // (interim: any destructible class value)
+    List<int32> items;
+    ~Res() { }
+    public fn Res copy() { Res r = Res(v: this.items[0]); return give r; }   // opt into Copyable
+}
+Res b = copy a;   // deep copy — a stays valid, b has its own buffer
+Res c = give b;   // move — b consumed
+Res d = a;        // ERROR: a is copyable — say `give` or `copy`
+```
 
 `Shared<T>` — ref-counted shared ownership (= C++ `shared_ptr` / Rust `Rc`). **Copyable**: each copy
 retains (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.

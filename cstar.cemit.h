@@ -108,6 +108,10 @@ struct ClassInfo {
     bool                              hasDtor = false;   // declares its own ~dtor
     ClassDestructorDeclarationNode*   dtorNode = nullptr;
     bool                              destructible = false; // own dtor OR a destructible field (transitive)
+    // M26f-4: opted into the `Copyable` contract — declares a public nullary `copy` returning
+    // its own type. Makes the give/copy marker MANDATORY on a `resource` value ("scream when
+    // ambiguous"). Structural for now; the explicit `: Copyable` form lands with M26h/M27.
+    bool                              copyable = false;
 
     // Inheritance + virtual dispatch (M6)
     std::string                       baseName;        // "" if no base
@@ -298,6 +302,10 @@ private:
     // M26f-2: a move-only VALUE — a destructible class value that isn't a smart-ptr/collection/
     // extern struct. It MOVES on hand-off (its dtor is suppressed) and is never silently copied.
     bool isMoveOnlyValue(const std::string& cls) const;
+    // M26f-4: a move-only VALUE that opted into `Copyable` (a public nullary `copy` returning its
+    // own type). Its presence makes the give/copy marker mandatory: bare hand-off = error, `copy`
+    // deep-copies via copy(), `give` moves.
+    bool isCopyable(const std::string& cls) const;
     void markMoved(const std::string& cVar);                // state -> Moved (loop-guard added in Increment 3)
     void checkNotMoved(const std::string& cVar, int line);  // reject a use of a moved local
     // The source of a move hand-off: a bare move-only local -> its name (caller marks it moved);
