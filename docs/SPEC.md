@@ -79,7 +79,7 @@ Owned<Counter> b = give a;   // explicit move (a consumed)
 Shared<Counter> t = s;       // copy/retain (default) — both valid
 Shared<Counter> u = give s;  // opt-in move of the share (no retain)
 ```
-*(🚧 `copy` of a collection — a deep copy — is not yet implemented; use `give` to move.)*
+*(`copy` of a collection is a deep copy — a fresh buffer (M26f-3); valid when the element is bitwise-copyable, else M26f-4.)*
 
 `Shared<T>` — ref-counted shared ownership (= C++ `shared_ptr` / Rust `Rc`). **Copyable**: each copy
 retains (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.

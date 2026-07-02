@@ -73,8 +73,12 @@ their names/numbers.
      upgrade if a real program needs it. Trigger = **destructibility** (the interim proxy for
      `resource`; the keyword arrives in M26h). Needs a migration sweep of existing destructible-value
      copy sites (they become moves; a reused source now surfaces a real latent double-drop).
-   - **M26f-3 — collection deep-`copy`.** The `copy` marker on `Array`/`List`/`String` → a real deep
-     copy (runtime + codegen); today it errors "not yet implemented".
+   - **M26f-3 — collection deep-`copy`.** ✅ **DONE (v0.1.38).** `copy` on `Array`/`List`/`String` →
+     a real deep copy: a `NAME__copy` runtime fn allocates a fresh buffer and copies the elements
+     (the init site emits it, overwriting the shallow blit). Gated on **bitwise-copyable elements**
+     (owns nothing) — a collection of resource-owning elements needs a per-element copy, deferred to
+     M26f-4. Fixtures `coll_copy`/`string_copy` (independent buffers, ASan-clean) + xfail
+     `copy_resource_coll`.
    - **M26f-4 — the `Copyable` contract (opt-in copy).** A `resource` opts into copy by satisfying an
      internal **`Copyable`** contract (its `copy` method). Its presence makes the `give`/`copy` marker
      **mandatory** for that type ("scream when ambiguous" — both move and copy are now plausible):

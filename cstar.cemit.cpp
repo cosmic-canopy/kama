@@ -780,13 +780,21 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k) << "\n";
                         else        *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
                     } else if (_classes.count(ty) && _classes[ty].isCollection && isNamedValue(init.get())) {
-                        // M26c: a collection move/deep-copy isn't a plain `=` — require a marker
-                        // and (for now) only the cheap `give` (move) is wired; `copy` (deep) is 🚧.
+                        // M26c/f-3: a collection move/deep-copy isn't a plain `=` — require a marker.
                         if (handoff == 0)
                             unsupported(("a collection hand-off must say `give` (move) or `copy` (deep) — write "
                                          "`" + ty + " v = give …`").c_str(), n->line);
-                        else if (handoff == 2)
-                            unsupported("`copy` of a collection (deep copy) is not yet implemented — use `give` (move) for now", n->line);
+                        else if (handoff == 2) {
+                            // M26f-3: `copy` = a real deep copy (fresh buffer). Valid iff the element is
+                            // bitwise-copyable (owns nothing); a destructible element needs a per-element
+                            // copy (deferred to M26f-4). The blit above is overwritten by the deep copy.
+                            auto ci = _collections.find(ty);
+                            if (ci != _collections.end() && ci->second.elemDestructible)
+                                unsupported(("`copy` of a `" + ty + "` isn't available yet — its elements own "
+                                             "resources, so each needs its own copy (a later milestone); use "
+                                             "`give` to move").c_str(), n->line);
+                            else { indent(depth); *_out << nm << " = " << ty << "__copy(&(" << emitExpression(init) << "));\n"; }
+                        }
                         // give: the plain `=` already transferred the struct; null the source's buffer.
                         else { indent(depth); *_out << "(" << emitExpression(init) << ").data = NULL; ("
                                                      << emitExpression(init) << ").len = 0;\n"; }

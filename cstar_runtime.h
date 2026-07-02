@@ -167,7 +167,13 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 }                                                                              \
 static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
- static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }
+ static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }  \
+ static inline NAME   NAME##__copy(const NAME* self) {  /* M26f-3: deep copy (fresh buffer) */ \
+    NAME r; r.len = self->len;                                                       \
+    r.data = (self->len ? (T*)cstar_alloc(self->len * sizeof(T)) : NULL);            \
+    if (self->len) cstar_copy(r.data, self->data, self->len * sizeof(T));            \
+    return r;                                                                        \
+ }
 #define CSTAR_ARRAY_DEFINE(T, NAME, ELEM_DTOR) CSTAR_ARRAY_TYPE(T, NAME) CSTAR_ARRAY_FUNCS(T, NAME, ELEM_DTOR)
 
 // List<T> — growable (capacity doubling), owns its buffer (RAII frees).
@@ -196,7 +202,13 @@ static inline void   NAME##__set(NAME* self, size_t i, T v) {                  \
 }                                                                              \
 static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
- static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }
+ static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }  \
+ static inline NAME   NAME##__copy(const NAME* self) {  /* M26f-3: deep copy (fresh buffer, cap=len) */ \
+    NAME r; r.len = self->len; r.cap = self->len;                                    \
+    r.data = (self->len ? (T*)cstar_alloc(self->len * sizeof(T)) : NULL);            \
+    if (self->len) cstar_copy(r.data, self->data, self->len * sizeof(T));            \
+    return r;                                                                        \
+ }
 #define CSTAR_LIST_DEFINE(T, NAME, ELEM_DTOR) CSTAR_LIST_TYPE(T, NAME) CSTAR_LIST_FUNCS(T, NAME, ELEM_DTOR)
 
 
@@ -231,6 +243,16 @@ static inline char* cstar_string__cstr(cstar_string* self) { return self->data; 
 static inline bool cstar_string__equals(cstar_string* self, cstar_string other) {
     return self->len == other.len &&
            (self->len == 0 || cstar_cmp(self->data, other.data, self->len) == 0);
+}
+// M26f-3: deep copy -> a fresh heap-owned string (even copying a borrowed literal).
+static inline cstar_string cstar_string__copy(const cstar_string* self) {
+    cstar_string r; r.len = self->len;
+    if (self->len == 0) { r.data = NULL; r.cap = 0; return r; }
+    char* buf = (char*)cstar_alloc(self->len + 1);
+    cstar_copy(buf, self->data, self->len);
+    buf[self->len] = '\0';
+    r.data = buf; r.cap = self->len + 1;   // heap-owned
+    return r;
 }
 // Returns a fresh heap-owned string (the caller binds it -> RAII frees it).
 static inline cstar_string cstar_string__concat(cstar_string* self, cstar_string other) {

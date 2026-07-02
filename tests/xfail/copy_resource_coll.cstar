@@ -1,0 +1,8 @@
+// M26f-3 — `copy` of a collection whose ELEMENTS own resources isn't available yet: each
+// element would need its own copy (a later milestone, M26f-4). Compile error.
+class Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} }
+fn int32 main() {
+    List<Res> a = new List<Res>();
+    List<Res> b = copy a;   // ERROR: elements own resources
+    return 0;
+}
