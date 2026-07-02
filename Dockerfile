@@ -19,6 +19,10 @@ RUN apt-get update \
       flex \
       make \
       clang \
+      libclang-rt-18-dev \
  && rm -rf /var/lib/apt/lists/*
+# libclang-rt-18-dev ships the compiler-rt runtime (libclang_rt.asan/ubsan.*) that the bare
+# `clang` metapackage omits on arm64 — without it `-fsanitize=address,undefined` fails to LINK.
+# It tracks the clang version above (18 here); bump the suffix if the base image's clang moves.
 
 WORKDIR /work

@@ -17,6 +17,23 @@ trap 'rm -rf "$TMP"' EXIT
 pass=0
 fail=0
 
+# Opt-in memory-safety pass: CSTAR_SAN=1 builds every positive (and multi-file) fixture with
+# ASan + UBSan and runs it, so a use-after-free / overflow / leak / UB fails the suite. Native
+# only; xfail fixtures never link so they're unaffected. Requires the compiler-rt runtime in the
+# image (Dockerfile: libclang-rt-*-dev). A halted sanitizer run exits nonzero -> reported as FAIL.
+SAN_FLAGS=()
+if [ "${CSTAR_SAN:-0}" != "0" ]; then
+    # -fno-sanitize=function: vtable / interface / BindableFunctionPtr dispatch stores each slot as
+    # `Ret (*)(void* self, ...)` and calls the concrete `Ret C__m(C* self, ...)` through it. That
+    # type-erased self is ABI-identical (how essentially all C OO dispatch works), but UBSan's
+    # `function` sub-check enforces exact function-pointer type identity and would flag it. All other
+    # UBSan checks (integer overflow, null, bounds, alignment, …) and ASan stay on.
+    SAN_FLAGS=(--cc "clang -fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer -g")
+    export ASAN_OPTIONS="detect_leaks=1:halt_on_error=1"
+    export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
+    echo "(sanitizer mode: ASan + UBSan on native positive fixtures)"
+fi
+
 for src in "$TESTS_DIR"/*.cstar; do
     [ -e "$src" ] || continue
     name="$(basename "$src" .cstar)"
@@ -28,10 +45,13 @@ for src in "$TESTS_DIR"/*.cstar; do
     expected="$(cat "$expect_file")"
 
     exe="$TMP/$name"
-    if ! "$CSTAR" build "$src" -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
+    if ! "$CSTAR" build "$src" "${SAN_FLAGS[@]}" -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
         echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue
     fi
-    "$exe"; actual=$?
+    "$exe" 2>"$TMP/$name.san"; actual=$?
+    if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
+        echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; fail=$((fail+1)); continue
+    fi
 
     if [ "$actual" = "$expected" ]; then
         echo "PASS $name (exit $actual)"; pass=$((pass+1))
@@ -52,10 +72,13 @@ for dir in "$TESTS_DIR"/*.d; do
     expected="$(cat "$expect_file")"
 
     exe="$TMP/$name"
-    if ! "$CSTAR" build "$dir"/*.cstar -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
+    if ! "$CSTAR" build "$dir"/*.cstar "${SAN_FLAGS[@]}" -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
         echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue
     fi
-    "$exe"; actual=$?
+    "$exe" 2>"$TMP/$name.san"; actual=$?
+    if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
+        echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; fail=$((fail+1)); continue
+    fi
 
     if [ "$actual" = "$expected" ]; then
         echo "PASS $name (multi-file, exit $actual)"; pass=$((pass+1))
