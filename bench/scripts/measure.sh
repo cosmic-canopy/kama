@@ -41,13 +41,17 @@ cmd_for() {  # lang workload -> run command (empty if artifact missing)
   esac
 }
 
-size_for() {  # lang workload -> artifact size (bytes) or 0
+size_for() {  # lang workload -> package size (bytes) or 0. Compiled langs -> the shipped binary;
+              # managed -> the assembly/class (needs an external runtime); interpreted -> the
+              # authored source (needs the interpreter). report.py annotates which is which.
   local l=$1 w=$2 f=""
   case $l in
     cstar) f=bench/build/cstar/$w ;;  c) f=bench/build/c/$w ;;  cpp) f=bench/build/cpp/$w ;;
     rust) f=bench/build/rust/$w ;;    go) f=bench/build/go/$w ;;
     csharp) f=bench/build/csharp/bench.dll ;;  cstar-wasm) f=bench/build/wasm/$w.wasm ;;
     java) f=bench/build/java/Bench.class ;;  # primary class only (javac also emits Bench$*.class)
+    lua) f=bench/src/lua/$w.lua ;;  python) f=bench/src/python/$w.py ;;
+    js)  f=bench/src/js/$w.js ;;    ts) f=bench/src/ts/$w.ts ;;
   esac
   [ -n "$f" ] && [ -f "$f" ] && stat -c %s "$f" 2>/dev/null || echo 0
 }

@@ -24,7 +24,8 @@ Engine auto-detected (podman preferred); override with `CSTAR_ENGINE=docker`.
 - **Workloads:** `fib` (recursion), `pi` (float64), `collatz` (integer), `dispatch` (virtual calls) —
   compute-bound, since cstar has no arrays/heap yet. Each emits a checksum as its exit code; the runner
   asserts every language produces the **same** checksum (fairness gate).
-- **Metrics:** time (`hyperfine`), peak RSS (`/usr/bin/time -v`), artifact size.
+- **Metrics:** time (`hyperfine`), peak RSS (`/usr/bin/time -v`), compile time (build wall-clock),
+  package size (self-contained binary, or code + external runtime).
 
 ## Layout
 

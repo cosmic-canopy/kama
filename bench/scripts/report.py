@@ -18,6 +18,21 @@ WASM = ["cstar-wasm", "js", "ts"]
 LABEL = {"cstar": "cstar", "c": "C", "cpp": "C++", "rust": "Rust", "go": "Go",
          "csharp": "C# (JIT)", "java": "Java (JIT)", "lua": "Lua", "python": "Python",
          "cstar-wasm": "cstar→wasm", "js": "JS", "ts": "TS"}
+# What "package size" means per language: a self-contained native binary vs code that needs an
+# external runtime (managed assembly / interpreted source). Keeps the size table honest.
+RUNTIME = {"cstar": "self-contained", "c": "self-contained", "cpp": "self-contained",
+           "rust": "self-contained", "go": "self-contained",
+           "csharp": "+ .NET runtime", "java": "+ JVM",
+           "lua": "source (+ Lua)", "python": "source (+ Python)",
+           "js": "source (+ node)", "ts": "source (+ node)", "cstar-wasm": "+ wasm/JS host"}
+
+# Compile time (bench/build/compile.tsv): lang -> (compile_ms, artifacts). Interpreted langs absent.
+COMPILE = {}
+_ctp = os.path.join(ROOT, "bench/build/compile.tsv")
+if os.path.exists(_ctp):
+    with open(_ctp) as f:
+        for r in csv.DictReader(f, delimiter="\t"):
+            COMPILE[r["lang"]] = (r["compile_ms"], r["artifacts"])
 
 def sh(*a):
     try: return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
@@ -65,17 +80,24 @@ def rss_table(track, langs):
     return "\n".join(out)
 
 def size_table(track, langs):
-    out = ["| lang | artifact size |", "|---|---|"]
-    seen = {}
+    out = ["| lang | package size | kind |", "|---|---|---|"]
     for l in langs:
+        sz = None
         for w in WORKLOADS:
             v = get(track, l, w, "size_bytes")
             if v and v not in ("0", "NA", None):
-                seen[l] = int(v); break
+                sz = int(v); break
+        if sz is None:
+            continue
+        out.append(f"| {LABEL[l]} | {sz / 1024.0:.1f} KB | {RUNTIME.get(l, '')} |")
+    return "\n".join(out)
+
+def compile_table(langs):
+    out = ["| lang | compile time | binaries built |", "|---|---|---|"]
     for l in langs:
-        if l in seen:
-            kb = seen[l] / 1024.0
-            out.append(f"| {LABEL[l]} | {kb:.1f} KB |")
+        if l in COMPILE:
+            ms, n = COMPILE[l]
+            out.append(f"| {LABEL[l]} | {cell(ms, ' ms')} | {n} |")
     return "\n".join(out)
 
 # fairness gate
@@ -120,7 +142,7 @@ cstar transpiles to C and is compiled by the **same clang** as the C baseline, s
 workloads cstar is expected to be **within measurement noise of C/C++** — that is the design, not a
 finding. The signals worth trusting here are:
 1. cstar (native) vs **managed/interpreted** languages (C#, Java, Go, Lua, Python),
-2. **peak RSS** and **artifact size** (the low-footprint goal),
+2. **peak RSS**, **compile time**, and **package size** (the low-footprint / self-contained goal),
 3. on the WASM track, **cstar→wasm vs hand-written JS/TS** under the same node.
 
 **Methodology — run isolated:** these are short workloads, so **parallel load badly skews them** — run the
@@ -172,9 +194,21 @@ diverged:
 
 {rss_table("native", NATIVE)}
 
-## NATIVE — artifact size
+## NATIVE — package size
+
+_What you ship: a **self-contained** binary needs no runtime; managed/interpreted rows are the
+assembly/source only and additionally require the noted runtime (.NET / JVM / interpreter)._
 
 {size_table("native", NATIVE)}
+
+## NATIVE — compile time
+
+_Wall-clock to compile that language's bench artifacts (single build, not averaged). The compiled
+languages build **one binary per workload** (`binaries built` = 6); C# and Java build **one**
+multi-workload binary that dispatches on `args[0]`. cstar's figure is transpile-to-C **plus** clang.
+Interpreted languages (Lua, Python, JS) have no compile step and are omitted._
+
+{compile_table(["cstar", "c", "cpp", "rust", "go", "csharp", "java"])}
 
 ## WASM track — execution time under node (median, ms)
 
@@ -187,6 +221,12 @@ diverged:
 ## WASM track — module size
 
 {size_table("wasm", WASM)}
+
+## WASM track — compile time
+
+_cstar→wasm is transpile-to-C **plus** `emcc -O3`; TS is `tsc`. Hand-written JS has no compile step._
+
+{compile_table(["cstar-wasm", "ts"])}
 
 ## Caveats
 - **arm64 results** — not comparable to x86 runs (arch recorded above).
@@ -204,7 +244,9 @@ os.makedirs(os.path.dirname(OUT_MD), exist_ok=True)
 with open(OUT_MD, "w") as f:
     f.write(md)
 with open(OUT_JSON, "w") as f:
-    json.dump({"env": env, "rows": rows}, f, indent=2)
+    json.dump({"env": env, "rows": rows,
+               "compile": {l: {"compile_ms": ms, "artifacts": n} for l, (ms, n) in COMPILE.items()}},
+              f, indent=2)
 
 print(f"wrote {OUT_MD}")
 print("fairness gate:", "PASS" if ok else "FAIL (checksum mismatch — see RESULTS.md)")
