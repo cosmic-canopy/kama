@@ -1,0 +1,11 @@
+// M26f-2 — moving a `resource` value declared OUTSIDE a loop is a compile error: it would be
+// moved again on the next iteration (double-move). Conservative rule, no loop fixpoint.
+class Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
+fn int32 sink(Res r) { return r.head(); }
+fn int32 main() {
+    Res a = Res(v: 1);                       // declared outside the loop
+    for (int32 i = 0; i < 3; i = i + 1) {
+        sink(r: give a);                     // ERROR: would move `a` again next iteration
+    }
+    return 0;
+}

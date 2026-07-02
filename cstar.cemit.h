@@ -202,6 +202,12 @@ private:
 
     std::map<std::string, ClassInfo>   _classes;     // class name -> info
     std::map<std::string, std::string> _localTypes;  // local/param -> class name ("" if primitive)
+    // M26f-2: compile-time move analysis for `resource` (destructible) VALUES. Per-local
+    // move-state, consulted by emitScopeCleanup (skip a moved local's dtor) and the hand-off
+    // sites (reject use-after-move). A value moved on some-but-not-all paths that is live at
+    // scope exit is *rejected* (conditional-drop) — zero runtime drop-flags by construction.
+    enum class MoveState { NotMoved, MaybeMoved, Moved };
+    std::map<std::string, MoveState> _moveState;   // move-only local/param cVar -> state
     ClassInfo*                         _currentClass = nullptr;  // when emitting a method/ctor
     std::string                        _currentFunc;             // C-name of the function/method being emitted (M25c friend match)
 
@@ -237,6 +243,7 @@ private:
     std::vector<LiveLocal> _pendingParamDtors;
     std::string        _currentReturnCType = "void";  // for return-temp
     int                _tempCounter = 0;
+    int                _curLine = 0;                   // M26f-2: last source line seen (conditional-drop diagnostics)
     bool               _inUnsafe = false;             // M17: inside an `unsafe { }` block
     bool               _inCtor   = false;             // M24d: emitting a ctor (const fields writable here)
 
@@ -288,6 +295,14 @@ private:
     // `whereClause` completes "it can't be ___" (e.g. "stored in a field").
     void rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line);
     std::string smartPtrInvalidate(const std::string& expr, CollKind kind);  // null the dtor's guard field
+    // M26f-2: a move-only VALUE — a destructible class value that isn't a smart-ptr/collection/
+    // extern struct. It MOVES on hand-off (its dtor is suppressed) and is never silently copied.
+    bool isMoveOnlyValue(const std::string& cls) const;
+    void markMoved(const std::string& cVar);                // state -> Moved (loop-guard added in Increment 3)
+    void checkNotMoved(const std::string& cVar, int line);  // reject a use of a moved local
+    // The source of a move hand-off: a bare move-only local -> its name (caller marks it moved);
+    // a field/element/base member -> reject (moving out would leave the owner moved-from).
+    std::string moveOnlySource(SharedExpression e, int line);
     // Dispatch `recv.method(args)` on a smart-pointer receiver: an intrinsic
     // (lock/expired/valid) on the pointer itself, else auto-deref to the pointee.
     std::string emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
@@ -357,6 +372,7 @@ private:
     void emitUnwindAll(int depth);                             // return: innermost..function root
     void recordDestructibleLocal(const std::string& cVar, const std::string& className);
     static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue
+    static bool bodyDiverges(SharedStatement s);               // M26f-2: body ends in return/break/continue
     void emitDtorDefinition(ClassInfo& ci);
 
     // Expressions -> C expression text

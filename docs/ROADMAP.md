@@ -57,8 +57,8 @@ their names/numbers.
      `CSTAR_*_DEFINE` macro into `_TYPE` (struct, emitted before class bodies) + `_FUNCS`; zero-init
      the field in the ctor. Fixture `coll_field`. *(This also made the non-pod double-drop reachable
      — hence B is next.)*
-   - **M26f-2 — resource values move-only + use-after-move analysis (option "B").** Next; safety-
-     critical (closes the double-drop M26f-1 exposed). **Resolved marker rule** ("silent default,
+   - **M26f-2 — resource values move-only + use-after-move analysis (option "B").** ✅ **DONE
+     (v0.1.37).** Safety-critical (closes the double-drop M26f-1 exposed; ASan-clean, 123/123). **Resolved marker rule** ("silent default,
      scream when ambiguous" — see [TYPE_MODEL.md](TYPE_MODEL.md)): a **`resource` (destructible) value
      moves** — a bare named hand-off is a *silent move* (the source is consumed, its dtor suppressed),
      `give` is optional emphasis, and `copy` errors until the type has a copy contract (M26f-4). **No

@@ -1,0 +1,8 @@
+// M26f-2 — using a `resource` value after it was `give`n is a compile error (use-after-move).
+class Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
+fn int32 take(Res r) { return r.head(); }
+fn int32 main() {
+    Res a = Res(v: 1);
+    take(r: give a);
+    return a.head();   // ERROR: use of `a` after it was moved
+}

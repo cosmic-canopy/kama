@@ -1,9 +1,10 @@
 // List<T> RAII + element-dtor chaining over the LIVE length (len=3, cap=4):
 // the list's dtor must destroy exactly its 3 live elements, not its capacity.
 //
-// NB (M9 limitation): `add(item:)` takes the element BY VALUE, so each source
-// local (a,b,c) and its list copy both destruct — the trace below counts both.
-// Move semantics (one owner) is future work.
+// M26f-2: `add(item:)` takes the element BY VALUE, and a `resource` (destructible) value
+// MOVES on a bare hand-off — so each source local (a,b,c) is moved INTO the list and its
+// own dtor is suppressed (no double-drop). Only the 3 list elements destruct: ~[1,2,4] ->
+// fold ((1*31+2)*31+4)=1027 -> exit 1027 & 0xFF = 3.
 extern fn void cstar_trace(int code);
 extern fn int cstar_trace_get();
 
@@ -24,7 +25,7 @@ fn int build()
     xs.add(item: b);
     xs.add(item: c);
     return 0;
-    // scope exit (reverse decl order): ~c(4) ~b(2) ~a(1), then xs -> ~[1,2,4]
+    // scope exit: a,b,c were moved into xs (dtors suppressed); xs -> ~[1,2,4]
 }
 
 fn int main()

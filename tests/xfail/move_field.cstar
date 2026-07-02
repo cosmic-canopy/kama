@@ -1,0 +1,9 @@
+// M26f-2 — you can't `give` a `resource` value OUT of a field: it would leave the owner
+// holding a moved-from value. (Deferred to Optional<T>, M28.) Compile error.
+class Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} }
+class Box {
+    Res r;
+    public Box() { }
+    public fn Res steal() { return give this.r; }   // ERROR: cannot give out of a field
+}
+fn int32 main() { Box b = Box(); return 0; }

@@ -26,6 +26,7 @@ void CEmitter::indent(int depth)
 
 void CEmitter::line(int srcLine)
 {
+    if (srcLine > 0) _curLine = srcLine;   // M26f-2: track for conditional-drop diagnostics
     if (_lines && srcLine > 0)
         *_out << "#line " << srcLine << " \"" << _sourcePath << "\"\n";
 }
@@ -352,6 +353,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             auto fit = _funcs.find(resolveFunc(nm, v->qualifier));
             if (fit != _funcs.end()) return fit->second.cName;
         }
+        checkNotMoved(nm, v->line);   // M26f-2: reject reading a moved-from `resource` value
         return nm;
     }
 
@@ -504,9 +506,27 @@ bool CEmitter::stmtIsJump(SharedStatement s)
     return dynamic_cast<ReturnNode*>(n) || dynamic_cast<BreakNode*>(n) || dynamic_cast<ContinueNode*>(n);
 }
 
+// M26f-2: does this body end in a jump (so control doesn't fall through to a branch join)?
+bool CEmitter::bodyDiverges(SharedStatement s)
+{
+    if (!s) return false;
+    if (auto* b = dynamic_cast<BlockNode*>(s.get())) {
+        if (b->statements && !b->statements->empty()) return stmtIsJump(b->statements->back());
+        return false;
+    }
+    return stmtIsJump(s);
+}
+
 void CEmitter::emitScopeCleanup(const Scope& s, int depth)
 {
     for (auto it = s.locals.rbegin(); it != s.locals.rend(); ++it) {
+        auto ms = _moveState.find(it->cVar);
+        if (ms != _moveState.end()) {
+            if (ms->second == MoveState::Moved) continue;   // M26f-2: moved out — skip its drop
+            if (ms->second == MoveState::MaybeMoved)        // moved on some paths, live here — undecidable drop
+                unsupported(("`" + it->cVar + "` is moved on some paths but not others and is still live at "
+                             "scope exit — move it on all paths or none, or use Optional<T> (M28)").c_str(), _curLine);
+        }
         indent(depth);
         *_out << it->className << "__dtor(&" << it->cVar << ");\n";
     }
@@ -532,6 +552,7 @@ void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::strin
 {
     if (!_scopes.empty())
         _scopes.back().locals.push_back({cVar, className});
+    if (isMoveOnlyValue(className)) _moveState[cVar] = MoveState::NotMoved;  // M26f-2: track for move analysis
 }
 
 // --- Blocks ----------------------------------------------------------------
@@ -769,6 +790,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // give: the plain `=` already transferred the struct; null the source's buffer.
                         else { indent(depth); *_out << "(" << emitExpression(init) << ").data = NULL; ("
                                                      << emitExpression(init) << ").len = 0;\n"; }
+                    } else if (isMoveOnlyValue(ty) && isNamedValue(init.get())) {
+                        // M26f-2: a `resource` (destructible) VALUE moves. The `=` above blitted the
+                        // struct; `give`/bare MOVE (suppress the source's dtor); `copy` errors (no
+                        // copy contract yet). Moving out of a field/element is rejected.
+                        if (handoff == 2)
+                            unsupported(("`copy` of a `" + ty + "` value is not yet implemented — use `give` to "
+                                         "move it (a copy needs a `copy` method, a later milestone)").c_str(), n->line);
+                        std::string mv = moveOnlySource(init, n->line);
+                        if (!mv.empty()) markMoved(mv);
                     } else if (handoff == 1) {
                         unsupported("`give` applies to an owned value (a smart pointer or collection) — a plain value just copies", n->line);
                     }
@@ -816,6 +846,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 else        *_out << "(" << emitExpression(retExpr) << ").ctrl->"
                                   << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
             }
+            // M26f-2: returning a `resource` (destructible) VALUE moves it out — mark the source
+            // moved so the unwind below skips its dtor; the caller now owns the returned bytes.
+            // (Must precede the bindable branch, whose `dynamic_cast<IdentifierNode>` is a catch-all.)
+            else if (isMoveOnlyValue(rc) && isNamedValue(retExpr.get())) {
+                if (handoff == 2)
+                    unsupported(("`copy` of a `" + rc + "` value is not yet implemented — use `give` to move it").c_str(), n->line);
+                std::string mv = moveOnlySource(retExpr, n->line);
+                if (!mv.empty()) markMoved(mv);
+            }
             // Same move-out for a returned BindableFunctionPtr (M22): it may own its
             // bound object, so the scope dtor must NOT drop what the caller now owns.
             else if (auto* rid = dynamic_cast<IdentifierNode*>(retExpr.get())) {
@@ -839,8 +878,31 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* f = dynamic_cast<IfNode*>(n)) {
         line(n->line); indent(depth);
         *_out << "if (" << emitExpression(f->booleanExpression) << ") ";
+        // M26f-2: walk each branch from the SAME pre-if move-state, then merge at the join.
+        // A branch that diverges (ends in return/break/continue) doesn't reach the join.
+        auto before = _moveState;
         emitBody(f->ifStatement, depth, /*loopBoundary=*/false);
-        if (f->elseStatement) { *_out << " else "; emitBody(f->elseStatement, depth, false); }
+        auto thenState = _moveState;
+        bool thenDiv = bodyDiverges(f->ifStatement);
+        _moveState = before;
+        bool elseDiv = false;
+        if (f->elseStatement) {
+            *_out << " else ";
+            emitBody(f->elseStatement, depth, false);
+            elseDiv = bodyDiverges(f->elseStatement);
+        }
+        auto elseState = _moveState;   // no else -> == before (the fall-through arm)
+        for (auto& kv : before) {
+            MoveState t = thenState.count(kv.first) ? thenState[kv.first] : kv.second;
+            MoveState e = elseState.count(kv.first) ? elseState[kv.first] : kv.second;
+            MoveState merged;
+            if (thenDiv && elseDiv) merged = kv.second;   // join unreachable
+            else if (thenDiv)       merged = e;
+            else if (elseDiv)       merged = t;
+            else if (t == e)        merged = t;
+            else                    merged = MoveState::MaybeMoved;   // moved on one arm only
+            _moveState[kv.first] = merged;
+        }
         *_out << "\n";
         return;
     }
@@ -887,13 +949,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* sw = dynamic_cast<SwitchNode*>(n)) {
         line(n->line); indent(depth);
         *_out << "switch (" << emitExpression(sw->expression) << ") {\n";
+        // M26f-2: each section is an independent arm off the pre-switch state; merge at the join.
+        auto before = _moveState;
+        std::vector<std::map<std::string, MoveState>> armEnd;
+        std::vector<bool> armDiv;
+        bool hasDefault = false;
         if (sw->switchsections) {
             for (auto& sec : *sw->switchsections) {
+                _moveState = before;                       // restore before each section
                 if (sec->labels) {
                     for (auto& lbl : *sec->labels) {
                         indent(depth + 1);
-                        if (lbl->isDefault())
-                            *_out << "default:\n";
+                        if (lbl->isDefault()) { *_out << "default:\n"; hasDefault = true; }
                         else
                             *_out << "case " << emitExpression(lbl->constantExpression) << ":\n";
                     }
@@ -911,10 +978,26 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                      dynamic_cast<ReturnNode*>(last.get()));
                 if (!ends) { indent(depth + 2); *_out << "break;\n"; }
                 indent(depth + 1); *_out << "}\n";
+                armEnd.push_back(_moveState);
+                armDiv.push_back(last && dynamic_cast<ReturnNode*>(last.get()));  // `return` diverges; `break` reaches the join
             }
         }
         indent(depth);
         *_out << "}\n";
+        // Merge arms at the join. Uncovered values (no `default`) fall through with the pre-switch
+        // state — an implicit arm. A local moved on ALL reaching arms -> Moved; on some -> MaybeMoved.
+        _moveState = before;
+        for (auto& kv : before) {
+            bool any = false, allMoved = true, allNot = true;
+            auto consider = [&](MoveState s){ any = true; if (s != MoveState::Moved) allMoved = false;
+                                              if (s != MoveState::NotMoved) allNot = false; };
+            for (size_t i = 0; i < armEnd.size(); ++i)
+                if (!armDiv[i]) consider(armEnd[i].count(kv.first) ? armEnd[i][kv.first] : kv.second);
+            if (!hasDefault) consider(kv.second);
+            if (!any) { _moveState[kv.first] = kv.second; continue; }
+            _moveState[kv.first] = allMoved ? MoveState::Moved
+                                            : (allNot ? MoveState::NotMoved : MoveState::MaybeMoved);
+        }
         return;
     }
 
@@ -1010,6 +1093,35 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             }
             if (rhsLval) { indent(depth); *_out << "}\n"; }
             return;
+        }
+        // M26f-2: assigning a `resource` (destructible) VALUE from a NAMED source is a MOVE —
+        // drop the target's current value (unless it was already moved out), blit, mark the
+        // source moved. A fresh rvalue (new/ctor/call) keeps the generic copy path below.
+        if (as->token == EQ && isMoveOnlyValue(exprClass(as->unaryExpression))) {
+            SharedExpression rhs = as->expression;
+            int handoff = 0;
+            if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
+            if (isNamedValue(rhs.get())) {
+                std::string lty = exprClass(as->unaryExpression);
+                checkConstWrite(as->unaryExpression, n->line);
+                if (handoff == 2)
+                    unsupported(("`copy` of a `" + lty + "` value is not yet implemented — use `give` to move it").c_str(), n->line);
+                std::string lname;
+                if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
+                    if (lid->value && (!lid->qualifier || lid->qualifier->empty())) lname = *lid->value;
+                std::string mv = moveOnlySource(rhs, n->line);
+                if (!mv.empty() && mv == lname)
+                    unsupported("moving a value onto itself would destroy it", n->line);
+                bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
+                if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // write target: clear before emit
+                std::string b   = emitExpression(as->unaryExpression);
+                std::string src = emitExpression(rhs);
+                line(n->line);
+                if (!bMoved) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }   // free the old value
+                indent(depth); *_out << b << " = " << src << ";\n";
+                if (!mv.empty()) markMoved(mv);
+                return;
+            }
         }
     }
 
@@ -1818,6 +1930,57 @@ std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind)
                                      : (expr + ".ctrl = NULL; " + expr + ".ptr = NULL;");  // Shared/Weak guard on ctrl
 }
 
+// ---- M26f-2: resource-value move analysis ---------------------------------
+
+// A move-only VALUE: a destructible class value that isn't a smart-ptr / collection / extern
+// struct. It moves on hand-off (its dtor is suppressed) and is never silently copied. (Trigger
+// = destructibility — the interim proxy for a `resource` until the M26h vocabulary lands.)
+bool CEmitter::isMoveOnlyValue(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.destructible && !it->second.isCollection
+        && !it->second.isExternStruct && !isSmartPtrClass(cls);
+}
+
+void CEmitter::markMoved(const std::string& cVar)
+{
+    // M26f-2 (Increment 3): moving a local declared OUTSIDE the nearest enclosing loop would move
+    // it again on the next iteration (double-move). Reject — conservative, no loop fixpoint. A value
+    // declared INSIDE the loop body is fresh each iteration, so moving it is fine.
+    int lb = -1;
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i) if (_scopes[i].isLoopBoundary) { lb = i; break; }
+    if (lb >= 0) {
+        int li = -1;
+        for (int i = (int)_scopes.size() - 1; i >= 0 && li < 0; --i)
+            for (auto& l : _scopes[i].locals) if (l.cVar == cVar) { li = i; break; }
+        if (li >= 0 && li < lb)
+            unsupported(("cannot `give` `" + cVar + "` inside a loop — it would be moved again on the next "
+                         "iteration; move it after the loop, or move a value declared in the loop body").c_str(), _curLine);
+    }
+    _moveState[cVar] = MoveState::Moved;
+}
+
+void CEmitter::checkNotMoved(const std::string& cVar, int line)
+{
+    auto it = _moveState.find(cVar);
+    if (it != _moveState.end() && it->second != MoveState::NotMoved)
+        unsupported(("use of `" + cVar + "` after it was moved (a `give` consumed it)").c_str(), line);
+}
+
+// The source of a move hand-off. A bare move-only local -> its name (caller marks it moved).
+// A field / element / base member -> reject: moving out would leave the owner holding a
+// moved-from value (the field-move case is deferred to Optional<T>, M28).
+std::string CEmitter::moveOnlySource(SharedExpression e, int line)
+{
+    if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
+        std::string nm = id->value ? *id->value : "";
+        if ((!id->qualifier || id->qualifier->empty()) && _moveState.count(nm)) return nm;
+    }
+    unsupported("cannot `give` out of a field/element — it would leave the owner holding a "
+                "moved-from value; move a local instead (Optional<T> comes in M28)", line);
+    return "";
+}
+
 std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
                                        const std::string& method, SharedArgumentList args, int srcLine)
 {
@@ -2122,6 +2285,14 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 s += val;
             } else if (collArg && handoff) {
                 unsupported("passing a collection by value is not yet supported — pass it by `ref` to borrow", srcLine);
+            } else if (isMoveOnlyValue(argCls) && isNamedValue(argExpr.get())) {
+                // M26f-2: a `resource` VALUE passed by value MOVES into the callee (which drops it at
+                // fn-end). `give`/bare move; `copy` errors. Mark the source moved at the call site.
+                if (handoff == 2)
+                    unsupported(("`copy` of a `" + argCls + "` value is not yet implemented — use `give` to move it").c_str(), srcLine);
+                std::string mv = moveOnlySource(argExpr, srcLine);
+                if (!mv.empty()) markMoved(mv);
+                s += val;
             } else {
                 if (handoff == 1)
                     unsupported("`give` applies to an owned value (a smart pointer or collection) — "
@@ -2623,6 +2794,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
+    _moveState.clear();   // M26f-2: per-function move analysis
     _pendingParamDtors.clear();
     _currentClass = nullptr;
     _currentFunc  = name;   // M25c — a free function may be a `friend` accessor
@@ -2636,7 +2808,10 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
             // M26d: a by-value smart-ptr param is OWNED by the callee — drop it at fn-end.
             // The function-root scope is created later (emitBlockScoped); stash it there.
-            if (!paramByRef(p.get()) && isSmartPtrClass(pty)) _pendingParamDtors.push_back({pn, pty});
+            if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || isMoveOnlyValue(pty))) {
+                _pendingParamDtors.push_back({pn, pty});
+                if (isMoveOnlyValue(pty)) _moveState[pn] = MoveState::NotMoved;   // M26f-2: track move-only param
+            }
         }
     }
 
@@ -2890,6 +3065,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentFunc  = cName;   // M25c — a method may be a `Class::method` friend accessor
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
+    _moveState.clear();   // M26f-2: per-method move analysis
     _inCtor = isCtor;   // M24d: const fields are writable only here
     if (isConstMethod) _constLocals.insert("this");   // M24b: `this` is immutable (deep)
     _currentReturnCType = retType;
@@ -2907,7 +3083,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
             // M26d: a by-value smart-ptr param is owned by the callee — drop it at fn-end.
             // The root scope is already on the stack, so record it directly (dropped last).
-            if (!paramByRef(p.get()) && isSmartPtrClass(pty)) recordDestructibleLocal(pn, pty);
+            if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || isMoveOnlyValue(pty))) recordDestructibleLocal(pn, pty);
         }
     }
 

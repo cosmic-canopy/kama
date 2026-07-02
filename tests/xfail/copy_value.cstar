@@ -1,0 +1,4 @@
+// M26f-2 — `copy` of a `resource` value has no meaning yet (the copy contract arrives in
+// M26f-4); it's a compile error with guidance to `give` (move) instead.
+class Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} }
+fn int32 main() { Res a = Res(v: 1); Res b = copy a; return 0; }   // ERROR: copy not yet implemented
