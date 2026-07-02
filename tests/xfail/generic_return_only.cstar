@@ -1,0 +1,8 @@
+// M27a — a type parameter that appears only in the return type cannot be inferred from the
+// arguments; explicit type arguments (make<int32>()) are not yet supported, so this is rejected.
+fn T make<T>() { return 0; }
+fn int main()
+{
+    int32 x = make();   // ERROR: cannot infer T (return-only)
+    return x;
+}

@@ -160,7 +160,7 @@ struct cstaryystype {
 
 /* non-terminals */
 %type <token> assignment_operator overloadable_operator
-%type <strings> qualifier
+%type <strings> qualifier type_params_opt ident_list
 %type <expression> expression expression_opt literal boolean_literal variable_initializer
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
 %type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis
@@ -433,14 +433,24 @@ function_declaration
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
       $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, SharedBlock() );
    }
-  | function_modifier_opt FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block   {
-      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8 );
+  | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
+      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $7, $9, $5 );
   }
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
       /* `fnptr ret Name(params);` — an explicit function-pointer TYPE (M21).
          A null body marks it as a signature type (collectSignatures -> _sigs). */
       $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() );
   }
+  ;
+/* Generic type parameters on a fn declaration: `fn max<T, U>(...)` — M27a.
+   Empty for a non-generic fn. The names are resolved contextually at emit time. */
+type_params_opt
+  : /* Nothing */   { $$ = SharedStringList(); }
+  | LT ident_list GT   { $$ = $2; }
+  ;
+ident_list
+  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
+  | ident_list COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; }
   ;
 function_return_type
   : type

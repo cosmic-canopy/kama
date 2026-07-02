@@ -1,0 +1,8 @@
+// M27a — a generic call that gives a type parameter two different concrete types is a
+// compile-time error (no silent widening/narrowing). Here T would be both int32 and float64.
+fn T pick<T>(T a, T b) { return a; }
+fn int main()
+{
+    int32 x = pick(a: 3, b: 2.5);   // ERROR: cannot unify T (int32 vs float64)
+    return x;
+}

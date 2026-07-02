@@ -1,0 +1,17 @@
+// M27a — a generic instantiation is emitted ONCE even when reached from multiple functions
+// (dedup is keyed by the mangled name — no duplicate C definition / link error). Also exercises
+// inference from LOCAL/PARAM-typed arguments (p, q below), not just literals.
+fn T min<T>(T a, T b)
+{
+    return a < b ? a : b;
+}
+fn int32 lo(int32 p, int32 q)
+{
+    return min(a: p, b: q);        // args typed from lo's params -> min__int32
+}
+fn int main()
+{
+    int32 x = lo(p: 5, q: 9);      // via lo()  -> min__int32 -> 5
+    int32 y = min(a: 42, b: 99);   // direct    -> min__int32 -> 42 (same instantiation)
+    return x + y - 5;              // 5 + 42 - 5 = 42
+}

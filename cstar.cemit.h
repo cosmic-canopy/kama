@@ -233,6 +233,19 @@ private:
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info (M7)
     std::map<std::string, CollectionInfo> _collections;      // cName -> info (M9)
 
+    // M27a — generic functions (monomorphization). A generic template is registered by its
+    // mangled cName; each reachable (template, concrete-type-args) pair is a synthetic
+    // instantiation emitted as a `static` C function. Call-site inference runs once at
+    // discovery and records the target per call node, so emission is a lookup, not re-inference.
+    struct GenericInst { std::string templateKey; std::string mangledName; std::vector<SharedIdentifier> typeArgs; };
+    std::map<std::string, FunctionDeclarationNode*> _generics;      // template cName -> node
+    std::map<std::string, NsCtx>                    _genericCtx;    // template cName -> home namespace ctx
+    std::map<std::string, GenericInst>              _genericInsts;  // mangled name -> instantiation (dedup)
+    std::map<const InvocationNode*, std::string>    _callInst;      // generic call site -> instantiation mangled name
+    std::map<std::string, SharedIdentifier>         _typeSubst;     // type-param name -> concrete (only while emitting an instantiation)
+    std::map<int, SharedIdentifier>                 _primTypeCache; // synthesized primitive type nodes (for inference)
+    std::shared_ptr<CodeGenContext>                 _synthCtx;      // context for synthesizing those nodes
+
     // Namespaces (M14): current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
     std::set<std::string> _namespaces;   // registered public namespaces (mangled)
@@ -299,6 +312,21 @@ private:
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
                               std::string& recvExpr, std::string& idx);
 
+    // Generics (M27a): discover reachable generic-function instantiations, infer their
+    // type args from call-site arguments, and emit one specialized `static` C function each.
+    void collectGenericInsts(SharedCompilationUnit unit);
+    void scanStmtForGenerics(SharedStatement s, std::map<std::string, SharedIdentifier>& localTys);
+    void scanExprForGenerics(SharedExpression e, std::map<std::string, SharedIdentifier>& localTys);
+    // The concrete type node of an argument expression ("" cases return null): literals map to
+    // their builtin kind; identifiers resolve through `localTys` (declared types in scope).
+    SharedIdentifier exprTypeNode(SharedExpression e, std::map<std::string, SharedIdentifier>& localTys);
+    SharedIdentifier primTypeNode(int builtInVal);          // cached synthesized primitive type node
+    bool isConcreteTypeArg(SharedIdentifier t);             // a primitive/class/enum/collection (not a bare type-param)
+    // Unify a generic call's args against the template's params -> a deduped instantiation.
+    bool inferGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedArgumentList args,
+                          std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out);
+    void emitGenericInst(const GenericInst& gi, bool prototypeOnly);
+
     // Smart pointers (M10 Owned, M11 Shared). If `cls` is a smart-pointer type,
     // rewrite `cls` -> pointee T and `recvExpr` -> "(recv).ptr" (a T*) (auto-deref).
     bool derefSmartPtr(std::string& cls, std::string& recvExpr);
@@ -363,8 +391,10 @@ private:
     // Declarations / top level
     bool paramByRef(FunctionParameterNode* p);
     std::string paramListC(SharedParameterList params, const char* selfType);
-    void emitFunctionPrototype(FunctionDeclarationNode* fn);
-    void emitFunction(FunctionDeclarationNode* fn);
+    // `nameOverride` (M27a): emit under a supplied mangled name instead of the declared one
+    // (used for generic instantiations, whose C name carries the concrete type args).
+    void emitFunctionPrototype(FunctionDeclarationNode* fn, const std::string* nameOverride = nullptr);
+    void emitFunction(FunctionDeclarationNode* fn, const std::string* nameOverride = nullptr);
 
     // Classes
     bool isClass(const std::string& name) const { return _classes.count(name) != 0; }

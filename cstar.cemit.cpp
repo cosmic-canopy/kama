@@ -1,5 +1,6 @@
 #include "cstar.cemit.h"
 #include "cstar.ast.h"
+#include "cstar.context.h"    // CodeGenContext — to synthesize primitive type nodes (M27a)
 #include "cstar.parser.hpp"   // bison token constants (PLUS, STAR, EQEQ, ...)
 
 #include <cstdio>
@@ -159,6 +160,13 @@ std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qual
 std::string CEmitter::cType(SharedIdentifier type)
 {
     if (!type) return "void";
+    // M27a: inside a generic instantiation, a bare type-param name (`T`, no <...> of its own)
+    // resolves to the concrete type it was bound to. Guarded on !genericArg so a real `List<T>`
+    // still flows to the collection arm (whose element then hits this same substitution).
+    if (!_typeSubst.empty() && type->value && !type->genericArg) {
+        auto s = _typeSubst.find(*type->value);
+        if (s != _typeSubst.end()) return cType(s->second);
+    }
     // FFI (M15): a raw C pointer carrier (opaque). Bare `Ptr` -> void* (the
     // universal handle / opaque pointer); `Ptr<T>` -> T*. usize/isize map to the
     // C size types. These are the explicit, extern-marked unsafe boundary.
@@ -1387,6 +1395,14 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.retCType = cType(fn->returnType);
         sig.params  = paramSigsOf(fn->parameters);
         _funcs[sig.cName] = sig;
+
+        // M27a: a generic template (`fn max<T>(…)`) is registered for monomorphization and is
+        // NOT emitted as-is (its `T` is unbound). Its FuncSig stays in _funcs so call sites reorder
+        // named args off it; call emission redirects to the concrete instantiation instead.
+        if (fn->typeParams && !fn->typeParams->empty()) {
+            _generics[sig.cName]   = fn;
+            _genericCtx[sig.cName] = _nsCtx;   // resolve the body's type refs in its home scope
+        }
     }
 }
 
@@ -1692,7 +1708,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
 std::string CEmitter::mangleElem(SharedIdentifier elem)
 {
     if (!elem) return "void";
+    // M27a: substitute a bound type-param before mangling (mirrors cType).
+    if (!_typeSubst.empty() && elem->value && !elem->genericArg) {
+        auto s = _typeSubst.find(*elem->value);
+        if (s != _typeSubst.end()) return mangleElem(s->second);
+    }
     switch (elem->builtInVal) {
+        case IDENTIFIER_STRING_VAL:  return "string";
         case IDENTIFIER_INT8_VAL:    return "int8";
         case IDENTIFIER_INT16_VAL:   return "int16";
         case IDENTIFIER_INT32_VAL:   return "int32";
@@ -2004,6 +2026,273 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             }
         }
     }
+}
+
+// ---- Generics (M27a) ------------------------------------------------------
+// Monomorphization. A `fn name<T,...>(…)` template is specialized once per concrete
+// type-argument tuple reachable from a call site. Discovery infers the tuple from the
+// call's arguments (literals + locally-typed values), registers a deduped instantiation,
+// and records the target per call node. Emission clones nothing — it re-emits the template
+// body with `_typeSubst` set, so cType/mangleElem resolve each `T` to its concrete type.
+
+// A cached, synthesized type node for a primitive kind — inference needs a SharedIdentifier
+// to feed _typeSubst / mangleElem, but a literal argument has no type node of its own.
+SharedIdentifier CEmitter::primTypeNode(int builtInVal)
+{
+    auto it = _primTypeCache.find(builtInVal);
+    if (it != _primTypeCache.end()) return it->second;
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
+    auto node = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(""), builtInVal);
+    _primTypeCache[builtInVal] = node;
+    return node;
+}
+
+// The concrete type node of an argument expression (null if undeterminable). M27a inputs:
+// literals -> their builtin kind; a bare identifier -> its declared type via `localTys`; an
+// explicit new/cast -> its own type; an arithmetic expr -> an operand's type.
+SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string, SharedIdentifier>& localTys)
+{
+    if (!e) return nullptr;
+    ASTNode* n = e.get();
+    if (dynamic_cast<Int8Node*>(n))    return primTypeNode(IDENTIFIER_INT8_VAL);
+    if (dynamic_cast<Int16Node*>(n))   return primTypeNode(IDENTIFIER_INT16_VAL);
+    if (dynamic_cast<Int32Node*>(n))   return primTypeNode(IDENTIFIER_INT32_VAL);
+    if (dynamic_cast<Int64Node*>(n))   return primTypeNode(IDENTIFIER_INT64_VAL);
+    if (dynamic_cast<UInt8Node*>(n))   return primTypeNode(IDENTIFIER_UINT8_VAL);
+    if (dynamic_cast<UInt16Node*>(n))  return primTypeNode(IDENTIFIER_UINT16_VAL);
+    if (dynamic_cast<UInt32Node*>(n))  return primTypeNode(IDENTIFIER_UINT32_VAL);
+    if (dynamic_cast<UInt64Node*>(n))  return primTypeNode(IDENTIFIER_UINT64_VAL);
+    if (dynamic_cast<Float32Node*>(n)) return primTypeNode(IDENTIFIER_FLOAT32_VAL);
+    if (dynamic_cast<Float64Node*>(n)) return primTypeNode(IDENTIFIER_FLOAT64_VAL);
+    if (dynamic_cast<BooleanNode*>(n)) return primTypeNode(IDENTIFIER_BOOL_VAL);
+    if (dynamic_cast<StringNode*>(n))  return primTypeNode(IDENTIFIER_STRING_VAL);
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (!id->value) return nullptr;
+        auto it = localTys.find(*id->value);
+        return it != localTys.end() ? it->second : nullptr;
+    }
+    if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) return oc->type;
+    if (auto* c  = dynamic_cast<CastNode*>(n))           return c->type;
+    if (auto* b  = dynamic_cast<BinaryExpressionNode*>(n)) {
+        SharedIdentifier l = exprTypeNode(b->LHS, localTys);
+        return l ? l : exprTypeNode(b->RHS, localTys);
+    }
+    return nullptr;
+}
+
+// A type node usable as a generic type argument in M27a: a primitive, or a known
+// class/enum/interface. A bare type-parameter (its name resolves to none of these) and a
+// collection/smart-pointer type argument (a `List<…>` etc.) are NOT concrete here (M27b).
+bool CEmitter::isConcreteTypeArg(SharedIdentifier t)
+{
+    if (!t) return false;
+    if (t->builtInVal != IDENTIFIER_NONE_VAL) return true;   // primitive
+    if (t->genericArg) return false;                          // List<…>/Shared<…> arg — M27b
+    if (!t->value) return false;
+    std::string m = resolveUserName(*t->value, t->qualifier);
+    return _classes.count(m) || _enums.count(m) || _interfaces.count(m);
+}
+
+// Unify a generic call's arguments against the template's parameters -> a deduped instantiation.
+// Each parameter whose declared type is a bare type-param binds it to the argument's concrete
+// type; a second, conflicting binding, an unresolvable argument, or a return-only (unbound)
+// type parameter each produce a clean diagnostic. Runs with _typeSubst empty (concrete mangles).
+bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedArgumentList args,
+                                std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out)
+{
+    std::map<std::string, SharedExpression> byName;
+    if (args) for (auto& a : *args) if (a && a->name && a->name->value) byName[*a->name->value] = a->expression;
+
+    std::set<std::string> tps;
+    for (auto& tp : *tmpl->typeParams) if (tp) tps.insert(*tp);
+
+    std::map<std::string, SharedIdentifier> bind;
+    if (tmpl->parameters) for (auto& p : *tmpl->parameters) {
+        if (!p || !p->type || !p->type->value) continue;
+        const std::string& pty = *p->type->value;
+        if (p->type->genericArg || !tps.count(pty)) continue;   // not a bare type-param (List<T> etc. — M27b)
+        std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
+        auto ai = byName.find(pname);
+        if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
+        SharedIdentifier at = exprTypeNode(ai->second, localTys);
+        if (!isConcreteTypeArg(at)) {
+            unsupported(("cannot infer generic type parameter '" + pty + "' — argument '" + pname +
+                         "' is not a literal or a locally-typed value").c_str(), line);
+            return false;
+        }
+        auto b = bind.find(pty);
+        if (b != bind.end() && mangleElem(b->second) != mangleElem(at)) {
+            unsupported(("cannot unify type parameter '" + pty + "' (" + mangleElem(b->second) +
+                         " vs " + mangleElem(at) + ")").c_str(), line);
+            return false;
+        }
+        bind[pty] = at;
+    }
+
+    for (auto& tp : *tmpl->typeParams) {
+        if (tp && !bind.count(*tp)) {
+            unsupported(("cannot infer type parameter '" + *tp + "' from the call arguments "
+                         "(explicit type arguments are not yet supported)").c_str(), line);
+            return false;
+        }
+    }
+
+    out.templateKey = key;
+    out.typeArgs.clear();
+    std::string mangled = key;
+    for (auto& tp : *tmpl->typeParams) {
+        SharedIdentifier a = bind[*tp];
+        out.typeArgs.push_back(a);
+        mangled += "__" + mangleElem(a);
+    }
+    out.mangledName = mangled;
+    return true;
+}
+
+void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, SharedIdentifier>& localTys)
+{
+    if (!e) return;
+    ASTNode* n = e.get();
+    if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) {
+        if (oc->args) for (auto& a : *oc->args) if (a) scanExprForGenerics(a->expression, localTys);
+    } else if (auto* c = dynamic_cast<CastNode*>(n)) {
+        scanExprForGenerics(c->unaryExpression, localTys);
+    } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
+        scanExprForGenerics(b->LHS, localTys); scanExprForGenerics(b->RHS, localTys);
+    } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) {
+        scanExprForGenerics(l->LHS, localTys); scanExprForGenerics(l->RHS, localTys);
+    } else if (auto* tn = dynamic_cast<TernaryExpressionNode*>(n)) {
+        scanExprForGenerics(tn->condition, localTys); scanExprForGenerics(tn->LHS, localTys); scanExprForGenerics(tn->RHS, localTys);
+    } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        scanExprForGenerics(as->unaryExpression, localTys); scanExprForGenerics(as->expression, localTys);
+    } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        scanExprForGenerics(inv->expression, localTys);
+        if (inv->args) for (auto& a : *inv->args) if (a) scanExprForGenerics(a->expression, localTys);
+        if (inv->identifier && inv->identifier->value) {
+            std::string k = resolveFunc(*inv->identifier->value, inv->identifier->qualifier);
+            auto git = _generics.find(k);
+            if (git != _generics.end()) {
+                GenericInst gi;
+                if (inferGenericInst(git->second, k, inv->args, localTys, inv->line, gi)) {
+                    if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
+                    _callInst[inv] = gi.mangledName;   // one call node -> one instantiation
+                }
+            }
+        }
+    } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        scanExprForGenerics(ea->expression, localTys);
+        if (ea->expressionlist) for (auto& x : *ea->expressionlist) scanExprForGenerics(x, localTys);
+    } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        scanExprForGenerics(ma->expression, localTys);
+    } else if (auto* pe = dynamic_cast<PreIncrDecrNode*>(n)) {
+        scanExprForGenerics(pe->expression, localTys);
+    } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) {
+        scanExprForGenerics(po->expression, localTys);
+    } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        scanExprForGenerics(su->expression, localTys);
+    }
+}
+
+void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, SharedIdentifier>& localTys)
+{
+    if (!s) return;
+    ASTNode* n = s.get();
+    if (auto* b = dynamic_cast<BlockNode*>(n)) {
+        if (b->statements) for (auto& st : *b->statements) scanStmtForGenerics(st, localTys);
+    } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
+        if (d->variables) for (auto& v : *d->variables) if (v) {
+            scanExprForGenerics(v->initializer, localTys);
+            // ponytail: flat name->type map, no scope-pop — correct without shadowing (fine for M27a).
+            if (v->name && v->name->value && d->type) localTys[*v->name->value] = d->type;
+        }
+    } else if (auto* cd = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
+        if (cd->variables) for (auto& v : *cd->variables) if (v) {
+            scanExprForGenerics(v->initializer, localTys);
+            if (v->name && v->name->value && cd->type) localTys[*v->name->value] = cd->type;
+        }
+    } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
+        scanExprForGenerics(r->expression, localTys);
+    } else if (auto* f = dynamic_cast<IfNode*>(n)) {
+        scanExprForGenerics(f->booleanExpression, localTys);
+        scanStmtForGenerics(f->ifStatement, localTys); scanStmtForGenerics(f->elseStatement, localTys);
+    } else if (auto* w = dynamic_cast<WhileNode*>(n)) {
+        scanExprForGenerics(w->booleanExpression, localTys); scanStmtForGenerics(w->whileStatement, localTys);
+    } else if (auto* dw = dynamic_cast<DoWhileNode*>(n)) {
+        scanExprForGenerics(dw->booleanExpression, localTys); scanStmtForGenerics(dw->doWhileStatement, localTys);
+    } else if (auto* fr = dynamic_cast<ForNode*>(n)) {
+        if (fr->initializerStatements) for (auto& st : *fr->initializerStatements) scanStmtForGenerics(st, localTys);
+        scanExprForGenerics(fr->booleanExpression, localTys);
+        if (fr->iteratorStatements) for (auto& st : *fr->iteratorStatements) scanStmtForGenerics(st, localTys);
+        scanStmtForGenerics(fr->body, localTys);
+    } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+        scanExprForGenerics(fe->expression, localTys);
+        scanStmtForGenerics(fe->body, localTys);
+    } else if (auto* sw = dynamic_cast<SwitchNode*>(n)) {
+        scanExprForGenerics(sw->expression, localTys);
+        if (sw->switchsections) for (auto& sec : *sw->switchsections)
+            if (sec && sec->statementList) for (auto& st : *sec->statementList) scanStmtForGenerics(st, localTys);
+    } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
+        scanExprForGenerics(std::dynamic_pointer_cast<ExpressionNode>(s), localTys);
+    }
+}
+
+// Pre-pass: discover every reachable generic-function instantiation (call sites in free
+// functions + class members). Seeds `localTys` with the enclosing signature's params.
+void CEmitter::collectGenericInsts(SharedCompilationUnit unit)
+{
+    if (!unit || !unit->codeDeclarationList) return;
+    if (_generics.empty()) return;   // nothing generic in the program
+    auto seed = [&](SharedParameterList params, std::map<std::string, SharedIdentifier>& lt) {
+        if (params) for (auto& p : *params)
+            if (p && p->identifier && p->identifier->value && p->type) lt[*p->identifier->value] = p->type;
+    };
+    for (auto& decl : *unit->codeDeclarationList) {
+        if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+            if (!fn->block) continue;
+            std::map<std::string, SharedIdentifier> lt; seed(fn->parameters, lt);
+            scanStmtForGenerics(fn->block, lt);
+        } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+            if (cd->members) for (auto& m : *cd->members) {
+                ASTNode* mn = m.get();
+                if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
+                    std::map<std::string, SharedIdentifier> lt; seed(md->params, lt);
+                    scanStmtForGenerics(md->body, lt);
+                } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
+                    std::map<std::string, SharedIdentifier> lt;
+                    if (cc->declarator) seed(cc->declarator->params, lt);
+                    scanStmtForGenerics(cc->body, lt);
+                } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
+                    std::map<std::string, SharedIdentifier> lt;
+                    scanStmtForGenerics(dd->body, lt);
+                }
+            }
+        }
+    }
+}
+
+// Emit one specialized `static` C function for an instantiation: a forward prototype
+// (prototypeOnly) so instantiations may call one another / recurse, else the body. The
+// template body is re-emitted with _typeSubst bound to this tuple, in the template's home
+// namespace scope, under the instantiation's mangled name.
+void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
+{
+    auto tit = _generics.find(gi.templateKey);
+    if (tit == _generics.end()) return;
+    FunctionDeclarationNode* tmpl = tit->second;
+
+    NsCtx savedCtx = _nsCtx;
+    auto cit = _genericCtx.find(gi.templateKey);
+    if (cit != _genericCtx.end()) _nsCtx = cit->second;
+
+    _typeSubst.clear();
+    for (size_t i = 0; i < tmpl->typeParams->size() && i < gi.typeArgs.size(); ++i)
+        if ((*tmpl->typeParams)[i]) _typeSubst[*(*tmpl->typeParams)[i]] = gi.typeArgs[i];
+
+    if (prototypeOnly) emitFunctionPrototype(tmpl, &gi.mangledName);   // emits `static` via nameOverride
+    else               emitFunction(tmpl, &gi.mangledName);
+
+    _typeSubst.clear();
+    _nsCtx = savedCtx;
 }
 
 // Emit the CSTAR_*_{TYPE,FUNCS}(...) macro line per registered instantiation.
@@ -2999,6 +3288,16 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
 
     std::string name = *call->identifier->value;
 
+    // M27a: a call to a generic function was resolved to a concrete instantiation at discovery.
+    // Route it to that specialized C name; reorder named args off the template's param list.
+    {
+        auto ci = _callInst.find(call);
+        if (ci != _callInst.end()) {
+            const GenericInst& gi = _genericInsts[ci->second];
+            return emitReorderedCall(gi.mangledName, "", _funcs[gi.templateKey].params, call->args, call->line);
+        }
+    }
+
     // FunctionPtr invoke (M21): a bare local whose type is a signature → an indirect
     // call `c(reordered args)` (c IS the function pointer). Named-arg reorder off the sig.
     if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
@@ -3095,18 +3394,19 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
     return s;
 }
 
-void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn)
+void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::string* nameOverride)
 {
     bool isEntry = false;
-    std::string name = mangledFunctionName(fn, isEntry);
+    std::string name = nameOverride ? *nameOverride : mangledFunctionName(fn, isEntry);
     rejectStoredInterface(fn->returnType, "returned from a function", fn->line);
-    *_out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ");\n";
+    *_out << (nameOverride ? "static " : "") << cType(fn->returnType) << " " << name
+          << "(" << paramListC(fn->parameters, nullptr) << ");\n";
 }
 
-void CEmitter::emitFunction(FunctionDeclarationNode* fn)
+void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* nameOverride)
 {
     bool isEntry = false;
-    std::string name = mangledFunctionName(fn, isEntry);
+    std::string name = nameOverride ? *nameOverride : mangledFunctionName(fn, isEntry);
 
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
@@ -3137,7 +3437,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn)
     _scopes.clear();
 
     line(fn->line);
-    *_out << cType(fn->returnType) << " " << name << "(" << paramListC(fn->parameters, nullptr) << ")\n";
+    *_out << (nameOverride ? "static " : "") << cType(fn->returnType) << " " << name
+          << "(" << paramListC(fn->parameters, nullptr) << ")\n";
 
     if (fn->block) {
         emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
@@ -3711,6 +4012,10 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
     // collection's elemDestructible from the final class destructibility.
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectCollections(u); }
+    // M27a: discover generic-function instantiations after collections (a specialization may use
+    // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
+    for (auto& u : units)
+        if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
     computeDestructible();
 }
 
@@ -3800,11 +4105,21 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (auto& decl : *u->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn) || !fn->block) continue;   // skip extern + signature types
+                if (fn->typeParams && !fn->typeParams->empty()) continue;   // M27a: template — instantiated below
                 emitFunctionPrototype(fn);
                 any = true;
             }
     }
     if (any) *_out << "\n";
+
+    // M27a: generic-function instantiations — one `static` C function per (template, type-args),
+    // in the header so every module can call them (like the collection macros). Forward-declare
+    // all, then define, so a generic that calls another (or recurses) resolves.
+    if (!_genericInsts.empty()) {
+        for (auto& kv : _genericInsts) emitGenericInst(kv.second, /*prototypeOnly=*/true);
+        *_out << "\n";
+        for (auto& kv : _genericInsts) emitGenericInst(kv.second, /*prototypeOnly=*/false);
+    }
 }
 
 // This file's DEFINITIONS: its classes' vtable instances + interface vtables +
@@ -3831,6 +4146,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         if (ClassInfo* ci = classOf(decl.get())) emitClassDefinitions(*ci);
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+            if (fn->typeParams && !fn->typeParams->empty()) continue;   // M27a: template — instantiations live in the header
             if (!isExtern(fn) && fn->block) emitFunction(fn);   // skip signature types (no body)
         } else if (dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // emitted above

@@ -211,10 +211,20 @@ function_declaration
 
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
-  | function_modifier_opt FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
+  | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
+  ;
+/* Generic type parameters on a fn declaration: `fn max<T, U>(...)` — M27a.
+   Empty for a non-generic fn. The names are resolved contextually at emit time. */
+type_params_opt
+  : /* Nothing */
+  | LT ident_list GT
+  ;
+ident_list
+  : IDENTIFIER
+  | ident_list COMMA IDENTIFIER
   ;
 function_return_type
   : type

@@ -235,14 +235,16 @@ public:
     SharedIdentifier name;
     SharedParameterList parameters;
     SharedBlock block;
-    FunctionDeclarationNode(CodeGenContext& context,  SharedModifier modifier, SharedIdentifier returnType, SharedIdentifier name, 
-                            SharedParameterList parameters, SharedBlock block ) 
+    SharedStringList typeParams;   // <T, ...> — generic fn (M27a); empty for non-generic
+    FunctionDeclarationNode(CodeGenContext& context,  SharedModifier modifier, SharedIdentifier returnType, SharedIdentifier name,
+                            SharedParameterList parameters, SharedBlock block, SharedStringList typeParams = SharedStringList() )
         : ASTNode(context),  StatementNode(context)
         , modifier(modifier)
         , returnType(returnType)
         , name(name)
         , parameters(parameters)
-        , block(block) { }
+        , block(block)
+        , typeParams(typeParams) { }
 };
 
 class FunctionParameterNode : public ExpressionNode {
