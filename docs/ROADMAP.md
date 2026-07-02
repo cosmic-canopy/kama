@@ -173,11 +173,17 @@ their names/numbers.
      dtor on destructibility). Positives `value_public_field`/`empty_resource` + 8 xfails
      (`dtor_on_value`, `value_owns_resource`, `public_field_on_resource`, `protected_on_value`,
      `virtual_on_value`, `contract_with_field`, `contract_with_body`, `bad_type_kind`). 146/146, ASan-clean.
-   - **M26h-3 — migrate all fixtures + docs, hard-cut.** Rewrite every fixture to `type value`/
-     `type resource`/`type contract` (`pod` → `type value` + explicit `public` fields); remove
-     `class`/`pod`/`interface` from grammar + lexer + emitter legacy branches; rewrite the docs;
-     regenerate `docs/grammar.bnf`. Full model in [TYPE_MODEL.md](TYPE_MODEL.md). *(Sequenced before
-     M27 so generics is authored in the new vocabulary — a `contract` bound, not an `interface` bound.)*
+   - **M26h-3 — migrate all fixtures, hard-cut the old keywords.** ✅ **DONE (v0.1.45).** Migrated all
+     ~140 fixtures (+ the `bench` dispatch source) to `type value`/`type resource`/`type contract`
+     (plain `class` → `resource` if it owns a dtor/collection/smart-ptr else `value`, the compiler as
+     oracle; `pod class` → `type value` + explicit `public` fields; `virtual/abstract/final class` →
+     `type … resource`; `extern class` → `type extern value`); deleted two now-obsolete legacy xfails
+     (`pod_method`, `field_visibility` — a `value` may have methods and public fields). Removed
+     `class`/`pod`/`interface` from the lexer, grammar, and the dead emitter `pod` code (grammar stays
+     `%expect 1`; `class Foo {}` is now a parse error). Fixed rule-4 (a `final resource` override uses
+     `protected` by NVI). Regenerated `docs/grammar.bnf`. 144/144, ASan-clean. *(Prose docs
+     SPEC/KEYWORDS/TYPE_MODEL updated next.)* Full model in [TYPE_MODEL.md](TYPE_MODEL.md). *(Sequenced
+     before M27 so generics is authored in the new vocabulary — a `contract` bound, not `interface`.)*
 
 5. **M27 — generics** *(the long-reserved "M23", renumbered to its build order).* Full user-defined
    generics: `Map<K,V>`, multi-param + nested (`>>` lexing). The foundational type-system feature —

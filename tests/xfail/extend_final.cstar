@@ -1,5 +1,5 @@
 // A `final class` is a sealed leaf — it cannot be extended further.
-virtual class Base { protected virtual fn int h() { return 0; } }
-final class Leaf extends Base { protected override fn int h() { return 1; } }
-virtual class Bad extends Leaf { protected override fn int h() { return 2; } }
+type virtual resource Base { protected virtual fn int h() { return 0; } }
+type final resource Leaf extends Base { protected override fn int h() { return 1; } }
+type virtual resource Bad extends Leaf { protected override fn int h() { return 2; } }
 fn int main() { return 0; }

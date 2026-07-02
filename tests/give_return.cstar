@@ -1,7 +1,7 @@
 // M26d — `give`/`copy` in RETURN position. `give` moves a dying local out (the
 // scope dtor must not free what the caller now owns); `copy` retains (the refcount
 // bump that lets the source survive — exercised here on a Shared).
-class Counter { int32 n; public Counter(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
+type value Counter { int32 n; public Counter(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
 
 // `give`: hand the local Owned to the caller (move out).
 fn Owned<Counter> makeOwned(int32 n) { Owned<Counter> c = new Counter(n: n); return give c; }

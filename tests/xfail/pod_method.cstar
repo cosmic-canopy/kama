@@ -1,3 +1,0 @@
-// A `pod class` is plain data — no methods (operators/static only).
-pod class Vec2 { int32 x; int32 y; public fn int32 sum() { return x + y; } }
-fn int main() { return 0; }

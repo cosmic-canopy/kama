@@ -1,4 +1,4 @@
-class Counter
+type value Counter
 {
     int value;
     public Counter(int start)

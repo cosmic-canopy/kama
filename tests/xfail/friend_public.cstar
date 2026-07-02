@@ -1,5 +1,5 @@
 // Granting a public member is redundant — flag it rather than let it mislead.
-class Account {
+type value Account {
     int64 balance;
     public Account(int64 b) { this.balance = b; }
     public fn int64 get() { return this.balance; }

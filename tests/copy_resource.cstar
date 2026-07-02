@@ -5,7 +5,7 @@
 // Independence is proved by keeping every copy live to scope exit: a shallow copy would double-free
 // (ASan traps), a deep copy frees N distinct heap buffers cleanly.
 
-class Res {
+type resource Res {
     List<int32> items;                                      // owns a heap buffer
     public Res(int32 v) { this.items.add(item: v); }
     ~Res() { }                                              // resource (move-only); frees `items` too

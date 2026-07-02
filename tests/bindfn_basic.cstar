@@ -2,7 +2,7 @@
 // through the captured receiver; a free function promotes into the same type
 // (null object, no capture). Receiver is HIDDEN in the signature.
 fnptr int32 Compare(int32 a, int32 b);
-class Scaler {
+type value Scaler {
     int32 k;
     Scaler(int32 k) { this.k = k; }
     fn int32 apply(int32 a, int32 b) { return (a - b) * this.k; }

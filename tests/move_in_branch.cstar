@@ -4,7 +4,7 @@
 extern fn void cstar_trace(int code);
 extern fn int cstar_trace_get();
 
-class Res {
+type resource Res {
     List<int32> items;
     public Res(int32 v) { this.items.add(item: v); }
     ~Res() { cstar_trace(code: 7); }

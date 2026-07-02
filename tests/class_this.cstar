@@ -1,4 +1,4 @@
-class Accum
+type value Accum
 {
     int total;
     public Accum(int init)

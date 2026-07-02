@@ -1,12 +1,12 @@
 // Virtual dispatch through a `ref Shape` parameter (the base object borrowed by ref).
 // M25b: the virtual is a `protected` hook (`compute`); `area` is the public surface a
 // free function may call. Dispatch still resolves to the most-derived override.
-virtual class Shape
+type virtual resource Shape
 {
     public fn int area() { return this.compute(); }
     protected virtual fn int compute() { return 1; }
 }
-final class Square extends Shape
+type final resource Square extends Shape
 {
     int s;
     public Square(int s) { this.s = s; }

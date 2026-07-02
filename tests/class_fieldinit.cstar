@@ -1,4 +1,4 @@
-class Box
+type value Box
 {
     int w = 6;
     int h = 7;

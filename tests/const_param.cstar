@@ -2,7 +2,7 @@
 // copying, can't mutate it); `const T` is an immutable value param. Only const methods
 // are callable on them, and writing to/through them is a compile error (verified
 // separately). Mirrors the same deep-const rules as const locals.
-class Vec2 {
+type value Vec2 {
     int32 x; int32 y;
     public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
     public const fn int32 lenSq() { return this.x * this.x + this.y * this.y; }

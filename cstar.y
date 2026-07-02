@@ -109,14 +109,14 @@ struct cstaryystype {
 
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BREAK
-%token <string> CASE CAST CLASS CONST CONTINUE
+%token <string> CASE CAST CONST CONTINUE
 %token <string> DEFAULT DO DOUBLE ELSE ENUM EXPORT EXTERN EXTENDS IMPLEMENTS
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH IF IN
 %token <string> INT INT8 INT16 INT32 INT64
-%token <string> INTERFACE NAMESPACE
+%token <string> NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT
-%token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND POD
+%token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
 %token <string> REF RETURN STATIC STRING
 %token <string> SWITCH THIS TRUE TYPE
 %token <string> UINT8 UINT16 UINT32 UINT64
@@ -174,8 +174,8 @@ struct cstaryystype {
 %type <statement> declaration_statement local_variable_declaration embedded_statement local_constant_declaration
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> switch_statement while_statement do_statement for_statement foreach_statement
-%type <statement> break_statement continue_statement return_statement enum_declaration interface_declaration
-%type <statement> class_declaration marked_type_declaration unsafe_statement
+%type <statement> break_statement continue_statement return_statement enum_declaration
+%type <statement> marked_type_declaration unsafe_statement
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <namespacedeclaration> namespace_opt
@@ -183,7 +183,7 @@ struct cstaryystype {
 %type <usingdeclarationlist> using_directives_opt using_directives
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
-%type <identifierlist> friend_member_list interface_base_opt interface_base interface_type_list
+%type <identifierlist> friend_member_list interface_type_list
 %type <modifier> modifier function_modifier_opt parameter_modifier_opt
 %type <modifierlist> modifiers modifiers_opt
 %type <parameter> parameter
@@ -206,8 +206,6 @@ struct cstaryystype {
 %type <argumentlist> argument_list_opt argument_list
 %type <enummemberdecl> enum_member_declaration
 %type <enummemberdecllist> enum_body enum_member_declarations_opt enum_member_declarations
-%type <functiondecl> interface_member_declaration interface_method_declaration
-%type <functiondecllist> interface_body interface_member_declarations_opt interface_member_declarations
 %type <classbasedecl> class_base_opt class_base
 %type <classmemberdecl> class_member_declaration constant_declaration field_declaration method_declaration friend_declaration
 %type <classmemberdecl> operator_declaration constructor_declaration destructor_declaration
@@ -369,9 +367,7 @@ class_type
   ;
 
 type_declaration
-  : class_declaration
-  | interface_declaration
-  | enum_declaration
+  : enum_declaration
   | marked_type_declaration
   ;
 
@@ -404,7 +400,6 @@ modifier
   | PROTECTED   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | PUBLIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | FINAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | POD   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | STATIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | VIRTUAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | VOLATILE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
@@ -829,9 +824,6 @@ conditional_expression
                               Class 
 ------------------------------------------------------------------------------*/
 
-class_declaration
-  : modifiers_opt CLASS basic_identifier class_base_opt class_body semicolon_opt   { $$ = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4, $5); }
-  ;
 class_base_opt
   : /* Nothing */   { $$ = SharedClassBaseDeclaration(); }
   | class_base
@@ -840,6 +832,11 @@ class_base
   : EXTENDS type_name   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<IdentifierList>()); }
   | IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), $2); }
   | EXTENDS type_name IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
+  ;
+/* The `implements <contract>[, …]` list (M26h: contracts, was interfaces). */
+interface_type_list
+  : type_name   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | interface_type_list COMMA type_name   { $1->push_back($3); }
   ;
 class_body
   : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE   { $$ = $2; }
@@ -978,39 +975,6 @@ enum_member_declaration
 /*------------------------------------------------------------------------------ 
                               Interface 
 ------------------------------------------------------------------------------*/
-
-interface_declaration
-  : modifiers_opt INTERFACE basic_identifier interface_base_opt interface_body semicolon_opt   { $$ = std::make_shared<InterfaceDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4, $5 ); }
-  ;
-interface_base_opt
-  : /* Nothing */   { $$ = std::make_shared<IdentifierList>(); }
-  | interface_base
-  ;
-interface_base
-  : COLON interface_type_list   { $$ = $2; }
-  ;
-interface_type_list
-  : type_name   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
-  | interface_type_list COMMA type_name   { $1->push_back($3); }
-  ;
-interface_body
-  : LEFT_BRACE interface_member_declarations_opt RIGHT_BRACE   { $$ = $2; }
-  ;
-interface_member_declarations_opt
-  : /* Nothing */   { $$ = std::make_shared<FunctionDeclarationList>(); }
-  | interface_member_declarations
-  ;
-interface_member_declarations
-  : interface_member_declaration   { $$ = std::make_shared<FunctionDeclarationList>(); $$->push_back($1); }
-  | interface_member_declarations interface_member_declaration   { $1->push_back($2); }
-  ;
-interface_member_declaration
-  : interface_method_declaration
-  ;
-interface_method_declaration
-  : FN type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   { $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() ); }
-  | FN VOID IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   { $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() ); }
-  ;
 
 %%
 

@@ -3,13 +3,13 @@
 // RETURN (M26e only rejected a *bare* interface in those positions). Dispatch stays polymorphic; the
 // field's owner drops it in RAII order. (A `List<Shared<IShape> >` needs the general
 // smart-pointer-in-collection support + `>>` split — that lands with generics, M27.)
-interface IShape { fn int32 area(); }
-class Sq implements IShape {
+type contract IShape { fn int32 area(); }
+type resource Sq implements IShape {
     List<int32> side;
     public Sq(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
-class Holder {
+type resource Holder {
     Shared<IShape> shape;                                  // owning-interface FIELD
     public Holder(Shared<IShape> s) { this.shape = give s; }
     public fn int32 area() { return this.shape.area(); }   // polymorphic dispatch through the field

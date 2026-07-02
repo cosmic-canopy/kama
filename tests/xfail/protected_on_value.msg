@@ -1,1 +1,1 @@
-belongs to an extensible
+belongs to a `virtual`/`abstract`/`final resource`

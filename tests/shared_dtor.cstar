@@ -3,7 +3,7 @@
 extern fn void cstar_trace(int code);
 extern fn int cstar_trace_get();
 
-class Probe
+type resource Probe
 {
     int32 id;
     Probe(int32 id) { this.id = id; cstar_trace(code: 1); }

@@ -4,7 +4,7 @@
 extern fn void cstar_trace(int code);
 extern fn int cstar_trace_get();
 fnptr int32 Get(int32 d);
-class Probe {
+type resource Probe {
     int32 id;
     Probe(int32 id) { this.id = id; }
     ~Probe() { cstar_trace(code: 9); }

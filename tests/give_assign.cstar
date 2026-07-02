@@ -1,7 +1,7 @@
 // M26d tail — give/copy markers in ASSIGNMENT position (uniform with init/arg/return).
 // A bare reassignment uses the kind default (Owned=move, Shared=retain); an explicit
 // `give` opts into moving a Shared handle instead of retaining.
-class C { int32 n; public C(int32 n){ this.n = n; } public fn int32 g(){ return this.n; } }
+type value C { int32 n; public C(int32 n){ this.n = n; } public fn int32 g(){ return this.n; } }
 fn int32 main() {
     Owned<C> a = new C(n: 20);
     Owned<C> b = new C(n: 9);

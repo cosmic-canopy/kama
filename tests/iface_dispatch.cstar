@@ -1,14 +1,14 @@
-interface IShape
+type contract IShape
 {
     fn int64 area();
 }
-class Circle implements IShape
+type value Circle implements IShape
 {
     int64 r;
     public Circle(int64 r) { this.r = r; }
     public fn int64 area() { return r * r; }
 }
-class Square implements IShape
+type value Square implements IShape
 {
     int64 s;
     public Square(int64 s) { this.s = s; }

@@ -1,7 +1,7 @@
 // M26f-4 — a `resource` that opted into `Copyable` (a public nullary `copy` returning its own
 // type) makes the give/copy marker MANDATORY: a bare hand-off is now ambiguous (both move and
 // copy are plausible) and must be a compile error. Say `give` (move) or `copy` (duplicate).
-class Res {
+type resource Res {
     int32 n;
     public Res(int32 v) { this.n = v; }
     ~Res() { }                                              // resource (move-only)

@@ -1,7 +1,7 @@
 // M22: a bindable returned from a factory MOVES out to the caller (the local must
 // not also drop the object it just transferred).
 fnptr int32 Get(int32 d);
-class Probe {
+type value Probe {
     int32 id;
     Probe(int32 id) { this.id = id; }
     fn int32 read(int32 d) { return this.id + d; }

@@ -1,7 +1,7 @@
 // A concrete class can't be passed by `ref`/`out` to an interface parameter — it would
 // need a throwaway temp (reseat would be lost). Bind it to the interface first.
-interface IShape { fn int64 area(); }
-class Circle implements IShape {
+type contract IShape { fn int64 area(); }
+type value Circle implements IShape {
     int64 r;
     public Circle(int64 r) { this.r = r; }
     public fn int64 area() { return r * r; }

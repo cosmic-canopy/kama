@@ -1478,7 +1478,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (!mod->value) continue;
                 const std::string& mv = *mod->value;
                 if (mv == "abstract") ci.isAbstractClass = true;
-                else if (mv == "pod")      ci.isPod = true;
                 else if (mv == "virtual")  ci.isVirtualClass = true;
                 else if (mv == "final")    ci.isFinalClass = true;
                 else if (mv == "export")
@@ -1534,12 +1533,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …` (M24b)
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);  // M25
-                        // M26h — `protected` ⟺ an extensible `resource` (virtual/abstract). It's
-                        // meaningless on a `value` or a sealed `resource`; those members are private/public.
+                        // M26h — `protected` belongs to a `resource` in an extensibility hierarchy
+                        // (`virtual`/`abstract` declares protected members for subclasses; a `final`
+                        // override still uses `protected` by NVI). It's meaningless on a `value`, a
+                        // plain sealed `resource`, or a `contract` — those members are private/public.
                         if (ci.kind != TypeKind::Legacy && mi.visibility == Visibility::Protected
-                            && !(ci.isVirtualClass || ci.isAbstractClass))
-                            unsupported(("`protected` belongs to an extensible `resource` — `" + ci.name
-                                         + "` is not `virtual`/`abstract`, so its members are `private` or `public`").c_str(), md->line);
+                            && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
+                            unsupported(("`protected` belongs to a `virtual`/`abstract`/`final resource` — `" + ci.name
+                                         + "` is a plain `value`/`resource`, so its members are `private` or `public`").c_str(), md->line);
                         mi.isFinal    = modHas(md->modifiers, "final");                              // M25
                         if (md->modifiers)
                             for (auto& mod : *md->modifiers) {
@@ -1641,9 +1642,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
                              + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd->line);
         }
-        // M25b — `pod class` is plain data: no methods, no base, no vtable.
-        if (ci.isPod && !ci.methods.empty())
-            unsupported(("`pod class` '" + ci.name + "' may not declare methods (operators/static only)").c_str(), cd->line);
         _classes[ci.name] = ci;
     }
 }
@@ -2650,7 +2648,7 @@ Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mod
             unsupported("a field takes no visibility modifier — data exposure is the class kind "
                         "(`pod class` = public, otherwise private); expose data with an accessor method", line);
     }
-    return ci.isPod ? Visibility::Public : Visibility::Private;
+    return Visibility::Private;   // a resource field is private
 }
 
 // Is a member (declared on `owner`, visibility `vis`) accessible from the current

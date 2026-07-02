@@ -1,6 +1,6 @@
 // Weak<T>: make a weak ref from a Shared, upgrade it (lock) while alive, and use
 // the shared object through the upgraded handle.
-class Counter
+type value Counter
 {
     int32 value;
     Counter(int32 start) { this.value = start; }

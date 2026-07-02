@@ -1,3 +1,0 @@
-// A field takes no visibility modifier — exposure is the class kind, not a per-field knob.
-class Box { public int32 n; public Box(int32 n) { this.n = n; } }
-fn int main() { return 0; }

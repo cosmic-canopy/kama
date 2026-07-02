@@ -1,5 +1,5 @@
 // Owned<T>: heap construction, auto-deref method calls, RAII free.
-class Counter
+type value Counter
 {
     int32 value;
     Counter(int32 start) { this.value = start; }

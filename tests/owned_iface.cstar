@@ -3,13 +3,13 @@
 // polymorphically through the vtable; dropping the handle destroys the concrete object via the
 // vtable's `__dtor` slot (so a destructible impl's own heap is freed) then frees it. Move-only, like
 // `Owned<T>`. ASan-clean: the destructible `Square`'s `List` is freed exactly once.
-interface IShape { fn int32 area(); }
-class Rect implements IShape {
+type contract IShape { fn int32 area(); }
+type value Rect implements IShape {
     int32 w; int32 h;
     public Rect(int32 w, int32 h) { this.w = w; this.h = h; }
     public fn int32 area() { return this.w * this.h; }         // non-destructible impl
 }
-class Square implements IShape {
+type resource Square implements IShape {
     List<int32> side;                                          // owns heap -> destructible impl
     public Square(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }

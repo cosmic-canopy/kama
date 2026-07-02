@@ -2,7 +2,7 @@
 // inside it `this` is immutable (can't write fields; can only call other const
 // methods). A non-const method on a const receiver is a compile error (verified
 // separately). Mutable receivers keep full access.
-class Counter {
+type value Counter {
     int32 n;
     public Counter(int32 n) { this.n = n; }
     public const fn int32 value() { return this.n; }              // read-only

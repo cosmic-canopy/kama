@@ -1,6 +1,6 @@
 // Shared<T> refcount: two handles share one pointee. When one handle drops, the
 // pointee survives (strong 2->1); the other handle is still valid.
-class Counter
+type value Counter
 {
     int32 value;
     Counter(int32 start) { this.value = start; }

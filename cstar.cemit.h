@@ -124,9 +124,8 @@ struct ClassInfo {
     std::string                       baseName;        // "" if no base
     ClassInfo*                        base = nullptr;  // resolved by linkBases()
     bool                              isAbstractClass = false;
-    // M25 — class kind + access. Kinds: plain (none) | pod | virtual | abstract | final.
-    bool                              isPod = false;          // `pod class` — public data, no vtable/dtor
-    bool                              isVirtualClass = false; // `virtual class` — extensible
+    // M26h — `virtual`/`abstract`/`final` are extensibility qualifiers on a `resource`.
+    bool                              isVirtualClass = false; // `virtual resource` — extensible base
     bool                              isFinalClass = false;   // `final class` — sealed leaf
     Visibility                        ctorVisibility = Visibility::Public;   // synth/default ctor is public; an EXPLICIT ctor defaults private
     std::vector<RawFriendGrant>       friendGrantsRaw;        // M25c — captured at collection

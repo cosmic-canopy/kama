@@ -4,7 +4,7 @@
 extern fn void cstar_trace(int code);
 extern fn int cstar_trace_get();
 
-class Node
+type resource Node
 {
     int32 id;
     Node(int32 id) { this.id = id; cstar_trace(code: 5); }

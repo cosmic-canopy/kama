@@ -1,14 +1,14 @@
 // Base-field embedding: a derived class reaches inherited base data.
 // M25b: fields are private (kind-decides), so the base exposes `x` to subclasses via a
 // `protected` accessor — the sanctioned "private field, protected accessor" pattern.
-virtual class Base
+type virtual resource Base
 {
     int x;                                       // private; embedded in the derived layout
     public Base(int x) { this.x = x; }
     protected fn int getX() { return this.x; }   // visible to subclasses, not to the world
     protected virtual fn int tag() { return 0; }
 }
-final class Derived extends Base
+type final resource Derived extends Base
 {
     int y;
     public Derived(int x, int y) : base(x: x)

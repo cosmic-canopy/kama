@@ -1,6 +1,6 @@
 // M26f-2 — a `resource` value moved in SOME switch sections but not others (no `default` to
 // cover the rest) is `MaybeMoved` at the join and live at scope exit -> compile error.
-class Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
+type resource Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
 fn int32 sink(Res r) { return r.head(); }
 fn int32 main() {
     Res a = Res(v: 1);

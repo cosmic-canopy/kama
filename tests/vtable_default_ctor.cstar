@@ -2,11 +2,11 @@
 // still get its vtable initialized, or the first virtual call segfaults.
 // M25b: polymorphism is opt-in — `virtual class`, a `protected virtual` hook behind a
 // public method; the sealed leaf is a `final class`.
-virtual class Shape {
+type virtual resource Shape {
     protected virtual fn int32 val() { return 0; }
     public fn int32 plus1() { return this.val() + 1; }   // public surface dispatches virtually
 }
-final class Box extends Shape {
+type final resource Box extends Shape {
     int32 n;                                          // private (kind-decides); set via accessor
     public fn void put(int32 v) { this.n = v; }
     protected override fn int32 val() { return this.n; }

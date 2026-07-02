@@ -2,7 +2,7 @@
 // element via its `copy()` method (a fresh, independent per-element buffer). This is the piece
 // M26f-3 deferred (it required the Copyable contract, M26f-4). Independence is proved by ASan:
 // a shallow copy would alias each element's inner `List` and double-free it at scope exit.
-class Res {
+type resource Res {
     List<int32> items;                                     // owns a heap buffer
     public Res(int32 v) { this.items.add(item: v); }
     ~Res() { }                                             // resource

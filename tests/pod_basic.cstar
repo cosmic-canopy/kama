@@ -1,6 +1,6 @@
-// A `pod class` is plain public data: all fields public, no methods/vtable/dtor.
-// Fields are read AND written directly from outside (the kind grants the exposure).
-pod class Vec2 { int32 x; int32 y; }
+// M26h — a `type value` with `public` fields is plain public data (the old `pod`): fields are read
+// AND written directly from outside. Field visibility is per field now — `public` makes it exposed.
+type value Vec2 { public int32 x; public int32 y; }
 fn int32 main() {
     Vec2 v = Vec2();
     v.x = 30;            // public field — external write OK

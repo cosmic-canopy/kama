@@ -1,4 +1,4 @@
-class Account {
+type value Account {
     int64 balance;
     public Account(int64 b) { this.balance = b; }
     friend readBalance[balance];     // a free function
@@ -6,10 +6,10 @@ class Account {
     friend Ledger::post[balance];    // a single method
 }
 fn int64 readBalance(ref Account a) { return a.balance; }   // free-fn friend reaches in
-class Bank {
+type value Bank {
     public fn int64 viaBank(ref Account a) { return a.balance; }   // any Bank method may
 }
-class Ledger {
+type value Ledger {
     public fn int64 post(ref Account a) { return a.balance; }      // granted method
 }
 fn int main() {

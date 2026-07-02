@@ -1,6 +1,6 @@
 // M26e — an interface borrows its object; storing one in a field would dangle.
 // Own the object instead (a `Shared<IShape>` — enabled by M26f).
-interface IShape { fn int32 area(); }
-class Sq implements IShape { int32 s; public Sq(int32 s){ this.s = s; } public fn int32 area(){ return this.s * this.s; } }
-class Holder { IShape sh; public Holder(){ } }
+type contract IShape { fn int32 area(); }
+type value Sq implements IShape { int32 s; public Sq(int32 s){ this.s = s; } public fn int32 area(){ return this.s * this.s; } }
+type value Holder { IShape sh; public Holder(){ } }
 fn int32 main() { return 0; }

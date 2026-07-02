@@ -1,10 +1,10 @@
 // `override` requires a virtual method in a base class (Step 3) — else malformed vtable.
-virtual class Base {
+type virtual resource Base {
     public Base() { }
     public fn int32 plain() { return 1; }            // NON-virtual
     protected virtual fn int32 hook() { return 0; }  // makes Base a valid virtual class
 }
-final class Derived extends Base {
+type final resource Derived extends Base {
     public Derived() { }
     protected override fn int32 plain() { return 2; }   // ERROR: plain is not virtual
 }

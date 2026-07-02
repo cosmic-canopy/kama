@@ -8,7 +8,7 @@
 extern fn void cstar_trace(int code);
 extern fn int cstar_trace_get();
 
-class Probe
+type resource Probe
 {
     int id;
     public Probe(int id) { this.id = id; }

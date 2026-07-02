@@ -3,13 +3,13 @@ extern fn int cstar_trace_get();
 
 // Destructor chaining through inheritance (Derived's dtor runs, then Base's).
 // M25b: extension is opt-in, so Base is a `virtual class`; the dtor chain is unchanged.
-virtual class Base
+type virtual resource Base
 {
     public Base() { }
     ~Base() { cstar_trace(code: 1); }
     protected virtual fn int kind() { return 0; }
 }
-final class Derived extends Base
+type final resource Derived extends Base
 {
     public Derived() { }
     ~Derived() { cstar_trace(code: 2); }

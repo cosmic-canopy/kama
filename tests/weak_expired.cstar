@@ -1,6 +1,6 @@
 // Weak<T> does NOT keep the pointee alive: after the last Shared drops, the weak
 // is expired and lock() safely returns an empty Shared.
-class Counter
+type value Counter
 {
     int32 value;
     Counter(int32 start) { this.value = start; }

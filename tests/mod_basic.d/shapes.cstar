@@ -1,6 +1,6 @@
 namespace Shapes;
 
-class Box
+type value Box
 {
     int32 w;
     int32 h;

@@ -2,8 +2,8 @@
 // Retain shares one concrete object (freed once, by the last strong handle, via the vtable's
 // `__dtor`); a `Weak<I>` observes without keeping alive and `upgrade()`s to a live `Shared<I>` or an
 // empty one after the object dies. Polymorphic dispatch through the fat handle. ASan-clean.
-interface IShape { fn int32 area(); }
-class Sq implements IShape {
+type contract IShape { fn int32 area(); }
+type resource Sq implements IShape {
     List<int32> side;                                       // owns heap -> destructible impl
     public Sq(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }

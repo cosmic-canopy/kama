@@ -1,7 +1,7 @@
 // M21b: an UNBOUND method reference `Type::method`. A method lowers to
 // Class__method(Class* self, …), so it's a function pointer whose first param is
 // the receiver (`ref Vec2 self`). The object is passed explicitly at the call.
-class Vec2 {
+type value Vec2 {
     int32 x; int32 y;
     public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
     fn int32 dot(ref Vec2 o) { return this.x * o.x + this.y * o.y; }

@@ -1,3 +1,3 @@
 // `new` is the heap operator (M26a) — constructing a stack value must drop it.
-class Box { int32 v; public Box(int32 v) { this.v = v; } }
+type value Box { int32 v; public Box(int32 v) { this.v = v; } }
 fn int main() { Box b = new Box(v: 1); return 0; }   // ERROR: drop `new` (`Box b = Box(v: 1)`)

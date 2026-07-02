@@ -1,3 +1,3 @@
 // A `virtual class` must actually declare an overridable method.
-virtual class Empty { public fn int id() { return 1; } }
+type virtual resource Empty { public fn int id() { return 1; } }
 fn int main() { return 0; }

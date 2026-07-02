@@ -2,7 +2,7 @@
 // arg or an inline initializer), then immutable. Writing it in a method or through
 // any binding outside the ctor is a compile error (verified separately); reading it
 // (incl. from a const method) is fine.
-class Widget {
+type value Widget {
     const int32 id;          // set from the ctor arg
     const int32 kind = 7;    // inline initializer
     int32 count;             // private (kind-decides); read via the accessor

@@ -5,7 +5,7 @@
 extern fn void cstar_trace(int code);
 extern fn int cstar_trace_get();
 
-class Probe
+type resource Probe
 {
     int id;
     ~Probe() { cstar_trace(code: 5); }

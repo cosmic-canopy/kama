@@ -1,3 +1,3 @@
 // Instantiating an abstract class would leave a NULL vtable slot and crash (Step 3).
-abstract class Shape { protected abstract fn int32 area(); }
+type abstract resource Shape { protected abstract fn int32 area(); }
 fn int main() { Shape s = Shape(); return 0; }

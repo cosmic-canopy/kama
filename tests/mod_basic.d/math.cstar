@@ -2,7 +2,7 @@ namespace Math;
 
 fn int32 add(int32 a, int32 b) { return a + b; }
 
-class Counter
+type value Counter
 {
     int32 value;
     public Counter(int32 start) { this.value = start; }

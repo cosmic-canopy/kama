@@ -1,11 +1,11 @@
 // M25b: a public method (`describe`) over a `protected virtual` hook (`area`) — the
 // sanctioned way to publish polymorphism from a class hierarchy (vs. an interface).
-virtual class Shape
+type virtual resource Shape
 {
     public fn int describe() { return this.area(); }
     protected virtual fn int area() { return 1; }
 }
-final class Circle extends Shape
+type final resource Circle extends Shape
 {
     int r;
     public Circle(int r) { this.r = r; }

@@ -1,5 +1,5 @@
 // Shared<T>: heap construction + control block, auto-deref, RAII (last handle frees).
-class Counter
+type value Counter
 {
     int32 value;
     Counter(int32 start) { this.value = start; }
