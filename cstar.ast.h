@@ -606,6 +606,9 @@ public:
     // M26h: the kind word from a `type <kind> Name { … }` declaration ("value"/"resource"/
     // "contract"); null for a legacy `class`/`pod class`. Drives the ownership/access model.
     SharedString typeKind;
+    // M27b: type parameters from `type value Box<T> { … }` — monomorphized per concrete arg;
+    // empty for a non-generic type. Set by the grammar action (like typeKind).
+    SharedStringList typeParams;
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
                         SharedIdentifier name,
                         SharedClassBaseDeclaration baseTypes,

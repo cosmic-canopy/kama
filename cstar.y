@@ -377,7 +377,15 @@ type_declaration
    kinds share the class body; the emitter routes `contract` to the interface path. */
 marked_type_declaration
   : TYPE modifiers_opt IDENTIFIER basic_identifier class_base_opt class_body semicolon_opt
-    { auto n = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6); n->typeKind = $3; $$ = n; }
+    { auto n = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6); n->typeKind = $3;
+      /* M27b: `type value Box<T> { … }` — the name parsed as Box<T> (genericArg = T). Capture the
+         type-parameter name and strip it, so the class NAME stays bare `Box`. Single param only (alpha). */
+      if ($4->genericArg && $4->genericArg->value) {
+          n->typeParams = std::make_shared<StringList>();
+          n->typeParams->push_back($4->genericArg->value);
+          $4->genericArg = SharedIdentifier();
+      }
+      $$ = n; }
   ;
 
 /*------------------------------------------------------------------------------ 

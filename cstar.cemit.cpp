@@ -102,7 +102,8 @@ bool CEmitter::isNamespace(const std::string& name) const
 std::string CEmitter::resolveUserName(const std::string& value, SharedStringList qualifier)
 {
     auto known = [&](const std::string& n) {
-        return _classes.count(n) || _enums.count(n) || _interfaces.count(n) || _sigs.count(n);
+        return _classes.count(n) || _enums.count(n) || _interfaces.count(n) || _sigs.count(n)
+            || _genericTypes.count(n);   // M27b: a generic-type template resolves to its scoped name too
     };
     // FFI (M16): extern struct/handle names are global literal C names.
     if ((!qualifier || qualifier->empty()) && _externNames.count(value)) return value;
@@ -184,6 +185,12 @@ std::string CEmitter::cType(SharedIdentifier type)
         (*type->value == "Array" || *type->value == "List" || *type->value == "Owned" ||
          *type->value == "Shared" || *type->value == "Weak" || *type->value == "BindableFunctionPtr"))
         return *type->value + "_" + mangleElem(type->genericArg);
+    // M27b: a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box_int32`).
+    // Reached only for a non-reserved name with a type arg; under _typeSubst the arg's `T` resolves.
+    if (type->genericArg && type->value) {
+        std::string tmpl = resolveUserName(*type->value, type->qualifier);
+        if (_genericTypes.count(tmpl)) return genericTypeMangle(tmpl, type->genericArg);
+    }
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "int8_t";
         case IDENTIFIER_INT16_VAL:   return "int16_t";
@@ -643,6 +650,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         SharedIdentifier declType = lvd ? lvd->type : (cvd ? cvd->type : SharedIdentifier());
         bool isConstDecl = (cvd != nullptr);
         if (declType) {
+            // M27b: a bare generic type without a type argument (`Box b` instead of `Box<int32> b`)
+            // is not a usable type — the template is not a concrete class.
+            if (declType->value && !declType->genericArg
+                && _genericTypes.count(resolveUserName(*declType->value, declType->qualifier)))
+                unsupported(("generic type `" + *declType->value + "` needs a type argument, e.g. `"
+                             + *declType->value + "<int32>`").c_str(), n->line);
             std::string ty = cType(declType);
             bool cls = isClass(ty);
             bool iface = isInterface(ty);
@@ -724,9 +737,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // declared class) is STACK construction; `new` is reserved for the heap.
                 InvocationNode* stackCtor = nullptr;
                 if (auto* iv = dynamic_cast<InvocationNode*>(init.get()))
-                    if (iv->identifier && iv->identifier->value && isClass(ty)
-                        && resolveUserName(*iv->identifier->value, iv->identifier->qualifier) == ty)
-                        stackCtor = iv;
+                    if (iv->identifier && iv->identifier->value && isClass(ty)) {
+                        std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
+                        // M27b: `Box<int32> b = Box(v: 7)` — the ctor names the bare template `Box`, but
+                        // the declared type is the instance `Box_int32`; accept the template→instance match.
+                        auto g = _genericTypeInstOf.find(ty);
+                        if (rn == ty || (g != _genericTypeInstOf.end() && g->second == rn))
+                            stackCtor = iv;
+                    }
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(init.get())) {
                     // M26a: `new` is the HEAP operator — it boxes a value into a smart
@@ -1697,7 +1715,16 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
                              + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd->line);
         }
-        _classes[ci.name] = ci;
+        // M27b: a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
+        // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
+        // methods) is parked in _genericTypes; the specialized instances are the real classes.
+        if (cd->typeParams && !cd->typeParams->empty()) {
+            _genericTypeParam[ci.name] = *(*cd->typeParams)[0];   // single type-param (alpha)
+            _genericTypeCtx[ci.name]   = _nsCtx;
+            _genericTypes[ci.name]     = ci;
+        } else {
+            _classes[ci.name] = ci;
+        }
     }
 }
 
@@ -1729,6 +1756,14 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         default:  // class element — resolve to its mangled name (the suffix)
             return elem->value ? resolveUserName(*elem->value, elem->qualifier) : "void";
     }
+}
+
+// M27b: the mangled struct name for `Box<Arg>` — the template's scoped name + "_" + the arg's
+// mangle suffix. `mangleElem` resolves a bound `T` under _typeSubst, so this is used identically at
+// discovery (concrete arg), at cType (field/decl arg under subst), and to name the specialized ClassInfo.
+std::string CEmitter::genericTypeMangle(const std::string& tmpl, SharedIdentifier arg)
+{
+    return tmpl + "_" + mangleElem(arg);
 }
 
 bool CEmitter::isCollectionType(SharedIdentifier t) const
@@ -1919,8 +1954,68 @@ bool CEmitter::isBindableClass(const std::string& cls) const
 void CEmitter::scanTypeForCollections(SharedIdentifier t)
 {
     if (!t) return;
+    scanTypeForGenericTypes(t);                                 // M27b: also discover Box<Arg> here
     if (isCollectionType(t)) registerCollection(t);
     if (t->genericArg) scanTypeForCollections(t->genericArg);   // nested (harmless)
+}
+
+// M27b: register the specialized instance for a user generic-type reference `Box<Arg>`. The
+// recursion into the arg is driven by scanTypeForCollections (which calls this at each type node).
+void CEmitter::scanTypeForGenericTypes(SharedIdentifier t)
+{
+    if (!t || !t->value || !t->genericArg) return;
+    std::string tmpl = resolveUserName(*t->value, t->qualifier);
+    if (_genericTypes.count(tmpl)) registerGenericTypeInst(tmpl, t->genericArg);
+}
+
+// Build one synthetic specialized ClassInfo per `Box<Arg>` (mirrors registerCollection): copy the
+// template shape, rewrite identity (struct name + method cNames), re-derive param signatures under
+// _typeSubst, register in _classes, and transitively scan its substituted member types so a
+// `Box<T>` holding `List<T>` registers `List_int32`. Deduped by the mangled name.
+void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier arg)
+{
+    // Resolve a bare-`T` arg (the nested/transitive case) to its concrete binding before use.
+    SharedIdentifier concreteArg = arg;
+    if (!_typeSubst.empty() && arg->value && !arg->genericArg) {
+        auto s = _typeSubst.find(*arg->value);
+        if (s != _typeSubst.end()) concreteArg = s->second;
+    }
+    std::string mangled = genericTypeMangle(tmpl, concreteArg);
+    if (_genericTypeInsts.count(mangled)) return;               // dedup
+
+    // Register the KEY first so the transitive scan below can't recurse into this same instance.
+    _genericTypeInsts[mangled] = { tmpl, mangled, concreteArg };
+    _genericTypeInstOf[mangled] = tmpl;
+    _genericTypeInstOrder.push_back(mangled);
+
+    NsCtx savedCtx = _nsCtx;
+    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    _nsCtx = _genericTypeCtx[tmpl];
+    _typeSubst.clear();
+    _typeSubst[_genericTypeParam[tmpl]] = concreteArg;
+
+    ClassInfo ci = _genericTypes[tmpl];                         // copy the template shape
+    ci.name = mangled;
+    ci.isGenericInst = true;
+    for (auto& kv : ci.methods) kv.second.cName = mangled + "__" + kv.first;
+    // Re-derive ParamSig under substitution so call-site arg typing is concrete (not a stale "T").
+    if (ci.ctorNode && ci.ctorNode->declarator)
+        ci.ctorParams = paramSigsOf(ci.ctorNode->declarator->params);
+    for (auto& kv : ci.methods)
+        if (kv.second.node) kv.second.params = paramSigsOf(kv.second.node->params);
+    _classes[mangled] = ci;
+
+    // Transitive close: register any collection / generic type the substituted members use.
+    for (auto& f : ci.fields) scanTypeForCollections(f.type);
+    for (auto& kv : ci.methods) {
+        scanTypeForCollections(kv.second.returnType);
+        if (kv.second.node) for (auto& p : *kv.second.node->params) if (p) scanTypeForCollections(p->type);
+    }
+    if (ci.ctorNode && ci.ctorNode->declarator)
+        for (auto& p : *ci.ctorNode->declarator->params) if (p) scanTypeForCollections(p->type);
+
+    _typeSubst = savedSubst;
+    _nsCtx = savedCtx;
 }
 
 void CEmitter::scanExprForCollections(SharedExpression e)
@@ -2560,7 +2655,9 @@ std::vector<ClassInfo*> CEmitter::topoOrderClasses()
         done.insert(ci);
         out.push_back(ci);
     };
-    for (auto& kv : _classes) visit(&kv.second);
+    // M27b: specialized generic-type instances are emitted by a dedicated pass under _typeSubst,
+    // not the normal class loops — exclude them here (their only consumer, header emission).
+    for (auto& kv : _classes) if (!kv.second.isGenericInst) visit(&kv.second);
     return out;
 }
 
@@ -2646,13 +2743,23 @@ void CEmitter::computeDestructible()
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
             if (ci.destructible || ci.isExternStruct) continue;   // cstar doesn't own external structs
-            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;   // resolve field types in ci's scope
+            // M27b: a specialized instance's fields are typed in `T` — resolve them under its binding
+            // (and the template's scope) so `Box<Resource>` correctly sees the owned resource.
+            bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
+            if (inst) {
+                const GenericTypeInst& gi = _genericTypeInsts[ci.name];
+                _nsCtx = _genericTypeCtx[gi.templateKey];
+                _typeSubst.clear(); _typeSubst[_genericTypeParam[gi.templateKey]] = gi.typeArg;
+            } else {
+                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;   // resolve field types in ci's scope
+            }
             bool d = (ci.base && ci.base->destructible);
             if (!d)
                 for (auto& f : ci.fields) {
                     auto it = _classes.find(cType(f.type));
                     if (it != _classes.end() && it->second.destructible) { d = true; break; }
                 }
+            if (inst) _typeSubst.clear();
             if (d) { ci.destructible = true; changed = true; }
         }
     }
@@ -2769,6 +2876,9 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         if (ctorIv && ctorIv->identifier && ctorIv->identifier->value) {
             std::string rn = resolveUserName(*ctorIv->identifier->value, ctorIv->identifier->qualifier);
             if (isClass(rn) && _classes.count(rn)) ctorCls = rn;
+            // M27b: `f(b: Box(v: 7))` — the ctor names template `Box`; the target param is instance `Box_int32`.
+            else { auto g = _genericTypeInstOf.find(p.className);
+                   if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = p.className; }
         }
         // M26i: an inline ctor is a temporary rvalue — it can't be borrowed (`ref`/`out`) or aliased
         // as an interface. Give a clear diagnostic instead of the generic "unknown function".
@@ -3623,19 +3733,20 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
 void CEmitter::emitClassPrototypes(ClassInfo& ci)
 {
     if (ci.isCollection || ci.isExternStruct) return;   // macro / header provides these
+    const char* stat = _emitStaticClass ? "static inline " : "";   // M27b: specialized instances are header-static inline
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
-        *_out << "void " << ci.name << "__ctor("
+        *_out << stat << "void " << ci.name << "__ctor("
              << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
     else if (ci.synthCtor)                                // M19: synthesized default ctor
-        *_out << "void " << ci.name << "__ctor(" << paramListC(nullptr, ci.name.c_str()) << ");\n";
+        *_out << stat << "void " << ci.name << "__ctor(" << paramListC(nullptr, ci.name.c_str()) << ");\n";
     if (ci.destructible)
-        *_out << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
+        *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
-        *_out << cType(mi.returnType) << " " << mi.cName << "("
+        *_out << stat << cType(mi.returnType) << " " << mi.cName << "("
              << paramListC(mi.node->params, ci.name.c_str()) << ");\n";
     }
 }
@@ -3654,7 +3765,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     Scope root; root.isFunctionRoot = true;
     _scopes.push_back(root);
 
-    *_out << "void " << ci.name << "__dtor(" << ci.name << "* self)\n{\n";
+    *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "__dtor(" << ci.name << "* self)\n{\n";
 
     SharedStatement last;
     if (ci.dtorNode && ci.dtorNode->body && ci.dtorNode->body->statements) {
@@ -3713,7 +3824,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         }
     }
 
-    *_out << retType << " " << cName << "(" << paramListC(params, owner.name.c_str()) << ")\n{\n";
+    *_out << (_emitStaticClass ? "static inline " : "") << retType << " " << cName
+          << "(" << paramListC(params, owner.name.c_str()) << ")\n{\n";
 
     if (isCtor) {
         // 1. Base constructor first (so derived overrides its effects + vptr).
@@ -3790,6 +3902,27 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     }
     if (ci.destructible)
         emitDtorDefinition(ci);
+}
+
+// M27b: emit one specialized generic-type instance under its binding. phase 0 = struct typedef+body,
+// 1 = ctor/dtor/method prototypes, 2 = bodies. Mirrors emitGenericInst (M27a): all specialized class
+// functions are header-`static` (every module includes the header), so `_emitStaticClass` is set here.
+void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
+{
+    auto cit = _classes.find(gi.mangledName);
+    if (cit == _classes.end()) return;
+    ClassInfo& ci = cit->second;
+    NsCtx savedCtx = _nsCtx;
+    _nsCtx = _genericTypeCtx[gi.templateKey];
+    _typeSubst.clear();
+    _typeSubst[_genericTypeParam[gi.templateKey]] = gi.typeArg;
+    _emitStaticClass = true;
+    if      (phase == 0) { *_out << "typedef struct " << ci.name << " " << ci.name << ";\n"; emitStruct(ci); }
+    else if (phase == 1) emitClassPrototypes(ci);
+    else                 emitClassDefinitions(ci);
+    _emitStaticClass = false;
+    _typeSubst.clear();
+    _nsCtx = savedCtx;
 }
 
 // The static class type of an expression ("" if primitive/unknown).
@@ -3979,6 +4112,10 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
                     // M26h: `type contract` pre-registers as an interface name, not a class.
                     if (cd->typeKind && *cd->typeKind == "contract") {
                         std::string n = qualify(*cd->name->value); _interfaces[n].name = n;
+                    } else if (cd->typeParams && !cd->typeParams->empty()) {
+                        // M27b: a generic TYPE template pre-registers in _genericTypes, NOT _classes
+                        // (an empty _classes entry would be emitted as a bogus struct). collectClasses fills it.
+                        std::string n = qualify(*cd->name->value); _genericTypes[n].name = n;
                     } else {
                         bool ext = false;
                         if (cd->modifiers) for (auto& mod : *cd->modifiers)
@@ -4067,6 +4204,12 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // store only `T*`, so the element being forward-declared (above) is enough.
     emitCollectionDefs(/*typesOnly=*/true);
 
+    // M27b: specialized generic-type instances — struct typedef + body BEFORE the normal class
+    // struct bodies, so a normal class may hold a `Box<int32>` BY VALUE (complete type needed).
+    // Registration order is inner-first (transitive close registers a held instance before its holder).
+    for (const std::string& m : _genericTypeInstOrder)
+        emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/0);
+
     // vtable struct types + struct bodies (topological), then interface types.
     for (ClassInfo* ci : classes) {
         if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
@@ -4092,6 +4235,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             *_out << ci->name << " " << ci->name << "__copy(" << ci->name << "* self);\n";
     emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
     for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings); emitClassPrototypes(*ci); }
+    // M27b: specialized generic-type instance prototypes (ctor/dtor/method), `static`.
+    for (const std::string& m : _genericTypeInstOrder)
+        emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/1);
     // Prototypes for cstar's OWN free functions. cstar never emits prototypes for
     // `extern` C functions: an `extern` decl is purely cstar's call signature
     // (name + named params, for lowering) — the C prototype comes from the header
@@ -4120,6 +4266,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         *_out << "\n";
         for (auto& kv : _genericInsts) emitGenericInst(kv.second, /*prototypeOnly=*/false);
     }
+
+    // M27b: specialized generic-type instance BODIES (ctor/method/dtor), `static`, in the header.
+    for (const std::string& m : _genericTypeInstOrder)
+        emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/2);
 }
 
 // This file's DEFINITIONS: its classes' vtable instances + interface vtables +

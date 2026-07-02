@@ -1,0 +1,22 @@
+// M27b-alpha: a specialized generic VALUE type held BY VALUE as a field of a normal class. This
+// forces `Pair_int32`'s struct typedef to be emitted BEFORE `Holder`'s struct (the instance is a
+// complete C type by the time the holder is laid out) — the struct-ordering path.
+type value Pair<T>
+{
+    public T a;
+    public T b;
+    public Pair(T x, T y) { this.a = x; this.b = y; }
+    public fn T sum() { return this.a + this.b; }
+}
+type value Holder
+{
+    public Pair<int32> p;                             // a Pair_int32 field, by value
+    public Holder(Pair<int32> pr) { this.p = pr; }
+    public fn int32 total() { return this.p.sum(); }  // Pair_int32__sum on the field
+}
+fn int main()
+{
+    Pair<int32> pp = Pair(x: 3, y: 4);
+    Holder h = Holder(pr: pp);
+    return h.total();                                 // 3 + 4 = 7
+}

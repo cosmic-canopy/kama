@@ -1,0 +1,18 @@
+// M27b-alpha: a single-parameter generic VALUE type, monomorphized per concrete type argument —
+// one `Box_int32` / `Box_float64` struct + ctor + methods, chosen at the use site. Fields and method
+// bodies are re-emitted under the M27a substitution engine (`T` -> the concrete type).
+type value Box<T>
+{
+    public T value;
+    public Box(T v) { this.value = v; }
+    public fn T get() { return this.value; }
+    public fn T twice() { return this.value + this.value; }
+}
+fn int main()
+{
+    Box<int32>   bi = Box(v: 7);     // Box_int32__ctor(&bi, 7)
+    Box<float64> bf = Box(v: 2.5);   // Box_float64 (a distinct instantiation)
+    int32   n = bi.get();            // Box_int32__get   -> 7
+    float64 f = bf.twice();          // Box_float64__twice -> 5.0
+    return n + cast<int32>(f);       // 7 + 5 = 12
+}

@@ -142,6 +142,7 @@ struct ClassInfo {
     bool                              isCollection = false;
     CollKind                          collKind = CollKind::Array;
     std::string                       collElemClass;         // element class name ("" if primitive)
+    bool                              isGenericInst = false; // M27b: a specialized generic-type instance (Box_int32)
 
     // Namespaces (M14): the declaring file's scope/usings, for resolving this
     // type's field/base/method references during header emission.
@@ -246,6 +247,18 @@ private:
     std::map<int, SharedIdentifier>                 _primTypeCache; // synthesized primitive type nodes (for inference)
     std::shared_ptr<CodeGenContext>                 _synthCtx;      // context for synthesizing those nodes
 
+    // M27b — generic TYPES (`type value Box<T>`). The TEMPLATE is kept OUT of _classes (so the normal
+    // class loops never see it); each reachable `Box<Arg>` becomes a synthetic specialized ClassInfo
+    // (`Box_int32`, isGenericInst=true) registered in _classes and emitted under _typeSubst.
+    struct GenericTypeInst { std::string templateKey; std::string mangledName; SharedIdentifier typeArg; };
+    std::map<std::string, ClassInfo>          _genericTypes;        // template name -> ClassInfo shape (NOT in _classes)
+    std::map<std::string, std::string>        _genericTypeParam;    // template name -> single type-param name
+    std::map<std::string, NsCtx>              _genericTypeCtx;      // template name -> home namespace ctx
+    std::map<std::string, GenericTypeInst>    _genericTypeInsts;    // mangled name -> instantiation (dedup)
+    std::map<std::string, std::string>        _genericTypeInstOf;   // mangled name -> template name (construction)
+    std::vector<std::string>                  _genericTypeInstOrder;// registration order (inner-first; struct-typedef emit)
+    bool                                      _emitStaticClass = false;  // prefix `static` on specialized class fns (header ODR)
+
     // Namespaces (M14): current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
     std::set<std::string> _namespaces;   // registered public namespaces (mangled)
@@ -311,6 +324,12 @@ private:
     // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
                               std::string& recvExpr, std::string& idx);
+
+    // Generic TYPES (M27b): discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
+    void scanTypeForGenericTypes(SharedIdentifier t);
+    void registerGenericTypeInst(const std::string& tmpl, SharedIdentifier arg);
+    std::string genericTypeMangle(const std::string& tmpl, SharedIdentifier arg);   // "Box" + "_" + mangleElem(arg)
+    void emitGenericTypeInst(const GenericTypeInst& gi, int phase);   // 0=struct typedef, 1=protos, 2=bodies
 
     // Generics (M27a): discover reachable generic-function instantiations, infer their
     // type args from call-site arguments, and emit one specialized `static` C function each.
