@@ -18,7 +18,8 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 
 ## Road to 1.0 — language complete
 
-Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 → Step 7 → tag.** Rationale: close the
+Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 → Step 7 → tag.**
+**Status (v0.1.54):** M26e–M26h ✅ and **M27 (generics) ✅ complete** — next is **M28**. Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -137,10 +138,10 @@ their names/numbers.
    - **M26g-3 — storage.** ✅ **DONE (v0.1.42)** for **fields + returns** — an interface smart-ptr is
      an ordinary value type, so `Shared<IShape>` as a class field and `Owned`/`Shared<IShape>` as a
      return work directly (`rejectStoredInterface` only fires on a *bare* interface). Fixture
-     `iface_ptr_store`. **Collections (`List<Shared<IDrawable>>`) DEFERRED to M27:** they need the
-     general smart-pointer-in-collection support (nested-generic element mangling — `mangleElem` drops
-     the inner `<…>` today — and foreach dispatch on a smart-ptr element) plus the `>>` token split,
-     all of which are generics work. Not M26g-specific (a `List<Shared<Circle>>` hits the same gap).
+     `iface_ptr_store`. **Collections (`List<Shared<IDrawable>>`) — ✅ DONE in M27** (was deferred): the
+     general smart-pointer-in-collection support (nested-generic element mangling + per-element RAII drop
+     + foreach dispatch through the stored handle, M27b-beta-2) plus the `>>` token split (M27b-beta-4).
+     Fixture `list_shared_iface`.
 
 4. **M26h — type-model reframe** *(the vocabulary milestone; before generics; in progress).* Rename the
    type kinds to the ownership model — **`value`** (owns nothing, copies), **`resource`** (owns/identity,
@@ -204,10 +205,21 @@ their names/numbers.
    ergonomics limitations; the remaining untracked limitations are dispositioned under "Tracked
    limitations & non-goals" below.)*
 
-6. **M27 — generics** *(the long-reserved "M23", renumbered to its build order).* Full user-defined
-   generics: `Map<K,V>`, multi-param + nested (`>>` lexing). The foundational type-system feature —
-   unblocks `Optional<T>`, `Map`, and every future library type. *(Was slated to defer to 1.1;
-   pulled back in for a language-complete 1.0.)*
+6. **M27 — generics** — ✅ **DONE (M27a–M27c, v0.1.47–v0.1.54)** *(the long-reserved "M23", renumbered
+   to its build order).* Full user-defined generics: `Map<K,V>`, multi-param + nested (`>>` lexing). The
+   foundational type-system feature — unblocks `Optional<T>`, `Map`, and every future library type.
+   *(Was slated to defer to 1.1; pulled back in for a language-complete 1.0.)*
+   **Built:** M27a generic functions (call-site inference); M27b-alpha/beta-1 single- & multi-param
+   generic types + nested-arg mangling; M27b-beta-2 smart-pointer-in-collection (`List<Shared<I>>`);
+   M27b-beta-3 generic resources (`type resource Box<T>`); M27b-beta-4 the `>>` lexer split (nested
+   generics with no space); M27c-1 contract bounds (`<K: I + J>`, monomorphized → static dispatch,
+   enforced); M27c-2 the `This` self-type. Monomorphization throughout; ISO-C11; ASan/UBSan clean.
+   **Known follow-ups (pre-existing gaps surfaced while building M27, orthogonal — tracked below):**
+   *(a) a generic instance holding a user value-type **by value** (`Box<Rock> { Rock item; }`) hits a
+   struct emit-order error — needs a topological struct-ordering pass (the workaround: store `T` behind
+   a pointer / `List<T>` / `Owned<T>`, or as a method param). (b) an inline constructor as a **return
+   expression** (`return Point(...)`) isn't lowered — use a local (`Point p = Point(...); return p;`);
+   M26i added inline ctors only in argument position.*
    - **DECIDED (2026-06-30):**
      - **Monomorphization**, not erasure — one specialized copy per concrete type (elements inline,
        no boxing). **Zero runtime/memory cost**; identical layout to today's intrinsics. (Erasure

@@ -19,10 +19,10 @@ block at the FFI boundary; **function pointers** (`fnptr` free + `BindableFuncti
 WASM**, debug/release, `#line` source debugging. The *safe* surface stays pointer-free; heap is reached only
 through safe abstractions.
 
-That's a solid systems-language core — and the **module system** and much of the **FFI keystone** have now
-landed. The remaining gaps are mostly **the math layer** (operator overloading + vector/matrix types) and
-**finishing the type system** (user generics, sum types), then **reach** (more C APIs, threading) and
-**scale**.
+That's a solid systems-language core — and the **module system**, much of the **FFI keystone**, and now
+**user generics** (M27 — monomorphized, with contract bounds + `This`) have landed. The remaining gaps are
+mostly **the math layer** (operator overloading + vector/matrix types) and **sum types + pattern matching**
+(M28), then **reach** (more C APIs, threading) and **scale**.
 
 ---
 
@@ -40,7 +40,8 @@ landed. The remaining gaps are mostly **the math layer** (operator overloading +
 | Feature | Status | Why | Effort |
 |---|---|---|---|
 | **Operator overloading** | 🟡 parses, **deferred** in the emitter | `a + b` for the math types above; without it the math layer is unusable. | M |
-| **`Map<K,V>` / hash maps** + **general user generics** (`type value Foo<T>`) | 🟡 partial (built-in generics only) | Entity/resource/asset registries, caches, string→handle lookup. | M (Map) + L (general monomorphization) |
+| **General user generics** (`type value Foo<T>`, generic fns, nested `>>`, contract bounds `<K: I + J>`, `This`) | ✅ **done (M27, v0.1.54)** — monomorphized, zero-cost, ASan-clean | Every future library type. | done |
+| **`Map<K,V>` / hash maps** | 🟡 now *buildable* as a library type on M27 (not yet written) | Entity/resource/asset registries, caches, string→handle lookup. | M (library) |
 | **Slices / spans** (non-owning views over `Array`/`List`/buffers) | ❌ | Iterate a subrange, pass a buffer to a system or a GPU upload without copying or transferring ownership. | M |
 | **Tagged unions / sum types + pattern matching** | ❌ | Events, messages, render commands, animation/state machines, asset variants. | L |
 | **Allocator control**: arenas / pools / frame & stack allocators | ❌ (GOALS #3 wants these as library types) | Deterministic per-frame perf, zero mid-frame `malloc`, bump-reset allocators. Needs a placement-construct hook + the runtime unsafe core. | M–L |
@@ -69,8 +70,8 @@ params/methods — once a Tier-3 item — shipped in M24.)*
 ## Recommended sequence (fastest path to a rendering engine)
 1. ~~**FFI depth** (extern structs + function pointers + handles)~~ — ✅ landed (M15–M18).
 2. ~~**Module system**~~ — ✅ landed (M13–M14).
-3. **Finish the type system** (1.0): user generics (M27) → sum types + `match`/`Optional` (M28) →
-   **operator overloading + full static methods** (M29) — the last unlocks ergonomic math types.
+3. **Finish the type system** (1.0): ~~user generics (M27)~~ ✅ done → sum types + `match`/`Optional`
+   (M28, next) → **operator overloading + full static methods** (M29) — the last unlocks ergonomic math types.
 4. **Math types** (`Vec2/3/4`, `Mat4`) as `type value`s (public fields) with operators + `::` static methods — the numeric core
    (Tier-0 math, unblocked by step 3's operators).
 5. **WebGPU bindings** (FFI is ready) → **a triangle on screen** → the engine spine + a real demo.

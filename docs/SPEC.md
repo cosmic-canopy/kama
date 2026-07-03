@@ -159,10 +159,9 @@ Passing a smart pointer: **borrow** it by passing `ref T` — the borrow names t
 agnostic; a `ref` may not name the smart pointer itself), which auto-derefs to the held object; or **transfer
 by value** (M26d), where the callee owns the argument and drops it at function end (`Owned` moves in, `Shared`
 retains). The pointee is a **`value`/`resource`** or (M26g) a **contract** — `Owned`/`Shared`/`Weak<IShape>`
-own a concrete implementer behind a fat handle and dispatch polymorphically (see Contracts below). Limits:
-storing a smart pointer as a *collection element* (`List<Shared<T>>`) is deferred to M27 (it needs the
-general smart-pointer-in-collection support + the `>>` split); a smart-pointer *field* / *return* works.
-User-defined generics — `Map<K,V>`, `type value Foo<T>`, multi-param/nested — are the next milestone (M27).
+own a concrete implementer behind a fat handle and dispatch polymorphically (see Contracts below). A smart
+pointer works as a *field*, *return*, and (M27) a **collection element** — `List<Shared<IShape>>` stores and
+drops each handle in RAII order and dispatches polymorphically through it. See **Generics** below.
 
 ## Functions ✅
 
@@ -458,8 +457,31 @@ the handle is an ordinary value type, it **stores** — as a field or a function
 type resource Holder { Shared<IShape> shape;  public fn int64 area() { return this.shape.area(); } }
 fn Owned<IShape> make(int64 s) { Owned<IShape> o = new Square(s: s); return give o; }
 ```
-A `List<Shared<IShape> >` (the engine's scene) needs the general smart-pointer-in-collection support and the
-`>>` token split — that arrives with generics (M27).
+A `List<Shared<IShape>>` (the engine's scene) works — polymorphic elements stored and dropped in RAII order.
+
+## Generics ✅ (M27)
+
+User-defined generics, **monomorphized** (one specialized copy per concrete type — elements inline, no
+boxing; identical layout and cost to the built-in collections). Erasure was rejected.
+
+```
+type value Pair<A, B> { public A a; public B b; public Pair(A a, B b){ this.a = a; this.b = b; } }
+fn T max<T>(T a, T b) { return a > b ? a : b; }         // generic fn — type args INFERRED from the call
+Pair<int32, string> p = Pair(a: 1, b: "x");             // generic type
+int32 m = max(a: 3, b: 4);                              // -> max<int32>, a static specialized C fn
+List<Shared<IShape>> scene;                             // nested generics, no space (the `>>` split)
+```
+
+- **Generic functions and types**; multi-parameter (`Pair<A, B>`), nested (`Box<Pair<int, int>>`) — nested
+  `>>` needs no space. `type value`/`resource` generics both work (a generic resource is move-only with a
+  per-instance dtor). Function type args are inferred from the call (no explicit `<…>`).
+- **Contract bounds** — `fn sort<T: IComparable>(…)`, `type value Map<K: IHashable + IComparable, V>`. `+`
+  means **AND** (all listed contracts). A bound lets the body call the contract's methods on a type-param
+  value; because it's monomorphized, those calls are **static direct calls** (zero cost, no vtable). Each
+  concrete type argument is checked to satisfy its bounds, else a clean compile error.
+- **`This`** — the self-type, inside a `type contract` or a type's own methods: `fn bool equals(This other)`,
+  `fn This clone()`. Resolves to the implementing/concrete type; used as a bound (`<T: IEquatable>`), the
+  dispatch is static. Chosen over `Self` to pair with the `this` value and the PascalCase-types convention.
 
 ## Access control ✅ (M25, M26h)
 
