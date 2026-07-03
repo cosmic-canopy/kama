@@ -36,7 +36,7 @@ jobs:
       - name: Version
         run: ./cstar --version
 
-      - name: Test suite (22 fixtures)
+      - name: Test suite
         run: ./run_tests.sh
 
   wasm-smoke:

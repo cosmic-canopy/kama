@@ -45,7 +45,7 @@ for src in "$TESTS_DIR"/*.cstar; do
     expected="$(cat "$expect_file")"
 
     exe="$TMP/$name"
-    if ! "$CSTAR" build "$src" "${SAN_FLAGS[@]}" -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
+    if ! "$CSTAR" build "$src" ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
         echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue
     fi
     "$exe" 2>"$TMP/$name.san"; actual=$?
@@ -72,7 +72,7 @@ for dir in "$TESTS_DIR"/*.d; do
     expected="$(cat "$expect_file")"
 
     exe="$TMP/$name"
-    if ! "$CSTAR" build "$dir"/*.cstar "${SAN_FLAGS[@]}" -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
+    if ! "$CSTAR" build "$dir"/*.cstar ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
         echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue
     fi
     "$exe" 2>"$TMP/$name.san"; actual=$?

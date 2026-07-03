@@ -1,0 +1,8 @@
+enum Flag { On, Off }
+fn Flag make() { return Flag::On; }
+fn int main()
+{
+    int32 n = 0;
+    while (match (make()) { case On: true; case Off: false; }) { n = n + 1; }
+    return n;
+}

@@ -2043,7 +2043,20 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
     // Intrinsics (not auto-deref forwarded): Owned has none; Shared has valid();
     // Weak has tryUpgrade() (-> Optional<Shared<T>>, M28d) and expired().
     if (kind == CollKind::Shared) addM("valid", {});
-    if (kind == CollKind::Weak) { addM("tryUpgrade", {}); addM("expired", {}); }
+    if (kind == CollKind::Weak) {
+        addM("tryUpgrade", {}); addM("expired", {});
+        // M29a: record that tryUpgrade returns Optional<Shared<elem>> so exprClass can class a
+        // `w.tryUpgrade()` call result — enabling `match(w.tryUpgrade())` without a local binding.
+        if (_genericTypeParams.count("Optional")) {
+            if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+            auto mk = [&](const char* nm, SharedIdentifier arg) {
+                auto n = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(nm));
+                n->genericArg = arg; n->genericArgs = std::make_shared<IdentifierList>(); n->genericArgs->push_back(arg);
+                return n;
+            };
+            ci.methods["tryUpgrade"].returnType = mk("Optional", mk("Shared", elem));
+        }
+    }
     _classes[cName] = ci;
 }
 
@@ -3705,8 +3718,22 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 unsupported(("`match` on '" + subjCls + "' is not exhaustive: variant '" + v.name
                              + "' is unhandled — add `case " + v.name + ":` or `case _:`").c_str(), m->line);
 
+    // The subject is borrowed by pointer. A plain lvalue is addressed in place; a non-lvalue
+    // (a call / construction result — M29a) can't be `&`-taken, so materialize an OWNING temp
+    // first and drop it after the switch (arm payload bindings borrow it, like a foreach element).
     std::string sp = "__msub" + std::to_string(_tempCounter++);
-    indent(depth); *_out << subjCls << "* " << sp << " = &(" << emitExpression(m->subject) << ");\n";
+    bool subjLvalue = dynamic_cast<IdentifierNode*>(m->subject.get())
+                   || dynamic_cast<MemberAccessNode*>(m->subject.get())
+                   || dynamic_cast<ThisAccessNode*>(m->subject.get())
+                   || dynamic_cast<ElementAccessNode*>(m->subject.get());
+    std::string subjOwner;
+    if (subjLvalue) {
+        indent(depth); *_out << subjCls << "* " << sp << " = &(" << emitExpression(m->subject) << ");\n";
+    } else {
+        subjOwner = "__msubj" + std::to_string(_tempCounter++);
+        indent(depth); *_out << subjCls << " " << subjOwner << " = " << emitExpression(m->subject) << ";\n";
+        indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
+    }
     indent(depth); *_out << "switch (" << sp << "->tag) {\n";
     for (auto& a : *m->arms) {
         indent(depth + 1);
@@ -3752,6 +3779,11 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     }
     if (!hasWildcard) { indent(depth + 1); *_out << "default: break;\n"; }   // exhaustive; keeps the C switch total
     indent(depth); *_out << "}\n";
+    // M29a: a materialized owning subject (a call/construction result) is dropped once after the
+    // switch — bindings only borrowed it, so this releases its owned resource (no leak, no double-free).
+    if (!subjOwner.empty() && _classes.count(subjCls) && _classes[subjCls].destructible) {
+        indent(depth); *_out << subjCls << "__dtor(&" << subjOwner << ");\n";
+    }
     if (instSubst) _typeSubst = savedSubst;
 }
 
@@ -4595,6 +4627,37 @@ std::string CEmitter::exprClass(SharedExpression e)
         std::string cls = exprClass(recv);
         if (!cls.empty() && _classes.count(cls) && _classes[cls].isCollection)
             return _classes[cls].collElemClass;
+        return "";
+    }
+
+    // M29a: a CALL RESULT's static class (pure resolution — no emission), so a call can be a
+    // `match` subject / value site (`match(w.tryUpgrade())`). A class return maps to its name; a
+    // primitive/void return stays "".
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        // Method call `recv.method(args)` — call->expression is a MemberAccessNode.
+        if (auto* ma = inv->expression ? dynamic_cast<MemberAccessNode*>(inv->expression.get()) : nullptr) {
+            std::string method = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+            std::string cls = exprClass(ma->expression);
+            if (isSmartPtrClass(cls)) {   // an intrinsic (tryUpgrade/valid/…) — returnType is on the smart-ptr
+                auto mit = _classes[cls].methods.find(method);
+                if (mit != _classes[cls].methods.end() && mit->second.returnType) {
+                    std::string rc = cType(mit->second.returnType);
+                    return isClass(rc) ? rc : "";
+                }
+                cls = _classes[cls].collElemClass;   // else auto-deref to the pointee's method
+            }
+            if (!cls.empty() && _classes.count(cls)) {
+                ClassInfo* owner = nullptr;
+                MethodInfo* mi = findMethod(&_classes[cls], method, &owner);
+                if (mi && mi->returnType) { std::string rc = cType(mi->returnType); return isClass(rc) ? rc : ""; }
+            }
+            return "";
+        }
+        // Free / qualified function call — its C return type, if that names a class.
+        if (inv->identifier && inv->identifier->value) {
+            auto f = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
+            if (f != _funcs.end() && isClass(f->second.retCType)) return f->second.retCType;
+        }
         return "";
     }
     return "";

@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 (expr-position lowering) → M30 (struct-ordering + generics completeness) → M31 (operators) → Step 7 → tag.**
-**Status (v0.1.59):** M27 (generics) ✅ and **M28 (tagged unions + `match` + `Optional`/`Result` + `Weak.tryUpgrade`) ✅ COMPLETE** — next is **M29** (expression-position lowering — a deferred-gap cleanup before operators, which move to M31). Rationale: close the
+**Status (v0.1.60):** M27 (generics) ✅, M28 (tagged unions) ✅ — **M29 (expression-position lowering) 🚧 in progress: M29a ✅** (inline `match` on a call result; + the macOS CI `set -u` fix). Deferred-gap cleanup before operators (which move to M31). Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -296,7 +296,7 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      `__upgrade` stays an internal helper; the emitter registers `Optional<Shared<T>>` per `Weak<T>`
      and emits a `__tryUpgrade` wrapper (`Some` on a live ctrl, else `None`), for both class and
      interface Weaks. Fixtures `weak_basic`, `weak_expired`, `shared_iface` migrated to
-     `tryUpgrade()` + `match` (bind the result to a local — inline `match` on a call result → **M29**).
+     `tryUpgrade()` + `match` (inline `match` on a call result ✅ **done in M29a**; a local binding also works).
      Every fallible op is now compiler-checked.
    - **Deferred gaps (surfaced building M28, orthogonal — now SCHEDULED, detail in M29/M30 below):**
      *(1)* the builtin `String` as a generic type ARG (`Optional<String>` emits the bare name, not
@@ -305,7 +305,7 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      from a fresh rvalue / bound-local `give` (inline `new`, collection move-in, nested inline
      `Some(Some(…))` not yet lowered) → **M29**. (Also in the memory's `roadmap-deferred`.)
 
-8. **M29 — expression-position lowering.** 🚧 *planned (deferred-gap cleanup, before operators).*
+8. **M29 — expression-position lowering.** 🚧 *in progress (deferred-gap cleanup, before operators).*
    Generalize the one M26i temp-hoist pass so **every** value-producing construct lowers in **any**
    expression position — strict ISO C11, no GNU statement-expression (the M26i invariant). Today
    in-place construction / value-lifting only works in the positions each feature happened to wire
@@ -320,8 +320,13 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      call is recognized as an inline ctor in general expression position (extend the M26a/M26i
      in-place-construction recognition beyond decl-init/arg). A context with no statement slot (a
      loop/branch condition) still cleanly rejects — never emits `({…})`.
-   - **Likely sub-steps:** M29a value-lifting (ctor / `new` / nested / collection payloads +
-     inline-match-on-call + assignment-RHS match); M29b block `match` arms (grammar + arm-value lowering).
+   - **Sub-steps:** **M29a** ✅ **DONE (v0.1.60)** — call-return typing (an `exprClass` InvocationNode
+     branch + `tryUpgrade`'s recorded return type) + an owning subject temp, so **inline `match` on a
+     call result** works (`match(w.tryUpgrade()){…}`, the temp dropped once after the switch; fixtures
+     `match_on_call` (SAN), xfail `match_in_cond`). *(Also folded in the macOS CI fix — the `SAN_FLAGS[@]`
+     empty-array `set -u` bug under bash 3.2.)* **M29b** inline construction (ctor + `new`) in general
+     expression position (`return Point(...)`, inline `new`/nested variant payloads). **M29c**
+     assignment-RHS value lowering (`x = match(…)`) + collection-move-in. **M29d** block `match` arms.
 
 9. **M30 — struct-ordering + generics completeness.** 🚧 *planned (deferred-gap cleanup, before operators).*
    Finish the type/struct emitter so a generic instance / tagged union can hold a user `value`-type
