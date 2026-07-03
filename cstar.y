@@ -165,7 +165,7 @@ struct cstaryystype {
 
 /* non-terminals */
 %type <token> assignment_operator overloadable_operator
-%type <strings> qualifier type_params_opt ident_list
+%type <strings> qualifier
 %type <expression> expression expression_opt literal boolean_literal variable_initializer
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
 %type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis
@@ -188,7 +188,8 @@ struct cstaryystype {
 %type <usingdeclarationlist> using_directives_opt using_directives
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
-%type <identifierlist> friend_member_list interface_type_list type_arg_list
+%type <identifier> type_param type_decl_head
+%type <identifierlist> friend_member_list interface_type_list type_arg_list type_param_list bound_list type_params_opt
 %type <modifier> modifier function_modifier_opt parameter_modifier_opt
 %type <modifierlist> modifiers modifiers_opt
 %type <parameter> parameter
@@ -396,17 +397,33 @@ type_declaration
    is never reserved. `type` marks every type declaration (greppable, like `fn`). All three
    kinds share the class body; the emitter routes `contract` to the interface path. */
 marked_type_declaration
-  : TYPE modifiers_opt IDENTIFIER basic_identifier class_base_opt class_body semicolon_opt
+  : TYPE modifiers_opt IDENTIFIER type_decl_head class_base_opt class_body semicolon_opt
     { auto n = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6); n->typeKind = $3;
-      /* M27b: `type value Pair<A, B> { … }` — the name parsed as Pair<A, B> (genericArgs = [A, B]).
-         Capture each type-parameter name and strip them, so the class NAME stays bare `Pair`. */
+      /* M27b/M27c: `type value Pair<A, B>` / `type value Map<K: IHashable, V>` — the head parsed the
+         params into genericArgs (each carrying its bounds). Capture names + bounds and strip them so
+         the class NAME stays bare `Pair`/`Map`. */
       if ($4->genericArgs && !$4->genericArgs->empty()) {
           n->typeParams = std::make_shared<StringList>();
-          for (auto& a : *$4->genericArgs) if (a && a->value) n->typeParams->push_back(a->value);
+          n->typeBounds = std::make_shared<BoundsList>();
+          for (auto& a : *$4->genericArgs) if (a && a->value) {
+              n->typeParams->push_back(a->value);
+              n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+          }
           $4->genericArgs = SharedIdentifierList();
           $4->genericArg  = SharedIdentifier();
       }
       $$ = n; }
+  ;
+/* M27c: the NAME + type-parameter list in a type DECLARATION — decoupled from the type-USE production
+   (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo` or `Foo<K: I + J, V>`. */
+type_decl_head
+  : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | IDENTIFIER LT { yyget_extra(scanner)->genericDepth++; } type_param_list GT   {
+        yyget_extra(scanner)->genericDepth--;
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1);
+        id->genericArgs = $4;   /* each element is a type_param node carrying its name + bounds */
+        $$ = id;
+    }
   ;
 
 /*------------------------------------------------------------------------------ 
@@ -463,7 +480,17 @@ function_declaration
       $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, SharedBlock() );
    }
   | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
-      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $7, $9, $5 );
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $7, $9 );
+      /* M27c: split `<T, K: I + J>` into parallel typeParams (names) + typeBounds (contract lists). */
+      if ($5 && !$5->empty()) {
+          fn->typeParams = std::make_shared<StringList>();
+          fn->typeBounds = std::make_shared<BoundsList>();
+          for (auto& p : *$5) if (p && p->value) {
+              fn->typeParams->push_back(p->value);
+              fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
+          }
+      }
+      $$ = fn;
   }
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
       /* `fnptr ret Name(params);` — an explicit function-pointer TYPE (M21).
@@ -471,15 +498,26 @@ function_declaration
       $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() );
   }
   ;
-/* Generic type parameters on a fn declaration: `fn max<T, U>(...)` — M27a.
-   Empty for a non-generic fn. The names are resolved contextually at emit time. */
+/* Generic type parameters on a fn declaration: `fn max<T, U>(...)` / `fn sort<T: IComparable>(...)`
+   — M27a + M27c bounds. Yields a list of type-param IdentifierNodes (each carrying its `bounds`);
+   the fn/type decl action splits it into names (typeParams) + contract lists (typeBounds). */
 type_params_opt
-  : /* Nothing */   { $$ = SharedStringList(); }
-  | LT ident_list GT   { $$ = $2; }
+  : /* Nothing */   { $$ = SharedIdentifierList(); }
+  | LT { yyget_extra(scanner)->genericDepth++; } type_param_list GT   { yyget_extra(scanner)->genericDepth--; $$ = $3; }
   ;
-ident_list
-  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
-  | ident_list COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; }
+type_param_list
+  : type_param   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | type_param_list COMMA type_param   { $1->push_back($3); $$ = $1; }
+  ;
+type_param
+  : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | IDENTIFIER COLON bound_list   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->bounds = $3; $$ = id; }
+  ;
+/* Contract bounds on a type parameter: `IHashable` or `IHashable + IComparable` (`+` = AND).
+   Each bound is a `type_name`, so a generic contract bound (`IFoo<int>`) parses + gets genericDepth. */
+bound_list
+  : type_name   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | bound_list PLUS type_name   { $1->push_back($3); $$ = $1; }
   ;
 function_return_type
   : type

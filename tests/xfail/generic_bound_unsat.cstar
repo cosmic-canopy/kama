@@ -1,0 +1,12 @@
+// M27c-1 — a type argument that does NOT satisfy a contract bound is rejected at instantiation, with a
+// clean diagnostic (instead of a downstream "class missing method"). `Feather` has no `weight()`.
+type contract IWeighable { fn int32 weight(); }
+type value Feather {
+    int32 g;
+    public Feather(int32 g) { this.g = g; }
+}
+fn int32 heft<T: IWeighable>(T x) { return x.weight(); }
+fn int32 main() {
+    Feather f = Feather(g: 1);
+    return heft(x: f);   // ERROR: Feather does not satisfy bound IWeighable
+}

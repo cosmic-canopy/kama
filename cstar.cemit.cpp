@@ -1722,6 +1722,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             std::vector<std::string> ps;
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);   // [A, B, …]
             _genericTypeParams[ci.name] = ps;
+            _genericTypeBounds[ci.name] = cd->typeBounds;   // M27c: per-param contract bounds
             _genericTypeCtx[ci.name]    = _nsCtx;
             _genericTypes[ci.name]      = ci;
         } else {
@@ -2019,6 +2020,13 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     for (auto& c : concrete) mangled += "_" + mangleElem(c);
     if (_genericTypeInsts.count(mangled)) return;               // dedup
 
+    // M27c: each concrete type argument must satisfy its parameter's contract bounds. Runs once per
+    // unique instance (after dedup); with _typeSubst still at the caller's binding so a nested arg is
+    // already the resolved `concrete[i]`.
+    SharedBoundsList bounds = _genericTypeBounds.count(tmpl) ? _genericTypeBounds[tmpl] : SharedBoundsList();
+    if (bounds) for (size_t i = 0; i < params.size() && i < bounds->size(); ++i)
+        checkBounds(params[i], concrete[i], (*bounds)[i], args->front() ? args->front()->line : 0);
+
     // Register the KEY first so the transitive scan below can't recurse into this same instance.
     _genericTypeInsts[mangled] = { tmpl, mangled, concrete };
     _genericTypeInstOf[mangled] = tmpl;
@@ -2272,6 +2280,12 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
             return false;
         }
     }
+
+    // M27c: each inferred concrete type must satisfy its parameter's contract bounds (points at this call).
+    if (tmpl->typeBounds)
+        for (size_t i = 0; i < tmpl->typeParams->size() && i < tmpl->typeBounds->size(); ++i)
+            if ((*tmpl->typeParams)[i])
+                checkBounds(*(*tmpl->typeParams)[i], bind[*(*tmpl->typeParams)[i]], (*tmpl->typeBounds)[i], line);
 
     out.templateKey = key;
     out.typeArgs.clear();
@@ -2848,6 +2862,44 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
         if (it != ci->methods.end()) { if (owner) *owner = ci; return &it->second; }
     }
     return nullptr;
+}
+
+// M27c: a concrete type satisfies a contract BOUND when it has every one of the contract's methods,
+// public (structural — this is exactly what makes the monomorphized call resolve to a static
+// `Concrete__m(&x)`; nominal `implements` is not required, matching the codegen reality).
+bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
+{
+    auto it = _interfaces.find(contract);
+    if (it == _interfaces.end()) return false;            // unknown contract — caller diagnoses
+    for (auto& m : it->second.methods) {
+        ClassInfo* owner = nullptr;
+        MethodInfo* mi = findMethod(ci, m.name, &owner);
+        if (!mi || mi->visibility != Visibility::Public) return false;
+    }
+    return true;
+}
+
+// M27c: at each monomorphization, verify the concrete type argument bound to `paramName` satisfies
+// every contract on it (`+` = AND); a clean diagnostic instead of a downstream "class missing method".
+void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
+                           SharedIdentifierList bounds, int line)
+{
+    if (!bounds || bounds->empty()) return;
+    std::string cls = cType(concreteArg);                 // concrete class key (or a primitive C type)
+    std::string clsName = (concreteArg && concreteArg->value) ? *concreteArg->value : cls;   // source-level
+    ClassInfo* ci = _classes.count(cls) ? &_classes[cls] : nullptr;
+    for (auto& b : *bounds) {
+        if (!b || !b->value) continue;
+        std::string contract = resolveUserName(*b->value, b->qualifier);
+        if (!_interfaces.count(contract)) {
+            unsupported(("unknown contract `" + *b->value + "` in a bound on type parameter `"
+                         + paramName + "`").c_str(), line);
+            continue;
+        }
+        if (!ci || !classSatisfiesBound(ci, contract))
+            unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
+                         + "` does not satisfy bound `" + *b->value + "`").c_str(), line);
+    }
 }
 
 // "__base." repeated for each hop from `from` down to ancestor `to` ("" if equal).

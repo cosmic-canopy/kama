@@ -199,6 +199,8 @@ public:
     SharedString generic;          // legacy bare-name generic (kept for compat)
     SharedIdentifier genericArg;   // element type for Coll<T> (a full type) — M9; == genericArgs[0]
     SharedIdentifierList genericArgs;  // M27b-beta: all type args for Pair<A,B> etc.; genericArg mirrors [0]
+    SharedIdentifierList bounds;       // M27c: when this node is a type-PARAMETER (`K` in `<K: I + J>`),
+                                       //       its contract bounds [I, J]; empty/unset otherwise.
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
     IdentifierNode(CodeGenContext& context, SharedString value, int builtInVal = IDENTIFIER_NONE_VAL)
@@ -237,6 +239,7 @@ public:
     SharedParameterList parameters;
     SharedBlock block;
     SharedStringList typeParams;   // <T, ...> — generic fn (M27a); empty for non-generic
+    SharedBoundsList typeBounds;   // M27c: contract bounds parallel to typeParams (empty entry = unbounded)
     FunctionDeclarationNode(CodeGenContext& context,  SharedModifier modifier, SharedIdentifier returnType, SharedIdentifier name,
                             SharedParameterList parameters, SharedBlock block, SharedStringList typeParams = SharedStringList() )
         : ASTNode(context),  StatementNode(context)
@@ -610,6 +613,7 @@ public:
     // M27b: type parameters from `type value Box<T> { … }` — monomorphized per concrete arg;
     // empty for a non-generic type. Set by the grammar action (like typeKind).
     SharedStringList typeParams;
+    SharedBoundsList typeBounds;   // M27c: contract bounds parallel to typeParams (empty entry = unbounded)
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
                         SharedIdentifier name,
                         SharedClassBaseDeclaration baseTypes,

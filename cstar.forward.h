@@ -92,6 +92,11 @@ typedef std::shared_ptr<StatementList> SharedStatementList;
 typedef std::shared_ptr<StringList> SharedStringList;
 typedef std::shared_ptr<UsingDeclarationList> SharedUsingDeclarationList;
 typedef std::shared_ptr<IdentifierList> SharedIdentifierList;
+// M27c: contract bounds — one contract list per type parameter (parallel to a decl's typeParams;
+// an entry is empty for an unbounded param). `Map<K: IHashable + IComparable, V>` -> bounds[0] =
+// [IHashable, IComparable], bounds[1] = [].
+typedef std::vector<SharedIdentifierList> BoundsList;
+typedef std::shared_ptr<BoundsList> SharedBoundsList;
 typedef std::shared_ptr<ModifierList> SharedModifierList;
 typedef std::shared_ptr<VariableDeclaratorList> SharedVariableDeclaratorList;
 typedef std::shared_ptr<ConstVariableDeclaratorList> SharedConstVariableDeclaratorList;

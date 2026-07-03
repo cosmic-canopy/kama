@@ -256,6 +256,7 @@ private:
     struct GenericTypeInst { std::string templateKey; std::string mangledName; std::vector<SharedIdentifier> typeArgs; };
     std::map<std::string, ClassInfo>          _genericTypes;        // template name -> ClassInfo shape (NOT in _classes)
     std::map<std::string, std::vector<std::string>> _genericTypeParams;  // template name -> type-param names [A, B]
+    std::map<std::string, SharedBoundsList>   _genericTypeBounds;   // M27c: template name -> per-param contract bounds
     std::map<std::string, NsCtx>              _genericTypeCtx;      // template name -> home namespace ctx
     std::map<std::string, GenericTypeInst>    _genericTypeInsts;    // mangled name -> instantiation (dedup)
     std::map<std::string, std::string>        _genericTypeInstOf;   // mangled name -> template name (construction)
@@ -394,6 +395,11 @@ private:
     std::vector<ClassInfo*> topoOrderClasses();
     ClassInfo* findFieldOwner(ClassInfo* ci, const std::string& field);   // class declaring `field`
     MethodInfo* findMethod(ClassInfo* ci, const std::string& name, ClassInfo** owner);
+    // M27c: does `ci` structurally satisfy contract `contract` (have all its methods, public)?
+    bool classSatisfiesBound(ClassInfo* ci, const std::string& contract);
+    // M27c: verify a concrete type arg satisfies each contract bound on a type parameter (else diagnose).
+    void checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
+                     SharedIdentifierList bounds, int line);
     std::string basePathTo(ClassInfo* from, ClassInfo* to);   // "__base." chain from `from` down to `to`
     std::string vptrPrefix(ClassInfo* ci);                    // "__base." * (hops to vtableRoot)
     void emitVtableType(ClassInfo& ci);                       // only when ci is its own vtableRoot
