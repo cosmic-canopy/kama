@@ -1,0 +1,13 @@
+fn int unwrap(Optional<int32> o, int32 dflt)
+{
+    return match (o) {
+        case Some(v): v;
+        case None: dflt;
+    };
+}
+fn int main()
+{
+    Optional<int32> a = Optional::Some(value: 42);
+    Optional<int32> b = Optional::None;
+    return unwrap(o: a, dflt: 0) + unwrap(o: b, dflt: -1);
+}

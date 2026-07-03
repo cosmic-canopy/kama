@@ -123,6 +123,34 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
     return extra.compilationUnit;
 }
 
+// M28c: the implicit prelude — library sum types available to every program without an import.
+// Parsed from source (dogfooding the parser), collected before user code, with an empty (global)
+// namespace so `Optional`/`Result` resolve unqualified everywhere (like the builtin collections).
+static const char* PRELUDE_SRC =
+    "enum Optional<T> { Some(T value), None }\n"
+    "enum Result<T, E> { Ok(T value), Err(E error) }\n";
+
+// Parse an in-memory cstar source string into a CompilationUnit (flex string buffer). nullptr on error.
+SharedCompilationUnit parseString(const char* src, const std::string& name)
+{
+    yyscan_t scanner;
+    struct LexerInstanceData extra = {
+        CSTAR_LEXERINSTANCE_DEFAULT_LINE_ONE,
+        CSTAR_LEXERINSTANCE_DEFAULT_COLUMN_ONE,
+        nullptr,
+        std::make_shared<CodeGenContext>(std::make_shared<std::string>(name)),
+        nullptr
+    };
+    yylex_init_extra(&extra, &scanner);
+    yy_scan_string(src, scanner);
+    int rc = yyparse(scanner);
+    yylex_destroy(scanner);
+    if (rc != 0 || extra.codeGenContext->errorCount() > 0) return nullptr;
+    return extra.compilationUnit;
+}
+
+SharedCompilationUnit preludeUnit() { return parseString(PRELUDE_SRC, "<prelude>"); }
+
 // Transpile `inputFile` to C, writing to `outPath`. Returns 0 on success.
 int transpileToFile(const std::string& inputFile, const std::string& outPath, bool emitLines)
 {
@@ -136,6 +164,7 @@ int transpileToFile(const std::string& inputFile, const std::string& outPath, bo
     }
 
     CEmitter emitter(out, absolutePath(inputFile), emitLines);
+    emitter.setPrelude(preludeUnit());   // M28c: Optional/Result available implicitly
     int unsupported = emitter.emit(unit);
     out.close();
 
@@ -175,6 +204,7 @@ int transpileProgram(const std::vector<std::string>& inputs,
     }
 
     CEmitter emitter(header, "", emitLines);
+    emitter.setPrelude(preludeUnit());   // M28c: Optional/Result available implicitly
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
     header.close();
     for (auto& f : moduleFiles) f->close();

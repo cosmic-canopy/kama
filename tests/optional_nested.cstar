@@ -1,0 +1,10 @@
+fn int main()
+{
+    Optional<int32> inner = Optional::Some(value: 5);
+    Optional<Optional<int32>> outer = Optional::Some(value: inner);
+    int32 r = match (outer) {
+        case Some(o): match (o) { case Some(x): x; case None: -1; };
+        case None: -2;
+    };
+    return r;
+}

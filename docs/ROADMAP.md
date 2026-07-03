@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 → Step 7 → tag.**
-**Status (v0.1.56):** M27 (generics) ✅ complete; **M28 (tagged unions) 🚧 in progress — M28a ✅** (layout/construction/RAII) **+ M28b ✅** (value-producing `match`), next is M28c `Optional<T>`. Rationale: close the
+**Status (v0.1.57):** M27 (generics) ✅ complete; **M28 (tagged unions) 🚧 in progress — M28a–c ✅** (layout/construction/RAII, value-producing `match`, `Optional<T>` via an implicit prelude), next is M28d (`Weak.tryUpgrade`). Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -277,7 +277,15 @@ their names/numbers.
      time exhaustiveness (`case _:` wildcard), payload binding into a fresh arm scope (borrow, like a
      foreach element). Fixtures `match_value`, `match_stmt`, `match_shared` (SAN); xfail
      `match_nonexhaustive`, `match_bad_variant`.
-   - **M28c–e (planned):** `Optional<T>` (prelude) → `Weak.tryUpgrade()` migration → `Result<T,E>`.
+   - **M28c — `Optional<T>` library sum type.** ✅ **DONE (v0.1.57).** A minimal implicit prelude —
+     `enum Optional<T> { Some(T value), None }` in cstar source, parsed and collected before user
+     code in the global namespace (resolvable unqualified everywhere, like the builtin collections),
+     with its templates emitting nothing unless instantiated. Generic-variant construction resolves
+     the instance from the target-type context (`Optional<int32> o = Optional::Some(value: 5)`);
+     cross-scope mangling is anchored by the use-site ctx per instance. Fixtures `optional_basic`,
+     `optional_multi`, `optional_shared` (SAN — `Optional<Shared<T>>` drops its handle once),
+     `optional_nested` (`Optional<Optional<int32>>` with a nested `match`).
+   - **M28d–e (planned):** `Weak.tryUpgrade()` migration → `Result<T,E>`.
 
 8. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already

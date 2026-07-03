@@ -87,6 +87,7 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
 std::string CEmitter::qualify(const std::string& name) const
 {
     if (name == "main") return "cstar_main";
+    if (_nsCtx.scope.empty()) return name;   // M28c: the prelude's global namespace -> bare names
     return _nsCtx.scope + "__" + name;
 }
 
@@ -348,12 +349,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             for (size_t i = 0; i + 1 < v->qualifier->size(); ++i) enumQual->push_back((*v->qualifier)[i]);
             std::string en = resolveUserName(*v->qualifier->back(), enumQual);
             if (_enums.count(en)) return en + "_" + nm;
-            // M28a: `Union::Variant` with no payload -> construct `(Union){ .tag = Union_Variant }`.
-            auto vit = _classes.find(en);
-            if (vit != _classes.end() && vit->second.isVariant)
-                for (auto& vc : vit->second.variants)
+            // M28a/c: `Union::Variant` with no payload -> `(Union){ .tag = Union_Variant }`
+            // (`Optional<int32>::None` resolves the instance via the target-type context).
+            if (ClassInfo* vt = resolveVariantType(en))
+                for (auto& vc : vt->variants)
                     if (vc.name == nm)
-                        return emitVariantConstruction(vit->second, nm, SharedArgumentList(), v->line);
+                        return emitVariantConstruction(*vt, nm, SharedArgumentList(), v->line);
             // Object field access `obj.field[.field…]` (qualifier=[obj,…], value=field).
             const std::string& head = *(*v->qualifier)[0];
             if (_localTypes.count(head) && !_localTypes[head].empty()) {
@@ -877,7 +878,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // (or the type's default) decides move vs duplicate.
                     line(n->line);
                     bool ph = _hoistOK; _hoistOK = true;               // M26i: inline-ctor hoisting
+                    std::string pvt = _variantTargetType; _variantTargetType = ty;   // M28c: `Optional<int32> o = Optional::Some(…)`
                     std::string iv = emitExpression(init);
+                    _variantTargetType = pvt;
                     _hoistOK = ph;
                     flushHoisted(depth);
                     indent(depth);
@@ -956,8 +959,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
             bool ph = _hoistOK; _hoistOK = true;                       // M26i: inline-ctor hoisting
             std::string pmt = _matchTargetCType; _matchTargetCType = _currentReturnCType;   // M28b: `return match(…)`
+            std::string pvt = _variantTargetType; _variantTargetType = _currentReturnCType; // M28c: `return Optional::Some(…)`
             std::string rv = emitExpression(retExpr);
             _matchTargetCType = pmt;
+            _variantTargetType = pvt;
             _hoistOK = ph;
             flushHoisted(depth);
             indent(depth);
@@ -2107,6 +2112,7 @@ void CEmitter::scanTypeForGenericTypes(SharedIdentifier t)
 void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args)
 {
     if (!args || args->empty()) return;
+    NsCtx savedCtxAtEntry = _nsCtx;   // M28c: the use-site ctx (the type args are mangled in it)
     const std::vector<std::string>& params = _genericTypeParams[tmpl];
 
     // Resolve each bare-`T` arg (the nested/transitive case) to its concrete binding.
@@ -2142,6 +2148,11 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     _genericTypeInsts[mangled] = { tmpl, mangled, concrete };
     _genericTypeInstOf[mangled] = tmpl;
     _genericTypeInstOrder.push_back(mangled);
+    // M28c: remember the USE-SITE ctx (the type args were mangled in it). A prelude template
+    // (Optional/Result) lives in the global scope but its args may name user types — emit the
+    // instance's members under this ctx so those names resolve. For a same-scope user generic it
+    // equals the template ctx, so nothing changes there.
+    _genericTypeInstCtx[mangled] = savedCtxAtEntry;
 
     NsCtx savedCtx = _nsCtx;
     std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
@@ -2675,6 +2686,8 @@ bool CEmitter::isNamedValue(ASTNode* e)
             if (_enums.count(en)) return false;                              // enum member
             auto c = _classes.find(en);
             if (c != _classes.end() && c->second.isVariant) return false;    // variant construction
+            if (_genericTypeParams.count(en) || _genericTypes.count(en))     // generic union: Optional::None
+                return false;
         }
         return true;
     }
@@ -2939,7 +2952,8 @@ void CEmitter::computeDestructible()
             bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
             if (inst) {
                 const GenericTypeInst& gi = _genericTypeInsts[ci.name];
-                _nsCtx = _genericTypeCtx[gi.templateKey];
+                _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name]   // M28c: use-site ctx
+                                                            : _genericTypeCtx[gi.templateKey];
                 _typeSubst.clear();
                 const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
                 for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
@@ -3626,6 +3640,19 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     }
     ClassInfo& ci = cit->second;
 
+    // M28c: a specialized generic union (Optional_int32) stores its variant payloads in the template's
+    // `T`; bind the instance's type args so payload binding types resolve concretely (mirrors
+    // computeDestructible). Restored at the end; arm bodies contain no `T`, so a whole-switch scope is safe.
+    std::map<std::string, SharedIdentifier> savedSubst;
+    bool instSubst = ci.isGenericInst && _genericTypeInsts.count(subjCls);
+    if (instSubst) {
+        savedSubst = _typeSubst;
+        _typeSubst.clear();
+        const GenericTypeInst& gi = _genericTypeInsts[subjCls];
+        const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+        for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+    }
+
     // Exhaustiveness (compile-time): every variant handled exactly once, unless a `_` wildcard is present.
     bool hasWildcard = false;
     std::set<std::string> covered;
@@ -3691,6 +3718,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     }
     if (!hasWildcard) { indent(depth + 1); *_out << "default: break;\n"; }   // exhaustive; keeps the C switch total
     indent(depth); *_out << "}\n";
+    if (instSubst) _typeSubst = savedSubst;
 }
 
 // M28b: a value-producing `match` in expression position. Lifts to a result temp + a switch, hoisted
@@ -3727,6 +3755,23 @@ void CEmitter::emitMatchStatement(MatchNode* m, int depth)
     emitMatchSwitch(m, nullptr, depth);
 }
 
+// M28a/c: resolve the variant type a `::` qualifier names. A non-generic union is in _classes
+// directly; a generic union names its bare template (`Optional`, in _genericTypes) — resolve it to
+// the target instance set by the enclosing typed position (`_variantTargetType`, e.g. Optional_int32).
+ClassInfo* CEmitter::resolveVariantType(const std::string& qualResolved)
+{
+    auto direct = _classes.find(qualResolved);
+    if (direct != _classes.end() && direct->second.isVariant) return &direct->second;
+    if (_genericTypeParams.count(qualResolved) && !_variantTargetType.empty()) {
+        auto of = _genericTypeInstOf.find(_variantTargetType);
+        if (of != _genericTypeInstOf.end() && of->second == qualResolved) {
+            auto inst = _classes.find(_variantTargetType);
+            if (inst != _classes.end() && inst->second.isVariant) return &inst->second;
+        }
+    }
+    return nullptr;
+}
+
 // M28a: `Union::Variant(field: value, …)` -> a C99 compound literal
 //   (Shape){ .tag = Shape_Circle, .u.Circle = { .radius = 2.0 } }
 // A no-payload variant omits the union member. The compound literal is an rvalue; stored in a local
@@ -3737,6 +3782,17 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
     const VariantCase* vc = nullptr;
     for (auto& v : ci.variants) if (v.name == variant) { vc = &v; break; }
     if (!vc) { unsupported(("'" + ci.name + "' has no variant '" + variant + "'").c_str(), srcLine); return "0"; }
+
+    // M28c: a specialized generic union (Optional_int32) stores payloads in the template's `T`; bind the
+    // instance's type args so each payload field's C type resolves concretely (in the caller's scope).
+    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    bool instSubst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
+    if (instSubst) {
+        _typeSubst.clear();
+        const GenericTypeInst& gi = _genericTypeInsts[ci.name];
+        const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+        for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+    }
 
     std::map<std::string, ArgumentNode*> byName;
     if (args) for (auto& a : *args) if (a->name && a->name->value) byName[*a->name->value] = a.get();
@@ -3806,6 +3862,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
         }
         s += " }";
     }
+    if (instSubst) _typeSubst = savedSubst;
     return s + " }";
 }
 
@@ -3878,14 +3935,14 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // is gone. `resolveFunc` handles namespace + `using` + alias resolution.
     SharedStringList qual = call->identifier->qualifier;
     if (qual && !qual->empty()) {
-        // M28a: `Union::Variant(args)` — construct a discriminated-union value with a payload.
+        // M28a/c: `Union::Variant(args)` — construct a discriminated-union value with a payload
+        // (`Optional<int32>::Some` resolves via the target-type context, M28c).
         auto tq = std::make_shared<StringList>();
         for (size_t i = 0; i + 1 < qual->size(); ++i) tq->push_back((*qual)[i]);
-        auto cit = _classes.find(resolveUserName(*qual->back(), tq));
-        if (cit != _classes.end() && cit->second.isVariant)
-            for (auto& v : cit->second.variants)
+        if (ClassInfo* vt = resolveVariantType(resolveUserName(*qual->back(), tq)))
+            for (auto& v : vt->variants)
                 if (v.name == name)
-                    return emitVariantConstruction(cit->second, name, call->args, call->line);
+                    return emitVariantConstruction(*vt, name, call->args, call->line);
         auto fit = _funcs.find(resolveFunc(name, qual));
         if (fit != _funcs.end())
             return emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line);
@@ -4445,7 +4502,10 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     if (cit == _classes.end()) return;
     ClassInfo& ci = cit->second;
     NsCtx savedCtx = _nsCtx;
-    _nsCtx = _genericTypeCtx[gi.templateKey];
+    // M28c: emit under the USE-SITE ctx (so a prelude template's user-type args resolve); for a
+    // same-scope user generic this equals the template's home ctx.
+    _nsCtx = _genericTypeInstCtx.count(gi.mangledName) ? _genericTypeInstCtx[gi.mangledName]
+                                                       : _genericTypeCtx[gi.templateKey];
     _typeSubst.clear();
     const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
     for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
@@ -4622,15 +4682,23 @@ std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, Share
 
 // Whole-program symbol table: run the collect passes for every unit (they append
 // to the shared maps), then resolve inheritance/vtables/destructibility once.
-void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
+void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnits)
 {
+    // M28c: the prelude (Optional/Result) is collected FIRST, in the global namespace (empty scope),
+    // so its generic templates register under bare names resolvable unqualified from every file.
+    std::vector<SharedCompilationUnit> units;
+    if (_preludeUnit) units.push_back(_preludeUnit);
+    for (auto& u : userUnits) units.push_back(u);
+
     // Assign each file its namespace context (public namespace or _F<idx> private)
     // and register public namespaces, before any name resolution.
     for (size_t i = 0; i < units.size(); ++i) {
         if (!units[i]) continue;
-        NsCtx ctx = ctxOf(units[i], (int)i);
+        NsCtx ctx;
+        if (units[i] == _preludeUnit) { ctx.isPublic = true; }   // empty scope = global (bare names)
+        else                          ctx = ctxOf(units[i], (int)i);
         _unitCtx[units[i].get()] = ctx;
-        if (ctx.isPublic) _namespaces.insert(ctx.scope);
+        if (ctx.isPublic && !ctx.scope.empty()) _namespaces.insert(ctx.scope);
     }
     // Pre-register every type's mangled NAME so references resolve regardless of
     // file/declaration order (a class method param may reference a type declared

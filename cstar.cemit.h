@@ -208,6 +208,10 @@ class CEmitter {
 public:
     CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives);
 
+    // M28c: the implicit prelude (library sum types Optional/Result). Collected before user code
+    // with a global namespace, so its templates register but emit nothing unless instantiated.
+    void setPrelude(SharedCompilationUnit u) { _preludeUnit = u; }
+
     // Emit a single self-contained translation unit (transpile / single-file
     // build). Returns the number of unsupported nodes (0 == fully lowered).
     int emit(SharedCompilationUnit unit);
@@ -222,6 +226,7 @@ public:
 
 private:
     std::ostream* _out;
+    SharedCompilationUnit _preludeUnit;   // M28c: implicit prelude (Optional/Result), collect-only
     std::string   _sourcePath;       // absolute path, used in #line directives
     bool          _lines;            // whether to emit #line directives
     int           _unsupported;      // count of nodes we could not lower
@@ -275,6 +280,8 @@ private:
     std::map<std::string, std::vector<std::string>> _genericTypeParams;  // template name -> type-param names [A, B]
     std::map<std::string, SharedBoundsList>   _genericTypeBounds;   // M27c: template name -> per-param contract bounds
     std::map<std::string, NsCtx>              _genericTypeCtx;      // template name -> home namespace ctx
+    std::map<std::string, NsCtx>              _genericTypeInstCtx;  // M28c: instance -> registration (use-site) ctx, so a
+                                                                    // prelude template's user-type args resolve at emit time
     std::map<std::string, GenericTypeInst>    _genericTypeInsts;    // mangled name -> instantiation (dedup)
     std::map<std::string, std::string>        _genericTypeInstOf;   // mangled name -> template name (construction)
     std::vector<std::string>                  _genericTypeInstOrder;// registration order (inner-first; struct-typedef emit)
@@ -304,6 +311,7 @@ private:
     std::vector<LiveLocal> _pendingParamDtors;
     std::string        _currentReturnCType = "void";  // for return-temp
     std::string        _matchTargetCType;              // M28b: result C type of a value-producing `match` (set by the liftable site)
+    std::string        _variantTargetType;             // M28c: target union instance for a generic-variant construction (Optional<int32>)
     int                _tempCounter = 0;
     // M26i: temp-hoist buffer. An inline constructor in argument position materializes into an
     // ordinary local ("Cls __tmp; Cls__ctor(&__tmp, …);") pushed here and flushed by the enclosing
@@ -484,6 +492,9 @@ private:
     std::string emitInvocation(InvocationNode* call);
     std::string emitVariantConstruction(ClassInfo& ci, const std::string& variant,
                                         SharedArgumentList args, int srcLine);   // M28a
+    // M28a/c: the variant type named by a `::` qualifier — a non-generic union directly, or a generic
+    // template resolved to its target instance (`Optional` + `_variantTargetType` Optional_int32). null if none.
+    ClassInfo* resolveVariantType(const std::string& qualResolved);
     // M28b: the value-producing `match`. `emitMatch` lifts an expression-position match to a temp
     // (strict ISO C11 — no statement-expression); `emitMatchStatement` emits a statement-position
     // match (value discarded). Both build the switch via `emitMatchSwitch`.
