@@ -2137,6 +2137,11 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             if (fn->parameters) for (auto& p : *fn->parameters) if (p) scanTypeForCollections(p->type);
             scanStmtForCollections(fn->block);
         } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+            // M27b: skip a generic TYPE template's members — their types name the raw type params
+            // (`List<T>` would register a bogus `List_T`). Each concrete `Wrap<int32>` reference in
+            // the program drives registerGenericTypeInst, which re-scans the specialized members
+            // under _typeSubst (so `List<T>` -> `List_int32`).
+            if (cd->typeParams && !cd->typeParams->empty()) continue;
             if (cd->members) for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
