@@ -168,6 +168,16 @@ std::string CEmitter::cType(SharedIdentifier type)
         auto s = _typeSubst.find(*type->value);
         if (s != _typeSubst.end()) return cType(s->second);
     }
+    // M27c: `This` (the self-type) resolves to the enclosing type — the concrete class while emitting a
+    // class body/prototype/struct (_thisType), or the interface type inside its vtbl slot. In a bounded
+    // generic the receiver's concrete class carries `This` (resolved when that class was emitted), so no
+    // binding is needed at the call site. `This` outside a type/contract is a clean error.
+    if (type->value && *type->value == "This" && !type->genericArg) {
+        if (!_thisType.empty()) return _thisType;
+        if (_currentClass)      return _currentClass->name;
+        unsupported("`This` (the self-type) is only valid inside a `type` or `contract`", type->line);
+        return "void";
+    }
     // FFI (M15): a raw C pointer carrier (opaque). Bare `Ptr` -> void* (the
     // universal handle / opaque pointer); `Ptr<T>` -> T*. usize/isize map to the
     // C size types. These are the explicit, extern-marked unsafe boundary.
@@ -1501,6 +1511,12 @@ void CEmitter::emitEnum(EnumInfo& ei)
     *_out << "} " << ei.name << ";\n\n";
 }
 
+// M27c: bind `_thisType` (what `This` resolves to) for a scope, restoring on exit (survives early
+// returns / loop `continue`s). Used across signature collection and class/interface emission.
+namespace { struct ScopedStr { std::string& s; std::string prev;
+    ScopedStr(std::string& s_, const std::string& v) : s(s_), prev(s_) { s = v; }
+    ~ScopedStr() { s = prev; } }; }
+
 // Build the class table: ordered fields, methods, and the (single) constructor.
 void CEmitter::collectClasses(SharedCompilationUnit unit)
 {
@@ -1535,6 +1551,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ci.isExternStruct = isExt;
         if (isExt) _externNames.insert(ci.name);
         ci.node = cd;
+        ScopedStr _ts(_thisType, ci.name);   // M27c: `This` -> this class in its collected method sigs
 
         // Single inheritance (extends). Base/interface names are RESOLVED in
         // linkBases() once every file's declarations are registered.
@@ -3673,6 +3690,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 
 void CEmitter::emitStruct(ClassInfo& ci)
 {
+    ScopedStr _ts(_thisType, ci.name);   // M27c: `This` -> this class while emitting its struct
     *_out << "struct " << ci.name << " {\n";
     // Offset-0 invariant: the vptr (root only) or the embedded base comes FIRST.
     bool hasMember = false;
@@ -3762,6 +3780,9 @@ std::string CEmitter::ifaceSlotSig(SharedParameterList params)
 // Interface I -> a vtable struct type `I_vtbl` and a fat-pointer value type `I`.
 void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 {
+    // M27c: in the type-erased vtbl slot, `This` is the interface type itself (a contract's `This`-typed
+    // method is dispatched STATICALLY via a bound; the vtbl slot is dead for that use but must be valid C).
+    ScopedStr _ts(_thisType, ii.name);
     *_out << "struct " << ii.name << "_vtbl {\n";
     for (auto& m : ii.methods) {
         indent(1);
@@ -3782,6 +3803,8 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end()) { unsupported("unknown interface in implements", ci.node->line); continue; }
         InterfaceInfo& ii = it->second;
+        // M27c: the slot casts must match the vtbl struct's erased signature -> `This` = the interface.
+        ScopedStr _ts(_thisType, ii.name);
         *_out << "static const " << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
@@ -3831,6 +3854,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
 void CEmitter::emitClassPrototypes(ClassInfo& ci)
 {
     if (ci.isCollection || ci.isExternStruct) return;   // macro / header provides these
+    ScopedStr _ts(_thisType, ci.name);                  // M27c: `This` -> this class in method prototypes
     const char* stat = _emitStaticClass ? "static inline " : "";   // M27b: specialized instances are header-static inline
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
         *_out << stat << "void " << ci.name << "__ctor("
@@ -3983,6 +4007,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 void CEmitter::emitClassDefinitions(ClassInfo& ci)
 {
     if (ci.isCollection || ci.isExternStruct) return;   // macro / header provides these
+    ScopedStr _ts(_thisType, ci.name);                  // M27c: `This` -> this class in method bodies/sigs
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator) {
         line(ci.ctorNode->line);
         emitMethodOrCtorBody(ci.name + "__ctor", "void",

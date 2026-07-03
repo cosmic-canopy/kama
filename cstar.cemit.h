@@ -225,6 +225,7 @@ private:
     std::map<std::string, MoveState> _moveState;   // move-only local/param cVar -> state
     ClassInfo*                         _currentClass = nullptr;  // when emitting a method/ctor
     std::string                        _currentFunc;             // C-name of the function/method being emitted (M25c friend match)
+    std::string                        _thisType;                // M27c: C name `This` resolves to (the class being emitted, or the interface type inside its vtbl slot)
 
     // Virtual dispatch (M6): per-root union of vtable slots, in introduction order.
     struct VSlot { std::string name; std::string owner; ClassMethodDeclarationNode* node; };

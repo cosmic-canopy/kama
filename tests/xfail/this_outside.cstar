@@ -1,0 +1,4 @@
+// M27c-2 — `This` (the self-type) is only meaningful inside a `type`/`contract`; a free function
+// using it is a clean compile error.
+fn This oops() { return 0; }
+fn int32 main() { return 0; }
