@@ -291,6 +291,15 @@ their names/numbers.
      fallibility). Fixtures `result_basic` (via a ternary), `result_shared` (SAN — the `Ok` handle
      drops once). *(Landed before M28d; the Weak migration is the heavier remaining piece.)*
    - **M28d (planned):** migrate `Weak.upgrade()` → `tryUpgrade(): Optional<Shared<T>>`.
+   - **Deferred gaps (surfaced building M28, orthogonal — not blocking):** *(1)* the builtin `String`
+     as a generic type ARG (`Optional<String>`, `Result<int32, String>`) emits the bare name, not
+     `cstar_string` — `String` in a type-arg list parses as a plain identifier; use a primitive /
+     user type / smart-ptr / collection payload for now. *(2)* a value-producing `match` is lifted
+     only in a local-init or `return` (an assignment RHS `x = match(…)` is rejected); an arm body is
+     a single expression (no block arms). *(3)* a resource payload is constructed from a fresh rvalue
+     or a bound-local `give` (inline `new` in a payload arg, a collection move-in, and nested inline
+     `Some(Some(…))` construction are not yet lowered — bind a local first). Tracked in the memory's
+     `roadmap-deferred`.
 
 8. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already
