@@ -74,6 +74,7 @@ struct MethodInfo {
     bool                         isConst = false;     // `const fn …` — non-mutating (M24b)
     Visibility                   visibility = Visibility::Private;   // M25
     bool                         isFinal = false;     // `final fn` — seals a virtual slot (M25)
+    bool                         isStatic = false;    // `static fn` — no implicit `self` (M31a); called `Type::m(...)`
 };
 
 // A built-in generic collection / smart-pointer kind (M9/M10). Backed by a C
@@ -326,6 +327,7 @@ private:
     int                _curLine = 0;                   // M26f-2: last source line seen (conditional-drop diagnostics)
     bool               _inUnsafe = false;             // M17: inside an `unsafe { }` block
     bool               _inCtor   = false;             // M24d: emitting a ctor (const fields writable here)
+    bool               _inStaticMethod = false;        // M31a: emitting a `static` method body (no `self`/`this`)
 
     void line(int srcLine);                          // emit a #line directive
     void indent(int depth);
@@ -468,7 +470,8 @@ private:
     void emitClassDefinitions(ClassInfo& ci);
     void emitMethodOrCtorBody(const std::string& cName, const char* retType,
                               SharedParameterList params, SharedBlock body,
-                              ClassInfo& owner, bool isCtor, bool isConstMethod = false);
+                              ClassInfo& owner, bool isCtor, bool isConstMethod = false,
+                              bool isStatic = false);
     std::string emitMemberAccess(MemberAccessNode* ma);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     // Dispatch a call on a receiver of static class `clsName`, given the C pointer

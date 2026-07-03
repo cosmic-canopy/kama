@@ -366,6 +366,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (_currentClass) {
                 ClassInfo* owner = findFieldOwner(_currentClass, head);
                 if (owner) {
+                    if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);   // M31a
                     checkFieldAccess(owner, head, v->line);   // M25
                     std::string e = "self->" + basePathTo(_currentClass, owner) + head;
                     for (size_t i = 1; i < v->qualifier->size(); ++i) e += "." + *(*v->qualifier)[i];
@@ -379,7 +380,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // ancestor) and not a local/param resolves to self->[__base.]…field.
         if (_currentClass && !_localTypes.count(nm)) {
             ClassInfo* owner = findFieldOwner(_currentClass, nm);
-            if (owner) { checkFieldAccess(owner, nm, v->line); return "self->" + basePathTo(_currentClass, owner) + nm; }  // M25
+            if (owner) {
+                if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);   // M31a
+                checkFieldAccess(owner, nm, v->line); return "self->" + basePathTo(_currentClass, owner) + nm;   // M25
+            }
         }
         // A bare **function name** used as a value (not a call) → its C function
         // pointer (M21) — enables binding/passing a free function to a FunctionPtr.
@@ -391,7 +395,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return nm;
     }
 
-    if (dynamic_cast<ThisAccessNode*>(n)) return "self";
+    if (auto* tn = dynamic_cast<ThisAccessNode*>(n)) {
+        if (_inStaticMethod) unsupported("a `static` method has no `this`", tn->line);   // M31a
+        return "self";
+    }
 
     if (auto* v = dynamic_cast<MemberAccessNode*>(n)) {
         return emitMemberAccess(v);
@@ -1795,11 +1802,19 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (*mod->value == "virtual")  mi.isVirtual = true;
                                 if (*mod->value == "override") { mi.isVirtual = true; mi.isOverride = true; }
                                 if (*mod->value == "abstract") { mi.isVirtual = true; mi.isAbstract = true; }
+                                if (*mod->value == "static")   mi.isStatic = true;   // M31a — no implicit `self`
                                 if (*mod->value == "export")
                                     unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", md->line);
                                 if (*mod->value == "volatile")
                                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", md->line);
                             }
+                        // M31a — a `static` method has no `this`: no vtable slot, must have a body.
+                        if (mi.isStatic) {
+                            if (mi.isVirtual)
+                                unsupported("a `static` method has no `this` — it can't be `virtual`/`override`/`abstract`", md->line);
+                            if (!md->body)
+                                unsupported("a `static` method needs a body", md->line);
+                        }
                         if (!md->body) mi.isAbstract = mi.isVirtual = true;   // null body => pure
                         // M25b — polymorphism rules.
                         if (mi.isVirtual) {
@@ -4235,11 +4250,23 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             for (auto& v : vt->variants)
                 if (v.name == name)
                     return emitVariantConstruction(*vt, name, call->args, call->line);
+        // M31a: `Type::method(args)` — a static method (no implicit `self`). The qualifier head
+        // resolves to a class; the named method must be `static`.
+        std::string typeName = resolveUserName(*qual->back(), tq);
+        if (_classes.count(typeName)) {
+            ClassInfo* owner = nullptr;
+            MethodInfo* mi = findMethod(&_classes[typeName], name, &owner);
+            if (mi && mi->isStatic) {
+                canAccess(owner, mi->visibility, name, call->line);   // M25
+                return emitReorderedCall(mi->cName, "", mi->params, call->args, call->line);   // no leading self
+            }
+            if (mi && !mi->isStatic)
+                unsupported(("`" + typeName + "::" + name + "` names a non-static method — call it on an instance (`obj." + name + "(...)`)").c_str(), call->line);
+        }
         auto fit = _funcs.find(resolveFunc(name, qual));
         if (fit != _funcs.end())
             return emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line);
-        unsupported("scope-qualified call resolves to no known function "
-                    "(static `Type::method()` is not yet supported)", call->line);
+        unsupported("scope-qualified call resolves to no known function", call->line);
         return "0";
     }
 
@@ -4586,7 +4613,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
         *_out << stat << cType(mi.returnType) << " " << mi.cName << "("
-             << paramListC(mi.node->params, ci.name.c_str()) << ");\n";
+             << paramListC(mi.node->params, mi.isStatic ? nullptr : ci.name.c_str()) << ");\n";   // M31a — static: no self
     }
 }
 
@@ -4663,10 +4690,11 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
 // Emit a method or constructor body with `self`/field/param context set up.
 void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retType,
                                     SharedParameterList params, SharedBlock body,
-                                    ClassInfo& owner, bool isCtor, bool isConstMethod)
+                                    ClassInfo& owner, bool isCtor, bool isConstMethod, bool isStatic)
 {
     _currentClass = &owner;
     _currentFunc  = cName;   // M25c — a method may be a `Class::method` friend accessor
+    _inStaticMethod = isStatic;   // M31a — a static body has no `self`/`this`
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
     _moveState.clear();   // M26f-2: per-method move analysis
@@ -4692,7 +4720,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     }
 
     *_out << (_emitStaticClass ? "static inline " : "") << retType << " " << cName
-          << "(" << paramListC(params, owner.name.c_str()) << ")\n{\n";
+          << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str()) << ")\n{\n";   // M31a — static: no self
 
     if (isCtor) {
         // 1. Base constructor first (so derived overrides its effects + vptr).
@@ -4747,6 +4775,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentClass = nullptr;
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
+    _inStaticMethod = false;   // M31a
 }
 
 void CEmitter::emitClassDefinitions(ClassInfo& ci)
@@ -4766,7 +4795,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         if (mi.isAbstract) continue;   // pure: no body to emit
         line(mi.node->line);
         std::string ret = cType(mi.returnType);
-        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false, mi.isConst);
+        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false, mi.isConst, mi.isStatic);
     }
     if (ci.destructible)
         emitDtorDefinition(ci);
@@ -4903,8 +4932,10 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         ClassInfo* owner = findFieldOwner(&_classes[cls], field);
         if (owner) { basePath = basePathTo(&_classes[cls], owner); checkFieldAccess(owner, field, ma->line); }  // M25
     }
-    if (dynamic_cast<ThisAccessNode*>(ma->expression.get()))
+    if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
+        if (_inStaticMethod) unsupported("a `static` method has no `this`", ma->line);   // M31a
         return "self->" + basePath + field;
+    }
     return "(" + emitExpression(ma->expression) + ")." + basePath + field;
 }
 

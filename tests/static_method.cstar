@@ -1,0 +1,15 @@
+// M31a — full static methods. A `static fn` has no implicit `self`; it is called `Type::method(named:)`.
+// `Vec2::dot` takes both operands explicitly (no `this`) — the canonical type-level helper.
+type value Vec2 {
+    int32 x;
+    int32 y;
+    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
+    public static fn int32 dot(Vec2 left, Vec2 right) {
+        return left.x * right.x + left.y * right.y;   // no `this` — both operands are params
+    }
+}
+fn int32 main() {
+    Vec2 a = Vec2(x: 3, y: 4);
+    Vec2 b = Vec2(x: 5, y: 6);
+    return Vec2::dot(left: a, right: b);   // 3*5 + 4*6 = 15 + 24 = 39
+}

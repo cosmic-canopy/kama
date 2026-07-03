@@ -1,0 +1,9 @@
+// M31a — `Type::method()` may only name a `static` method; an instance method needs a receiver.
+type value Vec2 {
+    int32 x;
+    public Vec2(int32 x) { this.x = x; }
+    public fn int32 len() { return this.x; }   // instance method
+}
+fn int32 main() {
+    return Vec2::len();   // wrong — call it on an instance
+}

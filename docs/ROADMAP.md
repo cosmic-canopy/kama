@@ -368,6 +368,13 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
 10. **M31 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already
    treats `Vec2 c = a + b` as a cheap pod copy. Validated by a first Vec2/3/4 + Mat4 library.
+   - **M31a — full static methods ✅ (v0.1.66).** `static fn` carries no implicit `self` (`MethodInfo.isStatic`
+     → `paramListC` gets a null self-type at both the prototype and the body); `Type::method(named:)` resolves
+     in `emitInvocation`'s `::` branch (the qualifier head → a class, the method must be `static`) and lowers
+     to `emitReorderedCall(cName, "", ...)` (no leading self — named args reorder for free). A `this`/bare-field
+     use inside a static body, and `static`+`virtual`/`override`/`abstract`, are clean errors. Fixtures
+     `static_method` (`Vec2::dot`), `static_method_noself`; xfail `static_this`, `static_call_nonstatic`,
+     `static_virtual`.
    - **Design Qs:** Operator-method **syntax** — operators are the *sanctioned exception* to
      named-args-only (a binary op has exactly two operands, positional by nature); how do we spell
      it (`fn Vec2 operator+(Vec2 rhs)`? a special `operator` member? free-function form?). **Which
@@ -397,7 +404,7 @@ declared a deliberate non-goal. The current inventory (swept from SPEC/KEYWORDS/
   build may pull a minimal `export` earlier. *(Was previously in KEYWORDS.md only, not the roadmap.)*
 - **`volatile` keyword** — reserved, hard-errors today; **tracked to 1.x → Embedded/MCU target**
   (below): emit C `volatile` for ISR↔loop flags / MMIO registers.
-- **`operator` / full `static` (`Type::method`)** — hard-error today; **tracked to M31.**
+- **Full `static` (`Type::method`)** — ✅ **done (M31a, v0.1.66).** **`operator` overloading** — hard-error today; **tracked to M31b.**
 - **Collection passed by value (params/returns)** — `give`-ing a collection into a variant payload is
   ✅ **done (M29c)** (move the struct, null the source). General by-value collection params/returns
   (and `copy`/deep-copy of a whole container into a variant) remain **tracked to M31+** (reuse the same
