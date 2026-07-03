@@ -1,6 +1,6 @@
 // M27b-beta: a NESTED generic argument — `Box<Pair<int32,int32>>` — proves the recursive mangler
-// (the inner `Pair<int32,int32>` is mangled INTO the name, not dropped, so no collision). Nested
-// generics parse today with a SPACE before the final `>` (`… > >`); the `>>` split is a later slice.
+// (the inner `Pair<int32,int32>` is mangled INTO the name, not dropped, so no collision). Written
+// with NO space before the final `>` (the `>>` lexer split lands with this fixture).
 type value Pair<A, B>
 {
     public A a;
@@ -17,7 +17,7 @@ type value Box<T>
 fn int main()
 {
     Pair<int32, int32> p = Pair(x: 3, y: 4);
-    Box<Pair<int32, int32> > b = Box(v: p);   // nested arg; note the space before the final `>`
+    Box<Pair<int32, int32>> b = Box(v: p);    // nested arg, no space — `>>` splits into two closes
     Pair<int32, int32> q = b.unbox();
     return q.first() + 5;                      // 3 + 5 = 8
 }

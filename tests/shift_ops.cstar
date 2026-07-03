@@ -1,0 +1,13 @@
+// Bit-shift operators — the depth-0 baseline that the `>>` generic split must NOT disturb.
+// `<<`/`>>` (binary) and `<<=`/`>>=` (compound assign). Folds to an exit code:
+//   a: 1<<4 = 16, then 16>>1 = 8 ;  b: 3<<=2 = 12, then 12>>=1 = 6 ;  (256 >> 4) = 16
+//   -> 8 + 6 + 16 = 30
+fn int32 main() {
+    int32 a = 1;
+    a = a << 4;
+    a = a >> 1;
+    int32 b = 3;
+    b <<= 2;
+    b >>= 1;
+    return a + b + (256 >> 4);
+}

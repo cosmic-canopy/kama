@@ -207,7 +207,10 @@ identifier                  ({letter_char}|"_"){ident_char}*
 "%="    { RETURN_TOKEN(MODEQ, 2); }
 
 "<<"    { RETURN_TOKEN(LTLT, 2); }
-">>"    { RETURN_TOKEN(GTGT, 2); }
+">>"    { /* Inside a generic `<…>` (depth>0), `>>` closes two levels: hand back one `>` and return a
+             single GT (the parser's GT-close action owns the decrement). Else it's the shift operator. */
+          if (yyextra->genericDepth > 0) { yyless(1); RETURN_TOKEN(GT, 1); }
+          else                           { RETURN_TOKEN(GTGT, 2); } }
 ">>="   { RETURN_TOKEN(GTGTEQ, 3); }
 "<<="   { RETURN_TOKEN(LTLTEQ, 3); }
 "&="    { RETURN_TOKEN(ANDEQ, 2); }

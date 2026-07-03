@@ -42,6 +42,11 @@ struct LexerInstanceData {
 
    SharedCodeGenContext codeGenContext;
    SharedCompilationUnit compilationUnit;
+
+   /* M27b: nesting depth of open generic `<…>` (type contexts only). The grammar bumps it on each
+      generic `<` and drops it on the matching `>`; while >0 the lexer splits a `>>` into two `>`
+      (so `List<Shared<Circle>>` needs no space). 0 in expression context, so `a >> b` stays a shift. */
+   int genericDepth = 0;
 };
 
 struct cstaryystype {
@@ -311,11 +316,14 @@ qualifier
   ;
 basic_identifier
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | IDENTIFIER LT type_arg_list GT   {
+  | IDENTIFIER LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT   {
+        /* The mid-rule bumped genericDepth on the opening `<` so the lexer splits a nested `>>`
+           close (see cstar.l); drop it back now that this `>` closed the list. */
+        yyget_extra(scanner)->genericDepth--;
         /* M27b-beta: `Name<A, B, …>` — the type args are a LIST. `genericArg` mirrors [0] so every
            single-arg consumer (Ptr/collections/guards) is untouched; multi-arg sites read genericArgs. */
-        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$3)[0]);
-        id->genericArgs = $3;
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$4)[0]);
+        id->genericArgs = $4;
         $$ = id;
     }
   ;
@@ -783,7 +791,9 @@ post_decrement_expression
   : postfix_expression MINUSMINUS   { $$ = std::make_shared<PostIncrDecrNode>(SCANNER_CODEGENCONTEXT, $2, $1); }
   ;
 cast_expression
-  : CAST LT type GT LPAREN unary_expression RPAREN   { $$ = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $3, $6 ); }
+    /* The mid-rules track genericDepth across the cast's `<…>` so `cast<List<int>>(x)` needs no space;
+       the `--` fires before `( unary_expression )` so a `>>` shift inside the cast body stays a shift. */
+  : CAST LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN unary_expression RPAREN   { $$ = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $4, $8 ); }
   ;
 constant_expression
   : expression
