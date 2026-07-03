@@ -1934,7 +1934,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     if (isSmart) {
         // M26g: a smart pointer over an INTERFACE owns the concrete object behind a fat element.
         if (isInterface(elemCType)) {
-            if (isWeak) registerSmartPtr(CollKind::Shared, elem);   // upgrade()'s Shared<I> return
+            if (isWeak) { registerSmartPtr(CollKind::Shared, elem); registerOptionalOfShared(elem); }  // tryUpgrade's Optional<Shared<I>>
             registerSmartPtr(kind, elem);   // interface-element variant (elemClass = the interface)
             return;
         }
@@ -1942,8 +1942,8 @@ void CEmitter::registerCollection(SharedIdentifier collType)
             unsupported("a smart pointer requires a class or interface element type", collType->line);
             return;
         }
-        // A Weak needs its Shared (lock()'s return type + the source of a weak).
-        if (isWeak) registerSmartPtr(CollKind::Shared, elem);
+        // A Weak needs its Shared (tryUpgrade's pointee) + Optional<Shared<T>> (tryUpgrade's return, M28d).
+        if (isWeak) { registerSmartPtr(CollKind::Shared, elem); registerOptionalOfShared(elem); }
         registerSmartPtr(kind, elem);
         return;
     }
@@ -2041,10 +2041,25 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
         mi.isIntrinsic = true; ci.methods[m] = mi;
     };
     // Intrinsics (not auto-deref forwarded): Owned has none; Shared has valid();
-    // Weak has upgrade() (-> Shared) and expired().
+    // Weak has tryUpgrade() (-> Optional<Shared<T>>, M28d) and expired().
     if (kind == CollKind::Shared) addM("valid", {});
-    if (kind == CollKind::Weak) { addM("upgrade", {}); addM("expired", {}); }
+    if (kind == CollKind::Weak) { addM("tryUpgrade", {}); addM("expired", {}); }
     _classes[cName] = ci;
+}
+
+// M28d: register `Optional<Shared<elem>>` for a `Weak<elem>` — the type `tryUpgrade()` returns.
+// Synthesizes the `Shared<elem>` argument node and drives the normal generic-type monomorphization.
+void CEmitter::registerOptionalOfShared(SharedIdentifier elem)
+{
+    if (!elem || !_genericTypeParams.count("Optional")) return;   // no prelude Optional -> skip
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto sh = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Shared"));
+    sh->genericArg  = elem;
+    sh->genericArgs = std::make_shared<IdentifierList>();
+    sh->genericArgs->push_back(elem);
+    auto optArgs = std::make_shared<IdentifierList>();
+    optArgs->push_back(sh);
+    registerGenericTypeInst("Optional", optArgs);
 }
 
 // Register a BindableFunctionPtr<Sig> (M22) — a callable that may own a bound
@@ -2570,6 +2585,22 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     _nsCtx = savedCtx;
 }
 
+// M28d: `Weak<T>.tryUpgrade() -> Optional<Shared<T>>` — the type-safe replacement for the empty-
+// Shared sentinel. Wraps the runtime macro's internal `__upgrade` (which does the strong++/empty):
+// a live Shared (ctrl != NULL) becomes `Some`, a dead one `None`. Emitted after the Weak macro,
+// where both the Shared and the Optional<Shared<T>> instance structs are already complete.
+void CEmitter::emitWeakTryUpgrade(const CollectionInfo& info)
+{
+    std::string sh  = "Shared_" + info.elemMangle;      // the pointee handle
+    std::string opt = "Optional_" + sh;                 // Optional_Shared_<elem>
+    if (!_genericTypeInsts.count(opt)) return;          // prelude Optional unavailable -> skip (upgrade stays)
+    *_out << "static inline " << opt << " " << info.cName << "__tryUpgrade(" << info.cName << "* self) {\n"
+          << "    " << sh << " s = " << info.cName << "__upgrade(self);\n"
+          << "    if (s.ctrl) return (" << opt << "){ .tag = " << opt << "_Some, .u.Some = { .value = s } };\n"
+          << "    return (" << opt << "){ .tag = " << opt << "_None };\n"
+          << "}\n";
+}
+
 // Emit the CSTAR_*_{TYPE,FUNCS}(...) macro line per registered instantiation.
 // `typesOnly` picks the struct-typedef half (emitted before class struct bodies so a
 // class may hold a collection/smart-ptr BY VALUE) vs the funcs half (after class
@@ -2604,14 +2635,17 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                  << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : ")\n");
         else if (info.kind == CollKind::Shared)
             *_out << "CSTAR_SHARED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
-        else if (info.kind == CollKind::Weak && info.elemIsInterface)
-            // upgrade() returns the matching Shared<I> (its _TYPE is emitted in the same pass).
+        else if (info.kind == CollKind::Weak && info.elemIsInterface) {
+            // The C `__upgrade` (-> Shared<I>) stays an internal helper; `tryUpgrade` wraps it (M28d).
             *_out << "CSTAR_WEAK_IFACE_" << suf << "(" << info.cName
                  << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : (", Shared_" + info.elemMangle + ")\n"));
-        else if (info.kind == CollKind::Weak)
-            // upgrade() returns the matching Shared (its _TYPE is emitted in the same pass).
+            if (!typesOnly) emitWeakTryUpgrade(info);
+        }
+        else if (info.kind == CollKind::Weak) {
             *_out << "CSTAR_WEAK_" << suf << "(" << info.elemCType << ", " << info.cName
                  << (typesOnly ? ")\n" : (", Shared_" + info.elemMangle + ")\n"));
+            if (!typesOnly) emitWeakTryUpgrade(info);
+        }
         else if (info.kind == CollKind::Bindable)
             // Fully type-erased — the signature drives only the invoke, not the layout.
             *_out << "CSTAR_BINDABLE_" << suf << "(" << info.cName << ")\n";
@@ -2802,7 +2836,7 @@ std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string
     // Otherwise auto-deref to the pointee T (Owned/Shared expose a T* ptr).
     if (smartKind(cls) != CollKind::Weak)
         return emitDispatch(_classes[cls].collElemClass, "(" + recvExpr + ").ptr", method, args, srcLine);
-    unsupported(("Weak<T> has no member '" + method + "'; call .upgrade()").c_str(), srcLine);
+    unsupported(("Weak<T> has no member '" + method + "'; call .tryUpgrade()").c_str(), srcLine);
     return "0";
 }
 
@@ -4579,7 +4613,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     // A Weak can't be dereffed — it must be upgraded with upgrade() first.
     if (isSmartPtrClass(cls)) {
         if (smartKind(cls) == CollKind::Weak) {
-            unsupported("cannot access a field through Weak<T>; call .upgrade()", ma->line);
+            unsupported("cannot access a field through Weak<T>; call .tryUpgrade()", ma->line);
             return field;
         }
         std::string T = _classes[cls].collElemClass;

@@ -1,7 +1,6 @@
-// M26g-2 — `Shared<IShape>` / `Weak<IShape>`: ref-counted owning smart pointers over an INTERFACE.
-// Retain shares one concrete object (freed once, by the last strong handle, via the vtable's
-// `__dtor`); a `Weak<I>` observes without keeping alive and `upgrade()`s to a live `Shared<I>` or an
-// empty one after the object dies. Polymorphic dispatch through the fat handle. ASan-clean.
+// M26g-2 / M28d — `Shared<IShape>` / `Weak<IShape>`: ref-counted owning smart pointers over an
+// INTERFACE. A `Weak<I>` observes without keeping alive and `tryUpgrade()`s to `Optional<Shared<I>>`
+// (Some while the object lives, None after it dies). Polymorphic dispatch through the fat handle.
 type contract IShape { fn int32 area(); }
 type resource Sq implements IShape {
     List<int32> side;                                       // owns heap -> destructible impl
@@ -17,12 +16,12 @@ fn int32 main() {
     Shared<IShape> a = new Sq(s: 6);                        // area 36
     Shared<IShape> b = a;                                   // retain: a and b share one Sq
     Weak<IShape> live = a;                                  // weak to the live Sq
-    Shared<IShape> u = live.upgrade();                      // valid while a/b alive
-    int32 sum = a.area() + b.area();                        // 36 + 36 = 72
-    if (u.valid()) { sum = sum + u.area(); }                // + 36 = 108
+    Optional<Shared<IShape>> lu = live.tryUpgrade();        // Some while a/b alive
+    int32 luv = match (lu) { case Some(u): u.area(); case None: 0; };   // 36
+    int32 sum = a.area() + b.area() + luv;                  // 36 + 36 + 36 = 108
 
     Weak<IShape> dead = orphan();                           // its Shared already died
-    Shared<IShape> d = dead.upgrade();                      // empty (expired)
-    if (dead.expired()) { sum = sum + 1; }                  // 109
-    return sum;                                             // 109; each Sq freed exactly once
+    Optional<Shared<IShape>> du = dead.tryUpgrade();        // None (expired)
+    int32 duv = match (du) { case Some(d): 0; case None: 1; };   // 1
+    return sum + duv;                                       // 109; each Sq freed exactly once
 }

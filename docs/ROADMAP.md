@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 → Step 7 → tag.**
-**Status (v0.1.58):** M27 (generics) ✅ complete; **M28 (tagged unions) 🚧 in progress — M28a–c + M28e ✅** (layout/construction/RAII, value-producing `match`, `Optional<T>` + `Result<T,E>` via an implicit prelude), only M28d (`Weak.tryUpgrade`) remains. Rationale: close the
+**Status (v0.1.59):** M27 (generics) ✅ and **M28 (tagged unions + `match` + `Optional`/`Result` + `Weak.tryUpgrade`) ✅ COMPLETE** — next is **M29** (operator overloading). Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -253,7 +253,7 @@ their names/numbers.
      operator-interfaces (generic math) will *reuse* this milestone's interface-bound + `This`
      mechanism — M27 lays the groundwork, no conflict.
 
-7. **M28 — tagged unions + `match` + `Optional<T>` + `Result<T,E>`.** 🚧 *in progress.* Sum types
+7. **M28 — tagged unions + `match` + `Optional<T>` + `Result<T,E>`.** ✅ **COMPLETE (v0.1.55–v0.1.59).** Sum types
    with exhaustive pattern matching; `Optional<T>`/`Result<T,E>` as *library* tagged unions, **not**
    compiler intrinsics — one way to do a thing. The "no forgotten case" capstone. Migrates
    `Weak.upgrade() -> tryUpgrade(): Optional<Shared<T>>` to its final form (no empty-Shared sentinel).
@@ -290,7 +290,14 @@ their names/numbers.
      monomorphization + M28c prelude for free (division of labor: `Optional` = absence, `Result` =
      fallibility). Fixtures `result_basic` (via a ternary), `result_shared` (SAN — the `Ok` handle
      drops once). *(Landed before M28d; the Weak migration is the heavier remaining piece.)*
-   - **M28d (planned):** migrate `Weak.upgrade()` → `tryUpgrade(): Optional<Shared<T>>`.
+   - **M28d — `Weak.tryUpgrade()` migration.** ✅ **DONE (v0.1.59). M28 COMPLETE.** `Weak<T>.upgrade()`
+     (returned an empty-Shared sentinel you had to remember to `.valid()`-check) becomes
+     `tryUpgrade(): Optional<Shared<T>>` — absence in the type, consumed by `match`. The C runtime
+     `__upgrade` stays an internal helper; the emitter registers `Optional<Shared<T>>` per `Weak<T>`
+     and emits a `__tryUpgrade` wrapper (`Some` on a live ctrl, else `None`), for both class and
+     interface Weaks. Fixtures `weak_basic`, `weak_expired`, `shared_iface` migrated to
+     `tryUpgrade()` + `match` (bind the result to a local — inline `match` on a call result is a
+     deferred gap). Every fallible op is now compiler-checked.
    - **Deferred gaps (surfaced building M28, orthogonal — not blocking):** *(1)* the builtin `String`
      as a generic type ARG (`Optional<String>`, `Result<int32, String>`) emits the bare name, not
      `cstar_string` — `String` in a type-arg list parses as a plain identifier; use a primitive /

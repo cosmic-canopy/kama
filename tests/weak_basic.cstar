@@ -1,5 +1,5 @@
-// Weak<T>: make a weak ref from a Shared, upgrade it (lock) while alive, and use
-// the shared object through the upgraded handle.
+// Weak<T>: make a weak ref from a Shared, tryUpgrade() it while alive (-> Some), and use the
+// shared object through the upgraded handle. The empty-Shared sentinel is gone (M28d).
 type value Counter
 {
     int32 value;
@@ -11,11 +11,10 @@ type value Counter
 fn int main()
 {
     Shared<Counter> s = new Counter(start: 40);
-    Weak<Counter> w = s;            // weak ref (does not keep alive)
-    Shared<Counter> s2 = w.upgrade();  // upgrade -> valid (s is alive)
-    int32 r = 0;
-    if (s2.valid()) { r = 1; }      // confirm the upgrade succeeded
-    s2.bump();
-    s2.bump();
-    return s2.get() + r - 1;        // 42 + 1 - 1 = 42
+    Weak<Counter> w = s;                          // weak ref (does not keep alive)
+    Optional<Shared<Counter>> up = w.tryUpgrade();
+    return match (up) {
+        case Some(s2): s2.get() + 2;              // alive -> 40 + 2 = 42
+        case None: 0;
+    };
 }

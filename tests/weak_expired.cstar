@@ -1,5 +1,5 @@
-// Weak<T> does NOT keep the pointee alive: after the last Shared drops, the weak
-// is expired and lock() safely returns an empty Shared.
+// Weak<T> does NOT keep the pointee alive: after the last Shared drops, tryUpgrade() returns
+// None (the type makes the absence unforgettable — no sentinel to remember to check).
 type value Counter
 {
     int32 value;
@@ -15,9 +15,9 @@ fn int main()
         w = s;          // weak ref
     }                   // s drops -> Counter freed (strong 1->0); ctrl kept (weak=1)
 
-    int32 r = 0;
-    if (w.expired()) { r = r + 5; }        // expired (strong==0) -> +5
-    Shared<Counter> s2 = w.upgrade();          // empty (cannot upgrade a dead weak)
-    if (s2.valid()) { r = r + 100; }        // not taken
-    return r;                               // 5
+    Optional<Shared<Counter>> up = w.tryUpgrade();   // expired -> None
+    return match (up) {
+        case Some(s2): 100;   // not taken
+        case None: 5;
+    };
 }

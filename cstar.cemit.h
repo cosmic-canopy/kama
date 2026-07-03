@@ -347,6 +347,8 @@ private:
     std::string mangleElem(SharedIdentifier elem);
     void registerCollection(SharedIdentifier collType);
     void registerSmartPtr(CollKind kind, SharedIdentifier elem);   // Owned/Shared/Weak (M10-12)
+    void registerOptionalOfShared(SharedIdentifier elem);          // M28d: Optional<Shared<elem>> for Weak.tryUpgrade
+    void emitWeakTryUpgrade(const CollectionInfo& info);           // M28d: the tryUpgrade wrapper (builds the Optional)
     void registerBindable(SharedIdentifier elem);                  // BindableFunctionPtr<Sig> (M22)
     // The CSTAR_*_DEFINE macros, split: typesOnly emits the struct typedefs (`_TYPE`,
     // before class struct bodies so a class may hold one BY VALUE); else the funcs
