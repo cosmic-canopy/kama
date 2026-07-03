@@ -61,6 +61,7 @@ struct cstaryystype {
   SharedVariableDeclarator variabledeclarator;
   SharedConstVariableDeclarator constvariabledeclarator;
   SharedExpressionStatement expressionstatement;
+  SharedMatchArm matcharm;
   SharedSwitchSection switchsection;
   SharedSwitchLabel switchlabel;
   SharedArgument argument;
@@ -80,6 +81,7 @@ struct cstaryystype {
   SharedParameterList parameterlist;
   SharedVariableDeclaratorList variabledeclaratorlist;
   SharedConstVariableDeclaratorList constvariabledeclaratorlist;
+  SharedMatchArmList matcharmlist;
   SharedSwitchSectionList switchsectionlist;
   SharedSwitchLabelList switchlabellist;
   SharedArgumentList argumentlist;
@@ -119,6 +121,7 @@ struct cstaryystype {
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH IF IN
 %token <string> INT INT8 INT16 INT32 INT64
+%token <string> MATCH
 %token <string> NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
@@ -199,7 +202,10 @@ struct cstaryystype {
 %type <variabledeclaratorlist> variable_declarators
 %type <constvariabledeclarator> constant_declarator
 %type <constvariabledeclaratorlist> constant_declarators
-%type <expressionstatement> expression_statement statement_expression assignment invocation_expression
+%type <expressionstatement> expression_statement statement_expression assignment invocation_expression match_expression
+%type <matcharm> match_arm match_pattern
+%type <matcharmlist> match_arms
+%type <strings> match_bindings
 %type <expressionstatement> object_creation_expression new_expression post_increment_expression post_decrement_expression
 %type <expressionstatement> pre_increment_expression pre_decrement_expression
 %type <switchsection> switch_section
@@ -614,6 +620,7 @@ statement_expression
   | post_decrement_expression
   | pre_increment_expression
   | pre_decrement_expression
+  | match_expression   /* M28b: `match (…) { … };` as a statement (trailing `;`, value discarded) */
   ;
 selection_statement
   : if_statement
@@ -690,6 +697,30 @@ statement_expression_list
   : statement_expression   { $$ = std::make_shared<StatementList>(); $$->push_back($1); }
   | statement_expression_list COMMA statement_expression   { $1->push_back($3); }
   ;
+/* M28b: `match (subject) { case Variant(bindings): expr; … case _: expr; }` — a single
+   value-producing construct. Wired into both statement_expression (value discarded) and
+   primary_expression_no_parenthesis (lifted to a temp). Each arm's body is one expression. */
+match_expression
+  : MATCH LPAREN expression RPAREN LEFT_BRACE match_arms RIGHT_BRACE
+    { $$ = std::make_shared<MatchNode>(SCANNER_CODEGENCONTEXT, $3, $6); }
+  ;
+match_arms
+  : match_arm   { $$ = std::make_shared<MatchArmList>(); $$->push_back($1); }
+  | match_arms match_arm   { $1->push_back($2); $$ = $1; }
+  ;
+match_arm
+  : CASE match_pattern COLON expression SEMICOLON   { $2->body = $4; $$ = $2; }
+  ;
+match_pattern
+  : IDENTIFIER
+    { auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = $1; $$ = a; }
+  | IDENTIFIER LPAREN match_bindings RPAREN
+    { auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = $1; a->bindings = $3; $$ = a; }
+  ;
+match_bindings
+  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
+  | match_bindings COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; }
+  ;
 foreach_statement
   : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement   { $$ = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); }
   ;
@@ -754,6 +785,7 @@ primary_expression_no_parenthesis
   | this_access
   | base_access
   | new_expression   { $$ = $1; }
+  | match_expression   { $$ = $1; }   /* M28b: value-producing `match` in expression position */
   ;
 parenthesized_expression
   : LPAREN expression RPAREN   { $$ = $2; }

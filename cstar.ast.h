@@ -818,7 +818,33 @@ public:
         : ASTNode(context),  StatementNode(context), identifier(identifier), constantExpression(constantExpression) { }
 };
 
-//------------------------------------------------------------------------------ 
+//------------------------------------------------------------------------------
+//                              Match (M28b)
+//------------------------------------------------------------------------------
+
+// One arm: `case Variant(bind1, bind2): expr;` (or `case _: expr;` — the wildcard).
+class MatchArmNode : public StatementNode {
+public:
+    SharedString     variantName;   // the variant matched; "_" = wildcard
+    SharedStringList bindings;      // payload binding names in field order; null/empty if none
+    SharedExpression body;          // the arm's value / side-effect expression
+    explicit MatchArmNode(CodeGenContext& context)
+        : ASTNode(context), StatementNode(context) { }
+    bool isWildcard() const { return variantName && *variantName == "_"; }
+};
+
+// `match (subject) { arms }` — a single value-producing construct usable in statement position
+// (value discarded) and expression position (lifted to a temp, strict ISO C11). Dual-nature via
+// ExpressionStatementNode (both an ExpressionNode and a StatementNode).
+class MatchNode : public ExpressionStatementNode {
+public:
+    SharedExpression   subject;
+    SharedMatchArmList arms;
+    MatchNode(CodeGenContext& context, SharedExpression subject, SharedMatchArmList arms)
+        : ASTNode(context), ExpressionStatementNode(context), subject(subject), arms(arms) { }
+};
+
+//------------------------------------------------------------------------------
 //                              Interface
 //------------------------------------------------------------------------------
 

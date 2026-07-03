@@ -1,0 +1,23 @@
+type resource Probe
+{
+    int32 id;
+    public Probe(int32 id) { this.id = id; }
+    ~Probe() { }
+    public fn int32 val() { return this.id; }
+}
+enum Box { Full(Shared<Probe> p), Empty }
+fn int main()
+{
+    Shared<Probe> s = new Probe(id: 42);
+    Box a = Box::Full(p: give s);
+    Box e = Box::Empty;
+    int32 v = match (a) {
+        case Full(p): p.val();
+        case Empty: 0;
+    };
+    int32 w = match (e) {
+        case Full(p): p.val();
+        case Empty: 7;
+    };
+    return v + w;
+}

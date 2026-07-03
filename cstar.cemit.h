@@ -303,6 +303,7 @@ private:
     // which drains this); emitMethodOrCtorBody records them in its root scope directly.
     std::vector<LiveLocal> _pendingParamDtors;
     std::string        _currentReturnCType = "void";  // for return-temp
+    std::string        _matchTargetCType;              // M28b: result C type of a value-producing `match` (set by the liftable site)
     int                _tempCounter = 0;
     // M26i: temp-hoist buffer. An inline constructor in argument position materializes into an
     // ordinary local ("Cls __tmp; Cls__ctor(&__tmp, …);") pushed here and flushed by the enclosing
@@ -483,6 +484,12 @@ private:
     std::string emitInvocation(InvocationNode* call);
     std::string emitVariantConstruction(ClassInfo& ci, const std::string& variant,
                                         SharedArgumentList args, int srcLine);   // M28a
+    // M28b: the value-producing `match`. `emitMatch` lifts an expression-position match to a temp
+    // (strict ISO C11 — no statement-expression); `emitMatchStatement` emits a statement-position
+    // match (value discarded). Both build the switch via `emitMatchSwitch`.
+    std::string emitMatch(MatchNode* m);
+    void        emitMatchStatement(MatchNode* m, int depth);
+    void        emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int depth);
 
     // M24a — const-correctness (deep): a const binding is immutable.
     std::set<std::string> _constLocals;                       // const local names in scope

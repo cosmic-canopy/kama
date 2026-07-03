@@ -1,0 +1,11 @@
+enum Shape { Circle(float64 r), Empty }
+fn int main()
+{
+    Shape s = Shape::Empty;
+    int32 k = match (s) {
+        case Circle(r): 1;
+        case Triangle(a): 2;
+        case Empty: 0;
+    };
+    return k;
+}

@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 → Step 7 → tag.**
-**Status (v0.1.55):** M27 (generics) ✅ complete; **M28 (tagged unions) 🚧 in progress — M28a ✅** (declaration/layout/construction/RAII), next is M28b `match`. Rationale: close the
+**Status (v0.1.56):** M27 (generics) ✅ complete; **M28 (tagged unions) 🚧 in progress — M28a ✅** (layout/construction/RAII) **+ M28b ✅** (value-producing `match`), next is M28c `Optional<T>`. Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -271,8 +271,13 @@ their names/numbers.
      hand-off. Fixtures `enum_payload`, `enum_payload_raii` (SAN); xfail `enum_variant_arity`,
      `enum_payload_byvalue` (by-value user value — the documented struct-order gap, hold behind
      `Owned`/`List`), `enum_recursive` (infinite-size by-value self-reference).
-   - **M28b–e (planned):** `match` (value-producing, exhaustive) → `Optional<T>` (prelude) →
-     `Weak.tryUpgrade()` migration → `Result<T,E>` (prelude).
+   - **M28b — value-producing `match`.** ✅ **DONE (v0.1.56).** One construct, both positions: a
+     value in a local-init / `return` (lifted to a temp + switch — strict ISO C11, no statement-
+     expression, reusing the M26i hoist), or a `;`-terminated statement (value discarded). Compile-
+     time exhaustiveness (`case _:` wildcard), payload binding into a fresh arm scope (borrow, like a
+     foreach element). Fixtures `match_value`, `match_stmt`, `match_shared` (SAN); xfail
+     `match_nonexhaustive`, `match_bad_variant`.
+   - **M28c–e (planned):** `Optional<T>` (prelude) → `Weak.tryUpgrade()` migration → `Result<T,E>`.
 
 8. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already

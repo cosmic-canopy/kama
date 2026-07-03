@@ -277,6 +277,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (!expr) return "";
     ASTNode* n = expr.get();
 
+    if (auto* mm = dynamic_cast<MatchNode*>(n)) return emitMatch(mm);   // M28b: value-producing match (lifted)
+
     if (auto* v = dynamic_cast<Int8Node*>(n))   return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int16Node*>(n))  return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int32Node*>(n))  return std::to_string(v->value);
@@ -722,7 +724,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     std::string initStr;
                     if (d->initializer) {
                         bool ph = _hoistOK; _hoistOK = true;               // M26i: inline-ctor hoisting
+                        std::string pmt = _matchTargetCType; _matchTargetCType = ty;   // M28b: value-producing match result type
                         initStr = " = " + emitExpression(d->initializer);
+                        _matchTargetCType = pmt;
                         _hoistOK = ph;
                     }
                     flushHoisted(depth);                                   // temp decls first…
@@ -951,7 +955,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (retExpr && _currentReturnCType != "void") {
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
             bool ph = _hoistOK; _hoistOK = true;                       // M26i: inline-ctor hoisting
+            std::string pmt = _matchTargetCType; _matchTargetCType = _currentReturnCType;   // M28b: `return match(…)`
             std::string rv = emitExpression(retExpr);
+            _matchTargetCType = pmt;
             _hoistOK = ph;
             flushHoisted(depth);
             indent(depth);
@@ -1287,6 +1293,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     }
 
     // Bare expression statement (e.g. an assignment or call used as a statement).
+    // M28b: a statement-position `match` (value discarded) — emit the switch directly, not as an
+    // expression (which would try to lift a result temp). Must precede the generic expr-statement path.
+    if (auto* mm = dynamic_cast<MatchNode*>(n)) { emitMatchStatement(mm, depth); return; }
+
     if (dynamic_cast<ExpressionStatementNode*>(n)) {
         line(n->line);
         bool ph = _hoistOK; _hoistOK = true;                       // M26i: allow inline-ctor hoisting
@@ -3602,6 +3612,121 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
 }
 
 // Lower a call, reordering named arguments to the callee's declared order.
+// M28b: the switch body shared by both `match` positions. Borrows the subject (a pointer, never a
+// copy — a move-only union must not be shallow-copied), checks exhaustiveness, binds each arm's
+// payload into a fresh scope, and either assigns the arm value to `resultTemp` (expression position)
+// or emits it as a side-effect statement (statement position). Writes to the current `_out`.
+void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int depth)
+{
+    std::string subjCls = exprClass(m->subject);
+    auto cit = _classes.find(subjCls);
+    if (cit == _classes.end() || !cit->second.isVariant) {
+        unsupported("`match` requires a tagged-union subject (an enum with payload variants)", m->line);
+        return;
+    }
+    ClassInfo& ci = cit->second;
+
+    // Exhaustiveness (compile-time): every variant handled exactly once, unless a `_` wildcard is present.
+    bool hasWildcard = false;
+    std::set<std::string> covered;
+    for (auto& a : *m->arms) {
+        if (a->isWildcard()) { hasWildcard = true; continue; }
+        std::string vn = a->variantName ? *a->variantName : "";
+        bool found = false;
+        for (auto& v : ci.variants) if (v.name == vn) { found = true; break; }
+        if (!found)          unsupported(("`match` arm names unknown variant '" + vn + "' of '" + subjCls + "'").c_str(), a->line);
+        if (covered.count(vn)) unsupported(("duplicate `match` arm for variant '" + vn + "'").c_str(), a->line);
+        covered.insert(vn);
+    }
+    if (!hasWildcard)
+        for (auto& v : ci.variants)
+            if (!covered.count(v.name))
+                unsupported(("`match` on '" + subjCls + "' is not exhaustive: variant '" + v.name
+                             + "' is unhandled — add `case " + v.name + ":` or `case _:`").c_str(), m->line);
+
+    std::string sp = "__msub" + std::to_string(_tempCounter++);
+    indent(depth); *_out << subjCls << "* " << sp << " = &(" << emitExpression(m->subject) << ");\n";
+    indent(depth); *_out << "switch (" << sp << "->tag) {\n";
+    for (auto& a : *m->arms) {
+        indent(depth + 1);
+        if (a->isWildcard()) *_out << "default: {\n";
+        else                 *_out << "case " << subjCls << "_" << *a->variantName << ": {\n";
+
+        const VariantCase* vc = nullptr;
+        if (!a->isWildcard()) for (auto& v : ci.variants) if (v.name == *a->variantName) { vc = &v; break; }
+
+        // Fresh arm scope; bind the payload fields (borrowed copies — same as a foreach element).
+        Scope sc; _scopes.push_back(sc);
+        struct Saved { std::string name; bool had; std::string prev; };
+        std::vector<Saved> savedTypes;
+        if (a->bindings && !a->bindings->empty()) {
+            if (!vc || a->bindings->size() != vc->payload.size())
+                unsupported(("`match` arm for '" + (a->variantName ? *a->variantName : std::string("_"))
+                             + "' binds " + std::to_string(a->bindings->size()) + " field(s) but the variant has "
+                             + std::to_string(vc ? vc->payload.size() : 0)).c_str(), a->line);
+            for (size_t i = 0; vc && i < a->bindings->size() && i < vc->payload.size(); ++i) {
+                std::string bn = *(*a->bindings)[i];
+                const FieldInfo& pf = vc->payload[i];
+                std::string bcty = cType(pf.type);
+                indent(depth + 2);
+                *_out << bcty << " " << bn << " = " << sp << "->u." << *a->variantName << "." << pf.name << ";\n";
+                savedTypes.push_back({bn, (bool)_localTypes.count(bn), _localTypes.count(bn) ? _localTypes[bn] : std::string()});
+                _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
+            }
+        }
+
+        // Arm body: one expression. Hoist any temps INSIDE the arm braces (nested lifting stays local).
+        bool ph = _hoistOK; _hoistOK = true;
+        std::string av = emitExpression(a->body);
+        _hoistOK = ph;
+        flushHoisted(depth + 2);
+        indent(depth + 2);
+        if (resultTemp) *_out << *resultTemp << " = " << av << ";\n";
+        else            *_out << av << ";\n";
+        indent(depth + 2); *_out << "break;\n";
+
+        for (auto& sv : savedTypes) { if (sv.had) _localTypes[sv.name] = sv.prev; else _localTypes.erase(sv.name); }
+        _scopes.pop_back();
+        indent(depth + 1); *_out << "}\n";
+    }
+    if (!hasWildcard) { indent(depth + 1); *_out << "default: break;\n"; }   // exhaustive; keeps the C switch total
+    indent(depth); *_out << "}\n";
+}
+
+// M28b: a value-producing `match` in expression position. Lifts to a result temp + a switch, hoisted
+// before the enclosing statement — strict ISO C11, no GNU statement-expression.
+std::string CEmitter::emitMatch(MatchNode* m)
+{
+    if (!_hoistOK) {
+        unsupported("a value-producing `match` here needs a statement slot — bind it to a local first", m->line);
+        return "0";
+    }
+    if (_matchTargetCType.empty()) {
+        unsupported("a value-producing `match` must appear in a typed position "
+                    "(a local-variable initializer or a `return`)", m->line);
+        return "0";
+    }
+    std::string t  = "__match" + std::to_string(_tempCounter++);
+    std::string rt = _matchTargetCType;
+    // Build the lowering into a buffer so it can be hoisted as one block; the arms flush their own
+    // temps inside their braces (so nested lifting can't escape the arm).
+    std::ostringstream buf;
+    std::ostream* savedOut = _out; _out = &buf;
+    std::vector<std::string> savedHoist; savedHoist.swap(_hoisted);
+    *_out << rt << " " << t << ";\n";
+    emitMatchSwitch(m, &t, 0);
+    savedHoist.swap(_hoisted);
+    _out = savedOut;
+    _hoisted.push_back(buf.str());
+    return t;
+}
+
+void CEmitter::emitMatchStatement(MatchNode* m, int depth)
+{
+    line(m->line);
+    emitMatchSwitch(m, nullptr, depth);
+}
+
 // M28a: `Union::Variant(field: value, …)` -> a C99 compound literal
 //   (Shape){ .tag = Shape_Circle, .u.Circle = { .radius = 2.0 } }
 // A no-payload variant omits the union member. The compound literal is an rvalue; stored in a local

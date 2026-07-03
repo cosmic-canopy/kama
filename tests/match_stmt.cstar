@@ -1,0 +1,20 @@
+enum Msg { Move(int32 dx, int32 dy), Stop, Reset }
+fn int score(Msg m)
+{
+    return match (m) {
+        case Move(dx, dy): dx + dy;
+        case _: 0;
+    };
+}
+fn int main()
+{
+    Msg a = Msg::Move(dx: 10, dy: 20);
+    Msg b = Msg::Stop;
+    int total = 0;
+    match (a) {
+        case Move(dx, dy): total = dx + dy;
+        case Stop: total = 1;
+        case Reset: total = 2;
+    };
+    return score(m: a) + score(m: b) + total;
+}

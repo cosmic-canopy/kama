@@ -1,0 +1,11 @@
+enum Shape { Circle(float64 radius), Rect(float64 w, float64 h), Empty }
+fn int main()
+{
+    Shape s = Shape::Rect(w: 3.0, h: 4.0);
+    float64 area = match (s) {
+        case Circle(radius): 3.14 * radius * radius;
+        case Rect(w, h): w * h;
+        case Empty: 0.0;
+    };
+    return cast<int>(area);
+}
