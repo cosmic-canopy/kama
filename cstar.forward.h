@@ -32,6 +32,7 @@ class ElementAccessNode;
 class ThisAccessNode;
 class ObjectCreationNode;
 class EnumMemberDeclarationNode;
+class EnumDeclarationNode;
 class ClassDeclarationNode;
 class ClassBaseDeclarationNode;
 class ClassMemberDeclarationNode;

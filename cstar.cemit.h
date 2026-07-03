@@ -48,6 +48,14 @@ struct FieldInfo {
     Visibility       visibility = Visibility::Private;   // M25
 };
 
+// M28a — one case of a discriminated-union `enum` (tagged union). `name` is the variant, `payload`
+// its named fields (empty = no payload); the tag value is the declaration index. Stored on ClassInfo
+// (a payload/generic enum is backed by a ClassInfo, reusing monomorphization + RAII + move analysis).
+struct VariantCase {
+    std::string            name;      // "Circle"
+    std::vector<FieldInfo> payload;   // named fields (name + type); empty for a no-payload variant
+};
+
 // M26h — a type's declared ownership kind. `Value` owns nothing (copies); `Resource` owns/has
 // identity (moves, RAII-dropped); `Contract` is the interface path (handled via InterfaceInfo).
 // `Legacy` = an old `class`/`pod class` (no `type` marker) — behaves exactly as before M26h until
@@ -144,6 +152,13 @@ struct ClassInfo {
     std::string                       collElemClass;         // element class name ("" if primitive)
     bool                              isGenericInst = false; // M27b: a specialized generic-type instance (Box_int32)
 
+    // Tagged unions (M28a): a payload/generic `enum` is backed by a ClassInfo whose layout is a
+    // discriminant tag + a union of per-variant payloads (not the flat `fields`). `variants` drives
+    // struct + per-variant dtor emission; `tagCType` pins the tag width (`: IntType`), "" = Name_Tag.
+    bool                              isVariant = false;
+    std::vector<VariantCase>          variants;
+    std::string                       tagCType;              // "" -> the synthesized `Name_Tag` enum
+
     // Namespaces (M14): the declaring file's scope/usings, for resolving this
     // type's field/base/method references during header emission.
     std::string                       scope;                 // mangle prefix ("" for collections)
@@ -186,6 +201,7 @@ struct EnumInfo   {
     std::vector<EnumMember> members;
     std::string scope;                          // M14
     std::vector<std::string> usings;
+    std::string underlyingCType;                // M28a: `enum E : IntType` -> fixed-width int C type; "" = plain `enum`
 };
 
 class CEmitter {
@@ -307,6 +323,7 @@ private:
     void collectSignatures(SharedCompilationUnit unit);
     void collectInterfaces(SharedCompilationUnit unit);
     void collectEnums(SharedCompilationUnit unit);
+    ClassInfo buildVariantClassInfo(EnumDeclarationNode* ed, const std::string& name);   // M28a: tagged-union ClassInfo
     void emitEnum(EnumInfo& ei);
     bool isEnum(const std::string& name) const { return _enums.count(name) != 0; }
     void collectClasses(SharedCompilationUnit unit);
@@ -362,7 +379,7 @@ private:
     // M26c/d: a NAMED value you can hand off (variable / field / element / base member),
     // as opposed to a FRESH rvalue (a `new`/constructor/call result/literal). A marker
     // (`give`/`copy`) rides a named value; a fresh rvalue is consumed in place, never marked.
-    static bool isNamedValue(ASTNode* e);
+    bool isNamedValue(ASTNode* e);
     // M26e: an interface value BORROWS its object (a fat pointer), so it's second-class —
     // it can't be stored beyond the call that made it (it would dangle). Reject a bare
     // interface in a stored/returned position; own the object instead (`Shared<I>`, M26f).
@@ -429,6 +446,7 @@ private:
     bool isClass(const std::string& name) const { return _classes.count(name) != 0; }
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
     void emitStruct(ClassInfo& ci);
+    void emitVariantStruct(ClassInfo& ci);   // M28a: tag + union layout of a discriminated-union enum
     void emitClassPrototypes(ClassInfo& ci);
     void emitClassDefinitions(ClassInfo& ci);
     void emitMethodOrCtorBody(const std::string& cName, const char* retType,
@@ -463,6 +481,9 @@ private:
     // Expressions -> C expression text
     std::string emitExpression(SharedExpression expr);
     std::string emitInvocation(InvocationNode* call);
+    std::string emitVariantConstruction(ClassInfo& ci, const std::string& variant,
+                                        SharedArgumentList args, int srcLine);   // M28a
+
     // M24a — const-correctness (deep): a const binding is immutable.
     std::set<std::string> _constLocals;                       // const local names in scope
     std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets

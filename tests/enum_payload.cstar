@@ -1,0 +1,15 @@
+enum Shape
+{
+    Circle(float64 radius),
+    Rect(float64 w, float64 h),
+    Empty
+}
+enum Tag : uint8 { A, B, C }
+fn int main()
+{
+    Shape a = Shape::Circle(radius: 2.0);
+    Shape b = Shape::Rect(w: 3.0, h: 4.0);
+    Shape e = Shape::Empty;
+    Tag t = Tag::C;
+    return cast<int>(t);
+}

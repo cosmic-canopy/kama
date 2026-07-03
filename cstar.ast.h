@@ -793,6 +793,13 @@ public:
     SharedModifierList modifiers;
     SharedIdentifier identifier;
     SharedEnumMemberDeclarationList body;
+    // M28a: `enum Name : IntType { … }` — pins the underlying integer (plain enum) / tag width
+    // (tagged union); null = compiler-chosen. Set by the grammar action after construction.
+    SharedIdentifier underlyingType;
+    // M28a: `enum Optional<T> { … }` — type parameters + contract bounds, monomorphized per
+    // concrete arg (mirror of ClassDeclarationNode); empty for a non-generic enum.
+    SharedStringList typeParams;
+    SharedBoundsList typeBounds;
     EnumDeclarationNode(CodeGenContext& context, SharedModifierList modifiers, SharedIdentifier identifier, SharedEnumMemberDeclarationList body)
         : ASTNode(context),  StatementNode(context)
         , modifiers(modifiers)
@@ -804,6 +811,9 @@ class EnumMemberDeclarationNode : public StatementNode {
 public:
     SharedIdentifier identifier;
     SharedExpression constantExpression;
+    // M28a: `Circle(float64 radius)` — named payload fields of a discriminated-union variant;
+    // null/empty for a plain (no-payload) variant. Reuses the ordinary parameter list.
+    SharedParameterList payload;
     EnumMemberDeclarationNode(CodeGenContext& context, SharedIdentifier identifier, SharedExpression constantExpression)
         : ASTNode(context),  StatementNode(context), identifier(identifier), constantExpression(constantExpression) { }
 };

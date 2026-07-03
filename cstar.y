@@ -188,7 +188,7 @@ struct cstaryystype {
 %type <usingdeclarationlist> using_directives_opt using_directives
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
-%type <identifier> type_param type_decl_head
+%type <identifier> type_param type_decl_head enum_underlying_opt
 %type <identifierlist> friend_member_list interface_type_list type_arg_list type_param_list bound_list type_params_opt
 %type <modifier> modifier function_modifier_opt parameter_modifier_opt
 %type <modifierlist> modifiers modifiers_opt
@@ -1031,8 +1031,30 @@ destructor_declaration
                               Enum 
 ------------------------------------------------------------------------------*/
 
+/* M28a: `enum Name<T> : IntType { A, B(payload…) }`. The head reuses `type_decl_head` (so
+   generic enums parse exactly like generic types); an optional `: IntType` pins the underlying
+   integer / tag width; members may carry a named payload (below) making the enum a tagged union. */
 enum_declaration
-  : modifiers_opt ENUM IDENTIFIER enum_body semicolon_opt   { $$ = std::make_shared<EnumDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $4 ); }
+  : modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
+    { auto n = std::make_shared<EnumDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5);
+      n->underlyingType = $4;
+      /* Same param/bounds capture as marked_type_declaration: strip the head's genericArgs so the
+         enum NAME stays bare `Optional`, keeping names + bounds on the node. */
+      if ($3->genericArgs && !$3->genericArgs->empty()) {
+          n->typeParams = std::make_shared<StringList>();
+          n->typeBounds = std::make_shared<BoundsList>();
+          for (auto& a : *$3->genericArgs) if (a && a->value) {
+              n->typeParams->push_back(a->value);
+              n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+          }
+          $3->genericArgs = SharedIdentifierList();
+          $3->genericArg  = SharedIdentifier();
+      }
+      $$ = n; }
+  ;
+enum_underlying_opt
+  : /* Nothing */        { $$ = SharedIdentifier(); }
+  | COLON integral_type  { $$ = $2; }
   ;
 enum_body
   : LEFT_BRACE enum_member_declarations_opt RIGHT_BRACE   { $$ = $2; }
@@ -1049,6 +1071,7 @@ enum_member_declarations
 enum_member_declaration
   : IDENTIFIER   { $$ = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   | IDENTIFIER EQ constant_expression   { $$ = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3 ); }
+  | IDENTIFIER LPAREN parameter_list RPAREN   { auto m = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); m->payload = $3; $$ = m; }   /* M28a: tagged-union variant with a named payload */
   ;
 
 /*------------------------------------------------------------------------------ 

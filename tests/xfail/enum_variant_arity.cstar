@@ -1,0 +1,6 @@
+enum Shape { Circle(float64 radius), Empty }
+fn int main()
+{
+    Shape s = Shape::Circle();
+    return 0;
+}

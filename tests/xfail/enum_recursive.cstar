@@ -1,0 +1,6 @@
+enum Tree { Node(Tree left), Leaf }
+fn int main()
+{
+    Tree t = Tree::Leaf;
+    return 0;
+}

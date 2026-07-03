@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 → Step 7 → tag.**
-**Status (v0.1.54):** M26e–M26h ✅ and **M27 (generics) ✅ complete** — next is **M28**. Rationale: close the
+**Status (v0.1.55):** M27 (generics) ✅ complete; **M28 (tagged unions) 🚧 in progress — M28a ✅** (declaration/layout/construction/RAII), next is M28b `match`. Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -253,18 +253,26 @@ their names/numbers.
      operator-interfaces (generic math) will *reuse* this milestone's interface-bound + `This`
      mechanism — M27 lays the groundwork, no conflict.
 
-7. **M28 — tagged unions + `match` + `Optional<T>`.** Sum types with exhaustive pattern matching;
-   `Optional<T>` as a *library* tagged union (`enum Optional<T> { Some(T), None }`), **not** a
-   compiler intrinsic — one way to do a thing. The "no forgotten case" capstone. Migrates
-   `Weak.tryUpgrade() -> Optional<Shared<T>>` to its final form (no out-param). Every fallible op
-   becomes compiler-checked.
-   - **Design Qs:** Do payload variants **extend `enum`** (reuse the keyword — today it's C-style
-     int constants; `enum E { A(int32), B(String) }`) or a **new keyword** (`union`/`variant`/`data`)?
-     `match` as an **expression and/or statement**; exhaustiveness checking, payload binding, the
-     `_` wildcard, guards? Memory layout (tag + union) and **per-variant RAII** (drop the right
-     payload). **Flow-typing** the matched binding (and the `tryUpgrade` result) to the narrowed
-     variant. This is where "absence" lives now that there's no null — confirm `Optional` is the one
-     blessed mechanism (vs also `Result<T,E>`?). Depends on M27 (generics).
+7. **M28 — tagged unions + `match` + `Optional<T>` + `Result<T,E>`.** 🚧 *in progress.* Sum types
+   with exhaustive pattern matching; `Optional<T>`/`Result<T,E>` as *library* tagged unions, **not**
+   compiler intrinsics — one way to do a thing. The "no forgotten case" capstone. Migrates
+   `Weak.upgrade() -> tryUpgrade(): Optional<Shared<T>>` to its final form (no empty-Shared sentinel).
+   - **Decided:** ONE unified `enum` spans the spectrum — a plain no-payload enum stays a bare C
+     integer (zero regression); any payload-carrying or generic enum is a discriminated union
+     (`enum Shape { Circle(float64 radius), … }`, payloads are named). `: IntType` pins the underlying
+     int / tag width. `match` is a single **value-producing** construct usable in statement *and*
+     expression position; compile-time exhaustiveness, `_` wildcard, payload binding into a fresh
+     arm scope. Per-variant RAII (switch-on-tag dtor drops only the active payload; move-only iff a
+     payload owns a resource). Bit-flag sets (choose-any-subset) are a *separate* later feature.
+   - **M28a — declaration + layout + construction + `: IntType` + per-variant RAII.** ✅ **DONE
+     (v0.1.55).** A payload/generic enum is backed by a `ClassInfo` (reusing M27 monomorphization +
+     M26 ownership/move analysis); emitted as `struct { Tag tag; union {…} u; }`. Construction is a
+     C99 compound literal (`Shape::Circle(radius: 2.0)`); smart-ptr payloads move in via the M26d
+     hand-off. Fixtures `enum_payload`, `enum_payload_raii` (SAN); xfail `enum_variant_arity`,
+     `enum_payload_byvalue` (by-value user value — the documented struct-order gap, hold behind
+     `Owned`/`List`), `enum_recursive` (infinite-size by-value self-reference).
+   - **M28b–e (planned):** `match` (value-producing, exhaustive) → `Optional<T>` (prelude) →
+     `Weak.tryUpgrade()` migration → `Result<T,E>` (prelude).
 
 8. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already

@@ -346,6 +346,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             for (size_t i = 0; i + 1 < v->qualifier->size(); ++i) enumQual->push_back((*v->qualifier)[i]);
             std::string en = resolveUserName(*v->qualifier->back(), enumQual);
             if (_enums.count(en)) return en + "_" + nm;
+            // M28a: `Union::Variant` with no payload -> construct `(Union){ .tag = Union_Variant }`.
+            auto vit = _classes.find(en);
+            if (vit != _classes.end() && vit->second.isVariant)
+                for (auto& vc : vit->second.variants)
+                    if (vc.name == nm)
+                        return emitVariantConstruction(vit->second, nm, SharedArgumentList(), v->line);
             // Object field access `obj.field[.field…]` (qualifier=[obj,…], value=field).
             const std::string& head = *(*v->qualifier)[0];
             if (_localTypes.count(head) && !_localTypes[head].empty()) {
@@ -1480,16 +1486,80 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
 }
 
 // Collect enum declarations.
+// M28a: an `enum` is a tagged union (discriminated union) if any variant carries a payload, or it
+// is generic (parameterized, so it can't be a bare C `enum`). A plain, non-generic, payloadless enum
+// stays a C integer.
+static bool enumIsTagged(EnumDeclarationNode* ed)
+{
+    if (ed->typeParams && !ed->typeParams->empty()) return true;
+    if (ed->body)
+        for (auto& m : *ed->body)
+            if (m->payload && !m->payload->empty()) return true;
+    return false;
+}
+
+// M28a: build the ClassInfo backing a payload/generic enum — a discriminant tag + a union of the
+// per-variant payloads. Reuses ClassInfo so monomorphization (M27), RAII (M5/M26), and move analysis
+// all apply. `kind` is left Legacy so move-only-ness follows destructibility (owns a resource → moves).
+ClassInfo CEmitter::buildVariantClassInfo(EnumDeclarationNode* ed, const std::string& name)
+{
+    ClassInfo ci;
+    ci.name      = name;
+    ci.kind      = TypeKind::Legacy;   // move-only iff it transitively owns a resource (destructible)
+    ci.scope     = _nsCtx.scope;
+    ci.usings    = _nsCtx.usings;
+    ci.isVariant = true;
+    ci.tagCType  = ed->underlyingType ? cType(ed->underlyingType) : "";
+    if (ed->body)
+        for (auto& m : *ed->body) {
+            if (!m->identifier || !m->identifier->value) continue;
+            VariantCase vc;
+            vc.name = *m->identifier->value;
+            if (m->payload)
+                for (auto& p : *m->payload)
+                    if (p && p->identifier && p->identifier->value) {
+                        FieldInfo fi;
+                        fi.name = *p->identifier->value;
+                        fi.type = p->type;
+                        vc.payload.push_back(fi);
+                    }
+            ci.variants.push_back(vc);
+        }
+    return ci;
+}
+
 void CEmitter::collectEnums(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
     for (auto& decl : *unit->codeDeclarationList) {
         auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
         if (!ed || !ed->identifier || !ed->identifier->value) continue;
+        std::string name = qualify(*ed->identifier->value);   // M14
+
+        if (enumIsTagged(ed)) {
+            // M28a: a payload/generic enum is a discriminated union backed by a ClassInfo.
+            ClassInfo ci = buildVariantClassInfo(ed, name);
+            if (ed->typeParams && !ed->typeParams->empty()) {
+                // Generic enum (Optional<T>): a monomorphization TEMPLATE, kept OUT of _classes —
+                // each `Optional<Arg>` becomes a specialized ClassInfo at discovery (registerGenericTypeInst).
+                std::vector<std::string> ps;
+                for (auto& p : *ed->typeParams) if (p) ps.push_back(*p);
+                _genericTypeParams[name] = ps;
+                _genericTypeBounds[name] = ed->typeBounds;
+                _genericTypeCtx[name]    = _nsCtx;
+                _genericTypes[name]      = ci;
+            } else {
+                _classes[name] = ci;
+            }
+            continue;
+        }
+
+        // Plain C-style enum — the existing lightweight path (bare integer, zero regression).
         EnumInfo ei;
-        ei.name  = qualify(*ed->identifier->value);   // M14
+        ei.name  = name;
         ei.scope = _nsCtx.scope;
         ei.usings = _nsCtx.usings;
+        ei.underlyingCType = ed->underlyingType ? cType(ed->underlyingType) : "";   // M28a: `: IntType`
         if (ed->body)
             for (auto& m : *ed->body)
                 if (m->identifier && m->identifier->value)
@@ -1501,6 +1571,20 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
 // enum Name { Name_M0, Name_M1 = <expr>, … }
 void CEmitter::emitEnum(EnumInfo& ei)
 {
+    // M28a: `enum Name : IntType` pins the value to a fixed-width integer. ISO C can't set an enum's
+    // underlying type, so emit `typedef <ctype> Name;` + an anonymous enum carrying the constants.
+    if (!ei.underlyingCType.empty()) {
+        *_out << "typedef " << ei.underlyingCType << " " << ei.name << ";\n";
+        *_out << "enum {\n";
+        for (auto& m : ei.members) {
+            indent(1);
+            *_out << ei.name << "_" << m.name;
+            if (m.value) *_out << " = " << emitExpression(m.value);
+            *_out << ",\n";
+        }
+        *_out << "};\n\n";
+        return;
+    }
     *_out << "typedef enum " << ei.name << " {\n";
     for (auto& m : ei.members) {
         indent(1);
@@ -2074,6 +2158,9 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     }
     if (ci.ctorNode && ci.ctorNode->declarator)
         for (auto& p : *ci.ctorNode->declarator->params) if (p) scanTypeForCollections(p->type);
+    // M28a: a generic tagged union (Optional<Shared<T>>) — scan each variant's substituted payload so
+    // the inner `Shared_int32` etc. registers (inner-first) before this instance's dtor references it.
+    for (auto& v : ci.variants) for (auto& f : v.payload) scanTypeForCollections(f.type);
 
     _typeSubst = savedSubst;
     _nsCtx = savedCtx;
@@ -2561,8 +2648,27 @@ bool CEmitter::isSmartPtrExpr(SharedExpression e)
 // call result, a literal), which is consumed in place and never needs a marker.
 bool CEmitter::isNamedValue(ASTNode* e)
 {
-    return dynamic_cast<IdentifierNode*>(e) || dynamic_cast<MemberAccessNode*>(e)
-        || dynamic_cast<ElementAccessNode*>(e) || dynamic_cast<BaseAccessNode*>(e);
+    if (dynamic_cast<MemberAccessNode*>(e) || dynamic_cast<ElementAccessNode*>(e)
+        || dynamic_cast<BaseAccessNode*>(e)) return true;
+    if (auto* id = dynamic_cast<IdentifierNode*>(e)) {
+        // M28a: a `::`-scope-resolved enum member / variant construction (`Color::Blue`, `Box::Empty`)
+        // is a FRESH rvalue, not a movable named lvalue. Distinguish it from an object access
+        // `obj.field` (also a qualified IdentifierNode) by the qualifier head: a local/current-class
+        // field head is an object; a type/namespace head is scope resolution.
+        if (id->qualifier && !id->qualifier->empty()) {
+            const std::string& head = *(*id->qualifier)[0];
+            if (_localTypes.count(head)) return true;                        // obj.field…
+            if (_currentClass && findFieldOwner(_currentClass, head)) return true;
+            auto q = std::make_shared<StringList>();
+            for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) q->push_back((*id->qualifier)[i]);
+            std::string en = resolveUserName(*id->qualifier->back(), q);
+            if (_enums.count(en)) return false;                              // enum member
+            auto c = _classes.find(en);
+            if (c != _classes.end() && c->second.isVariant) return false;    // variant construction
+        }
+        return true;
+    }
+    return false;
 }
 
 // M26e: an interface value borrows its object, so it's a second-class view — it may
@@ -2835,6 +2941,15 @@ void CEmitter::computeDestructible()
                 for (auto& f : ci.fields) {
                     auto it = _classes.find(cType(f.type));
                     if (it != _classes.end() && it->second.destructible) { d = true; break; }
+                }
+            // M28a: a tagged union is destructible if any variant's payload owns a resource.
+            if (!d)
+                for (auto& v : ci.variants) {
+                    for (auto& f : v.payload) {
+                        auto it = _classes.find(cType(f.type));
+                        if (it != _classes.end() && it->second.destructible) { d = true; break; }
+                    }
+                    if (d) break;
                 }
             if (inst) _typeSubst.clear();
             if (d) { ci.destructible = true; changed = true; }
@@ -3487,6 +3602,88 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
 }
 
 // Lower a call, reordering named arguments to the callee's declared order.
+// M28a: `Union::Variant(field: value, …)` -> a C99 compound literal
+//   (Shape){ .tag = Shape_Circle, .u.Circle = { .radius = 2.0 } }
+// A no-payload variant omits the union member. The compound literal is an rvalue; stored in a local
+// it is recorded destructible (if the union owns a resource) and drops via the switch-on-tag dtor.
+std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& variant,
+                                              SharedArgumentList args, int srcLine)
+{
+    const VariantCase* vc = nullptr;
+    for (auto& v : ci.variants) if (v.name == variant) { vc = &v; break; }
+    if (!vc) { unsupported(("'" + ci.name + "' has no variant '" + variant + "'").c_str(), srcLine); return "0"; }
+
+    std::map<std::string, ArgumentNode*> byName;
+    if (args) for (auto& a : *args) if (a->name && a->name->value) byName[*a->name->value] = a.get();
+    size_t argc = args ? args->size() : 0;
+    if (argc != vc->payload.size())
+        unsupported(("variant '" + ci.name + "::" + variant + "' takes " + std::to_string(vc->payload.size())
+                     + " payload field(s), got " + std::to_string(argc)).c_str(), srcLine);
+
+    std::string s = "(" + ci.name + "){ .tag = " + ci.name + "_" + variant;
+    if (!vc->payload.empty()) {
+        s += ", .u." + variant + " = {";
+        bool first = true;
+        for (auto& f : vc->payload) {
+            auto ai = byName.find(f.name);
+            if (ai == byName.end()) {
+                unsupported(("missing payload field '" + f.name + "' for '" + ci.name + "::" + variant + "'").c_str(), srcLine);
+                continue;
+            }
+            std::string fcls = cType(f.type);            // the payload field's C type (Shared_Probe / int32_t / …)
+            SharedExpression argExpr = ai->second->expression;
+            int handoff = 0;                             // 0 none, 1 give, 2 copy
+            if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
+            std::string val = emitExpression(argExpr);
+            std::string argCls = exprClass(argExpr);
+            std::string field;
+            if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
+                // A named smart pointer MOVES/RETAINS into the union (which now owns it, dropped by the
+                // switch-on-tag dtor). Same hand-off as a by-value call arg (M26d), hoisted (ISO C).
+                CollKind k = smartKind(argCls);
+                bool doGive = (handoff == 1) || (handoff == 0 && k == CollKind::Owned);
+                if (handoff == 2 && k == CollKind::Owned)
+                    unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", srcLine);
+                if (!_hoistOK)
+                    unsupported("moving a smart pointer into a variant here needs a statement slot — bind the "
+                                "constructed value to a local first", srcLine);
+                std::string t = "__cstar_varg" + std::to_string(_tempCounter++);
+                std::string side = doGive ? smartPtrInvalidate("(" + val + ")", k, isInterface(_classes[argCls].collElemClass))
+                                          : ("(" + val + ").ctrl->" + (k == CollKind::Weak ? "weak" : "strong") + "++;");
+                _hoisted.push_back(fcls + " " + t + " = (" + val + "); " + side);
+                field = t;
+            } else if (isMoveOnlyValue(argCls) && isNamedValue(argExpr.get())) {
+                // A named `resource` value MOVES into the union (source marked moved; its dtor suppressed).
+                if (handoff == 2) {
+                    if (!isCopyable(argCls))
+                        unsupported(("`" + argCls + "` has no `copy` method — use `give` to move it").c_str(), srcLine);
+                    field = argCls + "__copy(&(" + val + "))";
+                } else {
+                    if (handoff == 0 && isCopyable(argCls))
+                        unsupported(("`" + argCls + "` is copyable — say `give` (move) or `copy` (duplicate)").c_str(), srcLine);
+                    std::string mv = moveOnlySource(argExpr, srcLine);
+                    if (!mv.empty()) markMoved(mv);
+                    field = val;
+                }
+            } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection && handoff) {
+                unsupported("moving a collection into a variant is not yet supported — store it behind "
+                            "an `Owned`/`Shared`, or a wrapping resource", srcLine);
+                field = val;
+            } else {
+                // Primitive / plain value / fresh smart-ptr rvalue (factory result): consumed in place.
+                if (handoff && !isSmartPtrClass(argCls))
+                    unsupported("`give`/`copy` apply to a named smart pointer / resource value", srcLine);
+                field = val;
+            }
+            s += (first ? " ." : ", .");
+            s += f.name + " = " + field;
+            first = false;
+        }
+        s += " }";
+    }
+    return s + " }";
+}
+
 std::string CEmitter::emitInvocation(InvocationNode* call)
 {
     // Expression-form callee (this.method(...), base.method(...), parenthesized).
@@ -3556,6 +3753,14 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // is gone. `resolveFunc` handles namespace + `using` + alias resolution.
     SharedStringList qual = call->identifier->qualifier;
     if (qual && !qual->empty()) {
+        // M28a: `Union::Variant(args)` — construct a discriminated-union value with a payload.
+        auto tq = std::make_shared<StringList>();
+        for (size_t i = 0; i + 1 < qual->size(); ++i) tq->push_back((*qual)[i]);
+        auto cit = _classes.find(resolveUserName(*qual->back(), tq));
+        if (cit != _classes.end() && cit->second.isVariant)
+            for (auto& v : cit->second.variants)
+                if (v.name == name)
+                    return emitVariantConstruction(cit->second, name, call->args, call->line);
         auto fit = _funcs.find(resolveFunc(name, qual));
         if (fit != _funcs.end())
             return emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line);
@@ -3691,6 +3896,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 void CEmitter::emitStruct(ClassInfo& ci)
 {
     ScopedStr _ts(_thisType, ci.name);   // M27c: `This` -> this class while emitting its struct
+    // M28a: a tagged union — a discriminant tag + a union of per-variant payloads.
+    if (ci.isVariant) { emitVariantStruct(ci); return; }
     *_out << "struct " << ci.name << " {\n";
     // Offset-0 invariant: the vptr (root only) or the embedded base comes FIRST.
     bool hasMember = false;
@@ -3713,6 +3920,55 @@ void CEmitter::emitStruct(ClassInfo& ci)
     if (!hasMember) {
         indent(1);
         *_out << "char __empty; /* C forbids empty structs */\n";
+    }
+    *_out << "};\n\n";
+}
+
+// M28a: `struct Name { <tag> tag; union { struct {…} <Variant>; … } u; };` — a discriminated union.
+// The tag enum carries symbolic case constants (`Name_Circle`); only payload-carrying variants
+// contribute a union member. `: IntType` pins the tag field to a fixed-width integer.
+void CEmitter::emitVariantStruct(ClassInfo& ci)
+{
+    std::string tagTy = ci.tagCType.empty() ? (ci.name + "_Tag") : ci.tagCType;
+    // Tag constants: a named `Name_Tag` enum by default, else an anonymous enum (the struct tag
+    // field is the pinned integer type, but the constants are still needed for `switch` labels).
+    if (ci.tagCType.empty()) *_out << "typedef enum " << ci.name << "_Tag {\n";
+    else                     *_out << "enum {\n";
+    for (auto& v : ci.variants) { indent(1); *_out << ci.name << "_" << v.name << ",\n"; }
+    if (ci.tagCType.empty()) *_out << "} " << ci.name << "_Tag;\n";
+    else                     *_out << "};\n";
+
+    *_out << "struct " << ci.name << " {\n";
+    indent(1); *_out << tagTy << " tag;\n";
+    bool anyPayload = false;
+    for (auto& v : ci.variants) if (!v.payload.empty()) { anyPayload = true; break; }
+    if (anyPayload) {
+        indent(1); *_out << "union {\n";
+        for (auto& v : ci.variants) {
+            if (v.payload.empty()) continue;
+            indent(2); *_out << "struct {\n";
+            for (auto& f : v.payload) {
+                std::string fct = cType(f.type);
+                // Risk (a): a bare user value/resource payload by value hits the unresolved struct-
+                // ordering gap (as Box<Rock> does). Reject with the documented workaround. Primitives,
+                // collections, smart pointers, generic instances, and other unions emit their type early.
+                auto cit = _classes.find(fct);
+                if (cit != _classes.end() && !cit->second.isCollection && !cit->second.isExternStruct
+                    && !cit->second.isGenericInst && !cit->second.isVariant)
+                    unsupported(("variant payload '" + f.name + "' holds user type '" + fct
+                                 + "' by value; hold it via Owned<" + fct + ">, Shared<" + fct
+                                 + ">, or List<" + fct + "> (a by-value user type in a union isn't ordered yet)").c_str(),
+                                f.type ? f.type->line : (ci.node ? ci.node->line : 0));
+                // Risk (b): a variant carrying its own enum by value is infinite-sized.
+                if (fct == ci.name)
+                    unsupported(("variant payload '" + f.name + "' contains its own enum '" + ci.name
+                                 + "' by value (infinite size); hold it behind Owned<" + ci.name + ">").c_str(),
+                                f.type ? f.type->line : (ci.node ? ci.node->line : 0));
+                indent(3); *_out << fct << " " << f.name << ";\n";
+            }
+            indent(2); *_out << "} " << v.name << ";\n";
+        }
+        indent(1); *_out << "} u;\n";
     }
     *_out << "};\n\n";
 }
@@ -3877,7 +4133,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
 // reverse declaration order. (Early return inside a dtor body is unsupported.)
 void CEmitter::emitDtorDefinition(ClassInfo& ci)
 {
-    line(ci.dtorNode ? ci.dtorNode->line : ci.node->line);
+    line(ci.dtorNode ? ci.dtorNode->line : (ci.node ? ci.node->line : 0));
     _currentClass = &ci;
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
@@ -3888,6 +4144,34 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _scopes.push_back(root);
 
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "__dtor(" << ci.name << "* self)\n{\n";
+
+    // M28a: a discriminated union drops ONLY the active variant's owning payload fields (switch on tag).
+    if (ci.isVariant) {
+        indent(1); *_out << "switch (self->tag) {\n";
+        for (auto& v : ci.variants) {
+            bool anyDrop = false;
+            for (auto& f : v.payload) {
+                auto cit = _classes.find(cType(f.type));
+                if (cit != _classes.end() && cit->second.destructible) { anyDrop = true; break; }
+            }
+            if (!anyDrop) continue;
+            indent(2); *_out << "case " << ci.name << "_" << v.name << ":\n";
+            for (auto it = v.payload.rbegin(); it != v.payload.rend(); ++it) {   // reverse declaration order
+                auto cit = _classes.find(cType(it->type));
+                if (cit != _classes.end() && cit->second.destructible) {
+                    indent(3);
+                    *_out << cit->second.name << "__dtor(&self->u." << v.name << "." << it->name << ");\n";
+                }
+            }
+            indent(3); *_out << "break;\n";
+        }
+        indent(2); *_out << "default: break;\n";
+        indent(1); *_out << "}\n";
+        *_out << "}\n\n";
+        _scopes.clear();
+        _currentClass = nullptr;
+        return;
+    }
 
     SharedStatement last;
     if (ci.dtorNode && ci.dtorNode->body && ci.dtorNode->body->statements) {
@@ -4250,7 +4534,14 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& units)
                     }
                 }
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(d)) {
-                if (ed->identifier && ed->identifier->value) { std::string n = qualify(*ed->identifier->value); _enums[n].name = n; }
+                if (ed->identifier && ed->identifier->value) {
+                    std::string n = qualify(*ed->identifier->value);
+                    // M28a: pre-register a tagged/generic enum where its real home is (a class-like
+                    // type / a generic template), NOT _enums — else emitEnum would emit a bogus enum.
+                    if (ed->typeParams && !ed->typeParams->empty()) _genericTypes[n].name = n;
+                    else if (enumIsTagged(ed))                      _classes[n].name = n;
+                    else                                            _enums[n].name = n;
+                }
             } else if (auto* id = dynamic_cast<InterfaceDeclarationNode*>(d)) {
                 if (id->identifier && id->identifier->value) { std::string n = qualify(*id->identifier->value); _interfaces[n].name = n; }
             }
@@ -4426,8 +4717,14 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             // emitted above
         } else if (dynamic_cast<InterfaceDeclarationNode*>(decl.get())) {
             // type-only (header)
-        } else if (dynamic_cast<EnumDeclarationNode*>(decl.get())) {
-            // emitted in the header
+        } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+            // M28a: a non-generic tagged union's dtor DEFINITION lives in its home module (its struct +
+            // prototype are in the header). Generic-enum instances are emitted static-inline in the header.
+            if (ed->identifier && ed->identifier->value) {
+                auto it = _classes.find(qualify(*ed->identifier->value));
+                if (it != _classes.end() && it->second.isVariant && it->second.destructible)
+                    emitDtorDefinition(it->second);
+            }
         } else if (dynamic_cast<IncludeNode*>(decl.get())) {
             // FFI #include — emitted in the header by emitIncludes
         } else if (decl) {
