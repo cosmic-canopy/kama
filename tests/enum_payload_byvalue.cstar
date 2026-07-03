@@ -1,0 +1,17 @@
+type value Vec2 { public float64 x; public float64 y; public Vec2(float64 x, float64 y){this.x=x;this.y=y;} }
+enum Event { Resize(Vec2 size), Click(int32 x, int32 y), Quit }
+fn int area(Event e)
+{
+    return match (e) {
+        case Resize(size): cast<int>(size.x) * cast<int>(size.y);
+        case Click(x, y): x + y;
+        case Quit: 0;
+    };
+}
+fn int main()
+{
+    Event a = Event::Resize(size: Vec2(x: 4.0, y: 3.0));
+    Event b = Event::Click(x: 10, y: 5);
+    Event c = Event::Quit;
+    return area(e: a) + area(e: b) + area(e: c);
+}

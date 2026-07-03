@@ -1,7 +1,0 @@
-type value Vec2 { public float64 x; public float64 y; public Vec2(float64 x, float64 y) { this.x = x; this.y = y; } }
-enum Shape { Point(Vec2 v), Empty }
-fn int main()
-{
-    Shape s = Shape::Empty;
-    return 0;
-}

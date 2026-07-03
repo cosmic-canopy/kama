@@ -424,6 +424,10 @@ private:
 
     // Inheritance/vtable resolution (M6)
     std::vector<ClassInfo*> topoOrderClasses();
+    // M30a: all struct-body types (normal classes + generic instances + tagged unions) ordered so
+    // every BY-VALUE dependency precedes its holder (base-before-derived AND held-value-before-holder).
+    // A by-value cycle is an infinite-size type (reported). Collections/extern structs are excluded.
+    std::vector<ClassInfo*> unifiedStructOrder();
     ClassInfo* findFieldOwner(ClassInfo* ci, const std::string& field);   // class declaring `field`
     MethodInfo* findMethod(ClassInfo* ci, const std::string& name, ClassInfo** owner);
     // M27c: does `ci` structurally satisfy contract `contract` (have all its methods, public)?

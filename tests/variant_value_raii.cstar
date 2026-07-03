@@ -1,0 +1,8 @@
+type resource Res { List<int32> items; public Res(int32 v){this.items.add(item: v);} ~Res(){} public fn int32 head(){return this.items[0];} }
+enum Wrap { Has(Res r), Empty }
+fn int main()
+{
+    Wrap w = Wrap::Has(r: Res(v: 42));
+    Wrap e = Wrap::Empty;
+    return match (w) { case Has(r): r.head(); case Empty: 0; };
+}

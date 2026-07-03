@@ -2978,6 +2978,72 @@ std::vector<ClassInfo*> CEmitter::topoOrderClasses()
     return out;
 }
 
+// M30a: order EVERY laid-out struct (normal classes + generic instances + tagged unions) so a
+// by-value dependency is always emitted first — base-before-derived AND held-value-before-holder.
+// Unlike topoOrderClasses this INCLUDES generic instances and adds by-value field/payload edges, so
+// `Box<Rock>`/`class Holder{Rock r;}`/`enum Event{Resize(Vec2)}` lay out correctly. A collection /
+// smart-ptr field stores `T*` (a forward decl suffices) — not an edge; a by-value user struct is.
+// A back-edge (self / mutual by-value) is a genuine infinite-size type and is reported.
+std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
+{
+    std::vector<ClassInfo*> out;
+    std::set<ClassInfo*> done;        // fully ordered
+    std::set<ClassInfo*> visiting;    // on the current DFS stack — a re-entry is an infinite-size cycle
+    NsCtx savedCtxOuter = _nsCtx;
+    std::map<std::string, SharedIdentifier> savedSubstOuter = _typeSubst;
+
+    std::function<void(ClassInfo*)> visit = [&](ClassInfo* ci) {
+        if (!ci || done.count(ci)) return;
+        if (visiting.count(ci)) {
+            unsupported(("type '" + ci->name + "' contains itself by value (infinite size) — hold a "
+                         "member behind Owned<...>, Shared<...>, or List<...>").c_str(),
+                        ci->node ? ci->node->line : 0);
+            return;   // stop unwinding this cycle; the driver aborts on the recorded error
+        }
+        visiting.insert(ci);
+
+        // Resolve this node's field types concretely: a generic instance binds its type args +
+        // use-site scope (Box<Rock> -> Rock is an edge; Box<int32> -> none). Mirrors computeDestructible.
+        bool inst = ci->isGenericInst && _genericTypeInsts.count(ci->name);
+        if (inst) {
+            const GenericTypeInst& gi = _genericTypeInsts[ci->name];
+            _nsCtx = _genericTypeInstCtx.count(ci->name) ? _genericTypeInstCtx[ci->name]
+                                                         : _genericTypeCtx[gi.templateKey];
+            _typeSubst.clear();
+            const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+            for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+        } else {
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci->scope; _nsCtx.usings = ci->usings;
+            _typeSubst = savedSubstOuter;   // (typically empty here)
+        }
+
+        // A by-value dependency: a field/payload whose C type is a laid-out struct (not a T*-holding
+        // collection, not an extern header struct).
+        auto dep = [&](SharedIdentifier ty) -> ClassInfo* {
+            auto it = _classes.find(cType(ty));
+            if (it == _classes.end() || it->second.isCollection || it->second.isExternStruct) return nullptr;
+            return &it->second;
+        };
+        std::vector<ClassInfo*> deps;
+        if (ci->base) deps.push_back(ci->base);
+        for (auto& f : ci->fields) if (ClassInfo* d = dep(f.type)) deps.push_back(d);
+        for (auto& v : ci->variants) for (auto& f : v.payload) if (ClassInfo* d = dep(f.type)) deps.push_back(d);
+
+        // restore the outer context BEFORE recursing, so each recursed node sets up its own binding.
+        _nsCtx = savedCtxOuter; _typeSubst = savedSubstOuter;
+        for (ClassInfo* d : deps) visit(d);
+
+        visiting.erase(ci);
+        done.insert(ci);
+        out.push_back(ci);
+    };
+
+    for (auto& kv : _classes)
+        if (!kv.second.isCollection && !kv.second.isExternStruct) visit(&kv.second);
+    _nsCtx = savedCtxOuter; _typeSubst = savedSubstOuter;
+    return out;
+}
+
 // Build the per-class virtual slot tables and the per-root vtable union.
 void CEmitter::buildVtables()
 {
@@ -4356,23 +4422,10 @@ void CEmitter::emitVariantStruct(ClassInfo& ci)
             if (v.payload.empty()) continue;
             indent(2); *_out << "struct {\n";
             for (auto& f : v.payload) {
-                std::string fct = cType(f.type);
-                // Risk (a): a bare user value/resource payload by value hits the unresolved struct-
-                // ordering gap (as Box<Rock> does). Reject with the documented workaround. Primitives,
-                // collections, smart pointers, generic instances, and other unions emit their type early.
-                auto cit = _classes.find(fct);
-                if (cit != _classes.end() && !cit->second.isCollection && !cit->second.isExternStruct
-                    && !cit->second.isGenericInst && !cit->second.isVariant)
-                    unsupported(("variant payload '" + f.name + "' holds user type '" + fct
-                                 + "' by value; hold it via Owned<" + fct + ">, Shared<" + fct
-                                 + ">, or List<" + fct + "> (a by-value user type in a union isn't ordered yet)").c_str(),
-                                f.type ? f.type->line : (ci.node ? ci.node->line : 0));
-                // Risk (b): a variant carrying its own enum by value is infinite-sized.
-                if (fct == ci.name)
-                    unsupported(("variant payload '" + f.name + "' contains its own enum '" + ci.name
-                                 + "' by value (infinite size); hold it behind Owned<" + ci.name + ">").c_str(),
-                                f.type ? f.type->line : (ci.node ? ci.node->line : 0));
-                indent(3); *_out << fct << " " << f.name << ";\n";
+                // M30a: a by-value user value/resource payload is now legal — the unified struct order
+                // lays out the payload type first; a self/mutual by-value cycle is caught (infinite size)
+                // by unifiedStructOrder. (Was rejected here before the ordering pass existed.)
+                indent(3); *_out << cType(f.type) << " " << f.name << ";\n";
             }
             indent(2); *_out << "} " << v.name << ";\n";
         }
@@ -4736,7 +4789,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
     for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
     _emitStaticClass = true;
-    if      (phase == 0) { *_out << "typedef struct " << ci.name << " " << ci.name << ";\n"; emitStruct(ci); }
+    if      (phase == 0) { emitStruct(ci); }   // M30a: forward typedef now emitted in the phase-(a) loop
     else if (phase == 1) emitClassPrototypes(ci);
     else                 emitClassDefinitions(ci);
     _emitStaticClass = false;
@@ -5025,10 +5078,12 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
 // interface types, collection/smart-pointer macros, and every prototype.
 void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units)
 {
-    std::vector<ClassInfo*> classes = topoOrderClasses();   // base before derived
+    std::vector<ClassInfo*> classes = topoOrderClasses();       // base before derived (no generic instances)
+    std::vector<ClassInfo*> ordered = unifiedStructOrder();     // M30a: all struct bodies, by-value-dep order
 
-    // Forward typedefs so bodies can reference each other and any class.
-    for (ClassInfo* ci : classes) {
+    // Forward typedefs so bodies can reference each other and any struct (incl. generic instances,
+    // whose forward decl was previously emitted inside emitGenericTypeInst phase 0 — split out here).
+    for (ClassInfo* ci : ordered) {
         if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
         *_out << "typedef struct " << ci->name << " " << ci->name << ";\n";
         if (ci->hasVtable && ci->vtableRoot == ci->name)
@@ -5038,7 +5093,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         *_out << "typedef struct " << kv.first << "_vtbl " << kv.first << "_vtbl;\n";
         *_out << "typedef struct " << kv.first << " " << kv.first << ";\n";
     }
-    if (!classes.empty() || !_interfaces.empty()) *_out << "\n";
+    if (!ordered.empty() || !_interfaces.empty()) *_out << "\n";
 
     // Function-pointer signature typedefs (M21): `typedef ret (*Name)(params);`.
     // After the class forward-typedefs so a signature may take/return a class.
@@ -5069,18 +5124,20 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // store only `T*`, so the element being forward-declared (above) is enough.
     emitCollectionDefs(/*typesOnly=*/true);
 
-    // M27b: specialized generic-type instances — struct typedef + body BEFORE the normal class
-    // struct bodies, so a normal class may hold a `Box<int32>` BY VALUE (complete type needed).
-    // Registration order is inner-first (transitive close registers a held instance before its holder).
-    for (const std::string& m : _genericTypeInstOrder)
-        emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/0);
-
-    // vtable struct types + struct bodies (topological), then interface types.
-    for (ClassInfo* ci : classes) {
+    // M30a: struct bodies (normal classes + generic instances + tagged unions) in ONE by-value-
+    // dependency order — so any struct may hold another user struct BY VALUE (`Box<Rock>`, a union
+    // carrying a `Vec2`, a class holding a class). A generic instance routes through emitGenericTypeInst
+    // (which binds its _typeSubst/_nsCtx for its `T`-typed fields); a normal class/variant through
+    // emitStruct. Per-node output is unchanged from before — only the emission ORDER is now correct.
+    for (ClassInfo* ci : ordered) {
         if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
-        scopeOf(ci->scope, ci->usings);
-        if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
-        emitStruct(*ci);
+        if (ci->isGenericInst) {
+            emitGenericTypeInst(_genericTypeInsts[ci->name], /*phase=*/0);   // body-only (forward split out)
+        } else {
+            scopeOf(ci->scope, ci->usings);
+            if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
+            emitStruct(*ci);   // dispatches to emitVariantStruct for a union
+        }
     }
     for (auto& kv : _interfaces) { scopeOf(kv.second.scope, kv.second.usings); emitInterfaceTypes(kv.second); }
 

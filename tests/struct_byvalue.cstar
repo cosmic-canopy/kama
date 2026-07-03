@@ -1,0 +1,11 @@
+type value Rock { public int32 g; public Rock(int32 g){this.g=g;} }
+type value Vec2 { public float64 x; public float64 y; public Vec2(float64 x, float64 y){this.x=x;this.y=y;} }
+type value Box<T> { public T item; public Box(T v){this.item=v;} public fn T get(){return this.item;} }
+type value Holder { public Rock r; public Holder(Rock r){this.r=r;} }
+fn int main()
+{
+    Box<Rock> b = Box(v: Rock(g: 7));                // generic-instance -> Rock (by value)
+    Holder h = Holder(r: Rock(g: 3));               // class -> class (by value)
+    Box<Vec2> bv = Box(v: Vec2(x: 4.0, y: 5.0));    // class -> Box<Vec2> -> Vec2 (cross-kind chain)
+    return b.get().g + h.r.g + cast<int>(bv.get().x);   // 7 + 3 + 4 = 14
+}

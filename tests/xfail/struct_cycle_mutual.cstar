@@ -1,0 +1,6 @@
+type value A { public B b; public A(B b){this.b=b;} }
+type value B { public A a; public B(A a){this.a=a;} }
+fn int main()
+{
+    return 0;
+}

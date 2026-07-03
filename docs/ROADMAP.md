@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 (expr-position lowering) → M30 (struct-ordering + generics completeness) → M31 (operators) → Step 7 → tag.**
-**Status (v0.1.63):** M27 (generics) ✅, M28 (tagged unions) ✅, **M29 (expression-position lowering) ✅ COMPLETE** (inline `match` on a call result + macOS CI fix; inline ctor/`new`/nested construction anywhere; assignment-RHS `match`/variant + collection-move-in; block `match` arms). Next is **M30** (struct-ordering + generics completeness), then M31 operators. Rationale: close the
+**Status (v0.1.64):** M27 (generics) ✅, M28 (tagged unions) ✅, M29 (expression-position lowering) ✅ — **M30 (struct-ordering) 🚧: M30a ✅** (a struct can hold a user `value` BY VALUE — `enum Event{Resize(Vec2)}`, `Box<Rock>` — via a unified topological struct order), M30b (`string`-generic fixtures) next, then M31 operators. Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -340,22 +340,28 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      registered). Fixtures `match_block_stmt`, `match_block_value` (SAN — a block-local `Shared` drops at
      the arm end); xfail `match_block_no_value`.
 
-9. **M30 — struct-ordering + generics completeness.** 🚧 *planned (deferred-gap cleanup, before operators).*
-   Finish the type/struct emitter so a generic instance / tagged union can hold a user `value`-type
-   **by value**, and so a builtin resolves as a generic type argument. **Closes:** M27-a (a generic
-   instance embedding a user value by value, `Box<Rock> { Rock item; }`, hits a struct emit-ORDER error;
-   the M28a tagged-union payload has the same restriction — hence the `enum_payload_byvalue` xfail);
-   M28-1 (the builtin `String`/`string` as a generic type ARG, `Optional<String>`, emits the bare name
-   instead of `cstar_string` — it parses as a plain identifier in a type-arg list).
-   - **Mechanism:** a pre-emit **topological sort** over ALL struct types (normal classes + generic
-     instances + tagged unions) by by-value field containment — the mutual class↔instance dependency (a
-     class can hold a `Box<int32>` by value AND `Box<T>` can hold a user value) makes registration-order
-     insufficient; needs a real toposort. Then remove the M28a by-value-user-payload rejection + the
-     `Box<Rock>` workaround, and teach the generic type-arg path to map the `String`/`string` builtin to
-     `cstar_string`. **Engine payoff:** unblocks event/render-command unions carrying `Vec2`/`Color`
-     payloads by value (`enum Event { Resize(Vec2 size), … }`) — today they need the `Owned` workaround.
-   - **Retires:** xfail `enum_payload_byvalue`, and the two struct-order/`String`-arg entries in the
-     memory's `roadmap-deferred`.
+9. **M30 — struct-ordering + generics completeness.** 🚧 *in progress (deferred-gap cleanup, before operators).*
+   - **M30a — unified topological struct-ordering.** ✅ **DONE (v0.1.64).** A generic instance / tagged
+     union / normal class can now hold a user `value`-type **BY VALUE** (`Box<Rock> { Rock item; }`,
+     `class Holder { Rock r; }`, `enum Event { Resize(Vec2 size), … }`). New `unifiedStructOrder()` — a
+     post-order DFS over ALL laid-out structs (normal classes + generic instances + unions; collections/
+     extern excluded) with edges = base + by-value field/payload containment; a generic instance's field
+     deps resolve under its `_typeSubst`/use-site `_nsCtx` (mirroring `computeDestructible`), so
+     `Box<Rock>`→`Rock` is an edge but `Box<int32>`→nothing. The two per-kind struct-body phases in
+     `emitHeaderContent` merge into one loop over this order (per-node output unchanged — only ORDER
+     moves); the generic-instance forward typedef splits out to the phase-(a) forward loop. A by-value
+     cycle (self / mutual) is caught as an infinite-size error (subsumes the M28a self-reject). The M28a
+     by-value-user-payload reject is removed. **Engine payoff:** event/render-command unions carry
+     `Vec2`/`Color` payloads by value — no more `Owned` workaround. Fixtures: `enum_payload_byvalue`
+     (xfail→positive), `struct_byvalue` (`Box<Rock>` + `Holder{Rock}` + cross-kind chain),
+     `variant_value_raii` (SAN — a union carrying a `resource` value drops it once); xfail
+     `struct_cycle_mutual`, `enum_recursive`.
+   - **M30b — builtin `string` as a generic arg.** 🚧 planned. Turned out a *false alarm*: the lowercase
+     `string` keyword already resolves to `cstar_string` as a generic arg (`Pair<int32, string>` is in
+     SPEC); this step just verifies + adds fixtures (`Optional<string>` etc.). The capital-`String` alias
+     / PascalCase spelling is deferred to the **Step 7 naming pass** (per user).
+   - **Retires:** the struct-order tracked-limitation + the two `roadmap-deferred` struct-order/`String`
+     entries.
 
 10. **M31 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already
