@@ -681,6 +681,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             auto emitDeclarator = [&](auto& d) {
                 std::string nm = (d->name && d->name->value) ? *d->name->value : "";
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
+                _localCTypes[nm] = ty;                        // M29c: full C type (incl. primitives) for assignment-RHS lowering
                 if (isConstDecl) {
                     if (!d->initializer)
                         unsupported("a const must be initialized (it is immutable)", n->line);
@@ -1295,6 +1296,60 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 if (!bMoved) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }   // free the old value
                 indent(depth); *_out << b << " = " << (doCopy ? (lty + "__copy(&(" + src + "))") : src) << ";\n";
                 if (!mv.empty()) markMoved(mv);
+                return;
+            }
+        }
+    }
+
+    // M29c: `lhs = match(…)` / `lhs = Optional::Some(…)` — a value-producing RHS (a value-producing
+    // `match`, or a generic-variant construction that needs its instance from context) needs the LHS's
+    // C type threaded. The assignment paths above don't handle these RHS kinds; this fires ONLY for
+    // them (a match or a `Union::Variant` construction), so ordinary assignments are untouched.
+    if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        if (as->token == EQ) {
+            ASTNode* r = as->expression.get();
+            bool isMatch = dynamic_cast<MatchNode*>(r) != nullptr;
+            bool isVariantCtor = false;
+            if (!isMatch) {
+                SharedStringList qual;
+                if (auto* iv = dynamic_cast<InvocationNode*>(r)) { if (iv->identifier) qual = iv->identifier->qualifier; }
+                else if (auto* id = dynamic_cast<IdentifierNode*>(r)) qual = id->qualifier;
+                if (qual && !qual->empty()) {
+                    auto q = std::make_shared<StringList>();
+                    for (size_t i = 0; i + 1 < qual->size(); ++i) q->push_back((*qual)[i]);
+                    std::string en = resolveUserName(*qual->back(), q);
+                    isVariantCtor = (_classes.count(en) && _classes[en].isVariant) || _genericTypeParams.count(en);
+                }
+            }
+            if (isMatch || isVariantCtor) {
+                std::string lhsCType = exprClass(as->unaryExpression);      // class/union name
+                std::string lname;
+                if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
+                    if (lid->value && (!lid->qualifier || lid->qualifier->empty())) {
+                        lname = *lid->value;
+                        if (lhsCType.empty() && _localCTypes.count(lname)) lhsCType = _localCTypes[lname];   // primitive LHS
+                    }
+                if (lhsCType.empty()) {
+                    unsupported("a value-producing `match` / variant construction here needs a typed "
+                                "assignment target — assign to a plain local", n->line);
+                    *_out << "\n"; return;
+                }
+                checkConstWrite(as->unaryExpression, n->line);
+                bool destructible = _classes.count(lhsCType) && _classes[lhsCType].destructible;
+                bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
+                std::string lhs = emitExpression(as->unaryExpression);
+                line(n->line);
+                bool ph = _hoistOK; _hoistOK = true;
+                std::string pm = _matchTargetCType, pv = _variantTargetType;
+                _matchTargetCType = _variantTargetType = lhsCType;
+                std::string rv = emitExpression(as->expression);
+                _matchTargetCType = pm; _variantTargetType = pv;
+                _hoistOK = ph;
+                flushHoisted(depth);
+                // RAII: drop a live destructible LHS before the blit (its owned resource would leak).
+                if (destructible && !bMoved) { indent(depth); *_out << lhsCType << "__dtor(&" << lhs << ");\n"; }
+                if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // target is live again
+                indent(depth); *_out << lhs << " = " << rv << ";\n";
                 return;
             }
         }
@@ -3974,9 +4029,19 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                     field = val;
                 }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection && handoff) {
-                unsupported("moving a collection into a variant is not yet supported — store it behind "
-                            "an `Owned`/`Shared`, or a wrapping resource", srcLine);
-                field = val;
+                // M29c: `give` a collection into the union — transfer the struct (buffer) and null the
+                // source so its scope-drop is a no-op; the union now owns it (dropped by the tag dtor).
+                if (handoff == 2)
+                    unsupported("`copy` of a collection into a variant is not yet supported — use `give` to move it", srcLine);
+                else if (!_hoistOK)
+                    unsupported("moving a collection into a variant here needs a statement slot — bind the "
+                                "constructed value to a local first", srcLine);
+                else {
+                    std::string t = "__varg" + std::to_string(_tempCounter++);
+                    _hoisted.push_back(fcls + " " + t + " = (" + val + "); ("
+                                       + val + ").data = NULL; (" + val + ").len = 0;");
+                    field = t;
+                }
             } else {
                 // Primitive / plain value / fresh smart-ptr rvalue (factory result): consumed in place.
                 if (handoff && !isSmartPtrClass(argCls))

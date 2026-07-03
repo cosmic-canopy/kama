@@ -238,6 +238,8 @@ private:
 
     std::map<std::string, ClassInfo>   _classes;     // class name -> info
     std::map<std::string, std::string> _localTypes;  // local/param -> class name ("" if primitive)
+    std::map<std::string, std::string> _localCTypes; // M29c: local -> full C type (incl. primitives) — the
+                                                     // target type for a value-producing RHS at an assignment
     // M26f-2: compile-time move analysis for `resource` (destructible) VALUES. Per-local
     // move-state, consulted by emitScopeCleanup (skip a moved local's dtor) and the hand-off
     // sites (reject use-after-move). A value moved on some-but-not-all paths that is live at

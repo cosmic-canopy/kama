@@ -1,0 +1,7 @@
+type resource Probe { int32 id; public Probe(int32 id){this.id=id;} ~Probe(){} public fn int32 val(){return this.id;} }
+fn int main()
+{
+    Optional<Shared<Probe>> h = Optional::Some(value: new Probe(id: 3));
+    h = Optional::Some(value: new Probe(id: 8));   // old Probe(3) dropped before the new lands
+    return match (h) { case Some(p): p.val(); case None: 0; };
+}

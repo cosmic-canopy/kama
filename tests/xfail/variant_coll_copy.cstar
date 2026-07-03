@@ -1,0 +1,8 @@
+enum Bag { Items(List<int32> xs), Empty }
+fn int main()
+{
+    List<int32> xs;
+    xs.add(item: 1);
+    Bag b = Bag::Items(xs: copy xs);
+    return 0;
+}
