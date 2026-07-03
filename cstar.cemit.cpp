@@ -2305,6 +2305,14 @@ void CEmitter::scanExprForCollections(SharedExpression e)
         scanExprForCollections(po->expression);
     } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         scanExprForCollections(su->expression);
+    } else if (auto* mm = dynamic_cast<MatchNode*>(n)) {
+        // M29d: recurse into a `match` — the subject and each arm (a single expression OR a block),
+        // so a type used ONLY inside an arm (e.g. a block-local `Shared<T>`) is still registered.
+        scanExprForCollections(mm->subject);
+        if (mm->arms) for (auto& a : *mm->arms) if (a) {
+            scanExprForCollections(a->body);
+            scanStmtForCollections(a->block);
+        }
     }
 }
 
@@ -3821,14 +3829,40 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             }
         }
 
-        // Arm body: one expression. Hoist any temps INSIDE the arm braces (nested lifting stays local).
-        bool ph = _hoistOK; _hoistOK = true;
-        std::string av = emitExpression(a->body);
-        _hoistOK = ph;
-        flushHoisted(depth + 2);
-        indent(depth + 2);
-        if (resultTemp) *_out << *resultTemp << " = " << av << ";\n";
-        else            *_out << av << ";\n";
+        // Arm body: a single expression, OR a block (M29d). Hoist temps INSIDE the arm braces.
+        if (a->block) {
+            // M29d: block arm — emit its statements in the arm scope. For a value-producing match the
+            // block's LAST statement must yield the value (an expression-statement); earlier statements
+            // (locals, side effects) run normally, RAII-dropped by the arm's scope cleanup.
+            SharedStatementList stmts = a->block->statements;
+            size_t nstmt = stmts ? stmts->size() : 0;
+            for (size_t i = 0; i < nstmt; ++i) {
+                SharedStatement st = (*stmts)[i];
+                if (resultTemp && i + 1 == nstmt) {
+                    if (auto es = std::dynamic_pointer_cast<ExpressionNode>(st)) {
+                        bool ph = _hoistOK; _hoistOK = true;
+                        std::string av = emitExpression(es);
+                        _hoistOK = ph;
+                        flushHoisted(depth + 2);
+                        indent(depth + 2); *_out << *resultTemp << " = " << av << ";\n";
+                    } else {
+                        unsupported("a value-producing `match` arm block must end in a value expression "
+                                    "(a call/assignment) — this arm ends in a statement", a->line);
+                    }
+                } else {
+                    emitStatement(st, depth + 2);
+                }
+            }
+            emitScopeCleanup(_scopes.back(), depth + 2);
+        } else {
+            bool ph = _hoistOK; _hoistOK = true;
+            std::string av = emitExpression(a->body);
+            _hoistOK = ph;
+            flushHoisted(depth + 2);
+            indent(depth + 2);
+            if (resultTemp) *_out << *resultTemp << " = " << av << ";\n";
+            else            *_out << av << ";\n";
+        }
         indent(depth + 2); *_out << "break;\n";
 
         for (auto& sv : savedTypes) { if (sv.had) _localTypes[sv.name] = sv.prev; else _localTypes.erase(sv.name); }

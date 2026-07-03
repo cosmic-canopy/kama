@@ -710,6 +710,7 @@ match_arms
   ;
 match_arm
   : CASE match_pattern COLON expression SEMICOLON   { $2->body = $4; $$ = $2; }
+  | CASE match_pattern COLON block   { $2->block = $4; $$ = $2; }   /* M29d: block arm (multi-statement) */
   ;
 match_pattern
   : IDENTIFIER

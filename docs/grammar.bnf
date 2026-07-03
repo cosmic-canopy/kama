@@ -91,7 +91,7 @@ qualifier
   ;
 basic_identifier
   : IDENTIFIER
-  | IDENTIFIER LT type_arg_list GT
+  | IDENTIFIER LT  type_arg_list GT
 
   ;
 /* Comma-separated type arguments: `int32`, `int32, string`, `int32, List<int>` — mirrors
@@ -163,7 +163,14 @@ type_declaration
    is never reserved. `type` marks every type declaration (greppable, like `fn`). All three
    kinds share the class body; the emitter routes `contract` to the interface path. */
 marked_type_declaration
-  : TYPE modifiers_opt IDENTIFIER basic_identifier class_base_opt class_body semicolon_opt
+  : TYPE modifiers_opt IDENTIFIER type_decl_head class_base_opt class_body semicolon_opt
+
+  ;
+/* M27c: the NAME + type-parameter list in a type DECLARATION — decoupled from the type-USE production
+   (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo` or `Foo<K: I + J, V>`. */
+type_decl_head
+  : IDENTIFIER
+  | IDENTIFIER LT  type_param_list GT
 
   ;
 
@@ -223,15 +230,26 @@ function_declaration
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
   ;
-/* Generic type parameters on a fn declaration: `fn max<T, U>(...)` — M27a.
-   Empty for a non-generic fn. The names are resolved contextually at emit time. */
+/* Generic type parameters on a fn declaration: `fn max<T, U>(...)` / `fn sort<T: IComparable>(...)`
+   — M27a + M27c bounds. Yields a list of type-param IdentifierNodes (each carrying its `bounds`);
+   the fn/type decl action splits it into names (typeParams) + contract lists (typeBounds). */
 type_params_opt
   : /* Nothing */
-  | LT ident_list GT
+  | LT  type_param_list GT
   ;
-ident_list
+type_param_list
+  : type_param
+  | type_param_list COMMA type_param
+  ;
+type_param
   : IDENTIFIER
-  | ident_list COMMA IDENTIFIER
+  | IDENTIFIER COLON bound_list
+  ;
+/* Contract bounds on a type parameter: `IHashable` or `IHashable + IComparable` (`+` = AND).
+   Each bound is a `type_name`, so a generic contract bound (`IFoo<int>`) parses + gets genericDepth. */
+bound_list
+  : type_name
+  | bound_list PLUS type_name
   ;
 function_return_type
   : type
@@ -328,6 +346,7 @@ statement_expression
   | post_decrement_expression
   | pre_increment_expression
   | pre_decrement_expression
+  | match_expression   /* M28b: `match (…) ;` as a statement (trailing `;`, value discarded) */
   ;
 selection_statement
   : if_statement
@@ -404,6 +423,31 @@ statement_expression_list
   : statement_expression
   | statement_expression_list COMMA statement_expression
   ;
+/* M28b: `match (subject) ` — a single
+   value-producing construct. Wired into both statement_expression (value discarded) and
+   primary_expression_no_parenthesis (lifted to a temp). Each arm's body is one expression. */
+match_expression
+  : MATCH LPAREN expression RPAREN LEFT_BRACE match_arms RIGHT_BRACE
+
+  ;
+match_arms
+  : match_arm
+  | match_arms match_arm
+  ;
+match_arm
+  : CASE match_pattern COLON expression SEMICOLON
+  | CASE match_pattern COLON block      /* M29d: block arm (multi-statement) */
+  ;
+match_pattern
+  : IDENTIFIER
+
+  | IDENTIFIER LPAREN match_bindings RPAREN
+
+  ;
+match_bindings
+  : IDENTIFIER
+  | match_bindings COMMA IDENTIFIER
+  ;
 foreach_statement
   : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement
   ;
@@ -468,6 +512,7 @@ primary_expression_no_parenthesis
   | this_access
   | base_access
   | new_expression
+  | match_expression      /* M28b: value-producing `match` in expression position */
   ;
 parenthesized_expression
   : LPAREN expression RPAREN
@@ -543,7 +588,9 @@ post_decrement_expression
   : postfix_expression MINUSMINUS
   ;
 cast_expression
-  : CAST LT type GT LPAREN unary_expression RPAREN
+    /* The mid-rules track genericDepth across the cast's `<…>` so `cast<List<int>>(x)` needs no space;
+       the `--` fires before `( unary_expression )` so a `>>` shift inside the cast body stays a shift. */
+  : CAST LT  type GT  LPAREN unary_expression RPAREN
   ;
 constant_expression
   : expression
@@ -743,8 +790,16 @@ destructor_declaration
                               Enum
 ------------------------------------------------------------------------------*/
 
+/* M28a: `enum Name<T> : IntType `. The head reuses `type_decl_head` (so
+   generic enums parse exactly like generic types); an optional `: IntType` pins the underlying
+   integer / tag width; members may carry a named payload (below) making the enum a tagged union. */
 enum_declaration
-  : modifiers_opt ENUM IDENTIFIER enum_body semicolon_opt
+  : modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
+
+  ;
+enum_underlying_opt
+  : /* Nothing */
+  | COLON integral_type
   ;
 enum_body
   : LEFT_BRACE enum_member_declarations_opt RIGHT_BRACE
@@ -761,6 +816,7 @@ enum_member_declarations
 enum_member_declaration
   : IDENTIFIER
   | IDENTIFIER EQ constant_expression
+  | IDENTIFIER LPAREN parameter_list RPAREN      /* M28a: tagged-union variant with a named payload */
   ;
 
 /*------------------------------------------------------------------------------

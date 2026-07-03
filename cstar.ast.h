@@ -827,7 +827,8 @@ class MatchArmNode : public StatementNode {
 public:
     SharedString     variantName;   // the variant matched; "_" = wildcard
     SharedStringList bindings;      // payload binding names in field order; null/empty if none
-    SharedExpression body;          // the arm's value / side-effect expression
+    SharedExpression body;          // single-expression arm: the arm's value / side-effect expression
+    SharedBlock      block;         // M29d: block arm `{ … }` (multi-statement); one of body/block is set
     explicit MatchArmNode(CodeGenContext& context)
         : ASTNode(context), StatementNode(context) { }
     bool isWildcard() const { return variantName && *variantName == "_"; }

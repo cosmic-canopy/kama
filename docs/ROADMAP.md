@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 (expr-position lowering) → M30 (struct-ordering + generics completeness) → M31 (operators) → Step 7 → tag.**
-**Status (v0.1.62):** M27 (generics) ✅, M28 (tagged unions) ✅ — **M29 (expression-position lowering) 🚧 in progress: M29a–c ✅** (inline `match` on a call result + macOS CI fix; inline ctor/`new`/nested construction in any value site; assignment-RHS `match`/variant + collection-move-in), only M29d (block `match` arms) left. Deferred-gap cleanup before operators (which move to M31). Rationale: close the
+**Status (v0.1.63):** M27 (generics) ✅, M28 (tagged unions) ✅, **M29 (expression-position lowering) ✅ COMPLETE** (inline `match` on a call result + macOS CI fix; inline ctor/`new`/nested construction anywhere; assignment-RHS `match`/variant + collection-move-in; block `match` arms). Next is **M30** (struct-ordering + generics completeness), then M31 operators. Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -305,7 +305,7 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      from a fresh rvalue / bound-local `give` (inline `new`, collection move-in, nested inline
      `Some(Some(…))` not yet lowered) → **M29**. (Also in the memory's `roadmap-deferred`.)
 
-8. **M29 — expression-position lowering.** 🚧 *in progress (deferred-gap cleanup, before operators).*
+8. **M29 — expression-position lowering.** ✅ **COMPLETE (M29a–d, v0.1.60–v0.1.63)** *(deferred-gap cleanup, before operators).*
    Generalize the one M26i temp-hoist pass so **every** value-producing construct lowers in **any**
    expression position — strict ISO C11, no GNU statement-expression (the M26i invariant). Today
    in-place construction / value-lifting only works in the positions each feature happened to wire
@@ -333,7 +333,12 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      `_localCTypes` map for the LHS type + a dedicated assignment branch that drops a live destructible
      LHS before the blit; plus `give`-a-collection into a variant payload (`Some(give xs)`). Fixtures
      `assign_match`, `assign_match_drop` (SAN), `variant_coll_move` (SAN); xfail `variant_coll_copy`.
-     **M29d** block `match` arms.
+     **M29d** ✅ **DONE (v0.1.63)** — block `match` arms (`case X: { … }`): multi-statement arms in
+     statement position, and in value position the block's trailing expression-statement (a call /
+     assignment) is the arm value. Grammar adds `CASE match_pattern COLON block` (LALR-clean, `%expect 1`
+     held); the collection scanner now recurses into `match` arms (so a type used only inside an arm is
+     registered). Fixtures `match_block_stmt`, `match_block_value` (SAN — a block-local `Shared` drops at
+     the arm end); xfail `match_block_no_value`.
 
 9. **M30 — struct-ordering + generics completeness.** 🚧 *planned (deferred-gap cleanup, before operators).*
    Finish the type/struct emitter so a generic instance / tagged union can hold a user `value`-type

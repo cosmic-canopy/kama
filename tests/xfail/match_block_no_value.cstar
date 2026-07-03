@@ -1,0 +1,10 @@
+enum E { A(int32 n), B }
+fn int main()
+{
+    E e = E::A(n: 3);
+    int32 r = match (e) {
+        case A(n): { int32 t = n + 1; }
+        case B: 0;
+    };
+    return r;
+}
