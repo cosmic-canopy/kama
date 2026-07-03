@@ -18,8 +18,8 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 
 ## Road to 1.0 — language complete
 
-Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 → Step 7 → tag.**
-**Status (v0.1.59):** M27 (generics) ✅ and **M28 (tagged unions + `match` + `Optional`/`Result` + `Weak.tryUpgrade`) ✅ COMPLETE** — next is **M29** (operator overloading). Rationale: close the
+Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 (expr-position lowering) → M30 (struct-ordering + generics completeness) → M31 (operators) → Step 7 → tag.**
+**Status (v0.1.59):** M27 (generics) ✅ and **M28 (tagged unions + `match` + `Optional`/`Result` + `Weak.tryUpgrade`) ✅ COMPLETE** — next is **M29** (expression-position lowering — a deferred-gap cleanup before operators, which move to M31). Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -33,7 +33,9 @@ ownership (see M26f).
 order, so generics — long reserved as "M23" but never built — becomes **M27**, and operators (a few
 notes back called "M27") becomes **M29**. Each may sub-decompose (M27a/b…) like M25/M26 did. The
 type-model reframe is inserted as **M26h** (the M26 ownership-model family), before M27 — so M27+ keep
-their names/numbers.
+their names/numbers. *(Build-order renumber, 2026-07-03: the M27/M28 deferred gaps are scheduled as two
+cleanup milestones done **before** operators — **M29** expression-position lowering + **M30**
+struct-ordering + generics completeness — so operators shift M29 → **M31**.)*
 
 1. **M26e — borrow escape check** (second-class borrows). ✅ **DONE (v0.1.35).** Closed the last
    memory-safety hole; with the no-null work already shipped (M26a–d), fully delivers GOALS §3b.
@@ -214,12 +216,10 @@ their names/numbers.
    M27b-beta-3 generic resources (`type resource Box<T>`); M27b-beta-4 the `>>` lexer split (nested
    generics with no space); M27c-1 contract bounds (`<K: I + J>`, monomorphized → static dispatch,
    enforced); M27c-2 the `This` self-type. Monomorphization throughout; ISO-C11; ASan/UBSan clean.
-   **Known follow-ups (pre-existing gaps surfaced while building M27, orthogonal — tracked below):**
+   **Known follow-ups (pre-existing gaps surfaced while building M27, orthogonal — now SCHEDULED):**
    *(a) a generic instance holding a user value-type **by value** (`Box<Rock> { Rock item; }`) hits a
-   struct emit-order error — needs a topological struct-ordering pass (the workaround: store `T` behind
-   a pointer / `List<T>` / `Owned<T>`, or as a method param). (b) an inline constructor as a **return
-   expression** (`return Point(...)`) isn't lowered — use a local (`Point p = Point(...); return p;`);
-   M26i added inline ctors only in argument position.*
+   struct emit-order error → **M30** (topological struct-ordering pass). (b) an inline constructor as a
+   **return expression** (`return Point(...)`) isn't lowered → **M29** (expression-position lowering).*
    - **DECIDED (2026-06-30):**
      - **Monomorphization**, not erasure — one specialized copy per concrete type (elements inline,
        no boxing). **Zero runtime/memory cost**; identical layout to today's intrinsics. (Erasure
@@ -296,19 +296,51 @@ their names/numbers.
      `__upgrade` stays an internal helper; the emitter registers `Optional<Shared<T>>` per `Weak<T>`
      and emits a `__tryUpgrade` wrapper (`Some` on a live ctrl, else `None`), for both class and
      interface Weaks. Fixtures `weak_basic`, `weak_expired`, `shared_iface` migrated to
-     `tryUpgrade()` + `match` (bind the result to a local — inline `match` on a call result is a
-     deferred gap). Every fallible op is now compiler-checked.
-   - **Deferred gaps (surfaced building M28, orthogonal — not blocking):** *(1)* the builtin `String`
-     as a generic type ARG (`Optional<String>`, `Result<int32, String>`) emits the bare name, not
-     `cstar_string` — `String` in a type-arg list parses as a plain identifier; use a primitive /
-     user type / smart-ptr / collection payload for now. *(2)* a value-producing `match` is lifted
-     only in a local-init or `return` (an assignment RHS `x = match(…)` is rejected); an arm body is
-     a single expression (no block arms). *(3)* a resource payload is constructed from a fresh rvalue
-     or a bound-local `give` (inline `new` in a payload arg, a collection move-in, and nested inline
-     `Some(Some(…))` construction are not yet lowered — bind a local first). Tracked in the memory's
-     `roadmap-deferred`.
+     `tryUpgrade()` + `match` (bind the result to a local — inline `match` on a call result → **M29**).
+     Every fallible op is now compiler-checked.
+   - **Deferred gaps (surfaced building M28, orthogonal — now SCHEDULED, detail in M29/M30 below):**
+     *(1)* the builtin `String` as a generic type ARG (`Optional<String>` emits the bare name, not
+     `cstar_string`) → **M30**. *(2)* a value-producing `match` lifted only in a local-init/`return`
+     (assignment RHS rejected) + single-expression arms → **M29**. *(3)* a resource payload built only
+     from a fresh rvalue / bound-local `give` (inline `new`, collection move-in, nested inline
+     `Some(Some(…))` not yet lowered) → **M29**. (Also in the memory's `roadmap-deferred`.)
 
-8. **M29 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
+8. **M29 — expression-position lowering.** 🚧 *planned (deferred-gap cleanup, before operators).*
+   Generalize the one M26i temp-hoist pass so **every** value-producing construct lowers in **any**
+   expression position — strict ISO C11, no GNU statement-expression (the M26i invariant). Today
+   in-place construction / value-lifting only works in the positions each feature happened to wire
+   (M26i: ctor-in-argument; M28b: `match` in a local-init / `return`); this milestone lifts them one
+   level higher, uniformly. **Closes:** M27-b (inline ctor as a `return`/general rvalue,
+   `return Point(...)`); M28-3 (inline `new` as a variant payload arg, a collection move-in as a
+   payload, nested inline `Some(Some(…))` construction); M28-bonus (inline `match` on a call result,
+   `match(w.tryUpgrade()){…}`); M28-2 (value-producing `match` in an assignment RHS `x = match(…)`, +
+   multi-statement/block `match` arms).
+   - **Mechanism:** thread the target-type context (`_matchTargetCType`/`_variantTargetType`) to the
+     assignment-RHS + nested sites, and generalize the `_hoisted`/`_hoistOK` hoist so a class-resolving
+     call is recognized as an inline ctor in general expression position (extend the M26a/M26i
+     in-place-construction recognition beyond decl-init/arg). A context with no statement slot (a
+     loop/branch condition) still cleanly rejects — never emits `({…})`.
+   - **Likely sub-steps:** M29a value-lifting (ctor / `new` / nested / collection payloads +
+     inline-match-on-call + assignment-RHS match); M29b block `match` arms (grammar + arm-value lowering).
+
+9. **M30 — struct-ordering + generics completeness.** 🚧 *planned (deferred-gap cleanup, before operators).*
+   Finish the type/struct emitter so a generic instance / tagged union can hold a user `value`-type
+   **by value**, and so a builtin resolves as a generic type argument. **Closes:** M27-a (a generic
+   instance embedding a user value by value, `Box<Rock> { Rock item; }`, hits a struct emit-ORDER error;
+   the M28a tagged-union payload has the same restriction — hence the `enum_payload_byvalue` xfail);
+   M28-1 (the builtin `String`/`string` as a generic type ARG, `Optional<String>`, emits the bare name
+   instead of `cstar_string` — it parses as a plain identifier in a type-arg list).
+   - **Mechanism:** a pre-emit **topological sort** over ALL struct types (normal classes + generic
+     instances + tagged unions) by by-value field containment — the mutual class↔instance dependency (a
+     class can hold a `Box<int32>` by value AND `Box<T>` can hold a user value) makes registration-order
+     insufficient; needs a real toposort. Then remove the M28a by-value-user-payload rejection + the
+     `Box<Rock>` workaround, and teach the generic type-arg path to map the `String`/`string` builtin to
+     `cstar_string`. **Engine payoff:** unblocks event/render-command unions carrying `Vec2`/`Color`
+     payloads by value (`enum Event { Resize(Vec2 size), … }`) — today they need the `Owned` workaround.
+   - **Retires:** xfail `enum_payload_byvalue`, and the two struct-order/`String`-arg entries in the
+     memory's `roadmap-deferred`.
+
+10. **M31 — operator overloading + full static methods.** Ergonomic `pod` math — `Vec2 + Vec2`,
    `Vec2::dot(left:, right:)` — the engine's Tier-0 dependency. The value model (M26) already
    treats `Vec2 c = a + b` as a cheap pod copy. Validated by a first Vec2/3/4 + Mat4 library.
    - **Design Qs:** Operator-method **syntax** — operators are the *sanctioned exception* to
@@ -319,15 +351,15 @@ their names/numbers.
      Should `==` tie into a structural-equality default for `pod`s? **Operators-in-interfaces** for
      generic math (`interface IArithmetic { fn This operator+(This rhs); }`) reuse M27's interface-bound
      + `This` mechanism — so a generic `T: IArithmetic` gets `+`. (Does NOT impact M27's design; M27
-     ships the named-method form, M29 makes the methods operators.)
+     ships the named-method form, M31 makes the methods operators.)
 
-9. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
+11. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
    (give/copy + by-value from M26c/d, generics, `match`/`Optional`, operators; GOALS §3a unsafe
    wording vs shipped `unsafe{}`/`Ptr`). **Fold in the repo-wide naming/case convention pass**
    (lower-camel methods, PascalCase types) — 1.0 is the API-stability point, and post-1.0 renames
    are breaking, so settle it *now*.
 
-10. **Step 8 — tag 1.0.** Nothing deferred — the language is complete.
+12. **Step 8 — tag 1.0.** Nothing deferred — the language is complete.
 
 ## Tracked limitations & non-goals
 
@@ -340,10 +372,11 @@ declared a deliberate non-goal. The current inventory (swept from SPEC/KEYWORDS/
   build may pull a minimal `export` earlier. *(Was previously in KEYWORDS.md only, not the roadmap.)*
 - **`volatile` keyword** — reserved, hard-errors today; **tracked to 1.x → Embedded/MCU target**
   (below): emit C `volatile` for ISR↔loop flags / MMIO registers.
-- **`operator` / full `static` (`Type::method`)** — hard-error today; **tracked to M29.**
+- **`operator` / full `static` (`Type::method`)** — hard-error today; **tracked to M31.**
 - **Collection passed by value (params/returns)** — today pass a collection by `ref`; general
-  by-value (move/deep-copy of the whole container) **tracked to M27** (the generics by-value work).
-- **`List<Shared<T>>` (smart-ptr-in-collection) + nested-generic `>>`** — **tracked to M27.**
+  by-value (move/deep-copy of the whole container) **tracked to M29** (the expression-position
+  value-lifting work — same mechanism as the variant collection-move-in it overlaps).
+- **`List<Shared<T>>` (smart-ptr-in-collection) + nested-generic `>>`** — ✅ **fixed (M27b-beta-2/beta-4).**
 - **`contract` refining a `contract`** (`type contract A : B`) parses today; deeper multi-level
   contract inheritance is **tracked to M27** (alongside interface bounds + `This`).
 - **Non-goal — function / constructor overloading.** Deliberately *not* planned: it conflicts with
