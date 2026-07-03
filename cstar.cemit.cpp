@@ -960,7 +960,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             bool ph = _hoistOK; _hoistOK = true;                       // M26i: inline-ctor hoisting
             std::string pmt = _matchTargetCType; _matchTargetCType = _currentReturnCType;   // M28b: `return match(…)`
             std::string pvt = _variantTargetType; _variantTargetType = _currentReturnCType; // M28c: `return Optional::Some(…)`
-            std::string rv = emitExpression(retExpr);
+            // M29b: `return Point(...)` / `return new T(...)` — materialize the construction into a temp.
+            std::string rv = tryHoistInlineCtor(retExpr, _currentReturnCType, n->line);
+            if (rv.empty()) rv = tryHoistInlineNew(retExpr, _currentReturnCType, n->line);
+            if (rv.empty()) rv = emitExpression(retExpr);
             _matchTargetCType = pmt;
             _variantTargetType = pvt;
             _hoistOK = ph;
@@ -3821,6 +3824,56 @@ void CEmitter::emitMatchStatement(MatchNode* m, int depth)
     emitMatchSwitch(m, nullptr, depth);
 }
 
+// M29b: an inline constructor `Cls(args)` as a general rvalue (return / variant payload). A ctor
+// lowers to `Cls__ctor(&dest, …)` which needs an lvalue destination, so materialize a HOISTED temp
+// (declared before the leaf statement — pure ISO C, no `({…})`) and return its name. "" if `e` is not
+// an inline ctor for exactly `targetCType`, or no hoist slot. Mirrors the M26i arg-position recognizer.
+std::string CEmitter::tryHoistInlineCtor(SharedExpression e, const std::string& targetCType, int srcLine)
+{
+    if (!_hoistOK || targetCType.empty()) return "";
+    auto* iv = dynamic_cast<InvocationNode*>(e.get());
+    if (!iv || !iv->identifier || !iv->identifier->value) return "";
+    std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
+    std::string ctorCls;
+    if (isClass(rn) && _classes.count(rn)) ctorCls = rn;
+    else { auto g = _genericTypeInstOf.find(targetCType);   // ctor names template `Box`; target is `Box_int32`
+           if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = targetCType; }
+    if (ctorCls.empty() || ctorCls != targetCType || _classes[ctorCls].isCollection) return "";
+    std::string t = "__ctorarg" + std::to_string(_tempCounter++);
+    std::string ctor = emitCtorCall(t, _classes[ctorCls], iv->args, srcLine);
+    _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
+    return t;
+}
+
+// M29b: an inline `new T(...)` as a general rvalue whose target is a smart-pointer type — box it into
+// a HOISTED temp (malloc + ctor + optional ctrl, the emitDeclarator sequence) and return its name.
+// "" if not applicable / no slot. Interface-element boxes are deferred — rejected with guidance.
+std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& targetCType, int srcLine)
+{
+    if (!_hoistOK || targetCType.empty()) return "";
+    auto* oc = dynamic_cast<ObjectCreationNode*>(e.get());
+    if (!oc) return "";
+    auto cit = _classes.find(targetCType);
+    if (cit == _classes.end() || !isSmartPtrClass(targetCType)) return "";
+    std::string T = cit->second.collElemClass;
+    std::string octy = cType(oc->type);
+    if (isInterface(T)) {   // a `new Concrete` into a Shared/Owned<Interface> — fat-pointer box deferred
+        unsupported("boxing `new` into a smart-pointer-over-interface inline isn't supported here — "
+                    "bind it to a local first", srcLine);
+        return "";
+    }
+    if (octy != T) return "";                                   // element mismatch — let the caller diagnose
+    if (isClass(T) && _classes[T].isAbstractClass)
+        unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), srcLine);
+    std::string t = "__newarg" + std::to_string(_tempCounter++);
+    std::string box = targetCType + " " + t + " = {0}; " + t + ".ptr = (" + T + "*)malloc(sizeof(" + T + "));";
+    if (isClass(T) && _classes[T].hasCtor)
+        box += " " + emitReorderedCall(T + "__ctor", t + ".ptr", _classes[T].ctorParams, oc->args, srcLine) + ";";
+    if (smartKind(targetCType) == CollKind::Shared) box += " " + t + ".ctrl = cstar_ctrl_new();";
+    _hoisted.push_back(box);
+    return t;
+}
+
 // M28a/c: resolve the variant type a `::` qualifier names. A non-generic union is in _classes
 // directly; a generic union names its bare template (`Optional`, in _genericTypes) — resolve it to
 // the target instance set by the enclosing typed position (`_variantTargetType`, e.g. Optional_int32).
@@ -3881,7 +3934,15 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             SharedExpression argExpr = ai->second->expression;
             int handoff = 0;                             // 0 none, 1 give, 2 copy
             if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
-            std::string val = emitExpression(argExpr);
+            // M29b: an inline construction as the payload (inline `new`, an inline generic-instance ctor,
+            // or a nested `Some(Some(…))` / value-producing `match`) materializes against the field type;
+            // propagate the target so the nested variant/match resolves.
+            std::string pmt = _matchTargetCType, pvt = _variantTargetType;
+            _matchTargetCType = _variantTargetType = fcls;
+            std::string val = tryHoistInlineNew(argExpr, fcls, srcLine);
+            if (val.empty()) val = tryHoistInlineCtor(argExpr, fcls, srcLine);
+            if (val.empty()) val = emitExpression(argExpr);
+            _matchTargetCType = pmt; _variantTargetType = pvt;
             std::string argCls = exprClass(argExpr);
             std::string field;
             if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {

@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 (expr-position lowering) → M30 (struct-ordering + generics completeness) → M31 (operators) → Step 7 → tag.**
-**Status (v0.1.60):** M27 (generics) ✅, M28 (tagged unions) ✅ — **M29 (expression-position lowering) 🚧 in progress: M29a ✅** (inline `match` on a call result; + the macOS CI `set -u` fix). Deferred-gap cleanup before operators (which move to M31). Rationale: close the
+**Status (v0.1.61):** M27 (generics) ✅, M28 (tagged unions) ✅ — **M29 (expression-position lowering) 🚧 in progress: M29a ✅** (inline `match` on a call result; + the macOS CI `set -u` fix) **+ M29b ✅** (inline ctor/`new`/nested construction in any value site). Deferred-gap cleanup before operators (which move to M31). Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -324,8 +324,11 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      branch + `tryUpgrade`'s recorded return type) + an owning subject temp, so **inline `match` on a
      call result** works (`match(w.tryUpgrade()){…}`, the temp dropped once after the switch; fixtures
      `match_on_call` (SAN), xfail `match_in_cond`). *(Also folded in the macOS CI fix — the `SAN_FLAGS[@]`
-     empty-array `set -u` bug under bash 3.2.)* **M29b** inline construction (ctor + `new`) in general
-     expression position (`return Point(...)`, inline `new`/nested variant payloads). **M29c**
+     empty-array `set -u` bug under bash 3.2.)* **M29b** ✅ **DONE (v0.1.61)** — inline construction in
+     general expression position: `return Point(...)` (inline ctor as a general rvalue) + inline `new`
+     and nested `Some(Some(…))` as variant payloads, via the `tryHoistInlineCtor`/`tryHoistInlineNew`
+     helpers (materialize a preceding temp, moved into the union; fixtures `return_ctor`,
+     `variant_new_payload` (SAN), `variant_nested`; xfail `variant_new_iface`). **M29c**
      assignment-RHS value lowering (`x = match(…)`) + collection-move-in. **M29d** block `match` arms.
 
 9. **M30 — struct-ordering + generics completeness.** 🚧 *planned (deferred-gap cleanup, before operators).*

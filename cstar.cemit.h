@@ -494,6 +494,11 @@ private:
     std::string emitInvocation(InvocationNode* call);
     std::string emitVariantConstruction(ClassInfo& ci, const std::string& variant,
                                         SharedArgumentList args, int srcLine);   // M28a
+    // M29b: if `e` is an inline construction for exactly `targetCType` in a hoist-enabled context,
+    // materialize a preceding temp (ISO C, no `({…})`) and return its name; else "". Generalizes the
+    // M26i argument-position lowering to any value site (return, variant payload, …).
+    std::string tryHoistInlineCtor(SharedExpression e, const std::string& targetCType, int srcLine);
+    std::string tryHoistInlineNew(SharedExpression e, const std::string& targetCType, int srcLine);
     // M28a/c: the variant type named by a `::` qualifier — a non-generic union directly, or a generic
     // template resolved to its target instance (`Optional` + `_variantTargetType` Optional_int32). null if none.
     ClassInfo* resolveVariantType(const std::string& qualResolved);

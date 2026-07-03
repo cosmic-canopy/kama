@@ -1,0 +1,9 @@
+type resource Probe { int32 id; public Probe(int32 id){this.id=id;} ~Probe(){} public fn int32 val(){return this.id;} }
+fn int main()
+{
+    Optional<Shared<Probe>> o = Optional::Some(value: new Probe(id: 42));
+    Optional<Shared<Probe>> e = Optional::None;
+    int32 a = match (o) { case Some(p): p.val(); case None: 0; };
+    int32 b = match (e) { case Some(p): p.val(); case None: 7; };
+    return a + b;
+}
