@@ -1,0 +1,12 @@
+fn int divide(int32 a, int32 b)
+{
+    Result<int32, int32> r = b == 0 ? Result::Err(error: -1) : Result::Ok(value: a / b);
+    return match (r) {
+        case Ok(v): v;
+        case Err(e): e;
+    };
+}
+fn int main()
+{
+    return divide(a: 20, b: 4) + divide(a: 1, b: 0);
+}
