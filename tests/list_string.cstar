@@ -1,0 +1,8 @@
+fn int main()
+{
+    List<string> xs;
+    xs.add(item: "ab"); xs.add(item: "cde"); xs.add(item: "f");
+    int32 total = 0;
+    foreach (string s in xs) { total = total + cast<int32>(s.length()); }
+    return total;
+}

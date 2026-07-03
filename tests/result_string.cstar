@@ -1,0 +1,6 @@
+fn int describe(int32 code)
+{
+    Result<int32, string> r = code == 0 ? Result::Ok(value: 200) : Result::Err(error: "fail");
+    return match (r) { case Ok(v): v; case Err(e): cast<int32>(e.length()); };
+}
+fn int main() { return describe(code: 0) + describe(code: 1); }

@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 (expr-position lowering) → M30 (struct-ordering + generics completeness) → M31 (operators) → Step 7 → tag.**
-**Status (v0.1.64):** M27 (generics) ✅, M28 (tagged unions) ✅, M29 (expression-position lowering) ✅ — **M30 (struct-ordering) 🚧: M30a ✅** (a struct can hold a user `value` BY VALUE — `enum Event{Resize(Vec2)}`, `Box<Rock>` — via a unified topological struct order), M30b (`string`-generic fixtures) next, then M31 operators. Rationale: close the
+**Status (v0.1.65):** M27 (generics) ✅, M28 (tagged unions) ✅, M29 (expression-position lowering) ✅, **M30 (struct-ordering + generics completeness) ✅ COMPLETE** (a struct can hold a user `value` BY VALUE — `enum Event{Resize(Vec2)}`, `Box<Rock>` — via a unified topological struct order; `string` verified as a generic arg). **All the M27/M28 deferred gaps are now closed — next is M31 (operator overloading).** Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -340,7 +340,7 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      registered). Fixtures `match_block_stmt`, `match_block_value` (SAN — a block-local `Shared` drops at
      the arm end); xfail `match_block_no_value`.
 
-9. **M30 — struct-ordering + generics completeness.** 🚧 *in progress (deferred-gap cleanup, before operators).*
+9. **M30 — struct-ordering + generics completeness.** ✅ **COMPLETE (M30a–b, v0.1.64–v0.1.65)** *(deferred-gap cleanup, before operators).*
    - **M30a — unified topological struct-ordering.** ✅ **DONE (v0.1.64).** A generic instance / tagged
      union / normal class can now hold a user `value`-type **BY VALUE** (`Box<Rock> { Rock item; }`,
      `class Holder { Rock r; }`, `enum Event { Resize(Vec2 size), … }`). New `unifiedStructOrder()` — a
@@ -356,10 +356,12 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      (xfail→positive), `struct_byvalue` (`Box<Rock>` + `Holder{Rock}` + cross-kind chain),
      `variant_value_raii` (SAN — a union carrying a `resource` value drops it once); xfail
      `struct_cycle_mutual`, `enum_recursive`.
-   - **M30b — builtin `string` as a generic arg.** 🚧 planned. Turned out a *false alarm*: the lowercase
-     `string` keyword already resolves to `cstar_string` as a generic arg (`Pair<int32, string>` is in
-     SPEC); this step just verifies + adds fixtures (`Optional<string>` etc.). The capital-`String` alias
-     / PascalCase spelling is deferred to the **Step 7 naming pass** (per user).
+   - **M30b — builtin `string` as a generic arg.** ✅ **DONE (v0.1.65).** Was a *false alarm*: the
+     lowercase `string` keyword already resolves to `cstar_string` as a generic arg (`Pair<int32, string>`
+     is in SPEC). Verified + fixtured `Optional<string>`, `Result<int32, string>`, `List<string>` (all
+     SAN-clean — the owned `cstar_string`s free once). The capital-`String` alias / PascalCase spelling is
+     deferred to the **Step 7 naming pass** (per user). Fixtures `optional_string`, `result_string`,
+     `list_string`.
    - **Retires:** the struct-order tracked-limitation + the two `roadmap-deferred` struct-order/`String`
      entries.
 
