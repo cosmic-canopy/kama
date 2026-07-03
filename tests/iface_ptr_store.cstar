@@ -1,8 +1,9 @@
 // M26g-3 — owning polymorphism can be STORED and RETURNED: an interface smart pointer is an ordinary
 // value type, so `Shared<IShape>` works as a class FIELD and `Owned`/`Shared<IShape>` as a function
 // RETURN (M26e only rejected a *bare* interface in those positions). Dispatch stays polymorphic; the
-// field's owner drops it in RAII order. (A `List<Shared<IShape> >` needs the general
-// smart-pointer-in-collection support + `>>` split — that lands with generics, M27.)
+// field's owner drops it in RAII order. (A `List<Shared<IShape> >` now works too — the collection
+// drops each stored handle in RAII order; see `list_shared_iface`. Only the `>>` split, dropping the
+// space, remains as a later ergonomic slice.)
 type contract IShape { fn int32 area(); }
 type resource Sq implements IShape {
     List<int32> side;

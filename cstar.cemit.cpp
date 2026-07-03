@@ -1852,6 +1852,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     info.elemCType = elemCType; info.elemMangle = elemMangle; info.elemClass = elemClass;
     info.elemDestructible = !elemClass.empty() && _classes.count(elemClass) && _classes[elemClass].destructible;
     _collections[cName] = info;
+    _collectionOrder.push_back(cName);
 
     // Synthetic ClassInfo: a struct with a dtor, and (collections only) intrinsic methods.
     ClassInfo ci;
@@ -1913,6 +1914,7 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
     // collection's ELEM_DTOR machinery, so elemDestructible stays false here.
     info.elemDestructible = !elemIface && _classes.count(elemClass) && _classes[elemClass].destructible;
     _collections[cName] = info;
+    _collectionOrder.push_back(cName);
 
     ClassInfo ci;
     ci.name = cName; ci.isCollection = true; ci.collKind = kind;
@@ -1947,6 +1949,7 @@ void CEmitter::registerBindable(SharedIdentifier elem)
     info.elemCType = sigCName; info.elemMangle = mangleElem(elem); info.elemClass = "";
     info.elemDestructible = false;
     _collections[cName] = info;
+    _collectionOrder.push_back(cName);
 
     ClassInfo ci;
     ci.name = cName; ci.isCollection = true; ci.collKind = CollKind::Bindable;
@@ -1965,12 +1968,15 @@ bool CEmitter::isBindableClass(const std::string& cls) const
 void CEmitter::scanTypeForCollections(SharedIdentifier t)
 {
     if (!t) return;
-    scanTypeForGenericTypes(t);                                 // M27b: also discover Pair<A,B> here
-    if (isCollectionType(t)) registerCollection(t);
-    // Recurse ALL type args (M27b-beta), so a collection/generic in a 2nd+ position
-    // (`Pair<int, List<int>>`) is discovered — not just the first arg.
+    // Inner-first: register the element's collections / generic instances BEFORE the enclosing
+    // type, so the outer's elemClass/elemDestructible resolve against an already-registered inner
+    // (`List<Shared<IShape>>` must see `Shared_IShape` in _classes to drop each element; likewise
+    // `List<List<T>>`, `List<Box<T>>`). Recurse ALL type args (M27b-beta) so a collection/generic in
+    // a 2nd+ position (`Pair<int, List<int>>`) is discovered — not just the first arg.
     if (t->genericArgs) for (auto& a : *t->genericArgs) scanTypeForCollections(a);
     else if (t->genericArg) scanTypeForCollections(t->genericArg);
+    scanTypeForGenericTypes(t);                                 // M27b: also discover Pair<A,B> here
+    if (isCollectionType(t)) registerCollection(t);
 }
 
 // M27b: register the specialized instance for a user generic-type reference `Pair<A, B>`. The
@@ -2427,8 +2433,11 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
 void CEmitter::emitCollectionDefs(bool typesOnly)
 {
     const char* suf = typesOnly ? "TYPE" : "FUNCS";
-    for (auto& kv : _collections) {
-        CollectionInfo& info = kv.second;
+    // Iterate in registration (inner-first) order, not the map's alphabetical order: a collection's
+    // dtor calls its element's dtor (`List<Shared<I>>` -> `Shared_I__dtor`), so the element's FUNCS
+    // must be emitted first. Alphabetical order breaks e.g. `List_...` (emitted before `Shared_...`).
+    for (const std::string& cName : _collectionOrder) {
+        CollectionInfo& info = _collections[cName];
         std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "CSTAR_ELEM_NODTOR";
         std::string tail = typesOnly ? ")\n"                          // _TYPE(T, NAME)
                                      : (", " + elemDtor + ")\n");     // _FUNCS(T, NAME, ELEM_DTOR)

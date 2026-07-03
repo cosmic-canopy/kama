@@ -1,0 +1,24 @@
+// M27 — a `List<Shared<IShape> >` drops each stored smart pointer (ref-count decrement) at teardown
+// and dispatches polymorphically through the borrowed element in `foreach`. Exercises the nested
+// collection-element registration fixed in this slice: `elemClass`/`elemDestructible` now resolve
+// because the inner `Shared_IShape` is registered before the outer `List` (was outer-first -> the
+// list silently leaked its elements). Each Sq is freed exactly once -> ASan-clean is the real proof.
+// (Note the space in `Shared<IShape> >` — the `>>` lexer split is a separate later slice.)
+type contract IShape { fn int32 area(); }
+type resource Sq implements IShape {
+    List<int32> side;                                          // owns heap -> destructible impl
+    public Sq(int32 s) { this.side.add(item: s); }
+    public fn int32 area() { return this.side[0] * this.side[0]; }
+}
+fn int32 main() {
+    List<Shared<IShape> > xs = new List<Shared<IShape> >();
+    Shared<IShape> a = new Sq(s: 3);
+    Shared<IShape> b = new Sq(s: 4);
+    Shared<IShape> c = new Sq(s: 5);
+    xs.add(item: give a);                                      // move each shared into the list
+    xs.add(item: give b);
+    xs.add(item: give c);
+    int32 sum = 0;
+    foreach (Shared<IShape> s in xs) { sum = sum + s.area(); } // polymorphic dispatch through the handle
+    return sum;                                                // 9 + 16 + 25 = 50; xs drops -> each Sq freed once
+}

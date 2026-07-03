@@ -233,6 +233,9 @@ private:
     std::map<std::string, InterfaceInfo> _interfaces;        // interface name -> info (M6b)
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info (M7)
     std::map<std::string, CollectionInfo> _collections;      // cName -> info (M9)
+    std::vector<std::string>              _collectionOrder;  // registration order (inner-first; a
+                                                             // collection's dtor calls its element's,
+                                                             // so the element must emit first)
 
     // M27a — generic functions (monomorphization). A generic template is registered by its
     // mangled cName; each reachable (template, concrete-type-args) pair is a synthetic
