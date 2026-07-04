@@ -1,0 +1,9 @@
+// M31 — no overloading (a stated non-goal): a type has ONE `operator*`. A method form and a free form
+// (or two different operand types) collide on the same synthetic name — a clean error, not a silent win.
+type value Vec2 {
+    public int32 x;
+    public Vec2(int32 x) { this.x = x; }
+    public Vec2 operator*(int32 s) { return Vec2(x: this.x * s); }        // method form
+    public Vec2 operator*(int32 s, Vec2 v) { return Vec2(x: s * v.x); }   // free form — collides
+}
+fn int32 main() { return 0; }

@@ -1665,6 +1665,20 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                                      + "`) has no body — it is a guarantee, not an implementation").c_str(), md->line);
                     if (md->name && md->name->value)
                         ii.methods.push_back({*md->name->value, md->returnType, md->params});
+                } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
+                    // M31c — an operator in a `contract` is a bound for generic math: `IArithmetic`
+                    // declares `This operator+(This rhs)`. Register it under the SAME synthetic name
+                    // (`op_add`) the concrete class's `operator+` uses, so classSatisfiesBound matches
+                    // it structurally and the monomorphized `a + b` lowers to `Concrete__op_add(&a, b)`.
+                    if (od->body)
+                        unsupported("a `contract` operator has no body — it is a guarantee, not an implementation", od->line);
+                    auto* d = od->operatorDeclarator.get();
+                    int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
+                    std::string opName = operatorMangle(d->opToken, arity);
+                    if (opName.empty())
+                        unsupported((std::string("operator '") + binaryOperator(d->opToken)
+                                     + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od->line);
+                    ii.methods.push_back({opName, d->returnType, operatorParamList(d)});
                 } else if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()) || dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
                     unsupported(("a `contract` holds no state — remove the field from `" + ii.name + "`").c_str(), m->line);
                 } else if (dynamic_cast<ClassConstructorDeclarationNode*>(m.get()) || dynamic_cast<ClassDestructorDeclarationNode*>(m.get())) {
@@ -2004,6 +2018,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                      + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od->line);
                     if (!od->body)
                         unsupported("an operator needs a body", od->line);
+                    // No overloading (a stated non-goal): one operator per symbol+arity-class per type.
+                    // Two `operator*` on one type (even with different operand types) collide on `op_mul`.
+                    if (ci.methods.count(opName))
+                        unsupported((std::string("duplicate operator '") + binaryOperator(d->opToken)
+                                     + "' on '" + ci.name + "' — no overloading; one operator per symbol").c_str(), od->line);
                     MethodInfo mi;
                     mi.cName      = ci.name + "__" + opName;
                     mi.returnType = d->returnType;

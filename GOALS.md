@@ -115,6 +115,7 @@ Development of cstar follows two vendored guidance skills that reinforce goals #
 The single source of truth for status is `README.md` (feature summary) and `docs/ROADMAP.md` (the
 milestone plan). Through M26h, the core language, OO, RAII, collections, the smart-pointer family, the
 full value/ownership model, `const`-correctness, access control, and the type-model vocabulary reframe
-(`type value`/`type resource`/`type contract`, M26h) are all shipped; user-defined generics, sum types +
-pattern matching, and operator overloading are the remaining language milestones on the road to a
-language-complete 1.0. This section is intentionally brief so it doesn't drift — see those files.
+(`type value`/`type resource`/`type contract`, M26h) are all shipped; user-defined generics (M27), sum
+types + pattern matching (M28), and operator overloading + full static methods (M31) are now shipped too —
+so the **language feature set is complete**. What remains before 1.0 is Step 7 (doc/SPEC reconciliation +
+a repo-wide naming/case pass), then the tag. This section is intentionally brief so it doesn't drift — see those files.

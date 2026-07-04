@@ -518,6 +518,14 @@ List<Shared<IShape>> scene;                             // nested generics, no s
 - **`This`** — the self-type, inside a `type contract` or a type's own methods: `fn bool equals(This other)`,
   `fn This clone()`. Resolves to the implementing/concrete type; used as a bound (`<T: IEquatable>`), the
   dispatch is static. Chosen over `Self` to pair with the `this` value and the PascalCase-types convention.
+- **Generic math (operators as bounds, M31c)** — a `contract` may declare **operators**, giving generic
+  code arithmetic over any conforming type at zero cost:
+  ```
+  type contract IArithmetic { This operator+(This rhs); }
+  fn T sum<T: IArithmetic>(T a, T b) { return a + b; }   // `a + b` -> static Concrete__op_add(&a, b)
+  ```
+  The concrete type's `operator+` satisfies the bound structurally, and `a + b` in the monomorphized body
+  lowers to a direct call — no vtable, no boxing.
 
 ## Access control ✅ (M25, M26h)
 

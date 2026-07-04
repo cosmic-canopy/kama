@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 (expr-position lowering) → M30 (struct-ordering + generics completeness) → M31 (operators) → Step 7 → tag.**
-**Status (v0.1.65):** M27 (generics) ✅, M28 (tagged unions) ✅, M29 (expression-position lowering) ✅, **M30 (struct-ordering + generics completeness) ✅ COMPLETE** (a struct can hold a user `value` BY VALUE — `enum Event{Resize(Vec2)}`, `Box<Rock>` — via a unified topological struct order; `string` verified as a generic arg). **All the M27/M28 deferred gaps are now closed — next is M31 (operator overloading).** Rationale: close the
+**Status (v0.1.68):** M27 (generics) ✅, M28 (tagged unions) ✅, M29 (expression-position lowering) ✅, M30 (struct-ordering + generics completeness) ✅, **M31 (operator overloading + full static methods) ✅ COMPLETE** (M31a static `Type::method()`; M31b the full operator set, arity-picked method/free/unary forms; M31c operators-in-contracts → generic math, validated by a Vec3/Mat3 `math_lib`). **The language feature set is complete — next is Step 7 (doc/SPEC reconciliation + repo-wide naming pass), then tag 1.0.** Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -390,15 +390,22 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      equality — a noted follow-up). Fixtures `operator_all` (every operator on one `value`),
      `operator_free_static` (scalar-on-the-left); xfail `operator_missing`, `operator_arity`,
      `operator_eq_missing`.
-   - **Design Qs:** Operator-method **syntax** — operators are the *sanctioned exception* to
-     named-args-only (a binary op has exactly two operands, positional by nature); how do we spell
-     it (`fn Vec2 operator+(Vec2 rhs)`? a special `operator` member? free-function form?). **Which
-     operators** (arithmetic, comparison `== < >`, index `[]`, unary `-`/`!`, compound `+=`?). The
-     **`static` method form** (`Type::method`, no `self` — `static` is only partial today, M19).
-     Should `==` tie into a structural-equality default for `pod`s? **Operators-in-interfaces** for
-     generic math (`interface IArithmetic { fn This operator+(This rhs); }`) reuse M27's interface-bound
-     + `This` mechanism — so a generic `T: IArithmetic` gets `+`. (Does NOT impact M27's design; M27
-     ships the named-method form, M31 makes the methods operators.)
+   - **M31c — operators-in-interfaces / generic math ✅ (v0.1.68) — M31 COMPLETE.** An operator in a
+     `type contract` (`IArithmetic { This operator+(This rhs); }`) is a **bound** for generic math. The
+     linchpin was one branch in `collectInterfaces`: register a contract's operator under the SAME
+     synthetic name (`op_add`) the concrete class uses. Then it's **free** — `classSatisfiesBound` is
+     structural by name (so `Vec2::op_add` satisfies `IArithmetic`), and in a `sum<T: IArithmetic>`'s
+     monomorphized body `_localTypes[a]` resolves to the concrete type under `_typeSubst`, so `a + b`
+     hits M31b's own interception and lowers to `Vec2__op_add(&a, b)` — no new dispatch code. Capstone
+     `math_lib` (Vec3 with the full operator set + `Vec3::dot`/`cross` statics + `Mat3` holding `Vec3`
+     rows by value, transforming a vector via `operator*`). Fixtures `generic_arith`, `math_lib`; xfail
+     `generic_arith_unsat`, `operator_dup`.
+   - **Resolved design decisions:** operator **syntax** = the existing grammar, arity-picked (0 = unary
+     on `this`, 1 = binary method, 2 = binary free/static). **Which operators** = the full set (arithmetic,
+     comparison, bitwise, unary, `++`/`--`); `[]` and `true`/`false` out of scope. **`static`** shipped
+     in M31a. **`==`** = explicit (no auto structural-equality default; an opt-in `Equatable` derive is a
+     noted follow-up). **Operators-in-interfaces** reuse M27's bound + `This` verbatim. **No overloading**
+     (a stated non-goal) — one operator per symbol per type; distinguish operand types with named methods.
 
 11. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
    (give/copy + by-value from M26c/d, generics, `match`/`Optional`, operators; GOALS §3a unsafe
@@ -422,15 +429,17 @@ declared a deliberate non-goal. The current inventory (swept from SPEC/KEYWORDS/
 - **Full `static` (`Type::method`)** — ✅ **done (M31a, v0.1.66).** **`operator` overloading** — ✅ **done (M31b, v0.1.67).**
 - **Collection passed by value (params/returns)** — `give`-ing a collection into a variant payload is
   ✅ **done (M29c)** (move the struct, null the source). General by-value collection params/returns
-  (and `copy`/deep-copy of a whole container into a variant) remain **tracked to M31+** (reuse the same
+  (and `copy`/deep-copy of a whole container into a variant) remain **tracked to post-1.0** (reuse the same
   move-the-struct mechanism; not blocking).
 - **`List<Shared<T>>` (smart-ptr-in-collection) + nested-generic `>>`** — ✅ **fixed (M27b-beta-2/beta-4).**
 - **`contract` refining a `contract`** (`type contract A : B`) parses today; deeper multi-level
   contract inheritance is **tracked to M27** (alongside interface bounds + `This`).
-- **Non-goal — function / constructor overloading.** Deliberately *not* planned: it conflicts with
-  GOALS "one way to do a thing," and cstar's **named parameters** already cover the disambiguation
-  overloading is usually reached for. Not a limitation to fix — a design decision. *(Reopen only if a
-  concrete case shows named params can't express it.)*
+- **Non-goal — function / constructor / operator overloading.** Deliberately *not* planned: it conflicts
+  with GOALS "one way to do a thing," and cstar's **named parameters** already cover the disambiguation
+  overloading is usually reached for. Corollary for M31: a type has **one operator per symbol** (`op_add`,
+  `op_mul`, …) — two `operator*` (even with different operand types, e.g. `mat * vec` and `mat * mat`)
+  collide and are a clean error; distinguish operand types with a named `static` method. Not a limitation
+  to fix — a design decision. *(Reopen only if a concrete case shows named params can't express it.)*
 
 ## 1.x — systems & runtime (post-1.0)
 

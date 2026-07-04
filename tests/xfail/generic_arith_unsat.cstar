@@ -1,0 +1,16 @@
+// M31c — the bound is enforced: a type without `operator+` cannot satisfy `IArithmetic`.
+type contract IArithmetic { This operator+(This rhs); }
+
+type value Plain {
+    public int32 v;
+    public Plain(int32 v) { this.v = v; }   // no operator+
+}
+
+fn T sum<T: IArithmetic>(T a, T b) { return a + b; }
+
+fn int32 main() {
+    Plain p = Plain(v: 1);
+    Plain q = Plain(v: 2);
+    Plain r = sum(a: p, b: q);   // Plain does not satisfy IArithmetic
+    return r.v;
+}
