@@ -200,6 +200,8 @@ public:
     SharedIdentifierList genericArgs;  // all type args for Pair<A,B> etc.; genericArg mirrors [0]
     SharedIdentifierList bounds;       // when this node is a type-PARAMETER (`K` in `<K: I + J>`),
                                        // its contract bounds [I, J]; empty/unset otherwise.
+    bool isConstParam = false;         // const generic PARAMETER (`const N: int`) — a value, not a type
+    SharedExpression constArgValue;    // const generic ARGUMENT that is a literal (`4` in `Fixed<T,4>`)
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
     IdentifierNode(CodeGenContext& context, SharedString value, int builtInVal = IDENTIFIER_NONE_VAL)
@@ -239,6 +241,7 @@ public:
     SharedBlock block;
     SharedStringList typeParams;   // <T, ...> — generic fn; empty for non-generic
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
+    SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
     FunctionDeclarationNode(CodeGenContext& context,  SharedModifier modifier, SharedIdentifier returnType, SharedIdentifier name,
                             SharedParameterList parameters, SharedBlock block, SharedStringList typeParams = SharedStringList() )
         : ASTNode(context),  StatementNode(context)
@@ -451,6 +454,19 @@ public:
         , expressionlist(expressionlist) { }
 };
 
+// A fixed-array value literal used to initialize a `Fixed<T,N>`: `[a, b, c]` (elements) or
+// `[v; N]` (fill: value repeated N times).
+class ArrayLiteralNode : public ExpressionNode {
+public:
+    SharedExpressionList elements;   // `[a, b, c]` — the elements; null for the fill form
+    SharedExpression fillValue;      // `[v; N]` — the repeated value
+    SharedExpression fillCount;      // `[v; N]` — the count N (a constant expr)
+    ArrayLiteralNode(CodeGenContext& context, SharedExpressionList elements)
+        : ASTNode(context), ExpressionNode(context), elements(elements) { }
+    ArrayLiteralNode(CodeGenContext& context, SharedExpression fillValue, SharedExpression fillCount)
+        : ASTNode(context), ExpressionNode(context), fillValue(fillValue), fillCount(fillCount) { }
+};
+
 class ThisAccessNode : public ExpressionNode {
 public:
     ThisAccessNode(CodeGenContext& context) : ASTNode(context),  ExpressionNode(context) { }
@@ -588,6 +604,7 @@ public:
     // empty for a non-generic type. Set by the grammar action (like typeKind).
     SharedStringList typeParams;
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
+    SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
                         SharedIdentifier name,
                         SharedClassBaseDeclaration baseTypes,
@@ -774,6 +791,7 @@ public:
     // concrete arg (mirror of ClassDeclarationNode); empty for a non-generic enum.
     SharedStringList typeParams;
     SharedBoundsList typeBounds;
+    SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
     EnumDeclarationNode(CodeGenContext& context, SharedModifierList modifiers, SharedIdentifier identifier, SharedEnumMemberDeclarationList body)
         : ASTNode(context),  StatementNode(context)
         , modifiers(modifiers)

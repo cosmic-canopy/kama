@@ -167,7 +167,7 @@ struct cstaryystype {
 %type <strings> qualifier
 %type <expression> expression expression_opt literal boolean_literal variable_initializer
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
-%type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis
+%type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis array_literal
 %type <expression> postfix_expression cast_expression member_access element_access this_access
 %type <expression> base_access primary_expression multiplicative_expression additive_expression
 %type <expression> shift_expression relational_expression equality_expression and_expression
@@ -185,7 +185,7 @@ struct cstaryystype {
 %type <namespacedeclaration> namespace_opt
 %type <usingdeclaration> using_directive using_alias_directive
 %type <usingdeclarationlist> using_directives_opt using_directives
-%type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type
+%type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
 %type <identifier> type_param type_decl_head enum_underlying_opt
 %type <identifierlist> friend_member_list interface_type_list type_arg_list type_param_list bound_list type_params_opt
@@ -329,8 +329,14 @@ basic_identifier
 /* Comma-separated type arguments: `int32`, `int32, string`, `int32, List<int>` — mirrors
    interface_type_list. Always length ≥ 1 (the `<…>` syntax requires at least one). */
 type_arg_list
-  : type   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
-  | type_arg_list COMMA type   { $1->push_back($3); $$ = $1; }
+  : type_or_value_arg   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | type_arg_list COMMA type_or_value_arg   { $1->push_back($3); $$ = $1; }
+  ;
+/* A generic argument is a type, or an integer VALUE for a const param (`Fixed<float, 4>`). A value
+   arg is wrapped in an IdentifierNode carrying `constArgValue` (value name is null). */
+type_or_value_arg
+  : type
+  | literal   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, SharedString()); id->constArgValue = $1; $$ = id; }
   ;
 
 qualified_identifier_no_generic
@@ -403,9 +409,11 @@ marked_type_declaration
       if ($4->genericArgs && !$4->genericArgs->empty()) {
           n->typeParams = std::make_shared<StringList>();
           n->typeBounds = std::make_shared<BoundsList>();
+          n->constParams = std::make_shared<StringList>();
           for (auto& a : *$4->genericArgs) if (a && a->value) {
               n->typeParams->push_back(a->value);
               n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+              if (a->isConstParam) n->constParams->push_back(a->value);
           }
           $4->genericArgs = SharedIdentifierList();
           $4->genericArg  = SharedIdentifier();
@@ -483,9 +491,11 @@ function_declaration
       if ($5 && !$5->empty()) {
           fn->typeParams = std::make_shared<StringList>();
           fn->typeBounds = std::make_shared<BoundsList>();
+          fn->constParams = std::make_shared<StringList>();
           for (auto& p : *$5) if (p && p->value) {
               fn->typeParams->push_back(p->value);
               fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
+              if (p->isConstParam) fn->constParams->push_back(p->value);
           }
       }
       $$ = fn;
@@ -510,6 +520,7 @@ type_param_list
 type_param
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | IDENTIFIER COLON bound_list   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->bounds = $3; $$ = id; }
+  | CONST IDENTIFIER COLON integral_type   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); id->isConstParam = true; $$ = id; }   /* `const N: int` — a compile-time value param */
   ;
 /* Contract bounds on a type parameter: `IHashable` or `IHashable + IComparable` (`+` = AND).
    Each bound is a `type_name`, so a generic contract bound (`IFoo<int>`) parses + gets genericDepth. */
@@ -753,6 +764,16 @@ primary_expression_no_parenthesis
   | base_access
   | new_expression   { $$ = $1; }
   | match_expression   { $$ = $1; }   /* value-producing `match` in expression position */
+  | array_literal
+  ;
+
+/* fixed-array value literal initializing a `Fixed<T,N>`: `[a, b, c]` (elements) or `[v; N]` (fill).
+   A leading `[` is a primary here; a `[` after a primary is postfix indexing — unambiguous. */
+array_literal
+  : LEFT_BRACKET expression_list RIGHT_BRACKET
+    { $$ = std::make_shared<ArrayLiteralNode>(SCANNER_CODEGENCONTEXT, $2); }
+  | LEFT_BRACKET expression SEMICOLON constant_expression RIGHT_BRACKET
+    { $$ = std::make_shared<ArrayLiteralNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
   ;
 parenthesized_expression
   : LPAREN expression RPAREN   { $$ = $2; }
@@ -1050,9 +1071,11 @@ enum_declaration
       if ($3->genericArgs && !$3->genericArgs->empty()) {
           n->typeParams = std::make_shared<StringList>();
           n->typeBounds = std::make_shared<BoundsList>();
+          n->constParams = std::make_shared<StringList>();
           for (auto& a : *$3->genericArgs) if (a && a->value) {
               n->typeParams->push_back(a->value);
               n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+              if (a->isConstParam) n->constParams->push_back(a->value);
           }
           $3->genericArgs = SharedIdentifierList();
           $3->genericArg  = SharedIdentifier();
