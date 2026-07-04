@@ -56,11 +56,12 @@ struct VariantCase {
     std::vector<FieldInfo> payload;   // named fields (name + type); empty for a no-payload variant
 };
 
-// M26h — a type's declared ownership kind. `Value` owns nothing (copies); `Resource` owns/has
-// identity (moves, RAII-dropped); `Contract` is the interface path (handled via InterfaceInfo).
-// `Legacy` = an old `class`/`pod class` (no `type` marker) — behaves exactly as before M26h until
-// the fixtures migrate (h-3), at which point `Legacy` is retired.
-enum class TypeKind { Legacy, Value, Resource, Contract };
+// A type's ownership kind. `Value` owns nothing (copies); `Resource` owns/has identity (moves,
+// RAII-dropped); `Contract` is the interface path (handled via InterfaceInfo) — these three come
+// from a user `type <kind> Name` marker. `Intrinsic` is the neutral kind for compiler-built types
+// with no marker (collections, smart-ptrs, tagged-union enums); their ownership is driven by their
+// own machinery (isCollection/isSmartPtr/isVariant + destructibility), not the kind.
+enum class TypeKind { Value, Resource, Contract, Intrinsic };
 
 struct MethodInfo {
     std::string                  cName;   // Class__method (declaring class)
@@ -114,7 +115,7 @@ struct RawFriendGrant {
 
 struct ClassInfo {
     std::string                       name;       // struct name (== cstar class name in M4)
-    TypeKind                          kind = TypeKind::Legacy;   // M26h: value/resource (contract → InterfaceInfo)
+    TypeKind                          kind = TypeKind::Intrinsic;   // set to value/resource for user types
     std::vector<FieldInfo>            fields;      // declaration order
     std::set<std::string>            fieldNames;
     std::set<std::string>            constFields;   // `const` data members — write-once in the ctor (M24d)

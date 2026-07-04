@@ -1748,21 +1748,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
     for (auto& decl : *unit->codeDeclarationList) {
-        // Legacy `interface I { … }`.
-        if (auto* id = dynamic_cast<InterfaceDeclarationNode*>(decl.get())) {
-            if (!id->identifier || !id->identifier->value) continue;
-            if (id->baseTypes && !id->baseTypes->empty())
-                unsupported("interface inheritance (interface : interface) — deferred", id->line);
-            InterfaceInfo ii;
-            ii.name = qualify(*id->identifier->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
-            if (id->body)
-                for (auto& m : *id->body)
-                    if (m->name && m->name->value)
-                        ii.methods.push_back({*m->name->value, m->returnType, m->parameters});
-            _interfaces[ii.name] = ii;
-            continue;
-        }
-        // M26h: `type contract C { … }` — a ClassDeclarationNode whose kind word is "contract".
+        // `type contract C { … }` — a ClassDeclarationNode whose kind word is "contract".
         // Its methods parse as (bodiless) class methods; register them as a contract's slots.
         auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
         if (!cd || !cd->typeKind || *cd->typeKind != "contract" || !cd->name || !cd->name->value) continue;
@@ -1817,14 +1803,15 @@ static bool enumIsTagged(EnumDeclarationNode* ed)
     return false;
 }
 
-// M28a: build the ClassInfo backing a payload/generic enum — a discriminant tag + a union of the
-// per-variant payloads. Reuses ClassInfo so monomorphization (M27), RAII (M5/M26), and move analysis
-// all apply. `kind` is left Legacy so move-only-ness follows destructibility (owns a resource → moves).
+// Build the ClassInfo backing a payload/generic enum — a discriminant tag + a union of the
+// per-variant payloads. Reuses ClassInfo so monomorphization, RAII, and move analysis all apply.
+// A variant is flagged `isVariant`; its move-only-ness follows destructibility (owns a resource →
+// moves), not the `kind` (which stays the neutral `Intrinsic`).
 ClassInfo CEmitter::buildVariantClassInfo(EnumDeclarationNode* ed, const std::string& name)
 {
     ClassInfo ci;
     ci.name      = name;
-    ci.kind      = TypeKind::Legacy;   // move-only iff it transitively owns a resource (destructible)
+    ci.kind      = TypeKind::Intrinsic;   // neutral; move-only-ness is driven by isVariant + destructible
     ci.scope     = _nsCtx.scope;
     ci.usings    = _nsCtx.usings;
     ci.isVariant = true;
@@ -1928,9 +1915,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
         if (!cd || !cd->name || !cd->name->value) continue;
 
-        // M26h: `type <kind> Name` — map the kind word. `contract` is registered as an interface
+        // `type <kind> Name` — map the kind word. `contract` is registered as an interface
         // (collectInterfaces), so skip it here; a bad kind word is a clear error.
-        TypeKind kind = TypeKind::Legacy;
+        TypeKind kind = TypeKind::Intrinsic;
         if (cd->typeKind) {
             if      (*cd->typeKind == "value")    kind = TypeKind::Value;
             else if (*cd->typeKind == "resource") kind = TypeKind::Resource;
@@ -2001,10 +1988,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             if (*mod->value == "export")
                                 unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fd->line);
                         }
-                    // M26h — a `value` picks field visibility PER FIELD (default private, `public`
-                    // allowed; `protected` belongs to an extensible `resource`). A `resource` field is
-                    // always private (ownership encapsulated). Legacy/`pod`/extern keep kind-driven
-                    // exposure. (extern struct fields are public — the FFI struct owns its layout.)
+                    // A `value` picks field visibility PER FIELD (default private, `public` allowed;
+                    // `protected` belongs to an extensible `resource`). A `resource` field is always
+                    // private (ownership encapsulated). An extern struct's fields are public — the
+                    // FFI struct owns its layout.
                     Visibility fvis = fieldVisibility(ci, fd->modifiers, fd->line);
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
@@ -2030,7 +2017,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         // (`virtual`/`abstract` declares protected members for subclasses; a `final`
                         // override still uses `protected` by NVI). It's meaningless on a `value`, a
                         // plain sealed `resource`, or a `contract` — those members are private/public.
-                        if (ci.kind != TypeKind::Legacy && mi.visibility == Visibility::Protected
+                        if (mi.visibility == Visibility::Protected
                             && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
                             unsupported(("`protected` belongs to a `virtual`/`abstract`/`final resource` — `" + ci.name
                                          + "` is a plain `value`/`resource`, so its members are `private` or `public`").c_str(), md->line);
@@ -3157,9 +3144,9 @@ bool CEmitter::isMoveOnlyValue(const std::string& cls) const
     if (it == _classes.end() || it->second.isCollection || it->second.isExternStruct || isSmartPtrClass(cls))
         return false;
     const ClassInfo& ci = it->second;
-    // M26h: move-only-ness is the DECLARED kind. A `resource` moves even if it owns nothing (an
-    // empty resource is a move-only identity/token); a `value` copies. A legacy `class` (pre-marker)
-    // keeps the interim destructibility proxy until the fixtures migrate (h-3).
+    // Move-only-ness is the declared kind: a `resource` moves even if it owns nothing (an empty
+    // resource is a move-only identity/token); a `value` copies. An `Intrinsic` (a tagged-union enum;
+    // collections/smart-ptrs already returned above) moves iff it owns a resource (is destructible).
     if (ci.kind == TypeKind::Resource) return true;
     if (ci.kind == TypeKind::Value)    return false;
     return ci.destructible;
@@ -3479,10 +3466,11 @@ void CEmitter::computeDestructible()
         info.elemDestructible = known && it->second.destructible;
         info.elemCopyable     = known && it->second.copyable;   // M26f-5: deep-copy each element
     }
-    // M26h — a `value` owns nothing. `destructible` (computed above, transitively over base + owned
-    // fields + collections + smart-ptrs) is exactly "owns something to drop", so a destructible
-    // `value` is a design/field disagreement: declare it a `resource`. (A raw `Ptr`/borrowed
-    // contract confers no ownership → not destructible → correctly still a value.)
+    // A `value` owns nothing. `destructible` (computed above, transitively over base + owned fields +
+    // collections + smart-ptrs) is exactly "owns something to drop", so a destructible `value` is a
+    // design/field disagreement: declare it a `resource`. (A raw `Ptr`/borrowed contract confers no
+    // ownership → not destructible → correctly still a value.) Only user `Value` types are checked —
+    // compiler-built `Intrinsic` types (collections/smart-ptrs/variants) own by their own machinery.
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.kind == TypeKind::Value && ci.destructible && !ci.isExternStruct)
@@ -3848,10 +3836,9 @@ Visibility CEmitter::visibilityOf(SharedModifierList mods, Visibility dflt, int 
     return v;
 }
 
-// M26h — a field's visibility. A `value` picks it per field (default private, `public` allowed,
-// `protected` rejected — protected belongs to an extensible resource). A `resource` field is always
-// private (ownership encapsulated). An extern struct is public (FFI owns its layout). A legacy
-// `class`/`pod` keeps the kind-driven all-or-nothing rule (pod public, else private).
+// A field's visibility. A `value` picks it per field (default private, `public` allowed, `protected`
+// rejected — protected belongs to an extensible resource). A `resource` field is always private
+// (ownership encapsulated). An extern struct is public (the FFI struct owns its layout).
 Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mods, int line)
 {
     if (ci.isExternStruct) return Visibility::Public;
@@ -3860,14 +3847,10 @@ Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mod
             unsupported("a `value` field can't be `protected` — protected belongs to an extensible `resource`", line);
         return visibilityOf(mods, Visibility::Private, line);
     }
-    if (modHas(mods, "public") || modHas(mods, "protected") || modHas(mods, "private")) {
-        if (ci.kind == TypeKind::Resource)
-            unsupported("a `resource` field is always private — expose behavior through methods", line);
-        else
-            unsupported("a field takes no visibility modifier — data exposure is the class kind "
-                        "(`pod class` = public, otherwise private); expose data with an accessor method", line);
-    }
-    return Visibility::Private;   // a resource field is private
+    // A `resource` field is always private — ownership is encapsulated; expose behavior through methods.
+    if (modHas(mods, "public") || modHas(mods, "protected") || modHas(mods, "private"))
+        unsupported("a `resource` field is always private — expose behavior through methods", line);
+    return Visibility::Private;
 }
 
 // Is a member (declared on `owner`, visibility `vis`) accessible from the current
@@ -5568,8 +5551,6 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     else if (enumIsTagged(ed))                      _classes[n].name = n;
                     else                                            _enums[n].name = n;
                 }
-            } else if (auto* id = dynamic_cast<InterfaceDeclarationNode*>(d)) {
-                if (id->identifier && id->identifier->value) { std::string n = qualify(*id->identifier->value); _interfaces[n].name = n; }
             }
         }
     }
@@ -5745,8 +5726,6 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             if (!isExtern(fn) && fn->block) emitFunction(fn);   // skip signature types (no body)
         } else if (dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // emitted above
-        } else if (dynamic_cast<InterfaceDeclarationNode*>(decl.get())) {
-            // type-only (header)
         } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
             // M28a: a non-generic tagged union's dtor DEFINITION lives in its home module (its struct +
             // prototype are in the header). Generic-enum instances are emitted static-inline in the header.

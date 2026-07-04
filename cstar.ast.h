@@ -196,21 +196,20 @@ public:
     int builtInVal;
     SharedString value;
     SharedStringList qualifier;
-    SharedString generic;          // legacy bare-name generic (kept for compat)
-    SharedIdentifier genericArg;   // element type for Coll<T> (a full type) — M9; == genericArgs[0]
+    SharedIdentifier genericArg;   // element type for Coll<T> (a full type); == genericArgs[0]
     SharedIdentifierList genericArgs;  // M27b-beta: all type args for Pair<A,B> etc.; genericArg mirrors [0]
     SharedIdentifierList bounds;       // M27c: when this node is a type-PARAMETER (`K` in `<K: I + J>`),
                                        //       its contract bounds [I, J]; empty/unset otherwise.
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
     IdentifierNode(CodeGenContext& context, SharedString value, int builtInVal = IDENTIFIER_NONE_VAL)
-        : ASTNode(context),  ExpressionNode(context), builtInVal(builtInVal), value(value), qualifier( std::make_shared<StringList>() ), generic( SharedString() ), genericArg( SharedIdentifier() ) { }
-    IdentifierNode(CodeGenContext& context, SharedString value, SharedStringList qualifier, SharedString generic)
-        : ASTNode(context),  ExpressionNode(context), builtInVal(IDENTIFIER_NONE_VAL), value(value), qualifier(qualifier), generic(generic), genericArg( SharedIdentifier() ) { }
+        : ASTNode(context),  ExpressionNode(context), builtInVal(builtInVal), value(value), qualifier( std::make_shared<StringList>() ), genericArg( SharedIdentifier() ) { }
+    IdentifierNode(CodeGenContext& context, SharedString value, SharedStringList qualifier)
+        : ASTNode(context),  ExpressionNode(context), builtInVal(IDENTIFIER_NONE_VAL), value(value), qualifier(qualifier), genericArg( SharedIdentifier() ) { }
     // Coll<T>: the generic argument is a full type (IdentifierNode), so primitives
     // (List<int32>) and class element types (List<Point>) both work.
     IdentifierNode(CodeGenContext& context, SharedString value, SharedStringList qualifier, SharedIdentifier genericArg)
-        : ASTNode(context),  ExpressionNode(context), builtInVal(IDENTIFIER_NONE_VAL), value(value), qualifier(qualifier), generic( SharedString() ), genericArg(genericArg) { }
+        : ASTNode(context),  ExpressionNode(context), builtInVal(IDENTIFIER_NONE_VAL), value(value), qualifier(qualifier), genericArg(genericArg) { }
 };
 
 //------------------------------------------------------------------------------ 
@@ -582,8 +581,8 @@ public:
     SharedIdentifier name;
     SharedClassBaseDeclaration baseTypes;
     SharedClassMemberDeclarationList members;
-    // M26h: the kind word from a `type <kind> Name { … }` declaration ("value"/"resource"/
-    // "contract"); null for a legacy `class`/`pod class`. Drives the ownership/access model.
+    // The kind word from a `type <kind> Name { … }` declaration ("value"/"resource"/"contract").
+    // Drives the ownership/access model.
     SharedString typeKind;
     // M27b: type parameters from `type value Box<T> { … }` — monomorphized per concrete arg;
     // empty for a non-generic type. Set by the grammar action (like typeKind).
@@ -818,27 +817,6 @@ public:
     SharedMatchArmList arms;
     MatchNode(CodeGenContext& context, SharedExpression subject, SharedMatchArmList arms)
         : ASTNode(context), ExpressionStatementNode(context), subject(subject), arms(arms) { }
-};
-
-//------------------------------------------------------------------------------
-//                              Interface
-//------------------------------------------------------------------------------
-
-class InterfaceDeclarationNode : public StatementNode {
-public:
-    SharedModifierList modifiers;
-    SharedIdentifier identifier;
-    SharedIdentifierList baseTypes;
-    SharedFunctionDeclarationList body;
-    InterfaceDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
-                        SharedIdentifier identifier,
-                        SharedIdentifierList baseTypes,
-                        SharedFunctionDeclarationList body)
-        : ASTNode(context),  StatementNode(context)
-        , modifiers(modifiers)
-        , identifier(identifier)
-        , baseTypes(baseTypes)
-        , body(body) { }
 };
 
 
