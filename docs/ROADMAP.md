@@ -1,7 +1,6 @@
 # cstar roadmap
 
-The forward plan. The **language feature set is complete** (v0.1.75) — what remains before
-the 1.0 tag is documentation and release polish, not language work. History lives in the git
+The forward plan. The **language feature set is complete**. History lives in the git
 log; this file is only about what's next.
 
 ## The shape

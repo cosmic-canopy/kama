@@ -6,8 +6,7 @@ The durable "north star" for cstar. Decisions should be checked against these.
 
 A C-family language with C#-like syntax, **no garbage collector** (RAII / deterministic destruction),
 and **explicit named parameters**. It **transpiles to portable C** — so it runs anywhere C runs (native
-on every platform; the browser via WebAssembly) with no .NET/runtime baggage. Target use: a portable,
-lightweight WebGPU game engine.
+on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 
 ## Goals
 

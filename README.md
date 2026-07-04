@@ -2,8 +2,7 @@
 
 **A C-family language with C#-like syntax, no garbage collector, and no runtime — it
 transpiles to portable C.** So it runs anywhere C runs: native on every platform, and in
-the browser as WebAssembly. The end goal is a portable, lightweight **WebGPU game engine**
-with no .NET/runtime baggage.
+the browser as WebAssembly.
 
 > **TL;DR** — cstar gives you modern ergonomics (generics, sum types + exhaustive `match`,
 > operator overloading, RAII, smart pointers) over a **deterministic, no-GC** memory model,

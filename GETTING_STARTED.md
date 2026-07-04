@@ -1,8 +1,6 @@
 # Getting started with cstar
 
-cstar is a small C-family language (no GC, named parameters) that **transpiles to portable C** and
-compiles to a native binary or to WebAssembly. This is the quickest path from zero to a running,
-debuggable `.cstar` program.
+This is the quickest path from zero to a running, debuggable `.cstar` program.
 
 ## 1. Install
 

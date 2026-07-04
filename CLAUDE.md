@@ -1,8 +1,5 @@
 # cstar — repo guide for AI assistants
 
-cstar is a C-family language (C#-like syntax, **no GC / RAII**, **explicit named parameters**) that
-**transpiles to portable C** (native + WASM). End goal: a portable lightweight WebGPU game engine.
-
 **Read [GOALS.md](GOALS.md) first** — the language's design philosophy. Honor it, especially:
 *favor one way to do a thing, favor simplicity, favor explicit over implicit.*
 
