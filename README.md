@@ -1,5 +1,8 @@
 # cstar
 
+> **The memory-safe, no-GC systems language that keeps traditional OOP — and compiles to
+> readable, portable C.**
+
 **A C-family language with C#-like syntax, no garbage collector, and no runtime — it
 transpiles to portable C.** So it runs anywhere C runs: native on every platform, and in
 the browser as WebAssembly.
@@ -37,6 +40,33 @@ the browser as WebAssembly.
 
 The full language reference lives in **[docs/SPEC.md](docs/SPEC.md)**; the design philosophy
 in **[GOALS.md](GOALS.md)**; the forward plan in **[docs/ROADMAP.md](docs/ROADMAP.md)**.
+
+## Why cstar over…
+
+- **…C** — everything C targets, plus safety by default: no `null`, bounds-checked indexing,
+  RAII, and compile-time use-after-move — without leaving C. The output *is* readable C, so cstar
+  drops into an existing C codebase one file at a time.
+- **…C++** — one obvious construct per idea instead of five, safety on by default instead of
+  opt-in, no exception overhead, smaller binaries — and portable-C output that slots into
+  toolchains (certified, embedded, legacy) where modern C++ can't go. Most of C++'s expressive
+  OOP, minus the footguns and the decades of syntax accretion.
+- **…C# / interpreted languages** — the same OOP model and ergonomics with **no GC**
+  (deterministic latency, no stop-the-world) and **no runtime** (tiny deploys, real embedded,
+  wasm without a multi-MB runtime). AOT-native speed, and it runs where a managed runtime never
+  will.
+- **…Rust** — cstar keeps the memory-safety wins that bite in practice — no dangling, no
+  use-after-free, no use-after-move, no `null`, no leaks, bounds checks — at a fraction of the
+  cognitive cost, and hands back the **traditional OOP toolkit** (single inheritance + virtual
+  dispatch, contracts for substitutability) that Rust declines to provide. The trade is
+  deliberate: cstar does **not** statically enforce Rust's aliasing-exclusivity or data-race
+  freedom today. *(The planned concurrency model is shared-nothing — data-race freedom by
+  construction rather than by a borrow checker; see the [roadmap](docs/ROADMAP.md). The 1.0 core
+  is single-threaded.)* It's a different point on the safety/effort curve — aimed at the
+  OOP-shaped, borrow-checker-weary middle — not a superset of Rust.
+
+cstar's white space is the combination no one else occupies: **traditional OOP + no-GC/RAII +
+transpiles to portable C.** Rust and Zig drop OOP; C# and Swift carry a GC/runtime; C++ keeps the
+footguns. That triangle is the reason to reach for cstar.
 
 ## Toolchain
 

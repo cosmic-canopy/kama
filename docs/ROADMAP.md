@@ -11,8 +11,10 @@ log; this file is only about what's next.
 - **1.x — systems & runtime.** Capabilities built ON the finished language: reflection +
   serialization, file I/O, networking, an embedded/MCU target. Mostly library + codegen, little
   new syntax.
-- **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted,
-  via a TinyCC-JIT / wasm REPL.
+- **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted, via
+  a shared IR feeding C, direct-wasm, and a bytecode VM — the `cstar` binary self-contained.
+- **Concurrency — shared-nothing by construction** (1.x/2.0 direction): data-race freedom by
+  removing shared mutable state, not by a borrow checker. 1.0 ships a single-threaded core.
 - **Engine track** (the product north star): a portable lightweight **WebGPU** game engine,
   woven through 1.x. Its Tier-0 math types are already unblocked by operator overloading.
 
@@ -63,23 +65,123 @@ substrate the engine needs (asset I/O, scene serialization, networking).
   case. A devirtualization / speculative-inlining pass, or `final`-method static-call lowering,
   would close the one real native gap.
 
+## Concurrency — shared-nothing by construction (design direction)
+
+The intended concurrency model. **1.0 ships a single-threaded core**; this is the 1.x/2.0
+direction, not a shipped feature. It earns data-race freedom the way cstar earns null-safety — by
+making the hazard *unrepresentable*, not by checking it. Where Rust proves exclusivity over shared
+memory with a borrow checker, cstar **removes the shared mutable state**.
+
+- **Model — isolates + ownership-transferring channels.** An *isolate* is a shared-nothing unit of
+  execution (≈ an OS worker natively, a Web Worker on wasm). Crossing a channel reuses the existing
+  ownership model: send a `value` → **copy**; send a `resource` → **`give`** (move, zero-copy;
+  use-after-send is already a compile error via move tracking); genuinely shared hot-path data → a
+  narrow **`Atomic<T>` / shared-region** seam — the concurrency analog of `unsafe { }`/`Ptr` at the
+  FFI boundary (opt-in, greppable, atomics-only).
+- **Maps 1:1 onto wasm.** isolate → Web Worker; `give` across a channel → postMessage
+  *transferable* (zero-copy, browser-enforced no-use-after-transfer); shared-region →
+  SharedArrayBuffer + Atomics. Concurrency stays portable native↔browser from one source — which
+  threaded C++/Rust do not.
+- **Isolate vs job — two levels.** An *isolate* is the unit of *isolation* (few — roughly one per
+  core / one Web Worker); a *task/job* is the unit of *work* scheduled onto isolates (many). The
+  engine's job system / scheduler is a library on top, not language.
+- **Structured concurrency = RAII for tasks.** A concurrency scope joins its child tasks at scope
+  exit — deterministic task lifetimes, no orphans. The concurrency version of the no-leak
+  guarantee; on-brand with RAII.
+- **"Proceed until ready" without coloring.** The do-other-work-until-a-result-is-ready ergonomic
+  is cheap tasks that block on a channel while a scheduler runs other ready work (the Go/Erlang
+  model) — **not** Rust-style stackless `async/await`. Function coloring / `Pin` /
+  self-referential state machines would be cstar's least-cstar feature, against "one way / favor
+  simplicity."
+- **Lock-free default, locks as expert opt-in.** The default path has no shared state → no locks.
+  Atomics power the expert lock-free structures, built once in the engine/stdlib (as Rust's
+  std/crossbeam build theirs over `unsafe`). No mandatory mutex-everywhere model.
+- **Recommended language surface.** `isolate`/`task`, an ownership-transferring channel (reusing
+  `give`/`copy`), `Atomic<T>`, a structured-concurrency scope, and two targeted *safe* sharing
+  primitives that recover what shared-nothing otherwise costs:
+  - **immutable `Shared` read-across-isolates** — immutable data is race-free even when shared
+    (recovers cheap read-only sharing of big assets);
+  - **scoped disjoint-slice parallel-for** — a scope lends each task a non-overlapping mutable
+    slice of one buffer and reclaims it at join; safe by disjointness (the `rayon`/`split_at_mut`
+    pattern). Recovers data-parallel mutation without general shared memory.
+- **Deferred — general shared-memory ("hybrid").** Co-equal shared-memory threading is *not*
+  planned; it reintroduces the hazard the model removes. Capability is retained (via the seam + the
+  two primitives above); only some ergonomics move behind the seam. Reopen only if a concrete case
+  the seam can't express appears — the same discipline as the overloading non-goal.
+- **Positioning.** This turns concurrency from "the last gap vs Rust" into a *different, simpler,
+  more portable* safe-concurrency model. Honest trade: Rust's shared-memory-with-static-exclusivity
+  is more flexible for max-perf shared mutation; cstar's shared-nothing is far easier to reason
+  about and portable to wasm. Prior art: **Dart isolates** (closest — shared-nothing, native+web),
+  **Erlang/Elixir** actors, **Web Workers** + SharedArrayBuffer, **structured concurrency**
+  (Swift/Kotlin/Trio); **Pony** for the type-level ceiling.
+
 ## 2.0 — dual-mode: compiled + scripting/REPL (flagship)
 
-The end goal is **one language, two modes** — the same cstar syntax usable both compiled and as
-a scripting language with a full REPL. This rests on a **multi-backend emitter**: the shared
-front end lowered to more than one target, not just today's single C backend.
+The end goal is **one language, two modes** — the same cstar syntax usable both compiled and as a
+scripting language with a full REPL. The guiding constraint: **the `cstar` binary is the only tool
+you need.** External C toolchains stay *optional* — used for the portable-C release path, never
+required to write, run, or iterate on cstar.
 
-- **Compiled (today):** cstar → C → clang (native) / emcc (wasm). The web target is wasm *via
-  C* — there is no direct cstar→wasm; C is the portable middle.
-- **Scripting / REPL (future):** the same front end + C emitter, compiled and run **in-memory**:
-  - **Native fast path — TinyCC (TCC) JIT.** TCC compiles C in ~milliseconds in-process, so
-    `cstar run foo.cstar` and the REPL are **JIT-compiled, not tree-walked** — near-native speed
-    with instant startup.
-  - **Web — run the wasm.** Browser scripting/REPL = compile to wasm (emcc) and run it.
-  - A dedicated **bytecode VM** backend is the alternative if a more dynamic REPL is wanted; the
-    design leans JIT/VM, never a slow tree-walker.
-- **Why it beats other scripting languages:** Python/Ruby/Lua are bytecode interpreters;
-  cstar-as-script runs **compiled** (TCC-JIT native, or wasm) — at or near native speed.
+This rests on a **polymorphic emitter**: one front end lowered to a **shared IR**, then rendered
+by several backends.
+
+```
+   Frontend  (parser → type checker → ownership/move analysis)
+                          │
+                          ▼
+                     shared IR          (monomorphized, drops inserted,
+                          │              vtables + match/operators desugared)
+          ┌───────────────┼────────────────┐
+          ▼               ▼                 ▼
+          C              WASM            Bytecode
+          │               │                 │
+     TinyCC / clang    browser /          native VM
+     (JIT + release)   Wasmtime         (REPL, self-contained)
+```
+
+Every backend shares the same front end, so the safety analysis (ownership, move tracking,
+exhaustiveness) is proven **once**, before the IR.
+
+- **C backend — the portability moat (kept, always).** cstar → readable portable C → any C
+  toolchain. `clang`/`emcc` for release; a bundled **TinyCC** for near-instant in-process JIT
+  (`cstar run foo.cstar` and the REPL are **JIT-compiled, not tree-walked**). C stays a
+  first-class target — "runs anywhere C runs" is the whole moat, and these new backends are
+  *additive*, never a replacement.
+- **WASM backend — the self-contained web path.** Direct cstar → wasm (no `emcc`), run in the
+  browser or under Wasmtime. This is the web scripting/engine substrate; C→emcc remains the
+  maximal-compatibility option.
+- **Bytecode + VM backend — the self-contained native REPL.** A cstar-owned VM gives a true
+  interactive REPL with zero external tooling — the strongest read of "the binary is the only tool
+  you need."
+
+**The IR is the crux, and the real work.** Today there is no IR: the C emitter writes C text
+directly and *bakes in* monomorphization, RAII drop insertion, vtable layout, and match/operator
+desugaring (`cstar.cemit.*`, ~150 methods). The refactor pulls that **semantic lowering up into
+the shared IR**, leaving each backend a comparatively dumb renderer. Design constraints:
+
+- **Keep the IR high-level and structured** (retain `if`/`while`/`for` and named locals), *not*
+  SSA/basic-blocks — so the C backend can still emit the readable, `#line`-mapped C that is a
+  headline feature. A low-level IR would forfeit that.
+- **Move the runtime into cstar.** Collections/smart-pointers/`string` live as hand-tuned C in
+  `cstar_runtime.h` today; a wasm or VM backend can't `#include` it. Reimplementing those
+  intrinsics as **cstar generic library types** (unsafe core, safe API — already flagged in
+  GOALS #1 for self-hosting) makes them flow through the shared IR and monomorphize into *any*
+  backend. Multi-backend and the cstar-stdlib/self-hosting goal are the **same project**: do it
+  once, all three backends inherit it.
+- **Contain semantic drift.** A VM is a second execution semantics — the main risk. Having the C
+  backend and the VM consume the *same lowered IR* reduces drift from "two languages" to "two
+  renderers of one IR." Build the IR first; then a VM is a legitimate, low-drift option.
+
+**Speed ladder** (fastest last): tree-walk < bytecode VM < TinyCC-JIT < AOT C→clang. If raw
+scripting speed dominates, JIT wins; if zero-install and interactivity dominate, the VM /
+direct-wasm win. The "binary is the only tool" constraint tilts the *default* iteration experience
+toward the VM + direct-wasm, with the C/JIT path there when you want native speed or C
+compatibility.
+
+- **Why it beats other scripting languages:** Python/Ruby/Lua are bytecode interpreters; cstar
+  scales from a self-contained VM up to JIT/AOT-native — the same source, at or near native speed.
+- *Licensing note:* TinyCC is LGPL; if a bundled JIT ships, confirm the linking terms against the
+  MIT/permissive goal (GOALS #8). The VM / direct-wasm paths sidestep this entirely.
 
 ## Engine track (product north star)
 
