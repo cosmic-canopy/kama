@@ -14,14 +14,13 @@ lightweight WebGPU game engine.
 1. **Self-hosting eventually.** Developers should not need extra tooling; the compiler should ultimately
    be written in cstar and bootstrap through the C transpiler. *Long-term — requires strings, collections,
    maps, file I/O, and tagged unions in the language first.*
-   - *Tied to this:* the built-in containers/smart-pointers are currently compiler intrinsics with
-     hand-tuned **C** runtime bodies. Generics (M27) unify the *surface* but keep those C bodies
-     (option "C"). **Reimplementing them as cstar generic library types** (option "B" — the Rust-`Vec`
-     "unsafe core, safe API" model, in `unsafe`/`Ptr`) is a possible *later* step. It buys nothing for
-     runtime performance (monomorphization makes both identical) and isn't needed for the language to
-     be complete — its payoff is *this* goal, self-hosting (a cstar stdlib for a cstar compiler). The
-     M27 engine is built so (B) is a no-rework continuation (swap a generic type's body source from
-     C-macro to cstar), never a redo.
+   - *Tied to this:* the built-in containers/smart-pointers are compiler intrinsics with hand-tuned
+     **C** runtime bodies. Generics unify the *surface* but keep those C bodies. **Reimplementing them
+     as cstar generic library types** (the Rust-`Vec` "unsafe core, safe API" model, in `unsafe`/`Ptr`)
+     is a possible *later* step. It buys nothing for runtime performance (monomorphization makes both
+     identical) and isn't needed for the language to be complete — its payoff is *this* goal,
+     self-hosting (a cstar stdlib for a cstar compiler). The generics engine is built so this is a
+     no-rework continuation (swap a generic type's body source from C-macro to cstar), never a redo.
 
 2. **Fast compiles: single-pass, parallelizable.** Parsing stays essentially single-pass. Speed comes
    from per-file parallelism — parse + emit each translation unit independently, then compile the
@@ -33,11 +32,11 @@ lightweight WebGPU game engine.
 
 3a. **No raw pointers in the *safe* surface.** The safe cstar surface never exposes raw pointers or raw
    memory. Heap and buffers are reached only through safe abstractions: **collections** (`Array<T>`/
-   `List<T>`/`String`) and the **smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted,
-   `Weak<T>`) — both shipped. These are compiler-known intrinsics whose unsafe internals (raw pointers,
+   `List<T>`/`string`) and the **smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted,
+   `Weak<T>`). These are compiler-known intrinsics whose unsafe internals (raw pointers,
    `malloc`/`free`) live ONLY in `cstar_runtime.h` — the Rust-`Vec`/Swift-`Array` model: unsafe core, safe
    API. Indexing is **bounds-checked** (traps, not UB). The one deliberately contained exception is the
-   **`unsafe { }`** block + `Ptr<T>` at the **FFI boundary** (M17): a narrow, greppable seam for talking to C
+   **`unsafe { }`** block + `Ptr<T>` at the **FFI boundary**: a narrow, greppable seam for talking to C
    (GPU/OS APIs — the whole point of transpiling to C), never general-purpose escape, and the safe surface
    never sees it. (Self-hosting the compiler in cstar — goal #1 — is the other place a contained escape may
    matter.)
@@ -65,7 +64,7 @@ lightweight WebGPU game engine.
    marker is required exactly when *both* move and copy are plausible (a `resource` that has opted into
    a copy contract), and silent otherwise. The kind words `value`/`resource`/`contract` are
    **contextual** (they name a kind only right after `type`), so they stay ordinary identifiers
-   everywhere else. *(Shipped in **M26h**; full model in `docs/TYPE_MODEL.md`.)*
+   everywhere else. *(Full model in `docs/TYPE_MODEL.md`.)*
 
 3d. **No exceptions — fallibility is a value.** There is no `throw`/`try`/`catch` and no stack unwinding.
    A operation that can fail returns its outcome as a value: **`Optional<T>`** (absence) or **`Result<T, E>`**
@@ -76,7 +75,7 @@ lightweight WebGPU game engine.
    the fallible work lives there, and on failure it returns `Err` *before* the resource exists — so no
    half-constructed object can escape and the invariant "if you hold one, it's valid" holds by construction.
    A type with a *meaningful* inert state may instead start valid-but-inert and expose a
-   `bring_up(): Result<…>`. (No new feature — this is M31a static methods + M28e `Result` + `Owned` + RAII;
+   `bring_up(): Result<…>`. (This composes static methods + `Result` + `Owned` + RAII;
    see `tests/fallible_factory`.)
 
 4. **One way to do a thing. Favor simplicity.** Unlike C++'s many syntaxes for one concept, cstar
@@ -124,10 +123,6 @@ Development of cstar follows two vendored guidance skills that reinforce goals #
 
 ## Current status
 
-The single source of truth for status is `README.md` (feature summary) and `docs/ROADMAP.md` (the
-milestone plan). Through M26h, the core language, OO, RAII, collections, the smart-pointer family, the
-full value/ownership model, `const`-correctness, access control, and the type-model vocabulary reframe
-(`type value`/`type resource`/`type contract`, M26h) are all shipped; user-defined generics (M27), sum
-types + pattern matching (M28), and operator overloading + full static methods (M31) are now shipped too —
-so the **language feature set is complete**. What remains before 1.0 is Step 7 (doc/SPEC reconciliation +
-a repo-wide naming/case pass), then the tag. This section is intentionally brief so it doesn't drift — see those files.
+**The language feature set is complete.** What remains before the 1.0 tag is documentation and
+release polish, not language work. This section is intentionally brief so it doesn't drift — the
+feature reference is `docs/SPEC.md` and the forward plan is `docs/ROADMAP.md`.

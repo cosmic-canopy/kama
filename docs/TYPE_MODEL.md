@@ -1,9 +1,8 @@
 # cstar type model — `value` / `resource` / `contract`
 
-> **Status:** SHIPPED in **M26h**. The vocabulary + access-control rules below are enforced by the
-> compiler: every type declaration is introduced by a `type` marker (`type value` / `type resource` /
-> `type contract`) — the old `class` / `pod class` / `interface` keywords no longer exist. This doc is
-> the durable rationale — see also [GOALS.md §3c](../GOALS.md).
+Every type declaration is introduced by a `type` marker (`type value` / `type resource` / `type contract`);
+the vocabulary + access-control rules below are enforced by the compiler. This doc is the durable rationale
+— see also [GOALS.md §3c](../GOALS.md).
 
 ## The `type` marker
 
@@ -17,7 +16,7 @@ Only `type` itself is a keyword.
 ```cstar
 type value Name    { … }   // owns nothing — copies
 type resource Name { … }   // owns / has identity — moves, RAII-dropped
-type contract Name { … }   // a public-only guarantee (was `interface`)
+type contract Name { … }   // a public-only guarantee (an interface)
 ```
 
 ## Why reframe
@@ -57,12 +56,11 @@ type value Rect {
 }                                          // still copies freely — it owns nothing
 ```
 
-- **There is no `pod`.** A "plain-old-data" type is just a `value` whose fields are all `public`.
-  Encapsulation (public vs private fields) is a per-field choice, not a separate kind; `memcpy`
-  semantics hold either way.
+- A "plain-old-data" type is just a `value` whose fields are all `public`. Encapsulation (public vs
+  private fields) is a per-field choice, not a separate kind; `memcpy` semantics hold either way.
 - **Checked intent:** a `value` that (transitively) owns a resource is a **compile error** ("declare
   `resource`"). Like `override` — derivable, but a checked assertion that catches a design/field
-  disagreement, and it closes a latent hole (the old `pod` holding an `Owned` → double-free).
+  disagreement, and it closes a latent hole (a `value` holding an `Owned` → double-free).
 - A `value` is **sealed** and has **no destructor** — declaring `~dtor` on a value is an error whose
   message *is* the lesson: "a value owns nothing — a `~dtor` makes it a `resource`."
 
@@ -89,7 +87,7 @@ type resource Token { }   // owns nothing, but move-only by *identity* — a cap
 - A non-owning member does **not** make you a resource: a raw `Ptr<T>` (unsafe borrow) or a borrowed
   `contract` value confers no ownership → still a `value`.
 
-### `contract` — a public-only guarantee (was: `interface`)
+### `contract` — a public-only guarantee
 
 "Interface" is overloaded (the *public surface of any type* vs *the abstract type*). A **`contract`**
 is the abstract thing: a public-only guarantee a type promises to satisfy. A type's public members
@@ -126,7 +124,7 @@ types everything inheritance did — reuse *and* is-a — without inheritance's 
 - **Inheritance** (`virtual`/`abstract`): the vtable pointer is **embedded in the object**;
   polymorphic instances are used only through owned handles (`Owned`/`Shared<Base>`) and need a
   **virtual destructor**. Resource-world by construction — a `value` can't be `virtual` (an embedded
-  vtable breaks free copy / invites slicing; already dodged by M26e/M26g).
+  vtable breaks free copy / invites slicing).
 - **Contract** (external / erased): the value's layout is **unchanged**. Dispatch is either
   - a generic **bound** (`T: Drawable`) → **monomorphized**: direct, inlinable calls, **no vtable, no
     dtor, zero runtime cost** (type set fixed at compile time; cost = code size + compile time); or
@@ -134,9 +132,9 @@ types everything inheritance did — reuse *and* is-a — without inheritance's 
     call, no inlining — buys runtime swappability.
 
 Both `value` and `resource` satisfy contracts. Storing a contract over a **resource** you keep needs
-an owning handle (`Shared<Drawable>` — M26g); over a **value** it's a **second-class borrow** (M26e —
-can't escape/store). **Ownership introduces the destructor — polymorphism does not** (except the
-virtual dtor for owned hierarchies).
+an owning handle (`Shared<Drawable>`); over a **value** it's a **second-class borrow** (can't
+escape/store). **Ownership introduces the destructor — polymorphism does not** (except the virtual
+dtor for owned hierarchies).
 
 ## The lever cheat-sheet
 
@@ -178,8 +176,8 @@ Seven rules make the grid memorable:
 5. **`~dtor` ⟺ `resource`** (forbidden on a `value` — it owns nothing).
 6. **`virtual`/`abstract`/`final` ⟺ `resource`** (values are sealed → use contracts; a contract
    already *is* the abstraction).
-7. **`contract`** = all-public methods, no fields, no bodies, no ctor/dtor; may `require` other
-   contracts. `friend` (M25c) grants are unchanged.
+7. **`contract`** = all-public methods, no fields, no bodies, no ctor/dtor; may refine other
+   contracts. `friend` grants apply as elsewhere.
 
 ### Extensibility qualifiers
 
@@ -218,5 +216,5 @@ A `give`/`copy` marker is required **exactly when both move and copy are plausib
 A bare hand-off is **never a silent copy of a resource**, so the double-drop hole is closed in every
 case. This is compile-time move tracking with **zero runtime overhead by construction** — a value
 moved on some-but-not-all paths that is still live at scope exit is *rejected*, not tracked with a
-runtime drop-flag (`Optional<T>` — M28 — is the explicit escape hatch for genuinely-conditional
-ownership). See M26f-2 in [ROADMAP.md](ROADMAP.md).
+runtime drop-flag (`Optional<T>` is the explicit escape hatch for genuinely-conditional ownership).
+The full give/copy behavior matrix (every cell backed by a fixture) is in [SPEC.md](SPEC.md).

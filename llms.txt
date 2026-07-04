@@ -1,60 +1,57 @@
 # cstar
 
-> A C-family language (C#-like syntax, no garbage collector / RAII, explicit named parameters) that
-> transpiles to portable C — running natively everywhere and in the browser via WebAssembly, with no
-> runtime. Goal: a portable, lightweight WebGPU game engine. MIT licensed.
+> A C-family language (C#-like syntax, no garbage collector / RAII, explicit named
+> parameters) that transpiles to portable C — running natively everywhere and in the browser
+> via WebAssembly, with no runtime. Goal: a portable, lightweight WebGPU game engine. MIT licensed.
 
-cstar's grammar is the source of truth (the compiler is a Flex lexer + Bison grammar + AST → C emitter).
-Docs are generated from or point at that source so they never drift. For the authoritative syntax, read
-the grammar; for semantics, read the spec; for runnable examples, read the test fixtures.
+cstar's grammar is the source of truth: the compiler is a Flex lexer + Bison grammar + an
+AST → C emitter. The docs below are generated from, or point at, that source so they don't
+drift. For authoritative syntax read the grammar; for semantics read the spec; for runnable
+examples read the test fixtures.
 
 ## Language
-- [Specification (semantics overview)](docs/SPEC.md): types, named params, RAII, the `type value`/`type resource`/`type contract` model, inheritance, build/debug.
-- [Type model](docs/TYPE_MODEL.md): the ownership vocabulary — `value` copies, `resource` moves, `contract` = the guarantee; the `type` marker + access-control rules.
-- [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `cstar.y` by `tools/gen-grammar`.
-- [Keyword status](docs/KEYWORDS.md): per-keyword audit (implemented / reserved / planned).
-- [Goals & design philosophy](GOALS.md): no-GC, one-way/simplicity, explicit>implicit, self-describing, LLM-discoverable.
+- [Specification](docs/SPEC.md): the full language reference — types, the
+  `value`/`resource`/`contract` ownership model, generics, sum types + `match`, operators,
+  smart pointers, collections, FFI, build/debug. Start here for semantics.
+- [Type model](docs/TYPE_MODEL.md): the ownership vocabulary in depth — `value` copies,
+  `resource` moves, `contract` is the guarantee; the `type` marker + access-control rules.
+- [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `cstar.y` by
+  `tools/gen-grammar`.
+- [Keyword reference](docs/KEYWORDS.md): every reserved word and what it does.
+- [Goals & design philosophy](GOALS.md): no-GC, one-way/simplicity, explicit>implicit,
+  self-describing, LLM-discoverable.
 
 ## Examples
-- [tests/](tests/): each `*.cstar` is a runnable program with a `.expect` exit code. See
-  `type_kinds.cstar` (the `type value`/`resource`/`contract` model), `value_public_field.cstar`
-  (per-field `public`), `dtor_block.cstar` (RAII), `named_args.cstar` (named params),
-  `refparam.cstar` (ref/out), and the inheritance/virtual fixtures.
+- [tests/](tests/): each `*.cstar` is a runnable program with a `.expect` exit code.
+  Representative fixtures: `type_kinds.cstar` (value/resource/contract), `match_plain_enum.cstar`
+  and `optional_basic.cstar` (sum types + `match`), `generic_fn_explicit.cstar` (generics +
+  turbofish), `math_lib.cstar` (operator overloading + generic math), `owned_basic.cstar` /
+  `shared_iface.cstar` (smart pointers), `dtor_block.cstar` (RAII), `named_args.cstar`,
+  `refparam.cstar` (ref/out), `ffi_struct.cstar` (C interop).
 
 ## Toolchain & runtime
-- [README](README.md): build/run via the containerized toolchain (`tools/cdev`); native + wasm targets;
-  `cstar build [--release] [--target native|wasm]`.
-- [Runtime header](cstar_runtime.h): the small C runtime included by generated code (`cstar_string`, trace hook).
+- [README](README.md): build/run via the containerized toolchain (`tools/cdev`); native +
+  wasm targets; `cstar build [--release] [--target native|wasm]`.
+- [Runtime header](cstar_runtime.h): the small C runtime included by generated code.
 - [Repo guide for AI assistants](CLAUDE.md): working conventions and build commands.
 
 ## Status
-Implemented: functions, primitives, control flow, named-parameter calls, ref/out, the **ownership type
-model** (M26h — every declaration is `type value`/`type resource`/`type contract`: `value` owns nothing
-and copies, `resource` owns/has-identity and is move-only + RAII-dropped, `contract` is the public-only
-polymorphic guarantee; the `type` marker is greppable, and `value`/`resource`/`contract` are contextual —
-ordinary identifiers off the marker), RAII destructors, single inheritance + virtual dispatch
-(`type virtual`/`abstract resource`), contracts, enums; **generic collections**
-(`Array<T>`/`List<T>`/`String`, monomorphized + RAII, `foreach`, bounds-checked `[]`); the full
-**smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted, `Weak<T>` non-owning) with
-**auto-deref** and the **`give`/`copy` ownership model** (M26 — `give`=move, `copy`=retain/duplicate;
-smart pointers pass **by value**; **no null** in the safe surface, so `==null` on a safe type is a compile
-error; borrows are parameter-only, storage requires ownership); **`const`-correctness** (M24); **enforced
-access control** (M25/M26h — private-by-default, `public`/`protected`/`friend`, per-field `public` on a `type value` = the old plain-data "pod");
-**multi-file builds with private-by-default namespaces**
-(`namespace X;` + `using`/aliases/qualified access; no-namespace files are file-private; shared header +
-per-module .c); native + WASM + debug/release builds; IDE breakpoint debugging (VSCode extension in
-`editor/vscode/`); **C FFI** (`extern` functions + `type extern value` external structs, `extern "<header>"`
-includes, opaque `Ptr`/`Ptr<T>` = void*/T*, `usize`, `addr(of:)` out-params, `string.cstr()`, `--link
-<lib>`); raw pointer memory access is confined to an explicit **`unsafe { }`** block (M17 — the language's
-entire unsafe surface, greppable), with a safe `dataPtr()`/`byteLen()` collection→buffer bridge. An
-unlowered construct is a hard build error. **`fn` keyword** on every function/method (M20); **`::`** for
-scope resolution vs `.` for instance access (M20b). **Function pointers** (M21): **`fnptr int32 Sig(...)`**
-declares an explicit, named function-pointer TYPE — zero-cost (a bare C fn-ptr), non-null, signature-checked,
-used directly (`Sig c = cmp;`). A bare function name is its pointer (`c = cmp`), so `funcptr(of:)` is retired;
-a bodiless `fn` is an error (no silent type). Pass to C directly (cast to a header typedef when the C
-callback's exact fn-pointer type differs, e.g. `const` params). **`Type::method`** unbound refs and
-**`BindableFunctionPtr<Sig>`** (bound, object+RAII — the generic `<>` wrapper only where it adds an object)
-are shipped (M22). Planned — the road to 1.0 (see `docs/ROADMAP.md`): user-defined generics (`Map<K,V>`,
-`type value Foo<T>`; M27), tagged unions + `match` + `Optional` (M28), operator overloading + full static methods
-(M29). Post-1.0: reflection + declarative serialization, file I/O, networking, then cstar-level WebGPU
-bindings.
+The **language feature set is complete** (v0.1.75, on the road to 1.0). Implemented:
+functions, primitives, control flow, named-parameter calls, `ref`/`out`; the **ownership type
+model** (every declaration is `type value` / `type resource` / `type contract`); **RAII**
+destruction (no GC); single inheritance + **virtual dispatch**; **contracts** (interfaces via
+fat-pointer vtables); **enums and tagged unions** with value-producing, exhaustive **`match`**
+(there is no `switch`); **`Optional<T>`/`Result<T,E>`** as the no-exceptions, no-`null` error
+model; **generics** (monomorphized — user types + functions, contract bounds, `This`, explicit
+turbofish `f::<T>()`); **operator overloading** + full static methods; the full
+**smart-pointer family** (`Owned`/`Shared`/`Weak`) with auto-deref; **collections**
+(`Array`/`List`/`string`, bounds-checked + RAII); the **`give`/`copy`** by-value ownership
+model with compile-time use-after-move checking; **`const`-correctness**; **access control**
+(private-by-default, `public`/`protected`/`friend`); **namespaces** + multi-file builds;
+**C FFI** (`extern`, `Ptr`, raw memory confined to an explicit `unsafe { }` block); and
+**function pointers** (`fnptr`, `Type::method`, `BindableFunctionPtr`). Targets **native and
+WASM**, debug/release, with IDE breakpoint debugging.
+
+The remaining work before the 1.0 tag is documentation/tooling polish, not language features —
+see [docs/ROADMAP.md](docs/ROADMAP.md). Post-1.0: reflection + serialization, file I/O,
+networking, then the WebGPU engine.

@@ -48,9 +48,9 @@
     },
     "keywords": {
       "patterns": [
-        { "name": "keyword.control.cstar", "match": "\\b(if|else|switch|case|default|while|do|for|foreach|break|continue|return)\\b" },
+        { "name": "keyword.control.cstar", "match": "\\b(if|else|match|case|while|do|for|foreach|break|continue|return)\\b" },
         { "name": "keyword.other.modifier.cstar", "match": "\\b(abstract|override|virtual|final|static|private|protected|public|friend|const|volatile|ref|out|in|extern|export)\\b" },
-        { "name": "keyword.other.cstar", "match": "\\b(namespace|using|extends|implements|operator)\\b" },
+        { "name": "keyword.other.cstar", "match": "\\b(fn|fnptr|type|namespace|using|extends|implements|operator|unsafe|give|copy|cast)\\b" },
         { "name": "keyword.operator.new.cstar", "match": "\\b(new)\\b" },
         { "name": "variable.language.cstar", "match": "\\b(this|base)\\b" }
       ]
@@ -58,7 +58,15 @@
     "declarations": {
       "patterns": [
         {
-          "match": "\\b(class|interface|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(type)\\s+(value|resource|contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.cstar" },
+            "2": { "name": "storage.modifier.cstar" },
+            "3": { "name": "entity.name.type.cstar" }
+          }
+        },
+        {
+          "match": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "storage.type.cstar" },
             "2": { "name": "entity.name.type.cstar" }
