@@ -1,0 +1,30 @@
+// M31 — type-based operator dispatch (the sanctioned exception to no-overloading; `a*b` can't take named
+// args, so operators may distinguish OPERAND TYPES). A type can carry several `operator*`: `mat*vec` vs
+// `mat*mat` (different names `op_mul__Vec2` / `op_mul`), and `v*s` (method) vs `s*v` (free `op_mul__free`).
+type value Vec2 {
+    public int32 x; public int32 y;
+    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
+    public Vec2 operator+(Vec2 rhs) { return Vec2(x: this.x + rhs.x, y: this.y + rhs.y); }   // same-type
+    public Vec2 operator*(int32 s)  { return Vec2(x: this.x * s, y: this.y * s); }            // v * s (method)
+    public static Vec2 operator*(int32 s, Vec2 v) { return Vec2(x: s * v.x, y: s * v.y); }    // s * v (free) — COEXISTS
+}
+type value Mat2 {
+    public Vec2 r0; public Vec2 r1;
+    public Mat2(Vec2 r0, Vec2 r1) { this.r0 = r0; this.r1 = r1; }
+    public Vec2 operator*(Vec2 v) {              // mat * vec  -> op_mul__Vec2
+        return Vec2(x: this.r0.x * v.x + this.r0.y * v.y, y: this.r1.x * v.x + this.r1.y * v.y);
+    }
+    public Mat2 operator*(Mat2 m) {              // mat * mat  -> op_mul (same-type) — COEXISTS with mat*vec
+        return Mat2(r0: this * m.r0, r1: this * m.r1);   // reuses mat*vec on each column-ish row
+    }
+}
+fn int32 main() {
+    Vec2 v = Vec2(x: 3, y: 4);
+    Vec2 a = v * 2;      // v * s  (method) -> (6, 8)
+    Vec2 b = 2 * v;      // s * v  (free)   -> (6, 8)
+    Mat2 s = Mat2(r0: Vec2(x: 2, y: 0), r1: Vec2(x: 0, y: 2));   // scale by 2
+    Vec2 mv = s * v;     // mat * vec -> (6, 8)
+    Mat2 ss = s * s;     // mat * mat -> scale by 4-ish (r0=(4,0), r1=(0,4))
+    Vec2 mmv = ss * v;   // (12, 16)
+    return a.x + a.y + b.x + b.y + mv.x + mv.y + mmv.x + mmv.y;   // 14+14+14+28 = 70
+}

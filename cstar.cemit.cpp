@@ -300,6 +300,25 @@ std::string CEmitter::operatorMangle(int opToken, int arity)
     }
 }
 
+// M31 type-based dispatch — the full operator name = the base mangle + an operand-type suffix, so a
+// type can carry several `operator*` distinguished by operand type (mat*vec vs mat*mat). Rule:
+//   arity 2 (free/static form)              -> `op_<sym>__free`
+//   arity 1 (method form), DIFFERENT user rhs -> `op_<sym>__<RhsClass>`
+//   arity 1, same-type rhs (incl. `This`), primitive rhs, or a unary op -> bare `op_<sym>`
+// The same-type/`This` case keeping the bare name is what lets a `contract` bound (`This operator+(This)`)
+// match a concrete `operator+(Vec2)` structurally, with no `This`-in-name special-casing.
+std::string CEmitter::operatorName(int opToken, int arity, SharedIdentifier paramType, const std::string& owner)
+{
+    std::string base = operatorMangle(opToken, arity);
+    if (base.empty()) return "";
+    if (arity == 2) return base + "__free";
+    if (arity == 1 && paramType) {
+        std::string pk = (paramType->value && *paramType->value == "This") ? owner : cType(paramType);
+        if (!pk.empty() && pk != owner && isClass(pk)) return base + "__" + pk;   // different user type
+    }
+    return base;
+}
+
 // M31b — synthesize a ParameterList from an operator declarator's param1/param2 (0/1/2 params) so all
 // normal method machinery (paramListC, paramSigsOf, emitMethodOrCtorBody's binding) is reused verbatim.
 SharedParameterList CEmitter::operatorParamList(ClassOperatorDeclaratorNode* d)
@@ -336,17 +355,43 @@ static inline bool userOperandType(const std::string& cls, std::map<std::string,
 std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, int line)
 {
     ASTNode* n = e.get();
-    bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n)
-               || dynamic_cast<ThisAccessNode*>(n);
+    if (dynamic_cast<ThisAccessNode*>(n)) return emitExpression(e);   // `this` is already `self` (a pointer)
+    bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n);
     std::string em = emitExpression(e);
     if (lvalue || cls.empty()) return "&(" + em + ")";
     return "(" + cls + "[]){ " + em + " }";   // rvalue → addressable compound-literal temporary
 }
 
+// M31 — resolve `a OP b` to an operator method by OPERAND TYPES. Priority: the method form (arity 1) on
+// the LHS type — a different-user-type rhs (`op_<sym>__<Rc>`) before the same-type/scalar form
+// (`op_<sym>`) — then the free form (`op_<sym>__free`) on either operand's type. Returns null if none.
+MethodInfo* CEmitter::findBinaryOperator(int token, const std::string& lc, const std::string& rc, ClassInfo** ownerOut)
+{
+    std::string opBase = operatorMangle(token, 1);
+    if (opBase.empty()) return nullptr;
+    if (userOperandType(lc, _classes)) {
+        std::vector<std::string> names;
+        if (userOperandType(rc, _classes) && rc != lc) names.push_back(opBase + "__" + rc);   // mat * vec
+        names.push_back(opBase);                                                               // same-type / scalar
+        for (auto& nm : names) {
+            ClassInfo* owner = nullptr;
+            MethodInfo* mi = findMethod(&_classes[lc], nm, &owner);
+            if (mi && mi->isOperator && mi->arity == 1) { if (ownerOut) *ownerOut = owner; return mi; }
+        }
+    }
+    for (const std::string& cls : { lc, rc }) {   // free/static form (scalar-on-the-left, etc.)
+        if (!userOperandType(cls, _classes)) continue;
+        ClassInfo* owner = nullptr;
+        MethodInfo* mi = findMethod(&_classes[cls], opBase + "__free", &owner);
+        if (mi && mi->isOperator && mi->arity == 2) { if (ownerOut) *ownerOut = owner; return mi; }
+    }
+    return nullptr;
+}
+
 // M31b — a binary expression with a user-typed operand dispatches to an operator overload; a purely
-// primitive expression keeps the raw-C path (so the whole numeric fixture suite is untouched).
-// Resolution: the METHOD form (arity 1) on the LHS type first (`this`+rhs → `A__op(&lhs, rhs)`), else
-// the FREE form (arity 2) on either operand's type (`A__op(lhs, rhs)`).
+// primitive expression keeps the raw-C path (so the whole numeric fixture suite is untouched). The
+// method form passes `self` by pointer (an rvalue is wrapped by addrOfOperand); the free form passes
+// both operands by value.
 std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line)
 {
     std::string lc = exprClass(lhs);
@@ -357,28 +402,17 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         return "(" + emitExpression(lhs) + " " + binaryOperator(token) + " "
                    + emitExpression(rhs) + ")";   // primitives — unchanged
 
-    std::string opName = operatorMangle(token, 1);   // binary name (arity 1 or 2 share it)
-    // method form (arity 1) on the LHS type: `A__op(&lhs, rhs)`
-    if (lUser) {
-        MethodInfo* mi = findMethod(&_classes[lc], opName, nullptr);
-        if (mi && mi->isOperator && mi->arity == 1) {
-            canAccess(&_classes[lc], mi->visibility, opName, line);
-            std::string self = addrOfOperand(lhs, lc, line);   // rvalue LHS → hoisted temp
-            return mi->cName + "(" + self + ", " + emitExpression(rhs) + ")";
-        }
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = findBinaryOperator(token, lc, rc, &owner);
+    if (!mi) {
+        unsupported(("no operator '" + binaryOperator(token) + "' for operand type '"
+                     + (lUser ? lc : rc) + "' — define `operator" + binaryOperator(token) + "` on the type").c_str(), line);
+        return "0";
     }
-    // free form (arity 2) declared on either operand's type: `A__op(lhs, rhs)`
-    for (const std::string& cls : { lc, rc }) {
-        if (!userOperandType(cls, _classes)) continue;
-        MethodInfo* mi = findMethod(&_classes[cls], opName, nullptr);
-        if (mi && mi->isOperator && mi->arity == 2) {
-            canAccess(&_classes[cls], mi->visibility, opName, line);
-            return mi->cName + "(" + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";
-        }
-    }
-    unsupported(("no operator '" + binaryOperator(token) + "' for operand type '"
-                 + (lUser ? lc : rc) + "' — define `operator" + binaryOperator(token) + "` on the type").c_str(), line);
-    return "0";
+    canAccess(owner, mi->visibility, mi->cName, line);
+    if (mi->arity == 1)   // method form: `A__op(&lhs, rhs)` (rvalue lhs -> compound-literal temporary)
+        return mi->cName + "(" + addrOfOperand(lhs, lc, line) + ", " + emitExpression(rhs) + ")";
+    return mi->cName + "(" + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";   // free form: both by value
 }
 
 // M31b — a compound-assignment token maps to its binary operator (`a += b` == `a = a + b`) for a
@@ -1722,7 +1756,9 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         unsupported("a `contract` operator has no body — it is a guarantee, not an implementation", od->line);
                     auto* d = od->operatorDeclarator.get();
                     int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
-                    std::string opName = operatorMangle(d->opToken, arity);
+                    // owner="" — a `This` param is same-type → the bare name `op_add`, matching the concrete
+                    // class's same-type operator; a different-type contract operand keeps its `__<Type>` suffix.
+                    std::string opName = operatorName(d->opToken, arity, d->param1Type, "");
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
                                      + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od->line);
@@ -2060,17 +2096,18 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // 1 = binary method (`this`+rhs), 2 = binary free form (both operands explicit).
                     auto* d = od->operatorDeclarator.get();
                     int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
-                    std::string opName = operatorMangle(d->opToken, arity);
+                    std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name);   // M31 — type-suffixed
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
                                      + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od->line);
                     if (!od->body)
                         unsupported("an operator needs a body", od->line);
-                    // No overloading (a stated non-goal): one operator per symbol+arity-class per type.
-                    // Two `operator*` on one type (even with different operand types) collide on `op_mul`.
+                    // No overloading BY ARITY (a stated non-goal). Operators MAY distinguish operand types
+                    // (`mat*vec` vs `mat*mat` — the sanctioned exception, since `a*b` can't take named args),
+                    // so a duplicate is only two operators with the same symbol AND operand type (same name).
                     if (ci.methods.count(opName))
                         unsupported((std::string("duplicate operator '") + binaryOperator(d->opToken)
-                                     + "' on '" + ci.name + "' — no overloading; one operator per symbol").c_str(), od->line);
+                                     + "' on '" + ci.name + "' for the same operand type").c_str(), od->line);
                     MethodInfo mi;
                     mi.cName      = ci.name + "__" + opName;
                     mi.returnType = d->returnType;
@@ -5132,20 +5169,21 @@ std::string CEmitter::exprClass(SharedExpression e)
 // (a class), else "" (a primitive result like a comparison's `bool`, or no matching operator).
 std::string CEmitter::operatorResultClass(int opToken, int arity, SharedExpression lhs, SharedExpression rhs)
 {
-    std::string opName = operatorMangle(opToken, arity);
-    if (opName.empty()) return "";
     std::string lc = exprClass(lhs);
-    std::string rc = rhs ? exprClass(rhs) : "";
-    for (const std::string& cls : { lc, rc }) {
-        if (!userOperandType(cls, _classes)) continue;
-        MethodInfo* mi = findMethod(&_classes[cls], opName, nullptr);
-        if (mi && mi->isOperator) {
-            ScopedStr _ts(_thisType, cls);   // a `This` return type resolves to the operand's class
-            std::string rt = cType(mi->returnType);
-            return isClass(rt) ? rt : "";
-        }
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = nullptr;
+    if (arity == 0) {   // unary — `op_<sym>` on the operand type
+        std::string opName = operatorMangle(opToken, 0);
+        if (opName.empty() || !userOperandType(lc, _classes)) return "";
+        mi = findMethod(&_classes[lc], opName, &owner);
+        if (!(mi && mi->isOperator)) return "";
+    } else {            // binary — resolve by operand types (mirrors the dispatch)
+        mi = findBinaryOperator(opToken, lc, exprClass(rhs), &owner);
+        if (!mi) return "";
     }
-    return "";
+    ScopedStr _ts(_thisType, owner ? owner->name : lc);   // a `This` return type resolves to the operator's owner
+    std::string rt = cType(mi->returnType);
+    return isClass(rt) ? rt : "";
 }
 
 // obj.field / this.field — splice the __base. chain to the declaring ancestor.

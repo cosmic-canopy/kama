@@ -409,8 +409,12 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      on `this`, 1 = binary method, 2 = binary free/static). **Which operators** = the full set (arithmetic,
      comparison, bitwise, unary, `++`/`--`); `[]` and `true`/`false` out of scope. **`static`** shipped
      in M31a. **`==`** = explicit (no auto structural-equality default; an opt-in `Equatable` derive is a
-     noted follow-up). **Operators-in-interfaces** reuse M27's bound + `This` verbatim. **No overloading**
-     (a stated non-goal) — one operator per symbol per type; distinguish operand types with named methods.
+     noted follow-up). **Operators-in-interfaces** reuse M27's bound + `This` verbatim. **Type-based dispatch
+     (v0.1.71):** operators are the sanctioned exception to no-overloading (`a*b` can't take named args), so a
+     type MAY carry several `operator*` distinguished by operand type — `mat*vec` + `mat*mat`, and `v*s`
+     (method) + `s*v` (free) — matching C++/C#/Rust. A same-type/`This`/scalar rhs uses the bare name
+     `op_<sym>`; a different user-type rhs gets `op_<sym>__<Rhs>`; the free form gets `op_<sym>__free`. Only
+     two operators with the SAME symbol AND operand type collide (a clean error).
 
 11. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
    (give/copy + by-value from M26c/d, generics, `match`/`Optional`, operators; GOALS §3a unsafe
@@ -439,12 +443,12 @@ declared a deliberate non-goal. The current inventory (swept from SPEC/KEYWORDS/
 - **`List<Shared<T>>` (smart-ptr-in-collection) + nested-generic `>>`** — ✅ **fixed (M27b-beta-2/beta-4).**
 - **`contract` refining a `contract`** (`type contract A : B`) parses today; deeper multi-level
   contract inheritance is **tracked to M27** (alongside interface bounds + `This`).
-- **Non-goal — function / constructor / operator overloading.** Deliberately *not* planned: it conflicts
-  with GOALS "one way to do a thing," and cstar's **named parameters** already cover the disambiguation
-  overloading is usually reached for. Corollary for M31: a type has **one operator per symbol** (`op_add`,
-  `op_mul`, …) — two `operator*` (even with different operand types, e.g. `mat * vec` and `mat * mat`)
-  collide and are a clean error; distinguish operand types with a named `static` method. Not a limitation
-  to fix — a design decision. *(Reopen only if a concrete case shows named params can't express it.)*
+- **Non-goal — function / constructor overloading.** Deliberately *not* planned: it conflicts with GOALS
+  "one way to do a thing," and cstar's **named parameters** already cover the disambiguation overloading is
+  usually reached for. **Operators are the sanctioned exception** (M31): `a * b` can't take named args, so
+  a type MAY carry several `operator*` distinguished by operand type (`mat*vec`, `mat*mat`, `v*s`, `s*v`) —
+  matching C++/C#/Rust. Only two operators with the *same* symbol *and* operand type collide (a clean
+  error). *(Reopen the function/ctor case only if a concrete example shows named params can't express it.)*
 
 ## 1.x — systems & runtime (post-1.0)
 

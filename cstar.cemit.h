@@ -561,6 +561,10 @@ private:
     // `operatorParamList` synthesizes a ParameterList from an operator declarator's param1/param2 so
     // all normal method machinery (paramListC, paramSigsOf, emitMethodOrCtorBody) is reused verbatim.
     std::string operatorMangle(int opToken, int arity);
+    // M31 type-based dispatch: the full operator name adds an operand-type suffix so one type can carry
+    // several `operator*` (mat*vec vs mat*mat). `findBinaryOperator` resolves `a OP b` by operand types.
+    std::string operatorName(int opToken, int arity, SharedIdentifier paramType, const std::string& owner);
+    MethodInfo* findBinaryOperator(int token, const std::string& lc, const std::string& rc, ClassInfo** ownerOut);
     SharedParameterList operatorParamList(ClassOperatorDeclaratorNode* d);
     std::string emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line);   // user operand → dispatch, else raw C
     int         compoundToBinary(int token);   // PLUSEQ -> PLUS … (compound assignment on a user type)

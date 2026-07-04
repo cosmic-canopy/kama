@@ -489,6 +489,12 @@ The free form handles the mixed-type case a method can't — a primitive on the 
 prefers the method form on the left operand's type, else a free form on either operand's type. A binary or
 unary expression whose operands are all primitives keeps the built-in C operator (zero overhead).
 
+**Type-based dispatch.** Operators are the sanctioned exception to no-overloading (`a * b` can't take named
+arguments), so a type may carry several `operator*` distinguished by **operand type** — `mat * vec` *and*
+`mat * mat`, `v * s` *and* `s * v` — exactly as C++/C#/Rust allow. Resolution matches by the operand types;
+a same-type / `This` / scalar right operand uses the bare name, a different user-type right operand its own.
+Only two operators with the *same* symbol *and* operand type are a duplicate (a clean error).
+
 **Chaining & compound assignment.** Operators chain freely (`a + b + c`, `-(a + b)`, `(a + b) * s`), in
 any position including a raw `if`/`while` condition: a nested rvalue is wrapped in a C99 compound-literal
 array so the method form's by-pointer `this` is legal without a statement slot (and it re-evaluates
