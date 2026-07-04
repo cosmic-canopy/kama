@@ -41,8 +41,8 @@ class ClassMethodDeclarationNode;
 class ClassConstructorDeclarationNode;
 class ClassDestructorDeclarationNode;
 class ClassOperatorDeclaratorNode;
-class ClassOperatorDeclarationNode;   // M31b
-class BinaryExpressionNode;           // M31b
+class ClassOperatorDeclarationNode;
+class BinaryExpressionNode;
 class ClassConstructorDeclaratorNode;
 class ClassConstructorInitializerNode;
 
@@ -62,8 +62,8 @@ typedef std::shared_ptr<LocalVariableDeclaration> SharedLocalVariableDeclaration
 typedef std::shared_ptr<ConstVariableDeclarator> SharedConstVariableDeclarator;
 typedef std::shared_ptr<ConstLocalVariableDeclaration> SharedConstLocalVariableDeclaration;
 typedef std::shared_ptr<ExpressionStatementNode> SharedExpressionStatement;
-typedef std::shared_ptr<MatchNode> SharedMatch;                 // M28b
-typedef std::shared_ptr<MatchArmNode> SharedMatchArm;           // M28b
+typedef std::shared_ptr<MatchNode> SharedMatch;
+typedef std::shared_ptr<MatchArmNode> SharedMatchArm;
 typedef std::shared_ptr<ArgumentNode> SharedArgument;
 typedef std::shared_ptr<EnumMemberDeclarationNode> SharedEnumMemberDeclaration;
 typedef std::shared_ptr<ClassBaseDeclarationNode> SharedClassBaseDeclaration;
@@ -82,7 +82,7 @@ typedef std::vector<SharedParameter> ParameterList;
 typedef std::vector<SharedFunctionDeclaration> FunctionDeclarationList;
 typedef std::vector<SharedVariableDeclarator> VariableDeclaratorList;
 typedef std::vector<SharedConstVariableDeclarator> ConstVariableDeclaratorList;
-typedef std::vector<SharedMatchArm> MatchArmList;               // M28b
+typedef std::vector<SharedMatchArm> MatchArmList;
 typedef std::vector<SharedArgument> ArgumentList;
 typedef std::vector<SharedEnumMemberDeclaration> EnumMemberDeclarationList;
 typedef std::vector<SharedFunctionDeclaration> FunctionDeclarationList;
@@ -94,15 +94,15 @@ typedef std::shared_ptr<StatementList> SharedStatementList;
 typedef std::shared_ptr<StringList> SharedStringList;
 typedef std::shared_ptr<UsingDeclarationList> SharedUsingDeclarationList;
 typedef std::shared_ptr<IdentifierList> SharedIdentifierList;
-// M27c: contract bounds — one contract list per type parameter (parallel to a decl's typeParams;
-// an entry is empty for an unbounded param). `Map<K: IHashable + IComparable, V>` -> bounds[0] =
-// [IHashable, IComparable], bounds[1] = [].
+// Contract bounds — one contract list per type parameter (parallel to a decl's typeParams;
+// an entry is empty for an unbounded param). `Map<K: Hashable + Comparable, V>` -> bounds[0] =
+// [Hashable, Comparable], bounds[1] = [].
 typedef std::vector<SharedIdentifierList> BoundsList;
 typedef std::shared_ptr<BoundsList> SharedBoundsList;
 typedef std::shared_ptr<ModifierList> SharedModifierList;
 typedef std::shared_ptr<VariableDeclaratorList> SharedVariableDeclaratorList;
 typedef std::shared_ptr<ConstVariableDeclaratorList> SharedConstVariableDeclaratorList;
-typedef std::shared_ptr<MatchArmList> SharedMatchArmList;       // M28b
+typedef std::shared_ptr<MatchArmList> SharedMatchArmList;
 typedef std::shared_ptr<ArgumentList> SharedArgumentList;
 typedef std::shared_ptr<ExpressionList> SharedExpressionList;
 typedef std::shared_ptr<EnumMemberDeclarationList> SharedEnumMemberDeclarationList;

@@ -23,14 +23,14 @@ static inline void  cstar_free(void* p)                { extern void  free(void*
 static inline void  cstar_copy(void* d, const void* s, size_t n) { extern void* memcpy(void*, const void*, size_t); memcpy(d, s, n); }
 static inline int   cstar_cmp(const void* a, const void* b, size_t n) { extern int memcmp(const void*, const void*, size_t); return memcmp(a, b, n); }
 
-// ---- Collections (M9) -----------------------------------------------------
+// ---- Collections ----------------------------------------------------------
 // Generic collections are monomorphized per element type from these templates.
 // The cstar surface stays pointer-free and safe. Indexing is bounds-checked.
 
 // A no-op per-element destructor, used when the element type isn't destructible.
 #define CSTAR_ELEM_NODTOR(p) ((void)(p))
 
-// Per-element copy (M26f-5). A bitwise-copyable element (owns nothing) copies memberwise; a
+// Per-element copy. A bitwise-copyable element (owns nothing) copies memberwise; a
 // `Copyable` resource element deep-copies via its own `Elem__copy(&e)`. Given an element POINTER,
 // both yield the copied element BY VALUE, so `NAME##__copy` assigns `r.data[i] = ELEM_COPY(&src[i])`.
 #define CSTAR_ELEM_MEMBERWISE(e) (*(e))
@@ -51,7 +51,7 @@ static inline void NAME##__dtor(NAME* self) {                                  \
 }
 #define CSTAR_OWNED_DEFINE(T, NAME, ELEM_DTOR) CSTAR_OWNED_TYPE(T, NAME) CSTAR_OWNED_FUNCS(T, NAME, ELEM_DTOR)
 
-// Owned<I> over an INTERFACE (M26g) — a unique-owning fat pointer: the handle IS the interface
+// Owned<I> over a CONTRACT — a unique-owning fat pointer: the handle IS the contract
 // fat pointer {obj, vtbl}, with `obj` the heap-owned CONCRETE object. Drop dispatches the concrete
 // destructor through the vtable's `__dtor` slot (NULL for a non-destructible impl), then frees obj.
 #define CSTAR_OWNED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; } NAME;
@@ -87,7 +87,7 @@ static inline void NAME##__dtor(NAME* self) {                                  \
 static inline bool NAME##__valid(NAME* self) { return self->ptr != NULL; }
 #define CSTAR_SHARED_DEFINE(T, NAME, ELEM_DTOR) CSTAR_SHARED_TYPE(T, NAME) CSTAR_SHARED_FUNCS(T, NAME, ELEM_DTOR)
 
-// Shared<I> over an INTERFACE (M26g) — ref-counted fat pointer {obj, vtbl} + ctrl. Retain/release
+// Shared<I> over a CONTRACT — ref-counted fat pointer {obj, vtbl} + ctrl. Retain/release
 // on the shared count; the last strong handle drops the concrete object via the vtable's `__dtor`.
 #define CSTAR_SHARED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; cstar_ctrl* ctrl; } NAME;
 #define CSTAR_SHARED_IFACE_FUNCS(NAME)                                         \
@@ -128,7 +128,7 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                         
 }
 #define CSTAR_WEAK_DEFINE(T, NAME, SHARED_NAME) CSTAR_WEAK_TYPE(T, NAME) CSTAR_WEAK_FUNCS(T, NAME, SHARED_NAME)
 
-// Weak<I> over an INTERFACE (M26g) — same fat layout as Shared<I>; counts `weak`, never touches
+// Weak<I> over a CONTRACT — same fat layout as Shared<I>; counts `weak`, never touches
 // the concrete object. `upgrade()` yields a live Shared<I> (obj/vtbl/ctrl) or an empty one.
 #define CSTAR_WEAK_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* obj; const VTBL* vtbl; cstar_ctrl* ctrl; } NAME;
 #define CSTAR_WEAK_IFACE_FUNCS(NAME, SHARED_NAME)                              \
@@ -149,7 +149,7 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                         
     return s;                                                                 \
 }
 
-// BindableFunctionPtr<Sig> (M22) — a callable that optionally OWNS its bound
+// BindableFunctionPtr<Sig> — a callable that optionally OWNS its bound
 // receiver (RAII). Fully type-erased, so one definition serves every signature:
 //   obj      — the bound receiver (NULL => a free function, no object)
 //   ctrl     — refcount block, set only when the object was bound from a Shared<T>
@@ -223,7 +223,7 @@ static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
  static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }  \
  static inline T*     NAME##__at(NAME* self, size_t i) { if (i >= self->len) cstar_bounds_fail(i, self->len); return &self->data[i]; } \
- static inline NAME   NAME##__copy(NAME* self) {  /* M26f-3/5: deep copy (fresh buffer) */        \
+ static inline NAME   NAME##__copy(NAME* self) {  /* deep copy (fresh buffer) */        \
     NAME r; r.len = self->len;                                                       \
     r.data = (self->len ? (T*)cstar_alloc(self->len * sizeof(T)) : NULL);            \
     for (size_t i = 0; i < self->len; ++i) r.data[i] = ELEM_COPY(&self->data[i]);    \
@@ -259,7 +259,7 @@ static inline size_t NAME##__length(NAME* self) { return self->len; }\
  static inline T* NAME##__dataPtr(NAME* self) { return self->data; }                 \
  static inline size_t NAME##__byteLen(NAME* self) { return self->len * sizeof(T); }  \
  static inline T*     NAME##__at(NAME* self, size_t i) { if (i >= self->len) cstar_bounds_fail(i, self->len); return &self->data[i]; } \
- static inline NAME   NAME##__copy(NAME* self) {  /* M26f-3/5: deep copy (fresh buffer, cap=len) */  \
+ static inline NAME   NAME##__copy(NAME* self) {  /* deep copy (fresh buffer, cap=len) */  \
     NAME r; r.len = self->len; r.cap = self->len;                                    \
     r.data = (self->len ? (T*)cstar_alloc(self->len * sizeof(T)) : NULL);            \
     for (size_t i = 0; i < self->len; ++i) r.data[i] = ELEM_COPY(&self->data[i]);    \
@@ -268,7 +268,7 @@ static inline size_t NAME##__length(NAME* self) { return self->len; }\
 #define CSTAR_LIST_DEFINE(T, NAME, ELEM_DTOR, ELEM_COPY) CSTAR_LIST_TYPE(T, NAME) CSTAR_LIST_FUNCS(T, NAME, ELEM_DTOR, ELEM_COPY)
 
 
-// cstar `string` lowers to a fat, length-prefixed value (M9). `cap == 0` means
+// cstar `string` lowers to a fat, length-prefixed value. `cap == 0` means
 // the bytes are BORROWED (e.g. a C string literal in static storage) and must
 // never be written or freed; `cap > 0` means HEAP-OWNED (NUL-terminated) and is
 // freed by RAII. All string ops read uniformly; only concat allocates. Raw
@@ -294,13 +294,13 @@ static inline void cstar_string__dtor(cstar_string* self) {
     self->data = NULL; self->len = 0; self->cap = 0;
 }
 static inline size_t cstar_string__length(cstar_string* self) { return self->len; }
-// FFI (M16): the underlying NUL-terminated bytes, for passing to a C `const char*`.
+// FFI: the underlying NUL-terminated bytes, for passing to a C `const char*`.
 static inline char* cstar_string__cstr(cstar_string* self) { return self->data; }
 static inline bool cstar_string__equals(cstar_string* self, cstar_string other) {
     return self->len == other.len &&
            (self->len == 0 || cstar_cmp(self->data, other.data, self->len) == 0);
 }
-// M26f-3: deep copy -> a fresh heap-owned string (even copying a borrowed literal).
+// Deep copy -> a fresh heap-owned string (even copying a borrowed literal).
 static inline cstar_string cstar_string__copy(const cstar_string* self) {
     cstar_string r; r.len = self->len;
     if (self->len == 0) { r.data = NULL; r.cap = 0; return r; }

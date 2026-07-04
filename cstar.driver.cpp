@@ -123,7 +123,7 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
     return extra.compilationUnit;
 }
 
-// M28c: the implicit prelude — library sum types available to every program without an import.
+// The implicit prelude — library sum types available to every program without an import.
 // Parsed from source (dogfooding the parser), collected before user code, with an empty (global)
 // namespace so `Optional`/`Result` resolve unqualified everywhere (like the builtin collections).
 static const char* PRELUDE_SRC =
@@ -164,7 +164,7 @@ int transpileToFile(const std::string& inputFile, const std::string& outPath, bo
     }
 
     CEmitter emitter(out, absolutePath(inputFile), emitLines);
-    emitter.setPrelude(preludeUnit());   // M28c: Optional/Result available implicitly
+    emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
     int unsupported = emitter.emit(unit);
     out.close();
 
@@ -204,7 +204,7 @@ int transpileProgram(const std::vector<std::string>& inputs,
     }
 
     CEmitter emitter(header, "", emitLines);
-    emitter.setPrelude(preludeUnit());   // M28c: Optional/Result available implicitly
+    emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
     header.close();
     for (auto& f : moduleFiles) f->close();
@@ -252,7 +252,7 @@ int main(int argc, char** argv)
     std::string output;
     std::string cc;                       // empty => pick default per target
     std::string target     = "native";    // native | wasm
-    std::vector<std::string> links;        // -l libraries (FFI, M15)
+    std::vector<std::string> links;        // -l libraries (FFI)
     bool        emitLines  = true;
     bool        keepC      = false;
     bool        webgpu     = false;
@@ -373,7 +373,7 @@ int main(int argc, char** argv)
         if (!headerDir.empty()) cmd << "-I" << headerDir << " ";   // the shared generated header
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
         for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
-        for (auto& lib : links) cmd << "-l" << lib << " ";       // FFI link flags (M15)
+        for (auto& lib : links) cmd << "-l" << lib << " ";       // FFI link flags
         cmd << "-o \"" << outPath << "\"";
         int rc = runCmd(cmd.str());
 

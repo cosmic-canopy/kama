@@ -1,6 +1,6 @@
 #include "cstar.cemit.h"
 #include "cstar.ast.h"
-#include "cstar.context.h"    // CodeGenContext — to synthesize primitive type nodes (M27a)
+#include "cstar.context.h"    // CodeGenContext — to synthesize primitive type nodes
 #include "cstar.parser.hpp"   // bison token constants (PLUS, STAR, EQEQ, ...)
 
 #include <cstdio>
@@ -27,7 +27,7 @@ void CEmitter::indent(int depth)
 
 void CEmitter::line(int srcLine)
 {
-    if (srcLine > 0) _curLine = srcLine;   // M26f-2: track for conditional-drop diagnostics
+    if (srcLine > 0) _curLine = srcLine;   // track for conditional-drop diagnostics
     if (_lines && srcLine > 0)
         *_out << "#line " << srcLine << " \"" << _sourcePath << "\"\n";
 }
@@ -41,7 +41,7 @@ void CEmitter::unsupported(const char* what, int srcLine)
 }
 
 // ---------------------------------------------------------------------------
-// Namespaces (M14): scope prefixes + name resolution
+// Namespaces: scope prefixes + name resolution
 // ---------------------------------------------------------------------------
 
 // "a.b.c" — the dotted source name from an identifier's qualifier + value.
@@ -87,7 +87,7 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
 std::string CEmitter::qualify(const std::string& name) const
 {
     if (name == "main") return "cstar_main";
-    if (_nsCtx.scope.empty()) return name;   // M28c: the prelude's global namespace -> bare names
+    if (_nsCtx.scope.empty()) return name;   // the prelude's global namespace -> bare names
     return _nsCtx.scope + "__" + name;
 }
 
@@ -104,9 +104,9 @@ std::string CEmitter::resolveUserName(const std::string& value, SharedStringList
 {
     auto known = [&](const std::string& n) {
         return _classes.count(n) || _enums.count(n) || _interfaces.count(n) || _sigs.count(n)
-            || _genericTypes.count(n);   // M27b: a generic-type template resolves to its scoped name too
+            || _genericTypes.count(n);   // a generic-type template resolves to its scoped name too
     };
-    // FFI (M16): extern struct/handle names are global literal C names.
+    // FFI: extern struct/handle names are global literal C names.
     if ((!qualifier || qualifier->empty()) && _externNames.count(value)) return value;
     if (qualifier && !qualifier->empty()) {
         // Qualified `A.B...value` — a namespace path (alias-expand a 1-segment head).
@@ -162,14 +162,14 @@ std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qual
 std::string CEmitter::cType(SharedIdentifier type)
 {
     if (!type) return "void";
-    // M27a: inside a generic instantiation, a bare type-param name (`T`, no <...> of its own)
+    // inside a generic instantiation, a bare type-param name (`T`, no <...> of its own)
     // resolves to the concrete type it was bound to. Guarded on !genericArg so a real `List<T>`
     // still flows to the collection arm (whose element then hits this same substitution).
     if (!_typeSubst.empty() && type->value && !type->genericArg) {
         auto s = _typeSubst.find(*type->value);
         if (s != _typeSubst.end()) return cType(s->second);
     }
-    // M27c: `This` (the self-type) resolves to the enclosing type — the concrete class while emitting a
+    // `This` (the self-type) resolves to the enclosing type — the concrete class while emitting a
     // class body/prototype/struct (_thisType), or the interface type inside its vtbl slot. In a bounded
     // generic the receiver's concrete class carries `This` (resolved when that class was emitted), so no
     // binding is needed at the call site. `This` outside a type/contract is a clean error.
@@ -179,7 +179,7 @@ std::string CEmitter::cType(SharedIdentifier type)
         unsupported("`This` (the self-type) is only valid inside a `type` or `contract`", type->line);
         return "void";
     }
-    // FFI (M15): a raw C pointer carrier (opaque). Bare `Ptr` -> void* (the
+    // FFI: a raw C pointer carrier (opaque). Bare `Ptr` -> void* (the
     // universal handle / opaque pointer); `Ptr<T>` -> T*. usize/isize map to the
     // C size types. These are the explicit, extern-marked unsafe boundary.
     if (type->value && *type->value == "Ptr")
@@ -190,13 +190,13 @@ std::string CEmitter::cType(SharedIdentifier type)
     }
 
     // Collection / smart-pointer types spell their mangled struct name:
-    // Array<int32> -> Array_int32 (M9); Owned<Node> -> Owned_Node (M10);
-    // Shared<Tex> -> Shared_Tex (M11); Weak<Tex> -> Weak_Tex (M12).
+    // Array<int32> -> Array_int32; Owned<Node> -> Owned_Node;
+    // Shared<Tex> -> Shared_Tex; Weak<Tex> -> Weak_Tex.
     if (type->genericArg && type->value &&
         (*type->value == "Array" || *type->value == "List" || *type->value == "Owned" ||
          *type->value == "Shared" || *type->value == "Weak" || *type->value == "BindableFunctionPtr"))
         return *type->value + "_" + mangleElem(type->genericArg);
-    // M27b: a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box_int32`).
+    // a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box_int32`).
     // Reached only for a non-reserved name with a type arg; under _typeSubst the arg's `T` resolves.
     if (type->genericArg && type->value) {   // genericArg mirrors genericArgs[0] (non-null iff there are args)
         std::string tmpl = resolveUserName(*type->value, type->qualifier);
@@ -269,7 +269,7 @@ std::string CEmitter::assignmentOperator(int token)
     }
 }
 
-// M31b — map an overloadable operator token + arity-class to a stable C-safe method name.
+// map an overloadable operator token + arity-class to a stable C-safe method name.
 // arity 0 => a UNARY operator on `this`; arity >= 1 => a BINARY operator (method or free form,
 // same name). Returns "" when the operator has no form for that arity (e.g. unary `*`, binary `!`).
 std::string CEmitter::operatorMangle(int opToken, int arity)
@@ -300,7 +300,7 @@ std::string CEmitter::operatorMangle(int opToken, int arity)
     }
 }
 
-// M31 type-based dispatch — the full operator name = the base mangle + an operand-type suffix, so a
+// Type-based dispatch — the full operator name = the base mangle + an operand-type suffix, so a
 // type can carry several `operator*` distinguished by operand type (mat*vec vs mat*mat). Rule:
 //   arity 2 (free/static form)              -> `op_<sym>__free`
 //   arity 1 (method form), DIFFERENT user rhs -> `op_<sym>__<RhsClass>`
@@ -319,7 +319,7 @@ std::string CEmitter::operatorName(int opToken, int arity, SharedIdentifier para
     return base;
 }
 
-// M31b — synthesize a ParameterList from an operator declarator's param1/param2 (0/1/2 params) so all
+// synthesize a ParameterList from an operator declarator's param1/param2 (0/1/2 params) so all
 // normal method machinery (paramListC, paramSigsOf, emitMethodOrCtorBody's binding) is reused verbatim.
 SharedParameterList CEmitter::operatorParamList(ClassOperatorDeclaratorNode* d)
 {
@@ -332,7 +332,7 @@ SharedParameterList CEmitter::operatorParamList(ClassOperatorDeclaratorNode* d)
     return list;
 }
 
-// M31b — is `cls` a user type that may carry operator overloads (a `value`/`resource`/class, not a
+// is `cls` a user type that may carry operator overloads (a `value`/`resource`/class, not a
 // collection/smart-pointer, whose arithmetic is a real C `struct` with no built-in `+`)?
 static inline bool userOperandType(const std::string& cls, std::map<std::string, ClassInfo>& classes)
 {
@@ -341,18 +341,18 @@ static inline bool userOperandType(const std::string& cls, std::map<std::string,
     return it != classes.end() && !it->second.isCollection;
 }
 
-// M31b — `&<operand>` for a method-form/unary operator's `self`. A simple lvalue (a local, a field/
+// `&<operand>` for a method-form/unary operator's `self`. A simple lvalue (a local, a field/
 // member access, `this`) is addressed directly; an rvalue (a nested operator result, a call, `a[i]`)
 // is first materialized into a hoisted temp — ISO C, no statement-expressions — so `&` is legal and
 // chained `a + b + c` works. In a non-hoistable slot (a raw `if`/`while` condition) a chained operand
 // is a clean error rather than bad C.
-// M31b — produce the `self` pointer for a method-form/unary operator. A simple lvalue (a local, a
+// produce the `self` pointer for a method-form/unary operator. A simple lvalue (a local, a
 // field/member access, `this`) is addressed directly. An rvalue (a nested operator result, a call —
 // `a + b + c`, `-(a + b)`) can't be `&`'d, so it is wrapped in a C99 compound-literal array: `(V[]){e}`
 // decays to `V*` and the temporary lives to the end of the enclosing block. This is ISO C11 (the same
-// construct M28a uses for variants), needs no statement slot, and so works in ANY position — including
+// construct used for variants), needs no statement slot, and so works in ANY position — including
 // a raw `if`/`while` condition — with no hoisting.
-// M31/Q3 — the class `e` constructs if it is a bare inline constructor (`Vec3(x: …)` — not a method call
+// the class `e` constructs if it is a bare inline constructor (`Vec3(x: …)` — not a method call
 // or a `Type::variant`), else "".
 std::string CEmitter::bareCtorClass(SharedExpression e)
 {
@@ -363,14 +363,14 @@ std::string CEmitter::bareCtorClass(SharedExpression e)
     return (isClass(rn) && _classes.count(rn) && !_classes[rn].isCollection) ? rn : "";
 }
 
-// M31/Q3 — an inline constructor operand, hoisted into a temp (needs a statement slot); "" otherwise.
+// an inline constructor operand, hoisted into a temp (needs a statement slot); "" otherwise.
 std::string CEmitter::hoistCtorIfInline(SharedExpression e)
 {
     std::string rn = bareCtorClass(e);
     return rn.empty() ? "" : tryHoistInlineCtor(e, rn, e->line);   // "" when !_hoistOK (e.g. a raw condition)
 }
 
-// M31/Q3 — a clean diagnostic for a bare inline ctor operand that has no statement slot to hoist into
+// a clean diagnostic for a bare inline ctor operand that has no statement slot to hoist into
 // (e.g. inside a raw `if`/`while` condition) — the same boundary an inline `match`/ctor hits elsewhere.
 void CEmitter::rejectUnhoistableCtor(SharedExpression e)
 {
@@ -378,7 +378,7 @@ void CEmitter::rejectUnhoistableCtor(SharedExpression e)
         unsupported("an inline constructor as an operator operand here has no statement slot — bind it to a local first", e->line);
 }
 
-// M31/Q3 — emit an operator operand by value, materializing an inline constructor into a hoisted temp.
+// emit an operator operand by value, materializing an inline constructor into a hoisted temp.
 std::string CEmitter::emitOperandByValue(SharedExpression e)
 {
     std::string t = hoistCtorIfInline(e);
@@ -400,7 +400,7 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
     return "(" + cls + "[]){ " + em + " }";   // rvalue → addressable compound-literal temporary
 }
 
-// M31 — resolve `a OP b` to an operator method by OPERAND TYPES. Priority: the method form (arity 1) on
+// resolve `a OP b` to an operator method by OPERAND TYPES. Priority: the method form (arity 1) on
 // the LHS type — a different-user-type rhs (`op_<sym>__<Rc>`) before the same-type/scalar form
 // (`op_<sym>`) — then the free form (`op_<sym>__free`) on either operand's type. Returns null if none.
 MethodInfo* CEmitter::findBinaryOperator(int token, const std::string& lc, const std::string& rc, ClassInfo** ownerOut)
@@ -426,7 +426,7 @@ MethodInfo* CEmitter::findBinaryOperator(int token, const std::string& lc, const
     return nullptr;
 }
 
-// M31b — a binary expression with a user-typed operand dispatches to an operator overload; a purely
+// a binary expression with a user-typed operand dispatches to an operator overload; a purely
 // primitive expression keeps the raw-C path (so the whole numeric fixture suite is untouched). The
 // method form passes `self` by pointer (an rvalue is wrapped by addrOfOperand); the free form passes
 // both operands by value.
@@ -453,7 +453,7 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     return mi->cName + "(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";   // free form: both by value
 }
 
-// M31b — a compound-assignment token maps to its binary operator (`a += b` == `a = a + b`) for a
+// a compound-assignment token maps to its binary operator (`a += b` == `a = a + b`) for a
 // user type. Returns 0 (not a valid token) for a plain `=` or an unmapped token.
 int CEmitter::compoundToBinary(int token)
 {
@@ -472,7 +472,7 @@ int CEmitter::compoundToBinary(int token)
     }
 }
 
-// M31b — a unary / increment / decrement on a user type dispatches to a 0-param (on-`this`) operator.
+// a unary / increment / decrement on a user type dispatches to a 0-param (on-`this`) operator.
 // Returns "" when the operand is NOT a user type (caller keeps its raw-C path).
 std::string CEmitter::emitUnaryUserOp(int opToken, SharedExpression operand, int line)
 {
@@ -497,7 +497,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (!expr) return "";
     ASTNode* n = expr.get();
 
-    if (auto* mm = dynamic_cast<MatchNode*>(n)) return emitMatch(mm);   // M28b: value-producing match (lifted)
+    if (auto* mm = dynamic_cast<MatchNode*>(n)) return emitMatch(mm);   // value-producing match (lifted)
 
     if (auto* v = dynamic_cast<Int8Node*>(n))   return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int16Node*>(n))  return std::to_string((int)v->value);
@@ -522,7 +522,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (dynamic_cast<NullNode*>(n))              return "NULL";
 
     if (auto* h = dynamic_cast<HandoffNode*>(n)) {
-        // M26c/d: `give x` / `copy x`. The move (invalidate source) / retain side effects
+        // `give x` / `copy x`. The move (invalidate source) / retain side effects
         // need a statement context — handled where a value is HANDED OFF: an initializer,
         // assignment, argument, or return (emitDeclarator / the assignment arm / emitReorderedCall
         // / the return arm all unwrap the marker). Reaching here means the marker rides a bare
@@ -568,7 +568,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             for (size_t i = 0; i + 1 < v->qualifier->size(); ++i) enumQual->push_back((*v->qualifier)[i]);
             std::string en = resolveUserName(*v->qualifier->back(), enumQual);
             if (_enums.count(en)) return en + "_" + nm;
-            // M28a/c: `Union::Variant` with no payload -> `(Union){ .tag = Union_Variant }`
+            // `Union::Variant` with no payload -> `(Union){ .tag = Union_Variant }`
             // (`Optional<int32>::None` resolves the instance via the target-type context).
             if (ClassInfo* vt = resolveVariantType(en))
                 for (auto& vc : vt->variants)
@@ -585,8 +585,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (_currentClass) {
                 ClassInfo* owner = findFieldOwner(_currentClass, head);
                 if (owner) {
-                    if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);   // M31a
-                    checkFieldAccess(owner, head, v->line);   // M25
+                    if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);
+                    checkFieldAccess(owner, head, v->line);
                     std::string e = "self->" + basePathTo(_currentClass, owner) + head;
                     for (size_t i = 1; i < v->qualifier->size(); ++i) e += "." + *(*v->qualifier)[i];
                     return e + "." + nm;
@@ -600,22 +600,22 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (_currentClass && !_localTypes.count(nm)) {
             ClassInfo* owner = findFieldOwner(_currentClass, nm);
             if (owner) {
-                if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);   // M31a
-                checkFieldAccess(owner, nm, v->line); return "self->" + basePathTo(_currentClass, owner) + nm;   // M25
+                if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);
+                checkFieldAccess(owner, nm, v->line); return "self->" + basePathTo(_currentClass, owner) + nm;
             }
         }
         // A bare **function name** used as a value (not a call) → its C function
-        // pointer (M21) — enables binding/passing a free function to a FunctionPtr.
+        // pointer — enables binding/passing a free function to a FunctionPtr.
         if (!_localTypes.count(nm)) {
             auto fit = _funcs.find(resolveFunc(nm, v->qualifier));
             if (fit != _funcs.end()) return fit->second.cName;
         }
-        checkNotMoved(nm, v->line);   // M26f-2: reject reading a moved-from `resource` value
+        checkNotMoved(nm, v->line);   // reject reading a moved-from `resource` value
         return nm;
     }
 
     if (auto* tn = dynamic_cast<ThisAccessNode*>(n)) {
-        if (_inStaticMethod) unsupported("a `static` method has no `this`", tn->line);   // M31a
+        if (_inStaticMethod) unsupported("a `static` method has no `this`", tn->line);
         return "self";
     }
 
@@ -628,23 +628,23 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string name = (ba->identifier && ba->identifier->value) ? *ba->identifier->value : "";
         if (_currentClass && _currentClass->base) {
             ClassInfo* owner = findFieldOwner(_currentClass->base, name);
-            if (owner) { checkFieldAccess(owner, name, ba->line); return "self->__base." + basePathTo(_currentClass->base, owner) + name; }  // M25
+            if (owner) { checkFieldAccess(owner, name, ba->line); return "self->__base." + basePathTo(_currentClass->base, owner) + name; }
         }
         unsupported("base access", ba->line);
         return name;
     }
 
     if (auto* v = dynamic_cast<ObjectCreationNode*>(n)) {
-        // `new T(...)` is supported only as a local-variable initializer in M4
+        // `new T(...)` is supported only as a local-variable initializer
         // (handled in LocalVariableDeclaration). Bare expression position needs
-        // a temp/statement context that arrives with RAII (M5).
+        // a temp/statement context that arrives with RAII.
         unsupported("`new` outside a local-variable initializer", v->line);
         return "0";
     }
 
     if (auto* v = dynamic_cast<BinaryExpressionNode*>(n)) {
-        // M26b / GOALS §3b: `== null` / `!= null` on a safe type is a compile error — a value,
-        // smart pointer, or interface is never null (the C habit checks the wrong thing here).
+        // GOALS §3b: `== null` / `!= null` on a safe type is a compile error — a value,
+        // smart pointer, or contract is never null (the C habit checks the wrong thing here).
         // `null` is only for `Ptr<T>` at the FFI boundary (exprClass is empty for those).
         if (v->token == EQEQ || v->token == NOTEQ) {
             bool lNull = dynamic_cast<NullNode*>(v->LHS.get()) != nullptr;
@@ -657,7 +657,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                 v->line);
             }
         }
-        return emitBinaryOperator(v->token, v->LHS, v->RHS, v->line);   // M31b — user operand → dispatch, else raw C
+        return emitBinaryOperator(v->token, v->LHS, v->RHS, v->line);   // user operand → dispatch, else raw C
     }
 
     if (auto* v = dynamic_cast<LogicalAndOrNode*>(n)) {
@@ -675,7 +675,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
-        checkConstWrite(v->unaryExpression, v->line);   // M24a: no write to/through const
+        checkConstWrite(v->unaryExpression, v->line);   // no write to/through const
         // Indexed assignment to a collection lowers to __set, not `lhs = rhs`.
         if (auto* ea = dynamic_cast<ElementAccessNode*>(v->unaryExpression.get())) {
             std::string coll, recvExpr, idx;
@@ -689,7 +689,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 return coll + "__set(&(" + recvExpr + "), " + idx + ", "
                             + coll + "__get(&(" + recvExpr + "), " + idx + ") " + op + " (" + rhs + "))";
             }
-            // Raw pointer store `p[i] = v` (M17) — only inside `unsafe { }`.
+            // Raw pointer store `p[i] = v` — only inside `unsafe { }`.
             SharedExpression recv = ea->expression ? ea->expression
                                   : std::static_pointer_cast<ExpressionNode>(ea->identifier);
             std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
@@ -701,7 +701,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             return "((" + emitExpression(recv) + ")[" + ridx + "] "
                        + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
         }
-        // M31b — compound assignment on a user type (`a += b`) lowers to `a = a <op> b` via the
+        // compound assignment on a user type (`a += b`) lowers to `a = a <op> b` via the
         // operator, since a struct has no built-in `+=`. Plain `=` and primitives keep the raw path.
         int binTok = compoundToBinary(v->token);
         if (binTok && userOperandType(exprClass(v->unaryExpression), _classes))
@@ -715,7 +715,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx))
             return coll + "__get(&(" + recvExpr + "), " + idx + ")";
-        // Raw pointer read `p[i]` (M17) — only inside `unsafe { }`.
+        // Raw pointer read `p[i]` — only inside `unsafe { }`.
         SharedExpression recv = ea->expression ? ea->expression
                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
         std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
@@ -728,23 +728,23 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<PreIncrDecrNode*>(n)) {
-        checkConstWrite(v->expression, v->line);   // M24a
-        std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // M31b: op_inc/op_dec on a user type
+        checkConstWrite(v->expression, v->line);
+        std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // op_inc/op_dec on a user type
         if (!uop.empty()) return uop;
         std::string op = (v->token == PLUSPLUS) ? "++" : "--";
         return "(" + op + emitExpression(v->expression) + ")";
     }
 
     if (auto* v = dynamic_cast<PostIncrDecrNode*>(n)) {
-        checkConstWrite(v->expression, v->line);   // M24a
-        std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // M31b (mutating in place — pre/post alike)
+        checkConstWrite(v->expression, v->line);
+        std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   //  (mutating in place — pre/post alike)
         if (!uop.empty()) return uop;
         std::string op = (v->token == PLUSPLUS) ? "++" : "--";
         return "(" + emitExpression(v->expression) + op + ")";
     }
 
     if (auto* v = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
-        std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // M31b: op_neg/op_not/op_bnot/op_pos
+        std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // op_neg/op_not/op_bnot/op_pos
         if (!uop.empty()) return uop;
         std::string op;
         switch (v->token) {
@@ -769,7 +769,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 // Statements
 // ---------------------------------------------------------------------------
 
-// --- RAII cleanup helpers (M5) ---------------------------------------------
+// --- RAII cleanup helpers ---------------------------------------------
 
 bool CEmitter::stmtIsJump(SharedStatement s)
 {
@@ -777,7 +777,7 @@ bool CEmitter::stmtIsJump(SharedStatement s)
     return dynamic_cast<ReturnNode*>(n) || dynamic_cast<BreakNode*>(n) || dynamic_cast<ContinueNode*>(n);
 }
 
-// M26f-2: does this body end in a jump (so control doesn't fall through to a branch join)?
+// does this body end in a jump (so control doesn't fall through to a branch join)?
 bool CEmitter::bodyDiverges(SharedStatement s)
 {
     if (!s) return false;
@@ -793,12 +793,12 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
     for (auto it = s.locals.rbegin(); it != s.locals.rend(); ++it) {
         auto ms = _moveState.find(it->cVar);
         if (ms != _moveState.end()) {
-            if (ms->second == MoveState::Moved) continue;   // M26f-2: moved out — skip its drop
+            if (ms->second == MoveState::Moved) continue;   // moved out — skip its drop
             if (ms->second == MoveState::MaybeMoved)        // moved on some paths, live here — undecidable drop
                 unsupported(("`" + it->cVar + "` is moved on some paths but not others and is still live at "
-                             "scope exit — move it on all paths or none, or use Optional<T> (M28)").c_str(), _curLine);
+                             "scope exit — move it on all paths or none, or use Optional<T>").c_str(), _curLine);
         }
-        // M26h: a move-only value that owns nothing (an empty `resource`/token) is tracked for move
+        // A move-only value that owns nothing (an empty `resource`/token) is tracked for move
         // analysis but has no destructor — skip the drop.
         auto ci = _classes.find(it->className);
         if (ci != _classes.end() && !ci->second.destructible) continue;
@@ -827,7 +827,7 @@ void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::strin
 {
     if (!_scopes.empty())
         _scopes.back().locals.push_back({cVar, className});
-    if (isMoveOnlyValue(className)) _moveState[cVar] = MoveState::NotMoved;  // M26f-2: track for move analysis
+    if (isMoveOnlyValue(className)) _moveState[cVar] = MoveState::NotMoved;  // track for move analysis
 }
 
 // --- Blocks ----------------------------------------------------------------
@@ -841,7 +841,7 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
 {
     Scope sc; sc.isLoopBoundary = loopBoundary; sc.isFunctionRoot = functionRoot;
     _scopes.push_back(sc);
-    // M26d: by-value smart-ptr params the callee owns drop at fn-end. Recorded FIRST in
+    // by-value smart-ptr params the callee owns drop at fn-end. Recorded FIRST in
     // the root scope, so they're destroyed LAST (after every local), at function exit.
     if (functionRoot && !_pendingParamDtors.empty()) {
         for (auto& l : _pendingParamDtors) _scopes.back().locals.push_back(l);
@@ -863,7 +863,7 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
     _scopes.pop_back();
 }
 
-// M26i: write hoisted temp statements (inline-ctor-in-arg materialization) at `depth`, then clear.
+// write hoisted temp statements (inline-ctor-in-arg materialization) at `depth`, then clear.
 // A leaf statement sets _hoistOK, builds its expression string (which may push here), then calls
 // this BEFORE writing its own line — so the temps appear first. Pure ISO C, no `({ … })`.
 void CEmitter::flushHoisted(int depth)
@@ -872,7 +872,7 @@ void CEmitter::flushHoisted(int depth)
     _hoisted.clear();
 }
 
-// M31: emit a condition with hoisting enabled so an inline ctor / `match` works in `if`/`while`/`for`.
+// emit a condition with hoisting enabled so an inline ctor / `match` works in `if`/`while`/`for`.
 // An inline ctor knows its own type; a value-producing `match` needs a result type, and a condition is
 // boolean — so a DIRECTLY-`match` condition is typed `bool`. A `match` nested in a larger condition keeps
 // no target type and stays the clean "must appear in a typed position" error (bind it to a local).
@@ -901,7 +901,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         return;
     }
 
-    // `unsafe { ... }` (M17): permit raw pointer index/store inside; otherwise a
+    // `unsafe { ... }`: permit raw pointer index/store inside; otherwise a
     // plain scoped block. The single, explicit, greppable unsafe surface.
     if (auto* u = dynamic_cast<UnsafeNode*>(n)) {
         bool prev = _inUnsafe;
@@ -912,7 +912,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     }
 
     {
-        // Local declaration — plain or `const` (M24a). The two declarator node types
+        // Local declaration — plain or `const`. The two declarator node types
         // are structurally identical (name + initializer), so one generic body serves
         // both; a const decl additionally records each name as immutable (no
         // reassignment, and — deep const — no writes THROUGH the binding either).
@@ -922,7 +922,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         SharedIdentifier declType = lvd ? lvd->type : (cvd ? cvd->type : SharedIdentifier());
         bool isConstDecl = (cvd != nullptr);
         if (declType) {
-            // M27b: a bare generic type without a type argument (`Box b` instead of `Box<int32> b`)
+            // a bare generic type without a type argument (`Box b` instead of `Box<int32> b`)
             // is not a usable type — the template is not a concrete class.
             if (declType->value && !declType->genericArg
                 && _genericTypes.count(resolveUserName(*declType->value, declType->qualifier)))
@@ -934,7 +934,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             auto emitDeclarator = [&](auto& d) {
                 std::string nm = (d->name && d->name->value) ? *d->name->value : "";
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
-                _localCTypes[nm] = ty;                        // M29c: full C type (incl. primitives) for assignment-RHS lowering
+                _localCTypes[nm] = ty;                        // full C type (incl. primitives) for assignment-RHS lowering
                 if (isConstDecl) {
                     if (!d->initializer)
                         unsupported("a const must be initialized (it is immutable)", n->line);
@@ -959,7 +959,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     return;
                 }
 
-                // FunctionPtr<Sig> binding (M21): a signature-typed local — track the
+                // FunctionPtr<Sig> binding: a signature-typed local — track the
                 // sig (drives invoke), bind a free function (resolve + signature-check)
                 // or another FunctionPtr; must be initialized (non-null).
                 if (isSigType(ty)) {
@@ -978,8 +978,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     line(n->line);
                     std::string initStr;
                     if (d->initializer) {
-                        bool ph = _hoistOK; _hoistOK = true;               // M26i: inline-ctor hoisting
-                        std::string pmt = _matchTargetCType; _matchTargetCType = ty;   // M28b: value-producing match result type
+                        bool ph = _hoistOK; _hoistOK = true;               // inline-ctor hoisting
+                        std::string pmt = _matchTargetCType; _matchTargetCType = ty;   // value-producing match result type
                         initStr = " = " + emitExpression(d->initializer);
                         _matchTargetCType = pmt;
                         _hoistOK = ph;
@@ -997,10 +997,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 bool zeroInit = _classes[ty].isCollection || _classes[ty].isExternStruct;
                 *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
-                if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // M26h: track empty resources for move analysis
+                if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // track empty resources for move analysis
                 if (!d->initializer) return;   // declared but uninitialized (non-const)
 
-                // M26c: unwrap a give/copy hand-off marker — the inner NAMED value drives
+                // unwrap a give/copy hand-off marker — the inner NAMED value drives
                 // move (give) vs duplicate (copy). A fresh rvalue never takes a marker.
                 SharedExpression init = d->initializer;
                 int handoff = 0;   // 0 none, 1 give, 2 copy
@@ -1008,13 +1008,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 if (handoff && !isNamedValue(init.get()))
                     unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n->line);
 
-                // M26a: `T(...)` with no `new` (an InvocationNode whose callee names the
+                // `T(...)` with no `new` (an InvocationNode whose callee names the
                 // declared class) is STACK construction; `new` is reserved for the heap.
                 InvocationNode* stackCtor = nullptr;
                 if (auto* iv = dynamic_cast<InvocationNode*>(init.get()))
                     if (iv->identifier && iv->identifier->value && isClass(ty)) {
                         std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
-                        // M27b: `Box<int32> b = Box(v: 7)` — the ctor names the bare template `Box`, but
+                        // `Box<int32> b = Box(v: 7)` — the ctor names the bare template `Box`, but
                         // the declared type is the instance `Box_int32`; accept the template→instance match.
                         auto g = _genericTypeInstOf.find(ty);
                         if (rn == ty || (g != _genericTypeInstOf.end() && g->second == rn))
@@ -1022,20 +1022,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     }
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(init.get())) {
-                    // M26a: `new` is the HEAP operator — it boxes a value into a smart
+                    // `new` is the HEAP operator — it boxes a value into a smart
                     // pointer (Owned/Shared/Weak), naming the element type directly:
                     // `Owned<Box> p = new Box(...)`. (BindableFunctionPtr keeps `new` for
                     // its bind.) `new` into a plain value type is an error — drop `new`.
                     std::string octy = cType(oc->type);
                     if (isBindableClass(ty)) {
-                        emitBindableNew(nm, ty, oc, depth);   // bind obj + method (M22)
+                        emitBindableNew(nm, ty, oc, depth);   // bind obj + method
                     } else if (isSmartPtrClass(ty)) {
                         std::string T = _classes[ty].collElemClass;
                         if (isSmartPtrClass(octy) || isBindableClass(octy))
                             unsupported(("`new` now names the element type — write `new " + T
                                          + "(...)`, not the wrapper").c_str(), n->line);
                         else if (isInterface(T)) {
-                            // M26g: box a concrete class that implements interface T into an owned
+                            // box a concrete class that implements interface T into an owned
                             // interface handle — malloc the concrete, ctor it, set {obj, vtbl}.
                             auto cit = _classes.find(octy);
                             bool implementsT = false;
@@ -1051,14 +1051,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
                                 if (_classes[octy].hasCtor) {
                                     line(n->line);
-                                    bool ph = _hoistOK; _hoistOK = true;               // M26i: hoist arg hand-offs
+                                    bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
                                     std::string cc = emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + nm + ".obj",
                                                               _classes[octy].ctorParams, oc->args, n->line);
                                     _hoistOK = ph; flushHoisted(depth);
                                     indent(depth); *_out << cc << ";\n";
                                 }
                                 indent(depth); *_out << nm << ".vtbl = &" << octy << "__as_" << T << ";\n";
-                                if (smartKind(ty) == CollKind::Shared) {   // M26g-2: ref-counted owned interface
+                                if (smartKind(ty) == CollKind::Shared) {   // ref-counted owned interface
                                     indent(depth); *_out << nm << ".ctrl = cstar_ctrl_new();\n";
                                 }
                             }
@@ -1072,7 +1072,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
                             if (isClass(T) && _classes[T].hasCtor) {
                                 line(n->line);
-                                bool ph = _hoistOK; _hoistOK = true;               // M26i: hoist arg hand-offs
+                                bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
                                 std::string cc = emitReorderedCall(T + "__ctor", nm + ".ptr",
                                                           _classes[T].ctorParams, oc->args, n->line);
                                 _hoistOK = ph; flushHoisted(depth);
@@ -1102,7 +1102,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         unsupported(("cannot instantiate abstract class '" + ty + "'").c_str(), n->line);
                     if (_classes[ty].hasCtor) {
                         line(n->line);
-                        bool ph = _hoistOK; _hoistOK = true;               // M26i: hoist arg hand-offs
+                        bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
                         std::string cc = emitCtorCall(nm, _classes[ty], stackCtor->args, n->line);
                         _hoistOK = ph;
                         flushHoisted(depth);
@@ -1113,8 +1113,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
                            && isSmartPtrLValue(init) && exprClass(init) != ty) {
                     // Shared->Weak conversion (different C structs, same layout):
-                    // field-copy + weak retain. The source Shared stays valid. M26g: a fat
-                    // interface Weak copies {obj, vtbl}; a thin Weak copies {ptr}.
+                    // field-copy + weak retain. The source Shared stays valid. A fat
+                    // contract Weak copies {obj, vtbl}; a thin Weak copies {ptr}.
                     line(n->line); indent(depth);
                     std::string src = emitExpression(init);
                     if (isInterface(_classes[ty].collElemClass))
@@ -1128,11 +1128,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     line(n->line);
                     emitBindablePromote(nm, ty, init, depth);
                 } else {
-                    // Copy-initialize from another named value. M26c: the give/copy marker
+                    // Copy-initialize from another named value. The give/copy marker
                     // (or the type's default) decides move vs duplicate.
                     line(n->line);
-                    bool ph = _hoistOK; _hoistOK = true;               // M26i: inline-ctor hoisting
-                    std::string pvt = _variantTargetType; _variantTargetType = ty;   // M28c: `Optional<int32> o = Optional::Some(…)`
+                    bool ph = _hoistOK; _hoistOK = true;               // inline-ctor hoisting
+                    std::string pvt = _variantTargetType; _variantTargetType = ty;   // `Optional<int32> o = Optional::Some(…)`
                     std::string iv = emitExpression(init);
                     _variantTargetType = pvt;
                     _hoistOK = ph;
@@ -1149,14 +1149,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k, isInterface(_classes[ty].collElemClass)) << "\n";
                         else        *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
                     } else if (_classes.count(ty) && _classes[ty].isCollection && isNamedValue(init.get())) {
-                        // M26c/f-3: a collection move/deep-copy isn't a plain `=` — require a marker.
+                        // a collection move/deep-copy isn't a plain `=` — require a marker.
                         if (handoff == 0)
                             unsupported(("a collection hand-off must say `give` (move) or `copy` (deep) — write "
                                          "`" + ty + " v = give …`").c_str(), n->line);
                         else if (handoff == 2) {
-                            // M26f-3/5: `copy` = a real deep copy (fresh buffer), element-wise. Valid iff
+                            // `copy` = a real deep copy (fresh buffer), element-wise. Valid iff
                             // each element is copyable — bitwise-copyable (owns nothing), OR a resource that
-                            // opted into `Copyable` (M26f-5: `__copy` calls the element's `copy()`). A
+                            // opted into `Copyable` (`__copy` calls the element's `copy()`). A
                             // resource element WITHOUT the contract is rejected. Overwrites the blit above.
                             auto ci = _collections.find(ty);
                             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
@@ -1169,7 +1169,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         else { indent(depth); *_out << "(" << emitExpression(init) << ").data = NULL; ("
                                                      << emitExpression(init) << ").len = 0;\n"; }
                     } else if (isMoveOnlyValue(ty) && isNamedValue(init.get())) {
-                        // M26f-2/f-4: a `resource` (destructible) VALUE. The `=` above blitted the
+                        // a `resource` (destructible) VALUE. The `=` above blitted the
                         // struct. If the type opted into `Copyable`, the marker is MANDATORY (both
                         // ops plausible — "scream when ambiguous"): `copy` deep-copies via copy()
                         // (overwriting the blit; the source stays valid), `give` moves. A plain
@@ -1189,7 +1189,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     } else if (handoff == 1) {
                         unsupported("`give` applies to an owned value (a smart pointer or collection) — a plain value just copies", n->line);
                     }
-                    // handoff == 2 (copy) of a pod/primitive: the plain `=` above IS the copy.
+                    // handoff == 2 (copy) of a value/primitive: the plain `=` above IS the copy.
                 }
             };
             if (lvd && lvd->variables)
@@ -1202,7 +1202,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
         line(n->line);
-        // M26c/d: unwrap a give/copy hand-off marker; the inner value is what we return.
+        // unwrap a give/copy hand-off marker; the inner value is what we return.
         SharedExpression retExpr = ret->expression;
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (retExpr)
@@ -1211,10 +1211,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // reference locals about to be destroyed), then unwind, then return.
         if (retExpr && _currentReturnCType != "void") {
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
-            bool ph = _hoistOK; _hoistOK = true;                       // M26i: inline-ctor hoisting
-            std::string pmt = _matchTargetCType; _matchTargetCType = _currentReturnCType;   // M28b: `return match(…)`
-            std::string pvt = _variantTargetType; _variantTargetType = _currentReturnCType; // M28c: `return Optional::Some(…)`
-            // M29b: `return Point(...)` / `return new T(...)` — materialize the construction into a temp.
+            bool ph = _hoistOK; _hoistOK = true;                       // inline-ctor hoisting
+            std::string pmt = _matchTargetCType; _matchTargetCType = _currentReturnCType;   // `return match(…)`
+            std::string pvt = _variantTargetType; _variantTargetType = _currentReturnCType; // `return Optional::Some(…)`
+            // `return Point(...)` / `return new T(...)` — materialize the construction into a temp.
             std::string rv = tryHoistInlineCtor(retExpr, _currentReturnCType, n->line);
             if (rv.empty()) rv = tryHoistInlineNew(retExpr, _currentReturnCType, n->line);
             if (rv.empty()) rv = emitExpression(retExpr);
@@ -1244,11 +1244,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 else        *_out << "(" << emitExpression(retExpr) << ").ctrl->"
                                   << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
             }
-            // M26f-2: returning a `resource` (destructible) VALUE moves it out — mark the source
+            // returning a `resource` (destructible) VALUE moves it out — mark the source
             // moved so the unwind below skips its dtor; the caller now owns the returned bytes.
             // (Must precede the bindable branch, whose `dynamic_cast<IdentifierNode>` is a catch-all.)
             else if (isMoveOnlyValue(rc) && isNamedValue(retExpr.get())) {
-                // M26f-4: a `Copyable` resource returns a fresh `copy` (source survives the unwind)
+                // a `Copyable` resource returns a fresh `copy` (source survives the unwind)
                 // or `give`s (moves out, dtor suppressed); a bare return is ambiguous. Overwrite the
                 // shallow blit captured into `tmp` above with a real deep copy for `copy`.
                 if (handoff == 2) {
@@ -1264,7 +1264,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (!mv.empty()) markMoved(mv);
                 }
             }
-            // Same move-out for a returned BindableFunctionPtr (M22): it may own its
+            // Same move-out for a returned BindableFunctionPtr: it may own its
             // bound object, so the scope dtor must NOT drop what the caller now owns.
             else if (auto* rid = dynamic_cast<IdentifierNode*>(retExpr.get())) {
                 if (rid->value && isBindableClass(exprClass(retExpr))) {
@@ -1294,7 +1294,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (hoist) { indent(depth); *_out << "{\n"; flushHoisted(depth + 1); bd = depth + 1; }
         indent(bd);
         *_out << "if (" << cond << ") ";
-        // M26f-2: walk each branch from the SAME pre-if move-state, then merge at the join.
+        // walk each branch from the SAME pre-if move-state, then merge at the join.
         // A branch that diverges (ends in return/break/continue) doesn't reach the join.
         auto before = _moveState;
         emitBody(f->ifStatement, bd, /*loopBoundary=*/false);
@@ -1439,11 +1439,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // Smart-pointer assignment `b = a;` — release b's current pointee first (no
     // leak), copy, then either invalidate the source (give: move) or retain
     // (copy: refcount++). The null/retain is a statement, so it can't live in
-    // an expression. M26c/d: a give/copy marker on the RHS overrides the default,
+    // an expression. a give/copy marker on the RHS overrides the default,
     // uniformly with init / argument / return.
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
         if (as->token == EQ && isSmartPtrExpr(as->unaryExpression)) {
-            checkConstWrite(as->unaryExpression, n->line);   // M24a: no reseating a const smart ptr
+            checkConstWrite(as->unaryExpression, n->line);   // no reseating a const smart ptr
             std::string b   = emitExpression(as->unaryExpression);
             std::string ty  = exprClass(as->unaryExpression);      // Owned_T / Shared_T / Weak_T
             CollKind    knd = smartKind(ty);
@@ -1462,7 +1462,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (rhsLval) { indent(depth); *_out << "if (&" << b << " != &(" << src << ")) {\n"; d2 = depth + 1; }
             indent(d2); *_out << ty << "__dtor(&" << b << ");\n";   // release b's old
             if (knd == CollKind::Weak && rhsLval && exprClass(rhs) != ty) {
-                // Shared->Weak reseat: field-copy + weak retain. M26g: a fat interface Weak
+                // Shared->Weak reseat: field-copy + weak retain. A fat contract Weak
                 // copies {obj, vtbl}; a thin Weak copies {ptr}.
                 indent(d2);
                 if (isInterface(_classes[ty].collElemClass))
@@ -1486,7 +1486,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (rhsLval) { indent(depth); *_out << "}\n"; }
             return;
         }
-        // M26f-2: assigning a `resource` (destructible) VALUE from a NAMED source is a MOVE —
+        // assigning a `resource` (destructible) VALUE from a NAMED source is a MOVE —
         // drop the target's current value (unless it was already moved out), blit, mark the
         // source moved. A fresh rvalue (new/ctor/call) keeps the generic copy path below.
         if (as->token == EQ && isMoveOnlyValue(exprClass(as->unaryExpression))) {
@@ -1499,7 +1499,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 std::string lname;
                 if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
                     if (lid->value && (!lid->qualifier || lid->qualifier->empty())) lname = *lid->value;
-                // M26f-4: on a `Copyable` type the marker is mandatory — `copy` deep-copies via
+                // on a `Copyable` type the marker is mandatory — `copy` deep-copies via
                 // copy() (source survives), `give` moves, bare is ambiguous. A plain resource moves.
                 bool doCopy = false;
                 if (handoff == 2) {
@@ -1531,7 +1531,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         }
     }
 
-    // M29c: `lhs = match(…)` / `lhs = Optional::Some(…)` — a value-producing RHS (a value-producing
+    // `lhs = match(…)` / `lhs = Optional::Some(…)` — a value-producing RHS (a value-producing
     // `match`, or a generic-variant construction that needs its instance from context) needs the LHS's
     // C type threaded. The assignment paths above don't handle these RHS kinds; this fires ONLY for
     // them (a match or a `Union::Variant` construction), so ordinary assignments are untouched.
@@ -1586,13 +1586,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     }
 
     // Bare expression statement (e.g. an assignment or call used as a statement).
-    // M28b: a statement-position `match` (value discarded) — emit the switch directly, not as an
+    // a statement-position `match` (value discarded) — emit the switch directly, not as an
     // expression (which would try to lift a result temp). Must precede the generic expr-statement path.
     if (auto* mm = dynamic_cast<MatchNode*>(n)) { emitMatchStatement(mm, depth); return; }
 
     if (dynamic_cast<ExpressionStatementNode*>(n)) {
         line(n->line);
-        bool ph = _hoistOK; _hoistOK = true;                       // M26i: allow inline-ctor hoisting
+        bool ph = _hoistOK; _hoistOK = true;                       // allow inline-ctor hoisting
         std::string s = emitExpression(std::dynamic_pointer_cast<ExpressionNode>(stmt));
         _hoistOK = ph;
         flushHoisted(depth);                                       // temp decls first…
@@ -1715,7 +1715,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fn->line);
 
         // A bodiless top-level `fn ret Name(params);` (no body, not extern) is a
-        // function-pointer SIGNATURE type (M21), not a callable — register in _sigs.
+        // function-pointer SIGNATURE type, not a callable — register in _sigs.
         if (!fn->block && !isExtern(fn)) {
             SigInfo si;
             si.cName    = qualify(*fn->name->value);
@@ -1733,7 +1733,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.params  = paramSigsOf(fn->parameters);
         _funcs[sig.cName] = sig;
 
-        // M27a: a generic template (`fn max<T>(…)`) is registered for monomorphization and is
+        // a generic template (`fn max<T>(…)`) is registered for monomorphization and is
         // NOT emitted as-is (its `T` is unbound). Its FuncSig stays in _funcs so call sites reorder
         // named args off it; call emission redirects to the concrete instantiation instead.
         if (fn->typeParams && !fn->typeParams->empty()) {
@@ -1756,7 +1756,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         ii.name = qualify(*cd->name->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
         if (cd->members)
             for (auto& m : *cd->members) {
-                // M26h — a `contract` is a public guarantee: methods only, no bodies, no fields, no
+                // a `contract` is a public guarantee: methods only, no bodies, no fields, no
                 // ctor/dtor (it holds no state and constructs nothing).
                 if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                     if (md->body)
@@ -1765,7 +1765,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     if (md->name && md->name->value)
                         ii.methods.push_back({*md->name->value, md->returnType, md->params});
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
-                    // M31c — an operator in a `contract` is a bound for generic math: `IArithmetic`
+                    // an operator in a `contract` is a bound for generic math: `IArithmetic`
                     // declares `This operator+(This rhs)`. Register it under the SAME synthetic name
                     // (`op_add`) the concrete class's `operator+` uses, so classSatisfiesBound matches
                     // it structurally and the monomorphized `a + b` lowers to `Concrete__op_add(&a, b)`.
@@ -1791,7 +1791,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
 }
 
 // Collect enum declarations.
-// M28a: an `enum` is a tagged union (discriminated union) if any variant carries a payload, or it
+// an `enum` is a tagged union (discriminated union) if any variant carries a payload, or it
 // is generic (parameterized, so it can't be a bare C `enum`). A plain, non-generic, payloadless enum
 // stays a C integer.
 static bool enumIsTagged(EnumDeclarationNode* ed)
@@ -1840,10 +1840,10 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
     for (auto& decl : *unit->codeDeclarationList) {
         auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
         if (!ed || !ed->identifier || !ed->identifier->value) continue;
-        std::string name = qualify(*ed->identifier->value);   // M14
+        std::string name = qualify(*ed->identifier->value);
 
         if (enumIsTagged(ed)) {
-            // M28a: a payload/generic enum is a discriminated union backed by a ClassInfo.
+            // a payload/generic enum is a discriminated union backed by a ClassInfo.
             ClassInfo ci = buildVariantClassInfo(ed, name);
             if (ed->typeParams && !ed->typeParams->empty()) {
                 // Generic enum (Optional<T>): a monomorphization TEMPLATE, kept OUT of _classes —
@@ -1865,7 +1865,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         ei.name  = name;
         ei.scope = _nsCtx.scope;
         ei.usings = _nsCtx.usings;
-        ei.underlyingCType = ed->underlyingType ? cType(ed->underlyingType) : "";   // M28a: `: IntType`
+        ei.underlyingCType = ed->underlyingType ? cType(ed->underlyingType) : "";   // `: IntType`
         if (ed->body)
             for (auto& m : *ed->body)
                 if (m->identifier && m->identifier->value)
@@ -1877,7 +1877,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
 // enum Name { Name_M0, Name_M1 = <expr>, … }
 void CEmitter::emitEnum(EnumInfo& ei)
 {
-    // M28a: `enum Name : IntType` pins the value to a fixed-width integer. ISO C can't set an enum's
+    // `enum Name : IntType` pins the value to a fixed-width integer. ISO C can't set an enum's
     // underlying type, so emit `typedef <ctype> Name;` + an anonymous enum carrying the constants.
     if (!ei.underlyingCType.empty()) {
         *_out << "typedef " << ei.underlyingCType << " " << ei.name << ";\n";
@@ -1901,7 +1901,7 @@ void CEmitter::emitEnum(EnumInfo& ei)
     *_out << "} " << ei.name << ";\n\n";
 }
 
-// M27c: bind `_thisType` (what `This` resolves to) for a scope, restoring on exit (survives early
+// bind `_thisType` (what `This` resolves to) for a scope, restoring on exit (survives early
 // returns / loop `continue`s). Used across signature collection and class/interface emission.
 namespace { struct ScopedStr { std::string& s; std::string prev;
     ScopedStr(std::string& s_, const std::string& v) : s(s_), prev(s_) { s = v; }
@@ -1926,7 +1926,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                               + "` — expected `value`, `resource`, or `contract`").c_str(), cd->line);
         }
 
-        // FFI (M16): an `extern class`/`extern value` is an external C struct — keep its literal
+        // FFI: an `extern class`/`extern value` is an external C struct — keep its literal
         // C name (not namespace-mangled) and don't emit/own it.
         bool isExt = false;
         if (cd->modifiers)
@@ -1934,14 +1934,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (mod->value && *mod->value == "extern") isExt = true;
 
         ClassInfo ci;
-        ci.name  = isExt ? *cd->name->value : qualify(*cd->name->value);   // M14 mangle / M16 literal
+        ci.name  = isExt ? *cd->name->value : qualify(*cd->name->value);   // scope-mangle / FFI literal name
         ci.kind  = kind;
         ci.scope = _nsCtx.scope;
         ci.usings = _nsCtx.usings;
         ci.isExternStruct = isExt;
         if (isExt) _externNames.insert(ci.name);
         ci.node = cd;
-        ScopedStr _ts(_thisType, ci.name);   // M27c: `This` -> this class in its collected method sigs
+        ScopedStr _ts(_thisType, ci.name);   // `This` -> this class in its collected method sigs
 
         // Single inheritance (extends). Base/interface names are RESOLVED in
         // linkBases() once every file's declarations are registered.
@@ -1952,7 +1952,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 for (auto& itf : *cd->baseTypes->interfaces)
                     if (itf && itf->value) ci.interfaces.push_back(*itf->value);  // bare; resolved in linkBases
         }
-        // Class-level KIND modifier (M25): pod | virtual | abstract | final.
+        // Class-level extensibility modifier: virtual | abstract | final.
         if (cd->modifiers)
             for (auto& mod : *cd->modifiers) {
                 if (!mod->value) continue;
@@ -1965,12 +1965,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (mv == "volatile")
                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", cd->line);
             }
-        // M25b — a plain/`pod` class is sealed: only virtual/abstract/final classes may extend a base.
+        // A plain `value`/`resource` type is sealed: only virtual/abstract/final classes may extend a base.
         // (The base must itself be extensible — checked in linkBases once names resolve.)
         if (!ci.baseName.empty() && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
             unsupported(("class '" + ci.name + "' extends '" + ci.baseName
                          + "'; only a `virtual`/`abstract`/`final class` may extend").c_str(), cd->line);
-        // M26h — `virtual`/`abstract`/`final` are qualifiers on a `resource` (extensible owned
+        // `virtual`/`abstract`/`final` are qualifiers on a `resource` (extensible owned
         // hierarchy). A `value` is sealed — for polymorphism use a `contract`.
         if (ci.kind == TypeKind::Value && (ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
             unsupported("a `value` is sealed — `virtual`/`abstract`/`final` apply to a `resource`; "
@@ -2011,9 +2011,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.returnType = md->returnType;
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
-                        mi.isConst    = md->isConst;   // `const fn …` (M24b)
-                        mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);  // M25
-                        // M26h — `protected` belongs to a `resource` in an extensibility hierarchy
+                        mi.isConst    = md->isConst;   // `const fn …`
+                        mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
+                        // `protected` belongs to a `resource` in an extensibility hierarchy
                         // (`virtual`/`abstract` declares protected members for subclasses; a `final`
                         // override still uses `protected` by NVI). It's meaningless on a `value`, a
                         // plain sealed `resource`, or a `contract` — those members are private/public.
@@ -2021,20 +2021,20 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
                             unsupported(("`protected` belongs to a `virtual`/`abstract`/`final resource` — `" + ci.name
                                          + "` is a plain `value`/`resource`, so its members are `private` or `public`").c_str(), md->line);
-                        mi.isFinal    = modHas(md->modifiers, "final");                              // M25
+                        mi.isFinal    = modHas(md->modifiers, "final");
                         if (md->modifiers)
                             for (auto& mod : *md->modifiers) {
                                 if (!mod->value) continue;
                                 if (*mod->value == "virtual")  mi.isVirtual = true;
                                 if (*mod->value == "override") { mi.isVirtual = true; mi.isOverride = true; }
                                 if (*mod->value == "abstract") { mi.isVirtual = true; mi.isAbstract = true; }
-                                if (*mod->value == "static")   mi.isStatic = true;   // M31a — no implicit `self`
+                                if (*mod->value == "static")   mi.isStatic = true;   // no implicit `self`
                                 if (*mod->value == "export")
                                     unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", md->line);
                                 if (*mod->value == "volatile")
                                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", md->line);
                             }
-                        // M31a — a `static` method has no `this`: no vtable slot, must have a body.
+                        // a `static` method has no `this`: no vtable slot, must have a body.
                         if (mi.isStatic) {
                             if (mi.isVirtual)
                                 unsupported("a `static` method has no `this` — it can't be `virtual`/`override`/`abstract`", md->line);
@@ -2042,7 +2042,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 unsupported("a `static` method needs a body", md->line);
                         }
                         if (!md->body) mi.isAbstract = mi.isVirtual = true;   // null body => pure
-                        // M25b — polymorphism rules.
+                        // polymorphism rules.
                         if (mi.isVirtual) {
                             const std::string& mname = *md->name->value;
                             const char* kw = mi.isAbstract ? "abstract" : mi.isOverride ? "override" : "virtual";
@@ -2059,15 +2059,15 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             else if (!mi.isAbstract && !mi.isOverride && !ci.isVirtualClass && !ci.isAbstractClass)
                                 unsupported(("class '" + ci.name + "' declares a virtual method; declare it `virtual class`").c_str(), md->line);
                         }
-                        // M25b — `final` seals a virtual slot; reject the meaningless/contradictory cases.
+                        // `final` seals a virtual slot; reject the meaningless/contradictory cases.
                         if (mi.isFinal && mi.isAbstract)
                             unsupported(("`final abstract` on '" + *md->name->value + "' is a contradiction (an abstract method must be overridden)").c_str(), md->line);
                         else if (mi.isFinal && !mi.isVirtual)
                             unsupported(("`final` on '" + *md->name->value + "' applies only to an overridable (virtual/override) method").c_str(), md->line);
-                        // M26f-4: opting into the `Copyable` contract — a public, nullary `copy`
+                        // Opting into the `Copyable` contract — a public, nullary `copy`
                         // returning the class's OWN type (unqualified, same simple name). Its presence
-                        // makes the give/copy marker mandatory on this `resource` value. (The explicit
-                        // `: Copyable` form, needing `This`, lands with M26h/M27; this is the interim.)
+                        // makes the give/copy marker mandatory on this `resource` value. Detected
+                        // structurally (a public nullary `copy` returning the class's own type).
                         if (*md->name->value == "copy" && mi.params.empty()
                             && mi.visibility == Visibility::Public
                             && md->returnType && md->returnType->value
@@ -2081,10 +2081,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         unsupported("multiple constructors (no overloading yet)", cc->line);
                     ci.hasCtor   = true;
                     ci.ctorNode  = cc;
-                    ci.ctorVisibility = visibilityOf(cc->modifiers, Visibility::Private, cc->line);  // M25
+                    ci.ctorVisibility = visibilityOf(cc->modifiers, Visibility::Private, cc->line);
                     if (cc->declarator) ci.ctorParams = paramSigsOf(cc->declarator->params);
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
-                    // M26h — `~dtor` ⟺ `resource`. A `value` owns nothing, so a destructor makes it
+                    // `~dtor` ⟺ `resource`. A `value` owns nothing, so a destructor makes it
                     // a resource; that disagreement is the lesson in the message.
                     if (ci.kind == TypeKind::Value)
                         unsupported("a `value` owns nothing — a `~dtor` makes it a `resource`; "
@@ -2092,10 +2092,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     ci.hasDtor  = true;
                     ci.dtorNode = dd;
                 } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(mn)) {
-                    // M24d: a `const` data member — a normal struct field, written
+                    // a `const` data member — a normal struct field, written
                     // ONCE in the constructor (inline init or `this.f = …`), then
                     // immutable. Enforcement is at the cstar level; the C field is plain.
-                    // M26h — visibility follows the same per-field rule (see fieldVisibility).
+                    // visibility follows the same per-field rule (see fieldVisibility).
                     Visibility kvis = fieldVisibility(ci, kd->modifiers, kd->line);
                     if (kd->declarators)
                         for (auto& d : *kd->declarators) {
@@ -2109,12 +2109,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             ci.constFields.insert(fi.name);
                         }
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(mn)) {
-                    // M31b — an operator overload registers as a method under a synthetic name
+                    // an operator overload registers as a method under a synthetic name
                     // (`op_add`/`op_neg`/…), disambiguated by arity: 0 params = unary-on-`this`,
                     // 1 = binary method (`this`+rhs), 2 = binary free form (both operands explicit).
                     auto* d = od->operatorDeclarator.get();
                     int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
-                    std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name);   // M31 — type-suffixed
+                    std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name);   // type-suffixed
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
                                      + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od->line);
@@ -2138,7 +2138,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     mi.visibility = visibilityOf(od->modifiers, Visibility::Public, od->line);   // operators are public by nature
                     ci.methods[opName] = mi;
                 } else if (auto* fg = dynamic_cast<FriendGrantNode*>(mn)) {
-                    // M25c — capture the grant raw; the accessor is resolved (against the
+                    // capture the grant raw; the accessor is resolved (against the
                     // full function/class tables) in resolveFriends() once all units load.
                     RawFriendGrant rg; rg.accessor = fg->accessor; rg.line = fg->line;
                     if (fg->members)                                  // null => `[...]` (all privates)
@@ -2148,7 +2148,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 }
             }
         }
-        // M25b — a `virtual`/`abstract class` must actually declare an overridable method
+        // a `virtual`/`abstract class` must actually declare an overridable method
         // (else the qualifier is a lie); the reverse of rule 4a.
         if (ci.isVirtualClass || ci.isAbstractClass) {
             bool hasOverridable = false;
@@ -2157,14 +2157,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
                              + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd->line);
         }
-        // M27b: a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
+        // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
         // methods) is parked in _genericTypes; the specialized instances are the real classes.
         if (cd->typeParams && !cd->typeParams->empty()) {
             std::vector<std::string> ps;
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);   // [A, B, …]
             _genericTypeParams[ci.name] = ps;
-            _genericTypeBounds[ci.name] = cd->typeBounds;   // M27c: per-param contract bounds
+            _genericTypeBounds[ci.name] = cd->typeBounds;   // per-param contract bounds
             _genericTypeCtx[ci.name]    = _nsCtx;
             _genericTypes[ci.name]      = ci;
         } else {
@@ -2173,14 +2173,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
     }
 }
 
-// ---- Collections (M9) -----------------------------------------------------
+// ---- Collections -----------------------------------------------------
 
 // The mangling suffix for an element type: primitives use a short stable
 // spelling; a class/enum uses its own name. Array<int32> -> "int32".
 std::string CEmitter::mangleElem(SharedIdentifier elem)
 {
     if (!elem) return "void";
-    // M27a: substitute a bound type-param before mangling (mirrors cType).
+    // substitute a bound type-param before mangling (mirrors cType).
     if (!_typeSubst.empty() && elem->value && !elem->genericArg) {
         auto s = _typeSubst.find(*elem->value);
         if (s != _typeSubst.end()) return mangleElem(s->second);
@@ -2201,7 +2201,7 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         default: {  // class / generic element — resolve to its mangled name (the suffix)
             if (!elem->value) return "void";
             std::string base = resolveUserName(*elem->value, elem->qualifier);
-            // M27b-beta: recurse into a nested generic arg so `Shared<Circle>` mangles to
+            // recurse into a nested generic arg so `Shared<Circle>` mangles to
             // `Shared_Circle` (not just `Shared`) — fixes the `List<Shared<Circle>>` collision.
             if (elem->genericArgs) for (auto& a : *elem->genericArgs) base += "_" + mangleElem(a);
             else if (elem->genericArg) base += "_" + mangleElem(elem->genericArg);
@@ -2210,7 +2210,7 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
     }
 }
 
-// M27b: the mangled struct name for `Pair<A, B, …>` — the template's scoped name + one "_<mangle>"
+// the mangled struct name for `Pair<A, B, …>` — the template's scoped name + one "_<mangle>"
 // suffix per type arg. `mangleElem` resolves a bound `T` under _typeSubst, so this is used identically
 // at discovery (concrete args), at cType (field/decl args under subst), and to name the specialized ClassInfo.
 std::string CEmitter::genericTypeMangle(const std::string& tmpl, SharedIdentifierList args)
@@ -2250,7 +2250,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     std::string elemMangle = isStr ? "" : mangleElem(elem);
     std::string elemClass  = (!isStr && isClass(elemCType)) ? elemCType : "";
 
-    // BindableFunctionPtr<Sig> (M22) — element is a function SIGNATURE, not a class.
+    // BindableFunctionPtr<Sig> — element is a function SIGNATURE, not a class.
     if (!isStr && collType->value && *collType->value == "BindableFunctionPtr") {
         registerBindable(elem);
         return;
@@ -2258,7 +2258,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
 
     // Smart pointers (Owned/Shared/Weak) — registered via the shared helper.
     if (isSmart) {
-        // M26g: a smart pointer over an INTERFACE owns the concrete object behind a fat element.
+        // a smart pointer over an INTERFACE owns the concrete object behind a fat element.
         if (isInterface(elemCType)) {
             if (isWeak) { registerSmartPtr(CollKind::Shared, elem); registerOptionalOfShared(elem); }  // tryUpgrade's Optional<Shared<I>>
             registerSmartPtr(kind, elem);   // interface-element variant (elemClass = the interface)
@@ -2268,15 +2268,15 @@ void CEmitter::registerCollection(SharedIdentifier collType)
             unsupported("a smart pointer requires a class or interface element type", collType->line);
             return;
         }
-        // A Weak needs its Shared (tryUpgrade's pointee) + Optional<Shared<T>> (tryUpgrade's return, M28d).
+        // A Weak needs its Shared (tryUpgrade's pointee) + Optional<Shared<T>> (tryUpgrade's return).
         if (isWeak) { registerSmartPtr(CollKind::Shared, elem); registerOptionalOfShared(elem); }
         registerSmartPtr(kind, elem);
         return;
     }
 
-    // M26e: an interface borrows its object — it can't be a BARE collection element (a
+    // an interface borrows its object — it can't be a BARE collection element (a
     // `List`/`Array` of interface fat pointers would dangle). Own the object: store an
-    // `Owned<I>`/`Shared<I>` (a `List<Shared<I>>`) instead — the smart-ptr-over-interface (M26g).
+    // `Owned<I>`/`Shared<I>` (a `List<Shared<I>>`) instead — the smart-ptr-over-interface.
     if (isInterface(elemCType)) {
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
         unsupported(("an interface (`" + nm + "`) borrows its object, so it can't be a collection "
@@ -2328,7 +2328,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("get",    { ParamSig{"index", false, ""} }, elem);
         addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} }, SharedIdentifier());
         addMethod("length", {}, SharedIdentifier());
-        addMethod("dataPtr", {}, SharedIdentifier());   // FFI bridge (M17): Ptr<T> to the buffer
+        addMethod("dataPtr", {}, SharedIdentifier());   // FFI bridge: Ptr<T> to the buffer
         addMethod("byteLen", {}, SharedIdentifier());   // len * sizeof(T)
     }
 
@@ -2342,7 +2342,7 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
 {
     std::string elemCType  = cType(elem);
     std::string elemMangle = mangleElem(elem);
-    bool elemIface = isInterface(elemCType);                          // M26g: fat-element variant
+    bool elemIface = isInterface(elemCType);                          // fat-element variant
     std::string elemClass  = (isClass(elemCType) || elemIface) ? elemCType : "";
     if (elemClass.empty()) return;              // caller diagnosed
     std::string cName = (kind == CollKind::Owned  ? "Owned_"
@@ -2367,11 +2367,11 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
         mi.isIntrinsic = true; ci.methods[m] = mi;
     };
     // Intrinsics (not auto-deref forwarded): Owned has none; Shared has valid();
-    // Weak has tryUpgrade() (-> Optional<Shared<T>>, M28d) and expired().
+    // Weak has tryUpgrade() (-> Optional<Shared<T>>) and expired().
     if (kind == CollKind::Shared) addM("valid", {});
     if (kind == CollKind::Weak) {
         addM("tryUpgrade", {}); addM("expired", {});
-        // M29a: record that tryUpgrade returns Optional<Shared<elem>> so exprClass can class a
+        // record that tryUpgrade returns Optional<Shared<elem>> so exprClass can class a
         // `w.tryUpgrade()` call result — enabling `match(w.tryUpgrade())` without a local binding.
         if (_genericTypeParams.count("Optional")) {
             if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
@@ -2386,7 +2386,7 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
     _classes[cName] = ci;
 }
 
-// M28d: register `Optional<Shared<elem>>` for a `Weak<elem>` — the type `tryUpgrade()` returns.
+// register `Optional<Shared<elem>>` for a `Weak<elem>` — the type `tryUpgrade()` returns.
 // Synthesizes the `Shared<elem>` argument node and drives the normal generic-type monomorphization.
 void CEmitter::registerOptionalOfShared(SharedIdentifier elem)
 {
@@ -2401,7 +2401,7 @@ void CEmitter::registerOptionalOfShared(SharedIdentifier elem)
     registerGenericTypeInst("Optional", optArgs);
 }
 
-// Register a BindableFunctionPtr<Sig> (M22) — a callable that may own a bound
+// Register a BindableFunctionPtr<Sig> — a callable that may own a bound
 // receiver. Element is a signature type (from `fnptr`), not a class. Backed by the
 // fully type-erased CSTAR_BINDABLE_DEFINE struct; the sig drives only the invoke.
 void CEmitter::registerBindable(SharedIdentifier elem)
@@ -2442,15 +2442,15 @@ void CEmitter::scanTypeForCollections(SharedIdentifier t)
     // Inner-first: register the element's collections / generic instances BEFORE the enclosing
     // type, so the outer's elemClass/elemDestructible resolve against an already-registered inner
     // (`List<Shared<IShape>>` must see `Shared_IShape` in _classes to drop each element; likewise
-    // `List<List<T>>`, `List<Box<T>>`). Recurse ALL type args (M27b-beta) so a collection/generic in
+    // `List<List<T>>`, `List<Box<T>>`). Recurse ALL type args so a collection/generic in
     // a 2nd+ position (`Pair<int, List<int>>`) is discovered — not just the first arg.
     if (t->genericArgs) for (auto& a : *t->genericArgs) scanTypeForCollections(a);
     else if (t->genericArg) scanTypeForCollections(t->genericArg);
-    scanTypeForGenericTypes(t);                                 // M27b: also discover Pair<A,B> here
+    scanTypeForGenericTypes(t);                                 // also discover Pair<A,B> here
     if (isCollectionType(t)) registerCollection(t);
 }
 
-// M27b: register the specialized instance for a user generic-type reference `Pair<A, B>`. The
+// register the specialized instance for a user generic-type reference `Pair<A, B>`. The
 // recursion into the args is driven by scanTypeForCollections (which calls this at each type node).
 void CEmitter::scanTypeForGenericTypes(SharedIdentifier t)
 {
@@ -2466,7 +2466,7 @@ void CEmitter::scanTypeForGenericTypes(SharedIdentifier t)
 void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args)
 {
     if (!args || args->empty()) return;
-    NsCtx savedCtxAtEntry = _nsCtx;   // M28c: the use-site ctx (the type args are mangled in it)
+    NsCtx savedCtxAtEntry = _nsCtx;   // the use-site ctx (the type args are mangled in it)
     const std::vector<std::string>& params = _genericTypeParams[tmpl];
 
     // Resolve each bare-`T` arg (the nested/transitive case) to its concrete binding.
@@ -2491,7 +2491,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     for (auto& c : concrete) mangled += "_" + mangleElem(c);
     if (_genericTypeInsts.count(mangled)) return;               // dedup
 
-    // M27c: each concrete type argument must satisfy its parameter's contract bounds. Runs once per
+    // each concrete type argument must satisfy its parameter's contract bounds. Runs once per
     // unique instance (after dedup); with _typeSubst still at the caller's binding so a nested arg is
     // already the resolved `concrete[i]`.
     SharedBoundsList bounds = _genericTypeBounds.count(tmpl) ? _genericTypeBounds[tmpl] : SharedBoundsList();
@@ -2502,7 +2502,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     _genericTypeInsts[mangled] = { tmpl, mangled, concrete };
     _genericTypeInstOf[mangled] = tmpl;
     _genericTypeInstOrder.push_back(mangled);
-    // M28c: remember the USE-SITE ctx (the type args were mangled in it). A prelude template
+    // remember the USE-SITE ctx (the type args were mangled in it). A prelude template
     // (Optional/Result) lives in the global scope but its args may name user types — emit the
     // instance's members under this ctx so those names resolve. For a same-scope user generic it
     // equals the template ctx, so nothing changes there.
@@ -2523,7 +2523,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         ci.ctorParams = paramSigsOf(ci.ctorNode->declarator->params);
     for (auto& kv : ci.methods) {
         if (kv.second.node) kv.second.params = paramSigsOf(kv.second.node->params);
-        else if (kv.second.isOperator && kv.second.opDecl)   // M31b — an operator has no `node`
+        else if (kv.second.isOperator && kv.second.opDecl)   // an operator has no `node`
             kv.second.params = paramSigsOf(operatorParamList(kv.second.opDecl->operatorDeclarator.get()));
     }
     _classes[mangled] = ci;
@@ -2536,7 +2536,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     }
     if (ci.ctorNode && ci.ctorNode->declarator)
         for (auto& p : *ci.ctorNode->declarator->params) if (p) scanTypeForCollections(p->type);
-    // M28a: a generic tagged union (Optional<Shared<T>>) — scan each variant's substituted payload so
+    // a generic tagged union (Optional<Shared<T>>) — scan each variant's substituted payload so
     // the inner `Shared_int32` etc. registers (inner-first) before this instance's dtor references it.
     for (auto& v : ci.variants) for (auto& f : v.payload) scanTypeForCollections(f.type);
 
@@ -2577,7 +2577,7 @@ void CEmitter::scanExprForCollections(SharedExpression e)
     } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         scanExprForCollections(su->expression);
     } else if (auto* mm = dynamic_cast<MatchNode*>(n)) {
-        // M29d: recurse into a `match` — the subject and each arm (a single expression OR a block),
+        // recurse into a `match` — the subject and each arm (a single expression OR a block),
         // so a type used ONLY inside an arm (e.g. a block-local `Shared<T>`) is still registered.
         scanExprForCollections(mm->subject);
         if (mm->arms) for (auto& a : *mm->arms) if (a) {
@@ -2631,7 +2631,7 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             if (fn->parameters) for (auto& p : *fn->parameters) if (p) scanTypeForCollections(p->type);
             scanStmtForCollections(fn->block);
         } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
-            // M27b: skip a generic TYPE template's members — their types name the raw type params
+            // skip a generic TYPE template's members — their types name the raw type params
             // (`List<T>` would register a bogus `List_T`). Each concrete `Wrap<int32>` reference in
             // the program drives registerGenericTypeInst, which re-scans the specialized members
             // under _typeSubst (so `List<T>` -> `List_int32`).
@@ -2641,7 +2641,7 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
                     scanTypeForCollections(fd->type);
                 } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(mn)) {
-                    scanTypeForCollections(kd->type);   // const field of a collection type (M24d)
+                    scanTypeForCollections(kd->type);   // const field of a collection type
                 } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
                     scanTypeForCollections(md->returnType);
                     if (md->params) for (auto& p : *md->params) if (p) scanTypeForCollections(p->type);
@@ -2658,7 +2658,7 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
     }
 }
 
-// ---- Generics (M27a) ------------------------------------------------------
+// ---- Generics ------------------------------------------------------
 // Monomorphization. A `fn name<T,...>(…)` template is specialized once per concrete
 // type-argument tuple reachable from a call site. Discovery infers the tuple from the
 // call's arguments (literals + locally-typed values), registers a deduped instantiation,
@@ -2677,7 +2677,7 @@ SharedIdentifier CEmitter::primTypeNode(int builtInVal)
     return node;
 }
 
-// The concrete type node of an argument expression (null if undeterminable). M27a inputs:
+// The concrete type node of an argument expression (null if undeterminable). Inputs:
 // literals -> their builtin kind; a bare identifier -> its declared type via `localTys`; an
 // explicit new/cast -> its own type; an arithmetic expr -> an operand's type.
 SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string, SharedIdentifier>& localTys)
@@ -2710,14 +2710,14 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     return nullptr;
 }
 
-// A type node usable as a generic type argument in M27a: a primitive, or a known
-// class/enum/interface. A bare type-parameter (its name resolves to none of these) and a
-// collection/smart-pointer type argument (a `List<…>` etc.) are NOT concrete here (M27b).
+// A type node usable as a generic type argument: a primitive, or a known
+// class/enum/contract. A bare type-parameter (its name resolves to none of these) and a
+// collection/smart-pointer type argument (a `List<…>` etc.) are NOT concrete here.
 bool CEmitter::isConcreteTypeArg(SharedIdentifier t)
 {
     if (!t) return false;
     if (t->builtInVal != IDENTIFIER_NONE_VAL) return true;   // primitive
-    if (t->genericArg) return false;                          // List<…>/Shared<…> arg — M27b
+    if (t->genericArg) return false;                          // List<…>/Shared<…> arg
     if (!t->value) return false;
     std::string m = resolveUserName(*t->value, t->qualifier);
     return _classes.count(m) || _enums.count(m) || _interfaces.count(m);
@@ -2740,7 +2740,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     if (tmpl->parameters) for (auto& p : *tmpl->parameters) {
         if (!p || !p->type || !p->type->value) continue;
         const std::string& pty = *p->type->value;
-        if (p->type->genericArg || !tps.count(pty)) continue;   // not a bare type-param (List<T> etc. — M27b)
+        if (p->type->genericArg || !tps.count(pty)) continue;   // not a bare type-param (List<T> etc. is a generic type)
         std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
         auto ai = byName.find(pname);
         if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
@@ -2767,7 +2767,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         }
     }
 
-    // M27c: each inferred concrete type must satisfy its parameter's contract bounds (points at this call).
+    // each inferred concrete type must satisfy its parameter's contract bounds (points at this call).
     if (tmpl->typeBounds)
         for (size_t i = 0; i < tmpl->typeParams->size() && i < tmpl->typeBounds->size(); ++i)
             if ((*tmpl->typeParams)[i])
@@ -2872,7 +2872,7 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
     } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
         if (d->variables) for (auto& v : *d->variables) if (v) {
             scanExprForGenerics(v->initializer, localTys);
-            // ponytail: flat name->type map, no scope-pop — correct without shadowing (fine for M27a).
+            // Flat name->type map, no scope-pop — correct without shadowing.
             if (v->name && v->name->value && d->type) localTys[*v->name->value] = d->type;
         }
     } else if (auto* cd = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
@@ -2961,7 +2961,7 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     _nsCtx = savedCtx;
 }
 
-// M28d: `Weak<T>.tryUpgrade() -> Optional<Shared<T>>` — the type-safe replacement for the empty-
+// `Weak<T>.tryUpgrade() -> Optional<Shared<T>>` — the type-safe replacement for the empty-
 // Shared sentinel. Wraps the runtime macro's internal `__upgrade` (which does the strong++/empty):
 // a live Shared (ctrl != NULL) becomes `Some`, a dead one `None`. Emitted after the Weak macro,
 // where both the Shared and the Optional<Shared<T>> instance structs are already complete.
@@ -2992,7 +2992,7 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
         std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "CSTAR_ELEM_NODTOR";
         std::string tail = typesOnly ? ")\n"                          // _TYPE(T, NAME)
                                      : (", " + elemDtor + ")\n");     // _FUNCS(T, NAME, ELEM_DTOR)
-        // M26f-5: Array/List `__copy` deep-copies each element — a `Copyable` resource via its own
+        // Array/List `__copy` deep-copies each element — a `Copyable` resource via its own
         // `Elem__copy`, else a memberwise (bitwise) copy. (Only these two kinds have `__copy`.)
         std::string elemCopy = info.elemCopyable ? (info.elemClass + "__copy") : "CSTAR_ELEM_MEMBERWISE";
         std::string collTail = typesOnly ? ")\n" : (", " + elemDtor + ", " + elemCopy + ")\n");
@@ -3001,7 +3001,7 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
         else if (info.kind == CollKind::List)
             *_out << "CSTAR_LIST_" << suf << "(" << info.elemCType << ", " << info.cName << collTail;
         else if (info.kind == CollKind::Owned && info.elemIsInterface)
-            // M26g: fat-element `Owned<I>` — TYPE takes the vtbl type, FUNCS drops via the vtbl slot.
+            // fat-element `Owned<I>` — TYPE takes the vtbl type, FUNCS drops via the vtbl slot.
             *_out << "CSTAR_OWNED_IFACE_" << suf << "(" << info.cName
                  << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : ")\n");
         else if (info.kind == CollKind::Owned)
@@ -3012,7 +3012,7 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
         else if (info.kind == CollKind::Shared)
             *_out << "CSTAR_SHARED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Weak && info.elemIsInterface) {
-            // The C `__upgrade` (-> Shared<I>) stays an internal helper; `tryUpgrade` wraps it (M28d).
+            // The C `__upgrade` (-> Shared<I>) stays an internal helper; `tryUpgrade` wraps it.
             *_out << "CSTAR_WEAK_IFACE_" << suf << "(" << info.cName
                  << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : (", Shared_" + info.elemMangle + ")\n"));
             if (!typesOnly) emitWeakTryUpgrade(info);
@@ -3046,7 +3046,7 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     return true;
 }
 
-// ---- Smart pointers (M10 Owned, M11 Shared) -------------------------------
+// ---- Smart pointers (Owned, Shared) ---------------------------------------
 
 bool CEmitter::isSmartPtrClass(const std::string& cls) const
 {
@@ -3082,7 +3082,7 @@ bool CEmitter::isNamedValue(ASTNode* e)
     if (dynamic_cast<MemberAccessNode*>(e) || dynamic_cast<ElementAccessNode*>(e)
         || dynamic_cast<BaseAccessNode*>(e)) return true;
     if (auto* id = dynamic_cast<IdentifierNode*>(e)) {
-        // M28a: a `::`-scope-resolved enum member / variant construction (`Color::Blue`, `Box::Empty`)
+        // a `::`-scope-resolved enum member / variant construction (`Color::Blue`, `Box::Empty`)
         // is a FRESH rvalue, not a movable named lvalue. Distinguish it from an object access
         // `obj.field` (also a qualified IdentifierNode) by the qualifier head: a local/current-class
         // field head is an object; a type/namespace head is scope resolution.
@@ -3104,10 +3104,10 @@ bool CEmitter::isNamedValue(ASTNode* e)
     return false;
 }
 
-// M26e: an interface value borrows its object, so it's a second-class view — it may
+// an interface value borrows its object, so it's a second-class view — it may
 // be a parameter or local, but it can't be STORED beyond the call that produced it
 // (a field, a return, a collection element) without dangling. Reject the bare-interface
-// case with guidance toward owning the object (`Shared<I>` — M26f enables that).
+// case with guidance toward owning the object (`Shared<I>` — enables that).
 void CEmitter::rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line)
 {
     if (!ty || !isInterface(cType(ty))) return;
@@ -3128,16 +3128,16 @@ bool CEmitter::isSmartPtrLValue(SharedExpression e)
 // the source's drop becomes a no-op (the ref/ownership transfers to the dest).
 std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem)
 {
-    // M26g: an owned INTERFACE handle's value field is the fat pointer `.obj`, not `.ptr`.
+    // an owned INTERFACE handle's value field is the fat pointer `.obj`, not `.ptr`.
     if (kind == CollKind::Owned) return expr + (ifaceElem ? ".obj = NULL;" : ".ptr = NULL;");
     return expr + ".ctrl = NULL; " + expr + (ifaceElem ? ".obj = NULL;" : ".ptr = NULL;");  // Shared/Weak guard on ctrl
 }
 
-// ---- M26f-2: resource-value move analysis ---------------------------------
+// ---- Resource-value move analysis -----------------------------------------
 
 // A move-only VALUE: a destructible class value that isn't a smart-ptr / collection / extern
 // struct. It moves on hand-off (its dtor is suppressed) and is never silently copied. (Trigger
-// = destructibility — the interim proxy for a `resource` until the M26h vocabulary lands.)
+// = destructibility — the proxy for a `resource`.)
 bool CEmitter::isMoveOnlyValue(const std::string& cls) const
 {
     auto it = _classes.find(cls);
@@ -3152,7 +3152,7 @@ bool CEmitter::isMoveOnlyValue(const std::string& cls) const
     return ci.destructible;
 }
 
-// M26f-4: has this type opted into the `Copyable` contract? (Detected structurally at collection
+// has this type opted into the `Copyable` contract? (Detected structurally at collection
 // time — a public nullary `copy` returning the own type; see collectClasses.) Only ever consulted
 // for a move-only value, where it flips the marker from "silent move" to "mandatory give/copy".
 bool CEmitter::isCopyable(const std::string& cls) const
@@ -3163,7 +3163,7 @@ bool CEmitter::isCopyable(const std::string& cls) const
 
 void CEmitter::markMoved(const std::string& cVar)
 {
-    // M26f-2 (Increment 3): moving a local declared OUTSIDE the nearest enclosing loop would move
+    //  (Increment 3): moving a local declared OUTSIDE the nearest enclosing loop would move
     // it again on the next iteration (double-move). Reject — conservative, no loop fixpoint. A value
     // declared INSIDE the loop body is fresh each iteration, so moving it is fine.
     int lb = -1;
@@ -3188,7 +3188,7 @@ void CEmitter::checkNotMoved(const std::string& cVar, int line)
 
 // The source of a move hand-off. A bare move-only local -> its name (caller marks it moved).
 // A field / element / base member -> reject: moving out would leave the owner holding a
-// moved-from value (the field-move case is deferred to Optional<T>, M28).
+// moved-from value (use Optional<T> for the field-move case).
 std::string CEmitter::moveOnlySource(SharedExpression e, int line)
 {
     if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
@@ -3196,7 +3196,7 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
         if ((!id->qualifier || id->qualifier->empty()) && _moveState.count(nm)) return nm;
     }
     unsupported("cannot `give` out of a field/element — it would leave the owner holding a "
-                "moved-from value; move a local instead (Optional<T> comes in M28)", line);
+                "moved-from value; move a local instead, or use Optional<T>", line);
     return "";
 }
 
@@ -3206,7 +3206,7 @@ std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string
     // An intrinsic on the pointer itself (lock/expired/valid)?
     if (_classes[cls].methods.count(method))
         return emitDispatch(cls, "&(" + recvExpr + ")", method, args, srcLine);
-    // M26g: an owned INTERFACE handle dispatches polymorphically through its own {obj, vtbl}.
+    // an owned INTERFACE handle dispatches polymorphically through its own {obj, vtbl}.
     if (isInterface(_classes[cls].collElemClass) && smartKind(cls) != CollKind::Weak)
         return emitInterfaceDispatch(recvExpr, _classes[cls].collElemClass, method, args, srcLine);
     // Otherwise auto-deref to the pointee T (Owned/Shared expose a T* ptr).
@@ -3239,8 +3239,8 @@ void CEmitter::linkBases()
             ci.baseName.clear();
         } else {
             ci.base = &it->second;
-            // M25b — the base must be extensible: a `virtual`/`abstract class`, never a
-            // plain/`pod`/`final` (sealed) class.
+            // The base must be extensible: a `virtual`/`abstract class`, never a
+            // plain/`final` (sealed) class.
             int bl = ci.node ? ci.node->line : 0;
             if (ci.base->isFinalClass)
                 unsupported(("cannot extend '" + ci.base->name + "': it is a `final class` (a sealed leaf)").c_str(), bl);
@@ -3269,13 +3269,13 @@ std::vector<ClassInfo*> CEmitter::topoOrderClasses()
         done.insert(ci);
         out.push_back(ci);
     };
-    // M27b: specialized generic-type instances are emitted by a dedicated pass under _typeSubst,
+    // specialized generic-type instances are emitted by a dedicated pass under _typeSubst,
     // not the normal class loops — exclude them here (their only consumer, header emission).
     for (auto& kv : _classes) if (!kv.second.isGenericInst) visit(&kv.second);
     return out;
 }
 
-// M30a: order EVERY laid-out struct (normal classes + generic instances + tagged unions) so a
+// order EVERY laid-out struct (normal classes + generic instances + tagged unions) so a
 // by-value dependency is always emitted first — base-before-derived AND held-value-before-holder.
 // Unlike topoOrderClasses this INCLUDES generic instances and adds by-value field/payload edges, so
 // `Box<Rock>`/`class Holder{Rock r;}`/`enum Event{Resize(Vec2)}` lay out correctly. A collection /
@@ -3368,7 +3368,7 @@ void CEmitter::buildVtables()
                 unsupported(("'override fn " + mname + "' overrides no virtual method in any base class "
                              "(the base method must be `virtual`/`abstract`)").c_str(),
                             mi.node ? mi.node->line : 0);
-            // M25b — a `final` slot may not be re-overridden by any subclass.
+            // a `final` slot may not be re-overridden by any subclass.
             if (mi.isOverride)
                 for (ClassInfo* b = ci->base; b; b = b->base) {
                     auto it = b->methods.find(mname);
@@ -3415,7 +3415,7 @@ void CEmitter::computeDestructible()
 {
     // Seed: an explicit `~dtor` OR a collection/smart-ptr (always owns heap → RAII-dropped; its
     // ClassInfo carries destructible=true, which this reset must preserve — collections are
-    // registered before this pass now, M26f-5).
+    // registered before this pass now).
     for (auto& kv : _classes) kv.second.destructible = kv.second.hasDtor || kv.second.isCollection;
     bool changed = true;
     while (changed) {
@@ -3423,12 +3423,12 @@ void CEmitter::computeDestructible()
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
             if (ci.destructible || ci.isExternStruct) continue;   // cstar doesn't own external structs
-            // M27b: a specialized instance's fields are typed in `T` — resolve them under its binding
+            // a specialized instance's fields are typed in `T` — resolve them under its binding
             // (and the template's scope) so `Box<Resource>` correctly sees the owned resource.
             bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
             if (inst) {
                 const GenericTypeInst& gi = _genericTypeInsts[ci.name];
-                _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name]   // M28c: use-site ctx
+                _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name]   // use-site ctx
                                                             : _genericTypeCtx[gi.templateKey];
                 _typeSubst.clear();
                 const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
@@ -3442,7 +3442,7 @@ void CEmitter::computeDestructible()
                     auto it = _classes.find(cType(f.type));
                     if (it != _classes.end() && it->second.destructible) { d = true; break; }
                 }
-            // M28a: a tagged union is destructible if any variant's payload owns a resource.
+            // a tagged union is destructible if any variant's payload owns a resource.
             if (!d)
                 for (auto& v : ci.variants) {
                     for (auto& f : v.payload) {
@@ -3464,7 +3464,7 @@ void CEmitter::computeDestructible()
         auto it = _classes.find(info.elemClass);
         bool known = !info.elemClass.empty() && it != _classes.end();
         info.elemDestructible = known && it->second.destructible;
-        info.elemCopyable     = known && it->second.copyable;   // M26f-5: deep-copy each element
+        info.elemCopyable     = known && it->second.copyable;   // deep-copy each element
     }
     // A `value` owns nothing. `destructible` (computed above, transitively over base + owned fields +
     // collections + smart-ptrs) is exactly "owns something to drop", so a destructible `value` is a
@@ -3497,7 +3497,7 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
     return nullptr;
 }
 
-// M27c: a concrete type satisfies a contract BOUND when it has every one of the contract's methods,
+// a concrete type satisfies a contract BOUND when it has every one of the contract's methods,
 // public (structural — this is exactly what makes the monomorphized call resolve to a static
 // `Concrete__m(&x)`; nominal `implements` is not required, matching the codegen reality).
 bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
@@ -3512,7 +3512,7 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
     return true;
 }
 
-// M27c: at each monomorphization, verify the concrete type argument bound to `paramName` satisfies
+// at each monomorphization, verify the concrete type argument bound to `paramName` satisfies
 // every contract on it (`+` = AND); a clean diagnostic instead of a downstream "class missing method".
 void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
                            SharedIdentifierList bounds, int line)
@@ -3590,13 +3590,13 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         first = false;
         auto f = byName.find(p.name);
         if (f == byName.end()) { unsupported("missing argument in call", srcLine); s += "0"; continue; }
-        // M26c/d: unwrap a give/copy hand-off marker. The inner value is what we emit;
+        // unwrap a give/copy hand-off marker. The inner value is what we emit;
         // the marker (give=move / copy=retain) only matters for a smart pointer passed
         // BY VALUE (ownership transfer) — it's meaningless on a borrow.
         SharedExpression argExpr = f->second->expression;
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
-        // M26i: inline constructor in argument position — `f(x: Counter(start: 5))`. A ctor lowers to
+        // inline constructor in argument position — `f(x: Counter(start: 5))`. A ctor lowers to
         // `Cls__ctor(&dest, …)`, which needs an lvalue destination, so materialize a HOISTED temp
         // (declared on its own line before this statement — pure ISO C, no `({ … })`) and pass it by
         // value. Only for a by-value param of the exact class in a hoist-enabled statement context;
@@ -3607,11 +3607,11 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         if (ctorIv && ctorIv->identifier && ctorIv->identifier->value) {
             std::string rn = resolveUserName(*ctorIv->identifier->value, ctorIv->identifier->qualifier);
             if (isClass(rn) && _classes.count(rn)) ctorCls = rn;
-            // M27b: `f(b: Box(v: 7))` — the ctor names template `Box`; the target param is instance `Box_int32`.
+            // `f(b: Box(v: 7))` — the ctor names template `Box`; the target param is instance `Box_int32`.
             else { auto g = _genericTypeInstOf.find(p.className);
                    if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = p.className; }
         }
-        // M26i: an inline ctor is a temporary rvalue — it can't be borrowed (`ref`/`out`) or aliased
+        // an inline ctor is a temporary rvalue — it can't be borrowed (`ref`/`out`) or aliased
         // as an interface. Give a clear diagnostic instead of the generic "unknown function".
         if (!ctorCls.empty() && !_classes[ctorCls].isCollection && (p.byRef || isInterface(p.className)))
             unsupported("cannot pass an inline constructor to a `ref`/`out` or interface parameter — "
@@ -3646,11 +3646,11 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 s += (!c.empty() && isClass(c)) ? fatPointer(p.className, c, val) : val;
             }
         } else if (p.byRef) {
-            // M24 soundness: a non-const `ref`/`out` param can MUTATE its argument, so a
+            // Soundness: a non-const `ref`/`out` param can MUTATE its argument, so a
             // const binding (or a const field outside its ctor) may not be passed to one
             // — that would silently launder away const. (A `const ref` borrow is fine.)
             if (!p.isConst) checkConstWrite(argExpr, srcLine);
-            // M26b: a borrow names the OBJECT (`ref T`). If the argument is a smart pointer
+            // a borrow names the OBJECT (`ref T`). If the argument is a smart pointer
             // holding a T, auto-deref to its T* — `ref p` borrows the heap object, uniformly
             // with `ref stackValue`. (Weak can't be borrowed — it may be dead; tryUpgrade.)
             std::string argCls = exprClass(argExpr);
@@ -3664,10 +3664,9 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                                           : ("&(" + val + ")");
             }
         } else {
-            // M26d: by value. A *named* smart pointer TRANSFERS into the param, which the
+            // By value. A *named* smart pointer TRANSFERS into the param, which the
             // callee owns and drops at fn-end. The retain (copy) / invalidate (give) is a
-            // statement, materialized as a HOISTED temp (M26i: pure ISO C — this replaced the
-            // emitter's last GNU statement-expression).
+            // statement, materialized as a HOISTED temp (pure ISO C).
             std::string argCls = exprClass(argExpr);
             bool collArg = !argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection;
             if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
@@ -3680,13 +3679,13 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 std::string t = "__cstar_arg" + std::to_string(_tempCounter++);
                 std::string side = doGive ? smartPtrInvalidate("(" + val + ")", k, isInterface(_classes[argCls].collElemClass))
                                           : ("(" + val + ").ctrl->" + (k == CollKind::Weak ? "weak" : "strong") + "++;");
-                // M26i: hoist `T t = (x); <retain/invalidate>` as an ordinary statement (ISO C) —
-                // this retired the emitter's statement-expressions everywhere a temp can precede its
-                // statement (call/init/return/ctor sites). The `({ … })` form remains ONLY for a
-                // by-value smart-ptr hand-off inside a loop/branch CONDITION (no preceding-statement
-                // slot) — where it is also semantically REQUIRED: hoisting a per-iteration retain out
-                // of a `while (...)` would run it once, not each time. No fixture reaches it (the ISO
-                // `-pedantic-errors` gate confirms zero GNU extensions across the whole suite).
+                // Hoist `T t = (x); <retain/invalidate>` as an ordinary statement (ISO C)
+                // everywhere a temp can precede its statement (call/init/return/ctor sites). The
+                // `({ … })` form is used ONLY for a by-value smart-ptr hand-off inside a loop/branch
+                // CONDITION (no preceding-statement slot) — where it is also semantically REQUIRED:
+                // hoisting a per-iteration retain out of a `while (...)` would run it once, not each
+                // time. No fixture reaches it (the ISO `-pedantic-errors` gate confirms zero GNU
+                // extensions across the whole suite).
                 if (_hoistOK) {
                     _hoisted.push_back(p.className + " " + t + " = (" + val + "); " + side);
                     s += t;
@@ -3702,7 +3701,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             } else if (collArg && handoff) {
                 unsupported("passing a collection by value is not yet supported — pass it by `ref` to borrow", srcLine);
             } else if (isMoveOnlyValue(argCls) && isNamedValue(argExpr.get())) {
-                // M26f-2/f-4: a `resource` VALUE passed by value goes to the callee, which drops it at
+                // a `resource` VALUE passed by value goes to the callee, which drops it at
                 // fn-end. A `Copyable` type demands the marker: `copy` passes a fresh deep copy (the
                 // source survives), `give`/bare move (mark the source moved), bare-on-copyable errors.
                 if (handoff == 2) {
@@ -3722,14 +3721,14 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 if (handoff == 1)
                     unsupported("`give` applies to an owned value (a smart pointer or collection) — "
                                 "a plain value just copies", srcLine);
-                s += val;   // plain value copy (primitive / pod / collection borrow)
+                s += val;   // plain value copy (primitive / value type / collection borrow)
             }
         }
     }
     return s + ")";
 }
 
-// M21: does a free function match a FunctionPtr signature? Positional, by C type.
+// does a free function match a FunctionPtr signature? Positional, by C type.
 bool CEmitter::sigMatches(const SigInfo& sig, const FuncSig& fn) const
 {
     if (sig.retCType != fn.retCType) return false;
@@ -3741,7 +3740,7 @@ bool CEmitter::sigMatches(const SigInfo& sig, const FuncSig& fn) const
     return true;
 }
 
-// M24a: the root identifier a write ultimately targets, for deep-const checks.
+// the root identifier a write ultimately targets, for deep-const checks.
 // `x` -> "x";  `x.f`, `x[i]`, `x.f.g` -> "x";  `this`/`this.f` -> "this";  else "".
 std::string CEmitter::rootBinding(SharedExpression e) const
 {
@@ -3758,7 +3757,7 @@ std::string CEmitter::rootBinding(SharedExpression e) const
     return "";
 }
 
-// M24a/b: is a write/call root `const`? A const local/param, `this` inside a const
+// is a write/call root `const`? A const local/param, `this` inside a const
 // method (recorded as "this" in _constLocals), or — in a const method — a bare field
 // of the current class (a write to `f` is really `self->f`).
 bool CEmitter::rootIsConst(const std::string& root) const
@@ -3771,7 +3770,7 @@ bool CEmitter::rootIsConst(const std::string& root) const
     return false;
 }
 
-// M24d: is `target` a write to a `const` data member? (`this.f`, bare `f`, or `obj.f`
+// is `target` a write to a `const` data member? (`this.f`, bare `f`, or `obj.f`
 // where f is declared const). Used to forbid such writes outside the constructor.
 bool CEmitter::isConstFieldWrite(SharedExpression target)
 {
@@ -3795,7 +3794,7 @@ bool CEmitter::isConstFieldWrite(SharedExpression target)
     return false;
 }
 
-// M24a/d: writing TO or THROUGH a `const` binding is a hard error (deep const, so
+// writing TO or THROUGH a `const` binding is a hard error (deep const, so
 // `c.field = …` / `c[i] = …` are caught too), and a `const` data member may only be
 // written in the constructor.
 void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
@@ -3809,13 +3808,13 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
         unsupported("cannot assign to a `const` field outside the constructor", srcLine);
 }
 
-// M24b: a non-const method may not be invoked on a const receiver (it could mutate).
+// a non-const method may not be invoked on a const receiver (it could mutate).
 bool CEmitter::isConstReceiver(SharedExpression receiver) const
 {
     return receiver && rootIsConst(rootBinding(receiver));
 }
 
-// M25 — access control --------------------------------------------------------
+// access control --------------------------------------------------------
 bool CEmitter::modHas(SharedModifierList mods, const char* name)
 {
     if (mods) for (auto& m : *mods) if (m->value && *m->value == name) return true;
@@ -3862,7 +3861,7 @@ bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& me
         for (ClassInfo* c = _currentClass; c; c = c->base) if (c == owner) return true;
     } else {                                            // Private — owner itself, or a friend grant
         if (_currentClass == owner) return true;
-        // M25c: an owner-granted `friend` may touch the named members. The accessing
+        // an owner-granted `friend` may touch the named members. The accessing
         // context is the current class (any of its methods) or the current function/method.
         for (auto& g : owner->friendGrants) {
             if (!g.members.empty() && !g.members.count(member)) continue;   // empty => all privates
@@ -3883,7 +3882,7 @@ void CEmitter::checkFieldAccess(ClassInfo* owner, const std::string& field, int 
         if (f.name == field) { canAccess(owner, f.visibility, field, line); return; }
 }
 
-// M25c — resolve each class's raw `friend` grants to match keys, once every unit's
+// resolve each class's raw `friend` grants to match keys, once every unit's
 // functions/classes are registered. An accessor is a class (matched vs _currentClass),
 // a free function, or a `Class::method` (both matched vs _currentFunc's C-name).
 void CEmitter::resolveFriends()
@@ -3936,7 +3935,7 @@ void CEmitter::resolveFriends()
     }
 }
 
-// M21: bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
+// bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
 // signature-check) or another FunctionPtr (copy). Non-null: `null`/unknown is an error.
 std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line)
 {
@@ -3948,7 +3947,7 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
                     unsupported(("function '" + *id->value + "' does not match the FunctionPtr signature").c_str(), line);
                 return fit->second.cName;   // the C function name decays to a pointer
             }
-            // `Type::method` — an unbound method reference (M21b). The method lowers
+            // `Type::method` — an unbound method reference. The method lowers
             // to `Class__method(Class* self, …)`, so it's a function pointer over a
             // signature whose FIRST param is the receiver (`ref Class self`).
             if (id->qualifier && !id->qualifier->empty()) {
@@ -3980,7 +3979,7 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
     return "0";
 }
 
-// M22: `new BindableFunctionPtr<Sig>(obj: x, method: T::m)` — bind an object + a
+// `new BindableFunctionPtr<Sig>(obj: x, method: T::m)` — bind an object + a
 // method. Ownership follows x's pointer type: Owned MOVES in (sole owner), Shared
 // RETAINS (shared owner). The receiver is hidden, so Sig excludes it.
 void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
@@ -4041,7 +4040,7 @@ void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
     else { indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->strong++;\n"; }
 }
 
-// M22: `BindableFunctionPtr<Sig> b = <free fn | another bindable>;` — promote a free
+// `BindableFunctionPtr<Sig> b = <free fn | another bindable>;` — promote a free
 // function (no object) or MOVE another bindable.
 void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
                                    SharedExpression init, int depth)
@@ -4079,7 +4078,7 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
     indent(depth); *_out << nm << " = " << src << ";\n";
 }
 
-// M22: invoke a bindable — branch on obj (bound: pass it first; free: call directly).
+// invoke a bindable — branch on obj (bound: pass it first; free: call directly).
 // The signature drives the fn-pointer casts and the named-arg reorder.
 std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::string& cls,
                                          SharedArgumentList args, int line)
@@ -4098,7 +4097,7 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
 }
 
 // Lower a call, reordering named arguments to the callee's declared order.
-// M28b: the switch body shared by both `match` positions. Borrows the subject (a pointer, never a
+// the switch body shared by both `match` positions. Borrows the subject (a pointer, never a
 // copy — a move-only union must not be shallow-copied), checks exhaustiveness, binds each arm's
 // payload into a fresh scope, and either assigns the arm value to `resultTemp` (expression position)
 // or emits it as a side-effect statement (statement position). Writes to the current `_out`.
@@ -4114,7 +4113,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     }
     ClassInfo& ci = cit->second;
 
-    // M28c: a specialized generic union (Optional_int32) stores its variant payloads in the template's
+    // a specialized generic union (Optional_int32) stores its variant payloads in the template's
     // `T`; bind the instance's type args so payload binding types resolve concretely (mirrors
     // computeDestructible). Restored at the end; arm bodies contain no `T`, so a whole-switch scope is safe.
     std::map<std::string, SharedIdentifier> savedSubst;
@@ -4146,7 +4145,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                              + "' is unhandled — add `case " + v.name + ":` or `case _:`").c_str(), m->line);
 
     // The subject is borrowed by pointer. A plain lvalue is addressed in place; a non-lvalue
-    // (a call / construction result — M29a) can't be `&`-taken, so materialize an OWNING temp
+    // (a call / construction result) can't be `&`-taken, so materialize an OWNING temp
     // first and drop it after the switch (arm payload bindings borrow it, like a foreach element).
     std::string sp = "__msub" + std::to_string(_tempCounter++);
     bool subjLvalue = dynamic_cast<IdentifierNode*>(m->subject.get())
@@ -4194,9 +4193,9 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             }
         }
 
-        // Arm body: a single expression, OR a block (M29d). Hoist temps INSIDE the arm braces.
+        // Arm body: a single expression, OR a block. Hoist temps INSIDE the arm braces.
         if (a->block) {
-            // M29d: block arm — emit its statements in the arm scope. For a value-producing match the
+            // block arm — emit its statements in the arm scope. For a value-producing match the
             // block's LAST statement must yield the value (an expression-statement); earlier statements
             // (locals, side effects) run normally, RAII-dropped by the arm's scope cleanup.
             SharedStatementList stmts = a->block->statements;
@@ -4239,7 +4238,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
     if (!hasWildcard) { indent(depth + 1); *_out << "default: break;\n"; }   // exhaustive; keeps the C switch total
     indent(depth); *_out << "}\n";
-    // M29a: a materialized owning subject (a call/construction result) is dropped once after the
+    // a materialized owning subject (a call/construction result) is dropped once after the
     // switch — bindings only borrowed it, so this releases its owned resource (no leak, no double-free).
     if (!subjOwner.empty() && _classes.count(subjCls) && _classes[subjCls].destructible) {
         indent(depth); *_out << subjCls << "__dtor(&" << subjOwner << ");\n";
@@ -4247,7 +4246,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     if (instSubst) _typeSubst = savedSubst;
 }
 
-// M28b: a value-producing `match` in expression position. Lifts to a result temp + a switch, hoisted
+// a value-producing `match` in expression position. Lifts to a result temp + a switch, hoisted
 // before the enclosing statement — strict ISO C11, no GNU statement-expression.
 std::string CEmitter::emitMatch(MatchNode* m)
 {
@@ -4410,10 +4409,10 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
     indent(depth); *_out << "}\n";
 }
 
-// M29b: an inline constructor `Cls(args)` as a general rvalue (return / variant payload). A ctor
+// an inline constructor `Cls(args)` as a general rvalue (return / variant payload). A ctor
 // lowers to `Cls__ctor(&dest, …)` which needs an lvalue destination, so materialize a HOISTED temp
 // (declared before the leaf statement — pure ISO C, no `({…})`) and return its name. "" if `e` is not
-// an inline ctor for exactly `targetCType`, or no hoist slot. Mirrors the M26i arg-position recognizer.
+// an inline ctor for exactly `targetCType`, or no hoist slot. Mirrors the arg-position recognizer.
 std::string CEmitter::tryHoistInlineCtor(SharedExpression e, const std::string& targetCType, int srcLine)
 {
     if (!_hoistOK || targetCType.empty()) return "";
@@ -4431,7 +4430,7 @@ std::string CEmitter::tryHoistInlineCtor(SharedExpression e, const std::string& 
     return t;
 }
 
-// M29b: an inline `new T(...)` as a general rvalue whose target is a smart-pointer type — box it into
+// an inline `new T(...)` as a general rvalue whose target is a smart-pointer type — box it into
 // a HOISTED temp (malloc + ctor + optional ctrl, the emitDeclarator sequence) and return its name.
 // "" if not applicable / no slot. Interface-element boxes are deferred — rejected with guidance.
 std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& targetCType, int srcLine)
@@ -4460,7 +4459,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
     return t;
 }
 
-// M28a/c: resolve the variant type a `::` qualifier names. A non-generic union is in _classes
+// resolve the variant type a `::` qualifier names. A non-generic union is in _classes
 // directly; a generic union names its bare template (`Optional`, in _genericTypes) — resolve it to
 // the target instance set by the enclosing typed position (`_variantTargetType`, e.g. Optional_int32).
 ClassInfo* CEmitter::resolveVariantType(const std::string& qualResolved)
@@ -4477,7 +4476,7 @@ ClassInfo* CEmitter::resolveVariantType(const std::string& qualResolved)
     return nullptr;
 }
 
-// M28a: `Union::Variant(field: value, …)` -> a C99 compound literal
+// `Union::Variant(field: value, …)` -> a C99 compound literal
 //   (Shape){ .tag = Shape_Circle, .u.Circle = { .radius = 2.0 } }
 // A no-payload variant omits the union member. The compound literal is an rvalue; stored in a local
 // it is recorded destructible (if the union owns a resource) and drops via the switch-on-tag dtor.
@@ -4488,7 +4487,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
     for (auto& v : ci.variants) if (v.name == variant) { vc = &v; break; }
     if (!vc) { unsupported(("'" + ci.name + "' has no variant '" + variant + "'").c_str(), srcLine); return "0"; }
 
-    // M28c: a specialized generic union (Optional_int32) stores payloads in the template's `T`; bind the
+    // a specialized generic union (Optional_int32) stores payloads in the template's `T`; bind the
     // instance's type args so each payload field's C type resolves concretely (in the caller's scope).
     std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
     bool instSubst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
@@ -4520,7 +4519,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             SharedExpression argExpr = ai->second->expression;
             int handoff = 0;                             // 0 none, 1 give, 2 copy
             if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
-            // M29b: an inline construction as the payload (inline `new`, an inline generic-instance ctor,
+            // an inline construction as the payload (inline `new`, an inline generic-instance ctor,
             // or a nested `Some(Some(…))` / value-producing `match`) materializes against the field type;
             // propagate the target so the nested variant/match resolves.
             std::string pmt = _matchTargetCType, pvt = _variantTargetType;
@@ -4533,7 +4532,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             std::string field;
             if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
                 // A named smart pointer MOVES/RETAINS into the union (which now owns it, dropped by the
-                // switch-on-tag dtor). Same hand-off as a by-value call arg (M26d), hoisted (ISO C).
+                // switch-on-tag dtor). Same hand-off as a by-value call arg, hoisted (ISO C).
                 CollKind k = smartKind(argCls);
                 bool doGive = (handoff == 1) || (handoff == 0 && k == CollKind::Owned);
                 if (handoff == 2 && k == CollKind::Owned)
@@ -4560,7 +4559,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                     field = val;
                 }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection && handoff) {
-                // M29c: `give` a collection into the union — transfer the struct (buffer) and null the
+                // `give` a collection into the union — transfer the struct (buffer) and null the
                 // source so its scope-drop is a no-op; the union now owns it (dropped by the tag dtor).
                 if (handoff == 2)
                     unsupported("`copy` of a collection into a variant is not yet supported — use `give` to move it", srcLine);
@@ -4615,7 +4614,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
 
     std::string name = *call->identifier->value;
 
-    // M27a: a call to a generic function was resolved to a concrete instantiation at discovery.
+    // a call to a generic function was resolved to a concrete instantiation at discovery.
     // Route it to that specialized C name; reorder named args off the template's param list.
     {
         auto ci = _callInst.find(call);
@@ -4632,7 +4631,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return "0";
     }
 
-    // FunctionPtr invoke (M21): a bare local whose type is a signature → an indirect
+    // FunctionPtr invoke: a bare local whose type is a signature → an indirect
     // call `c(reordered args)` (c IS the function pointer). Named-arg reorder off the sig.
     if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
         && _localTypes.count(name) && isSigType(_localTypes[name])) {
@@ -4641,46 +4640,45 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return emitReorderedCall(callee, "", sig.params, call->args, call->line);
     }
 
-    // BindableFunctionPtr invoke (M22): a bare local of bindable type → branch on the
+    // BindableFunctionPtr invoke: a bare local of bindable type → branch on the
     // bound object (call the method with it, or the free fn directly).
     if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
         && _localTypes.count(name) && isBindableClass(_localTypes[name])) {
         return emitBindableInvoke(name, _localTypes[name], call->args, call->line);
     }
 
-    // FFI (M16): `addr(x)` is a builtin — the address of a local/value (`&(x)`),
+    // FFI: `addr(x)` is a builtin — the address of a local/value (`&(x)`),
     // for out-params and passing a descriptor by pointer. A controlled operation
     // (it addresses a real value), so it needs no `unsafe`.
     if (name == "addr" && (!call->identifier->qualifier || call->identifier->qualifier->empty())
         && call->args && call->args->size() == 1)
         return "&(" + emitExpression((*call->args)[0]->expression) + ")";
 
-    // (M21 retired the M18 `funcptr(of: fn)` builtin: a bare function name is now a
-    // value — its C function pointer — so `FunctionPtr<Sig> c = fn;` / passing `fn`
-    // directly replaces it.)
+    // (A bare function name is a value — its C function pointer — so `FunctionPtr<Sig> c = fn;`
+    // and passing `fn` directly bind a callable; there is no separate `funcptr(of: fn)` builtin.)
 
-    // A `::`-qualified callee is **scope resolution**: `Namespace::fn(...)`. After
-    // M20b, the head of a `::` is always a type/namespace — never an object (object
+    // A `::`-qualified callee is **scope resolution**: `Namespace::fn(...)`. The head of a `::`
+    // is always a type/namespace — never an object (object
     // access is `.`/member_access) — so the old namespace-vs-object precedence hack
     // is gone. `resolveFunc` handles namespace + `using` + alias resolution.
     SharedStringList qual = call->identifier->qualifier;
     if (qual && !qual->empty()) {
-        // M28a/c: `Union::Variant(args)` — construct a discriminated-union value with a payload
-        // (`Optional<int32>::Some` resolves via the target-type context, M28c).
+        // `Union::Variant(args)` — construct a discriminated-union value with a payload
+        // (`Optional<int32>::Some` resolves via the target-type context).
         auto tq = std::make_shared<StringList>();
         for (size_t i = 0; i + 1 < qual->size(); ++i) tq->push_back((*qual)[i]);
         if (ClassInfo* vt = resolveVariantType(resolveUserName(*qual->back(), tq)))
             for (auto& v : vt->variants)
                 if (v.name == name)
                     return emitVariantConstruction(*vt, name, call->args, call->line);
-        // M31a: `Type::method(args)` — a static method (no implicit `self`). The qualifier head
+        // `Type::method(args)` — a static method (no implicit `self`). The qualifier head
         // resolves to a class; the named method must be `static`.
         std::string typeName = resolveUserName(*qual->back(), tq);
         if (_classes.count(typeName)) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&_classes[typeName], name, &owner);
             if (mi && mi->isStatic) {
-                canAccess(owner, mi->visibility, name, call->line);   // M25
+                canAccess(owner, mi->visibility, name, call->line);
                 return emitReorderedCall(mi->cName, "", mi->params, call->args, call->line);   // no leading self
             }
             if (mi && !mi->isStatic)
@@ -4727,11 +4725,11 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
             if (!first) s += ", ";
             first = false;
             std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
-            // M24e: `const Ptr<T>`/`const Ptr` emits `const T*`/`const void*` (FFI const
+            // `const Ptr<T>`/`const Ptr` emits `const T*`/`const void*` (FFI const
             // pointers — to match C const callback/API signatures). Only pointer types:
             // a `const ref <class>` stays plain (its methods take a non-const `self`).
             bool constPtr = p->isConst && p->type && p->type->value && *p->type->value == "Ptr";
-            // M26b: a `ref`/`const ref` parameter may not name a smart pointer — you borrow
+            // a `ref`/`const ref` parameter may not name a smart pointer — you borrow
             // the OBJECT (`ref T`), or transfer ownership by value (`give`/`copy`). Borrowing
             // the handle never makes sense (and would make `ref p` ambiguous). `out` producing
             // a handle (tryUpgrade / factory-out) stays legal.
@@ -4765,24 +4763,24 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
-    _moveState.clear();   // M26f-2: per-function move analysis
+    _moveState.clear();   // per-function move analysis
     _pendingParamDtors.clear();
     _currentClass = nullptr;
-    _currentFunc  = name;   // M25c — a free function may be a `friend` accessor
+    _currentFunc  = name;   // a free function may be a `friend` accessor
     if (fn->parameters) {
         for (auto& p : *fn->parameters) {
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
-            if (p->isConst) _constLocals.insert(pn);   // M24c: const param is immutable
+            if (p->isConst) _constLocals.insert(pn);   // const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
             _localCTypes[pn] = pty;                    // full C type (incl. enums/primitives) — e.g. a plain-enum `match` subject
-            // M26d: a by-value smart-ptr param is OWNED by the callee — drop it at fn-end.
+            // a by-value smart-ptr param is OWNED by the callee — drop it at fn-end.
             // The function-root scope is created later (emitBlockScoped); stash it there.
             if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || isMoveOnlyValue(pty))) {
                 _pendingParamDtors.push_back({pn, pty});
-                if (isMoveOnlyValue(pty)) _moveState[pn] = MoveState::NotMoved;   // M26f-2: track move-only param
+                if (isMoveOnlyValue(pty)) _moveState[pn] = MoveState::NotMoved;   // track move-only param
             }
         }
     }
@@ -4820,8 +4818,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 
 void CEmitter::emitStruct(ClassInfo& ci)
 {
-    ScopedStr _ts(_thisType, ci.name);   // M27c: `This` -> this class while emitting its struct
-    // M28a: a tagged union — a discriminant tag + a union of per-variant payloads.
+    ScopedStr _ts(_thisType, ci.name);   // `This` -> this class while emitting its struct
+    // a tagged union — a discriminant tag + a union of per-variant payloads.
     if (ci.isVariant) { emitVariantStruct(ci); return; }
     *_out << "struct " << ci.name << " {\n";
     // Offset-0 invariant: the vptr (root only) or the embedded base comes FIRST.
@@ -4849,7 +4847,7 @@ void CEmitter::emitStruct(ClassInfo& ci)
     *_out << "};\n\n";
 }
 
-// M28a: `struct Name { <tag> tag; union { struct {…} <Variant>; … } u; };` — a discriminated union.
+// `struct Name { <tag> tag; union { struct {…} <Variant>; … } u; };` — a discriminated union.
 // The tag enum carries symbolic case constants (`Name_Circle`); only payload-carrying variants
 // contribute a union member. `: IntType` pins the tag field to a fixed-width integer.
 void CEmitter::emitVariantStruct(ClassInfo& ci)
@@ -4873,9 +4871,9 @@ void CEmitter::emitVariantStruct(ClassInfo& ci)
             if (v.payload.empty()) continue;
             indent(2); *_out << "struct {\n";
             for (auto& f : v.payload) {
-                // M30a: a by-value user value/resource payload is now legal — the unified struct order
+                // A by-value user value/resource payload is legal — the unified struct order
                 // lays out the payload type first; a self/mutual by-value cycle is caught (infinite size)
-                // by unifiedStructOrder. (Was rejected here before the ordering pass existed.)
+                // by unifiedStructOrder.
                 indent(3); *_out << cType(f.type) << " " << f.name << ";\n";
             }
             indent(2); *_out << "} " << v.name << ";\n";
@@ -4931,7 +4929,7 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
     *_out << "};\n\n";
 }
 
-// ---- Interfaces (M6b) -----------------------------------------------------
+// ---- Interfaces -----------------------------------------------------
 
 // "(void* self, T a, U b)" — an interface slot's C signature (self is type-erased).
 std::string CEmitter::ifaceSlotSig(SharedParameterList params)
@@ -4948,7 +4946,7 @@ std::string CEmitter::ifaceSlotSig(SharedParameterList params)
 // Interface I -> a vtable struct type `I_vtbl` and a fat-pointer value type `I`.
 void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 {
-    // M27c: in the type-erased vtbl slot, `This` is the interface type itself (a contract's `This`-typed
+    // in the type-erased vtbl slot, `This` is the interface type itself (a contract's `This`-typed
     // method is dispatched STATICALLY via a bound; the vtbl slot is dead for that use but must be valid C).
     ScopedStr _ts(_thisType, ii.name);
     *_out << "struct " << ii.name << "_vtbl {\n";
@@ -4956,7 +4954,7 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
         indent(1);
         *_out << cType(m.returnType) << " (*" << m.name << ")" << ifaceSlotSig(m.params) << ";\n";
     }
-    // M26g: a virtual-destructor slot so an OWNED interface (`Owned`/`Shared<I>`) can drop its
+    // a virtual-destructor slot so an OWNED interface (`Owned`/`Shared<I>`) can drop its
     // concrete object polymorphically. NULL for a non-destructible impl (drop just frees the obj).
     indent(1); *_out << "void (*__dtor)(void*);\n";
     *_out << "};\n";
@@ -4971,14 +4969,14 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end()) { unsupported("unknown interface in implements", ci.node->line); continue; }
         InterfaceInfo& ii = it->second;
-        // M27c: the slot casts must match the vtbl struct's erased signature -> `This` = the interface.
+        // the slot casts must match the vtbl struct's erased signature -> `This` = the interface.
         ScopedStr _ts(_thisType, ii.name);
         *_out << "static const " << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&ci, m.name, &owner);
             if (!mi) { unsupported(("class missing interface method '" + m.name + "'").c_str(), ci.node->line); continue; }
-            // M25: an interface is a PUBLIC contract — a method that satisfies it must be
+            // an interface is a PUBLIC contract — a method that satisfies it must be
             // public too (else it's reachable through the interface but not by name: a leak).
             if (mi->visibility != Visibility::Public)
                 unsupported(("method '" + m.name + "' implements interface '" + ii.name
@@ -4988,7 +4986,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
             *_out << "." << m.name << " = (" << cType(m.returnType) << "(*)" << ifaceSlotSig(m.params)
                  << ")&" << mi->cName << ",\n";
         }
-        // M26g: the virtual-destructor slot — the concrete dtor (cast to the erased signature),
+        // the virtual-destructor slot — the concrete dtor (cast to the erased signature),
         // or NULL when this impl owns nothing to free.
         indent(1);
         if (ci.destructible) *_out << ".__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
@@ -5022,12 +5020,12 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
 void CEmitter::emitClassPrototypes(ClassInfo& ci)
 {
     if (ci.isCollection || ci.isExternStruct) return;   // macro / header provides these
-    ScopedStr _ts(_thisType, ci.name);                  // M27c: `This` -> this class in method prototypes
-    const char* stat = _emitStaticClass ? "static inline " : "";   // M27b: specialized instances are header-static inline
+    ScopedStr _ts(_thisType, ci.name);                  // `This` -> this class in method prototypes
+    const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
         *_out << stat << "void " << ci.name << "__ctor("
              << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
-    else if (ci.synthCtor)                                // M19: synthesized default ctor
+    else if (ci.synthCtor)                                // synthesized default ctor
         *_out << stat << "void " << ci.name << "__ctor(" << paramListC(nullptr, ci.name.c_str()) << ");\n";
     if (ci.destructible)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
@@ -5036,11 +5034,11 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
-        // M31b — an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
+        // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
         SharedParameterList plist = mi.isOperator ? operatorParamList(mi.opDecl->operatorDeclarator.get())
                                                   : mi.node->params;
         *_out << stat << cType(mi.returnType) << " " << mi.cName << "("
-             << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str()) << ");\n";   // M31a — static/free: no self
+             << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str()) << ");\n";   // static/free: no self
     }
 }
 
@@ -5060,7 +5058,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
 
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "__dtor(" << ci.name << "* self)\n{\n";
 
-    // M28a: a discriminated union drops ONLY the active variant's owning payload fields (switch on tag).
+    // a discriminated union drops ONLY the active variant's owning payload fields (switch on tag).
     if (ci.isVariant) {
         indent(1); *_out << "switch (self->tag) {\n";
         for (auto& v : ci.variants) {
@@ -5120,13 +5118,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
                                     ClassInfo& owner, bool isCtor, bool isConstMethod, bool isStatic)
 {
     _currentClass = &owner;
-    _currentFunc  = cName;   // M25c — a method may be a `Class::method` friend accessor
-    _inStaticMethod = isStatic;   // M31a — a static body has no `self`/`this`
+    _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
+    _inStaticMethod = isStatic;   // a static body has no `self`/`this`
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
-    _moveState.clear();   // M26f-2: per-method move analysis
-    _inCtor = isCtor;   // M24d: const fields are writable only here
-    if (isConstMethod) _constLocals.insert("this");   // M24b: `this` is immutable (deep)
+    _moveState.clear();   // per-method move analysis
+    _inCtor = isCtor;   // const fields are writable only here
+    if (isConstMethod) _constLocals.insert("this");   // `this` is immutable (deep)
     _currentReturnCType = retType;
     _tempCounter = 0;
     _scopes.clear();
@@ -5137,18 +5135,18 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
             if (paramByRef(p.get())) _refParams.insert(pn);
-            if (p->isConst) _constLocals.insert(pn);   // M24c: const param is immutable
+            if (p->isConst) _constLocals.insert(pn);   // const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
             _localCTypes[pn] = pty;                    // full C type (incl. enums/primitives) — e.g. a plain-enum `match` subject
-            // M26d: a by-value smart-ptr param is owned by the callee — drop it at fn-end.
+            // a by-value smart-ptr param is owned by the callee — drop it at fn-end.
             // The root scope is already on the stack, so record it directly (dropped last).
             if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || isMoveOnlyValue(pty))) recordDestructibleLocal(pn, pty);
         }
     }
 
     *_out << (_emitStaticClass ? "static inline " : "") << retType << " " << cName
-          << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str()) << ")\n{\n";   // M31a — static: no self
+          << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str()) << ")\n{\n";   // static: no self
 
     if (isCtor) {
         // 1. Base constructor first (so derived overrides its effects + vptr).
@@ -5203,25 +5201,25 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentClass = nullptr;
     _refParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
-    _inStaticMethod = false;   // M31a
+    _inStaticMethod = false;
 }
 
 void CEmitter::emitClassDefinitions(ClassInfo& ci)
 {
     if (ci.isCollection || ci.isExternStruct) return;   // macro / header provides these
-    ScopedStr _ts(_thisType, ci.name);                  // M27c: `This` -> this class in method bodies/sigs
+    ScopedStr _ts(_thisType, ci.name);                  // `This` -> this class in method bodies/sigs
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator) {
         line(ci.ctorNode->line);
         emitMethodOrCtorBody(ci.name + "__ctor", "void",
                              ci.ctorNode->declarator->params, ci.ctorNode->body, ci, true);
-    } else if (ci.synthCtor) {                            // M19: emit the synthesized default ctor
+    } else if (ci.synthCtor) {                            // emit the synthesized default ctor
         emitMethodOrCtorBody(ci.name + "__ctor", "void",
                              SharedParameterList(), SharedBlock(), ci, true);
     }
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no body to emit
-        // M31b — an operator has no `node`; emit its body from `opDecl` (free form: no self).
+        // an operator has no `node`; emit its body from `opDecl` (free form: no self).
         if (mi.isOperator) {
             auto* d = mi.opDecl->operatorDeclarator.get();
             line(mi.opDecl->line);
@@ -5237,8 +5235,8 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         emitDtorDefinition(ci);
 }
 
-// M27b: emit one specialized generic-type instance under its binding. phase 0 = struct typedef+body,
-// 1 = ctor/dtor/method prototypes, 2 = bodies. Mirrors emitGenericInst (M27a): all specialized class
+// emit one specialized generic-type instance under its binding. phase 0 = struct typedef+body,
+// 1 = ctor/dtor/method prototypes, 2 = bodies. Mirrors emitGenericInst: all specialized class
 // functions are header-`static` (every module includes the header), so `_emitStaticClass` is set here.
 void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
 {
@@ -5246,7 +5244,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     if (cit == _classes.end()) return;
     ClassInfo& ci = cit->second;
     NsCtx savedCtx = _nsCtx;
-    // M28c: emit under the USE-SITE ctx (so a prelude template's user-type args resolve); for a
+    // emit under the USE-SITE ctx (so a prelude template's user-type args resolve); for a
     // same-scope user generic this equals the template's home ctx.
     _nsCtx = _genericTypeInstCtx.count(gi.mangledName) ? _genericTypeInstCtx[gi.mangledName]
                                                        : _genericTypeCtx[gi.templateKey];
@@ -5254,7 +5252,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
     for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
     _emitStaticClass = true;
-    if      (phase == 0) { emitStruct(ci); }   // M30a: forward typedef now emitted in the phase-(a) loop
+    if      (phase == 0) { emitStruct(ci); }   // forward typedef now emitted in the phase-(a) loop
     else if (phase == 1) emitClassPrototypes(ci);
     else                 emitClassDefinitions(ci);
     _emitStaticClass = false;
@@ -5297,7 +5295,7 @@ std::string CEmitter::exprClass(SharedExpression e)
         return "";
     }
 
-    // M26i: `list[i]` / `a[i]` resolves to the ELEMENT type, so `list[i].m()` finds the method.
+    // `list[i]` / `a[i]` resolves to the ELEMENT type, so `list[i].m()` finds the method.
     // Pure resolution (no emission) — mirrors the front of collectionElemAccess.
     if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
         SharedExpression recv = ea->expression ? ea->expression
@@ -5308,7 +5306,7 @@ std::string CEmitter::exprClass(SharedExpression e)
         return "";
     }
 
-    // M29a: a CALL RESULT's static class (pure resolution — no emission), so a call can be a
+    // a CALL RESULT's static class (pure resolution — no emission), so a call can be a
     // `match` subject / value site (`match(w.tryUpgrade())`). A class return maps to its name; a
     // primitive/void return stays "".
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
@@ -5346,7 +5344,7 @@ std::string CEmitter::exprClass(SharedExpression e)
         return "";
     }
 
-    // M31b — a user-operator result carries the operator's return type, so a NESTED operator
+    // a user-operator result carries the operator's return type, so a NESTED operator
     // (`a + b + c`, `-a + b`, `(a + b) * s`) resolves and the enclosing operator can be found.
     if (auto* be = dynamic_cast<BinaryExpressionNode*>(n))
         return operatorResultClass(be->token, /*binary*/1, be->LHS, be->RHS);
@@ -5359,7 +5357,7 @@ std::string CEmitter::exprClass(SharedExpression e)
     return "";
 }
 
-// M31b — the class an operator expression evaluates to = the resolved operator's return type
+// the class an operator expression evaluates to = the resolved operator's return type
 // (a class), else "" (a primitive result like a comparison's `bool`, or no matching operator).
 std::string CEmitter::operatorResultClass(int opToken, int arity, SharedExpression lhs, SharedExpression rhs)
 {
@@ -5399,16 +5397,16 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         std::string T = _classes[cls].collElemClass;
         std::string basePath;
         ClassInfo* owner = findFieldOwner(&_classes[T], field);
-        if (owner) { basePath = basePathTo(&_classes[T], owner); checkFieldAccess(owner, field, ma->line); }  // M25
+        if (owner) { basePath = basePathTo(&_classes[T], owner); checkFieldAccess(owner, field, ma->line); }
         return "(" + emitExpression(ma->expression) + ").ptr->" + basePath + field;
     }
     std::string basePath;
     if (!cls.empty() && _classes.count(cls)) {
         ClassInfo* owner = findFieldOwner(&_classes[cls], field);
-        if (owner) { basePath = basePathTo(&_classes[cls], owner); checkFieldAccess(owner, field, ma->line); }  // M25
+        if (owner) { basePath = basePathTo(&_classes[cls], owner); checkFieldAccess(owner, field, ma->line); }
     }
     if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
-        if (_inStaticMethod) unsupported("a `static` method has no `this`", ma->line);   // M31a
+        if (_inStaticMethod) unsupported("a `static` method has no `this`", ma->line);
         return "self->" + basePath + field;
     }
     return "(" + emitExpression(ma->expression) + ")." + basePath + field;
@@ -5422,7 +5420,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(&_classes[clsName], method, &owner);
     if (!mi) { unsupported("unknown method", srcLine); return "0"; }
-    if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);   // M25
+    if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);
 
     if (mi->isVirtual) {
         // Dynamic dispatch through the vptr (at offset 0 via the vtable root).
@@ -5446,7 +5444,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
     SharedExpression receiver = recv->expression;
     std::string cls = exprClass(receiver);
-    // M24b: a non-const method may not be called on a const receiver (deep const).
+    // a non-const method may not be called on a const receiver (deep const).
     // The method lives on the pointee for a smart-pointer receiver (auto-deref).
     if (isConstReceiver(receiver)) {
         std::string mcls = isSmartPtrClass(cls) ? _classes[cls].collElemClass : cls;
@@ -5467,7 +5465,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     }
     std::string recvPtr;
     if (auto* ea = dynamic_cast<ElementAccessNode*>(receiver.get())) {
-        // M26i: `list[i].m()` — borrow the element IN PLACE via the bounds-checked `__at`
+        // `list[i].m()` — borrow the element IN PLACE via the bounds-checked `__at`
         // (a T* into the buffer). No copy, no temp; a plain nested call, strictly ISO C.
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx))
@@ -5484,10 +5482,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
 
 std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine)
 {
-    if (ci.isAbstractClass)   // M25/Step 3: instantiating one crashes on a NULL vtable slot
+    if (ci.isAbstractClass)   // instantiating one crashes on a NULL vtable slot
         unsupported(("cannot instantiate abstract class '" + ci.name
                      + "' (it has an unimplemented method)").c_str(), srcLine);
-    if (ci.hasCtor && !ci.isCollection)   // M25: private ctor blocks external `new` (intrinsics exempt)
+    if (ci.hasCtor && !ci.isCollection)   // private ctor blocks external `new` (intrinsics exempt)
         canAccess(&ci, ci.ctorVisibility, "constructor", srcLine);
     return emitReorderedCall(ci.name + "__ctor", "&" + cVar, ci.ctorParams, args, srcLine);
 }
@@ -5500,7 +5498,7 @@ std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, Share
 // to the shared maps), then resolve inheritance/vtables/destructibility once.
 void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnits)
 {
-    // M28c: the prelude (Optional/Result) is collected FIRST, in the global namespace (empty scope),
+    // the prelude (Optional/Result) is collected FIRST, in the global namespace (empty scope),
     // so its generic templates register under bare names resolvable unqualified from every file.
     std::vector<SharedCompilationUnit> units;
     if (_preludeUnit) units.push_back(_preludeUnit);
@@ -5526,11 +5524,11 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             ASTNode* d = decl.get();
             if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d)) {
                 if (cd->name && cd->name->value) {
-                    // M26h: `type contract` pre-registers as an interface name, not a class.
+                    // `type contract` pre-registers as an interface name, not a class.
                     if (cd->typeKind && *cd->typeKind == "contract") {
                         std::string n = qualify(*cd->name->value); _interfaces[n].name = n;
                     } else if (cd->typeParams && !cd->typeParams->empty()) {
-                        // M27b: a generic TYPE template pre-registers in _genericTypes, NOT _classes
+                        // a generic TYPE template pre-registers in _genericTypes, NOT _classes
                         // (an empty _classes entry would be emitted as a bogus struct). collectClasses fills it.
                         std::string n = qualify(*cd->name->value); _genericTypes[n].name = n;
                     } else {
@@ -5545,7 +5543,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(d)) {
                 if (ed->identifier && ed->identifier->value) {
                     std::string n = qualify(*ed->identifier->value);
-                    // M28a: pre-register a tagged/generic enum where its real home is (a class-like
+                    // pre-register a tagged/generic enum where its real home is (a class-like
                     // type / a generic template), NOT _enums — else emitEnum would emit a bogus enum.
                     if (ed->typeParams && !ed->typeParams->empty()) _genericTypes[n].name = n;
                     else if (enumIsTagged(ed))                      _classes[n].name = n;
@@ -5564,14 +5562,14 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     }
     linkBases();
     buildVtables();
-    resolveFriends();   // M25c — after all classes/functions are registered
-    // M26f-5: register collections BEFORE the destructibility fixpoint, so a class whose only
+    resolveFriends();   // after all classes/functions are registered
+    // register collections BEFORE the destructibility fixpoint, so a class whose only
     // owning member is a collection field (`List<T>` etc., no explicit `~dtor`) is correctly seen
     // as a resource (destructible + move-only). computeDestructible then re-derives each
     // collection's elemDestructible from the final class destructibility.
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectCollections(u); }
-    // M27a: discover generic-function instantiations after collections (a specialization may use
+    // discover generic-function instantiations after collections (a specialization may use
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
@@ -5583,10 +5581,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
 void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units)
 {
     std::vector<ClassInfo*> classes = topoOrderClasses();       // base before derived (no generic instances)
-    std::vector<ClassInfo*> ordered = unifiedStructOrder();     // M30a: all struct bodies, by-value-dep order
+    std::vector<ClassInfo*> ordered = unifiedStructOrder();     // all struct bodies, by-value-dep order
 
-    // Forward typedefs so bodies can reference each other and any struct (incl. generic instances,
-    // whose forward decl was previously emitted inside emitGenericTypeInst phase 0 — split out here).
+    // Forward typedefs so bodies can reference each other and any struct (incl. generic instances).
     for (ClassInfo* ci : ordered) {
         if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
         *_out << "typedef struct " << ci->name << " " << ci->name << ";\n";
@@ -5599,7 +5596,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     if (!ordered.empty() || !_interfaces.empty()) *_out << "\n";
 
-    // Function-pointer signature typedefs (M21): `typedef ret (*Name)(params);`.
+    // Function-pointer signature typedefs: `typedef ret (*Name)(params);`.
     // After the class forward-typedefs so a signature may take/return a class.
     for (auto& kv : _sigs) {
         SigInfo& si = kv.second;
@@ -5607,7 +5604,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (si.params.empty()) *_out << "void";
         for (size_t i = 0; i < si.params.size(); ++i) {
             const ParamSig& p = si.params[i];
-            // M24e: const pointer params -> `const T*` (FFI). className already ends
+            // const pointer params -> `const T*` (FFI). className already ends
             // in `*` for a Ptr<T>/Ptr; a const-ref class param keeps its self mutable.
             bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*';
             *_out << (i ? ", " : "") << (constPtr ? "const " : "") << p.className << (p.byRef ? "*" : "");
@@ -5616,7 +5613,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     if (!_sigs.empty()) *_out << "\n";
 
-    // Set the name-resolution scope from the type/file being emitted (M14).
+    // Set the name-resolution scope from the type/file being emitted.
     auto scopeOf = [&](const std::string& scope, const std::vector<std::string>& usings) {
         _nsCtx = NsCtx{}; _nsCtx.scope = scope; _nsCtx.usings = usings;
     };
@@ -5628,11 +5625,11 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // store only `T*`, so the element being forward-declared (above) is enough.
     emitCollectionDefs(/*typesOnly=*/true);
 
-    // M30a: struct bodies (normal classes + generic instances + tagged unions) in ONE by-value-
+    // struct bodies (normal classes + generic instances + tagged unions) in ONE by-value-
     // dependency order — so any struct may hold another user struct BY VALUE (`Box<Rock>`, a union
     // carrying a `Vec2`, a class holding a class). A generic instance routes through emitGenericTypeInst
     // (which binds its _typeSubst/_nsCtx for its `T`-typed fields); a normal class/variant through
-    // emitStruct. Per-node output is unchanged from before — only the emission ORDER is now correct.
+    // emitStruct. The emission ORDER places every by-value dependency before its holder.
     for (ClassInfo* ci : ordered) {
         if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
         if (ci->isGenericInst) {
@@ -5646,14 +5643,14 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     for (auto& kv : _interfaces) { scopeOf(kv.second.scope, kv.second.usings); emitInterfaceTypes(kv.second); }
 
     // Element destructor prototypes the collection/smart-pointer macros call, then the
-    // macros themselves, then class prototypes — so a method (M26d: or any class member)
+    // macros themselves, then class prototypes — so a method (or any class member)
     // can pass a collection/smart-pointer wrapper BY VALUE in its signature, the wrapper
     // type being complete by then. The dtor protos are re-declared (identically, harmless)
     // by emitClassPrototypes. Free-function prototypes follow (they may use a wrapper too).
     for (ClassInfo* ci : classes)
         if (!ci->isCollection && !ci->isExternStruct && ci->destructible)
             *_out << "void " << ci->name << "__dtor(" << ci->name << "* self);\n";
-    // M26f-5: a collection of `Copyable` elements deep-copies via the element's `copy()`, so its
+    // a collection of `Copyable` elements deep-copies via the element's `copy()`, so its
     // prototype must precede the `_FUNCS` macro that calls it (re-declared identically by
     // emitClassPrototypes). The C signature is `Elem Elem__copy(Elem* self)` (nullary; paramListC).
     for (ClassInfo* ci : classes)
@@ -5661,7 +5658,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             *_out << ci->name << " " << ci->name << "__copy(" << ci->name << "* self);\n";
     emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
     for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings); emitClassPrototypes(*ci); }
-    // M27b: specialized generic-type instance prototypes (ctor/dtor/method), `static`.
+    // specialized generic-type instance prototypes (ctor/dtor/method), `static`.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/1);
     // Prototypes for cstar's OWN free functions. cstar never emits prototypes for
@@ -5677,14 +5674,14 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (auto& decl : *u->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn) || !fn->block) continue;   // skip extern + signature types
-                if (fn->typeParams && !fn->typeParams->empty()) continue;   // M27a: template — instantiated below
+                if (fn->typeParams && !fn->typeParams->empty()) continue;   // template — instantiated below
                 emitFunctionPrototype(fn);
                 any = true;
             }
     }
     if (any) *_out << "\n";
 
-    // M27a: generic-function instantiations — one `static` C function per (template, type-args),
+    // generic-function instantiations — one `static` C function per (template, type-args),
     // in the header so every module can call them (like the collection macros). Forward-declare
     // all, then define, so a generic that calls another (or recurses) resolves.
     if (!_genericInsts.empty()) {
@@ -5693,7 +5690,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (auto& kv : _genericInsts) emitGenericInst(kv.second, /*prototypeOnly=*/false);
     }
 
-    // M27b: specialized generic-type instance BODIES (ctor/method/dtor), `static`, in the header.
+    // specialized generic-type instance BODIES (ctor/method/dtor), `static`, in the header.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/2);
 }
@@ -5703,7 +5700,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
 // referenced across files live in the shared header.
 void CEmitter::emitModuleContent(SharedCompilationUnit unit)
 {
-    _nsCtx = _unitCtx[unit.get()];   // resolve this file's body references in its scope (M14)
+    _nsCtx = _unitCtx[unit.get()];   // resolve this file's body references in its scope
     auto classOf = [&](ASTNode* d) -> ClassInfo* {
         auto* cd = dynamic_cast<ClassDeclarationNode*>(d);
         if (cd && cd->name && cd->name->value) {
@@ -5722,12 +5719,12 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         if (ClassInfo* ci = classOf(decl.get())) emitClassDefinitions(*ci);
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
-            if (fn->typeParams && !fn->typeParams->empty()) continue;   // M27a: template — instantiations live in the header
+            if (fn->typeParams && !fn->typeParams->empty()) continue;   // template — instantiations live in the header
             if (!isExtern(fn) && fn->block) emitFunction(fn);   // skip signature types (no body)
         } else if (dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // emitted above
         } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
-            // M28a: a non-generic tagged union's dtor DEFINITION lives in its home module (its struct +
+            // a non-generic tagged union's dtor DEFINITION lives in its home module (its struct +
             // prototype are in the header). Generic-enum instances are emitted static-inline in the header.
             if (ed->identifier && ed->identifier->value) {
                 auto it = _classes.find(qualify(*ed->identifier->value));
@@ -5743,7 +5740,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     }
 }
 
-// FFI (M16): emit a C `#include` per `extern "<header>";` directive, deduped.
+// FFI: emit a C `#include` per `extern "<header>";` directive, deduped.
 void CEmitter::emitIncludes(const std::vector<SharedCompilationUnit>& units)
 {
     std::set<std::string> seen;

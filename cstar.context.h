@@ -1,11 +1,9 @@
 #ifndef __CSTAR_CONTEXT_H__
 #define __CSTAR_CONTEXT_H__
 
-// LLVM-free parse-time context.
+// Parse-time context.
 //
-// This used to be the LLVM-heavy CodeGenContext (see cstar.codegen.h, kept on
-// disk for reference only). The transpiler no longer depends on LLVM, so the
-// parser/lexer/AST only need a tiny context that tracks source position, the
+// The parser/lexer/AST need only a tiny context that tracks source position, the
 // module name, and error reporting. The C backend lives in cstar.cemit.*.
 
 #include <string>

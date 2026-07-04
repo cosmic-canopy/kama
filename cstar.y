@@ -43,7 +43,7 @@ struct LexerInstanceData {
    SharedCodeGenContext codeGenContext;
    SharedCompilationUnit compilationUnit;
 
-   /* M27b: nesting depth of open generic `<…>` (type contexts only). The grammar bumps it on each
+   /* Nesting depth of open generic `<…>` (type contexts only). The grammar bumps it on each
       generic `<` and drops it on the matching `>`; while >0 the lexer splits a `>>` into two `>`
       (so `List<Shared<Circle>>` needs no space). 0 in expression context, so `a >> b` stays a shift. */
    int genericDepth = 0;
@@ -319,7 +319,7 @@ basic_identifier
         /* The mid-rule bumped genericDepth on the opening `<` so the lexer splits a nested `>>`
            close (see cstar.l); drop it back now that this `>` closed the list. */
         yyget_extra(scanner)->genericDepth--;
-        /* M27b-beta: `Name<A, B, …>` — the type args are a LIST. `genericArg` mirrors [0] so every
+        /* `Name<A, B, …>` — the type args are a LIST. `genericArg` mirrors [0] so every
            single-arg consumer (Ptr/collections/guards) is untouched; multi-arg sites read genericArgs. */
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$4)[0]);
         id->genericArgs = $4;
@@ -390,14 +390,14 @@ type_declaration
   | marked_type_declaration
   ;
 
-/* M26h: `type <kind> Name { … }` — the ownership-model declaration. The kind word
+/* `type <kind> Name { … }` — the ownership-model declaration. The kind word
    (`value`/`resource`/`contract`) is an ordinary IDENTIFIER checked by the emitter, so it
    is never reserved. `type` marks every type declaration (greppable, like `fn`). All three
-   kinds share the class body; the emitter routes `contract` to the interface path. */
+   kinds share the class body; the emitter routes `contract` to the fat-pointer vtable path. */
 marked_type_declaration
   : TYPE modifiers_opt IDENTIFIER type_decl_head class_base_opt class_body semicolon_opt
     { auto n = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6); n->typeKind = $3;
-      /* M27b/M27c: `type value Pair<A, B>` / `type value Map<K: IHashable, V>` — the head parsed the
+      /* `type value Pair<A, B>` / `type value Map<K: Hashable, V>` — the head parsed the
          params into genericArgs (each carrying its bounds). Capture names + bounds and strip them so
          the class NAME stays bare `Pair`/`Map`. */
       if ($4->genericArgs && !$4->genericArgs->empty()) {
@@ -412,7 +412,7 @@ marked_type_declaration
       }
       $$ = n; }
   ;
-/* M27c: the NAME + type-parameter list in a type DECLARATION — decoupled from the type-USE production
+/* The NAME + type-parameter list in a type DECLARATION — decoupled from the type-USE production
    (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo` or `Foo<K: I + J, V>`. */
 type_decl_head
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
@@ -479,7 +479,7 @@ function_declaration
    }
   | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $7, $9 );
-      /* M27c: split `<T, K: I + J>` into parallel typeParams (names) + typeBounds (contract lists). */
+      /* Split `<T, K: I + J>` into parallel typeParams (names) + typeBounds (contract lists). */
       if ($5 && !$5->empty()) {
           fn->typeParams = std::make_shared<StringList>();
           fn->typeBounds = std::make_shared<BoundsList>();
@@ -491,13 +491,13 @@ function_declaration
       $$ = fn;
   }
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
-      /* `fnptr ret Name(params);` — an explicit function-pointer TYPE (M21).
+      /* `fnptr ret Name(params);` — an explicit function-pointer TYPE.
          A null body marks it as a signature type (collectSignatures -> _sigs). */
       $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() );
   }
   ;
-/* Generic type parameters on a fn declaration: `fn max<T, U>(...)` / `fn sort<T: IComparable>(...)`
-   — M27a + M27c bounds. Yields a list of type-param IdentifierNodes (each carrying its `bounds`);
+/* Generic type parameters on a fn declaration: `fn max<T, U>(...)` / `fn sort<T: Comparable>(...)`
+   with contract bounds. Yields a list of type-param IdentifierNodes (each carrying its `bounds`);
    the fn/type decl action splits it into names (typeParams) + contract lists (typeBounds). */
 type_params_opt
   : /* Nothing */   { $$ = SharedIdentifierList(); }
@@ -612,7 +612,7 @@ statement_expression
   | post_decrement_expression
   | pre_increment_expression
   | pre_decrement_expression
-  | match_expression   /* M28b: `match (…) { … };` as a statement (trailing `;`, value discarded) */
+  | match_expression   /* `match (…) { … };` as a statement (trailing `;`, value discarded) */
   ;
 selection_statement
   : if_statement
@@ -663,7 +663,7 @@ statement_expression_list
   : statement_expression   { $$ = std::make_shared<StatementList>(); $$->push_back($1); }
   | statement_expression_list COMMA statement_expression   { $1->push_back($3); }
   ;
-/* M28b: `match (subject) { case Variant(bindings): expr; … case _: expr; }` — a single
+/* `match (subject) { case Variant(bindings): expr; … case _: expr; }` — a single
    value-producing construct. Wired into both statement_expression (value discarded) and
    primary_expression_no_parenthesis (lifted to a temp). Each arm's body is one expression. */
 match_expression
@@ -676,7 +676,7 @@ match_arms
   ;
 match_arm
   : CASE match_pattern COLON expression SEMICOLON   { $2->body = $4; $$ = $2; }
-  | CASE match_pattern COLON block   { $2->block = $4; $$ = $2; }   /* M29d: block arm (multi-statement) */
+  | CASE match_pattern COLON block   { $2->block = $4; $$ = $2; }   /* block arm (multi-statement) */
   ;
 match_pattern
   : IDENTIFIER
@@ -721,8 +721,8 @@ semicolon_opt
 expression
   : conditional_expression
   | assignment   { $$ = $1; }
-  | GIVE variable_reference   { $$ = std::make_shared<HandoffNode>(SCANNER_CODEGENCONTEXT, true,  $2); }   // M26c: move
-  | COPY variable_reference   { $$ = std::make_shared<HandoffNode>(SCANNER_CODEGENCONTEXT, false, $2); }   // M26c: duplicate
+  | GIVE variable_reference   { $$ = std::make_shared<HandoffNode>(SCANNER_CODEGENCONTEXT, true,  $2); }   // move
+  | COPY variable_reference   { $$ = std::make_shared<HandoffNode>(SCANNER_CODEGENCONTEXT, false, $2); }   // duplicate
   ;
 assignment
   : unary_expression assignment_operator expression   { $$ = std::make_shared<AssignmentNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
@@ -752,7 +752,7 @@ primary_expression_no_parenthesis
   | this_access
   | base_access
   | new_expression   { $$ = $1; }
-  | match_expression   { $$ = $1; }   /* M28b: value-producing `match` in expression position */
+  | match_expression   { $$ = $1; }   /* value-producing `match` in expression position */
   ;
 parenthesized_expression
   : LPAREN expression RPAREN   { $$ = $2; }
@@ -919,7 +919,7 @@ class_base
   | IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), $2); }
   | EXTENDS type_name IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
   ;
-/* The `implements <contract>[, …]` list (M26h: contracts, was interfaces). */
+/* The `implements <contract>[, …]` list. */
 interface_type_list
   : type_name   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
   | interface_type_list COMMA type_name   { $1->push_back($3); }
@@ -956,14 +956,14 @@ method_declaration
   ;
 /* A method name is an identifier — but `copy`/`give` are hand-off markers only in expression
    position, so we let them name a member too (contextual keywords). This is what lets a `resource`
-   opt into the `Copyable` contract with a method literally named `copy` (M26f-4). */
+   opt into the `Copyable` contract with a method literally named `copy`. */
 method_name
   : IDENTIFIER   { $$ = $1; }
   | COPY         { $$ = $1; }
   | GIVE         { $$ = $1; }
   ;
 
-/* `const fn …` — an optional const qualifier on a method (M24b). A dedicated slot
+/* `const fn …` — an optional const qualifier on a method. A dedicated slot
    (not a general modifier) so it can't collide with the const-field / const-local
    declaration forms that also begin with CONST. */
 const_opt
@@ -986,7 +986,7 @@ operator_body
   | SEMICOLON   { $$ = SharedBlock(); }
   ;
 overloadable_operator_declarator
-  : type OPERATOR overloadable_operator LPAREN RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, SharedIdentifier(), SharedIdentifier(), SharedIdentifier(), SharedIdentifier()); }   /* M31b — 0-param unary: `Vec2 operator-()` = `-this` */
+  : type OPERATOR overloadable_operator LPAREN RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, SharedIdentifier(), SharedIdentifier(), SharedIdentifier(), SharedIdentifier()); }   /* 0-param unary: `Vec2 operator-()` = `-this` */
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), SharedIdentifier(), SharedIdentifier()); }
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $9) ); }
   ;
@@ -997,7 +997,7 @@ overloadable_operator
   | TILDE
   | PLUSPLUS
   | MINUSMINUS
-  /* M31: `true`/`false` conversion operators deferred (they aliased token codes 0/1) */
+  /* `true`/`false` conversion operators are not overloadable (they aliased token codes 0/1) */
   | STAR
   | SLASH
   | PERCENT
@@ -1038,7 +1038,7 @@ destructor_declaration
                               Enum 
 ------------------------------------------------------------------------------*/
 
-/* M28a: `enum Name<T> : IntType { A, B(payload…) }`. The head reuses `type_decl_head` (so
+/* `enum Name<T> : IntType { A, B(payload…) }`. The head reuses `type_decl_head` (so
    generic enums parse exactly like generic types); an optional `: IntType` pins the underlying
    integer / tag width; members may carry a named payload (below) making the enum a tagged union. */
 enum_declaration
@@ -1078,7 +1078,7 @@ enum_member_declarations
 enum_member_declaration
   : IDENTIFIER   { $$ = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   | IDENTIFIER EQ constant_expression   { $$ = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3 ); }
-  | IDENTIFIER LPAREN parameter_list RPAREN   { auto m = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); m->payload = $3; $$ = m; }   /* M28a: tagged-union variant with a named payload */
+  | IDENTIFIER LPAREN parameter_list RPAREN   { auto m = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); m->payload = $3; $$ = m; }   /* tagged-union variant with a named payload */
   ;
 
 /*------------------------------------------------------------------------------ 

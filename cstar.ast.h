@@ -72,7 +72,7 @@ public:
         : ASTNode(context),  StatementNode(context), name(name) { }
 };
 
-// `extern "<header.h>";` — emit a C `#include` for FFI (M16).
+// `extern "<header.h>";` — emit a C `#include` for FFI.
 class IncludeNode : public StatementNode {
 public:
     SharedString header;   // the raw string, e.g. <stdlib.h> or math.h
@@ -197,9 +197,9 @@ public:
     SharedString value;
     SharedStringList qualifier;
     SharedIdentifier genericArg;   // element type for Coll<T> (a full type); == genericArgs[0]
-    SharedIdentifierList genericArgs;  // M27b-beta: all type args for Pair<A,B> etc.; genericArg mirrors [0]
-    SharedIdentifierList bounds;       // M27c: when this node is a type-PARAMETER (`K` in `<K: I + J>`),
-                                       //       its contract bounds [I, J]; empty/unset otherwise.
+    SharedIdentifierList genericArgs;  // all type args for Pair<A,B> etc.; genericArg mirrors [0]
+    SharedIdentifierList bounds;       // when this node is a type-PARAMETER (`K` in `<K: I + J>`),
+                                       // its contract bounds [I, J]; empty/unset otherwise.
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
     IdentifierNode(CodeGenContext& context, SharedString value, int builtInVal = IDENTIFIER_NONE_VAL)
@@ -237,8 +237,8 @@ public:
     SharedIdentifier name;
     SharedParameterList parameters;
     SharedBlock block;
-    SharedStringList typeParams;   // <T, ...> — generic fn (M27a); empty for non-generic
-    SharedBoundsList typeBounds;   // M27c: contract bounds parallel to typeParams (empty entry = unbounded)
+    SharedStringList typeParams;   // <T, ...> — generic fn; empty for non-generic
+    SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     FunctionDeclarationNode(CodeGenContext& context,  SharedModifier modifier, SharedIdentifier returnType, SharedIdentifier name,
                             SharedParameterList parameters, SharedBlock block, SharedStringList typeParams = SharedStringList() )
         : ASTNode(context),  StatementNode(context)
@@ -255,7 +255,7 @@ public:
     SharedModifier modifier;
     SharedIdentifier type;
     SharedIdentifier identifier;
-    bool isConst = false;   // `const [ref] T x` — immutable param (M24c)
+    bool isConst = false;   // `const [ref] T x` — immutable param
     FunctionParameterNode(CodeGenContext& context, SharedModifier modifier, SharedIdentifier type, SharedIdentifier identifier)
         : ASTNode(context),  ExpressionNode(context), modifier(modifier), type(type), identifier(identifier) { }
 };
@@ -271,7 +271,7 @@ public:
         : ASTNode(context),  StatementNode(context), statements(statements) { }
 };
 
-// `unsafe { ... }` (M17): a scoped block inside which raw pointer index/store is
+// `unsafe { ... }` — a scoped block inside which raw pointer index/store is
 // permitted. The single, explicit, greppable unsafe surface of the language.
 class UnsafeNode : public StatementNode {
 public:
@@ -426,7 +426,7 @@ public:
         , expression(expression) { }
 };
 
-// M26c — `give x` (move; source consumed) / `copy x` (duplicate). The explicit hand-off
+// `give x` (move; source consumed) / `copy x` (duplicate). The explicit hand-off
 // marker that rides a NAMED value; a fresh rvalue never needs one.
 class HandoffNode : public ExpressionNode {
 public:
@@ -584,10 +584,10 @@ public:
     // The kind word from a `type <kind> Name { … }` declaration ("value"/"resource"/"contract").
     // Drives the ownership/access model.
     SharedString typeKind;
-    // M27b: type parameters from `type value Box<T> { … }` — monomorphized per concrete arg;
+    // Type parameters from `type value Box<T> { … }` — monomorphized per concrete arg;
     // empty for a non-generic type. Set by the grammar action (like typeKind).
     SharedStringList typeParams;
-    SharedBoundsList typeBounds;   // M27c: contract bounds parallel to typeParams (empty entry = unbounded)
+    SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
                         SharedIdentifier name,
                         SharedClassBaseDeclaration baseTypes,
@@ -614,7 +614,7 @@ public:
     ClassMemberDeclarationNode(CodeGenContext& context) : ASTNode(context),  StatementNode(context) { }
 };
 
-// M25c — `friend <accessor>(member, …);` (or `friend <accessor>;` = all privates): the
+// `friend <accessor>(member, …);` (or `friend <accessor>;` = all privates): the
 // OWNING class grants the named accessor (a class / free function / Class::method) access
 // to the named private members. Owner-granted, narrow, greppable.
 class FriendGrantNode : public ClassMemberDeclarationNode {
@@ -661,7 +661,7 @@ public:
     SharedIdentifier name;
     SharedParameterList params;
     SharedBlock body;
-    bool isConst = false;   // `const fn …` — a non-mutating method (M24b)
+    bool isConst = false;   // `const fn …` — a non-mutating method
     ClassMethodDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
             SharedIdentifier returnType,
             SharedIdentifier name,
@@ -767,10 +767,10 @@ public:
     SharedModifierList modifiers;
     SharedIdentifier identifier;
     SharedEnumMemberDeclarationList body;
-    // M28a: `enum Name : IntType { … }` — pins the underlying integer (plain enum) / tag width
+    // `enum Name : IntType { … }` — pins the underlying integer (plain enum) / tag width
     // (tagged union); null = compiler-chosen. Set by the grammar action after construction.
     SharedIdentifier underlyingType;
-    // M28a: `enum Optional<T> { … }` — type parameters + contract bounds, monomorphized per
+    // `enum Optional<T> { … }` — type parameters + contract bounds, monomorphized per
     // concrete arg (mirror of ClassDeclarationNode); empty for a non-generic enum.
     SharedStringList typeParams;
     SharedBoundsList typeBounds;
@@ -785,7 +785,7 @@ class EnumMemberDeclarationNode : public StatementNode {
 public:
     SharedIdentifier identifier;
     SharedExpression constantExpression;
-    // M28a: `Circle(float64 radius)` — named payload fields of a discriminated-union variant;
+    // `Circle(float64 radius)` — named payload fields of a discriminated-union variant;
     // null/empty for a plain (no-payload) variant. Reuses the ordinary parameter list.
     SharedParameterList payload;
     EnumMemberDeclarationNode(CodeGenContext& context, SharedIdentifier identifier, SharedExpression constantExpression)
@@ -793,7 +793,7 @@ public:
 };
 
 //------------------------------------------------------------------------------
-//                              Match (M28b)
+//                              Match
 //------------------------------------------------------------------------------
 
 // One arm: `case Variant(bind1, bind2): expr;` (or `case _: expr;` — the wildcard).
@@ -802,7 +802,7 @@ public:
     SharedString     variantName;   // the variant matched; "_" = wildcard
     SharedStringList bindings;      // payload binding names in field order; null/empty if none
     SharedExpression body;          // single-expression arm: the arm's value / side-effect expression
-    SharedBlock      block;         // M29d: block arm `{ … }` (multi-statement); one of body/block is set
+    SharedBlock      block;         // block arm `{ … }` (multi-statement); one of body/block is set
     explicit MatchArmNode(CodeGenContext& context)
         : ASTNode(context), StatementNode(context) { }
     bool isWildcard() const { return variantName && *variantName == "_"; }
