@@ -322,27 +322,49 @@ static inline bool userOperandType(const std::string& cls, std::map<std::string,
     return it != classes.end() && !it->second.isCollection;
 }
 
+// M31b — `&<operand>` for a method-form/unary operator's `self`. A simple lvalue (a local, a field/
+// member access, `this`) is addressed directly; an rvalue (a nested operator result, a call, `a[i]`)
+// is first materialized into a hoisted temp — ISO C, no statement-expressions — so `&` is legal and
+// chained `a + b + c` works. In a non-hoistable slot (a raw `if`/`while` condition) a chained operand
+// is a clean error rather than bad C.
+std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, int line)
+{
+    ASTNode* n = e.get();
+    bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n)
+               || dynamic_cast<ThisAccessNode*>(n);
+    std::string em = emitExpression(e);   // may itself hoist inner temps (declared first — correct order)
+    if (lvalue) return "&(" + em + ")";
+    if (!_hoistOK || cls.empty()) {
+        unsupported("a temporary/chained operator operand isn't supported here — bind it to a local first", line);
+        return "&(" + em + ")";
+    }
+    std::string t = "__cstar_op" + std::to_string(_tempCounter++);
+    _hoisted.push_back(cls + " " + t + " = (" + em + ");");
+    return "&" + t;
+}
+
 // M31b — a binary expression with a user-typed operand dispatches to an operator overload; a purely
 // primitive expression keeps the raw-C path (so the whole numeric fixture suite is untouched).
 // Resolution: the METHOD form (arity 1) on the LHS type first (`this`+rhs → `A__op(&lhs, rhs)`), else
 // the FREE form (arity 2) on either operand's type (`A__op(lhs, rhs)`).
-std::string CEmitter::emitBinaryOperator(BinaryExpressionNode* v)
+std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line)
 {
-    std::string lc = exprClass(v->LHS);
-    std::string rc = exprClass(v->RHS);
+    std::string lc = exprClass(lhs);
+    std::string rc = exprClass(rhs);
     bool lUser = userOperandType(lc, _classes);
     bool rUser = userOperandType(rc, _classes);
     if (!lUser && !rUser)
-        return "(" + emitExpression(v->LHS) + " " + binaryOperator(v->token) + " "
-                   + emitExpression(v->RHS) + ")";   // primitives — unchanged
+        return "(" + emitExpression(lhs) + " " + binaryOperator(token) + " "
+                   + emitExpression(rhs) + ")";   // primitives — unchanged
 
-    std::string opName = operatorMangle(v->token, 1);   // binary name (arity 1 or 2 share it)
+    std::string opName = operatorMangle(token, 1);   // binary name (arity 1 or 2 share it)
     // method form (arity 1) on the LHS type: `A__op(&lhs, rhs)`
     if (lUser) {
         MethodInfo* mi = findMethod(&_classes[lc], opName, nullptr);
         if (mi && mi->isOperator && mi->arity == 1) {
-            canAccess(&_classes[lc], mi->visibility, opName, v->line);
-            return mi->cName + "(&(" + emitExpression(v->LHS) + "), " + emitExpression(v->RHS) + ")";
+            canAccess(&_classes[lc], mi->visibility, opName, line);
+            std::string self = addrOfOperand(lhs, lc, line);   // rvalue LHS → hoisted temp
+            return mi->cName + "(" + self + ", " + emitExpression(rhs) + ")";
         }
     }
     // free form (arity 2) declared on either operand's type: `A__op(lhs, rhs)`
@@ -350,13 +372,32 @@ std::string CEmitter::emitBinaryOperator(BinaryExpressionNode* v)
         if (!userOperandType(cls, _classes)) continue;
         MethodInfo* mi = findMethod(&_classes[cls], opName, nullptr);
         if (mi && mi->isOperator && mi->arity == 2) {
-            canAccess(&_classes[cls], mi->visibility, opName, v->line);
-            return mi->cName + "(" + emitExpression(v->LHS) + ", " + emitExpression(v->RHS) + ")";
+            canAccess(&_classes[cls], mi->visibility, opName, line);
+            return mi->cName + "(" + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";
         }
     }
-    unsupported(("no operator '" + binaryOperator(v->token) + "' for operand type '"
-                 + (lUser ? lc : rc) + "' — define `operator" + binaryOperator(v->token) + "` on the type").c_str(), v->line);
+    unsupported(("no operator '" + binaryOperator(token) + "' for operand type '"
+                 + (lUser ? lc : rc) + "' — define `operator" + binaryOperator(token) + "` on the type").c_str(), line);
     return "0";
+}
+
+// M31b — a compound-assignment token maps to its binary operator (`a += b` == `a = a + b`) for a
+// user type. Returns 0 (not a valid token) for a plain `=` or an unmapped token.
+int CEmitter::compoundToBinary(int token)
+{
+    switch (token) {
+        case PLUSEQ:  return PLUS;
+        case MINUSEQ: return MINUS;
+        case STAREQ:  return STAR;
+        case DIVEQ:   return SLASH;
+        case MODEQ:   return PERCENT;
+        case ANDEQ:   return AMP;
+        case OREQ:    return BAR;
+        case XOREQ:   return CARET;
+        case LTLTEQ:  return LTLT;
+        case GTGTEQ:  return GTGT;
+        default:      return 0;
+    }
 }
 
 // M31b — a unary / increment / decrement on a user type dispatches to a 0-param (on-`this`) operator.
@@ -367,11 +408,12 @@ std::string CEmitter::emitUnaryUserOp(int opToken, SharedExpression operand, int
     if (!userOperandType(oc, _classes)) return "";
     std::string opName = operatorMangle(opToken, 0);   // op_neg / op_not / op_bnot / op_pos / op_inc / op_dec
     MethodInfo* mi = opName.empty() ? nullptr : findMethod(&_classes[oc], opName, nullptr);
-    if (!mi || !mi->isOperator)
+    if (!mi || !mi->isOperator) {
         unsupported(("no unary operator for type '" + oc + "' — define the matching `operator` on the type").c_str(), line);
-    else
-        canAccess(&_classes[oc], mi->visibility, opName, line);
-    return mi ? (mi->cName + "(&(" + emitExpression(operand) + "))") : "0";
+        return "0";
+    }
+    canAccess(&_classes[oc], mi->visibility, opName, line);
+    return mi->cName + "(" + addrOfOperand(operand, oc, line) + ")";   // rvalue operand → hoisted temp
 }
 
 // ---------------------------------------------------------------------------
@@ -543,7 +585,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                 v->line);
             }
         }
-        return emitBinaryOperator(v);   // M31b — user-typed operand → operator dispatch, else raw C
+        return emitBinaryOperator(v->token, v->LHS, v->RHS, v->line);   // M31b — user operand → dispatch, else raw C
     }
 
     if (auto* v = dynamic_cast<LogicalAndOrNode*>(n)) {
@@ -587,6 +629,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             return "((" + emitExpression(recv) + ")[" + ridx + "] "
                        + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
         }
+        // M31b — compound assignment on a user type (`a += b`) lowers to `a = a <op> b` via the
+        // operator, since a struct has no built-in `+=`. Plain `=` and primitives keep the raw path.
+        int binTok = compoundToBinary(v->token);
+        if (binTok && userOperandType(exprClass(v->unaryExpression), _classes))
+            return "(" + emitExpression(v->unaryExpression) + " = "
+                       + emitBinaryOperator(binTok, v->unaryExpression, v->expression, v->line) + ")";
         return "(" + emitExpression(v->unaryExpression) + " "
                    + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
     }
@@ -5065,6 +5113,37 @@ std::string CEmitter::exprClass(SharedExpression e)
             if (f != _funcs.end() && isClass(f->second.retCType)) return f->second.retCType;
         }
         return "";
+    }
+
+    // M31b — a user-operator result carries the operator's return type, so a NESTED operator
+    // (`a + b + c`, `-a + b`, `(a + b) * s`) resolves and the enclosing operator can be found.
+    if (auto* be = dynamic_cast<BinaryExpressionNode*>(n))
+        return operatorResultClass(be->token, /*binary*/1, be->LHS, be->RHS);
+    if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n))
+        return operatorResultClass(su->token, /*unary*/0, su->expression, nullptr);
+    if (auto* pr = dynamic_cast<PreIncrDecrNode*>(n))
+        return operatorResultClass(pr->token, 0, pr->expression, nullptr);
+    if (auto* po = dynamic_cast<PostIncrDecrNode*>(n))
+        return operatorResultClass(po->token, 0, po->expression, nullptr);
+    return "";
+}
+
+// M31b — the class an operator expression evaluates to = the resolved operator's return type
+// (a class), else "" (a primitive result like a comparison's `bool`, or no matching operator).
+std::string CEmitter::operatorResultClass(int opToken, int arity, SharedExpression lhs, SharedExpression rhs)
+{
+    std::string opName = operatorMangle(opToken, arity);
+    if (opName.empty()) return "";
+    std::string lc = exprClass(lhs);
+    std::string rc = rhs ? exprClass(rhs) : "";
+    for (const std::string& cls : { lc, rc }) {
+        if (!userOperandType(cls, _classes)) continue;
+        MethodInfo* mi = findMethod(&_classes[cls], opName, nullptr);
+        if (mi && mi->isOperator) {
+            ScopedStr _ts(_thisType, cls);   // a `This` return type resolves to the operand's class
+            std::string rt = cType(mi->returnType);
+            return isClass(rt) ? rt : "";
+        }
     }
     return "";
 }

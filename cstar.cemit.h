@@ -562,8 +562,14 @@ private:
     // all normal method machinery (paramListC, paramSigsOf, emitMethodOrCtorBody) is reused verbatim.
     std::string operatorMangle(int opToken, int arity);
     SharedParameterList operatorParamList(ClassOperatorDeclaratorNode* d);
-    std::string emitBinaryOperator(BinaryExpressionNode* v);   // user-typed operand → operator dispatch, else raw C
+    std::string emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line);   // user operand → dispatch, else raw C
+    int         compoundToBinary(int token);   // PLUSEQ -> PLUS … (compound assignment on a user type)
     std::string emitUnaryUserOp(int opToken, SharedExpression operand, int line);   // unary/incr/decr on a user type
+    std::string operatorResultClass(int opToken, int arity, SharedExpression lhs, SharedExpression rhs);  // nested-operator type
+    // M31b — `&<operand>` for a method-form/unary operator's `self`. A simple lvalue is addressed
+    // directly; an rvalue (a nested operator result / call) is first materialized into a hoisted temp
+    // (ISO C — no statement-expressions) so chained `a + b + c` works.
+    std::string addrOfOperand(SharedExpression e, const std::string& cls, int line);
 
     void unsupported(const char* what, int srcLine);
 
