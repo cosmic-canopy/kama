@@ -1,0 +1,22 @@
+enum Signal { Red, Yellow, Green }
+
+fn int32 duration(Signal s)
+{
+    return match (s) {
+        case Red: 30;
+        case Yellow: 5;
+        case Green: 25;
+    };
+}
+
+fn int main()
+{
+    Signal s = Signal::Yellow;
+    int32 total = duration(s: Signal::Red) + duration(s: s) + duration(s: Signal::Green);   // 30 + 5 + 25
+    int32 code = 0;
+    match (s) {
+        case Yellow: code = 1;
+        case _: code = 9;
+    };
+    return total + code;   // 60 + 1
+}

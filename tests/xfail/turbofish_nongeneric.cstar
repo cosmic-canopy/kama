@@ -1,0 +1,3 @@
+// Turbofish type arguments on a non-generic function are rejected (they'd be silently meaningless).
+fn int plain(int x) { return x; }
+fn int main() { return plain::<int32>(x: 1); }

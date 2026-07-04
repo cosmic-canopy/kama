@@ -350,36 +350,10 @@ statement_expression
   ;
 selection_statement
   : if_statement
-  | switch_statement
   ;
 if_statement
   : IF LPAREN boolean_expression RPAREN embedded_statement
   | IF LPAREN boolean_expression RPAREN embedded_statement ELSE embedded_statement
-  ;
-switch_statement
-  : SWITCH LPAREN expression RPAREN switch_block
-  ;
-switch_block
-  : LEFT_BRACE switch_sections_opt RIGHT_BRACE
-  ;
-switch_sections_opt
-  : /* Nothing */
-  | switch_sections
-  ;
-switch_sections
-  : switch_section
-  | switch_sections switch_section
-  ;
-switch_section
-  : switch_labels statement_list
-  ;
-switch_labels
-  : switch_label
-  | switch_labels switch_label
-  ;
-switch_label
-  : CASE constant_expression COLON
-  | DEFAULT COLON
   ;
 iteration_statement
   : while_statement
@@ -525,6 +499,11 @@ member_access
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN
   | qualified_identifier_no_generic LPAREN argument_list_opt RPAREN
+    /* Turbofish: explicit type arguments on a generic function call — `make::<int32>()`. The `::`
+       before `<` is unambiguous (a qualifier is always followed by an identifier, never `<`), so no
+       comparison-operator clash. The mid-rule bumps genericDepth so a nested `>>` close still splits. */
+  | IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN
+
   ;
 argument_list_opt
   : /* Nothing */
@@ -738,7 +717,8 @@ operator_body
   | SEMICOLON
   ;
 overloadable_operator_declarator
-  : type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN
+  : type OPERATOR overloadable_operator LPAREN RPAREN      /* M31b — 0-param unary: `Vec2 operator-()` = `-this` */
+  | type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN
   ;
 overloadable_operator
@@ -748,8 +728,7 @@ overloadable_operator
   | TILDE
   | PLUSPLUS
   | MINUSMINUS
-  | TRUE
-  | FALSE
+  /* M31: `true`/`false` conversion operators deferred (they aliased token codes 0/1) */
   | STAR
   | SLASH
   | PERCENT

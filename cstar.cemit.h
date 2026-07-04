@@ -389,6 +389,10 @@ private:
     // Unify a generic call's args against the template's params -> a deduped instantiation.
     bool inferGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedArgumentList args,
                           std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out);
+    // Turbofish: bind a generic function's type params directly from explicit `::<…>` args (bypassing
+    // argument inference — reaches return-only generics inference can't). Arity + bounds are checked.
+    bool explicitGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedIdentifierList typeArgs,
+                             int line, GenericInst& out);
     void emitGenericInst(const GenericInst& gi, bool prototypeOnly);
 
     // Smart pointers (M10 Owned, M11 Shared). If `cls` is a smart-pointer type,
@@ -525,6 +529,16 @@ private:
     std::string emitMatch(MatchNode* m);
     void        emitMatchStatement(MatchNode* m, int depth);
     void        emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int depth);
+    // A `match` over a plain (payload-less) enum lowers to a C `switch` on the integer value,
+    // with the same compile-time exhaustiveness + `_` wildcard as the tagged-union path.
+    void        emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const std::string* resultTemp, int depth);
+    std::string exprEnumType(SharedExpression e);       // plain-enum type name of expr, "" if not a plain enum
+    // Merge per-arm move-states at a match join. A `match` is exhaustive, so a local moved on some but
+    // not all reaching arms becomes MaybeMoved (rejected as an undecidable drop at scope exit) — the
+    // same conditional-drop guard `if`/`else` has, so removing `switch` costs no safety.
+    void        mergeMatchMoveStates(const std::map<std::string, MoveState>& before,
+                                     const std::vector<std::map<std::string, MoveState>>& armEnds,
+                                     const std::vector<bool>& armDivs);
 
     // M24a — const-correctness (deep): a const binding is immutable.
     std::set<std::string> _constLocals;                       // const local names in scope

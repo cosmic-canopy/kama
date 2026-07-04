@@ -326,31 +326,6 @@ public:
         , elseStatement(elseStatement) { }
 };
 
-class SwitchNode : public StatementNode {
-public:
-    SharedExpression expression;
-    SharedSwitchSectionList switchsections;
-    SwitchNode(CodeGenContext& context, SharedExpression expression, SharedSwitchSectionList switchsections)
-        : ASTNode(context),  StatementNode(context), expression(expression), switchsections(switchsections) { }
-};
-
-class SwitchSectionNode : public StatementNode {
-public:
-    SharedSwitchLabelList labels;
-    SharedStatementList statementList;
-    SwitchSectionNode(CodeGenContext& context, SharedSwitchLabelList labels, SharedStatementList statementList)
-        : ASTNode(context),  StatementNode(context), labels(labels)
-    , statementList(statementList) { }
-};
-
-class SwitchLabelNode : public StatementNode {
-public:
-    SharedExpression constantExpression;
-    SwitchLabelNode(CodeGenContext& context, SharedExpression constantExpression)
-        : ASTNode(context),  StatementNode(context), constantExpression(constantExpression) { }
-    bool isDefault(){ return !constantExpression; }
-};
-
 class WhileNode : public StatementNode {
 public:
     SharedExpression booleanExpression;

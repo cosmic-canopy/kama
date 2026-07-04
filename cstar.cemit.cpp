@@ -1387,61 +1387,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         return;
     }
 
-    if (auto* sw = dynamic_cast<SwitchNode*>(n)) {
-        line(n->line); indent(depth);
-        *_out << "switch (" << emitExpression(sw->expression) << ") {\n";
-        // M26f-2: each section is an independent arm off the pre-switch state; merge at the join.
-        auto before = _moveState;
-        std::vector<std::map<std::string, MoveState>> armEnd;
-        std::vector<bool> armDiv;
-        bool hasDefault = false;
-        if (sw->switchsections) {
-            for (auto& sec : *sw->switchsections) {
-                _moveState = before;                       // restore before each section
-                if (sec->labels) {
-                    for (auto& lbl : *sec->labels) {
-                        indent(depth + 1);
-                        if (lbl->isDefault()) { *_out << "default:\n"; hasDefault = true; }
-                        else
-                            *_out << "case " << emitExpression(lbl->constantExpression) << ":\n";
-                    }
-                }
-                // Wrap the section body in a block: C forbids a declaration
-                // directly after a `case` label (e.g. a `return`'s __ret temp).
-                indent(depth + 1); *_out << "{\n";
-                SharedStatement last;
-                if (sec->statementList) {
-                    for (auto& st : *sec->statementList) { emitStatement(st, depth + 2); last = st; }
-                }
-                // cstar switch sections don't fall through; add break unless the
-                // section already ends in a break/return.
-                bool ends = last && (dynamic_cast<BreakNode*>(last.get()) ||
-                                     dynamic_cast<ReturnNode*>(last.get()));
-                if (!ends) { indent(depth + 2); *_out << "break;\n"; }
-                indent(depth + 1); *_out << "}\n";
-                armEnd.push_back(_moveState);
-                armDiv.push_back(last && dynamic_cast<ReturnNode*>(last.get()));  // `return` diverges; `break` reaches the join
-            }
-        }
-        indent(depth);
-        *_out << "}\n";
-        // Merge arms at the join. Uncovered values (no `default`) fall through with the pre-switch
-        // state — an implicit arm. A local moved on ALL reaching arms -> Moved; on some -> MaybeMoved.
-        _moveState = before;
-        for (auto& kv : before) {
-            bool any = false, allMoved = true, allNot = true;
-            auto consider = [&](MoveState s){ any = true; if (s != MoveState::Moved) allMoved = false;
-                                              if (s != MoveState::NotMoved) allNot = false; };
-            for (size_t i = 0; i < armEnd.size(); ++i)
-                if (!armDiv[i]) consider(armEnd[i].count(kv.first) ? armEnd[i][kv.first] : kv.second);
-            if (!hasDefault) consider(kv.second);
-            if (!any) { _moveState[kv.first] = kv.second; continue; }
-            _moveState[kv.first] = allMoved ? MoveState::Moved
-                                            : (allNot ? MoveState::NotMoved : MoveState::MaybeMoved);
-        }
-        return;
-    }
-
     if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         line(n->line); indent(depth);
         std::string itCls = exprClass(fe->expression);
@@ -2684,10 +2629,6 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         scanTypeForCollections(fe->type);
         scanExprForCollections(fe->expression);
         scanStmtForCollections(fe->body);
-    } else if (auto* sw = dynamic_cast<SwitchNode*>(n)) {
-        scanExprForCollections(sw->expression);
-        if (sw->switchsections) for (auto& sec : *sw->switchsections)
-            if (sec && sec->statementList) for (auto& st : *sec->statementList) scanStmtForCollections(st);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForCollections(std::dynamic_pointer_cast<ExpressionNode>(s));
     }
@@ -2857,6 +2798,34 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     return true;
 }
 
+// Turbofish `f::<A, B>(…)` — bind each type param from the explicit type args in order (no inference).
+// The concrete args are already resolved type nodes from the grammar; check arity + contract bounds.
+bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::string& key,
+                                   SharedIdentifierList typeArgs, int line, GenericInst& out)
+{
+    size_t np = tmpl->typeParams ? tmpl->typeParams->size() : 0;
+    size_t na = typeArgs ? typeArgs->size() : 0;
+    if (na != np) {
+        unsupported(("generic function '" + key + "' takes " + std::to_string(np) + " type argument(s), but "
+                     + std::to_string(na) + " were given in `::<…>`").c_str(), line);
+        return false;
+    }
+    if (tmpl->typeBounds)
+        for (size_t i = 0; i < np && i < tmpl->typeBounds->size(); ++i)
+            if ((*tmpl->typeParams)[i])
+                checkBounds(*(*tmpl->typeParams)[i], (*typeArgs)[i], (*tmpl->typeBounds)[i], line);
+
+    out.templateKey = key;
+    out.typeArgs.clear();
+    std::string mangled = key;
+    for (size_t i = 0; i < np; ++i) {
+        out.typeArgs.push_back((*typeArgs)[i]);
+        mangled += "__" + mangleElem((*typeArgs)[i]);
+    }
+    out.mangledName = mangled;
+    return true;
+}
+
 void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, SharedIdentifier>& localTys)
 {
     if (!e) return;
@@ -2881,11 +2850,17 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
             auto git = _generics.find(k);
             if (git != _generics.end()) {
                 GenericInst gi;
-                if (inferGenericInst(git->second, k, inv->args, localTys, inv->line, gi)) {
+                SharedIdentifierList tfArgs = inv->identifier->genericArgs;   // turbofish `f::<…>` type args
+                if (tfArgs) for (auto& ta : *tfArgs) scanTypeForCollections(ta);   // register List<…>/etc. args
+                bool ok = tfArgs ? explicitGenericInst(git->second, k, tfArgs, inv->line, gi)
+                                 : inferGenericInst(git->second, k, inv->args, localTys, inv->line, gi);
+                if (ok) {
                     if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
                     _callInst[inv] = gi.mangledName;   // one call node -> one instantiation
                 }
             }
+            // Turbofish on a non-generic function is rejected at emit (emitInvocation), where it is a
+            // hard build error — a bare `::<…>` that resolves to no generic template.
         }
     } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
         scanExprForGenerics(ea->expression, localTys);
@@ -2935,10 +2910,6 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
     } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         scanExprForGenerics(fe->expression, localTys);
         scanStmtForGenerics(fe->body, localTys);
-    } else if (auto* sw = dynamic_cast<SwitchNode*>(n)) {
-        scanExprForGenerics(sw->expression, localTys);
-        if (sw->switchsections) for (auto& sec : *sw->switchsections)
-            if (sec && sec->statementList) for (auto& st : *sec->statementList) scanStmtForGenerics(st, localTys);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForGenerics(std::dynamic_pointer_cast<ExpressionNode>(s), localTys);
     }
@@ -4153,7 +4124,9 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     std::string subjCls = exprClass(m->subject);
     auto cit = _classes.find(subjCls);
     if (cit == _classes.end() || !cit->second.isVariant) {
-        unsupported("`match` requires a tagged-union subject (an enum with payload variants)", m->line);
+        std::string enumTy = exprEnumType(m->subject);
+        if (!enumTy.empty()) { emitMatchPlainEnum(m, enumTy, resultTemp, depth); return; }
+        unsupported("`match` requires an enum subject (a tagged union, or a plain enum)", m->line);
         return;
     }
     ClassInfo& ci = cit->second;
@@ -4206,7 +4179,11 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
     }
     indent(depth); *_out << "switch (" << sp << "->tag) {\n";
+    auto beforeMove = _moveState;                            // each arm branches from the same pre-match state
+    std::vector<std::map<std::string, MoveState>> armEnds;
+    std::vector<bool> armDivs;
     for (auto& a : *m->arms) {
+        _moveState = beforeMove;
         indent(depth + 1);
         if (a->isWildcard()) *_out << "default: {\n";
         else                 *_out << "case " << subjCls << "_" << *a->variantName << ": {\n";
@@ -4271,9 +4248,12 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth + 2); *_out << "break;\n";
 
         for (auto& sv : savedTypes) { if (sv.had) _localTypes[sv.name] = sv.prev; else _localTypes.erase(sv.name); }
+        armEnds.push_back(_moveState);
+        armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);
         _scopes.pop_back();
         indent(depth + 1); *_out << "}\n";
     }
+    mergeMatchMoveStates(beforeMove, armEnds, armDivs);
     if (!hasWildcard) { indent(depth + 1); *_out << "default: break;\n"; }   // exhaustive; keeps the C switch total
     indent(depth); *_out << "}\n";
     // M29a: a materialized owning subject (a call/construction result) is dropped once after the
@@ -4316,6 +4296,135 @@ void CEmitter::emitMatchStatement(MatchNode* m, int depth)
 {
     line(m->line);
     emitMatchSwitch(m, nullptr, depth);
+}
+
+void CEmitter::mergeMatchMoveStates(const std::map<std::string, MoveState>& before,
+                                    const std::vector<std::map<std::string, MoveState>>& armEnds,
+                                    const std::vector<bool>& armDivs)
+{
+    _moveState = before;
+    for (auto& kv : before) {
+        bool any = false, allMoved = true, allNot = true;
+        for (size_t i = 0; i < armEnds.size(); ++i) {
+            if (armDivs[i]) continue;                        // a diverging arm never reaches the join
+            any = true;
+            MoveState s = armEnds[i].count(kv.first) ? armEnds[i].at(kv.first) : kv.second;
+            if (s != MoveState::Moved)    allMoved = false;
+            if (s != MoveState::NotMoved) allNot   = false;
+        }
+        if (!any) { _moveState[kv.first] = kv.second; continue; }   // every arm diverges -> join unreachable
+        _moveState[kv.first] = allMoved ? MoveState::Moved
+                             : (allNot  ? MoveState::NotMoved : MoveState::MaybeMoved);
+    }
+}
+
+// Resolve the plain (payload-less) enum type of a `match` subject; "" if it is not a plain enum.
+// A tagged union resolves through exprClass instead — this only sees bare-integer enums.
+std::string CEmitter::exprEnumType(SharedExpression e)
+{
+    if (!e) return "";
+    auto asEnum = [&](const std::string& ty) -> std::string {
+        return (!ty.empty() && _enums.count(ty)) ? ty : std::string();
+    };
+    if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
+        if (!id->value) return "";
+        auto it = _localCTypes.find(*id->value);              // a local / param of enum type
+        if (it != _localCTypes.end()) { std::string r = asEnum(it->second); if (!r.empty()) return r; }
+        if (_currentClass) {                                  // a bare field reference inside a method
+            ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
+            if (owner)
+                for (auto& f : owner->fields)
+                    if (f.name == *id->value && f.type) { std::string r = asEnum(cType(f.type)); if (!r.empty()) return r; }
+        }
+        return "";
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) {   // `obj.field` of enum type
+        std::string recv = exprClass(ma->expression);
+        if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
+            ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
+            if (owner)
+                for (auto& f : owner->fields)
+                    if (f.name == *ma->identifier->value && f.type) { std::string r = asEnum(cType(f.type)); if (!r.empty()) return r; }
+        }
+        return "";
+    }
+    return "";
+}
+
+// Lower a `match` over a plain enum to a C `switch` on the integer value. Same compile-time
+// exhaustiveness + `_` wildcard as the tagged-union path, but no payload binding.
+void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const std::string* resultTemp, int depth)
+{
+    EnumInfo& ei = _enums[enumTy];
+
+    bool hasWildcard = false;
+    std::set<std::string> covered;
+    for (auto& a : *m->arms) {
+        if (a->isWildcard()) { hasWildcard = true; continue; }
+        std::string vn = a->variantName ? *a->variantName : "";
+        bool found = false;
+        for (auto& mem : ei.members) if (mem.name == vn) { found = true; break; }
+        if (!found)            unsupported(("`match` arm names unknown case '" + vn + "' of enum '" + enumTy + "'").c_str(), a->line);
+        if (a->bindings && !a->bindings->empty())
+                               unsupported(("enum case '" + vn + "' carries no payload to bind").c_str(), a->line);
+        if (covered.count(vn)) unsupported(("duplicate `match` arm for case '" + vn + "'").c_str(), a->line);
+        covered.insert(vn);
+    }
+    if (!hasWildcard)
+        for (auto& mem : ei.members)
+            if (!covered.count(mem.name))
+                unsupported(("`match` on '" + enumTy + "' is not exhaustive: case '" + mem.name
+                             + "' is unhandled — add `case " + mem.name + ":` or `case _:`").c_str(), m->line);
+
+    indent(depth); *_out << "switch (" << emitExpression(m->subject) << ") {\n";
+    auto beforeMove = _moveState;
+    std::vector<std::map<std::string, MoveState>> armEnds;
+    std::vector<bool> armDivs;
+    for (auto& a : *m->arms) {
+        _moveState = beforeMove;
+        indent(depth + 1);
+        if (a->isWildcard()) *_out << "default: {\n";
+        else                 *_out << "case " << enumTy << "_" << *a->variantName << ": {\n";
+
+        Scope sc; _scopes.push_back(sc);
+        if (a->block) {
+            SharedStatementList stmts = a->block->statements;
+            size_t nstmt = stmts ? stmts->size() : 0;
+            for (size_t i = 0; i < nstmt; ++i) {
+                SharedStatement st = (*stmts)[i];
+                if (resultTemp && i + 1 == nstmt) {
+                    if (auto es = std::dynamic_pointer_cast<ExpressionNode>(st)) {
+                        bool ph = _hoistOK; _hoistOK = true;
+                        std::string av = emitExpression(es);
+                        _hoistOK = ph;
+                        flushHoisted(depth + 2);
+                        indent(depth + 2); *_out << *resultTemp << " = " << av << ";\n";
+                    } else {
+                        unsupported("a value-producing `match` arm block must end in a value expression", a->line);
+                    }
+                } else {
+                    emitStatement(st, depth + 2);
+                }
+            }
+            emitScopeCleanup(_scopes.back(), depth + 2);
+        } else {
+            bool ph = _hoistOK; _hoistOK = true;
+            std::string av = emitExpression(a->body);
+            _hoistOK = ph;
+            flushHoisted(depth + 2);
+            indent(depth + 2);
+            if (resultTemp) *_out << *resultTemp << " = " << av << ";\n";
+            else            *_out << av << ";\n";
+        }
+        indent(depth + 2); *_out << "break;\n";
+        armEnds.push_back(_moveState);
+        armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);
+        _scopes.pop_back();
+        indent(depth + 1); *_out << "}\n";
+    }
+    mergeMatchMoveStates(beforeMove, armEnds, armDivs);
+    if (!hasWildcard) { indent(depth + 1); *_out << "default: break;\n"; }   // exhaustive; keeps the C switch total
+    indent(depth); *_out << "}\n";
 }
 
 // M29b: an inline constructor `Cls(args)` as a general rvalue (return / variant payload). A ctor
@@ -4533,6 +4642,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
     }
 
+    // Turbofish `f::<…>` that didn't resolve to a generic instantiation -> the target isn't a generic
+    // function. Reject rather than silently drop the type arguments.
+    if (call->identifier->genericArgs) {
+        unsupported(("`" + name + "::<…>` — turbofish type arguments are only valid on a generic function").c_str(), call->line);
+        return "0";
+    }
+
     // FunctionPtr invoke (M21): a bare local whose type is a signature → an indirect
     // call `c(reordered args)` (c IS the function pointer). Named-arg reorder off the sig.
     if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
@@ -4678,6 +4794,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
             if (p->isConst) _constLocals.insert(pn);   // M24c: const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
+            _localCTypes[pn] = pty;                    // full C type (incl. enums/primitives) — e.g. a plain-enum `match` subject
             // M26d: a by-value smart-ptr param is OWNED by the callee — drop it at fn-end.
             // The function-root scope is created later (emitBlockScoped); stash it there.
             if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || isMoveOnlyValue(pty))) {
@@ -5040,6 +5157,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             if (p->isConst) _constLocals.insert(pn);   // M24c: const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
+            _localCTypes[pn] = pty;                    // full C type (incl. enums/primitives) — e.g. a plain-enum `match` subject
             // M26d: a by-value smart-ptr param is owned by the callee — drop it at fn-end.
             // The root scope is already on the stack, so record it directly (dropped last).
             if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || isMoveOnlyValue(pty))) recordDestructibleLocal(pn, pty);

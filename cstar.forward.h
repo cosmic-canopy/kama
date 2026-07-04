@@ -23,8 +23,6 @@ class LocalVariableDeclaration;
 class ConstVariableDeclarator;
 class ConstLocalVariableDeclaration;
 class ExpressionStatementNode;
-class SwitchSectionNode;
-class SwitchLabelNode;
 class ArgumentNode;
 class InvocationNode;
 class MemberAccessNode;
@@ -66,8 +64,6 @@ typedef std::shared_ptr<ConstLocalVariableDeclaration> SharedConstLocalVariableD
 typedef std::shared_ptr<ExpressionStatementNode> SharedExpressionStatement;
 typedef std::shared_ptr<MatchNode> SharedMatch;                 // M28b
 typedef std::shared_ptr<MatchArmNode> SharedMatchArm;           // M28b
-typedef std::shared_ptr<SwitchSectionNode> SharedSwitchSection;
-typedef std::shared_ptr<SwitchLabelNode> SharedSwitchLabel;
 typedef std::shared_ptr<ArgumentNode> SharedArgument;
 typedef std::shared_ptr<EnumMemberDeclarationNode> SharedEnumMemberDeclaration;
 typedef std::shared_ptr<ClassBaseDeclarationNode> SharedClassBaseDeclaration;
@@ -87,8 +83,6 @@ typedef std::vector<SharedFunctionDeclaration> FunctionDeclarationList;
 typedef std::vector<SharedVariableDeclarator> VariableDeclaratorList;
 typedef std::vector<SharedConstVariableDeclarator> ConstVariableDeclaratorList;
 typedef std::vector<SharedMatchArm> MatchArmList;               // M28b
-typedef std::vector<SharedSwitchSection> SwitchSectionList;
-typedef std::vector<SharedSwitchLabel> SwitchLabelList;
 typedef std::vector<SharedArgument> ArgumentList;
 typedef std::vector<SharedEnumMemberDeclaration> EnumMemberDeclarationList;
 typedef std::vector<SharedFunctionDeclaration> FunctionDeclarationList;
@@ -109,8 +103,6 @@ typedef std::shared_ptr<ModifierList> SharedModifierList;
 typedef std::shared_ptr<VariableDeclaratorList> SharedVariableDeclaratorList;
 typedef std::shared_ptr<ConstVariableDeclaratorList> SharedConstVariableDeclaratorList;
 typedef std::shared_ptr<MatchArmList> SharedMatchArmList;       // M28b
-typedef std::shared_ptr<SwitchSectionList> SharedSwitchSectionList;
-typedef std::shared_ptr<SwitchLabelList> SharedSwitchLabelList;
 typedef std::shared_ptr<ArgumentList> SharedArgumentList;
 typedef std::shared_ptr<ExpressionList> SharedExpressionList;
 typedef std::shared_ptr<EnumMemberDeclarationList> SharedEnumMemberDeclarationList;

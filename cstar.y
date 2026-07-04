@@ -62,8 +62,6 @@ struct cstaryystype {
   SharedConstVariableDeclarator constvariabledeclarator;
   SharedExpressionStatement expressionstatement;
   SharedMatchArm matcharm;
-  SharedSwitchSection switchsection;
-  SharedSwitchLabel switchlabel;
   SharedArgument argument;
   SharedEnumMemberDeclaration enummemberdecl;
   SharedFunctionDeclaration functiondecl;
@@ -82,8 +80,6 @@ struct cstaryystype {
   SharedVariableDeclaratorList variabledeclaratorlist;
   SharedConstVariableDeclaratorList constvariabledeclaratorlist;
   SharedMatchArmList matcharmlist;
-  SharedSwitchSectionList switchsectionlist;
-  SharedSwitchLabelList switchlabellist;
   SharedArgumentList argumentlist;
   SharedExpressionList expressionlist;
   SharedEnumMemberDeclarationList enummemberdecllist;
@@ -117,7 +113,7 @@ struct cstaryystype {
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BREAK
 %token <string> CASE CAST CONST CONTINUE
-%token <string> DEFAULT DO DOUBLE ELSE ENUM EXPORT EXTERN EXTENDS IMPLEMENTS
+%token <string> DO DOUBLE ELSE ENUM EXPORT EXTERN EXTENDS IMPLEMENTS
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH IF IN
 %token <string> INT INT8 INT16 INT32 INT64
@@ -126,7 +122,7 @@ struct cstaryystype {
 %token <string> NEW NULL_LITERAL OPERATOR OUT
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
 %token <string> REF RETURN STATIC STRING
-%token <string> SWITCH THIS TRUE TYPE
+%token <string> THIS TRUE TYPE
 %token <string> UINT8 UINT16 UINT32 UINT64
 %token <string> UNSAFE USING VIRTUAL VOID
 %token <string> VOLATILE WHILE
@@ -181,7 +177,7 @@ struct cstaryystype {
 %type <statement> compilation_unit code_declaration type_declaration function_declaration statement
 %type <statement> declaration_statement local_variable_declaration embedded_statement local_constant_declaration
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
-%type <statement> switch_statement while_statement do_statement for_statement foreach_statement
+%type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
 %type <statement> marked_type_declaration unsafe_statement
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
@@ -208,10 +204,6 @@ struct cstaryystype {
 %type <strings> match_bindings
 %type <expressionstatement> object_creation_expression new_expression post_increment_expression post_decrement_expression
 %type <expressionstatement> pre_increment_expression pre_decrement_expression
-%type <switchsection> switch_section
-%type <switchlabel> switch_label
-%type <switchsectionlist> switch_block switch_sections_opt switch_sections
-%type <switchlabellist> switch_labels
    /* %type <unaryexpression> unary_expression */
    /*%type <binaryexpression>*/
 %type <argument> argument
@@ -624,36 +616,10 @@ statement_expression
   ;
 selection_statement
   : if_statement
-  | switch_statement
   ;
 if_statement
   : IF LPAREN boolean_expression RPAREN embedded_statement   { $$ = std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $3, $5, SharedStatement()); }
   | IF LPAREN boolean_expression RPAREN embedded_statement ELSE embedded_statement   { $$ = std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $3, $5, $7); }
-  ;
-switch_statement
-  : SWITCH LPAREN expression RPAREN switch_block   { $$ = std::make_shared<SwitchNode>(SCANNER_CODEGENCONTEXT, $3, $5); }
-  ;
-switch_block
-  : LEFT_BRACE switch_sections_opt RIGHT_BRACE   { $$ = $2; }
-  ;
-switch_sections_opt
-  : /* Nothing */   { $$ = std::make_shared<SwitchSectionList>(); }
-  | switch_sections
-  ;
-switch_sections
-  : switch_section   { $$ = std::make_shared<SwitchSectionList>(); $$->push_back($1); }
-  | switch_sections switch_section   { $1->push_back($2); }
-  ;
-switch_section
-  : switch_labels statement_list   { $$ = std::make_shared<SwitchSectionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
-  ;
-switch_labels
-  : switch_label   { $$ = std::make_shared<SwitchLabelList>(); $$->push_back($1); }
-  | switch_labels switch_label   { $1->push_back($2); }
-  ;
-switch_label
-  : CASE constant_expression COLON   { $$ = std::make_shared<SwitchLabelNode>(SCANNER_CODEGENCONTEXT, $2); }
-  | DEFAULT COLON   { $$ = std::make_shared<SwitchLabelNode>(SCANNER_CODEGENCONTEXT, SharedExpression()); }
   ;
 iteration_statement
   : while_statement
@@ -799,6 +765,14 @@ member_access
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
   | qualified_identifier_no_generic LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
+    /* Turbofish: explicit type arguments on a generic function call — `make::<int32>()`. The `::`
+       before `<` is unambiguous (a qualifier is always followed by an identifier, never `<`), so no
+       comparison-operator clash. The mid-rule bumps genericDepth so a nested `>>` close still splits. */
+  | IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN {
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$5)[0]);
+        id->genericArgs = $5;
+        $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, id, $9);
+    }
   ;
 argument_list_opt
   : /* Nothing */   { $$ = std::make_shared<ArgumentList>(); }
