@@ -568,6 +568,10 @@ private:
     SharedParameterList operatorParamList(ClassOperatorDeclaratorNode* d);
     std::string emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line);   // user operand → dispatch, else raw C
     int         compoundToBinary(int token);   // PLUSEQ -> PLUS … (compound assignment on a user type)
+    std::string bareCtorClass(SharedExpression e);       // the class if `e` is a bare inline ctor call, else ""
+    void        rejectUnhoistableCtor(SharedExpression e);   // clean error for an inline ctor with no statement slot
+    std::string hoistCtorIfInline(SharedExpression e);   // an inline ctor operand → a hoisted temp name, else ""
+    std::string emitOperandByValue(SharedExpression e);  // emit an operator operand by value (hoisting an inline ctor)
     std::string emitUnaryUserOp(int opToken, SharedExpression operand, int line);   // unary/incr/decr on a user type
     std::string operatorResultClass(int opToken, int arity, SharedExpression lhs, SharedExpression rhs);  // nested-operator type
     // M31b — `&<operand>` for a method-form/unary operator's `self`. A simple lvalue is addressed

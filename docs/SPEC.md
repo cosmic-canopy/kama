@@ -499,6 +499,8 @@ Only two operators with the *same* symbol *and* operand type are a duplicate (a 
 any position including a raw `if`/`while` condition: a nested rvalue is wrapped in a C99 compound-literal
 array so the method form's by-pointer `this` is legal without a statement slot (and it re-evaluates
 correctly each loop pass). Compound assignment lowers to the operator — `pos += vel` ≡ `pos = pos + vel`.
+An **inline constructor** is a valid operand in a statement position — `v + Vec3(x: 1, y: 0, z: 0)` needs
+no separate local (it materializes into a temp); inside a raw condition it must still be bound to a local.
 
 `==` is **explicit** — a `value` without `operator==` cannot be compared (there is no auto-generated
 structural equality; an opt-in `Equatable` derive is future work). Index `operator[]` and the `true`/`false`

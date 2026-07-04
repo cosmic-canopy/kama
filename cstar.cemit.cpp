@@ -352,10 +352,48 @@ static inline bool userOperandType(const std::string& cls, std::map<std::string,
 // decays to `V*` and the temporary lives to the end of the enclosing block. This is ISO C11 (the same
 // construct M28a uses for variants), needs no statement slot, and so works in ANY position — including
 // a raw `if`/`while` condition — with no hoisting.
+// M31/Q3 — the class `e` constructs if it is a bare inline constructor (`Vec3(x: …)` — not a method call
+// or a `Type::variant`), else "".
+std::string CEmitter::bareCtorClass(SharedExpression e)
+{
+    auto* iv = dynamic_cast<InvocationNode*>(e.get());
+    if (!iv || iv->expression || !iv->identifier || !iv->identifier->value) return "";
+    if (iv->identifier->qualifier && !iv->identifier->qualifier->empty()) return "";   // Type::variant, not a ctor
+    std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
+    return (isClass(rn) && _classes.count(rn) && !_classes[rn].isCollection) ? rn : "";
+}
+
+// M31/Q3 — an inline constructor operand, hoisted into a temp (needs a statement slot); "" otherwise.
+std::string CEmitter::hoistCtorIfInline(SharedExpression e)
+{
+    std::string rn = bareCtorClass(e);
+    return rn.empty() ? "" : tryHoistInlineCtor(e, rn, e->line);   // "" when !_hoistOK (e.g. a raw condition)
+}
+
+// M31/Q3 — a clean diagnostic for a bare inline ctor operand that has no statement slot to hoist into
+// (e.g. inside a raw `if`/`while` condition) — the same boundary an inline `match`/ctor hits elsewhere.
+void CEmitter::rejectUnhoistableCtor(SharedExpression e)
+{
+    if (!bareCtorClass(e).empty())
+        unsupported("an inline constructor as an operator operand here has no statement slot — bind it to a local first", e->line);
+}
+
+// M31/Q3 — emit an operator operand by value, materializing an inline constructor into a hoisted temp.
+std::string CEmitter::emitOperandByValue(SharedExpression e)
+{
+    std::string t = hoistCtorIfInline(e);
+    if (!t.empty()) return t;
+    rejectUnhoistableCtor(e);
+    return emitExpression(e);
+}
+
 std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, int line)
 {
     ASTNode* n = e.get();
     if (dynamic_cast<ThisAccessNode*>(n)) return emitExpression(e);   // `this` is already `self` (a pointer)
+    std::string ct = hoistCtorIfInline(e);
+    if (!ct.empty()) return "&" + ct;   // inline ctor operand → a hoisted, addressable temp
+    rejectUnhoistableCtor(e);
     bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n);
     std::string em = emitExpression(e);
     if (lvalue || cls.empty()) return "&(" + em + ")";
@@ -411,8 +449,8 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     }
     canAccess(owner, mi->visibility, mi->cName, line);
     if (mi->arity == 1)   // method form: `A__op(&lhs, rhs)` (rvalue lhs -> compound-literal temporary)
-        return mi->cName + "(" + addrOfOperand(lhs, lc, line) + ", " + emitExpression(rhs) + ")";
-    return mi->cName + "(" + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";   // free form: both by value
+        return mi->cName + "(" + addrOfOperand(lhs, lc, line) + ", " + emitOperandByValue(rhs) + ")";
+    return mi->cName + "(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";   // free form: both by value
 }
 
 // M31b — a compound-assignment token maps to its binary operator (`a += b` == `a = a + b`) for a
@@ -5143,6 +5181,13 @@ std::string CEmitter::exprClass(SharedExpression e)
                 if (mi && mi->returnType) { std::string rc = cType(mi->returnType); return isClass(rc) ? rc : ""; }
             }
             return "";
+        }
+        // Q3: a bare inline constructor `Vec3(x: …)` — its own class (so an inline ctor works as an
+        // operator operand). Checked before _funcs since a class name is never a function.
+        if (inv->identifier && inv->identifier->value && !inv->expression
+            && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())) {
+            std::string rn = resolveUserName(*inv->identifier->value, inv->identifier->qualifier);
+            if (isClass(rn) && _classes.count(rn) && !_classes[rn].isCollection) return rn;
         }
         // Free / qualified function call — its C return type, if that names a class.
         if (inv->identifier && inv->identifier->value) {

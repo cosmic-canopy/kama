@@ -415,6 +415,11 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      (method) + `s*v` (free) — matching C++/C#/Rust. A same-type/`This`/scalar rhs uses the bare name
      `op_<sym>`; a different user-type rhs gets `op_<sym>__<Rhs>`; the free form gets `op_<sym>__free`. Only
      two operators with the SAME symbol AND operand type collide (a clean error).
+   - **Inline-ctor operands (v0.1.72):** an inline constructor is a valid operator operand in a statement
+     position (`v + Vec3(x: 1, y: 0, z: 0)`) — `exprClass` resolves a bare ctor call to its class, and the
+     operand is materialized into a hoisted temp; inside a raw condition it's a clean "bind to a local"
+     error. Fixture `operator_ctorarg`. Also fixed a `this`-as-operand bug (`this` is already `self`, a
+     pointer — pass it directly, not `&self`).
 
 11. **Step 7 — doc/SPEC reconciliation + naming pass.** Bring SPEC/KEYWORDS/GOALS/README current
    (give/copy + by-value from M26c/d, generics, `match`/`Optional`, operators; GOALS §3a unsafe

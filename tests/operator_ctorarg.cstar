@@ -1,0 +1,17 @@
+// M31/Q3 — an inline constructor as an operator operand. In a statement position (local-init, return,
+// assignment) it materializes into a hoisted temp; `v + Vec3(x:1,y:0,z:0)` needs no separate local.
+type value Vec3 {
+    public int32 x; public int32 y; public int32 z;
+    public Vec3(int32 x, int32 y, int32 z) { this.x = x; this.y = y; this.z = z; }
+    public Vec3 operator+(Vec3 rhs) { return Vec3(x: this.x + rhs.x, y: this.y + rhs.y, z: this.z + rhs.z); }
+    public Vec3 operator*(int32 s)  { return Vec3(x: this.x * s, y: this.y * s, z: this.z * s); }
+}
+fn Vec3 shifted(Vec3 v) { return v + Vec3(x: 1, y: 1, z: 1); }   // inline ctor operand in a `return`
+fn int32 main() {
+    Vec3 v = Vec3(x: 1, y: 2, z: 3);
+    Vec3 a = v + Vec3(x: 10, y: 20, z: 30);          // inline ctor as the RHS operand      -> (11, 22, 33)
+    Vec3 b = Vec3(x: 90, y: 0, z: 0) + a;           // inline ctor as the LHS/self operand -> (101, 22, 33)
+    Vec3 c = Vec3(x: 1, y: 1, z: 1) * 3 + v;          // chained: inline ctor, scale, add    -> (4,5,6)
+    Vec3 d = shifted(v: v);                           // (2, 3, 4)
+    return a.x+a.y+a.z + b.x+b.y+b.z + c.x+c.y+c.z + d.x+d.y+d.z;   // 66 + 166 + 15 + 9 = 256 -> exit 0
+}
