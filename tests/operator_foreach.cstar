@@ -1,0 +1,18 @@
+// Operator overloading combined with collections: sum a List of `value` vectors via `+` in a foreach.
+type value Vec2
+{
+    public int32 x;
+    public int32 y;
+    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
+    public Vec2 operator+(Vec2 rhs) { return Vec2(x: this.x + rhs.x, y: this.y + rhs.y); }
+}
+fn int main()
+{
+    List<Vec2> vs = new List<Vec2>();
+    vs.add(item: Vec2(x: 1, y: 2));
+    vs.add(item: Vec2(x: 3, y: 4));
+    vs.add(item: Vec2(x: 5, y: 6));
+    Vec2 sum = Vec2(x: 0, y: 0);
+    foreach (Vec2 v in vs) { sum = sum + v; }
+    return sum.x * 10 + sum.y;   // (9,12) -> 102
+}

@@ -1,0 +1,13 @@
+// `out` parameters: the callee writes the caller's variables (write-only borrows).
+fn void divmod(int32 a, int32 b, out int32 q, out int32 r)
+{
+    q = a / b;
+    r = a % b;
+}
+fn int main()
+{
+    int32 quotient = 0;
+    int32 remainder = 0;
+    divmod(a: 17, b: 5, q: out quotient, r: out remainder);
+    return quotient * 10 + remainder;   // 3*10 + 2
+}
