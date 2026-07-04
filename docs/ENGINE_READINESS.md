@@ -32,7 +32,8 @@ The entire language feature set is complete. In place today:
   reached only through safe abstractions.
 
 That is a complete systems-language core. The remaining engine work is **library and platform reach**, not
-language features: a math layer, more C bindings, slices, allocators, and eventually threading.
+language features: a math layer, more C bindings, slices, allocators, and threading (already *designed* — the
+shared-nothing model in ROADMAP.md).
 
 ---
 
@@ -41,9 +42,10 @@ language features: a math layer, more C bindings, slices, allocators, and eventu
 | Feature | Status | Why an engine needs it | Effort |
 |---|---|---|---|
 | **FFI depth**: `extern` structs, opaque handles, function-pointer params, pass structs by value/ptr to C, map/include C headers | ✅ — `extern` structs, `extern "<header>"` includes, opaque `Ptr<T>`, `addr(of:)` out-params, and C-callback fn-pointers all shipped; residual is richer struct-by-value ergonomics | WebGPU, SDL/GLFW, platform, audio are **C APIs**. The keystone — landed. | done |
-| **Function pointers / delegates / closures** | 🟡 free `fnptr` ✅ + bound `BindableFunctionPtr` ✅; inline closures ❌ | Callbacks (input, window events, GPU completion), ECS system fns, job functions. Pervasive. | S (closures) |
+| **Function pointers / delegates** | ✅ free `fnptr` + bound `BindableFunctionPtr` (captures a receiver); with a `this`/userdata pointer these cover callbacks (input, window, GPU completion), ECS system fns, and job functions | Pervasive — and satisfied. Inline *capturing closures* are a separate ergonomic nice-to-have (Tier 3; M+ under the ownership/RAII/move model), not a blocker. | done |
 | **Module system**: multi-file builds, `using`/imports, namespaces actually linked | ✅ — multi-file builds, `namespace`/`using`/aliases, private-by-default, shared header + per-module `.c` | An engine is hundreds of files. | done |
-| **Math layer**: vector/matrix/quaternion types, fixed-size value arrays (`float[4]`, `Vec3 pos`), SIMD | 🟡 — operator overloading + static methods are done (math types are now *writable* as `type value`s); no built-in math types or SIMD yet | Transforms, physics, culling, shading — the numeric core. Write as `value` structs + operators; SIMD after. | M (types) → L (SIMD) |
+| **Math layer**: vector/matrix/quaternion types + SIMD | 🟡 — operators + static methods done, so math types are *writable* as `type value`s (named fields today); no built-in math types or SIMD yet | Transforms, physics, culling, shading — the numeric core. Ships on named-field structs; SIMD after. | M (types) → L (SIMD) |
+| **Fixed-size value arrays** (`float[4]`, matrix storage) | ❌ — no `T[N]` value-array primitive; a `Mat4` is 16 named fields or 4 `Vec4` columns today (heap `Array<T>` is the only array). A **design decision** (bounds-safety + const-length model) — *not* required to ship the math layer, but the right storage for matrices/SIMD/buffers/generic-length math. | Compact stack numeric storage, SIMD lanes, ergonomic matrices. | S–M |
 
 ## Tier 1 — Core ergonomics (painful without; needed soon after Tier 0)
 
@@ -53,7 +55,7 @@ language features: a math layer, more C bindings, slices, allocators, and eventu
 | **General user generics** (`type value Foo<T>`, generic fns, nested `>>`, contract bounds `<K: A + B>`, `This`, turbofish) | ✅ — monomorphized, zero-cost, ASan-clean | Every future library type. | done |
 | **Error model**: `Result`/`Optional` | ✅ — `Optional<T>`/`Result<T,E>` prelude tagged unions, consumed by exhaustive `match` (no exceptions, no `null`) | File/asset/GPU/shader-compile failures need a first-class, non-exception path (fits no-GC/deterministic). | done |
 | **Tagged unions / sum types + pattern matching** | ✅ — `enum` payloads/generic enums + value-producing exhaustive `match` (plain enums too) | Events, messages, render commands, animation/state machines, asset variants. | done |
-| **`Map<K,V>` / hash maps** | 🟡 now *buildable* as a library type on the generics + bounds infrastructure (not yet written) | Entity/resource/asset registries, caches, string→handle lookup. | M (library) |
+| **`Map<K,V>` / hash maps** | 🟡 generics + bounds *machinery* ready, but the standard vocabulary is not: no prelude `Hashable`/`Comparable`/`Ordering` contracts, no hashing convention (only `Equatable`, and only in a test). Needs that small stdlib-contract + hashing foundation, then the container. | Entity/resource/asset registries, caches, string→handle lookup. | M (contracts + hashing + container) |
 | **Slices / spans** (non-owning views over `Array`/`List`/buffers) | ❌ | Iterate a subrange, pass a buffer to a system or a GPU upload without copying or transferring ownership. | M |
 | **Allocator control**: arenas / pools / frame & stack allocators | ❌ (GOALS #3 wants these as library types) | Deterministic per-frame perf, zero mid-frame `malloc`, bump-reset allocators. Needs a placement-construct hook + the runtime unsafe core. | M–L |
 
@@ -61,7 +63,7 @@ language features: a math layer, more C bindings, slices, allocators, and eventu
 
 | Feature | Status | Why | Effort |
 |---|---|---|---|
-| **Threading / atomics / memory model** | ❌ | Job system, parallel ECS, async asset streaming. (WASM threads = SharedArrayBuffer caveats.) | XL |
+| **Threading / atomics / memory model** | ❌ built · ✅ *designed* — the **shared-nothing model** (isolates + ownership-transferring channels + `Atomic<T>`, mapping 1:1 onto WASM Web Workers) is specified in [ROADMAP.md](ROADMAP.md) (§ Concurrency). That model **is** the engine's job-system / parallel-ECS substrate; only the runtime remains. | Job system, parallel ECS, async asset streaming. | XL (build) |
 | **Bit/byte manipulation**: reinterpret/bitcast, byte buffers, endianness | 🟡 partial (bitwise ops only) | (De)serialization, networking, binary asset/scene formats. | M |
 | **String formatting / interpolation + I/O** (file, stdout, logging) | ❌ (the `string` type + `concat`/compare/`length` only) | Logging, config, text assets, tooling. | M |
 | **comptime / const-eval** | 🟡 partial (`const` values; no compile-time eval) | Lookup tables, shader/permutation specialization, asserts. | L |
@@ -70,7 +72,9 @@ language features: a math layer, more C bindings, slices, allocators, and eventu
 ## Tier 3 — Ecosystem & polish
 
 Package manager / multi-module build & deps (L); **LSP** + formatter + debugger polish (L); variadics (S);
-`defer`/scope-guards (S — RAII already covers most); enum methods / flags (S).
+`defer`/scope-guards (S — RAII already covers most); enum methods / flags (S); inline **capturing closures**
+(M+); a **`foreach` iteration protocol** for user types (S–M — today `foreach` is built-in-collections only;
+matters once `Map` / custom containers land).
 
 ## The actual goal
 
@@ -85,7 +89,8 @@ Package manager / multi-module build & deps (L); **LSP** + formatter + debugger 
 The language is complete; the path is now entirely library + platform work.
 
 1. **Math types** (`Vec2/3/4`, `Mat4`, quaternion) as `type value`s (public fields) with operators + `::`
-   static methods — the numeric core (Tier-0 math). All the language machinery it needs is in place.
+   static methods — the numeric core (Tier-0 math). All the language machinery it needs is in place; it
+   ships on named-field structs (the **fixed-size array** primitive is a parallel, non-blocking design).
 2. **WebGPU bindings** (FFI is ready) → **a triangle on screen** → the engine spine + a real demo.
 3. Iterate as the engine grows: `Map`/slices/arenas as library types, then bit/byte + I/O, then threading.
 
