@@ -1,7 +1,7 @@
-type contract IShape { fn int32 area(); }
-type resource Sq implements IShape { List<int32> side; public Sq(int32 s){this.side.add(item: s);} public fn int32 area(){return this.side[0]*this.side[0];} }
+type contract Shape { fn int32 area(); }
+type resource Sq implements Shape { List<int32> side; public Sq(int32 s){this.side.add(item: s);} public fn int32 area(){return this.side[0]*this.side[0];} }
 fn int main()
 {
-    Optional<Shared<IShape>> o = Optional::Some(value: new Sq(s: 5));
+    Optional<Shared<Shape>> o = Optional::Some(value: new Sq(s: 5));
     return 0;
 }

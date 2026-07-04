@@ -1,14 +1,14 @@
-// M27c-1 — a contract BOUND on a generic TYPE: `type value Scale<T: IWeighable>`. The bound lets a
+// M27c-1 — a contract BOUND on a generic TYPE: `type value Scale<T: Weighable>`. The bound lets a
 // method call `x.weight()` on a T PARAMETER (static dispatch after monomorphization). Enforcement:
-// `Scale<Rock>` requires Rock to satisfy IWeighable. (T is a method param, not a by-value field — a
+// `Scale<Rock>` requires Rock to satisfy Weighable. (T is a method param, not a by-value field — a
 // generic instance holding a user value-type BY VALUE is a separate pre-existing emit-order gap.)
-type contract IWeighable { fn int32 weight(); }
-type value Rock implements IWeighable {
+type contract Weighable { fn int32 weight(); }
+type value Rock implements Weighable {
     int32 g;
     public Rock(int32 g) { this.g = g; }
     public fn int32 weight() { return this.g; }
 }
-type value Scale<T: IWeighable> {
+type value Scale<T: Weighable> {
     int32 factor;
     public Scale(int32 f) { this.factor = f; }
     public fn int32 apply(T x) { return this.factor * x.weight(); }

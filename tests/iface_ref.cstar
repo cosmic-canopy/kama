@@ -1,22 +1,22 @@
-type contract IShape { fn int64 area(); }
-type value Circle implements IShape {
+type contract Shape { fn int64 area(); }
+type value Circle implements Shape {
     int64 r;
     public Circle(int64 r) { this.r = r; }
     public fn int64 area() { return r * r; }
 }
-type value Square implements IShape {
+type value Square implements Shape {
     int64 s;
     public Square(int64 s) { this.s = s; }
     public fn int64 area() { return s * s; }
 }
-fn void swap_to(out IShape sh, IShape other) { sh = other; }   // reseat the caller's handle
-fn int64 read(ref IShape sh) { return sh.area(); }
+fn void swapTo(out Shape sh, Shape other) { sh = other; }   // reseat the caller's handle
+fn int64 read(ref Shape sh) { return sh.area(); }
 fn int main() {
     Circle c = Circle(r: 6);
     Square q = Square(s: 5);
-    IShape s = c;
+    Shape s = c;
     int64 a = read(sh: ref s);     // 36
-    swap_to(sh: ref s, other: q);  // now s holds the square
+    swapTo(sh: ref s, other: q);  // now s holds the square
     int64 b = read(sh: ref s);     // 25
     int64 total = a + b;           // 61
     return cast<int>(total);

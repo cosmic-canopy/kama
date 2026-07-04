@@ -1,9 +1,9 @@
 // A method satisfying an interface must be public — the interface is a public contract,
 // so an implementer that hides it would be reachable through the interface but not by name.
-type contract IShape { fn int64 area(); }
-type value Circle implements IShape {
+type contract Shape { fn int64 area(); }
+type value Circle implements Shape {
     int64 r;
     public Circle(int64 r) { this.r = r; }
-    fn int64 area() { return r * r; }   // ERROR: implements IShape.area but isn't public
+    fn int64 area() { return r * r; }   // ERROR: implements Shape.area but isn't public
 }
 fn int main() { return 0; }

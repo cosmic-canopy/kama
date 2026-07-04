@@ -1,15 +1,15 @@
-// M27c-2 — the `This` self-type. In a `type contract`, `This` is the implementing type: `IEquatable`
+// M27c-2 — the `This` self-type. In a `type contract`, `This` is the implementing type: `Equatable`
 // declares `equals(This other)`. Used as a BOUND, `a.equals(b)` monomorphizes to a STATIC
 // `Point__equals(&a, b)` (the concrete method's `This` param resolved to `Point`). A class may also
 // return `This` (`fn This clone()`), resolving to itself.
-type contract IEquatable { fn bool equals(This other); }
-type value Point implements IEquatable {
+type contract Equatable { fn bool equals(This other); }
+type value Point implements Equatable {
     int32 x;
     public Point(int32 x) { this.x = x; }
     public fn bool equals(This other) { return this.x == other.x; }   // This -> Point
     public fn This clone() { This c = Point(x: this.x); return c; }   // self-returning (This local + return)
 }
-fn bool same<T: IEquatable>(T a, T b) { return a.equals(other: b); }  // static dispatch via the bound
+fn bool same<T: Equatable>(T a, T b) { return a.equals(other: b); }  // static dispatch via the bound
 fn int32 main() {
     Point p = Point(x: 7);
     Point q = p.clone();          // This -> Point: q == Point(7)

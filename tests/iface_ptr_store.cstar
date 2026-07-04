@@ -1,27 +1,27 @@
 // M26g-3 — owning polymorphism can be STORED and RETURNED: an interface smart pointer is an ordinary
-// value type, so `Shared<IShape>` works as a class FIELD and `Owned`/`Shared<IShape>` as a function
+// value type, so `Shared<Shape>` works as a class FIELD and `Owned`/`Shared<Shape>` as a function
 // RETURN (M26e only rejected a *bare* interface in those positions). Dispatch stays polymorphic; the
-// field's owner drops it in RAII order. (A `List<Shared<IShape> >` now works too — the collection
+// field's owner drops it in RAII order. (A `List<Shared<Shape> >` now works too — the collection
 // drops each stored handle in RAII order; see `list_shared_iface`. Only the `>>` split, dropping the
 // space, remains as a later ergonomic slice.)
-type contract IShape { fn int32 area(); }
-type resource Sq implements IShape {
+type contract Shape { fn int32 area(); }
+type resource Sq implements Shape {
     List<int32> side;
     public Sq(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 type resource Holder {
-    Shared<IShape> shape;                                  // owning-interface FIELD
-    public Holder(Shared<IShape> s) { this.shape = give s; }
+    Shared<Shape> shape;                                  // owning-interface FIELD
+    public Holder(Shared<Shape> s) { this.shape = give s; }
     public fn int32 area() { return this.shape.area(); }   // polymorphic dispatch through the field
 }
-fn Owned<IShape> makeShape(int32 s) {                      // RETURN an owned interface
-    Owned<IShape> o = new Sq(s: s);
+fn Owned<Shape> makeShape(int32 s) {                      // RETURN an owned interface
+    Owned<Shape> o = new Sq(s: s);
     return give o;
 }
 fn int32 main() {
-    Shared<IShape> a = new Sq(s: 3);
+    Shared<Shape> a = new Sq(s: 3);
     Holder h = Holder(s: give a);                          // move the shared into the field
-    Owned<IShape> m = makeShape(s: 5);                     // returned owned interface
+    Owned<Shape> m = makeShape(s: 5);                     // returned owned interface
     return h.area() + m.area();                            // 9 + 25 = 34; h and m drop -> each Sq freed once
 }

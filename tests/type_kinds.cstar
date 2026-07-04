@@ -3,8 +3,8 @@
 // through a borrow). Crucially, `value`/`resource`/`contract` are NOT reserved — the `type` marker
 // (like `fn`) means they stay ordinary identifiers. Coexists with legacy `class`/`interface` (h-3
 // migrates those away). ASan-clean.
-type contract IShape { fn int32 area(); }
-type resource Box implements IShape {          // owns a List -> moves; satisfies a contract
+type contract Shape { fn int32 area(); }
+type resource Box implements Shape {          // owns a List -> moves; satisfies a contract
     List<int32> sides;
     public Box(int32 w, int32 h) { this.sides.add(item: w); this.sides.add(item: h); }
     public fn int32 area() { return this.sides[0] * this.sides[1]; }
@@ -15,12 +15,12 @@ type value Point {                             // owns nothing -> copies freely
     public fn int32 sum() { return this.x + this.y; }
 }
 type resource Token { }                        // empty resource — move-only identity (unused here)
-fn int32 measure(IShape s) { return s.area(); }   // contract borrow + polymorphic dispatch
+fn int32 measure(Shape s) { return s.area(); }   // contract borrow + polymorphic dispatch
 fn int32 main() {
     int32 value = 10; int32 resource = 20; int32 contract = 3;   // de-reserved: ordinary identifiers
     Point p = Point(x: 4, y: 5);
     Point q = p;                               // value COPIES (p stays valid)
     Box b = Box(w: 6, h: 7);
-    int32 viaContract = measure(s: b);         // borrow b as IShape -> 42; b stays valid
+    int32 viaContract = measure(s: b);         // borrow b as Shape -> 42; b stays valid
     return p.sum() + q.sum() + viaContract + value + resource + contract;   // 9+9+42+10+20+3 = 93
 }

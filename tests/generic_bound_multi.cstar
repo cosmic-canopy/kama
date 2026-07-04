@@ -1,14 +1,14 @@
-// M27c-1 — a MULTI bound `<K: IWeighable + INamed>` (`+` = AND): the type parameter must satisfy BOTH
+// M27c-1 — a MULTI bound `<K: Weighable + Named>` (`+` = AND): the type parameter must satisfy BOTH
 // contracts, and the body may call a method from each. Both monomorphize to static direct calls.
-type contract IWeighable { fn int32 weight(); }
-type contract INamed { fn int32 tag(); }
-type value Crate implements IWeighable, INamed {
+type contract Weighable { fn int32 weight(); }
+type contract Named { fn int32 tag(); }
+type value Crate implements Weighable, Named {
     int32 g;
     public Crate(int32 g) { this.g = g; }
     public fn int32 weight() { return this.g; }
     public fn int32 tag() { return 100; }
 }
-fn int32 describe<K: IWeighable + INamed>(K x) {
+fn int32 describe<K: Weighable + Named>(K x) {
     return x.weight() + x.tag();   // one method from each bound contract
 }
 fn int32 main() {

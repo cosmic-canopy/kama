@@ -1,20 +1,20 @@
-type contract IShape
+type contract Shape
 {
     fn int64 area();
 }
-type value Circle implements IShape
+type value Circle implements Shape
 {
     int64 r;
     public Circle(int64 r) { this.r = r; }
     public fn int64 area() { return r * r; }
 }
-type value Square implements IShape
+type value Square implements Shape
 {
     int64 s;
     public Square(int64 s) { this.s = s; }
     public fn int64 area() { return s * s; }
 }
-fn int64 measure(IShape sh)
+fn int64 measure(Shape sh)
 {
     return sh.area();
 }

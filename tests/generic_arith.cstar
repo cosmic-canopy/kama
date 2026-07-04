@@ -1,16 +1,16 @@
-// M31c — operators in a `contract` are a BOUND for generic math. `IArithmetic` declares
-// `This operator+(This rhs)`; a `sum<T: IArithmetic>` monomorphizes `a + b` to a STATIC
+// M31c — operators in a `contract` are a BOUND for generic math. `Arithmetic` declares
+// `This operator+(This rhs)`; a `sum<T: Arithmetic>` monomorphizes `a + b` to a STATIC
 // `Vec2__op_add(&a, b)` — zero-cost, reusing M27's bound + `This` machinery.
-type contract IArithmetic { This operator+(This rhs); }
+type contract Arithmetic { This operator+(This rhs); }
 
-type value Vec2 implements IArithmetic {
+type value Vec2 implements Arithmetic {
     public int32 x;
     public int32 y;
     public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
     public This operator+(This rhs) { return Vec2(x: this.x + rhs.x, y: this.y + rhs.y); }
 }
 
-fn T sum<T: IArithmetic>(T a, T b) { return a + b; }   // `a + b` via the bound → static dispatch
+fn T sum<T: Arithmetic>(T a, T b) { return a + b; }   // `a + b` via the bound → static dispatch
 
 fn int32 main() {
     Vec2 p = Vec2(x: 10, y: 20);

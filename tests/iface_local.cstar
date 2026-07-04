@@ -1,8 +1,8 @@
-type contract IShape
+type contract Shape
 {
     fn int64 area();
 }
-type value Circle implements IShape
+type value Circle implements Shape
 {
     int64 r;
     public Circle(int64 r) { this.r = r; }
@@ -11,7 +11,7 @@ type value Circle implements IShape
 fn int main()
 {
     Circle c = Circle(r: 6);
-    IShape s = c;
+    Shape s = c;
     int64 a = s.area();
     uint64 m = cast<uint64>(a) % 256;
     return cast<int>(m);
