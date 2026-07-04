@@ -85,7 +85,7 @@ struct MethodInfo {
 
 // A built-in generic collection / smart-pointer kind. Backed by a C
 // runtime template. Owned<T> is a unique heap-owning pointer kind.
-enum class CollKind { Array, List, String, Owned, Shared, Weak, Bindable };
+enum class CollKind { Array, List, String, Owned, Shared, Weak, Bindable, Fixed };
 
 // Per-file namespace context. A file with `namespace X;` is public (scope
 // = mangled X); a file without one is private (scope = "_F<idx>"). Bare names
@@ -187,6 +187,7 @@ struct CollectionInfo {
     bool         elemDestructible = false;
     bool         elemCopyable = false;   // element is a `Copyable` resource -> deep-copy each
     bool         elemIsInterface = false;   // owned-contract smart ptr (fat {obj, vtbl} element)
+    int64_t      constValue = 0;         // Fixed<T,N> only: the compile-time size N (the array length)
 };
 
 // A `contract`: a set of method prototypes, lowered to a vtable struct
@@ -279,6 +280,7 @@ private:
     std::map<std::string, GenericInst>              _genericInsts;  // mangled name -> instantiation (dedup)
     std::map<const InvocationNode*, std::string>    _callInst;      // generic call site -> instantiation mangled name
     std::map<std::string, SharedIdentifier>         _typeSubst;     // type-param name -> concrete (only while emitting an instantiation)
+    std::map<std::string, int64_t>                  _constSubst;    // const-param name (`const N: int`) -> value (parallel to _typeSubst)
     std::map<int, SharedIdentifier>                 _primTypeCache; // synthesized primitive type nodes (for inference)
     std::shared_ptr<CodeGenContext>                 _synthCtx;      // context for synthesizing those nodes
 
@@ -360,6 +362,15 @@ private:
     bool isCollectionType(SharedIdentifier t) const;
     std::string mangleElem(SharedIdentifier elem);
     void registerCollection(SharedIdentifier collType);
+    void registerFixed(SharedIdentifier fixedType);   // Fixed<T,N> — the const-generic value array
+    // Const generics: the compile-time integer value of a const argument/param expression (an
+    // integer literal, or a const-param identifier bound in the current instantiation via _constSubst).
+    bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
+    bool constArgN(SharedIdentifier arg, int64_t& out);  // same, for a type-arg node (literal or bound param)
+    // A `Fixed<T,N>` intrinsic instance (a value-semantics collection). Its indexing/foreach reuse the
+    // collection machinery, but it is carved out of ownership (never destructible, copies freely).
+    bool isFixedColl(const std::string& cls) const;
+    std::string emitArrayLiteral(ArrayLiteralNode* al);   // `[a,b,c]` / `[v; N]` -> a Fixed value
     void registerSmartPtr(CollKind kind, SharedIdentifier elem);   // Owned/Shared/Weak
     void registerOptionalOfShared(SharedIdentifier elem);          // Optional<Shared<elem>> for Weak.tryUpgrade
     void emitWeakTryUpgrade(const CollectionInfo& info);           // the tryUpgrade wrapper (builds the Optional)

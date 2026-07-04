@@ -1,0 +1,5 @@
+// An array literal's element count must equal the Fixed size N.
+fn int32 main() {
+    Fixed<int32, 4> v = [1, 2, 3];   // 3 elements, but the type holds 4
+    return v[0];
+}

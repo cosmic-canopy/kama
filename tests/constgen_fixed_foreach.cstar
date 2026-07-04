@@ -1,0 +1,7 @@
+// foreach over a Fixed<T,N> iterates its N elements (bounds-checked __get, __length = N).
+fn int32 main() {
+    Fixed<int32, 5> v = [2, 4, 6, 8, 10];
+    int32 t = 0;
+    foreach (int32 e in v) { t = t + e; }
+    return t;   // 30
+}

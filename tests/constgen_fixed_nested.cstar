@@ -1,0 +1,15 @@
+// A Fixed element may itself be a Fixed (`Fixed<Fixed<int32,N>,M>` — the row/col shape a matrix
+// needs) and a Fixed can be a class FIELD held by value. Nested literals resolve each inner `[…]`
+// to the element Fixed; a row bound to a local is a plain value you can then index.
+type value Grid {
+    public Fixed<int32, 4> cells;
+    public Grid(Fixed<int32, 4> cells) { this.cells = cells; }
+    public fn int32 at(int32 i) { return this.cells[i]; }
+}
+fn int32 main() {
+    Fixed<int32, 4> c = [3, 6, 9, 12];
+    Grid g = Grid(cells: c);                         // Fixed as a by-value field
+    Fixed<Fixed<int32, 2>, 2> m = [[1, 2], [3, 4]];  // nested Fixed
+    Fixed<int32, 2> row = m[1];                       // the inner row is a value copy
+    return g.at(i: 2) + row[0] + row[1];              // 9 + 3 + 4 = 16
+}

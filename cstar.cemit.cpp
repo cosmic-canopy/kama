@@ -189,6 +189,12 @@ std::string CEmitter::cType(SharedIdentifier type)
         if (*type->value == "isize") return "ptrdiff_t";
     }
 
+    // Fixed<T, N> spells `Fixed_<mangleT>_<N>` (two args — the const size mangles to its value).
+    if (type->genericArg && type->value && *type->value == "Fixed" && type->genericArgs) {
+        std::string m = "Fixed";
+        for (auto& a : *type->genericArgs) m += "_" + mangleElem(a);
+        return m;
+    }
     // Collection / smart-pointer types spell their mangled struct name:
     // Array<int32> -> Array_int32; Owned<Node> -> Owned_Node;
     // Shared<Tex> -> Shared_Tex; Weak<Tex> -> Weak_Tex.
@@ -498,6 +504,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     ASTNode* n = expr.get();
 
     if (auto* mm = dynamic_cast<MatchNode*>(n)) return emitMatch(mm);   // value-producing match (lifted)
+    if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) return emitArrayLiteral(al);   // `[…]` -> a Fixed value
 
     if (auto* v = dynamic_cast<Int8Node*>(n))   return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int16Node*>(n))  return std::to_string((int)v->value);
@@ -1148,8 +1155,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         indent(depth);
                         if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k, isInterface(_classes[ty].collElemClass)) << "\n";
                         else        *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
-                    } else if (_classes.count(ty) && _classes[ty].isCollection && isNamedValue(init.get())) {
-                        // a collection move/deep-copy isn't a plain `=` — require a marker.
+                    } else if (_classes.count(ty) && _classes[ty].isCollection && !isFixedColl(ty) && isNamedValue(init.get())) {
+                        // a collection move/deep-copy isn't a plain `=` — require a marker. (A
+                        // `Fixed` is a value: the plain `=` above already copied it — no marker.)
                         if (handoff == 0)
                             unsupported(("a collection hand-off must say `give` (move) or `copy` (deep) — write "
                                          "`" + ty + " v = give …`").c_str(), n->line);
@@ -1539,8 +1547,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (as->token == EQ) {
             ASTNode* r = as->expression.get();
             bool isMatch = dynamic_cast<MatchNode*>(r) != nullptr;
+            // an array literal RHS (`v = [1,2,3]`) is value-producing too — it needs the LHS Fixed
+            // type threaded so the compound literal / `__fill` names the right struct.
+            bool isArrayLit = dynamic_cast<ArrayLiteralNode*>(r) != nullptr;
             bool isVariantCtor = false;
-            if (!isMatch) {
+            if (!isMatch && !isArrayLit) {
                 SharedStringList qual;
                 if (auto* iv = dynamic_cast<InvocationNode*>(r)) { if (iv->identifier) qual = iv->identifier->qualifier; }
                 else if (auto* id = dynamic_cast<IdentifierNode*>(r)) qual = id->qualifier;
@@ -1551,13 +1562,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     isVariantCtor = (_classes.count(en) && _classes[en].isVariant) || _genericTypeParams.count(en);
                 }
             }
-            if (isMatch || isVariantCtor) {
+            if (isMatch || isVariantCtor || isArrayLit) {
                 std::string lhsCType = exprClass(as->unaryExpression);      // class/union name
                 std::string lname;
                 if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
                     if (lid->value && (!lid->qualifier || lid->qualifier->empty())) {
                         lname = *lid->value;
-                        if (lhsCType.empty() && _localCTypes.count(lname)) lhsCType = _localCTypes[lname];   // primitive LHS
+                        if (lhsCType.empty() && _localCTypes.count(lname)) lhsCType = _localCTypes[lname];   // primitive/Fixed LHS
                     }
                 if (lhsCType.empty()) {
                     unsupported("a value-producing `match` / variant construction here needs a typed "
@@ -2175,11 +2186,55 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
 
 // ---- Collections -----------------------------------------------------
 
+// ---- Const generics --------------------------------------------------
+// The compile-time integer value of a const generic argument expression: an integer literal (any
+// width), or a const-param identifier bound to a value in the current instantiation (`N` -> 4). This
+// is the value half of the monomorphization — the parallel of resolving a bound type-param.
+bool CEmitter::constValue(SharedExpression e, int64_t& out)
+{
+    if (!e) return false;
+    ASTNode* n = e.get();
+    if (auto* v = dynamic_cast<Int8Node*>(n))   { out = v->value; return true; }
+    if (auto* v = dynamic_cast<Int16Node*>(n))  { out = v->value; return true; }
+    if (auto* v = dynamic_cast<Int32Node*>(n))  { out = v->value; return true; }
+    if (auto* v = dynamic_cast<Int64Node*>(n))  { out = (int64_t)v->value; return true; }
+    if (auto* v = dynamic_cast<UInt8Node*>(n))  { out = v->value; return true; }
+    if (auto* v = dynamic_cast<UInt16Node*>(n)) { out = v->value; return true; }
+    if (auto* v = dynamic_cast<UInt32Node*>(n)) { out = v->value; return true; }
+    if (auto* v = dynamic_cast<UInt64Node*>(n)) { out = (int64_t)v->value; return true; }
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) return constArgN(std::static_pointer_cast<IdentifierNode>(e), out);
+    return false;
+}
+
+// The const value carried by a generic ARGUMENT node: a literal wrapped by the grammar
+// (`constArgValue`, as in `Fixed<T,4>`), or a bare const-param identifier bound in this
+// instantiation (`Fixed<T,N>`). Returns false for a type argument (no const value).
+bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
+{
+    if (!arg) return false;
+    if (arg->constArgValue) return constValue(arg->constArgValue, out);
+    if (arg->value && !arg->genericArg) {
+        auto it = _constSubst.find(*arg->value);
+        if (it != _constSubst.end()) { out = it->second; return true; }
+    }
+    return false;
+}
+
+bool CEmitter::isFixedColl(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.isCollection && it->second.collKind == CollKind::Fixed;
+}
+
 // The mangling suffix for an element type: primitives use a short stable
 // spelling; a class/enum uses its own name. Array<int32> -> "int32".
 std::string CEmitter::mangleElem(SharedIdentifier elem)
 {
     if (!elem) return "void";
+    // const generic ARGUMENT: a literal value (`Fixed<T,4>`) or a const-param identifier bound in
+    // this instantiation (`Fixed<T,N>` with N=4) mangles to the integer itself (`_4`), symmetric to
+    // a type arg's name. Consulted before the type-param path since a const arg has no `value`.
+    { int64_t v; if (constArgN(elem, v)) return std::to_string(v); }
     // substitute a bound type-param before mangling (mirrors cType).
     if (!_typeSubst.empty() && elem->value && !elem->genericArg) {
         auto s = _typeSubst.find(*elem->value);
@@ -2226,7 +2281,8 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
     if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string / String
     return t->genericArg && t->value &&
            (*t->value == "Array" || *t->value == "List" || *t->value == "Owned" ||
-            *t->value == "Shared" || *t->value == "Weak" || *t->value == "BindableFunctionPtr");
+            *t->value == "Shared" || *t->value == "Weak" || *t->value == "BindableFunctionPtr" ||
+            *t->value == "Fixed");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -2253,6 +2309,12 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     // BindableFunctionPtr<Sig> — element is a function SIGNATURE, not a class.
     if (!isStr && collType->value && *collType->value == "BindableFunctionPtr") {
         registerBindable(elem);
+        return;
+    }
+
+    // Fixed<T, N> — the const-generic value array (a distinct shape: two args, value semantics).
+    if (!isStr && collType->value && *collType->value == "Fixed") {
+        registerFixed(collType);
         return;
     }
 
@@ -2332,6 +2394,76 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("byteLen", {}, SharedIdentifier());   // len * sizeof(T)
     }
 
+    _classes[cName] = ci;
+}
+
+// Register a `Fixed<T, N>` instance — the const-generic safe array. Unlike the heap collections it
+// is a VALUE type (`struct { T v[N]; }`): it owns no heap, copies by value, and has no destructor,
+// so it is a `CollKind::Fixed` carved out of the ownership machinery. It reuses the collection path
+// only for bounds-checked indexing + `foreach`. The element must be a `value` (own nothing) and N a
+// positive compile-time integer (a literal, or a bound `const N: int` param).
+void CEmitter::registerFixed(SharedIdentifier fixedType)
+{
+    SharedIdentifierList args = fixedType->genericArgs;
+    if (!args || args->size() != 2) {
+        unsupported("`Fixed<T, N>` takes exactly two arguments — an element type and a const size "
+                    "(`Fixed<float32, 4>`)", fixedType->line);
+        return;
+    }
+    SharedIdentifier elem = (*args)[0];
+    SharedIdentifier nArg = (*args)[1];
+    int64_t n;
+    // An unbound `N` (a `const N: int` param referenced inside a generic template, no binding yet)
+    // isn't a concrete type — skip it silently; the concrete `Fixed<T, 4>` instance registers at the
+    // use site (a caller's typed local / a bound instantiation). A concrete non-const size resolves here.
+    if (!constArgN(nArg, n)) return;
+    if (n <= 0) {
+        unsupported("the size of a `Fixed<T, N>` must be a positive integer", fixedType->line);
+        return;
+    }
+
+    std::string elemCType  = cType(elem);
+    std::string elemMangle = mangleElem(elem);
+    std::string elemClass  = isClass(elemCType) ? elemCType : "";
+
+    // The element must OWN NOTHING (a `value` or primitive): a `Fixed` is a plain value with no
+    // per-element dtor, so a `resource`/interface/destructible element would leak or dangle.
+    if (isInterface(elemCType) || (!elemClass.empty() && isMoveOnlyValue(elemClass))) {
+        std::string nm = (elem && elem->value) ? *elem->value : elemCType;
+        unsupported(("a `Fixed<T, N>` element must be a `value` (it owns nothing) — `" + nm +
+                     "` is a `resource`/contract, which would leak; wrap it in an owning `Array`/"
+                     "`List` instead").c_str(), fixedType->line);
+        return;
+    }
+
+    std::string cName = "Fixed_" + elemMangle + "_" + std::to_string(n);
+    if (_collections.count(cName)) return;    // dedup
+
+    CollectionInfo info;
+    info.kind = CollKind::Fixed; info.cName = cName;
+    info.elemCType = elemCType; info.elemMangle = elemMangle; info.elemClass = elemClass;
+    info.constValue = n;
+    _collections[cName] = info;
+    _collectionOrder.push_back(cName);
+
+    // Synthetic ClassInfo: a value struct (NOT destructible, no ctor) with intrinsic get/set/length.
+    // Indexing (`v[i]`) and `foreach` go through collectionElemAccess/the foreach path directly;
+    // `length` is the one method resolved by name (`v.length()`).
+    ClassInfo ci;
+    ci.name = cName;
+    ci.isCollection = true;
+    ci.collKind = CollKind::Fixed;
+    ci.collElemClass = elemClass;
+    ci.destructible = false;                   // a value — owns no heap
+    ci.hasCtor = false;                        // built from an array literal, not a ctor call
+    auto addMethod = [&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret) {
+        MethodInfo mi; mi.cName = cName + "__" + mname;
+        mi.params = std::move(params); mi.returnType = ret; mi.isIntrinsic = true;
+        ci.methods[mname] = mi;
+    };
+    addMethod("get",    { ParamSig{"index", false, ""} }, elem);
+    addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} }, SharedIdentifier());
+    addMethod("length", {}, SharedIdentifier());
     _classes[cName] = ci;
 }
 
@@ -2576,6 +2708,9 @@ void CEmitter::scanExprForCollections(SharedExpression e)
         scanExprForCollections(po->expression);
     } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         scanExprForCollections(su->expression);
+    } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
+        if (al->elements) for (auto& x : *al->elements) scanExprForCollections(x);
+        scanExprForCollections(al->fillValue);
     } else if (auto* mm = dynamic_cast<MatchNode*>(n)) {
         // recurse into a `match` — the subject and each arm (a single expression OR a block),
         // so a type used ONLY inside an arm (e.g. a block-local `Shared<T>`) is still registered.
@@ -2735,11 +2870,66 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
 
     std::set<std::string> tps;
     for (auto& tp : *tmpl->typeParams) if (tp) tps.insert(*tp);
+    std::set<std::string> cps;
+    if (tmpl->constParams) for (auto& cp : *tmpl->constParams) if (cp) cps.insert(*cp);
+
+    // synthesize a const generic ARGUMENT node carrying an integer value (so a bound const param
+    // travels through mangleElem / GenericInst::typeArgs uniformly with a type argument).
+    auto constArgNode = [&](int64_t v) -> SharedIdentifier {
+        if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+        auto id = std::make_shared<IdentifierNode>(*_synthCtx, SharedString());
+        id->constArgValue = std::make_shared<Int64Node>(*_synthCtx, v);
+        return id;
+    };
 
     std::map<std::string, SharedIdentifier> bind;
     if (tmpl->parameters) for (auto& p : *tmpl->parameters) {
         if (!p || !p->type || !p->type->value) continue;
         const std::string& pty = *p->type->value;
+        // A `Fixed<ElemT, K>` parameter — infer any type-param element AND the const size K from the
+        // argument's concrete `Fixed<int32, 4>` type. This is the const-generic half of inference.
+        if (pty == "Fixed" && p->type->genericArgs && p->type->genericArgs->size() == 2) {
+            std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
+            auto ai = byName.find(pname);
+            if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
+            SharedIdentifier at = exprTypeNode(ai->second, localTys);
+            if (!at || !at->value || *at->value != "Fixed" || !at->genericArgs || at->genericArgs->size() != 2) {
+                unsupported(("cannot infer the generic parameters of `Fixed<…>` — argument '" + pname +
+                             "' is not a `Fixed<…>` value").c_str(), line);
+                return false;
+            }
+            SharedIdentifier pElem = (*p->type->genericArgs)[0], pN = (*p->type->genericArgs)[1];
+            SharedIdentifier aElem = (*at->genericArgs)[0],       aN = (*at->genericArgs)[1];
+            // element type parameter (`Fixed<T, N>` — bind T), if it is a bare type-param
+            if (pElem && pElem->value && !pElem->genericArg && tps.count(*pElem->value)) {
+                if (!isConcreteTypeArg(aElem)) {
+                    unsupported(("cannot infer type parameter '" + *pElem->value + "' from argument '" + pname + "'").c_str(), line);
+                    return false;
+                }
+                auto b = bind.find(*pElem->value);
+                if (b != bind.end() && mangleElem(b->second) != mangleElem(aElem)) {
+                    unsupported(("cannot unify type parameter '" + *pElem->value + "'").c_str(), line);
+                    return false;
+                }
+                bind[*pElem->value] = aElem;
+            }
+            // const size parameter (`Fixed<T, N>` — bind N to the argument's size)
+            if (pN && pN->value && cps.count(*pN->value)) {
+                int64_t v;
+                if (!constArgN(aN, v)) {
+                    unsupported(("cannot infer const parameter '" + *pN->value + "' — argument '" + pname +
+                                 "' has no statically-known size").c_str(), line);
+                    return false;
+                }
+                auto b = bind.find(*pN->value);
+                if (b != bind.end()) { int64_t pv; if (constArgN(b->second, pv) && pv != v) {
+                    unsupported(("cannot unify const parameter '" + *pN->value + "' (" + std::to_string(pv) +
+                                 " vs " + std::to_string(v) + ")").c_str(), line);
+                    return false; } }
+                bind[*pN->value] = constArgNode(v);
+            }
+            continue;
+        }
         if (p->type->genericArg || !tps.count(pty)) continue;   // not a bare type-param (List<T> etc. is a generic type)
         std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
         auto ai = byName.find(pname);
@@ -2950,14 +3140,26 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     auto cit = _genericCtx.find(gi.templateKey);
     if (cit != _genericCtx.end()) _nsCtx = cit->second;
 
+    // Bind each parameter to its argument: a const param (`const N: int`) binds a VALUE in
+    // _constSubst (so a `Fixed<T,N>` param type resolves to `Fixed_T_4`); a type param binds a type
+    // in _typeSubst. Both are cleared identically at the end.
+    std::set<std::string> cps;
+    if (tmpl->constParams) for (auto& cp : *tmpl->constParams) if (cp) cps.insert(*cp);
     _typeSubst.clear();
-    for (size_t i = 0; i < tmpl->typeParams->size() && i < gi.typeArgs.size(); ++i)
-        if ((*tmpl->typeParams)[i]) _typeSubst[*(*tmpl->typeParams)[i]] = gi.typeArgs[i];
+    _constSubst.clear();
+    for (size_t i = 0; i < tmpl->typeParams->size() && i < gi.typeArgs.size(); ++i) {
+        if (!(*tmpl->typeParams)[i]) continue;
+        const std::string& pn = *(*tmpl->typeParams)[i];
+        int64_t v;
+        if (cps.count(pn) && constArgN(gi.typeArgs[i], v)) _constSubst[pn] = v;
+        else _typeSubst[pn] = gi.typeArgs[i];
+    }
 
     if (prototypeOnly) emitFunctionPrototype(tmpl, &gi.mangledName);   // emits `static` via nameOverride
     else               emitFunction(tmpl, &gi.mangledName);
 
     _typeSubst.clear();
+    _constSubst.clear();
     _nsCtx = savedCtx;
 }
 
@@ -3025,6 +3227,14 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
         else if (info.kind == CollKind::Bindable)
             // Fully type-erased — the signature drives only the invoke, not the layout.
             *_out << "CSTAR_BINDABLE_" << suf << "(" << info.cName << ")\n";
+        else if (info.kind == CollKind::Fixed) {
+            // Value array: `struct { T v[N]; }` + bounds-checked get/set/at/length/fill. It embeds T
+            // by value, so its `_TYPE` is emitted in the by-value struct-body order (emitHeaderContent),
+            // NOT in this early types pass — only the `_FUNCS` half comes from here.
+            if (!typesOnly)
+                *_out << "CSTAR_FIXED_FUNCS(" << info.elemCType << ", " << info.constValue
+                     << ", " << info.cName << ")\n";
+        }
     }
     if (!_collections.empty()) *_out << "\n";
 }
@@ -3040,10 +3250,67 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     std::string cls = exprClass(recv);
     if (cls.empty() || !_classes.count(cls) || !_classes[cls].isCollection) return false;
     coll     = _classes[cls].name;
+    // A `Fixed<T,N>` knows its size at compile time, so a CONSTANT out-of-range index is a
+    // compile-time error, not just a runtime trap (the safe-array payoff).
+    SharedExpression idxExpr = (ea->expressionlist && !ea->expressionlist->empty())
+                                   ? (*ea->expressionlist)[0] : SharedExpression();
+    if (isFixedColl(cls) && idxExpr) {
+        int64_t iv;
+        if (constValue(idxExpr, iv) && (iv < 0 || iv >= _collections[cls].constValue))
+            unsupported(("index " + std::to_string(iv) + " is out of bounds for `" + cls + "` (length "
+                         + std::to_string(_collections[cls].constValue) + ")").c_str(), ea->line);
+    }
     recvExpr = emitExpression(recv);
-    idx      = (ea->expressionlist && !ea->expressionlist->empty())
-                   ? emitExpression((*ea->expressionlist)[0]) : "0";
+    idx      = idxExpr ? emitExpression(idxExpr) : "0";
     return true;
+}
+
+// A fixed-array value literal (`[a, b, c]` or `[v; N]`) initializing a `Fixed<T,N>`. Its type comes
+// from the enclosing typed position (a Fixed local, return, or assignment, threaded via the same
+// target-type context as `match`/variant construction). List form -> a C99 compound literal over the
+// backing array (`(NAME){ .v = { … } }`, count checked == N); fill form -> the runtime `NAME__fill(v)`.
+std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
+{
+    if (!al) return "0";
+    std::string ty = _variantTargetType;
+    if (!isFixedColl(ty)) ty = _matchTargetCType;
+    if (!isFixedColl(ty)) {
+        unsupported("an array literal `[…]` initializes a `Fixed<T, N>` — its type must be known from "
+                    "context (a typed local, return, or assignment)", al->line);
+        return "0";
+    }
+    int64_t n = _collections[ty].constValue;
+    // Each element's target type is the Fixed's element type — so a NESTED array literal
+    // (`Fixed<Fixed<int32,2>,2> = [[1,2],[3,4]]`) resolves each inner `[…]` to the element Fixed.
+    std::string elemCType = _collections[ty].elemCType;
+    ScopedStr _tm(_matchTargetCType, elemCType), _tv(_variantTargetType, elemCType);
+    if (al->elements) {
+        size_t count = al->elements->size();
+        if ((int64_t)count != n) {
+            unsupported(("this array literal has " + std::to_string(count) + " element(s) but `" + ty
+                         + "` holds " + std::to_string(n)).c_str(), al->line);
+            return "0";
+        }
+        std::string s = "(" + ty + "){ .v = {";
+        // Each element by value — an inline constructor element (`[Point(x:1,y:2), …]`) is
+        // materialized into a hoisted temp (ISO C, no statement-expression), like an operator operand.
+        for (size_t i = 0; i < al->elements->size(); ++i)
+            s += (i ? ", " : " ") + emitOperandByValue((*al->elements)[i]);
+        s += " } }";
+        return s;
+    }
+    // fill form `[v; count]` — the count must be a constant equal to N.
+    int64_t fc;
+    if (!constValue(al->fillCount, fc)) {
+        unsupported("the count in a fill literal `[v; N]` must be an integer constant", al->line);
+        return "0";
+    }
+    if (fc != n) {
+        unsupported(("this fill literal repeats " + std::to_string(fc) + " time(s) but `" + ty
+                     + "` holds " + std::to_string(n)).c_str(), al->line);
+        return "0";
+    }
+    return ty + "__fill(" + emitOperandByValue(al->fillValue) + ")";
 }
 
 // ---- Smart pointers (Owned, Shared) ---------------------------------------
@@ -3315,16 +3582,25 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
         }
 
         // A by-value dependency: a field/payload whose C type is a laid-out struct (not a T*-holding
-        // collection, not an extern header struct).
+        // collection, not an extern header struct). A `Fixed<T,N>` DOES embed its element by value,
+        // so it is a real dependency — both as a field's type and as the Fixed struct's own element.
         auto dep = [&](SharedIdentifier ty) -> ClassInfo* {
             auto it = _classes.find(cType(ty));
-            if (it == _classes.end() || it->second.isCollection || it->second.isExternStruct) return nullptr;
+            if (it == _classes.end() || it->second.isExternStruct) return nullptr;
+            if (it->second.isCollection && it->second.collKind != CollKind::Fixed) return nullptr;  // pointer storage
             return &it->second;
         };
         std::vector<ClassInfo*> deps;
         if (ci->base) deps.push_back(ci->base);
         for (auto& f : ci->fields) if (ClassInfo* d = dep(f.type)) deps.push_back(d);
         for (auto& v : ci->variants) for (auto& f : v.payload) if (ClassInfo* d = dep(f.type)) deps.push_back(d);
+        // a `Fixed<T,N>` struct (`{ T v[N]; }`) embeds T by value -> its layout needs T's.
+        if (ci->isCollection && ci->collKind == CollKind::Fixed && !ci->collElemClass.empty()) {
+            auto it = _classes.find(ci->collElemClass);
+            if (it != _classes.end() && !it->second.isExternStruct &&
+                !(it->second.isCollection && it->second.collKind != CollKind::Fixed))
+                deps.push_back(&it->second);
+        }
 
         // restore the outer context BEFORE recursing, so each recursed node sets up its own binding.
         _nsCtx = savedCtxOuter; _typeSubst = savedSubstOuter;
@@ -3336,7 +3612,9 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
     };
 
     for (auto& kv : _classes)
-        if (!kv.second.isCollection && !kv.second.isExternStruct) visit(&kv.second);
+        if ((!kv.second.isCollection && !kv.second.isExternStruct) ||
+            (kv.second.isCollection && kv.second.collKind == CollKind::Fixed))   // Fixed lays out by value
+            visit(&kv.second);
     _nsCtx = savedCtxOuter; _typeSubst = savedSubstOuter;
     return out;
 }
@@ -3423,7 +3701,11 @@ void CEmitter::computeDestructible()
     // Seed: an explicit `~dtor` OR a collection/smart-ptr (always owns heap → RAII-dropped; its
     // ClassInfo carries destructible=true, which this reset must preserve — collections are
     // registered before this pass now).
-    for (auto& kv : _classes) kv.second.destructible = kv.second.hasDtor || kv.second.isCollection;
+    // A `Fixed<T,N>` is a value (owns no heap), so — unlike the heap collections — it is NOT
+    // destructible; its element is a `value`, so there is nothing to drop.
+    for (auto& kv : _classes)
+        kv.second.destructible = kv.second.hasDtor ||
+            (kv.second.isCollection && kv.second.collKind != CollKind::Fixed);
     bool changed = true;
     while (changed) {
         changed = false;
@@ -5669,7 +5951,18 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // (which binds its _typeSubst/_nsCtx for its `T`-typed fields); a normal class/variant through
     // emitStruct. The emission ORDER places every by-value dependency before its holder.
     for (ClassInfo* ci : ordered) {
-        if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
+        if (ci->isExternStruct) continue;
+        if (ci->isCollection) {
+            // A `Fixed<T,N>` embeds its element BY VALUE, so — unlike the pointer-storing collections
+            // (whose `_TYPE` went out above) — its struct typedef must land HERE, after the element's
+            // struct body (this loop is the by-value-dependency order). Other collections are skipped.
+            if (ci->collKind == CollKind::Fixed) {
+                CollectionInfo& info = _collections[ci->name];
+                *_out << "CSTAR_FIXED_TYPE(" << info.elemCType << ", " << info.constValue
+                     << ", " << info.cName << ")\n";
+            }
+            continue;   // macro / header provides it
+        }
         if (ci->isGenericInst) {
             emitGenericTypeInst(_genericTypeInsts[ci->name], /*phase=*/0);   // body-only (forward split out)
         } else {

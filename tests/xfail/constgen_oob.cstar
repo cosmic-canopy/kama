@@ -1,0 +1,5 @@
+// A CONSTANT out-of-range index is caught at COMPILE time (the size is part of the type).
+fn int32 main() {
+    Fixed<int32, 4> v = [1, 2, 3, 4];
+    return v[5];   // 5 >= 4 -> compile error
+}

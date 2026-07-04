@@ -1,0 +1,5 @@
+// Fixed takes exactly two arguments: an element type and a const size.
+fn int32 main() {
+    Fixed<int32> v = [1, 2];
+    return v[0];
+}

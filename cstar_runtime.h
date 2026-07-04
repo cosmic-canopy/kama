@@ -267,6 +267,31 @@ static inline size_t NAME##__length(NAME* self) { return self->len; }\
  }
 #define CSTAR_LIST_DEFINE(T, NAME, ELEM_DTOR, ELEM_COPY) CSTAR_LIST_TYPE(T, NAME) CSTAR_LIST_FUNCS(T, NAME, ELEM_DTOR, ELEM_COPY)
 
+// Fixed<T,N> — a fixed-size, bounds-checked VALUE array (`struct { T v[N]; }`). It owns no heap:
+// it copies by value (a plain struct blit), has no destructor, and never decays to a raw pointer.
+// The element must be a `value` (owns nothing), so there is no per-element dtor/copy. This is how
+// cstar reintroduces raw arrays SAFELY — indexing is bounds-checked (a runtime trap), the size is
+// part of the type (monomorphized per (T,N)), and the whole thing is a first-class value.
+#define CSTAR_FIXED_TYPE(T, N, NAME) typedef struct NAME { T v[N]; } NAME;
+#define CSTAR_FIXED_FUNCS(T, N, NAME)                                           \
+static inline T      NAME##__get(NAME* self, size_t i) {                        \
+    if (i >= (size_t)(N)) cstar_bounds_fail(i, (size_t)(N));                    \
+    return self->v[i];                                                          \
+}                                                                               \
+static inline void   NAME##__set(NAME* self, size_t i, T x) {                   \
+    if (i >= (size_t)(N)) cstar_bounds_fail(i, (size_t)(N));                    \
+    self->v[i] = x;                                                             \
+}                                                                               \
+static inline T*     NAME##__at(NAME* self, size_t i) {                         \
+    if (i >= (size_t)(N)) cstar_bounds_fail(i, (size_t)(N));                    \
+    return &self->v[i];                                                         \
+}                                                                               \
+static inline size_t NAME##__length(NAME* self) { (void)self; return (size_t)(N); } \
+static inline NAME   NAME##__fill(T x) {                                        \
+    NAME r; for (size_t i = 0; i < (size_t)(N); ++i) r.v[i] = x; return r;      \
+}
+#define CSTAR_FIXED_DEFINE(T, N, NAME) CSTAR_FIXED_TYPE(T, N, NAME) CSTAR_FIXED_FUNCS(T, N, NAME)
+
 
 // cstar `string` lowers to a fat, length-prefixed value. `cap == 0` means
 // the bytes are BORROWED (e.g. a C string literal in static storage) and must
