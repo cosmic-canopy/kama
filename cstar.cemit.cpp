@@ -872,6 +872,22 @@ void CEmitter::flushHoisted(int depth)
     _hoisted.clear();
 }
 
+// M31: emit a condition with hoisting enabled so an inline ctor / `match` works in `if`/`while`/`for`.
+// An inline ctor knows its own type; a value-producing `match` needs a result type, and a condition is
+// boolean — so a DIRECTLY-`match` condition is typed `bool`. A `match` nested in a larger condition keeps
+// no target type and stays the clean "must appear in a typed position" error (bind it to a local).
+std::string CEmitter::emitCondition(SharedExpression cond)
+{
+    if (!cond) return "";
+    bool ph = _hoistOK; _hoistOK = true;
+    std::string pmt = _matchTargetCType;
+    if (dynamic_cast<MatchNode*>(cond.get())) _matchTargetCType = "bool";
+    std::string s = emitExpression(cond);
+    _matchTargetCType = pmt;
+    _hoistOK = ph;
+    return s;
+}
+
 void CEmitter::emitStatement(SharedStatement stmt, int depth)
 {
     if (!stmt) return;
@@ -1269,19 +1285,26 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     }
 
     if (auto* f = dynamic_cast<IfNode*>(n)) {
-        line(n->line); indent(depth);
-        *_out << "if (" << emitExpression(f->booleanExpression) << ") ";
+        line(n->line);
+        // A value-producing construct in the condition (an inline ctor / `match`) hoists a temp; a raw
+        // condition has no statement slot, so wrap the whole `if` in a block and flush the temps first.
+        std::string cond = emitCondition(f->booleanExpression);
+        bool hoist = !_hoisted.empty();
+        int bd = depth;
+        if (hoist) { indent(depth); *_out << "{\n"; flushHoisted(depth + 1); bd = depth + 1; }
+        indent(bd);
+        *_out << "if (" << cond << ") ";
         // M26f-2: walk each branch from the SAME pre-if move-state, then merge at the join.
         // A branch that diverges (ends in return/break/continue) doesn't reach the join.
         auto before = _moveState;
-        emitBody(f->ifStatement, depth, /*loopBoundary=*/false);
+        emitBody(f->ifStatement, bd, /*loopBoundary=*/false);
         auto thenState = _moveState;
         bool thenDiv = bodyDiverges(f->ifStatement);
         _moveState = before;
         bool elseDiv = false;
         if (f->elseStatement) {
             *_out << " else ";
-            emitBody(f->elseStatement, depth, false);
+            emitBody(f->elseStatement, bd, false);
             elseDiv = bodyDiverges(f->elseStatement);
         }
         auto elseState = _moveState;   // no else -> == before (the fall-through arm)
@@ -1297,19 +1320,33 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             _moveState[kv.first] = merged;
         }
         *_out << "\n";
+        if (hoist) { indent(depth); *_out << "}\n"; }
         return;
     }
 
     if (auto* w = dynamic_cast<WhileNode*>(n)) {
-        line(n->line); indent(depth);
-        *_out << "while (" << emitExpression(w->booleanExpression) << ") ";
-        emitBody(w->whileStatement, depth, /*loopBoundary=*/true);
-        *_out << "\n";
+        line(n->line);
+        std::string cond = emitCondition(w->booleanExpression);
+        if (_hoisted.empty()) {                                   // fast path — unchanged
+            indent(depth);
+            *_out << "while (" << cond << ") ";
+            emitBody(w->whileStatement, depth, /*loopBoundary=*/true);
+            *_out << "\n";
+        } else {                                                  // loop-and-a-half: recompute cond each pass
+            indent(depth); *_out << "while (1) {\n";
+            flushHoisted(depth + 1);                              // condition temps — re-run each iteration
+            indent(depth + 1); *_out << "if (!(" << cond << ")) break;\n";
+            emitBody(w->whileStatement, depth + 1, /*loopBoundary=*/true);
+            *_out << "\n";
+            indent(depth); *_out << "}\n";
+        }
         return;
     }
 
     if (auto* d = dynamic_cast<DoWhileNode*>(n)) {
         line(n->line); indent(depth);
+        // `do`/`while` condition sits at the bottom and its `continue` must skip TO it, which a naive
+        // while(1) rewrite breaks — so a hoisting construct here stays a clean error (bind to a local).
         *_out << "do ";
         emitBody(d->doWhileStatement, depth, /*loopBoundary=*/true);
         *_out << " while (" << emitExpression(d->booleanExpression) << ");\n";
@@ -1317,12 +1354,23 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     }
 
     if (auto* f = dynamic_cast<ForNode*>(n)) {
-        line(n->line); indent(depth);
-        *_out << "for (" << emitForClause(f->initializerStatements) << "; "
-             << (f->booleanExpression ? emitExpression(f->booleanExpression) : std::string()) << "; "
-             << emitForClause(f->iteratorStatements) << ") ";
-        emitBody(f->body, depth, /*loopBoundary=*/true);
-        *_out << "\n";
+        line(n->line);
+        std::string init = emitForClause(f->initializerStatements);
+        std::string cond = emitCondition(f->booleanExpression);
+        std::string iter = emitForClause(f->iteratorStatements);
+        if (_hoisted.empty()) {                                   // fast path — unchanged
+            indent(depth);
+            *_out << "for (" << init << "; " << cond << "; " << iter << ") ";
+            emitBody(f->body, depth, /*loopBoundary=*/true);
+            *_out << "\n";
+        } else {                                                  // loop-and-a-half; iter stays in the C header
+            indent(depth); *_out << "for (" << init << "; ; " << iter << ") {\n";
+            flushHoisted(depth + 1);                              // condition temps — re-run each iteration
+            indent(depth + 1); *_out << "if (!(" << cond << ")) break;\n";
+            emitBody(f->body, depth + 1, /*loopBoundary=*/true);
+            *_out << "\n";
+            indent(depth); *_out << "}\n";
+        }
         return;
     }
 

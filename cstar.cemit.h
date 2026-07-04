@@ -329,6 +329,9 @@ private:
     std::vector<std::string> _hoisted;
     bool                     _hoistOK = false;
     void flushHoisted(int depth);
+    // M31: emit an if/while/for condition with value-producing constructs allowed (they hoist a temp);
+    // any hoisted temps are left in `_hoisted` for the caller to flush (empty => the fast path).
+    std::string emitCondition(SharedExpression cond);
     int                _curLine = 0;                   // M26f-2: last source line seen (conditional-drop diagnostics)
     bool               _inUnsafe = false;             // M17: inside an `unsafe { }` block
     bool               _inCtor   = false;             // M24d: emitting a ctor (const fields writable here)

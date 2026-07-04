@@ -67,6 +67,18 @@ lightweight WebGPU game engine.
    **contextual** (they name a kind only right after `type`), so they stay ordinary identifiers
    everywhere else. *(Shipped in **M26h**; full model in `docs/TYPE_MODEL.md`.)*
 
+3d. **No exceptions — fallibility is a value.** There is no `throw`/`try`/`catch` and no stack unwinding.
+   A operation that can fail returns its outcome as a value: **`Optional<T>`** (absence) or **`Result<T, E>`**
+   (failure), which `match` forces the caller to handle. This has a direct consequence for construction:
+   **constructors are infallible** — trivial, in-place field setup that cannot fail (which is also why the
+   ctor keeps its in-place `void ctor(T*)` ABI: there is nothing to signal). **Fallible resource acquisition
+   is a `static fn` factory returning `Result<T, E>`** (`Buffer::create(size:) -> Result<Owned<Buffer>, E>`):
+   the fallible work lives there, and on failure it returns `Err` *before* the resource exists — so no
+   half-constructed object can escape and the invariant "if you hold one, it's valid" holds by construction.
+   A type with a *meaningful* inert state may instead start valid-but-inert and expose a
+   `bring_up(): Result<…>`. (No new feature — this is M31a static methods + M28e `Result` + `Owned` + RAII;
+   see `tests/fallible_factory`.)
+
 4. **One way to do a thing. Favor simplicity.** Unlike C++'s many syntaxes for one concept, cstar
    prefers a single, obvious construct. Resist redundant syntax. (Already: named args only — no
    positional; one form per construct.)

@@ -387,6 +387,28 @@ A `~Type()` destructor runs deterministically at scope exit, in reverse construc
 path (block end, early `return`, `break`/`continue`). Destructible fields are destroyed in reverse
 declaration order. No GC; allocation/deallocation is predictable.
 
+## Fallible construction (no exceptions) ✅
+
+cstar has no exceptions, so **constructors are infallible** — trivial, in-place field setup that cannot
+fail. Fallible resource acquisition is a **`static fn` factory returning `Result<T, E>`**: the fallible
+work lives in the factory, and on failure it returns `Err` *before* the resource exists, so no
+half-constructed object can escape and `match` forces the caller to handle the error.
+```cstar
+type resource Buffer {
+    int32 size;
+    private Buffer(int32 size) { this.size = size; }              // trivial, infallible, private
+    public static fn Result<Owned<Buffer>, int32> create(int32 size) {
+        if (size <= 0) { return Result::Err(error: -1); }         // fail before the resource exists
+        Owned<Buffer> b = new Buffer(size: size);
+        return Result::Ok(value: give b);
+    }
+    ~Buffer() { /* … */ }
+}
+```
+A type with a *meaningful* inert state may instead start valid-but-inert and expose a
+`bring_up(): Result<…>` method. (This is the Rust idiom; it reuses static methods + `Result` + `Owned` +
+RAII — no dedicated feature. See `tests/fallible_factory`.)
+
 ## Inheritance & virtual dispatch ✅ (M6, M25b, M26h)
 
 Extensible hierarchies are a **`resource`** concern (an embedded vtable breaks a `value`'s free copy).
@@ -499,8 +521,10 @@ Only two operators with the *same* symbol *and* operand type are a duplicate (a 
 any position including a raw `if`/`while` condition: a nested rvalue is wrapped in a C99 compound-literal
 array so the method form's by-pointer `this` is legal without a statement slot (and it re-evaluates
 correctly each loop pass). Compound assignment lowers to the operator — `pos += vel` ≡ `pos = pos + vel`.
-An **inline constructor** is a valid operand in a statement position — `v + Vec3(x: 1, y: 0, z: 0)` needs
-no separate local (it materializes into a temp); inside a raw condition it must still be bound to a local.
+An **inline constructor** is a valid operand — `v + Vec3(x: 1, y: 0, z: 0)` needs no separate local. It
+works in an `if`/`while`/`for` condition too (the condition is wrapped / uses a loop-and-a-half so the
+temp materializes and re-evaluates each pass); a `do`/`while` condition is the one place it must still be
+bound to a local.
 
 `==` is **explicit** — a `value` without `operator==` cannot be compared (there is no auto-generated
 structural equality; an opt-in `Equatable` derive is future work). Index `operator[]` and the `true`/`false`

@@ -1,0 +1,12 @@
+// M31 — a value-producing `match` is legal in a `while` condition (a direct match condition is boolean).
+// The subject is re-read each iteration via the loop-and-a-half; a compute-once bug would loop forever.
+enum Step { More(int32 left), Done }
+fn int32 main() {
+    Step s = Step::More(left: 5);
+    int32 count = 0;
+    while (match (s) { case More(left): true; case Done: false; }) {
+        count = count + 1;
+        if (count < 5) { s = Step::More(left: 5 - count); } else { s = Step::Done; }
+    }
+    return count;   // 5
+}

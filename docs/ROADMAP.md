@@ -19,7 +19,7 @@ milestones are also summarized in `CLAUDE.md` / `GOALS.md`.
 ## Road to 1.0 — language complete
 
 Recommended order: **M26e → M26f → M26g → M26h → M27 → M28 → M29 (expr-position lowering) → M30 (struct-ordering + generics completeness) → M31 (operators) → Step 7 → tag.**
-**Status (v0.1.68):** M27 (generics) ✅, M28 (tagged unions) ✅, M29 (expression-position lowering) ✅, M30 (struct-ordering + generics completeness) ✅, **M31 (operator overloading + full static methods) ✅ COMPLETE** (M31a static `Type::method()`; M31b the full operator set, arity-picked method/free/unary forms; M31c operators-in-contracts → generic math, validated by a Vec3/Mat3 `math_lib`). **The language feature set is complete — next is Step 7 (doc/SPEC reconciliation + repo-wide naming pass), then tag 1.0.** Rationale: close the
+**Status (v0.1.73):** M27 (generics) ✅, M28 (tagged unions) ✅, M29 (expression-position lowering) ✅, M30 (struct-ordering + generics completeness) ✅, **M31 (operator overloading + full static methods) ✅ COMPLETE** (M31a static `Type::method()`; M31b the full operator set, arity-picked method/free/unary forms + type-based dispatch so `mat*vec`+`mat*mat` coexist; M31c operators-in-contracts → generic math, validated by a Vec3/Mat3 `math_lib`). Post-M31 usability: operators/`match`/inline-ctors are legal in `if`/`while`/`for` conditions (**hoistable conditions, v0.1.73**), and the **fallible-construction idiom** (infallible ctors + `static fn` factory returning `Result<T,E>`) is documented (`tests/fallible_factory`). **The language feature set is complete — next is Step 7 (doc/SPEC reconciliation + repo-wide naming pass), then tag 1.0.** Rationale: close the
 borrow-safety arc (M26e, done), then *complete the value model* (M26f — resource move semantics,
 deep-copy, copy contract), then enable owned-interface storage (M26g — the engine needs it), then the
 **type-model reframe** (M26h — the `value`/`resource`/`contract` vocabulary + access-control rules,
@@ -435,6 +435,17 @@ Policy: **no known limitation stays untracked** — each is either fixed, tied t
 declared a deliberate non-goal. The current inventory (swept from SPEC/KEYWORDS/emitter, M26i):
 
 - **`list[i].m()` / inline ctor in arg** — ✅ **fixed (M26i).**
+- **Value-producing constructs in a raw condition** (inline ctor / `match` in `if`/`while`/`for`) — ✅
+  **fixed (v0.1.73):** conditions are hoistable (loop-and-a-half for loops so the temp re-evaluates each
+  pass). `do`/`while` stays a clean "bind to a local" error (its `continue` fights the rewrite) — a
+  deliberate, narrow exclusion.
+- **A free-function call as a `match` subject** (`match(poll(x))`) — **parse error today** (a *method*
+  call `match(x.f())` or a variable/field works). A pre-existing grammar limitation surfaced writing the
+  condition fixtures; **tracked to Step 7** (small grammar fix — the match-subject production is narrower
+  than a general primary expression). Workaround: bind the call result to a local, or use a method call.
+- **`match` on a plain (payload-less) enum** — rejected ("requires a tagged-union subject"); `match` is
+  for tagged unions. Use `if x == Enum::Variant` for a plain enum. **Deliberate for now** — revisit in
+  Step 7 if a `match` over a plain enum's cases proves worth the sugar.
 - **`export` keyword** — reserved, hard-errors today; **tracked to 2.0** (the cstar→host boundary —
   WASM module exports for the browser engine, and the scripting host interface). The engine's wasm
   build may pull a minimal `export` earlier. *(Was previously in KEYWORDS.md only, not the roadmap.)*
