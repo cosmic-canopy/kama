@@ -1,38 +1,37 @@
-// dispatch — dynamic-dispatch cost: virtual calls through a base reference.
-// M25b: polymorphism is opt-in (`virtual class`) with a `protected virtual` hook behind
-// a public `area()`. The trivial wrapper inlines under -O2, so the measured cost is the
-// vtable call itself (`compute`), unchanged from the pre-M25 version.
-type virtual resource Shape
-{
-    public fn int64 area() { return this.compute(); }
-    protected virtual fn int64 compute() { return 0; }
-}
-type final resource Circle extends Shape
+// dispatch — dynamic-dispatch cost. The shapes live in a heap-owned, heterogeneous
+// `List<Owned<Shape>>` built at runtime, so no compiler can prove the concrete type at a
+// call site: every `area()` is a genuine indirect (contract-vtable) call. That is the honest
+// dynamic-dispatch measurement — a monomorphic call site (two stack locals) instead lets an
+// optimizer devirtualize the call away, which is what the earlier variant inadvertently measured.
+type contract Shape { fn int64 area(); }
+type resource Circle implements Shape
 {
     int64 r;
     public Circle(int64 r) { this.r = r; }
-    protected override fn int64 compute() { return r * r; }
+    public fn int64 area() { return this.r * this.r; }
 }
-type final resource Square extends Shape
+type resource Square implements Shape
 {
     int64 s;
     public Square(int64 s) { this.s = s; }
-    protected override fn int64 compute() { return s * s; }
-}
-fn int64 measure(ref Shape sh)
-{
-    return sh.area();
+    public fn int64 area() { return this.s * this.s; }
 }
 fn int main()
 {
-    Circle c = Circle(r: 3);
-    Square q = Square(s: 4);
+    List<Owned<Shape>> shapes = new List<Owned<Shape>>();
+    for (int32 j = 0; j < 512; j++)
+    {
+        if ((j % 2) == 0) { Owned<Shape> sh = new Circle(r: 3); shapes.add(item: give sh); }
+        else              { Owned<Shape> sh = new Square(s: 4); shapes.add(item: give sh); }
+    }
     uint64 sum = 0;
     for (uint64 i = 0; i < 8000000; i++)
     {
-        if ((i % 2) == 0) { sum += cast<uint64>(measure(sh: ref c)); }
-        else { sum += cast<uint64>(measure(sh: ref q)); }
+        uint64 r = i % 512;
+        int32 idx = cast<int32>(r);
+        sum += cast<uint64>(shapes[idx].area());
     }
     uint64 m = sum % 256;
     return cast<int>(m);
+    // shapes drops here -> each Owned<Shape> frees its object (deterministic, no GC)
 }

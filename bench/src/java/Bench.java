@@ -26,7 +26,7 @@ public class Bench {
     if(w.equals("fib")){ for(long i=0;i<32;i++) sum+=fib(i); }
     else if(w.equals("pi")){ double pi=0,sign=1; for(long i=0;i<20000000L;i++){ long d=2*i+1; pi+=sign/(double)d; sign=-sign; } sum=(long)(pi*4000000000.0); }
     else if(w.equals("collatz")){ for(long i=1;i<700000;i++) sum+=clen(i); }
-    else if(w.equals("dispatch")){ Shape c=new Circle(3), q=new Square(4); for(long i=0;i<8000000;i++){ if(i%2==0) sum+=measure(c); else sum+=measure(q); } }
+    else if(w.equals("dispatch")){ final int N=512; Shape[] shapes=new Shape[N]; for(int j=0;j<N;j++) shapes[j]=(j%2==0)?new Circle(3):new Square(4); for(long i=0;i<8000000;i++) sum+=shapes[(int)(i%N)].area(); }
     else if(w.equals("alloc")){ for(int iter=0;iter<2000;iter++){ ArrayList<Integer> xs=new ArrayList<>(); for(int j=1;j<=1000;j++) xs.add(j); long s=0; for(int v: xs) s+=v; sum+=s; } }
     else if(w.equals("fnptr")){ LongUnaryOperator a=Bench::add1, b=Bench::mul3; for(long i=0;i<8000000;i++){ if(i%2==0) sum+=apply(a,i); else sum+=apply(b,i); } }
     System.exit((int)(sum%256));

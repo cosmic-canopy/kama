@@ -60,10 +60,28 @@ substrate the engine needs (asset I/O, scene serialization, networking).
   **WebSockets** (reliable), via FFI (the browser has no raw sockets — a real wasm nuance).
 - **Embedded / MCU target** — globals/statics for ISR flags, `volatile` *emit*, ISR attributes,
   no-heap mode, avr/arm toolchains.
-- **Native dispatch devirtualization** — on the `dispatch` bench cstar matches C on a real
-  vtable indirect call, but Rust is ~5× faster because it devirtualizes/inlines the monomorphic
-  case. A devirtualization / speculative-inlining pass, or `final`-method static-call lowering,
-  would close the one real native gap.
+- **Native dispatch devirtualization** *(optimization, not a gap)* — on a *monomorphic* call site
+  (a receiver of statically-known concrete type) Rust devirtualizes/inlines the call while clang
+  does **not** devirtualize the emitted C vtable — so hand-written C is equally behind Rust there.
+  It is a clang-vs-rustc optimizer gap, not a cstar defect. (On the corrected `dispatch` bench Rust
+  converges to C and the ~5× vanishes; **cstar ties the C/C++/Rust cluster** and beats Go's
+  interface dispatch — after fixing a redundant per-call re-read of the indexed element in the
+  contract-dispatch emitter, which alone had made cstar ~2× before.) cstar can still win further
+  where it *sees* the concrete type, by emitting a **direct call** instead of a vtable call — a
+  laddered pass:
+  - **Tier 1 — sound static devirtualization (no inlining).** Direct-call when the target is
+    provable: a **concrete-value receiver**, a **`final` class/method**, or a **method with no
+    overrides program-wide** (a "slot → overridden?" map built after `buildVtables()`). cstar's
+    whole-program view makes the last one free, where C++ needs LTO + `-fwhole-program-vtables`;
+    it runs before C emission, sidestepping the no-LTO/multi-TU limit. (`isFinalClass` /
+    `MethodInfo::isFinal`, and the receiver's concrete type via `exprClass()`, already exist.)
+  - **Tier 2 — intraprocedural type-flow.** Devirtualize a base-typed local with a proven concrete
+    assignment. Sound, no inlining.
+  - **Tier 3 — inlining-enabled / guarded devirtualization.** Either a cstar-level inliner (hard
+    part: integrating callee scope-cleanup / drop order / move-state with the existing
+    `emitScopeCleanup`/`emitUnwindAll`) then re-run Tier 1, or guarded/speculative inline caches
+    (needing a type heuristic / PGO). A separate, larger project — pursue only if a real hot path
+    (e.g. engine ECS dispatch) proves Tier 1 insufficient. Land Tier 1 first.
 
 ## Concurrency — shared-nothing by construction (design direction)
 
@@ -191,11 +209,19 @@ assets, serialization for scenes). See [ENGINE_READINESS.md](ENGINE_READINESS.md
 
 ## Performance (from the benchmark suite — [benchmarks/RESULTS.md](benchmarks/RESULTS.md))
 
-cstar is at **C/C++ parity** on native compute and wins decisively on footprint (~2 MB RSS,
-~66 KB binary) and the no-GC `alloc` workload. `cstar→wasm` (optimized) **beats hand-written JS
-on fib/pi/collatz/fnptr (up to ~4.5×)** and ties on dispatch/alloc.
+cstar is at **C/C++ parity** on native compute (fib/pi/collatz/fnptr/alloc, and now dynamic
+dispatch) and wins decisively on footprint (~2 MB RSS, ~66 KB binary) and the no-GC `alloc`
+workload. `cstar→wasm` (optimized) **beats hand-written JS on fib/pi/collatz/fnptr (up to ~4.5×)**
+and is near-parity on `alloc`/`dispatch`.
 
-- **Native dispatch devirtualization** (above, under 1.x) is the one real native gap.
+- **Native dispatch — the ~5× "gap" was an artifact.** The old workload used monomorphic call
+  sites that let rustc devirtualize the call to plain arithmetic while clang did not (hand-written C
+  was equally ~5× behind). The corrected `dispatch` measures *true* polymorphic dispatch over a
+  heap-owned collection: **Rust converges to C** (artifact gone), and **cstar ties the C/C++/Rust
+  cluster** (~6.2 ms) and beats Go's interface dispatch. Reaching that parity took one emitter fix —
+  the contract-dispatch path was re-reading the indexed element twice per call, which alone had made
+  cstar ~2×; hoisting it to a single temp halved the workload. Further devirtualization (1.x, above)
+  is optional upside for code with statically-known receivers, not a gap-closer here.
 - **WASM tiering.** Measure at the optimizing tier (`node --no-liftoff` — what a real long-running
   app gets); the bench forces TurboFan for the wasm track so the numbers reflect steady-state, not
   V8's short-lived baseline (Liftoff) compiler.

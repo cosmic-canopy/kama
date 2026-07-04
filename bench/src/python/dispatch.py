@@ -1,4 +1,5 @@
 import sys
+# dispatch — dynamic dispatch over a heterogeneous list of shapes built at runtime.
 class Shape:
     def area(self): return 0
 class Circle(Shape):
@@ -7,10 +8,9 @@ class Circle(Shape):
 class Square(Shape):
     def __init__(self,s): self.s=s
     def area(self): return self.s*self.s
-def measure(sh): return sh.area()
-c=Circle(3); q=Square(4)
+N=512
+shapes=[Circle(3) if j%2==0 else Square(4) for j in range(N)]
 total=0
 for i in range(8000000):
-    if i%2==0: total+=measure(c)
-    else: total+=measure(q)
+    total+=shapes[i%N].area()
 sys.exit(total % 256)

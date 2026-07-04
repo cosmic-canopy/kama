@@ -14,7 +14,7 @@ class P {
     if(w=="fib"){ for(ulong i=0;i<32;i++) sum+=Fib(i); }
     else if(w=="pi"){ double pi=0,sign=1; for(ulong i=0;i<20000000;i++){ ulong d=2*i+1; pi+=sign/(double)d; sign=-sign; } double scaled=pi*4000000000.0; sum=(ulong)scaled; }
     else if(w=="collatz"){ for(ulong i=1;i<700000;i++) sum+=Clen(i); }
-    else if(w=="dispatch"){ Shape c=new Circle(3), q=new Square(4); for(ulong i=0;i<8000000;i++){ if(i%2==0) sum+=(ulong)Measure(c); else sum+=(ulong)Measure(q); } }
+    else if(w=="dispatch"){ const int N=512; Shape[] shapes=new Shape[N]; for(int j=0;j<N;j++) shapes[j]=(j%2==0)?(Shape)new Circle(3):new Square(4); for(ulong i=0;i<8000000;i++) sum+=(ulong)shapes[(int)(i%(ulong)N)].Area(); }
     else if(w=="alloc"){ for(int iter=0;iter<2000;iter++){ var xs=new System.Collections.Generic.List<int>(); for(int j=1;j<=1000;j++) xs.Add(j); ulong s=0; foreach(var v in xs) s+=(ulong)v; sum+=s; } }
     else if(w=="fnptr"){ System.Func<long,long> a=Add1, b=Mul3; for(ulong i=0;i<8000000;i++){ if(i%2==0) sum+=(ulong)Apply(a,(long)i); else sum+=(ulong)Apply(b,(long)i); } }
     return (int)(sum%256);

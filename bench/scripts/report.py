@@ -157,8 +157,10 @@ variable (σ up to 9.8 ms), while JS always got its optimizing JIT. `--no-liftof
 **optimized, stable** wasm (σ ~0.3 ms) — what a real long-running app gets (its hot loops tier up on their
 own) and a fair compare vs V8's auto-JIT'd JS. Strict IEEE throughout (no `-ffast-math`).
 
-The compute workloads (fib/pi/collatz/dispatch) are tuned so the slow interpreters finish quickly; the
-fast compiled languages run in a few ms, so small absolute differences between them are noise. The
+The compute workloads (fib/pi/collatz) are tuned so the slow interpreters finish quickly; the fast
+compiled languages run in a few ms, so small absolute differences between them are noise — **except
+`dispatch`**, which measures *true* dynamic dispatch (see Workloads): the AOT cluster
+(cstar/C/C++/Rust) converges there, while **Go**'s interface dispatch trails ~2×. The
 **`alloc`** workload (added once `List<T>` landed in M9) is the one to watch for the no-GC story: it
 churns ~2M growable-list appends and 2000 collection lifetimes, so it contrasts cstar's deterministic
 **RAII** free against the **garbage collectors** (Go, C#, Java, Lua, Python, JS) and against the RAII
@@ -176,7 +178,11 @@ diverged:
 - **fib** — naive recursive Fibonacci summed over 0..31 (function-call / stack-frame cost).
 - **pi** — Leibniz series, 2×10⁷ terms, float64 (FP throughput; cleanest cross-language compare).
 - **collatz** — sum of Collatz stopping times for 1..699 999 (integer ALU + unpredictable branches).
-- **dispatch** — 8×10⁶ virtual-method calls through a base reference (dynamic-dispatch cost).
+- **dispatch** — 8×10⁶ virtual calls over a **heterogeneous, heap-owned collection** of mixed
+  concrete types built at runtime, so the concrete type is *not* knowable at the call site and the
+  call **cannot be devirtualized** — a true dynamic-dispatch measurement. Each language uses its
+  idiomatic owning collection (cstar `List<Owned<Shape>>`, C++ `vector<unique_ptr>`, Rust
+  `Vec<Box<dyn>>`, C array of heap `Shape*`, Go `[]interface`, C#/Java `Shape[]`).
 - **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
   (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — cstar `List<int32>`,
   C++ `vector`, Rust `Vec`, Go slice, C# `List`, Java `ArrayList`, Lua table, Python/JS array, C manual realloc).
@@ -229,6 +235,13 @@ _cstar→wasm is transpile-to-C **plus** `emcc -O3`; TS is `tsc`. Hand-written J
 {compile_table(["cstar-wasm", "ts"])}
 
 ## Caveats
+- **`dispatch` measures *true* dynamic dispatch.** An earlier variant called two stack locals of
+  known `final` type, which let optimizers (notably rustc) devirtualize the call to plain arithmetic
+  — comparing Rust's *devirtualized* code against everyone else's real indirect calls (a ~5×
+  artifact). The current variant dispatches over a heap-owned heterogeneous collection the optimizer
+  cannot resolve, so every AOT language performs a genuine vtable call: **Rust converges to C** (the
+  artifact is gone) and **cstar ties the C/C++/Rust cluster**. Only **Go**'s interface dispatch
+  trails (~2×).
 - **arm64 results** — not comparable to x86 runs (arch recorded above).
 - **JIT warmup** (C#, Java, node): mitigated by hyperfine warmups; tiny workloads still partly reflect
   startup. Java (HotSpot) has the heaviest fixed startup here, so startup-dominated workloads (e.g. `fib`)
