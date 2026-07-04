@@ -464,7 +464,8 @@ private:
     // (I){ (void*)&<obj>, &<C>__as_I } — wrap a concrete lvalue as an interface value
     std::string fatPointer(const std::string& iface, const std::string& concrete, const std::string& addrExpr);
     std::string emitInterfaceDispatch(const std::string& fatExpr, const std::string& iface,
-                                      const std::string& method, SharedArgumentList args, int srcLine);
+                                      const std::string& method, SharedArgumentList args, int srcLine,
+                                      const std::string& recvCType = "");
 
     // Declarations / top level
     bool paramByRef(FunctionParameterNode* p);

@@ -3208,7 +3208,7 @@ std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string
         return emitDispatch(cls, "&(" + recvExpr + ")", method, args, srcLine);
     // an owned INTERFACE handle dispatches polymorphically through its own {obj, vtbl}.
     if (isInterface(_classes[cls].collElemClass) && smartKind(cls) != CollKind::Weak)
-        return emitInterfaceDispatch(recvExpr, _classes[cls].collElemClass, method, args, srcLine);
+        return emitInterfaceDispatch(recvExpr, _classes[cls].collElemClass, method, args, srcLine, cls);
     // Otherwise auto-deref to the pointee T (Owned/Shared expose a T* ptr).
     if (smartKind(cls) != CollKind::Weak)
         return emitDispatch(_classes[cls].collElemClass, "(" + recvExpr + ").ptr", method, args, srcLine);
@@ -5001,16 +5001,38 @@ std::string CEmitter::fatPointer(const std::string& iface, const std::string& co
     return "(" + iface + "){ (void*)&(" + lvalue + "), &" + concrete + "__as_" + iface + " }";
 }
 
-// s.m(args) where s is an interface value -> (s).vtbl->m((s).obj, <reordered args>)
+// True for a bare C identifier (a local/param) — cheap and side-effect-free to read more than
+// once, so it needs no hoisting. Anything with a call/index/member/deref is not "simple".
+static bool isSimpleIdent(const std::string& s)
+{
+    if (s.empty()) return false;
+    for (char c : s) if (!(isalnum((unsigned char)c) || c == '_')) return false;
+    return true;
+}
+
+// s.m(args) where s is an interface value -> (s).vtbl->m((s).obj, <reordered args>).
+// A fat-pointer dispatch reads the receiver twice (vtbl + obj), so a non-trivial receiver (a
+// bounds-checked index, a call) would run twice — hoist it into one temp (perf + side-effect
+// safety). Needs a hoistable statement context; a bare identifier is free to re-read as-is.
 std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const std::string& iface,
-                                            const std::string& method, SharedArgumentList args, int srcLine)
+                                            const std::string& method, SharedArgumentList args, int srcLine,
+                                            const std::string& recvCType)
 {
     auto it = _interfaces.find(iface);
     if (it == _interfaces.end()) { unsupported("dispatch on unknown interface", srcLine); return "0"; }
+    std::string recv = fatExpr;
+    if (_hoistOK && !isSimpleIdent(fatExpr)) {
+        // The receiver's own C type — the plain interface `iface`, or a smart-ptr-of-interface
+        // (`Owned/Shared<I>`) when called through a handle; all expose `.obj`/`.vtbl`.
+        std::string ty = recvCType.empty() ? iface : recvCType;
+        std::string t = "__ifacerecv" + std::to_string(_tempCounter++);
+        _hoisted.push_back(ty + " " + t + " = " + fatExpr + ";");
+        recv = t;
+    }
     for (auto& m : it->second.methods) {
         if (m.name != method) continue;
         std::vector<ParamSig> params = paramSigsOf(m.params);
-        return emitReorderedCall("(" + fatExpr + ").vtbl->" + method, "(" + fatExpr + ").obj",
+        return emitReorderedCall("(" + recv + ").vtbl->" + method, "(" + recv + ").obj",
                                  params, args, srcLine);
     }
     unsupported("unknown interface method", srcLine);
