@@ -327,20 +327,20 @@ static inline bool userOperandType(const std::string& cls, std::map<std::string,
 // is first materialized into a hoisted temp — ISO C, no statement-expressions — so `&` is legal and
 // chained `a + b + c` works. In a non-hoistable slot (a raw `if`/`while` condition) a chained operand
 // is a clean error rather than bad C.
+// M31b — produce the `self` pointer for a method-form/unary operator. A simple lvalue (a local, a
+// field/member access, `this`) is addressed directly. An rvalue (a nested operator result, a call —
+// `a + b + c`, `-(a + b)`) can't be `&`'d, so it is wrapped in a C99 compound-literal array: `(V[]){e}`
+// decays to `V*` and the temporary lives to the end of the enclosing block. This is ISO C11 (the same
+// construct M28a uses for variants), needs no statement slot, and so works in ANY position — including
+// a raw `if`/`while` condition — with no hoisting.
 std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, int line)
 {
     ASTNode* n = e.get();
     bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n)
                || dynamic_cast<ThisAccessNode*>(n);
-    std::string em = emitExpression(e);   // may itself hoist inner temps (declared first — correct order)
-    if (lvalue) return "&(" + em + ")";
-    if (!_hoistOK || cls.empty()) {
-        unsupported("a temporary/chained operator operand isn't supported here — bind it to a local first", line);
-        return "&(" + em + ")";
-    }
-    std::string t = "__cstar_op" + std::to_string(_tempCounter++);
-    _hoisted.push_back(cls + " " + t + " = (" + em + ");");
-    return "&" + t;
+    std::string em = emitExpression(e);
+    if (lvalue || cls.empty()) return "&(" + em + ")";
+    return "(" + cls + "[]){ " + em + " }";   // rvalue → addressable compound-literal temporary
 }
 
 // M31b — a binary expression with a user-typed operand dispatches to an operator overload; a purely

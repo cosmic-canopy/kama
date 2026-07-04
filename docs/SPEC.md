@@ -489,11 +489,10 @@ The free form handles the mixed-type case a method can't — a primitive on the 
 prefers the method form on the left operand's type, else a free form on either operand's type. A binary or
 unary expression whose operands are all primitives keeps the built-in C operator (zero overhead).
 
-**Chaining & compound assignment.** Operators chain (`a + b + c`, `-(a + b)`, `(a + b) * s`): a nested
-rvalue is materialized into a temp so the method form's by-pointer `this` is legal. Compound assignment
-lowers to the operator — `pos += vel` ≡ `pos = pos + vel`. (A chained operand inside a raw `if`/`while`
-*condition* has no statement slot to hoist into, so bind it to a local first — the same rule as an inline
-`match`/constructor in a condition.)
+**Chaining & compound assignment.** Operators chain freely (`a + b + c`, `-(a + b)`, `(a + b) * s`), in
+any position including a raw `if`/`while` condition: a nested rvalue is wrapped in a C99 compound-literal
+array so the method form's by-pointer `this` is legal without a statement slot (and it re-evaluates
+correctly each loop pass). Compound assignment lowers to the operator — `pos += vel` ≡ `pos = pos + vel`.
 
 `==` is **explicit** — a `value` without `operator==` cannot be compared (there is no auto-generated
 structural equality; an opt-in `Equatable` derive is future work). Index `operator[]` and the `true`/`false`

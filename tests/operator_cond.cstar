@@ -1,0 +1,20 @@
+// M31b — operators in a raw condition. A method-form operator's rvalue `self` (a nested result like
+// `a + b`) is wrapped in a C99 compound-literal array so `&` is legal with no statement slot — it works
+// in an `if`/`while` condition and is correctly re-evaluated each pass (no once-only hoisting bug).
+type value V {
+    public int32 x;
+    public V(int32 x) { this.x = x; }
+    public V operator+(V rhs) { return V(x: this.x + rhs.x); }
+    public V operator-() { return V(x: -this.x); }
+    public bool operator==(V rhs) { return this.x == rhs.x; }
+}
+fn int32 main() {
+    V a = V(x: 5); V b = V(x: 3); V c = V(x: 8);
+    V zero = V(x: 0);
+    int32 r = 0;
+    if (a + b == c) { r = r + 1; }                 // nested arith operand in an if condition
+    while (a + b == c) { r = r + 10; c = zero; }   // and a while condition (re-evaluated each pass)
+    V chain = a + b + c + a;                        // deep chain
+    if (-(a + b) == zero) { r = r + 100; }          // unary of nested, compared, in a condition (false)
+    return r + chain.x;                             // 11 + 13 = 24
+}

@@ -387,14 +387,14 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      `++`/`--` emission is intercepted **only** when an operand's `exprClass` is a user type (primitives
      keep the raw-C path — the whole numeric suite is untouched); dispatch is **positional**
      (`Type__op_add(&lhs, rhs)`, bypassing named-arg reordering). `==` is **explicit** (no auto structural
-     equality — a noted follow-up). **Chaining + compound assignment (v0.1.69):** a nested rvalue operand
-     (`a + b + c`, `-(a + b)`) is materialized into a hoisted temp so the method form's by-pointer `this`
-     is legal (`exprClass` resolves a nested operator result to the operator's return type); compound
-     assignment `pos += vel` lowers to `pos = pos + vel`. (A chained operand in a raw `if`/`while`
-     condition is a clean error — bind it to a local, like an inline `match`/ctor in a condition.)
-     Fixtures `operator_all` (every operator on one `value`), `operator_free_static` (scalar-on-the-left),
-     `operator_chain` (chaining + compound assignment); xfail `operator_missing`, `operator_arity`,
-     `operator_eq_missing`.
+     equality — a noted follow-up). **Chaining + compound assignment (v0.1.69–0.1.70):** `exprClass`
+     resolves a nested operator result to the operator's return type, and an rvalue `self` is wrapped in a
+     **C99 compound-literal array** (`(V[]){e}` → `V*`) so the method form's by-pointer `this` is legal in
+     **any** position — including a raw `if`/`while` condition (re-evaluated correctly each pass), with no
+     hoisting. `a + b + c`, `-(a + b)`, `if (a + b == c)` all work. Compound assignment `pos += vel` lowers
+     to `pos = pos + vel`. Fixtures `operator_all` (every operator on one `value`), `operator_free_static`
+     (scalar-on-the-left), `operator_chain` (chaining + compound), `operator_cond` (operators in
+     conditions); xfail `operator_missing`, `operator_arity`, `operator_eq_missing`.
    - **M31c — operators-in-interfaces / generic math ✅ (v0.1.68) — M31 COMPLETE.** An operator in a
      `type contract` (`IArithmetic { This operator+(This rhs); }`) is a **bound** for generic math. The
      linchpin was one branch in `collectInterfaces`: register a contract's operator under the SAME
