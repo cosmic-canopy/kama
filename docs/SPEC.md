@@ -459,6 +459,42 @@ fn Owned<IShape> make(int64 s) { Owned<IShape> o = new Square(s: s); return give
 ```
 A `List<Shared<IShape>>` (the engine's scene) works — polymorphic elements stored and dropped in RAII order.
 
+## Static methods & operator overloading ✅ (M31)
+
+**Static methods** (M31a) — a `static fn` has **no implicit `self`** and is called at the type level with
+named args:
+```cstar
+type value Vec2 {
+    public float64 x;  public float64 y;
+    public Vec2(float64 x, float64 y) { this.x = x; this.y = y; }
+    public static fn float64 dot(Vec2 left, Vec2 right) { return left.x*right.x + left.y*right.y; }
+}
+float64 d = Vec2::dot(left: a, right: b);
+```
+A `static` method has no vtable slot (so it can't be `virtual`/`override`/`abstract`) and may not touch
+`this` or a bare field.
+
+**Operator overloading** (M31b) — the sanctioned exception to named-args-only (a binary operator has
+exactly two operands, positional by nature). The full overloadable set is supported: arithmetic
+`+ - * / %`, comparison `== != < > <= >=`, bitwise `& | ^ << >>`, unary `- ! ~`, and `++`/`--`. **Arity
+picks the form:**
+
+| params | form | example | `a op b` lowers to |
+|--------|------|---------|--------------------|
+| 0 | unary on `this` | `Vec2 operator-()` | `Vec2__op_neg(&a)` |
+| 1 | binary **method** (`this` is the left operand) | `Vec2 operator+(Vec2 rhs)` | `Vec2__op_add(&a, b)` |
+| 2 | binary **free/static** (both explicit) | `Vec2 operator*(float64 s, Vec2 v)` | `Vec2__op_mul(a, b)` |
+
+The free form handles the mixed-type case a method can't — a primitive on the **left** (`s * v`). Dispatch
+prefers the method form on the left operand's type, else a free form on either operand's type. A binary or
+unary expression whose operands are all primitives keeps the built-in C operator (zero overhead).
+
+`==` is **explicit** — a `value` without `operator==` cannot be compared (there is no auto-generated
+structural equality; an opt-in `Equatable` derive is future work). Index `operator[]` and the `true`/`false`
+conversion operators are out of scope.
+
+Used in a `contract`, an operator becomes a **bound** for generic math (see below).
+
 ## Generics ✅ (M27)
 
 User-defined generics, **monomorphized** (one specialized copy per concrete type — elements inline, no

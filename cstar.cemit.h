@@ -75,6 +75,11 @@ struct MethodInfo {
     Visibility                   visibility = Visibility::Private;   // M25
     bool                         isFinal = false;     // `final fn` — seals a virtual slot (M25)
     bool                         isStatic = false;    // `static fn` — no implicit `self` (M31a); called `Type::m(...)`
+    // M31b — operator overloads register as methods under a synthetic name (`op_add`, `op_neg`, …).
+    // They are NOT ClassMethodDeclarationNode, so `node` stays null: emit from `opDecl` instead.
+    bool                         isOperator = false;
+    int                          arity = 0;           // 0 = unary-on-this, 1 = binary method (`this`+rhs), 2 = binary free
+    ClassOperatorDeclarationNode* opDecl = nullptr;   // the operator decl (body/params) when isOperator
 };
 
 // A built-in generic collection / smart-pointer kind (M9/M10). Backed by a C
@@ -551,6 +556,14 @@ private:
     std::string mangledFunctionName(FunctionDeclarationNode* fn, bool& isEntryPoint);
     std::string binaryOperator(int token);
     std::string assignmentOperator(int token);
+    // M31b — operator overloading. `operatorMangle` maps a token + arity-class (0=unary, ≥1=binary)
+    // to a stable C-safe method name (`op_add`, `op_neg`, …), "" if the op has no such form.
+    // `operatorParamList` synthesizes a ParameterList from an operator declarator's param1/param2 so
+    // all normal method machinery (paramListC, paramSigsOf, emitMethodOrCtorBody) is reused verbatim.
+    std::string operatorMangle(int opToken, int arity);
+    SharedParameterList operatorParamList(ClassOperatorDeclaratorNode* d);
+    std::string emitBinaryOperator(BinaryExpressionNode* v);   // user-typed operand → operator dispatch, else raw C
+    std::string emitUnaryUserOp(int opToken, SharedExpression operand, int line);   // unary/incr/decr on a user type
 
     void unsupported(const char* what, int srcLine);
 

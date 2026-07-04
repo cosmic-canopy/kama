@@ -1,0 +1,7 @@
+// M31b — arity picks the form: 0 params = unary. `*` has no unary form, so `operator*()` is rejected.
+type value Vec2 {
+    public int32 x;
+    public Vec2(int32 x) { this.x = x; }
+    public Vec2 operator*() { return Vec2(x: this.x); }   // `*` has no unary form
+}
+fn int32 main() { return 0; }

@@ -269,6 +269,111 @@ std::string CEmitter::assignmentOperator(int token)
     }
 }
 
+// M31b — map an overloadable operator token + arity-class to a stable C-safe method name.
+// arity 0 => a UNARY operator on `this`; arity >= 1 => a BINARY operator (method or free form,
+// same name). Returns "" when the operator has no form for that arity (e.g. unary `*`, binary `!`).
+std::string CEmitter::operatorMangle(int opToken, int arity)
+{
+    bool unary = (arity == 0);
+    switch (opToken) {
+        case PLUS:        return unary ? "op_pos"  : "op_add";
+        case MINUS:       return unary ? "op_neg"  : "op_sub";
+        case STAR:        return unary ? ""        : "op_mul";
+        case SLASH:       return unary ? ""        : "op_div";
+        case PERCENT:     return unary ? ""        : "op_mod";
+        case EQEQ:        return unary ? ""        : "op_eq";
+        case NOTEQ:       return unary ? ""        : "op_ne";
+        case LT:          return unary ? ""        : "op_lt";
+        case GT:          return unary ? ""        : "op_gt";
+        case LEQ:         return unary ? ""        : "op_le";
+        case GEQ:         return unary ? ""        : "op_ge";
+        case AMP:         return unary ? ""        : "op_band";
+        case BAR:         return unary ? ""        : "op_bor";
+        case CARET:       return unary ? ""        : "op_bxor";
+        case LTLT:        return unary ? ""        : "op_shl";
+        case GTGT:        return unary ? ""        : "op_shr";
+        case EXCLAMATION: return unary ? "op_not"  : "";
+        case TILDE:       return unary ? "op_bnot" : "";
+        case PLUSPLUS:    return unary ? "op_inc"  : "";   // pre/post both map here (mutating in place)
+        case MINUSMINUS:  return unary ? "op_dec"  : "";
+        default:          return "";
+    }
+}
+
+// M31b — synthesize a ParameterList from an operator declarator's param1/param2 (0/1/2 params) so all
+// normal method machinery (paramListC, paramSigsOf, emitMethodOrCtorBody's binding) is reused verbatim.
+SharedParameterList CEmitter::operatorParamList(ClassOperatorDeclaratorNode* d)
+{
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<operator>"));
+    auto list = std::make_shared<ParameterList>();
+    if (d->param1Type)
+        list->push_back(std::make_shared<FunctionParameterNode>(*_synthCtx, SharedModifier(), d->param1Type, d->param1Name));
+    if (d->param2Type)
+        list->push_back(std::make_shared<FunctionParameterNode>(*_synthCtx, SharedModifier(), d->param2Type, d->param2Name));
+    return list;
+}
+
+// M31b — is `cls` a user type that may carry operator overloads (a `value`/`resource`/class, not a
+// collection/smart-pointer, whose arithmetic is a real C `struct` with no built-in `+`)?
+static inline bool userOperandType(const std::string& cls, std::map<std::string, ClassInfo>& classes)
+{
+    if (cls.empty()) return false;
+    auto it = classes.find(cls);
+    return it != classes.end() && !it->second.isCollection;
+}
+
+// M31b — a binary expression with a user-typed operand dispatches to an operator overload; a purely
+// primitive expression keeps the raw-C path (so the whole numeric fixture suite is untouched).
+// Resolution: the METHOD form (arity 1) on the LHS type first (`this`+rhs → `A__op(&lhs, rhs)`), else
+// the FREE form (arity 2) on either operand's type (`A__op(lhs, rhs)`).
+std::string CEmitter::emitBinaryOperator(BinaryExpressionNode* v)
+{
+    std::string lc = exprClass(v->LHS);
+    std::string rc = exprClass(v->RHS);
+    bool lUser = userOperandType(lc, _classes);
+    bool rUser = userOperandType(rc, _classes);
+    if (!lUser && !rUser)
+        return "(" + emitExpression(v->LHS) + " " + binaryOperator(v->token) + " "
+                   + emitExpression(v->RHS) + ")";   // primitives — unchanged
+
+    std::string opName = operatorMangle(v->token, 1);   // binary name (arity 1 or 2 share it)
+    // method form (arity 1) on the LHS type: `A__op(&lhs, rhs)`
+    if (lUser) {
+        MethodInfo* mi = findMethod(&_classes[lc], opName, nullptr);
+        if (mi && mi->isOperator && mi->arity == 1) {
+            canAccess(&_classes[lc], mi->visibility, opName, v->line);
+            return mi->cName + "(&(" + emitExpression(v->LHS) + "), " + emitExpression(v->RHS) + ")";
+        }
+    }
+    // free form (arity 2) declared on either operand's type: `A__op(lhs, rhs)`
+    for (const std::string& cls : { lc, rc }) {
+        if (!userOperandType(cls, _classes)) continue;
+        MethodInfo* mi = findMethod(&_classes[cls], opName, nullptr);
+        if (mi && mi->isOperator && mi->arity == 2) {
+            canAccess(&_classes[cls], mi->visibility, opName, v->line);
+            return mi->cName + "(" + emitExpression(v->LHS) + ", " + emitExpression(v->RHS) + ")";
+        }
+    }
+    unsupported(("no operator '" + binaryOperator(v->token) + "' for operand type '"
+                 + (lUser ? lc : rc) + "' — define `operator" + binaryOperator(v->token) + "` on the type").c_str(), v->line);
+    return "0";
+}
+
+// M31b — a unary / increment / decrement on a user type dispatches to a 0-param (on-`this`) operator.
+// Returns "" when the operand is NOT a user type (caller keeps its raw-C path).
+std::string CEmitter::emitUnaryUserOp(int opToken, SharedExpression operand, int line)
+{
+    std::string oc = exprClass(operand);
+    if (!userOperandType(oc, _classes)) return "";
+    std::string opName = operatorMangle(opToken, 0);   // op_neg / op_not / op_bnot / op_pos / op_inc / op_dec
+    MethodInfo* mi = opName.empty() ? nullptr : findMethod(&_classes[oc], opName, nullptr);
+    if (!mi || !mi->isOperator)
+        unsupported(("no unary operator for type '" + oc + "' — define the matching `operator` on the type").c_str(), line);
+    else
+        canAccess(&_classes[oc], mi->visibility, opName, line);
+    return mi ? (mi->cName + "(&(" + emitExpression(operand) + "))") : "0";
+}
+
 // ---------------------------------------------------------------------------
 // Expressions
 // ---------------------------------------------------------------------------
@@ -438,8 +543,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                 v->line);
             }
         }
-        return "(" + emitExpression(v->LHS) + " " + binaryOperator(v->token) + " "
-                   + emitExpression(v->RHS) + ")";
+        return emitBinaryOperator(v);   // M31b — user-typed operand → operator dispatch, else raw C
     }
 
     if (auto* v = dynamic_cast<LogicalAndOrNode*>(n)) {
@@ -505,17 +609,23 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<PreIncrDecrNode*>(n)) {
         checkConstWrite(v->expression, v->line);   // M24a
+        std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // M31b: op_inc/op_dec on a user type
+        if (!uop.empty()) return uop;
         std::string op = (v->token == PLUSPLUS) ? "++" : "--";
         return "(" + op + emitExpression(v->expression) + ")";
     }
 
     if (auto* v = dynamic_cast<PostIncrDecrNode*>(n)) {
         checkConstWrite(v->expression, v->line);   // M24a
+        std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // M31b (mutating in place — pre/post alike)
+        if (!uop.empty()) return uop;
         std::string op = (v->token == PLUSPLUS) ? "++" : "--";
         return "(" + emitExpression(v->expression) + op + ")";
     }
 
     if (auto* v = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // M31b: op_neg/op_not/op_bnot/op_pos
+        if (!uop.empty()) return uop;
         std::string op;
         switch (v->token) {
             case EXCLAMATION: op = "!"; break;
@@ -1882,8 +1992,29 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             ci.fieldNames.insert(fi.name);
                             ci.constFields.insert(fi.name);
                         }
-                } else if (dynamic_cast<ClassOperatorDeclarationNode*>(mn)) {
-                    unsupported("operator overload — deferred", mn->line);
+                } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(mn)) {
+                    // M31b — an operator overload registers as a method under a synthetic name
+                    // (`op_add`/`op_neg`/…), disambiguated by arity: 0 params = unary-on-`this`,
+                    // 1 = binary method (`this`+rhs), 2 = binary free form (both operands explicit).
+                    auto* d = od->operatorDeclarator.get();
+                    int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
+                    std::string opName = operatorMangle(d->opToken, arity);
+                    if (opName.empty())
+                        unsupported((std::string("operator '") + binaryOperator(d->opToken)
+                                     + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od->line);
+                    if (!od->body)
+                        unsupported("an operator needs a body", od->line);
+                    MethodInfo mi;
+                    mi.cName      = ci.name + "__" + opName;
+                    mi.returnType = d->returnType;
+                    mi.params     = paramSigsOf(operatorParamList(d));
+                    mi.node       = nullptr;                 // an operator is NOT a ClassMethodDeclarationNode
+                    mi.opDecl     = od;
+                    mi.isOperator = true;
+                    mi.arity      = arity;
+                    mi.isStatic   = (arity == 2);            // the free form takes no `this`
+                    mi.visibility = visibilityOf(od->modifiers, Visibility::Public, od->line);   // operators are public by nature
+                    ci.methods[opName] = mi;
                 } else if (auto* fg = dynamic_cast<FriendGrantNode*>(mn)) {
                     // M25c — capture the grant raw; the accessor is resolved (against the
                     // full function/class tables) in resolveFriends() once all units load.
@@ -2268,8 +2399,11 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // Re-derive ParamSig under substitution so call-site arg typing is concrete (not a stale "T").
     if (ci.ctorNode && ci.ctorNode->declarator)
         ci.ctorParams = paramSigsOf(ci.ctorNode->declarator->params);
-    for (auto& kv : ci.methods)
+    for (auto& kv : ci.methods) {
         if (kv.second.node) kv.second.params = paramSigsOf(kv.second.node->params);
+        else if (kv.second.isOperator && kv.second.opDecl)   // M31b — an operator has no `node`
+            kv.second.params = paramSigsOf(operatorParamList(kv.second.opDecl->operatorDeclarator.get()));
+    }
     _classes[mangled] = ci;
 
     // Transitive close: register any collection / generic type the substituted members use.
@@ -4612,8 +4746,11 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
+        // M31b — an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
+        SharedParameterList plist = mi.isOperator ? operatorParamList(mi.opDecl->operatorDeclarator.get())
+                                                  : mi.node->params;
         *_out << stat << cType(mi.returnType) << " " << mi.cName << "("
-             << paramListC(mi.node->params, mi.isStatic ? nullptr : ci.name.c_str()) << ");\n";   // M31a — static: no self
+             << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str()) << ");\n";   // M31a — static/free: no self
     }
 }
 
@@ -4793,6 +4930,14 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no body to emit
+        // M31b — an operator has no `node`; emit its body from `opDecl` (free form: no self).
+        if (mi.isOperator) {
+            auto* d = mi.opDecl->operatorDeclarator.get();
+            line(mi.opDecl->line);
+            std::string ret = cType(mi.returnType);
+            emitMethodOrCtorBody(mi.cName, ret.c_str(), operatorParamList(d), mi.opDecl->body, ci, false, false, mi.arity == 2);
+            continue;
+        }
         line(mi.node->line);
         std::string ret = cType(mi.returnType);
         emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false, mi.isConst, mi.isStatic);

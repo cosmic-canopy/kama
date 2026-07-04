@@ -43,6 +43,8 @@ class ClassMethodDeclarationNode;
 class ClassConstructorDeclarationNode;
 class ClassDestructorDeclarationNode;
 class ClassOperatorDeclaratorNode;
+class ClassOperatorDeclarationNode;   // M31b
+class BinaryExpressionNode;           // M31b
 class ClassConstructorDeclaratorNode;
 class ClassConstructorInitializerNode;
 

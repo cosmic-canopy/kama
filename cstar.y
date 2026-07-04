@@ -1012,7 +1012,8 @@ operator_body
   | SEMICOLON   { $$ = SharedBlock(); }
   ;
 overloadable_operator_declarator
-  : type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), SharedIdentifier(), SharedIdentifier()); }
+  : type OPERATOR overloadable_operator LPAREN RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, SharedIdentifier(), SharedIdentifier(), SharedIdentifier(), SharedIdentifier()); }   /* M31b — 0-param unary: `Vec2 operator-()` = `-this` */
+  | type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), SharedIdentifier(), SharedIdentifier()); }
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $9) ); }
   ;
 overloadable_operator
@@ -1022,8 +1023,7 @@ overloadable_operator
   | TILDE
   | PLUSPLUS
   | MINUSMINUS
-  | TRUE   { $$ = 1; }
-  | FALSE   { $$ = 0; }
+  /* M31: `true`/`false` conversion operators deferred (they aliased token codes 0/1) */
   | STAR
   | SLASH
   | PERCENT

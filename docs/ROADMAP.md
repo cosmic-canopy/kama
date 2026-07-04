@@ -375,6 +375,21 @@ struct-ordering + generics completeness — so operators shift M29 → **M31**.)
      use inside a static body, and `static`+`virtual`/`override`/`abstract`, are clean errors. Fixtures
      `static_method` (`Vec2::dot`), `static_method_noself`; xfail `static_this`, `static_call_nonstatic`,
      `static_virtual`.
+   - **M31b — operator overloading ✅ (v0.1.67).** Full overloadable set — arithmetic `+ - * / %`,
+     comparison `== != < > <= >=`, bitwise `& | ^ << >>`, unary `- ! ~`, `++`/`--`. **Both forms,
+     disambiguated by arity:** 0 params = a unary operator on `this` (`Vec2 operator-()`), 1 = a binary
+     method (`Vec2 operator+(Vec2 rhs)`, `this` is the left operand), 2 = a binary free/static form
+     (`Vec2 operator*(int32 s, Vec2 v)` — the mixed-LHS / scalar-on-the-left case). Emitter-only: the
+     grammar/AST already existed (one 0-param unary production added; `%expect 1` held); an
+     `operatorMangle(token, arity)` yields a synthetic method name (`op_add`/`op_neg`/…) so operators
+     register + dispatch through the normal method path (`operatorParamList` synthesizes the
+     ParameterList so `paramListC`/`paramSigsOf`/`emitMethodOrCtorBody` are reused verbatim). Binary/unary/
+     `++`/`--` emission is intercepted **only** when an operand's `exprClass` is a user type (primitives
+     keep the raw-C path — the whole numeric suite is untouched); dispatch is **positional**
+     (`Type__op_add(&lhs, rhs)`, bypassing named-arg reordering). `==` is **explicit** (no auto structural
+     equality — a noted follow-up). Fixtures `operator_all` (every operator on one `value`),
+     `operator_free_static` (scalar-on-the-left); xfail `operator_missing`, `operator_arity`,
+     `operator_eq_missing`.
    - **Design Qs:** Operator-method **syntax** — operators are the *sanctioned exception* to
      named-args-only (a binary op has exactly two operands, positional by nature); how do we spell
      it (`fn Vec2 operator+(Vec2 rhs)`? a special `operator` member? free-function form?). **Which
@@ -404,7 +419,7 @@ declared a deliberate non-goal. The current inventory (swept from SPEC/KEYWORDS/
   build may pull a minimal `export` earlier. *(Was previously in KEYWORDS.md only, not the roadmap.)*
 - **`volatile` keyword** — reserved, hard-errors today; **tracked to 1.x → Embedded/MCU target**
   (below): emit C `volatile` for ISR↔loop flags / MMIO registers.
-- **Full `static` (`Type::method`)** — ✅ **done (M31a, v0.1.66).** **`operator` overloading** — hard-error today; **tracked to M31b.**
+- **Full `static` (`Type::method`)** — ✅ **done (M31a, v0.1.66).** **`operator` overloading** — ✅ **done (M31b, v0.1.67).**
 - **Collection passed by value (params/returns)** — `give`-ing a collection into a variant payload is
   ✅ **done (M29c)** (move the struct, null the source). General by-value collection params/returns
   (and `copy`/deep-copy of a whole container into a variant) remain **tracked to M31+** (reuse the same

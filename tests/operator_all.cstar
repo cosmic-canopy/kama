@@ -1,0 +1,85 @@
+// M31b — operator overloading, EVERY overloadable operator on one `value` type. `Num` wraps an int32
+// and defines the full set: arithmetic, bitwise, comparison, unary, and increment/decrement. Each
+// `a <op> b` lowers to a positional call `Num__op_xxx(&a, b)` (method form — `this` is the left operand).
+type value Num {
+    public int32 v;
+    public Num(int32 v) { this.v = v; }
+
+    // arithmetic (method form: `this` + rhs)
+    public Num operator+(Num rhs) { return Num(v: this.v + rhs.v); }
+    public Num operator-(Num rhs) { return Num(v: this.v - rhs.v); }
+    public Num operator*(Num rhs) { return Num(v: this.v * rhs.v); }
+    public Num operator/(Num rhs) { return Num(v: this.v / rhs.v); }
+    public Num operator%(Num rhs) { return Num(v: this.v % rhs.v); }
+
+    // bitwise
+    public Num operator&(Num rhs) { return Num(v: this.v & rhs.v); }
+    public Num operator|(Num rhs) { return Num(v: this.v | rhs.v); }
+    public Num operator^(Num rhs) { return Num(v: this.v ^ rhs.v); }
+    public Num operator<<(Num rhs) { return Num(v: this.v << rhs.v); }
+    public Num operator>>(Num rhs) { return Num(v: this.v >> rhs.v); }
+
+    // comparison (return bool)
+    public bool operator==(Num rhs) { return this.v == rhs.v; }
+    public bool operator!=(Num rhs) { return this.v != rhs.v; }
+    public bool operator<(Num rhs) { return this.v < rhs.v; }
+    public bool operator>(Num rhs) { return this.v > rhs.v; }
+    public bool operator<=(Num rhs) { return this.v <= rhs.v; }
+    public bool operator>=(Num rhs) { return this.v >= rhs.v; }
+
+    // unary (0 params — operate on `this`)
+    public Num operator-() { return Num(v: -this.v); }
+    public Num operator~() { return Num(v: ~this.v); }
+    public bool operator!() { return this.v == 0; }
+
+    // increment / decrement (mutating in place; returns the new value)
+    public Num operator++() { this.v = this.v + 1; return Num(v: this.v); }
+    public Num operator--() { this.v = this.v - 1; return Num(v: this.v); }
+}
+
+fn int32 main() {
+    Num a = Num(v: 12);
+    Num b = Num(v: 5);
+    int32 acc = 0;
+
+    // arithmetic: 17 + 7 + 60 + 2 + 2 = 88
+    Num add = a + b;
+    Num sub = a - b;
+    Num mul = a * b;
+    Num div = a / b;
+    Num mod = a % b;
+    acc = acc + add.v + sub.v + mul.v + div.v + mod.v;
+
+    // bitwise: 4 + 13 + 9 + 10 + 3 = 39   (running total 127)
+    Num one = Num(v: 1);
+    Num two = Num(v: 2);
+    Num band = a & b;
+    Num bor  = a | b;
+    Num bxor = a ^ b;
+    Num shl  = b << one;
+    Num shr  = a >> two;
+    acc = acc + band.v + bor.v + bxor.v + shl.v + shr.v;
+
+    // comparison: +1 +2 +4 +8 +16 = +31   (running total 158)
+    if (a > b)  { acc = acc + 1; }
+    if (a == a) { acc = acc + 2; }
+    if (a != b) { acc = acc + 4; }
+    if (b <= a) { acc = acc + 8; }
+    if (a >= b) { acc = acc + 16; }
+
+    // unary: -12 + (-6) = -18, then !0 -> +10   (running total 150)
+    Num neg  = -a;
+    Num bnot = ~b;
+    acc = acc + neg.v + bnot.v;
+    Num zero = Num(v: 0);
+    if (!zero) { acc = acc + 10; }
+
+    // increment / decrement: 100 -> 101 -> 100 -> 99   (running total 249)
+    Num c = Num(v: 100);
+    c++;
+    c--;
+    c--;
+    acc = acc + c.v;
+
+    return acc;   // 249
+}
