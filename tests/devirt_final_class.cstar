@@ -1,0 +1,19 @@
+// Tier-1 devirtualization (trigger 1): a call whose static receiver is a `final` class
+// devirtualizes even an overridden method — no subclass can exist, so the target is unique.
+// Inside `meow`, `this` is a `Cat` (final), so `this.noise()` lowers to a direct Cat__noise.
+type virtual resource Animal
+{
+    public Animal() {}
+    protected virtual fn int32 noise() { return 1; }
+}
+type final resource Cat extends Animal
+{
+    public Cat() {}
+    protected override fn int32 noise() { return 7; }
+    public fn int32 meow() { return this.noise(); }
+}
+fn int main()
+{
+    Cat c = Cat();
+    return c.meow();
+}

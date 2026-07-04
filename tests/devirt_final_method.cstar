@@ -1,0 +1,19 @@
+// Tier-1 devirtualization (trigger 2): a `final override` seals a slot, so calls to it lower to a
+// direct call even though the method IS overridden at the root level (trigger 3 would not fire).
+// Inside `midGo`, `this` is a `Mid` whose `tick` is `final` -> direct Mid__tick.
+type virtual resource Base
+{
+    public Base() {}
+    protected virtual fn int32 tick() { return 1; }
+}
+type virtual resource Mid extends Base
+{
+    public Mid() {}
+    protected final override fn int32 tick() { return 5; }
+    public fn int32 midGo() { return this.tick(); }
+}
+fn int main()
+{
+    Mid m = Mid();
+    return m.midGo();
+}

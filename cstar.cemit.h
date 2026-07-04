@@ -260,6 +260,7 @@ private:
     // Virtual dispatch: per-root union of vtable slots, in introduction order.
     struct VSlot { std::string name; std::string owner; ClassMethodDeclarationNode* node; };
     std::map<std::string, std::vector<VSlot>> _rootVtables;   // root class name -> slots
+    std::set<std::pair<std::string,std::string>> _overriddenSlots;  // (vtableRoot, slot) overridden somewhere -> keep dynamic
 
     std::map<std::string, InterfaceInfo> _interfaces;        // contract name -> info
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info

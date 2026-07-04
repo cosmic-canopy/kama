@@ -3407,6 +3407,13 @@ void CEmitter::buildVtables()
             ci->hasCtor   = true;   // `new` now calls the ctor; prototype gets emitted
         }
     }
+    // Whole-program override index for devirtualization: a virtual slot must stay an indirect call
+    // iff some class overrides it. A never-overridden slot (and every method of a `final` class /
+    // any `final` method) has a unique target, so emitDispatch can lower it to a direct call.
+    for (auto& kv : _classes)
+        for (auto& mkv : kv.second.methods)
+            if (mkv.second.isOverride)
+                _overriddenSlots.insert(std::make_pair(kv.second.vtableRoot, mkv.first));
 }
 
 // A class is destructible if it declares a dtor, has a destructible field, OR
@@ -5445,17 +5452,26 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);
 
     if (mi->isVirtual) {
-        // Dynamic dispatch through the vptr (at offset 0 via the vtable root).
-        const std::string& root = _classes[clsName].vtableRoot;
-        std::string slotOwner = owner->name;
-        auto rit = _rootVtables.find(root);
-        if (rit != _rootVtables.end())
-            for (auto& s : rit->second) if (s.name == method) { slotOwner = s.owner; break; }
-        std::string self = "(" + slotOwner + "*)" + recvPtr;
-        std::string vptr = "((" + root + "*)" + recvPtr + ")->__vptr";
-        return emitReorderedCall(vptr + "->" + method, self, mi->params, args, srcLine);
+        // Devirtualize when the concrete target is unique for every possible dynamic type: a
+        // `final` receiver class (no subclass), a `final` method (unoverridable), or a virtual
+        // method no class overrides anywhere in the program (whole-program view — no LTO needed).
+        // Then fall through to the direct call below. Otherwise dispatch through the vptr.
+        ClassInfo& sc = _classes[clsName];
+        bool monomorphic = sc.isFinalClass || mi->isFinal
+                         || !_overriddenSlots.count(std::make_pair(sc.vtableRoot, method));
+        if (!monomorphic) {
+            // Dynamic dispatch through the vptr (at offset 0 via the vtable root).
+            const std::string& root = sc.vtableRoot;
+            std::string slotOwner = owner->name;
+            auto rit = _rootVtables.find(root);
+            if (rit != _rootVtables.end())
+                for (auto& s : rit->second) if (s.name == method) { slotOwner = s.owner; break; }
+            std::string self = "(" + slotOwner + "*)" + recvPtr;
+            std::string vptr = "((" + root + "*)" + recvPtr + ")->__vptr";
+            return emitReorderedCall(vptr + "->" + method, self, mi->params, args, srcLine);
+        }
     }
-    // Static call; upcast self to the declaring class (offset-0 valid).
+    // Static call; upcast self to the declaring class (offset-0 valid). Also the devirtualized path.
     std::string self = "(" + owner->name + "*)" + recvPtr;
     return emitReorderedCall(mi->cName, self, mi->params, args, srcLine);
 }
