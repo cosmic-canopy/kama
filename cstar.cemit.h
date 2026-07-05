@@ -319,6 +319,7 @@ private:
     std::map<std::string, NsCtx>                    _genericContractInstCtx;// instance -> use-site ctx (its type args, e.g. a user `Point`, resolve here — like _genericTypeInstCtx)
     std::set<std::string>                           _genericContractInsts;  // mangled instance names already registered (dedup)
     std::string                                     _derefContract;         // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
+    std::string                                     _heapOwnerContract;     // resolved name of the prelude `HeapOwner` contract — `new` placement-constructs into a type implementing it
 
     // Namespaces: current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
@@ -439,6 +440,9 @@ private:
     // If `cls` implements the prelude `Deref<T>` contract, the pointee class `T` (auto-deref target);
     // "" otherwise. Nominal — the `implements Deref<T>` is the opt-in gate. Inert when no Deref is in scope.
     std::string derefTarget(const std::string& cls);
+    // If `cls` implements the prelude `HeapOwner<T>` contract, the owned element `T` (so `new T(args)` can
+    // placement-construct into `cls` via its `adopt(Ptr<T>)`); "" otherwise. Inert when no HeapOwner in scope.
+    std::string heapOwnerTarget(const std::string& cls);
     // RAII: while emitting a generic-contract instance's vtbl / a class's impl-vtable for it, bind
     // T->concrete (and its home ctx) so the `T`-typed method sigs resolve — a no-op for a plain
     // contract. Mirrors emitGenericTypeInst's subst bind; nested so it can touch CEmitter's privates.

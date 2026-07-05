@@ -1,0 +1,25 @@
+// Box<T> owning a DESTRUCTIBLE pointee: `drop(value: this.deref())` runs the pointee's `~dtor` before `free`.
+// Noisy owns a heap buffer freed only in its `~dtor`, so if `drop` didn't run it, LeakSanitizer would
+// catch the leak. ASan-clean == the pointee's destructor ran through the library Box.
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+
+type resource Noisy {
+    Ptr<int32> buf;
+    public Noisy(int32 id) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = id; } }
+    public fn int32 val() { unsafe { return this.buf[0]; } }
+    ~Noisy() { unsafe { free(p: cast<Ptr>(this.buf)); } }   // must run, or `buf` leaks
+}
+
+type resource Box<T> implements Deref<T>, HeapOwner<T> {
+    Ptr<T> p;
+    public static fn Box<T> adopt(Ptr<T> raw) { Box<T> b; b.p = raw; return b; }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    ~Box() { unsafe { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); } }
+}
+
+fn int32 main() {
+    Box<Noisy> b = new Noisy(id: 9);
+    return b.val();   // auto-deref -> 9; at return b drops -> Noisy__dtor frees buf (ASan verifies)
+}

@@ -1076,6 +1076,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             else {
                                 line(n->line); indent(depth);
                                 *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
+                                indent(depth); *_out << "if (!" << nm << ".obj) cstar_panic(cstar_string_lit(\"out of memory\", 13));\n";
                                 if (_classes[octy].hasCtor) {
                                     line(n->line);
                                     bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
@@ -1097,6 +1098,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), n->line);
                             line(n->line); indent(depth);
                             *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
+                            indent(depth); *_out << "if (!" << nm << ".ptr) cstar_panic(cstar_string_lit(\"out of memory\", 13));\n";
                             if (isClass(T) && _classes[T].hasCtor) {
                                 line(n->line);
                                 bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
@@ -1109,6 +1111,34 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 indent(depth); *_out << nm << ".ctrl = cstar_ctrl_new();\n";
                             }
                             // T with no ctor: malloc leaves it default (callers init fields).
+                        }
+                    } else if (!heapOwnerTarget(ty).empty()) {
+                        // a LIBRARY heap owner (`Box<T> implements HeapOwner<T>`): `new T(args)`
+                        // placement-constructs T on the heap and adopts the raw ptr — ZERO copies, same
+                        // as the intrinsic. `new` stays valid ONLY into an RAII owner, so it can't leak.
+                        std::string T = heapOwnerTarget(ty);
+                        if (octy != T)
+                            unsupported(("`" + ty + "` owns `" + T + "`, but got `new " + octy + "(...)`").c_str(), n->line);
+                        else if (isClass(T) && _classes[T].isAbstractClass)
+                            unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), n->line);
+                        else {
+                            ClassInfo* ao = nullptr;
+                            MethodInfo* adoptM = findMethod(&_classes[ty], "adopt", &ao);
+                            if (!adoptM) { unsupported(("`" + ty + "` implements HeapOwner but has no `adopt` method").c_str(), n->line); }
+                            else {
+                                std::string hp = "__heap" + std::to_string(_tempCounter++);
+                                line(n->line); indent(depth);
+                                *_out << T << "* " << hp << " = (" << T << "*)malloc(sizeof(" << T << "));\n";
+                                indent(depth); *_out << "if (!" << hp << ") cstar_panic(cstar_string_lit(\"out of memory\", 13));\n";
+                                if (isClass(T) && _classes[T].hasCtor) {
+                                    line(n->line);
+                                    bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
+                                    std::string cc = emitReorderedCall(T + "__ctor", hp, _classes[T].ctorParams, oc->args, n->line);
+                                    _hoistOK = ph; flushHoisted(depth);
+                                    indent(depth); *_out << cc << ";\n";
+                                }
+                                indent(depth); *_out << nm << " = " << adoptM->cName << "(" << hp << ");\n";
+                            }
                         }
                     } else if (_classes.count(ty) && _classes[ty].isCollection) {
                         // Array/List/String — a value type that manages its own heap buffer;
@@ -1864,6 +1894,8 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         // the prelude `Deref<T>` gates auto-deref — remember its resolved name (by source name, so a
         // user's own `Deref` in a namespace still matches). Empty if no `Deref` is in scope → inert.
         if (cd->name && cd->name->value && *cd->name->value == "Deref") _derefContract = ii.name;
+        // the prelude `HeapOwner<T>` — a type implementing it is a `new` placement target (via `adopt`).
+        if (cd->name && cd->name->value && *cd->name->value == "HeapOwner") _heapOwnerContract = ii.name;
         if (cd->typeParams && !cd->typeParams->empty()) {
             std::vector<std::string> ps;
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);
@@ -4169,6 +4201,29 @@ std::string CEmitter::derefTarget(const std::string& cls)
     return "";
 }
 
+// If `cls` implements the prelude `HeapOwner<T>` contract, return the owned element `T` (so `new T(args)`
+// placement-constructs into `cls` via `cls::adopt(Ptr<T>)`); "" otherwise. The element is the contract
+// instance's type arg. Inert (always "") when no `HeapOwner` is in scope.
+std::string CEmitter::heapOwnerTarget(const std::string& cls)
+{
+    if (_heapOwnerContract.empty()) return "";
+    auto it = _classes.find(cls);
+    if (it == _classes.end()) return "";
+    for (auto& ifn : it->second.interfaces) {
+        auto ii = _interfaces.find(ifn);
+        if (ii == _interfaces.end() || !ii->second.isGenericInst || ii->second.templateKey != _heapOwnerContract)
+            continue;
+        if (ii->second.typeArgs.empty() || !ii->second.typeArgs[0]) return "";
+        // the element is the contract instance's type arg, resolved in its use-site ctx (a user `Point`).
+        NsCtx saved = _nsCtx;
+        if (_genericContractInstCtx.count(ifn)) _nsCtx = _genericContractInstCtx[ifn];
+        std::string t = cType(ii->second.typeArgs[0]);
+        _nsCtx = saved;
+        return t;
+    }
+    return "";
+}
+
 // at each monomorphization, verify the concrete type argument bound to `paramName` satisfies
 // every contract on it (`+` = AND); a clean diagnostic instead of a downstream "class missing method".
 void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
@@ -5326,6 +5381,16 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if (name == "assert" && bareCall && call->args && call->args->size() == 1)
         return "((" + emitExpression((*call->args)[0]->expression)
              + ") ? (void)0 : cstar_panic(cstar_string_lit(\"assertion failed\", 16)))";
+    // `drop(place)` — run the destructor of a place's value (for a library owner over `Ptr<T>` to drop
+    // its heap pointee before `free`). A no-op when the value's type isn't destructible. The type is
+    // resolved via exprClass (so `drop(this.deref())` reaches the pointee `T` through a `ref T` return).
+    if (name == "drop" && bareCall && call->args && call->args->size() == 1) {
+        SharedExpression a = (*call->args)[0]->expression;
+        std::string cls = exprClass(a);
+        if (!cls.empty() && _classes.count(cls) && _classes[cls].destructible)
+            return cls + "__dtor(&(" + emitExpression(a) + "))";
+        return "(void)0";   // nothing to drop (a value / non-destructible type)
+    }
 
     // (A bare function name is a value — its C function pointer — so `FunctionPtr<Sig> c = fn;`
     // and passing `fn` directly bind a callable; there is no separate `funcptr(of: fn)` builtin.)

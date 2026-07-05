@@ -1,0 +1,25 @@
+// A library unique-owning smart pointer written in cstar. `Box<T> implements HeapOwner<T>` so
+// `new Counter(...)` placement-constructs on the heap (0 copies) and adopts the raw pointer; `Deref<T>`
+// forwards `c.bump()`/`c.n` to the pointee. RAII frees the heap object. This is `Owned<T>` as a library.
+extern "<stdlib.h>";
+extern fn void free(Ptr p);
+
+type value Counter {
+    public int32 n;
+    public Counter(int32 start) { this.n = start; }
+    public fn int32 bump() { this.n = this.n + 1; return this.n; }
+}
+
+type resource Box<T> implements Deref<T>, HeapOwner<T> {
+    Ptr<T> p;
+    public static fn Box<T> adopt(Ptr<T> raw) { Box<T> b; b.p = raw; return b; }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    ~Box() { unsafe { free(p: cast<Ptr>(this.p)); } }
+}
+
+fn int32 main() {
+    Box<Counter> c = new Counter(start: 40);   // heap placement + adopt, 0 copies
+    int32 a = c.bump();                          // auto-deref -> 41
+    int32 b = c.n;                               // auto-deref field -> 41
+    return a + b;                                // 82  (then RAII frees the heap Counter)
+}
