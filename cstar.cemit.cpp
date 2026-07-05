@@ -777,6 +777,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return "((" + cType(v->type) + ")(" + emitExpression(v->unaryExpression) + "))";
     }
 
+    // `sizeof(T)` -> C `sizeof(<cType>)` (a compile-time `size_t`/`usize`). `cType` resolves a generic
+    // `T` under substitution, so `n * sizeof(T)` inside a `Vec<T>` monomorphizes to the concrete size.
+    if (auto* v = dynamic_cast<SizeofNode*>(n)) {
+        return "sizeof(" + cType(v->type) + ")";
+    }
+
     unsupported("expression", n->line);
     return "0";
 }
@@ -5022,6 +5028,17 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if (name == "addr" && (!call->identifier->qualifier || call->identifier->qualifier->empty())
         && call->args && call->args->size() == 1)
         return "&(" + emitExpression((*call->args)[0]->expression) + ")";
+
+    // `panic(msg: s)` and `assert(cond: c)` — builtins that trap cleanly (abort with a message), the
+    // user-facing form of the runtime bounds trap. Let a user collection bounds-check itself without
+    // dropping to FFI `abort()`. `panic` aborts unconditionally; `assert` aborts iff the condition is
+    // false. Recoverable errors use `Result<T,E>` — `panic` is for "this is a bug that can't continue".
+    bool bareCall = (!call->identifier->qualifier || call->identifier->qualifier->empty());
+    if (name == "panic" && bareCall && call->args && call->args->size() == 1)
+        return "cstar_panic(" + emitExpression((*call->args)[0]->expression) + ")";
+    if (name == "assert" && bareCall && call->args && call->args->size() == 1)
+        return "((" + emitExpression((*call->args)[0]->expression)
+             + ") ? (void)0 : cstar_panic(cstar_string_lit(\"assertion failed\", 16)))";
 
     // (A bare function name is a value — its C function pointer — so `FunctionPtr<Sig> c = fn;`
     // and passing `fn` directly bind a callable; there is no separate `funcptr(of: fn)` builtin.)

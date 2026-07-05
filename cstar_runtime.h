@@ -345,6 +345,25 @@ static inline cstar_string cstar_string__concat(cstar_string* self, cstar_string
     cstar_string r; r.data = buf; r.len = n; r.cap = n + 1; return r;
 }
 
+// User-triggerable trap for `panic(msg: …)` and a failed `assert(cond: …)`. Writes
+// "cstar: panic: <msg>" to stderr and `abort()`s — the same clean-abort mechanism as the bounds
+// trap (no <stdio.h>, no undefined behavior). Never returns.
+static inline void cstar_panic(cstar_string msg) {
+    extern void abort(void);
+#if defined(_WIN32)
+    extern int _write(int, const void*, unsigned int);
+    (void)_write(2, "cstar: panic: ", 14);
+    if (msg.len) (void)_write(2, msg.data, (unsigned int)msg.len);
+    (void)_write(2, "\n", 1);
+#else
+    extern long write(int, const void*, size_t);
+    (void)write(2, "cstar: panic: ", 14);
+    if (msg.len) (void)write(2, msg.data, msg.len);
+    (void)write(2, "\n", 1);
+#endif
+    abort();
+}
+
 // Tiny tracing hook for tests/debugging: a folding accumulator that records a
 // sequence of integer events (e.g. constructor/destructor order). Declare in
 // cstar with `extern void cstar_trace(int code);` / `extern int cstar_trace_get();`.

@@ -305,6 +305,7 @@ static struct name_value keywords [] = {
     {"public",      PUBLIC},
     {"ref",         REF},
     {"return",      RETURN},
+    {"sizeof",      SIZEOF},
     {"static",      STATIC},
     {"string",      STRING},
     {"this",        THIS},

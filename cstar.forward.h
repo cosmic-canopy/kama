@@ -28,6 +28,7 @@ class InvocationNode;
 class MemberAccessNode;
 class ElementAccessNode;
 class ArrayLiteralNode;
+class SizeofNode;
 class ThisAccessNode;
 class ObjectCreationNode;
 class EnumMemberDeclarationNode;

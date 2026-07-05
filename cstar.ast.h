@@ -499,6 +499,14 @@ public:
         , unaryExpression(unaryExpression) { }
 };
 
+// `sizeof(T)` — the compile-time byte size of a type, a `usize` (lowers to C `sizeof(cType)`).
+class SizeofNode : public ExpressionNode {
+public:
+    SharedIdentifier type;
+    SizeofNode(CodeGenContext& context, SharedIdentifier type)
+        : ASTNode(context),  ExpressionNode(context), type(type) { }
+};
+
 class BinaryExpressionNode : public ExpressionNode {
 public:
     int token;

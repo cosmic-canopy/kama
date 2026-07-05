@@ -119,7 +119,7 @@ struct cstaryystype {
 %token <string> INT INT8 INT16 INT32 INT64
 %token <string> MATCH
 %token <string> NAMESPACE
-%token <string> NEW NULL_LITERAL OPERATOR OUT
+%token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
 %token <string> REF RETURN STATIC STRING
 %token <string> THIS TRUE TYPE
@@ -168,7 +168,7 @@ struct cstaryystype {
 %type <expression> expression expression_opt literal boolean_literal variable_initializer
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
 %type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis array_literal
-%type <expression> postfix_expression cast_expression member_access element_access this_access
+%type <expression> postfix_expression cast_expression sizeof_expression member_access element_access this_access
 %type <expression> base_access primary_expression multiplicative_expression additive_expression
 %type <expression> shift_expression relational_expression equality_expression and_expression
 %type <expression> exclusive_or_expression inclusive_or_expression conditional_and_expression
@@ -834,6 +834,7 @@ unary_expression
   | EXCLAMATION unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
   | TILDE unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
   | cast_expression
+  | sizeof_expression
   | PLUS unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
   | MINUS unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
   | pre_increment_expression   { $$ = $1; }
@@ -861,6 +862,11 @@ cast_expression
     /* The mid-rules track genericDepth across the cast's `<…>` so `cast<List<int>>(x)` needs no space;
        the `--` fires before `( unary_expression )` so a `>>` shift inside the cast body stays a shift. */
   : CAST LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN unary_expression RPAREN   { $$ = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $4, $8 ); }
+  ;
+sizeof_expression
+  /* `sizeof(T)` — the compile-time byte size of a type as a `usize` (`type` self-manages its own
+     `<…>` genericDepth, so `sizeof(Fixed<int32,4>)` parses too). */
+  : SIZEOF LPAREN type RPAREN   { $$ = std::make_shared<SizeofNode>(SCANNER_CODEGENCONTEXT, $3); }
   ;
 constant_expression
   : expression
