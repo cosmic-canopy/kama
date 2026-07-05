@@ -47,6 +47,77 @@ non-goal.
   carry several `operator*` distinguished by operand type (`mat*vec`, `mat*mat`, `v*s`, `s*v`),
   matching C++/C#/Rust. Reopen only if a concrete example shows named params can't express it.
 
+## Reference model, the standard library & near-term prerequisites (open — for discussion)
+
+Three linked threads, on the record (policy: nothing untracked). These sit around the 1.0 line and
+are **not yet scheduled** — the sequencing is the open question.
+
+### The reference model — why no borrow checker, and what it costs
+
+cstar earns memory safety by making hazards *unrepresentable* (ownership + RAII, no null,
+second-class borrows), **not** by statically checking first-class references — the same philosophy as
+the no-GC and shared-nothing-concurrency positions. Concretely:
+
+- A **borrow is second-class**: `ref`/`out` params, a `contract` value, an indexed place (`a[i]`,
+  `ref a[i]`), and a place-returning `operator[]` result all borrow their object and are usable *only
+  within the enclosing statement* — they cannot be stored in a local, a field, or a collection, nor
+  returned further. There is **no `ref`-local / `ref`-field syntax**, so a borrow cannot outlive the
+  statement that produced it. This is exactly why `operator[]` — and a future general `ref T`-returning
+  method — need **no borrow checker**: the borrow is too short-lived to be invalidated, and the "I need
+  a stored reference" case is served by **owning** it (`Shared<T>`/`Owned<T>`).
+- **What the absence costs (honest):**
+  - No first-class / stored borrows — patterns Rust writes as `&'a T` in a struct become refcounted
+    ownership in cstar.
+  - No static aliasing/exclusivity proof for the cases a borrow checker would cover.
+  - **A known soundness gap to close:** mutating a collection *while iterating it by `ref`* —
+    `foreach (ref e in v) { v.add(…); e = … }` — compiles but is a **use-after-free** (verified under
+    ASan) when the mutation reallocates. A borrow checker rejects this; cstar currently does not. **Fix
+    (targeted, no lifetimes):** in a `ref` `foreach`, reject a mutating call on the iterated collection
+    — the loop already names it — or, minimally, document it. Tracked.
+- **Position:** keep the no-borrow-checker stance (core to "favor simplicity" — no lifetime
+  annotations), and *close the specific holes* the absence leaves (the iterate-and-mutate UAF above),
+  the way null-safety is enforced by targeted rules rather than a whole analysis.
+
+### Fast-follow prerequisites for a cstar-written standard library
+
+Place-returning `operator[]` (shipped) lets a collection be written *in* cstar. Three small language
+features finish the prerequisite set — each independently useful, none requiring new theory:
+
+- **`sizeof(T)` (a compile-time builtin)** — *hard requirement* for a generic heap container: a
+  `Vec<T>` over `Ptr<T>` can't allocate `n * sizeof(T)` today. Monomorphized ⇒ a constant per instance.
+- **A `panic`/`assert` surface** — so a user collection can bounds-*trap* safely without dropping to
+  FFI `abort()`; reuses the runtime's existing `cstar_bounds_fail` trap shape.
+- **General `ref T`-returning methods** (`fn ref T at(usize i)`, `first()`, `get_mut()`) — the same
+  second-class-place machinery as `operator[]`, extended to named method calls at the caller (a
+  mechanical deref, no analysis). API ergonomics; a minimal `Vec` works with `operator[]` alone.
+
+### The standard-library shape — modular & opt-in (design question)
+
+The roadmap already ties "**move the runtime into cstar**" (below, under 2.0) to the IR/multi-backend
+work — "Multi-backend and the cstar-stdlib are the same project." Two questions to settle before
+building it:
+
+- **Is the math layer a stdlib *module* or language-level value types?** Recommendation: build the math
+  types (`Vec2/3/4`, `Mat4 = Fixed<float32,16>` / `Fixed<Vec4,4>`, `Quat`) **now, as ordinary `value`
+  types** — they need only operator overloading + `Fixed` (both shipped), **no** stdlib prerequisites —
+  and *package* them as a module once the module mechanism exists. Unblocks the engine's Tier-0 math
+  immediately and stays forward-compatible either way.
+- **How does "modular / opt-in / pay-for-what-you-use" work?** The **prelude mechanism** (`PRELUDE_SRC`
+  — parsed cstar collected before user code, the model `Optional`/`Result` already use) is the seed: a
+  stdlib = more prelude-collected cstar modules in a `Std` namespace, `using`-imported; generic types
+  already emit only when instantiated. **Caveat to solve:** plain (non-generic) functions are *not*
+  reachability-pruned today, so a large module would bloat output — "pay for what you use" needs either
+  dead-function elimination or explicit per-module opt-in. **A dedicated design pass is warranted**
+  before the collection rewrite.
+
+**Sequencing (recommendation).** Land the three fast-follows soon (cheap; they harden `operator[]` and
+unblock cstar-written collections). Build the **math value types now** (no prereqs). Treat
+**collections-as-a-modular-cstar-stdlib** as its own milestone with the design pass above — it *is* the
+self-hosting / 2.0-IR project, worth doing deliberately rather than rushed. (Note: const generics,
+`Fixed<T,N>`, place-indexing, and `operator[]` all landed as language features *after* the "language
+complete" framing above — so where the **1.0 cut** falls, relative to these prerequisites, is itself
+part of this discussion.)
+
 ## 1.x — systems & runtime (post-1.0)
 
 Built ON the finished language; mostly library + codegen, not new syntax. These are also the
