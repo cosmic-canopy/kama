@@ -119,7 +119,7 @@ struct cstaryystype {
 %token <string> INT INT8 INT16 INT32 INT64
 %token <string> MATCH
 %token <string> NAMESPACE
-%token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF
+%token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
 %token <string> REF RETURN STATIC STRING
 %token <string> THIS TRUE TYPE
@@ -864,9 +864,10 @@ cast_expression
   : CAST LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN unary_expression RPAREN   { $$ = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $4, $8 ); }
   ;
 sizeof_expression
-  /* `sizeof(T)` — the compile-time byte size of a type as a `usize` (`type` self-manages its own
-     `<…>` genericDepth, so `sizeof(Fixed<int32,4>)` parses too). */
+  /* `sizeof(T)` / `alignof(T)` — the compile-time byte size / alignment of a type as a `usize`
+     (`type` self-manages its own `<…>` genericDepth, so `sizeof(Fixed<int32,4>)` parses too). */
   : SIZEOF LPAREN type RPAREN   { $$ = std::make_shared<SizeofNode>(SCANNER_CODEGENCONTEXT, $3); }
+  | ALIGNOF LPAREN type RPAREN   { auto s = std::make_shared<SizeofNode>(SCANNER_CODEGENCONTEXT, $3); s->isAlign = true; $$ = s; }
   ;
 constant_expression
   : expression

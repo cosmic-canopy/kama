@@ -591,9 +591,10 @@ cast_expression
   : CAST LT  type GT  LPAREN unary_expression RPAREN
   ;
 sizeof_expression
-  /* `sizeof(T)` — the compile-time byte size of a type as a `usize` (`type` self-manages its own
-     `<…>` genericDepth, so `sizeof(Fixed<int32,4>)` parses too). */
+  /* `sizeof(T)` / `alignof(T)` — the compile-time byte size / alignment of a type as a `usize`
+     (`type` self-manages its own `<…>` genericDepth, so `sizeof(Fixed<int32,4>)` parses too). */
   : SIZEOF LPAREN type RPAREN
+  | ALIGNOF LPAREN type RPAREN
   ;
 constant_expression
   : expression

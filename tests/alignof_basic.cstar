@@ -1,0 +1,7 @@
+// `alignof(T)` — the compile-time alignment of a type, as a usize (sibling to `sizeof`, for allocators).
+type value P { public int64 a; public int8 b; public P(){ this.a=0; this.b=0; } }
+fn int32 main() {
+    // sizeof(P)=16 (int64 + trailing pad), alignof(P)=8, alignof(int32)=4, alignof(int8)=1
+    return cast<int32>(sizeof(P)) + cast<int32>(alignof(P)) + cast<int32>(alignof(int32)) + cast<int32>(alignof(int8));
+    // 16 + 8 + 4 + 1 = 29
+}

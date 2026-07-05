@@ -260,6 +260,7 @@ struct name_value {
 static struct name_value keywords [] = { 
  /* This list must remain sorted!!! */
     {"abstract",    ABSTRACT},
+    {"alignof",     ALIGNOF},
     {"base",        BASE},
     {"bool",        BOOL},
     {"break",       BREAK},

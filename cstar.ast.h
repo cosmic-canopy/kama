@@ -499,10 +499,12 @@ public:
         , unaryExpression(unaryExpression) { }
 };
 
-// `sizeof(T)` — the compile-time byte size of a type, a `usize` (lowers to C `sizeof(cType)`).
+// `sizeof(T)` / `alignof(T)` — the compile-time byte size / alignment of a type, a `usize`
+// (lowers to C `sizeof(cType)` / `_Alignof(cType)`).
 class SizeofNode : public ExpressionNode {
 public:
     SharedIdentifier type;
+    bool isAlign = false;   // `alignof(T)` rather than `sizeof(T)`
     SizeofNode(CodeGenContext& context, SharedIdentifier type)
         : ASTNode(context),  ExpressionNode(context), type(type) { }
 };

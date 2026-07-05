@@ -777,10 +777,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return "((" + cType(v->type) + ")(" + emitExpression(v->unaryExpression) + "))";
     }
 
-    // `sizeof(T)` -> C `sizeof(<cType>)` (a compile-time `size_t`/`usize`). `cType` resolves a generic
-    // `T` under substitution, so `n * sizeof(T)` inside a `Vec<T>` monomorphizes to the concrete size.
+    // `sizeof(T)`/`alignof(T)` -> C `sizeof(<cType>)`/`_Alignof(<cType>)` (a compile-time `size_t`/
+    // `usize`). `cType` resolves a generic `T` under substitution, so `n * sizeof(T)` inside a
+    // `Vec<T>` monomorphizes to the concrete size. `_Alignof` is C11 (cstar emits strict ISO C11).
     if (auto* v = dynamic_cast<SizeofNode*>(n)) {
-        return "sizeof(" + cType(v->type) + ")";
+        return std::string(v->isAlign ? "_Alignof(" : "sizeof(") + cType(v->type) + ")";
     }
 
     unsupported("expression", n->line);
