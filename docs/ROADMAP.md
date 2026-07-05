@@ -47,10 +47,11 @@ non-goal.
   carry several `operator*` distinguished by operand type (`mat*vec`, `mat*mat`, `v*s`, `s*v`),
   matching C++/C#/Rust. Reopen only if a concrete example shows named params can't express it.
 
-## Reference model, the standard library & near-term prerequisites (open — for discussion)
+## Reference model, the standard library & near-term prerequisites
 
-Three linked threads, on the record (policy: nothing untracked). These sit around the 1.0 line and
-are **not yet scheduled** — the sequencing is the open question.
+Three linked threads (policy: nothing untracked). The **prerequisites are now DONE** (the reference
+model's one soundness hole is closed; the three fast-follows shipped); the **modular-stdlib shape**
+below remains the open design question, sequenced before the collection rewrite.
 
 ### The reference model — why no borrow checker, and what it costs
 
@@ -69,27 +70,29 @@ the no-GC and shared-nothing-concurrency positions. Concretely:
   - No first-class / stored borrows — patterns Rust writes as `&'a T` in a struct become refcounted
     ownership in cstar.
   - No static aliasing/exclusivity proof for the cases a borrow checker would cover.
-  - **A known soundness gap to close:** mutating a collection *while iterating it by `ref`* —
-    `foreach (ref e in v) { v.add(…); e = … }` — compiles but is a **use-after-free** (verified under
-    ASan) when the mutation reallocates. A borrow checker rejects this; cstar currently does not. **Fix
-    (targeted, no lifetimes):** in a `ref` `foreach`, reject a mutating call on the iterated collection
-    — the loop already names it — or, minimally, document it. Tracked.
+  - **A known soundness gap — NOW CLOSED.** Mutating a collection *while iterating it by `ref`* —
+    `foreach (ref e in v) { v.add(…); e = … }` — used to compile but was a **use-after-free** (verified
+    under ASan) when the mutation reallocated. Fixed (`fc212e7`) with a targeted rule (no lifetimes):
+    growing the iterated collection (`add`) inside its own `foreach` is now a clean compile error naming
+    the collection. Place-return escape is also enforced (a `ref T` result must borrow `this`/a `ref`
+    param, never a local).
 - **Position:** keep the no-borrow-checker stance (core to "favor simplicity" — no lifetime
-  annotations), and *close the specific holes* the absence leaves (the iterate-and-mutate UAF above),
-  the way null-safety is enforced by targeted rules rather than a whole analysis.
+  annotations), and *close the specific holes* the absence leaves (as done above) with targeted rules
+  rather than a whole analysis — the way null-safety is enforced.
 
-### Fast-follow prerequisites for a cstar-written standard library
+### Fast-follow prerequisites for a cstar-written standard library — DONE
 
-Place-returning `operator[]` (shipped) lets a collection be written *in* cstar. Three small language
-features finish the prerequisite set — each independently useful, none requiring new theory:
+Place-returning `operator[]` (shipped) lets a collection be written *in* cstar; three small features
+(`2a5beec`, `fc212e7`) finished the prerequisite set, proven end-to-end by a generic heap `Vec<T>`
+written entirely in cstar (`tests/opindex_vec`, ASan-clean):
 
-- **`sizeof(T)` (a compile-time builtin)** — *hard requirement* for a generic heap container: a
-  `Vec<T>` over `Ptr<T>` can't allocate `n * sizeof(T)` today. Monomorphized ⇒ a constant per instance.
-- **A `panic`/`assert` surface** — so a user collection can bounds-*trap* safely without dropping to
-  FFI `abort()`; reuses the runtime's existing `cstar_bounds_fail` trap shape.
-- **General `ref T`-returning methods** (`fn ref T at(usize i)`, `first()`, `get_mut()`) — the same
-  second-class-place machinery as `operator[]`, extended to named method calls at the caller (a
-  mechanical deref, no analysis). API ergonomics; a minimal `Vec` works with `operator[]` alone.
+- **`sizeof(T)`** ✅ — compile-time size builtin (mirrors `cast<T>`); monomorphizes, so `n * sizeof(T)`
+  works in a generic `Vec<T>` over `Ptr<T>`.
+- **`panic` / `assert`** ✅ — named-arg trap builtins over a new `cstar_panic` runtime helper (the
+  `cstar_bounds_fail` shape); a user collection bounds-traps without FFI `abort()`.
+- **General `ref T`-returning methods** ✅ — `fn ref T at(usize i)` etc. reuse the `operator[]` place
+  machinery (caller derefs the call). *Remaining niceties (unscheduled):* the same for **free
+  functions**; `debug_assert`-style release stripping; formatted panic messages.
 
 ### The standard-library shape — modular & opt-in (design question)
 

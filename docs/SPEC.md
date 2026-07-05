@@ -277,6 +277,23 @@ while the collection is alive + unmodified, and dereferencing it requires `unsaf
 (including a safety-gate violation) is a **hard build error** — cstar never emits incomplete C and claims
 success.
 
+### Writing a collection *in* cstar — `sizeof`, `panic`/`assert`, place-returning methods ✅
+
+The above pieces (a place-returning `operator[]`, `Ptr<T>` + `unsafe`, generics, RAII) let a `Vec`/matrix
+be written **in the language** rather than baked into the compiler. Three builtins complete the kit:
+
+- **`sizeof(T)`** — the compile-time byte size of a type (a `usize`); monomorphizes, so
+  `malloc(n: n * sizeof(T))` works in a generic `Vec<T>`.
+- **`panic(msg: string)` / `assert(cond: bool)`** — a clean **trap** (writes the message + `abort()`, not
+  UB — the user-facing form of the built-in bounds trap). For a *bug that can't continue*; recoverable
+  errors use `Result<T, E>`. (cstar aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.)
+- **A place-returning method** — `public fn ref T at(usize i) { … }` returns a place, exactly like
+  `operator[]`, so `v.at(i) = x` works. A `ref T` result must borrow `this` or a `ref` parameter (never a
+  local — it would dangle), and it's second-class (used in-place, never stored).
+
+Iterator safety: growing a collection (`add`) while iterating it with `foreach` is a compile error (it
+would invalidate the loop) — collect and append after.
+
 ### Function pointers — `fnptr` ✅
 
 cstar has no naked function pointers. **`fnptr`** declares an explicit, named function-pointer **type**
