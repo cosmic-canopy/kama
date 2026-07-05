@@ -49,13 +49,17 @@ ones. There is no separate capital-`String` collection type.
 ## Collections & strings ✅
 
 Built-in generics, monomorphized per element type and backed by the C runtime (unsafe internals, safe API —
-the Rust-`Vec` model); **indexing is bounds-checked** (a clean trap, not UB).
+the Rust-`Vec` model); **indexing is bounds-checked** (a clean trap, not UB). An indexed element `a[i]` is
+a **place** (an lvalue): you can write a field through it (`a[i].x = v`), index it again
+(`m[i][j] = v`), compound-assign it (`a[i] += x`), or borrow it (`ref a[i]`) — every form stays
+bounds-checked. (Reading `a[i]` still yields a copy.)
 
 ```cstar
 Array<int32> a = new Array<int32>(size: 4);   // fixed buffer, zero-initialized
 a[0] = 10;  a[1] = 20;                          // bounds-checked []
 int32 first = a[0];
-foreach (int32 x in a) { /* ... */ }            // iterate
+foreach (int32 x in a) { /* ... */ }            // iterate (x is a copy)
+foreach (ref int32 x in a) { x = x * 2; }       // `ref`: mutate each element in place
 
 List<Point> ps = new List<Point>();             // growable
 ps.add(item: p);   int n = ps.length();   Point q = ps[0];
@@ -555,7 +559,9 @@ constructor** is a valid operand — `v + Vec3(x: 1, y: 0, z: 0)` needs no separ
 and re-evaluates each pass); a `do`/`while` condition is the one place it must still be bound to a local.
 
 `==` is **explicit** — a `value` without `operator==` cannot be compared (there is no auto-generated
-structural equality). Index `operator[]` and the `true`/`false` conversion operators are out of scope.
+structural equality). A **user-defined** index `operator[]` (a place-returning one, for user
+collections) and the `true`/`false` conversion operators are out of scope; the built-in collections'
+`a[i]` place-indexing is not affected.
 
 Used in a `contract`, an operator becomes a **bound** for generic math (see below).
 
