@@ -201,6 +201,11 @@ struct InterfaceInfo {
     std::vector<InterfaceMethod> methods;
     std::string                  scope;
     std::vector<std::string>     usings;
+    // A specialized generic-contract instance (`Iterator_int32`) — emitted under a bound _typeSubst so
+    // its `T`-typed method sigs resolve; the template itself lives in _genericContracts, not here.
+    bool                         isGenericInst = false;
+    std::string                  templateKey;   // the generic contract this specializes (e.g. "Iterator")
+    std::vector<SharedIdentifier> typeArgs;      // the concrete args (e.g. [int32])
 };
 
 // An enum: lowered to a C `enum` with members mangled `Enum_Member`.
@@ -301,6 +306,16 @@ private:
     std::map<std::string, std::string>        _genericTypeInstOf;   // mangled name -> template name (construction)
     std::vector<std::string>                  _genericTypeInstOrder;// registration order (inner-first; struct-typedef emit)
     bool                                      _emitStaticClass = false;  // prefix `static` on specialized class fns (header ODR)
+
+    // Generic CONTRACTS (`type contract Iterator<T>`) — the exact parallel of generic TYPES above. The
+    // TEMPLATE is kept OUT of _interfaces (so the eager vtable-emit loop never sees its unbound `T`);
+    // each reachable `Iterator<Arg>` becomes a specialized InterfaceInfo (`Iterator_int32`,
+    // isGenericInst=true) registered in _interfaces and emitted under _typeSubst. Bound-checking is by
+    // method NAME (T-independent), so it reads the template's methods directly (no instance needed).
+    std::map<std::string, InterfaceInfo>            _genericContracts;      // template name -> InterfaceInfo shape (NOT in _interfaces)
+    std::map<std::string, std::vector<std::string>> _genericContractParams; // template name -> type-param names [T]
+    std::map<std::string, NsCtx>                    _genericContractCtx;    // template name -> home namespace ctx
+    std::set<std::string>                           _genericContractInsts;  // mangled instance names already registered (dedup)
 
     // Namespaces: current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
@@ -409,6 +424,23 @@ private:
     void registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args);
     std::string genericTypeMangle(const std::string& tmpl, SharedIdentifierList args);  // "Pair" + "_int32" + "_string"
     void emitGenericTypeInst(const GenericTypeInst& gi, int phase);   // 0=struct typedef, 1=protos, 2=bodies
+
+    // Generic CONTRACTS: discover `Iterator<int32>` uses, build one specialized InterfaceInfo each
+    // (registered in _interfaces so the vtable-emit loop picks it up), emit under subst.
+    void scanTypeForGenericContracts(SharedIdentifier t);
+    void registerGenericContractInst(const std::string& tmpl, SharedIdentifierList args);
+    // A contract's method-prototype list, from _interfaces (concrete/instance) or _genericContracts
+    // (a template). Bound-checking matches by method NAME, which is type-parameter-independent, so it
+    // reads either table through this one accessor. Returns nullptr for an unknown name.
+    const std::vector<InterfaceMethod>* contractMethods(const std::string& name);
+    // RAII: while emitting a generic-contract instance's vtbl / a class's impl-vtable for it, bind
+    // T->concrete (and its home ctx) so the `T`-typed method sigs resolve — a no-op for a plain
+    // contract. Mirrors emitGenericTypeInst's subst bind; nested so it can touch CEmitter's privates.
+    struct ContractSubst {
+        CEmitter& e; NsCtx savedCtx; std::map<std::string, SharedIdentifier> savedSubst; bool active;
+        ContractSubst(CEmitter& e_, const InterfaceInfo& ii);
+        ~ContractSubst();
+    };
 
     // Generics: discover reachable generic-function instantiations, infer their
     // type args from call-site arguments, and emit one specialized `static` C function each.

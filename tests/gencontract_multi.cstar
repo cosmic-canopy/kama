@@ -1,0 +1,17 @@
+// A two-parameter generic contract `Pairing<K, V>` — exercises multi-arg mangling
+// (`Pairing_int32_int32`) and a bound over it. `Entry` satisfies `Pairing<int32, int32>` structurally.
+type contract Pairing<K, V> { fn K key(); fn V val(); }
+
+type value Entry implements Pairing<int32, int32> {
+    int32 k; int32 v;
+    public Entry(int32 k, int32 v) { this.k = k; this.v = v; }
+    public fn int32 key() { return this.k; }
+    public fn int32 val() { return this.v; }
+}
+
+fn int32 combine<P: Pairing<int32, int32>>(P p) { return p.key() + p.val(); }
+
+fn int32 main() {
+    Entry e = Entry(k: 30, v: 12);
+    return combine(p: e);   // 42
+}

@@ -104,7 +104,8 @@ std::string CEmitter::resolveUserName(const std::string& value, SharedStringList
 {
     auto known = [&](const std::string& n) {
         return _classes.count(n) || _enums.count(n) || _interfaces.count(n) || _sigs.count(n)
-            || _genericTypes.count(n);   // a generic-type template resolves to its scoped name too
+            || _genericTypes.count(n)       // a generic-type template resolves to its scoped name too
+            || _genericContracts.count(n);  // as does a generic-contract template (`Iterator<T>`)
     };
     // FFI: extern struct/handle names are global literal C names.
     if ((!qualifier || qualifier->empty()) && _externNames.count(value)) return value;
@@ -206,7 +207,10 @@ std::string CEmitter::cType(SharedIdentifier type)
     // Reached only for a non-reserved name with a type arg; under _typeSubst the arg's `T` resolves.
     if (type->genericArg && type->value) {   // genericArg mirrors genericArgs[0] (non-null iff there are args)
         std::string tmpl = resolveUserName(*type->value, type->qualifier);
-        if (_genericTypes.count(tmpl)) return genericTypeMangle(tmpl, type->genericArgs);
+        // a generic TYPE (`Box<int32>`) or a generic CONTRACT (`Iterator<int32>`) both spell their
+        // specialized name; the contract instance lives in _interfaces after discovery.
+        if (_genericTypes.count(tmpl) || _genericContracts.count(tmpl))
+            return genericTypeMangle(tmpl, type->genericArgs);
     }
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "int8_t";
@@ -1853,7 +1857,19 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     unsupported(("a `contract` has no constructor/destructor — `" + ii.name + "` is a guarantee").c_str(), m->line);
                 }
             }
-        _interfaces[ii.name] = ii;
+        // a generic CONTRACT template (`type contract Iterator<T>`) is kept OUT of _interfaces — its
+        // method sigs name the raw `T`, so an eager vtable would be bogus. Its shape is parked in
+        // _genericContracts and specialized per concrete `Iterator<Arg>` at discovery (mirrors the
+        // generic-TYPE divert in collectClasses).
+        if (cd->typeParams && !cd->typeParams->empty()) {
+            std::vector<std::string> ps;
+            for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);
+            _genericContractParams[ii.name] = ps;
+            _genericContractCtx[ii.name]    = _nsCtx;
+            _genericContracts[ii.name]      = ii;
+        } else {
+            _interfaces[ii.name] = ii;
+        }
     }
 }
 
@@ -2637,6 +2653,7 @@ void CEmitter::scanTypeForCollections(SharedIdentifier t)
     if (t->genericArgs) for (auto& a : *t->genericArgs) scanTypeForCollections(a);
     else if (t->genericArg) scanTypeForCollections(t->genericArg);
     scanTypeForGenericTypes(t);                                 // also discover Pair<A,B> here
+    scanTypeForGenericContracts(t);                             // and Iterator<int32> (value-position use)
     if (isCollectionType(t)) registerCollection(t);
 }
 
@@ -2729,6 +2746,81 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // a generic tagged union (Optional<Shared<T>>) — scan each variant's substituted payload so
     // the inner `Shared_int32` etc. registers (inner-first) before this instance's dtor references it.
     for (auto& v : ci.variants) for (auto& f : v.payload) scanTypeForCollections(f.type);
+
+    _typeSubst = savedSubst;
+    _nsCtx = savedCtx;
+}
+
+// A contract's method-prototype list — from _interfaces (a concrete contract or a specialized
+// generic-contract instance) or _genericContracts (a template). Bound-checking matches by method
+// NAME (type-parameter-independent), so it reads either table through this one accessor.
+const std::vector<InterfaceMethod>* CEmitter::contractMethods(const std::string& name)
+{
+    auto it = _interfaces.find(name);
+    if (it != _interfaces.end()) return &it->second.methods;
+    auto gt = _genericContracts.find(name);
+    if (gt != _genericContracts.end()) return &gt->second.methods;
+    return nullptr;
+}
+
+// register the specialized instance for a generic-contract reference `Iterator<Arg>` (mirrors
+// scanTypeForGenericTypes). Driven by scanTypeForCollections at each type node.
+void CEmitter::scanTypeForGenericContracts(SharedIdentifier t)
+{
+    if (!t || !t->value || !t->genericArg) return;
+    std::string tmpl = resolveUserName(*t->value, t->qualifier);
+    if (_genericContracts.count(tmpl)) registerGenericContractInst(tmpl, t->genericArgs);
+}
+
+// Build one specialized InterfaceInfo per `Iterator<Arg>` (the exact parallel of
+// registerGenericTypeInst, minus fields/ctor/dtor): resolve each arg through the active _typeSubst
+// (the nested/transitive case), mangle, dedup, copy the template shape into _interfaces under the
+// specialized name, then transitively scan the substituted method sigs so an inner `Optional<T>`
+// registers `Optional_int32` before this instance's vtable references it.
+void CEmitter::registerGenericContractInst(const std::string& tmpl, SharedIdentifierList args)
+{
+    if (!args || args->empty()) return;
+    const std::vector<std::string>& params = _genericContractParams[tmpl];
+
+    std::vector<SharedIdentifier> concrete;
+    for (auto& a : *args) {
+        SharedIdentifier c = a;
+        if (a && !_typeSubst.empty() && a->value && !a->genericArg) {
+            auto s = _typeSubst.find(*a->value);
+            if (s != _typeSubst.end()) c = s->second;
+        }
+        concrete.push_back(c);
+    }
+    if (concrete.size() != params.size()) {
+        unsupported(("wrong number of type arguments for generic contract `" + tmpl + "` (expected "
+                     + std::to_string(params.size()) + ", got " + std::to_string(concrete.size()) + ")").c_str(),
+                    args->front() ? args->front()->line : 0);
+        return;
+    }
+
+    std::string mangled = tmpl;
+    for (auto& c : concrete) mangled += "_" + mangleElem(c);
+    if (!_genericContractInsts.insert(mangled).second) return;    // dedup (also stops self-recursion)
+
+    NsCtx savedCtx = _nsCtx;
+    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    _nsCtx = _genericContractCtx[tmpl];
+    _typeSubst.clear();
+    for (size_t i = 0; i < params.size(); ++i) _typeSubst[params[i]] = concrete[i];   // zip params -> args
+
+    InterfaceInfo ii = _genericContracts[tmpl];                   // copy the template (methods keep `T`)
+    ii.name = mangled;
+    ii.isGenericInst = true;
+    ii.templateKey = tmpl;
+    ii.typeArgs = concrete;
+    _interfaces[mangled] = ii;                                    // the emit loops pick it up from here
+
+    // transitive close: register any collection / generic type the substituted method sigs use, so
+    // `Optional<T>` -> `Optional_int32` exists (as a complete typedef) before this vtable slot names it.
+    for (auto& m : ii.methods) {
+        scanTypeForCollections(m.returnType);
+        if (m.params) for (auto& p : *m.params) if (p) scanTypeForCollections(p->type);
+    }
 
     _typeSubst = savedSubst;
     _nsCtx = savedCtx;
@@ -2829,6 +2921,10 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             // the program drives registerGenericTypeInst, which re-scans the specialized members
             // under _typeSubst (so `List<T>` -> `List_int32`).
             if (cd->typeParams && !cd->typeParams->empty()) continue;
+            // `class C implements Iterator<int32>` — register the specialized contract instance so its
+            // vtable emits (a value/dynamic use of C needs `C__as_Iterator_int32`).
+            if (cd->baseTypes && cd->baseTypes->interfaces)
+                for (auto& itf : *cd->baseTypes->interfaces) scanTypeForGenericContracts(itf);
             if (cd->members) for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
@@ -3709,7 +3805,18 @@ void CEmitter::linkBases()
         _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;
         if (ci.node && ci.node->baseTypes && ci.node->baseTypes->base && ci.node->baseTypes->base->value)
             ci.baseName = resolveUserName(*ci.node->baseTypes->base->value, ci.node->baseTypes->base->qualifier);
-        for (auto& itf : ci.interfaces) itf = resolveUserName(itf, nullptr);
+        // resolve each interface name; a generic-contract `implements Iterator<int32>` resolves to the
+        // specialized instance name (`Iterator_int32`) — its genericArgs live on the AST node, which
+        // ci.interfaces (a plain name list) dropped, so read them back in parallel.
+        SharedIdentifierList ifaceNodes = (ci.node && ci.node->baseTypes) ? ci.node->baseTypes->interfaces
+                                                                          : SharedIdentifierList();
+        for (size_t i = 0; i < ci.interfaces.size(); ++i) {
+            std::string base = resolveUserName(ci.interfaces[i], nullptr);
+            SharedIdentifier itfNode = (ifaceNodes && i < ifaceNodes->size()) ? (*ifaceNodes)[i] : nullptr;
+            if (itfNode && itfNode->genericArg && _genericContracts.count(base))
+                base = genericTypeMangle(base, itfNode->genericArgs);   // Iterator -> Iterator_int32
+            ci.interfaces[i] = base;
+        }
     }
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
@@ -4005,9 +4112,11 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
 // `Concrete__m(&x)`; nominal `implements` is not required, matching the codegen reality).
 bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
 {
-    auto it = _interfaces.find(contract);
-    if (it == _interfaces.end()) return false;            // unknown contract — caller diagnoses
-    for (auto& m : it->second.methods) {
+    // matched by method NAME (type-parameter-independent), so a generic-contract bound checks against
+    // its TEMPLATE — no `Iterator<int32>` instance is needed just to constrain a type parameter.
+    const std::vector<InterfaceMethod>* methods = contractMethods(contract);
+    if (!methods) return false;                           // unknown contract — caller diagnoses
+    for (auto& m : *methods) {
         ClassInfo* owner = nullptr;
         MethodInfo* mi = findMethod(ci, m.name, &owner);
         if (!mi || mi->visibility != Visibility::Public) return false;
@@ -4027,7 +4136,7 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
     for (auto& b : *bounds) {
         if (!b || !b->value) continue;
         std::string contract = resolveUserName(*b->value, b->qualifier);
-        if (!_interfaces.count(contract)) {
+        if (!contractMethods(contract)) {   // a plain contract OR a generic-contract template (`Iterator<T>`)
             unsupported(("unknown contract `" + *b->value + "` in a bound on type parameter `"
                          + paramName + "`").c_str(), line);
             continue;
@@ -5463,11 +5572,28 @@ std::string CEmitter::ifaceSlotSig(SharedParameterList params)
 }
 
 // Interface I -> a vtable struct type `I_vtbl` and a fat-pointer value type `I`.
+CEmitter::ContractSubst::ContractSubst(CEmitter& e_, const InterfaceInfo& ii)
+    : e(e_), savedCtx(e_._nsCtx), savedSubst(e_._typeSubst), active(ii.isGenericInst)
+{
+    if (!active) return;
+    e._nsCtx = e._genericContractCtx.count(ii.templateKey) ? e._genericContractCtx[ii.templateKey] : e._nsCtx;
+    e._typeSubst.clear();
+    const std::vector<std::string>& ps = e._genericContractParams[ii.templateKey];
+    for (size_t i = 0; i < ps.size() && i < ii.typeArgs.size(); ++i) e._typeSubst[ps[i]] = ii.typeArgs[i];
+}
+CEmitter::ContractSubst::~ContractSubst()
+{
+    if (!active) return;
+    e._typeSubst = savedSubst;
+    e._nsCtx = savedCtx;
+}
+
 void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 {
     // in the type-erased vtbl slot, `This` is the interface type itself (a contract's `This`-typed
     // method is dispatched STATICALLY via a bound; the vtbl slot is dead for that use but must be valid C).
     ScopedStr _ts(_thisType, ii.name);
+    ContractSubst _cs(*this, ii);   // bind T->int32 for a generic-contract instance (`Iterator_int32`)
     *_out << "struct " << ii.name << "_vtbl {\n";
     for (auto& m : ii.methods) {
         indent(1);
@@ -5490,6 +5616,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         InterfaceInfo& ii = it->second;
         // the slot casts must match the vtbl struct's erased signature -> `This` = the interface.
         ScopedStr _ts(_thisType, ii.name);
+        ContractSubst _cs(*this, ii);   // bind T->int32 so a generic-contract slot's sig matches its vtbl
         *_out << "static const " << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
@@ -6112,9 +6239,14 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             ASTNode* d = decl.get();
             if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d)) {
                 if (cd->name && cd->name->value) {
-                    // `type contract` pre-registers as an interface name, not a class.
+                    // `type contract` pre-registers as an interface name, not a class. A GENERIC
+                    // contract pre-registers in _genericContracts (like a generic type below), so an
+                    // early `cType(Iterator<int32>)` (collectSignatures runs first) mangles to the
+                    // instance name rather than resolving the bare template stub.
                     if (cd->typeKind && *cd->typeKind == "contract") {
-                        std::string n = qualify(*cd->name->value); _interfaces[n].name = n;
+                        std::string n = qualify(*cd->name->value);
+                        if (cd->typeParams && !cd->typeParams->empty()) _genericContracts[n].name = n;
+                        else                                            _interfaces[n].name = n;
                     } else if (cd->typeParams && !cd->typeParams->empty()) {
                         // a generic TYPE template pre-registers in _genericTypes, NOT _classes
                         // (an empty _classes entry would be emitted as a bogus struct). collectClasses fills it.

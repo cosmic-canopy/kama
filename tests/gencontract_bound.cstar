@@ -1,0 +1,32 @@
+// A generic contract `Iterator<T>` used as a static BOUND: `<I: Iterator<int32>>` monomorphizes
+// `it.next()` to a direct `IntRange__next(&it)` — zero-cost, no vtable. The generic contract is
+// specialized per use (`Iterator_int32`) exactly like a generic type; `implements Iterator<int32>`
+// on the concrete type is checked against that instance.
+type contract Iterator<T> { fn Optional<T> next(); }
+
+type value IntRange implements Iterator<int32> {
+    int32 cur; int32 end;
+    public IntRange(int32 start, int32 end) { this.cur = start; this.end = end; }
+    public fn Optional<int32> next() {
+        if (this.cur >= this.end) { return Optional::None; }
+        int32 v = this.cur; this.cur = this.cur + 1; return Optional::Some(value: v);
+    }
+}
+
+fn int32 sumIter<I: Iterator<int32>>(I it) {
+    int32 total = 0;
+    bool going = true;
+    while (going) {
+        Optional<int32> o = it.next();               // static: IntRange__next(&it)
+        match (o) {
+            case Some(v): { total = total + v; }
+            case None:    { going = false; }
+        };
+    }
+    return total;
+}
+
+fn int32 main() {
+    IntRange r = IntRange(start: 1, end: 5);         // 1 + 2 + 3 + 4
+    return sumIter(it: r);                            // 10
+}

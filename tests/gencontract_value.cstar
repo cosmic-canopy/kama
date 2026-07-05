@@ -1,0 +1,32 @@
+// The SAME generic contract used as a dynamic fat-pointer VALUE: `Iterator<int32>` as a parameter
+// erases the concrete type; `it.next()` dispatches through the monomorphized vtable
+// (`Iterator_int32_vtbl`). Proves generic contracts get full value + bound parity with plain
+// contracts — monomorphization (bound) and fat pointers (value) are complementary, not either/or.
+type contract Iterator<T> { fn Optional<T> next(); }
+
+type value IntRange implements Iterator<int32> {
+    int32 cur; int32 end;
+    public IntRange(int32 start, int32 end) { this.cur = start; this.end = end; }
+    public fn Optional<int32> next() {
+        if (this.cur >= this.end) { return Optional::None; }
+        int32 v = this.cur; this.cur = this.cur + 1; return Optional::Some(value: v);
+    }
+}
+
+fn int32 drain(Iterator<int32> it) {                 // `it` is a fat pointer {obj, vtbl}
+    int32 total = 0;
+    bool going = true;
+    while (going) {
+        Optional<int32> o = it.next();               // dynamic: it.vtbl->next(it.obj)
+        match (o) {
+            case Some(v): { total = total + v; }
+            case None:    { going = false; }
+        };
+    }
+    return total;
+}
+
+fn int32 main() {
+    IntRange r = IntRange(start: 1, end: 5);         // coerced to Iterator<int32> at the call
+    return drain(it: r);                             // 10
+}
