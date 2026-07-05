@@ -1,0 +1,10 @@
+// Writing a field through a subscript is now valid: arr[i].field = v (a place, not an rvalue copy).
+type value P { public int32 x; public int32 y; public P(int32 x, int32 y){ this.x=x; this.y=y; } }
+fn int32 main() {
+    Fixed<P, 2> f = [P(x: 1, y: 2), P(x: 3, y: 4)];
+    f[1].x = 40;                        // field write through a Fixed subscript
+    List<P> l = new List<P>();
+    l.add(item: P(x: 5, y: 6));
+    l[0].y = 70;                        // field write through a List subscript
+    return f[1].x + f[0].x + l[0].y + l[0].x;   // 40 + 1 + 70 + 5 = 116
+}

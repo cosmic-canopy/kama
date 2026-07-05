@@ -382,6 +382,11 @@ private:
     // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
                               std::string& recvExpr, std::string& idx);
+    // A C lvalue (a PLACE) for `e`. An indexed element is lowered through the bounds-checked
+    // `NAME__at(self,i) -> T*` intrinsic (`(*NAME__at(&recv, i))`, recursing so `a[i][j]` chains),
+    // so it can be a write target / a `.field` receiver / a nested-index receiver. Anything else
+    // (a name, a member access, `this`) is already an lvalue and falls through to emitExpression.
+    std::string emitPlace(SharedExpression e);
 
     // Generic TYPES: discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
     void scanTypeForGenericTypes(SharedIdentifier t);

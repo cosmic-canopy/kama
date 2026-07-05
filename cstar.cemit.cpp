@@ -690,11 +690,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 std::string rhs = emitExpression(v->expression);
                 if (v->token == EQ)
                     return coll + "__set(&(" + recvExpr + "), " + idx + ", " + rhs + ")";
-                // Compound (a[i] += x): set(get(...) <op> (x)). NB: index double-evaluated.
-                std::string op = assignmentOperator(v->token);   // e.g. "+="
-                if (op.size() >= 2 && op.back() == '=') op.pop_back();
-                return coll + "__set(&(" + recvExpr + "), " + idx + ", "
-                            + coll + "__get(&(" + recvExpr + "), " + idx + ") " + op + " (" + rhs + "))";
+                // Compound (a[i] += x): mutate the element in place through the bounds-checked `*__at`
+                // place — the index is evaluated ONCE (no double `__get`+`__set`), and a nested
+                // `a[i][j] += x` works because `recvExpr` is itself a place.
+                return "((*" + coll + "__at(&(" + recvExpr + "), " + idx + ")) "
+                            + assignmentOperator(v->token) + " (" + rhs + "))";
             }
             // Raw pointer store `p[i] = v` — only inside `unsafe { }`.
             SharedExpression recv = ea->expression ? ea->expression
@@ -3260,9 +3260,25 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
             unsupported(("index " + std::to_string(iv) + " is out of bounds for `" + cls + "` (length "
                          + std::to_string(_collections[cls].constValue) + ")").c_str(), ea->line);
     }
-    recvExpr = emitExpression(recv);
+    // The receiver is emitted as a PLACE (an lvalue): a plain name stays itself, but a nested index
+    // (`m[i]` in `m[i][j]`) becomes `(*Outer__at(&m, i))` so `&recvExpr` is a real `T*`, not the
+    // address of a by-value `__get` rvalue. This is what makes chained/field-write indexing valid C.
+    recvExpr = emitPlace(recv);
     idx      = idxExpr ? emitExpression(idxExpr) : "0";
     return true;
+}
+
+// A C lvalue (place) for `e`: an indexed element lowers to `(*NAME__at(&recv, i))` via the
+// bounds-checked place intrinsic (recursing through the receiver so nested `a[i][j]` chains stay
+// valid — `&(*__at(...))` folds back to the `T*`). Everything else is already an lvalue.
+std::string CEmitter::emitPlace(SharedExpression e)
+{
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) {
+        std::string coll, recvExpr, idx;
+        if (collectionElemAccess(ea, coll, recvExpr, idx))   // recvExpr is itself a place (recursive)
+            return "(*" + coll + "__at(&(" + recvExpr + "), " + idx + "))";
+    }
+    return emitExpression(e);
 }
 
 // A fixed-array value literal (`[a, b, c]` or `[v; N]`) initializing a `Fixed<T,N>`. Its type comes
@@ -3911,6 +3927,11 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
             _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
             val = t;
+        } else if (p.byRef && dynamic_cast<ElementAccessNode*>(argExpr.get())) {
+            // `ref a[i]` borrows the ELEMENT: emit it as a place (`*NAME__at(...)`) so the `&(...)`
+            // below is the bounds-checked `T*` (index evaluated once), not the address of a by-value
+            // `__get` rvalue. Folds to `NAME__at(&a, i)`.
+            val = emitPlace(argExpr);
         } else {
             val = emitExpression(argExpr);
         }
@@ -5720,7 +5741,10 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         if (_inStaticMethod) unsupported("a `static` method has no `this`", ma->line);
         return "self->" + basePath + field;
     }
-    return "(" + emitExpression(ma->expression) + ")." + basePath + field;
+    // Emit the receiver as a PLACE: for an indexed-element receiver this is `(*NAME__at(&a,i)).field`
+    // (a real lvalue), so `arr[i].field = v` is a valid write — not `(__get(...)).field = v` (assigning
+    // to a member of an rvalue). `emitPlace` is identity for a name/`this`/nested member access.
+    return "(" + emitPlace(ma->expression) + ")." + basePath + field;
 }
 
 // Dispatch a method call on a receiver of static class `clsName`.
@@ -5905,7 +5929,16 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
 
     // Forward typedefs so bodies can reference each other and any struct (incl. generic instances).
     for (ClassInfo* ci : ordered) {
-        if (ci->isCollection || ci->isExternStruct) continue;   // macro / header provides it
+        if (ci->isExternStruct) continue;
+        if (ci->isCollection) {
+            // A `Fixed<T,N>` gets its full `CSTAR_FIXED_TYPE` later (by-value struct order); forward-
+            // declare it HERE so a pointer-storing collection (`List<Fixed<...>>`, emitted in the early
+            // types pass) can name it. The later full typedef is a legal C11 redeclaration. Other
+            // collections already emit a full `_TYPE` typedef in that early pass.
+            if (ci->collKind == CollKind::Fixed)
+                *_out << "typedef struct " << ci->name << " " << ci->name << ";\n";
+            continue;
+        }
         *_out << "typedef struct " << ci->name << " " << ci->name << ";\n";
         if (ci->hasVtable && ci->vtableRoot == ci->name)
             *_out << "typedef struct " << ci->name << "_vtable " << ci->name << "_vtable;\n";
