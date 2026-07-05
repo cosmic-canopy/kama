@@ -17,7 +17,13 @@ The entire language feature set is complete. In place today:
   `copy` hand-off, by-value transfer, no null in the safe surface, borrow-vs-storage rule).
 - Generic **collections** (`Array<T>`/`List<T>`/`string`, bounds-checked, monomorphized) and **user
   generics** (monomorphized types + functions, contract bounds `<K: Hashable + Comparable>`, the `This`
-  self-type, turbofish `f::<T>()`).
+  self-type, turbofish `f::<T>()`) — plus **const generics** and the **`Fixed<T,N>` safe fixed array**
+  (a bounds-checked value array; `Mat4 = Fixed<float32,16>` / `Fixed<Vec4,4>` is available today).
+- **Place-indexing**: an indexed element is an lvalue, so `m[i][j] = v`, `arr[i].x = v`, `a[i] += x`,
+  `ref a[i]`, and `foreach (ref T e in c)` all work — and a **user type can define its own
+  `operator[]`** (and `fn ref T at(i)`), so a `Vec`/matrix can be written *in* cstar.
+- **Stdlib-prerequisite builtins**: `sizeof(T)` (compile-time, monomorphizes), `panic`/`assert` (a
+  clean abort trap), so a heap collection can be written in cstar (proven by `tests/opindex_vec`).
 - **Operator overloading** + **full static methods** (`Type::method()`) — including type-based dispatch, so
   ergonomic math types (`mat*vec` + `mat*mat`) are writable today.
 - **Tagged unions + pattern matching** (`match`, exhaustive) and the **error model** (`Optional<T>`/
@@ -44,8 +50,8 @@ shared-nothing model in ROADMAP.md).
 | **FFI depth**: `extern` structs, opaque handles, function-pointer params, pass structs by value/ptr to C, map/include C headers | ✅ — `extern` structs, `extern "<header>"` includes, opaque `Ptr<T>`, `addr(of:)` out-params, and C-callback fn-pointers all shipped; residual is richer struct-by-value ergonomics | WebGPU, SDL/GLFW, platform, audio are **C APIs**. The keystone — landed. | done |
 | **Function pointers / delegates** | ✅ free `fnptr` + bound `BindableFunctionPtr` (captures a receiver); with a `this`/userdata pointer these cover callbacks (input, window, GPU completion), ECS system fns, and job functions | Pervasive — and satisfied. Inline *capturing closures* are a separate ergonomic nice-to-have (Tier 3; M+ under the ownership/RAII/move model), not a blocker. | done |
 | **Module system**: multi-file builds, `using`/imports, namespaces actually linked | ✅ — multi-file builds, `namespace`/`using`/aliases, private-by-default, shared header + per-module `.c` | An engine is hundreds of files. | done |
-| **Math layer**: vector/matrix/quaternion types + SIMD | 🟡 — operators + static methods done, so math types are *writable* as `type value`s (named fields today); no built-in math types or SIMD yet | Transforms, physics, culling, shading — the numeric core. Ships on named-field structs; SIMD after. | M (types) → L (SIMD) |
-| **Fixed-size value arrays** (`float[4]`, matrix storage) | ❌ — no `T[N]` value-array primitive; a `Mat4` is 16 named fields or 4 `Vec4` columns today (heap `Array<T>` is the only array). A **design decision** (bounds-safety + const-length model) — *not* required to ship the math layer, but the right storage for matrices/SIMD/buffers/generic-length math. | Compact stack numeric storage, SIMD lanes, ergonomic matrices. | S–M |
+| **Math layer**: vector/matrix/quaternion types + SIMD | 🟡 — every *language* primitive is in place (operators + static methods + `Fixed<T,N>` storage + `m[i][j]` place-indexing), so `Vec2/3/4`/`Mat4`/`Quat` are writable today as `type value`s; the **library types themselves** aren't written yet, and SIMD is later | Transforms, physics, culling, shading — the numeric core. A pure library layer now. | S (types) → L (SIMD) |
+| **Fixed-size value arrays** (`float[4]`, matrix storage) | ✅ — **`Fixed<T,N>`** shipped: a bounds-checked value array (`struct{T v[N];}`, monomorphized per (T,N), value-copy, no pointer decay), with array literals `[a,b,c]`/`[v;N]`, `.length()`, `foreach`, nested `Fixed<Fixed<..>,..>`, and place-indexing. `Mat4 = Fixed<float32,16>` or `Fixed<Vec4,4>`. Const OOB is a compile error; dynamic OOB traps. | Compact stack numeric storage, SIMD lanes, ergonomic matrices. | done |
 
 ## Tier 1 — Core ergonomics (painful without; needed soon after Tier 0)
 
@@ -66,8 +72,8 @@ shared-nothing model in ROADMAP.md).
 | **Threading / atomics / memory model** | ❌ built · ✅ *designed* — the **shared-nothing model** (isolates + ownership-transferring channels + `Atomic<T>`, mapping 1:1 onto WASM Web Workers) is specified in [ROADMAP.md](ROADMAP.md) (§ Concurrency). That model **is** the engine's job-system / parallel-ECS substrate; only the runtime remains. | Job system, parallel ECS, async asset streaming. | XL (build) |
 | **Bit/byte manipulation**: reinterpret/bitcast, byte buffers, endianness | 🟡 partial (bitwise ops only) | (De)serialization, networking, binary asset/scene formats. | M |
 | **String formatting / interpolation + I/O** (file, stdout, logging) | ❌ (the `string` type + `concat`/compare/`length` only) | Logging, config, text assets, tooling. | M |
-| **comptime / const-eval** | 🟡 partial (`const` values; no compile-time eval) | Lookup tables, shader/permutation specialization, asserts. | L |
-| **Reflection / metadata** | ❌ | Auto-serialization, editor property panels, ECS introspection. | L–XL |
+| **comptime / const-eval** | 🟡 partial — `const` values, **const generics** (`Fixed<T,N>`, integer type params), and **`sizeof(T)`** (a monomorphizing compile-time builtin) are shipped; general compile-time *evaluation* (arithmetic on const params, lookup-table generation) is not. `alignof(T)` is the obvious missing sibling for allocators. | Lookup tables, shader/permutation specialization, asserts. | M |
+| **Reflection / metadata** | ❌ built · **mostly codegen, not a language gap** — the compiler's `ClassInfo` already holds every field's name/type/order + sum-type variants, so a serializer generator can walk it; the only *possible* new language surface is opt-in **attributes** on types/fields (needed only for per-field control like rename/skip). | Auto-serialization, editor property panels, ECS introspection. | M (codegen) + S (opt-in attrs, if field-level) |
 
 ## Tier 3 — Ecosystem & polish
 
@@ -80,7 +86,7 @@ matters once `Map` / custom containers land).
 
 | Goal | Status | Notes |
 |---|---|---|
-| **cstar-level WebGPU bindings** → first triangle → the engine spine | ❌ | The Tier-0 FFI keystone (extern structs + function pointers) is in place, so this is now a binding layer + a thin idiomatic wrapper. | L (binding layer) |
+| **cstar-level WebGPU bindings** → first triangle → the engine spine | ❌ | The Tier-0 FFI keystone (extern structs + function pointers) is in place, **and a `--webgpu` build flag already links Emscripten's `emdawnwebgpu` port** (`cstar.driver.cpp`, `README.md`) — so the toolchain path is wired; only the cstar-side `extern` bindings against `webgpu.h` + a thin idiomatic wrapper remain. | L (binding layer) |
 
 ---
 
@@ -89,8 +95,9 @@ matters once `Map` / custom containers land).
 The language is complete; the path is now entirely library + platform work.
 
 1. **Math types** (`Vec2/3/4`, `Mat4`, quaternion) as `type value`s (public fields) with operators + `::`
-   static methods — the numeric core (Tier-0 math). All the language machinery it needs is in place; it
-   ships on named-field structs (the **fixed-size array** primitive is a parallel, non-blocking design).
+   static methods — the numeric core (Tier-0 math). **All the language machinery it needs is shipped** —
+   operators, static methods, and now `Fixed<T,N>` for matrix storage + `m[i][j]` place-indexing — so
+   this is a pure library layer (a natural first opt-in **stdlib module**, per ROADMAP).
 2. **WebGPU bindings** (FFI is ready) → **a triangle on screen** → the engine spine + a real demo.
 3. Iterate as the engine grows: `Map`/slices/arenas as library types, then bit/byte + I/O, then threading.
 

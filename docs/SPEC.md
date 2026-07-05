@@ -585,8 +585,9 @@ and the caller derefs the place, so `g[i] = v`, `g[i] += 1`, `m[i][j] = v`, `m[i
 language (so a `Vec`/matrix can be written *in* cstar). The place is a **second-class borrow** of
 `self`: it is used transiently and cannot be stored (there is no `ref`-local/`ref`-field to hold it),
 and a `const` receiver makes it read-only. Bounds safety is the operator's responsibility — a
-`Fixed`/collection-backed body is auto-checked; a raw `Ptr<T>` body is `unsafe`. (General
-`ref T`-returning methods beyond `operator[]` are not yet supported.)
+`Fixed`/collection-backed body is auto-checked; a raw `Ptr<T>` body is `unsafe`. The same place-return
+works for a **named method** — `public fn ref T at(usize i) { … }` — so `v.at(i) = x` too. (A `ref T`
+return is supported on methods/operators; free-function `ref T` returns are not yet.)
 
 Used in a `contract`, an operator becomes a **bound** for generic math (see below).
 
