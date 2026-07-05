@@ -561,6 +561,7 @@ unary_expression
   | EXCLAMATION unary_expression
   | TILDE unary_expression
   | cast_expression
+  | sizeof_expression
   | PLUS unary_expression
   | MINUS unary_expression
   | pre_increment_expression
@@ -588,6 +589,11 @@ cast_expression
     /* The mid-rules track genericDepth across the cast's `<…>` so `cast<List<int>>(x)` needs no space;
        the `--` fires before `( unary_expression )` so a `>>` shift inside the cast body stays a shift. */
   : CAST LT  type GT  LPAREN unary_expression RPAREN
+  ;
+sizeof_expression
+  /* `sizeof(T)` — the compile-time byte size of a type as a `usize` (`type` self-manages its own
+     `<…>` genericDepth, so `sizeof(Fixed<int32,4>)` parses too). */
+  : SIZEOF LPAREN type RPAREN
   ;
 constant_expression
   : expression
@@ -702,6 +708,7 @@ field_declaration
 method_declaration
   : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_body
   | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_body
+  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_body      /* `fn ref T at(…)` — a place-returning method */
   ;
 /* A method name is an identifier — but `copy`/`give` are hand-off markers only in expression
    position, so we let them name a member too (contextual keywords). This is what lets a `resource`

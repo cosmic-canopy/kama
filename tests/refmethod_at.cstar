@@ -1,0 +1,16 @@
+// A general `fn ref T at(i)` method returns a PLACE (like `operator[]`), used as read/write/compound/
+// a `ref` argument. Composes with the place machinery.
+type value Buf {
+    Fixed<int32, 4> d;
+    public Buf() { this.d = [0; 4]; }
+    public fn ref int32 at(usize i) { return this.d[i]; }
+}
+fn void bump(ref int32 v) { v = v + 100; }
+fn int32 main() {
+    Buf b = Buf();
+    b.at(i: 0) = 5;
+    b.at(i: 1) = 10;
+    b.at(i: 0) += 1;              // 6
+    bump(v: ref b.at(i: 1));     // 110
+    return b.at(i: 0) + b.at(i: 1);   // 6 + 110 = 116
+}

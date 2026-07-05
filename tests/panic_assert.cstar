@@ -1,0 +1,9 @@
+// A passing `assert` is a no-op; a `panic` behind an untaken guard doesn't fire. (An actually-firing
+// trap writes to stderr + aborts — not asserted here, to keep the fixture ASan-clean.)
+fn int32 main() {
+    int32 x = 42;
+    assert(cond: x == 42);
+    assert(cond: x > 0);
+    if (x < 0) { panic(msg: "impossible"); }
+    return x;   // 42
+}

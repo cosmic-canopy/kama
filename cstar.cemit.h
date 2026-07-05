@@ -244,6 +244,8 @@ private:
     std::map<std::string, SigInfo> _sigs;    // function-pointer signature types
     bool isSigType(const std::string& name) const { return _sigs.count(name) != 0; }
     std::set<std::string> _refParams;        // by-ref params of the function being emitted
+    std::vector<std::string> _foreachColls;  // root bindings of collections being iterated (nested foreach) —
+                                             // growing one mid-iteration (`add`) invalidates its element refs
 
     std::map<std::string, ClassInfo>   _classes;     // class name -> info
     std::map<std::string, std::string> _localTypes;  // local/param -> class name ("" if primitive)

@@ -981,6 +981,7 @@ field_declaration
 method_declaration
   : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
   | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
+  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $10); m->isConst = ($2 != nullptr); m->isRef = true; $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
   ;
 /* A method name is an identifier — but `copy`/`give` are hand-off markers only in expression
    position, so we let them name a member too (contextual keywords). This is what lets a `resource`

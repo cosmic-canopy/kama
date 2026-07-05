@@ -1234,6 +1234,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // by-value return-temp (you can't copy a place). The place borrows `self`, which outlives the
         // call, so it's valid for the caller's enclosing statement (used transiently, never stored).
         if (_returnIsPlace) {
+            // A returned place must borrow something that OUTLIVES the call — `this` (the caller owns
+            // the receiver) or a `ref` parameter (a borrow the caller holds). A place rooted at a
+            // LOCAL would dangle the moment the callee returns. Targeted rule, no lifetimes.
+            std::string root = retExpr ? rootBinding(retExpr) : std::string();
+            if (root != "this" && !_refParams.count(root))
+                unsupported("a `ref T` result must borrow `this` or a `ref` parameter — returning a "
+                            "place into a local would dangle", n->line);
             bool ph = _hoistOK; _hoistOK = true;
             std::string p = retExpr ? emitPlace(retExpr) : std::string("0");
             _hoistOK = ph;
@@ -1464,6 +1471,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             *_out << elemTy << " " << nm << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
         }
 
+        // Mark this collection as "being iterated": growing it (`add`) mid-loop reallocs its buffer
+        // and invalidates the element references — a use-after-free (verified) for a `ref` binding, a
+        // runaway loop otherwise. `emitMethodCall` rejects `add` on a root in this stack.
+        std::string iterRoot = rootBinding(fe->expression);
+        if (!iterRoot.empty()) _foreachColls.push_back(iterRoot);
+
         SharedStatement last;
         if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
             if (b->statements) for (auto& st : *b->statements) { emitStatement(st, depth + 2); last = st; }
@@ -1472,6 +1485,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         }
         if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
 
+        if (!iterRoot.empty()) _foreachColls.pop_back();
         if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
         if (fe->isRef && !hadRef) _refParams.erase(nm);
         _scopes.pop_back();
@@ -2060,6 +2074,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …`
+                        mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
                         // `protected` belongs to a `resource` in an extensibility hierarchy
                         // (`virtual`/`abstract` declares protected members for subclasses; a `final`
@@ -5642,8 +5657,12 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
             continue;
         }
         line(mi.node->line);
-        std::string ret = cType(mi.returnType);
+        // a place-returning `fn ref T m(…)` emits `T* Class__m(Class* self, …)`; its `return e`
+        // addresses the place (the ReturnNode path, gated on `_returnIsPlace`) — same as `operator[]`.
+        std::string ret = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
+        _returnIsPlace = mi.isPlaceReturn;
         emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false, mi.isConst, mi.isStatic);
+        _returnIsPlace = false;
     }
     if (ci.destructible)
         emitDtorDefinition(ci);
@@ -5877,6 +5896,18 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
     SharedExpression receiver = recv->expression;
     std::string cls = exprClass(receiver);
+    // Iterator invalidation: growing a collection (`add`) while a `foreach` iterates it reallocs the
+    // buffer and dangles the loop's element refs (a use-after-free for a `ref` binding). Reject it — a
+    // local rule (the loop already names the collection), no lifetimes; collect + append after the loop.
+    if (method == "add" && !_foreachColls.empty() && !cls.empty() && _classes.count(cls)
+        && _classes[cls].isCollection) {
+        std::string r = rootBinding(receiver);
+        bool iterated = false;
+        if (!r.empty()) for (auto& c : _foreachColls) if (c == r) { iterated = true; break; }
+        if (iterated)
+            unsupported(("cannot grow `" + r + "` while iterating it in a `foreach` (it would invalidate "
+                         "the loop) — collect the additions and append them after the loop").c_str(), call->line);
+    }
     // a non-const method may not be called on a const receiver (deep const).
     // The method lives on the pointee for a smart-pointer receiver (auto-deref).
     if (isConstReceiver(receiver)) {
@@ -5910,7 +5941,13 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 ? std::string("self")
                 : "&(" + emitExpression(receiver) + ")";
     }
-    return emitDispatch(cls, recvPtr, method, call->args, call->line);
+    std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line);
+    // a place-returning `fn ref T m(…)` returns a `T*`; deref it so the call is an lvalue EVERYWHERE
+    // (read copies out; `m(…) = x` writes through; `m(…).f` / `ref m(…)` / nesting all compose via the
+    // existing lvalue paths). `&(*…)` folds, so a chained `a.at(i).at(j)` stays clean ISO C.
+    ClassInfo* powner = nullptr;
+    MethodInfo* pmi = findMethod(&_classes[cls], method, &powner);
+    return (pmi && pmi->isPlaceReturn) ? ("(*" + callStr + ")") : callStr;
 }
 
 std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine)

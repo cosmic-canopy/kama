@@ -688,6 +688,7 @@ public:
     SharedParameterList params;
     SharedBlock body;
     bool isConst = false;   // `const fn …` — a non-mutating method
+    bool isRef = false;     // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller
     ClassMethodDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
             SharedIdentifier returnType,
             SharedIdentifier name,
