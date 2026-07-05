@@ -2736,6 +2736,21 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         else if (kv.second.isOperator && kv.second.opDecl)   // an operator has no `node`
             kv.second.params = paramSigsOf(operatorParamList(kv.second.opDecl->operatorDeclarator.get()));
     }
+    // Resolve the `implements` list under THIS instance's subst (linkBases skips generic instances). A
+    // generic contract implemented with the class's own param (`Box<T> implements Deref<T>`) mangles to the
+    // concrete instance (`Deref_Point`) and that instance is registered; plain contracts just resolve.
+    if (ci.node && ci.node->baseTypes && ci.node->baseTypes->interfaces) {
+        ci.interfaces.clear();
+        for (auto& itf : *ci.node->baseTypes->interfaces) {
+            if (!itf || !itf->value) continue;
+            std::string base = resolveUserName(*itf->value, itf->qualifier);
+            if (itf->genericArg && _genericContracts.count(base)) {
+                scanTypeForGenericContracts(itf);                     // register `Deref_Point` under subst
+                base = genericTypeMangle(base, itf->genericArgs);     // mangleElem resolves the class param
+            }
+            ci.interfaces.push_back(base);
+        }
+    }
     _classes[mangled] = ci;
 
     // Transitive close: register any collection / generic type the substituted members use.
@@ -3806,6 +3821,9 @@ void CEmitter::linkBases()
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.isCollection) continue;
+        // a generic INSTANCE resolved its base/interfaces under its own subst in registerGenericTypeInst
+        // (its `node` is the template's, whose refs still name the raw param `T`) — don't re-resolve here.
+        if (ci.isGenericInst) continue;
         _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;
         if (ci.node && ci.node->baseTypes && ci.node->baseTypes->base && ci.node->baseTypes->base->value)
             ci.baseName = resolveUserName(*ci.node->baseTypes->base->value, ci.node->baseTypes->base->qualifier);
