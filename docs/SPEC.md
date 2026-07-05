@@ -559,9 +559,17 @@ constructor** is a valid operand — `v + Vec3(x: 1, y: 0, z: 0)` needs no separ
 and re-evaluates each pass); a `do`/`while` condition is the one place it must still be bound to a local.
 
 `==` is **explicit** — a `value` without `operator==` cannot be compared (there is no auto-generated
-structural equality). A **user-defined** index `operator[]` (a place-returning one, for user
-collections) and the `true`/`false` conversion operators are out of scope; the built-in collections'
-`a[i]` place-indexing is not affected.
+structural equality). The `true`/`false` conversion operators are out of scope.
+
+A user type may define a **place-returning index operator** — `public ref T operator[](usize i)` —
+whose body returns a place (`return this.cells[i]`). It lowers to `T* C__op_index(C* self, size_t i)`,
+and the caller derefs the place, so `g[i] = v`, `g[i] += 1`, `m[i][j] = v`, `m[i].field = v`, and
+`ref g[i]` all work — the same place semantics as a built-in collection, now expressible in the
+language (so a `Vec`/matrix can be written *in* cstar). The place is a **second-class borrow** of
+`self`: it is used transiently and cannot be stored (there is no `ref`-local/`ref`-field to hold it),
+and a `const` receiver makes it read-only. Bounds safety is the operator's responsibility — a
+`Fixed`/collection-backed body is auto-checked; a raw `Ptr<T>` body is `unsafe`. (General
+`ref T`-returning methods beyond `operator[]` are not yet supported.)
 
 Used in a `contract`, an operator becomes a **bound** for generic math (see below).
 
