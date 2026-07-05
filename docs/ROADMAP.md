@@ -196,13 +196,16 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    into an RAII owner (can't leak). Also added the missing OOM guard to the intrinsic `new`. New
    `drop(value: place)` builtin runs a place's dtor (no-op if non-destructible), so a library owner over
    `Ptr<T>` drops its heap pointee before `free`.
-3. **Smart pointers as cstar library types — unique owner DONE.** A library `Box<T>` written in cstar
-   (construct via `new`, auto-deref via `Deref`, move-only + use-after-move + RAII free from `resource`,
-   pointee `~dtor` via `drop`) works and is ASan/LeakSanitizer-clean (`tests/box_{basic,move,dtor}` +
-   xfail `box_use_after_move`). RAII/move/use-after-move are general `resource` behavior — not smart-ptr
-   magic. **Remaining for full parity:** interface boxing (`Box<Shape>` = a fat `{obj,vtbl}` for
-   polymorphic ownership) and `Shared`/`Weak` (a refcount `resource` over `Ptr<ctrl>`, made `Copyable` so
-   `copy s` = refcount++, + `tryUpgrade`).
+3. **Smart pointers as cstar library types — unique owner DONE (concrete + polymorphic).** A library
+   `Box<T>` written in cstar: construct via `new`, auto-deref via `Deref`, move-only + use-after-move +
+   RAII free from `resource`, pointee `~dtor` via `drop` — ASan/LeakSanitizer-clean (`tests/box_{basic,
+   move,dtor}` + xfail). **Polymorphic ownership too — `Box<Shape>` (Rust's `Box<dyn Trait>`):** a
+   `HeapOwner` instance over a *contract* element is routed through the interface-owner path (inline
+   `{obj,vtbl}`, virtual dispatch, vtable `__dtor`), **intrinsic perf parity — one malloc, verified in the
+   emitted C** (`tests/box_iface{,_dtor}` + xfail). One user-facing `Box<T>`; lifetime/RAII in the library,
+   **type erasure in the compiler** (it can't be safe library code — the Rust boundary). RAII/move/UAM are
+   general `resource` behavior, not smart-ptr magic. **Remaining for full parity:** `Shared`/`Weak` (a
+   refcount `resource` over `Ptr<ctrl>`, made `Copyable` so `copy s` = refcount++, + `tryUpgrade`).
 4. **Remove/rename intrinsic smart pointers** — once the library `Owned`/`Shared`/`Weak` reach parity
    (interface boxing + refcount), swap them in (rename `Box`→`Owned`) and delete the compiler's
    `isSmartPtr` special-casing. Core shrinks.
