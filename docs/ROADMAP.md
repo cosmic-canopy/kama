@@ -113,9 +113,10 @@ directly — no instance needed just to constrain a type. This gives a *formal*
 resolves its iterator protocol **structurally** (the formal contract is additive). Fixtures:
 `tests/gencontract_{bound,value,multi}`, `tests/xfail/gencontract_{unsat,arity}`.
 
-- **Boundary (first cut):** concrete type arguments everywhere. A generic contract parameterized by an
-  *enclosing template's own* type param (`class Foo<T> implements Iterator<T>`) is a **follow-up** —
-  structural `foreach` + concrete-arg bounds already cover the stdlib's functional needs.
+- **Boundary — now closed.** A generic contract implemented by a generic class with its *own* type param
+  (`class Foo<T> implements Iterator<T>`) initially wasn't monomorphized; resolved in step 1b below
+  (`registerGenericTypeInst` rebuilds a generic instance's `implements` under its subst). Concrete and
+  enclosing-param uses both work now.
 
 ### The standard-library shape — modular & opt-in (design question)
 
@@ -179,19 +180,19 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    `exprClass`, keyed on the deref method's `ref T` return; the intrinsic `isSmartPtr` path is untouched.
    No lifetimes (place rooted at `this`, second-class-borrow rules), nominal/opt-in, inert when no
    `Deref` is in scope. Fixtures `tests/deref_{basic,heap}` (heap = a `Ptr<T>`+`unsafe`+RAII `resource`,
-   the real smart-ptr shape, ASan-clean) + xfail `deref_missing`. Suite 280 green.
-   - **Prerequisite for step 3 (found while building step 1):** a **generic** wrapper
-     `type value Box<T> implements Deref<T>` does NOT yet auto-deref — it's the "generic class implements a
-     generic contract parameterized by its own type param" case (the same enclosing-template-param
-     follow-up noted under *Generic contracts*). Concrete `implements Deref<Point>` works. Since
-     `Owned<T>` is generic, **this case must be built before step 3** — likely the next task: resolve a
-     generic class's interface refs under its instance subst in `registerGenericTypeInst` (mangle
-     `Deref<T>`→`Deref_Point`, register the instance) so `Box_Point.interfaces` carries `Deref_Point`.
-2. **Smart-pointer contracts** — the contract(s) a smart pointer satisfies (`Deref` + RAII drop; a shared
-   variant for `Shared`/`Weak`).
+   the real smart-ptr shape, ASan-clean) + xfail `deref_missing`.
+1b. **Generic class implements a generic contract — DONE.** `Box<T> implements Deref<T>` /
+   `Own<T> implements Deref<T>` now work: `registerGenericTypeInst` rebuilds the instance's `implements`
+   list under its own subst (`Deref<T>`→`Deref_Point`, register the instance); `linkBases` skips generic
+   instances. This was the prerequisite for step 3 — a **generic** heap smart pointer written in cstar now
+   auto-derefs (fixture `tests/deref_generic`: `Own<T>` over `Ptr<T>`+`unsafe`+RAII, ASan-clean). Suite 281
+   green (native+wasm+ASan/UBSan). **Also closes the enclosing-template-param follow-up under *Generic
+   contracts*.**
+2. **Smart-pointer contracts — NEXT.** The contract(s) a smart pointer satisfies (`Deref` + RAII drop; a
+   shared variant for `Shared`/`Weak`).
 3. **Smart pointers as cstar library types** — write `Owned` (then `Shared`/`Weak`) in pure cstar over
-   `Ptr<T>` + `unsafe` + the contracts (the heap-`Vec` pattern proves it works). **Gated on the generic
-   `implements` prerequisite in step 1.**
+   `Ptr<T>` + `unsafe` + the contracts. **Now unblocked** (the generic `implements` prerequisite is done;
+   `deref_generic` is a working `Owned<T>` skeleton).
 4. **Remove intrinsic smart pointers** — once the library versions are proven, delete the compiler's
    `isSmartPtr` special-casing. Core shrinks.
 5. **Module / `import` system** — design it (the modular-stdlib pass above: prelude mechanism + the
