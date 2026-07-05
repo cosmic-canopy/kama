@@ -97,8 +97,14 @@ basic_identifier
 /* Comma-separated type arguments: `int32`, `int32, string`, `int32, List<int>` — mirrors
    interface_type_list. Always length ≥ 1 (the `<…>` syntax requires at least one). */
 type_arg_list
+  : type_or_value_arg
+  | type_arg_list COMMA type_or_value_arg
+  ;
+/* A generic argument is a type, or an integer VALUE for a const param (`Fixed<float, 4>`). A value
+   arg is wrapped in an IdentifierNode carrying `constArgValue` (value name is null). */
+type_or_value_arg
   : type
-  | type_arg_list COMMA type
+  | literal
   ;
 
 qualified_identifier_no_generic
@@ -244,6 +250,7 @@ type_param_list
 type_param
   : IDENTIFIER
   | IDENTIFIER COLON bound_list
+  | CONST IDENTIFIER COLON integral_type      /* `const N: int` — a compile-time value param */
   ;
 /* Contract bounds on a type parameter: `IHashable` or `IHashable + IComparable` (`+` = AND).
    Each bound is a `type_name`, so a generic contract bound (`IFoo<int>`) parses + gets genericDepth. */
@@ -424,6 +431,7 @@ match_bindings
   ;
 foreach_statement
   : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement
+  | FOREACH LPAREN REF type IDENTIFIER IN expression RPAREN embedded_statement      /* `foreach (ref T e in …)` — mutate elements in place */
   ;
 jump_statement
   : break_statement
@@ -487,6 +495,16 @@ primary_expression_no_parenthesis
   | base_access
   | new_expression
   | match_expression      /* value-producing `match` in expression position */
+  | array_literal
+  ;
+
+/* fixed-array value literal initializing a `Fixed<T,N>`: `[a, b, c]` (elements) or `[v; N]` (fill).
+   A leading `[` is a primary here; a `[` after a primary is postfix indexing — unambiguous. */
+array_literal
+  : LEFT_BRACKET expression_list RIGHT_BRACKET
+
+  | LEFT_BRACKET expression SEMICOLON constant_expression RIGHT_BRACKET
+
   ;
 parenthesized_expression
   : LPAREN expression RPAREN

@@ -371,6 +371,7 @@ public:
     SharedIdentifier name;
     SharedExpression expression;
     SharedStatement body;
+    bool isRef = false;   // `foreach (ref T e in …)` — bind each element by place (mutable, in-place)
     ForEachNode(CodeGenContext& context,  SharedIdentifier type,
                 SharedIdentifier name,
                 SharedExpression expression,

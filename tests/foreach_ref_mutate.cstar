@@ -1,0 +1,17 @@
+// `foreach (ref T e in coll)` binds each element by place, so mutating `e` persists to the collection;
+// plain `foreach` still binds a copy (no persist).
+type value P { public int32 x; public int32 y; public P(int32 x, int32 y){ this.x=x; this.y=y; } }
+fn int32 main() {
+    Fixed<int32, 4> a = [1, 2, 3, 4];
+    foreach (ref int32 e in a) { e = e * 10; }        // [10,20,30,40]
+    List<P> ps = new List<P>();
+    ps.add(item: P(x: 1, y: 0));
+    ps.add(item: P(x: 2, y: 0));
+    foreach (ref P p in ps) { p.x = p.x + 5; }        // x -> 6, 7
+    // plain foreach: a copy, mutation does NOT persist
+    int32 sum = 0;
+    foreach (int32 e in a) { e = e + 1000; sum = sum + e; }   // sum over copies+1000, a unchanged
+    return a[0] + a[3] + ps[0].x + ps[1].x + (sum - 4000);
+    // 10 + 40 + 6 + 7 + ((10+20+30+40) - ... ) : sum = 1010+1020+1030+1040 = 4100; sum-4000 = 100
+    // total = 10 + 40 + 6 + 7 + 100 = 163
+}

@@ -1,0 +1,9 @@
+// A `ref` foreach binding is a mutable BORROW: you cannot move (`give`) a resource out of it — that
+// would leave the collection holding a moved-from element.
+type resource R { public int32 v; public R(int32 v){ this.v = v; } }
+fn int32 main() {
+    List<R> rs = new List<R>();
+    rs.add(item: R(v: 1));
+    foreach (ref R r in rs) { R moved = give r; }   // ERROR
+    return 0;
+}

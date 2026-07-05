@@ -701,6 +701,7 @@ match_bindings
   ;
 foreach_statement
   : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement   { $$ = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); }
+  | FOREACH LPAREN REF type IDENTIFIER IN expression RPAREN embedded_statement   { auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); n->isRef = true; $$ = n; }   /* `foreach (ref T e in …)` — mutate elements in place */
   ;
 jump_statement
   : break_statement

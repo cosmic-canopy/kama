@@ -1424,9 +1424,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         std::string prevType = hadType ? _localTypes[nm] : std::string();
         _localTypes[nm] = elemClass;   // element binding's class (for x.method() resolution)
 
-        // The element binding is a borrowed copy — NOT recorded destructible.
+        // `foreach (ref T e …)` binds each element by PLACE (a bounds-checked `T*` via `__at`), so
+        // mutation persists; `e` joins `_refParams` so reads/writes in the body deref it (`(*e)`),
+        // exactly like a `ref` parameter. Plain `foreach` binds a borrowed COPY (`__get`). Neither
+        // is recorded destructible (the collection owns the element).
+        bool hadRef = _refParams.count(nm);
         indent(depth + 2);
-        *_out << elemTy << " " << nm << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
+        if (fe->isRef) {
+            *_out << elemTy << "* " << nm << " = " << coll << "__at(" << fp << ", " << ix << ");\n";
+            _refParams.insert(nm);
+        } else {
+            *_out << elemTy << " " << nm << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
+        }
 
         SharedStatement last;
         if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
@@ -1437,6 +1446,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
 
         if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
+        if (fe->isRef && !hadRef) _refParams.erase(nm);
         _scopes.pop_back();
 
         indent(depth + 1); *_out << "}\n";   // close for
