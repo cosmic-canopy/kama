@@ -394,6 +394,13 @@ private:
     std::string emitPlace(SharedExpression e);
     // The user-defined place-returning `operator[]` on `cls` (or a base), else null.
     MethodInfo* userIndexOp(const std::string& cls);
+    // `foreach` over a user type via the iterator protocol (structural — direct monomorphized calls):
+    // value = `iterator()`/`next() -> Optional<T>`; mutable (`ref`) = `iterMut()`/`hasNext()` + a
+    // place-returning `next()`. A type that IS an iterator (has `next()`) is iterated directly.
+    void emitForeachIterator(ForEachNode* fe, const std::string& container, int depth);
+    // cType(typeNode) resolved in the type-substitution context of generic instance `inCls` (binds its
+    // type args, like computeDestructible); plain cType for a non-generic class.
+    std::string cTypeInInstance(const std::string& inCls, SharedIdentifier typeNode);
     // `ea` indexes a value whose class defines a place-returning `operator[]` (not a built-in collection).
     bool indexesUserOp(ElementAccessNode* ea);
 

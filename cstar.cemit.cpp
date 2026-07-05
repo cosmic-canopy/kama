@@ -1433,8 +1433,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         line(n->line); indent(depth);
         std::string itCls = exprClass(fe->expression);
+        // A user type (not a built-in collection) iterates via the iterator protocol (structural).
+        if (!itCls.empty() && _classes.count(itCls) && !_classes[itCls].isCollection) {
+            emitForeachIterator(fe, itCls, depth); return;
+        }
         if (itCls.empty() || !_classes.count(itCls) || !_classes[itCls].isCollection) {
-            unsupported("foreach over a non-collection", n->line); *_out << "\n"; return;
+            unsupported("foreach over a non-collection (a user type needs `iterator()`/`next()` or `iterMut()`)", n->line); *_out << "\n"; return;
         }
         const std::string& coll = _classes[itCls].name;
         std::string elemTy   = cType(fe->type);
@@ -3360,6 +3364,119 @@ bool CEmitter::indexesUserOp(ElementAccessNode* ea)
     SharedExpression recv = ea->expression ? ea->expression
                                            : std::static_pointer_cast<ExpressionNode>(ea->identifier);
     return recv && userIndexOp(exprClass(recv)) != nullptr;
+}
+
+// cType(typeNode) resolved in the type-substitution context of a generic-instance class `inCls` — so a
+// method's `T`-typed return (e.g. `iterator()` -> `VecIter<T>`, `next()` -> `Optional<T>`) resolves to
+// the concrete instance (`VecIter_int32` / `Optional_int32`). Mirrors computeDestructible's binding.
+std::string CEmitter::cTypeInInstance(const std::string& inCls, SharedIdentifier typeNode)
+{
+    if (!_genericTypeInsts.count(inCls)) return cType(typeNode);   // non-generic: plain
+    auto savedSubst = _typeSubst; NsCtx savedCtx = _nsCtx;
+    const GenericTypeInst& gi = _genericTypeInsts[inCls];
+    _nsCtx = _genericTypeInstCtx.count(inCls) ? _genericTypeInstCtx[inCls] : _genericTypeCtx[gi.templateKey];
+    _typeSubst.clear();
+    const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+    std::string r = cType(typeNode);
+    _typeSubst = savedSubst; _nsCtx = savedCtx;
+    return r;
+}
+
+// `foreach` over a user type via the ITERATOR PROTOCOL (structural, zero-cost — direct monomorphized
+// calls, no vtable). VALUE (`foreach (T x in v)`): `v.iterator()` yields an iterator with
+// `next() -> Optional<T>` (or `v` itself is the iterator); loop while `next()` returns `Some`. MUTABLE
+// (`foreach (ref T x in v)`): `v.iterMut()` yields an iterator with `hasNext()` + a place-returning
+// `next()`; loop while `hasNext()`, binding `x` to the place. A borrowing iterator holds a `Ptr` cursor
+// (its own unsafe internals); the `foreach` surface stays safe.
+void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container, int depth)
+{
+    ClassInfo* cc = &_classes[container];
+    std::string nm = (fe->name && fe->name->value) ? *fe->name->value : "__x";
+    std::string elemTy = cType(fe->type);
+    std::string elemClass = isClass(elemTy) ? elemTy : "";   // for `x.method()` resolution
+    int id = _tempCounter++;
+    std::string it = "__it" + std::to_string(id);
+    std::string ot = "__o"  + std::to_string(id);
+
+    // Resolve the iterator + method C-names (structural). `iterCall`/`nextCall`/`hasNextCall` are the
+    // full direct calls; `iterCType`/`optC` the concrete types.
+    std::string iterCType, iterInit, nextCall, hasNextCall, optC;
+    if (fe->isRef) {
+        MethodInfo* iterMi = findMethod(cc, "iterMut", nullptr);
+        if (!iterMi || !iterMi->params.empty()) {
+            unsupported(("`foreach (ref …)` over `" + container + "` needs a nullary `iterMut()` "
+                         "(a mutable iterator)").c_str(), fe->line); *_out << "\n"; return;
+        }
+        iterCType = cTypeInInstance(container, iterMi->returnType);
+        ClassInfo* ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
+        MethodInfo* hasNextMi = ic ? findMethod(ic, "hasNext", nullptr) : nullptr;
+        MethodInfo* nextMi    = ic ? findMethod(ic, "next", nullptr) : nullptr;
+        if (!hasNextMi || !nextMi || !nextMi->isPlaceReturn) {
+            unsupported(("a mutable iterator (`" + iterCType + "`) needs `hasNext()` and a "
+                         "place-returning `ref T next()`").c_str(), fe->line); *_out << "\n"; return;
+        }
+        iterInit    = iterMi->cName + "(&(" + emitExpression(fe->expression) + "))";
+        hasNextCall = hasNextMi->cName + "(&" + it + ")";
+        nextCall    = nextMi->cName + "(&" + it + ")";
+    } else {
+        MethodInfo* iterMi = findMethod(cc, "iterator", nullptr);
+        if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
+        ClassInfo* ic = nullptr;
+        if (iterMi) { iterCType = cTypeInInstance(container, iterMi->returnType);
+                      ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
+                      iterInit = iterMi->cName + "(&(" + emitExpression(fe->expression) + "))"; }
+        else        { iterCType = container; ic = cc;                       // the container IS the iterator
+                      iterInit = emitExpression(fe->expression); }
+        MethodInfo* nextMi = ic ? findMethod(ic, "next", nullptr) : nullptr;
+        if (!nextMi || !nextMi->params.empty()) {
+            unsupported(("`foreach` over `" + container + "` needs a nullary `iterator()`, or a nullary "
+                         "`next()` returning `Optional<T>`").c_str(), fe->line); *_out << "\n"; return;
+        }
+        optC     = cTypeInInstance(iterCType, nextMi->returnType);
+        nextCall = nextMi->cName + "(&" + it + ")";
+    }
+
+    // Outer wrapper: the iterator, then the loop. All calls are direct (monomorphized), no vtable.
+    *_out << "{\n";
+    indent(depth + 1); *_out << iterCType << " " << it << " = " << iterInit << ";\n";
+    indent(depth + 1); *_out << "while (" << (fe->isRef ? hasNextCall : std::string("1")) << ") {\n";
+
+    Scope sc; sc.isLoopBoundary = true;
+    _scopes.push_back(sc);
+    bool hadType = _localTypes.count(nm);
+    std::string prevType = hadType ? _localTypes[nm] : std::string();
+    _localTypes[nm] = elemClass;
+    bool hadRef = _refParams.count(nm);
+    if (fe->isRef) {
+        _refParams.insert(nm);   // reads/writes deref the place, like a `ref` param / built-in `foreach ref`
+        indent(depth + 2); *_out << elemTy << "* " << nm << " = " << nextCall << ";\n";
+    } else {
+        indent(depth + 2); *_out << optC << " " << ot << " = " << nextCall << ";\n";
+        indent(depth + 2); *_out << "if (" << ot << ".tag == " << optC << "_None) break;\n";
+        indent(depth + 2); *_out << elemTy << " " << nm << " = " << ot << ".u.Some.value;\n";
+    }
+    // Mutation guard: mutating the container mid-loop is the author's concern for a user iterator (its
+    // `Ptr` cursor would dangle) — the built-in `add`-reject can't see into user methods. Still push the
+    // root so a mix of a user container + a built-in field-collection `add` inside is caught.
+    std::string iterRoot = rootBinding(fe->expression);
+    if (!iterRoot.empty()) _foreachColls.push_back(iterRoot);
+
+    SharedStatement last;
+    if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
+        if (b->statements) for (auto& st : *b->statements) { emitStatement(st, depth + 2); last = st; }
+    } else if (fe->body) {
+        emitStatement(fe->body, depth + 2); last = fe->body;
+    }
+    if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
+
+    if (!iterRoot.empty()) _foreachColls.pop_back();
+    if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
+    if (fe->isRef && !hadRef) _refParams.erase(nm);
+    _scopes.pop_back();
+
+    indent(depth + 1); *_out << "}\n";   // close while
+    indent(depth);     *_out << "}\n";   // close wrapper
 }
 
 // A fixed-array value literal (`[a, b, c]` or `[v; N]`) initializing a `Fixed<T,N>`. Its type comes

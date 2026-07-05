@@ -29,6 +29,7 @@ class MemberAccessNode;
 class ElementAccessNode;
 class ArrayLiteralNode;
 class SizeofNode;
+class ForEachNode;
 class ThisAccessNode;
 class ObjectCreationNode;
 class EnumMemberDeclarationNode;

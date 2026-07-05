@@ -1,0 +1,31 @@
+// A NON-contiguous container: a singly-linked list whose iterator walks `next` pointers (no index).
+// This is exactly what index-based `foreach` could never do — proving the protocol is iterator-based.
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+type value Node { public int32 val; public Ptr<Node> nextp;
+    public Node(int32 v) { this.val = v; this.nextp = cast<Ptr<Node>>(null); }
+}
+type value ListIter {                       // the iterator IS iterated directly (has next(), no iterator())
+    Ptr<Node> cur;
+    public ListIter(Ptr<Node> head) { this.cur = head; }
+    public fn Optional<int32> next() {
+        if (this.cur == null) { return Optional::None; }
+        unsafe { int32 v = this.cur[0].val; this.cur = this.cur[0].nextp; return Optional::Some(value: v); }
+    }
+}
+fn int32 main() {
+    unsafe {
+        Ptr<Node> a = cast<Ptr<Node>>(malloc(n: sizeof(Node)));
+        Ptr<Node> b = cast<Ptr<Node>>(malloc(n: sizeof(Node)));
+        Ptr<Node> c = cast<Ptr<Node>>(malloc(n: sizeof(Node)));
+        a[0].val = 3;  a[0].nextp = b;
+        b[0].val = 2;  b[0].nextp = c;
+        c[0].val = 1;  c[0].nextp = cast<Ptr<Node>>(null);
+        ListIter it = ListIter(head: a);
+        int32 sum = 0;
+        foreach (int32 x in it) { sum = sum + x; }
+        free(p: cast<Ptr>(a)); free(p: cast<Ptr>(b)); free(p: cast<Ptr>(c));
+        return sum;   // 6
+    }
+}
