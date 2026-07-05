@@ -291,8 +291,24 @@ be written **in the language** rather than baked into the compiler. Three builti
   `operator[]`, so `v.at(i) = x` works. A `ref T` result must borrow `this` or a `ref` parameter (never a
   local — it would dangle), and it's second-class (used in-place, never stored).
 
-Iterator safety: growing a collection (`add`) while iterating it with `foreach` is a compile error (it
-would invalidate the loop) — collect and append after.
+**`foreach` over a user type — the iterator protocol.** A user container is `foreach`-able (not just the
+built-in `Array`/`List`/`Fixed`) via a small **iterator protocol** — not indexing, so it works for any
+shape (list, tree, map, range). It's zero-cost: resolved structurally and monomorphized to **direct
+calls** (no vtable), and the container is **borrowed, not consumed**.
+- **value** — `foreach (T x in v)`: `v` provides `fn <Iter> iterator()` whose iterator has
+  `fn Optional<T> next()` (`Some` per element, `None` at the end); or `v` *is* the iterator (has `next()`).
+- **mutable** — `foreach (ref T x in v)`: `v` provides `fn <IterMut> iterMut()` whose iterator has
+  `fn bool hasNext()` + a place-returning `fn ref T next()` (Rust's `iter()`/`iter_mut()` split —
+  `Optional` can't carry a place, so mutable is a parallel iterator).
+- A borrowing iterator holds a `Ptr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
+
+*(The formal `type contract Iterator<T>` opt-in is not yet available — generic contracts aren't
+monomorphized — so the protocol is matched structurally today; a formal contract awaits generic-contract
+support.)*
+
+Iterator safety: growing a *built-in* collection (`add`) while iterating it with `foreach` is a compile
+error (it would invalidate the loop) — collect and append after. (For a *user* container, mid-iteration
+invalidation is the author's responsibility.)
 
 ### Function pointers — `fnptr` ✅
 

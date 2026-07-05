@@ -93,6 +93,24 @@ written entirely in cstar (`tests/opindex_vec`, ASan-clean):
 - **General `ref T`-returning methods** ✅ — `fn ref T at(usize i)` etc. reuse the `operator[]` place
   machinery (caller derefs the call). *Remaining niceties (unscheduled):* the same for **free
   functions**; `debug_assert`-style release stripping; formatted panic messages.
+- **`alignof(T)`** ✅ (`3eff4b4`) — sibling to `sizeof`, for arena/pool allocators.
+- **`foreach` over user types** ✅ (`9b49ad7`) — a zero-cost **iterator protocol** (not index-based:
+  containers aren't contiguous). Value: `iterator()` + `next() -> Optional<T>`; mutable: `iterMut()` +
+  `hasNext()` + a place-returning `next()` (Rust's `iter()`/`iter_mut()` split). Resolved structurally,
+  monomorphized to direct calls (no vtable). Proven on a generic heap `Vec<T>` and a non-contiguous
+  linked list (`tests/iter_*`).
+
+### Generic contracts (`type contract Foo<T>`) — a tracked gap (not fundamental)
+
+Discovered while building the iterator protocol: a **generic contract** parses and collects, but emits
+a broken *eager* vtable (`Optional_T (*next)(…)` — bare `T`), because contracts are **not
+monomorphized-per-use** the way generic *types* are (kept out of the class table, specialized on
+demand). There is **no fundamental reason** — it's an unbuilt extension of the existing generic-type
+machinery to contracts (keep a generic contract out of `_interfaces` as a template; specialize per
+`(contract, args)` use; the bound/`This` static-dispatch path already exists). Until then, `foreach`
+matches its iterator protocol **structurally** (all it needs). Worth doing for a *formal*
+`Iterator<T>`/`Comparable<T>`/`Container<T>` opt-in + generic-over-iterator code — a real stdlib
+expressiveness win, tracked as its own feature (size **M**), not blocking.
 
 ### The standard-library shape — modular & opt-in (design question)
 
