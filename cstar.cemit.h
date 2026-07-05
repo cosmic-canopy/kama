@@ -81,6 +81,7 @@ struct MethodInfo {
     bool                         isOperator = false;
     int                          arity = 0;           // 0 = unary-on-this, 1 = binary method (`this`+rhs), 2 = binary free
     ClassOperatorDeclarationNode* opDecl = nullptr;   // the operator decl (body/params) when isOperator
+    bool                         isPlaceReturn = false;  // `ref T operator[]` — returns a PLACE (T*), deref'd at the caller
 };
 
 // A built-in generic collection / smart-pointer kind. Backed by a C
@@ -322,6 +323,7 @@ private:
     // which drains this); emitMethodOrCtorBody records them in its root scope directly.
     std::vector<LiveLocal> _pendingParamDtors;
     std::string        _currentReturnCType = "void";  // for return-temp
+    bool               _returnIsPlace = false;         // emitting a `ref T operator[]` body: `return e` -> `return &(place)`
     std::string        _matchTargetCType;              // result C type of a value-producing `match` (set by the liftable site)
     std::string        _variantTargetType;             // target union instance for a generic-variant construction (Optional<int32>)
     int                _tempCounter = 0;
@@ -384,9 +386,14 @@ private:
                               std::string& recvExpr, std::string& idx);
     // A C lvalue (a PLACE) for `e`. An indexed element is lowered through the bounds-checked
     // `NAME__at(self,i) -> T*` intrinsic (`(*NAME__at(&recv, i))`, recursing so `a[i][j]` chains),
-    // so it can be a write target / a `.field` receiver / a nested-index receiver. Anything else
-    // (a name, a member access, `this`) is already an lvalue and falls through to emitExpression.
+    // or a user place-`operator[]` (`(*Class__op_index(&recv, i))`), so it can be a write target / a
+    // `.field` receiver / a nested-index receiver. Anything else (a name, a member access, `this`) is
+    // already an lvalue and falls through to emitExpression.
     std::string emitPlace(SharedExpression e);
+    // The user-defined place-returning `operator[]` on `cls` (or a base), else null.
+    MethodInfo* userIndexOp(const std::string& cls);
+    // `ea` indexes a value whose class defines a place-returning `operator[]` (not a built-in collection).
+    bool indexesUserOp(ElementAccessNode* ea);
 
     // Generic TYPES: discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
     void scanTypeForGenericTypes(SharedIdentifier t);

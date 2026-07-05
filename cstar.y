@@ -1008,7 +1008,8 @@ operator_body
   | SEMICOLON   { $$ = SharedBlock(); }
   ;
 overloadable_operator_declarator
-  : type OPERATOR overloadable_operator LPAREN RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, SharedIdentifier(), SharedIdentifier(), SharedIdentifier(), SharedIdentifier()); }   /* 0-param unary: `Vec2 operator-()` = `-this` */
+  : REF type OPERATOR LEFT_BRACKET RIGHT_BRACKET LPAREN type IDENTIFIER RPAREN   { auto d = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $2, LEFT_BRACKET, $7, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $8), SharedIdentifier(), SharedIdentifier()); d->refReturn = true; $$ = d; }   /* `ref T operator[](usize i)` — a place-returning index operator */
+  | type OPERATOR overloadable_operator LPAREN RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, SharedIdentifier(), SharedIdentifier(), SharedIdentifier(), SharedIdentifier()); }   /* 0-param unary: `Vec2 operator-()` = `-this` */
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), SharedIdentifier(), SharedIdentifier()); }
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $9) ); }
   ;

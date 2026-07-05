@@ -302,6 +302,7 @@ std::string CEmitter::operatorMangle(int opToken, int arity)
         case TILDE:       return unary ? "op_bnot" : "";
         case PLUSPLUS:    return unary ? "op_inc"  : "";   // pre/post both map here (mutating in place)
         case MINUSMINUS:  return unary ? "op_dec"  : "";
+        case LEFT_BRACKET: return unary ? ""       : "op_index";   // `a[i]` — method form (self + index)
         default:          return "";
     }
 }
@@ -696,6 +697,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 return "((*" + coll + "__at(&(" + recvExpr + "), " + idx + ")) "
                             + assignmentOperator(v->token) + " (" + rhs + "))";
             }
+            // A user place-returning `operator[]`: assign/compound-assign THROUGH the place.
+            if (indexesUserOp(ea)) {
+                std::string place = emitPlace(v->unaryExpression);
+                std::string rhs = emitExpression(v->expression);
+                return "(" + place + " " + assignmentOperator(v->token) + " (" + rhs + "))";
+            }
             // Raw pointer store `p[i] = v` — only inside `unsafe { }`.
             SharedExpression recv = ea->expression ? ea->expression
                                   : std::static_pointer_cast<ExpressionNode>(ea->identifier);
@@ -722,6 +729,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx))
             return coll + "__get(&(" + recvExpr + "), " + idx + ")";
+        // A user place-returning `operator[]`: read the value out of the place.
+        if (indexesUserOp(ea)) return emitPlace(expr);
         // Raw pointer read `p[i]` — only inside `unsafe { }`.
         SharedExpression recv = ea->expression ? ea->expression
                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
@@ -1215,6 +1224,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (retExpr)
             if (auto* h = dynamic_cast<HandoffNode*>(retExpr.get())) { handoff = h->isGive ? 1 : 2; retExpr = h->value; }
+        // A `ref T operator[]` returns a PLACE: address the lvalue directly (`return &(place)`) — no
+        // by-value return-temp (you can't copy a place). The place borrows `self`, which outlives the
+        // call, so it's valid for the caller's enclosing statement (used transiently, never stored).
+        if (_returnIsPlace) {
+            bool ph = _hoistOK; _hoistOK = true;
+            std::string p = retExpr ? emitPlace(retExpr) : std::string("0");
+            _hoistOK = ph;
+            flushHoisted(depth);
+            emitUnwindAll(depth);
+            indent(depth); *_out << "return &(" << p << ");\n";
+            return;
+        }
         // Capture the return value BEFORE running any destructors (it may
         // reference locals about to be destroyed), then unwind, then return.
         if (retExpr && _currentReturnCType != "void") {
@@ -2156,6 +2177,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     mi.isOperator = true;
                     mi.arity      = arity;
                     mi.isStatic   = (arity == 2);            // the free form takes no `this`
+                    mi.isPlaceReturn = d->refReturn;         // `ref T operator[]` — the result is a place (T*)
                     mi.visibility = visibilityOf(od->modifiers, Visibility::Public, od->line);   // operators are public by nature
                     ci.methods[opName] = mi;
                 } else if (auto* fg = dynamic_cast<FriendGrantNode*>(mn)) {
@@ -3287,8 +3309,35 @@ std::string CEmitter::emitPlace(SharedExpression e)
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx))   // recvExpr is itself a place (recursive)
             return "(*" + coll + "__at(&(" + recvExpr + "), " + idx + "))";
+        // A user place-returning `operator[]`: `a[i]` -> `(*Class__op_index(&(place of a), i))`.
+        // The receiver is emitted as a place too, so a nested `m[i][j]` chains cleanly.
+        SharedExpression recv = ea->expression ? ea->expression
+                                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        if (recv) if (MethodInfo* op = userIndexOp(exprClass(recv))) {
+            std::string idxE = (ea->expressionlist && !ea->expressionlist->empty())
+                                   ? emitExpression((*ea->expressionlist)[0]) : "0";
+            return "(*" + op->cName + "(&(" + emitPlace(recv) + "), " + idxE + "))";
+        }
     }
     return emitExpression(e);
+}
+
+// The place-returning `operator[]` on `cls` or an ancestor (else null). `op_index` is registered with
+// `isPlaceReturn` only for `ref T operator[]`.
+MethodInfo* CEmitter::userIndexOp(const std::string& cls)
+{
+    if (cls.empty() || !_classes.count(cls)) return nullptr;
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = findMethod(&_classes[cls], "op_index", &owner);
+    return (mi && mi->isOperator && mi->isPlaceReturn) ? mi : nullptr;
+}
+
+bool CEmitter::indexesUserOp(ElementAccessNode* ea)
+{
+    if (!ea) return false;
+    SharedExpression recv = ea->expression ? ea->expression
+                                           : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+    return recv && userIndexOp(exprClass(recv)) != nullptr;
 }
 
 // A fixed-array value literal (`[a, b, c]` or `[v; N]`) initializing a `Fixed<T,N>`. Its type comes
@@ -5379,7 +5428,9 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
         SharedParameterList plist = mi.isOperator ? operatorParamList(mi.opDecl->operatorDeclarator.get())
                                                   : mi.node->params;
-        *_out << stat << cType(mi.returnType) << " " << mi.cName << "("
+        // a place-returning `ref T operator[]` returns a `T*` (the place); everything else by value.
+        std::string retC = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
+        *_out << stat << retC << " " << mi.cName << "("
              << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str()) << ");\n";   // static/free: no self
     }
 }
@@ -5565,8 +5616,12 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         if (mi.isOperator) {
             auto* d = mi.opDecl->operatorDeclarator.get();
             line(mi.opDecl->line);
-            std::string ret = cType(mi.returnType);
+            // a place-returning `ref T operator[]` emits `T* Class__op_index(Class* self, …)`; its
+            // `return e` addresses the place (see the ReturnNode path, gated on `_returnIsPlace`).
+            std::string ret = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
+            _returnIsPlace = mi.isPlaceReturn;
             emitMethodOrCtorBody(mi.cName, ret.c_str(), operatorParamList(d), mi.opDecl->body, ci, false, false, mi.arity == 2);
+            _returnIsPlace = false;
             continue;
         }
         line(mi.node->line);
@@ -5645,6 +5700,13 @@ std::string CEmitter::exprClass(SharedExpression e)
         std::string cls = exprClass(recv);
         if (!cls.empty() && _classes.count(cls) && _classes[cls].isCollection)
             return _classes[cls].collElemClass;
+        // a user place-`operator[]` element resolves to the operator's element type (its `ref T`), so
+        // `m[i][j]` / `m[i].field` chain. Bind `This`/the instance's type args for the return type.
+        if (MethodInfo* op = userIndexOp(cls)) {
+            ScopedStr _ts(_thisType, cls);
+            std::string rt = cType(op->returnType);
+            return isClass(rt) ? rt : "";
+        }
         return "";
     }
 

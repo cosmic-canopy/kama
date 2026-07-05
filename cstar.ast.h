@@ -713,6 +713,7 @@ public:
     SharedIdentifier param1Name;
     SharedIdentifier param2Type;
     SharedIdentifier param2Name;
+    bool refReturn = false;   // `ref T operator[](…)` — returns a PLACE (a T*), not a value
     ClassOperatorDeclaratorNode(CodeGenContext& context, SharedIdentifier returnType,
             int opToken,
             SharedIdentifier param1Type,

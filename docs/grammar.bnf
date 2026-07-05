@@ -735,7 +735,8 @@ operator_body
   | SEMICOLON
   ;
 overloadable_operator_declarator
-  : type OPERATOR overloadable_operator LPAREN RPAREN      /* 0-param unary: `Vec2 operator-()` = `-this` */
+  : REF type OPERATOR LEFT_BRACKET RIGHT_BRACKET LPAREN type IDENTIFIER RPAREN      /* `ref T operator[](usize i)` — a place-returning index operator */
+  | type OPERATOR overloadable_operator LPAREN RPAREN      /* 0-param unary: `Vec2 operator-()` = `-this` */
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN
   | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN
   ;

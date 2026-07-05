@@ -1,0 +1,15 @@
+// A user type can define a place-returning `ref T operator[]`, so `g[i] = v` / `g[i] += 1` work —
+// the same place semantics as a built-in collection, but written in the language.
+type value Grid3 {
+    Fixed<int32, 9> cells;
+    public Grid3() { this.cells = [0; 9]; }
+    public ref int32 operator[](usize i) { return this.cells[i]; }
+}
+fn int32 main() {
+    Grid3 g = Grid3();
+    g[0] = 5;
+    g[4] = 10;
+    g[0] += 1;             // compound through the place
+    int32 x = g[4];        // read (copy out)
+    return g[0] + x;       // 6 + 10 = 16
+}

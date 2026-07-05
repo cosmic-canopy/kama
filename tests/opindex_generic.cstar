@@ -1,0 +1,14 @@
+// A generic `ref T operator[]` monomorphizes per T (here `ref int32` -> `int32*`); the place is a
+// plain `T` field.
+type value Pair<T> {
+    T a;
+    T b;
+    public Pair(T x, T y) { this.a = x; this.b = y; }
+    public ref T operator[](usize i) { if (i == 0) { return this.a; } return this.b; }
+}
+fn int32 main() {
+    Pair<int32> p = Pair(x: 5, y: 6);
+    p[0] = 50;
+    p[1] += 4;             // 10
+    return p[0] + p[1];    // 60
+}

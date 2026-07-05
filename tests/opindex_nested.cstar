@@ -1,0 +1,20 @@
+// Place-indexers compose: `m[i][j] = v` chains a `ref Row` operator[] then a `ref int32` one, and
+// `m[i].field = v` writes a field through the row place.
+type value Row {
+    public int32 a;
+    public int32 b;
+    public Row() { this.a = 0; this.b = 0; }
+    public ref int32 operator[](usize j) { if (j == 0) { return this.a; } return this.b; }
+}
+type value Mat {
+    Fixed<Row, 2> rows;
+    public Mat() { Row r = Row(); this.rows = [r; 2]; }
+    public ref Row operator[](usize i) { return this.rows[i]; }
+}
+fn int32 main() {
+    Mat m = Mat();
+    m[0][1] = 7;           // nested place: m[0] (ref Row) then [1] (ref int32)
+    m[1][0] = 9;
+    m[0].a = 3;            // field write through m[0] (a Row place)
+    return m[0][0] + m[0][1] + m[1][0];   // 3 + 7 + 9 = 19
+}
