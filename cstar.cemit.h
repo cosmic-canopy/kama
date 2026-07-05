@@ -394,7 +394,7 @@ private:
     // collection machinery, but it is carved out of ownership (never destructible, copies freely).
     bool isFixedColl(const std::string& cls) const;
     std::string emitArrayLiteral(ArrayLiteralNode* al);   // `[a,b,c]` / `[v; N]` -> a Fixed value
-    void registerSmartPtr(CollKind kind, SharedIdentifier elem);   // Owned/Shared/Weak
+    void registerSmartPtr(CollKind kind, SharedIdentifier elem, const std::string& customName = "");   // Owned/Shared/Weak (customName: a library `Box<Contract>` routed here)
     void registerOptionalOfShared(SharedIdentifier elem);          // Optional<Shared<elem>> for Weak.tryUpgrade
     void emitWeakTryUpgrade(const CollectionInfo& info);           // the tryUpgrade wrapper (builds the Optional)
     void registerBindable(SharedIdentifier elem);                  // BindableFunctionPtr<Sig>

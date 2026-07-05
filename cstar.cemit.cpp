@@ -2579,14 +2579,17 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
 // Register a smart pointer (Owned/Shared/Weak) as a synthetic ClassInfo backed by
 // a runtime macro. Smart pointers expose a T* `ptr` (auto-deref) and have no real
 // ctor (construction is inline). Shared/Weak carry a few intrinsic methods.
-void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem)
+void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem, const std::string& customName)
 {
     std::string elemCType  = cType(elem);
     std::string elemMangle = mangleElem(elem);
     bool elemIface = isInterface(elemCType);                          // fat-element variant
     std::string elemClass  = (isClass(elemCType) || elemIface) ? elemCType : "";
     if (elemClass.empty()) return;              // caller diagnosed
-    std::string cName = (kind == CollKind::Owned  ? "Owned_"
+    // a library `Box<Contract>` is routed here under its own mangled name (Rust's `Box<dyn Trait>`);
+    // otherwise the built-in Owned/Shared/Weak prefix.
+    std::string cName = !customName.empty() ? customName
+                      : (kind == CollKind::Owned  ? "Owned_"
                        : kind == CollKind::Shared ? "Shared_" : "Weak_") + elemMangle;
     if (_collections.count(cName)) return;      // dedup
 
@@ -2732,6 +2735,20 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     std::string mangled = tmpl;
     for (auto& c : concrete) mangled += "_" + mangleElem(c);
     if (_genericTypeInsts.count(mangled)) return;               // dedup
+
+    // A library heap owner (`Box<T> implements HeapOwner<T>`) over a CONTRACT element is Rust's
+    // `Box<dyn Trait>`: the type-erased `{obj,vtbl}` fat pointer + vtable dispatch/drop can't be safe
+    // library code, so route this instance through the intrinsic interface-owner path (an Owned-kind
+    // smart pointer under the `Box_Shape` name) — every downstream `isSmartPtrClass` path then applies.
+    // A concrete `Box<Counter>` falls through to the normal library-class instantiation below.
+    if (!_heapOwnerContract.empty() && !concrete.empty() && concrete[0] && isInterface(cType(concrete[0]))) {
+        bool implementsHeapOwner = false;
+        auto ti = _genericTypes.find(tmpl);
+        if (ti != _genericTypes.end())
+            for (auto& ifn : ti->second.interfaces)
+                if (resolveUserName(ifn, nullptr) == _heapOwnerContract) { implementsHeapOwner = true; break; }
+        if (implementsHeapOwner) { registerSmartPtr(CollKind::Owned, concrete[0], mangled); return; }
+    }
 
     // each concrete type argument must satisfy its parameter's contract bounds. Runs once per
     // unique instance (after dedup); with _typeSubst still at the caller's binding so a nested arg is
