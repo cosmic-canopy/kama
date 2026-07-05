@@ -188,12 +188,23 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    auto-derefs (fixture `tests/deref_generic`: `Own<T>` over `Ptr<T>`+`unsafe`+RAII, ASan-clean). Suite 281
    green (native+wasm+ASan/UBSan). **Also closes the enclosing-template-param follow-up under *Generic
    contracts*.**
-2. **Smart-pointer contracts — NEXT.** The contract(s) a smart pointer satisfies (`Deref` + RAII drop; a
-   shared variant for `Shared`/`Weak`).
-3. **Smart pointers as cstar library types** — write `Owned` (then `Shared`/`Weak`) in pure cstar over
-   `Ptr<T>` + `unsafe` + the contracts. **Now unblocked** (the generic `implements` prerequisite is done;
-   `deref_generic` is a working `Owned<T>` skeleton).
-4. **Remove intrinsic smart pointers** — once the library versions are proven, delete the compiler's
+2. **Construction primitive (`new` → `HeapOwner`/`adopt`) + `drop` — DONE.** `new T(args)` is no longer
+   hardcoded to the intrinsics: a type implementing the prelude contract
+   `HeapOwner<T> { static fn This adopt(Ptr<T> raw); }` is a valid `new` target, lowered to
+   `p = malloc; if(!p) panic; T__ctor(p,args); dst = Owner::adopt(p)` — **guaranteed zero-copy placement
+   at every opt level** (verified in the emitted C; no optimizer reliance), with `new` still valid ONLY
+   into an RAII owner (can't leak). Also added the missing OOM guard to the intrinsic `new`. New
+   `drop(value: place)` builtin runs a place's dtor (no-op if non-destructible), so a library owner over
+   `Ptr<T>` drops its heap pointee before `free`.
+3. **Smart pointers as cstar library types — unique owner DONE.** A library `Box<T>` written in cstar
+   (construct via `new`, auto-deref via `Deref`, move-only + use-after-move + RAII free from `resource`,
+   pointee `~dtor` via `drop`) works and is ASan/LeakSanitizer-clean (`tests/box_{basic,move,dtor}` +
+   xfail `box_use_after_move`). RAII/move/use-after-move are general `resource` behavior — not smart-ptr
+   magic. **Remaining for full parity:** interface boxing (`Box<Shape>` = a fat `{obj,vtbl}` for
+   polymorphic ownership) and `Shared`/`Weak` (a refcount `resource` over `Ptr<ctrl>`, made `Copyable` so
+   `copy s` = refcount++, + `tryUpgrade`).
+4. **Remove/rename intrinsic smart pointers** — once the library `Owned`/`Shared`/`Weak` reach parity
+   (interface boxing + refcount), swap them in (rename `Box`→`Owned`) and delete the compiler's
    `isSmartPtr` special-casing. Core shrinks.
 5. **Module / `import` system** — design it (the modular-stdlib pass above: prelude mechanism + the
    reachability-pruning caveat) and move the new smart pointers into it.
