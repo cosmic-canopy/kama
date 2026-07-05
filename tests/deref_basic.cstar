@@ -1,0 +1,21 @@
+// Auto-deref via the prelude `Deref<T>` contract: a wrapper that `implements Deref<Point>` forwards
+// member access to its pointee — `b.sum()` resolves to `Point__sum(BoxP__deref(&b))` and `b.x` reads
+// through `BoxP__deref(&b)->x`. Nominal/opt-in: the `implements` is the gate. No heap, no lifetimes.
+type value Point {
+    public int32 x; public int32 y;
+    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
+    public fn int32 sum() { return this.x + this.y; }
+}
+
+type value BoxP implements Deref<Point> {
+    Point inner;
+    public BoxP(Point p) { this.inner = p; }
+    public fn ref Point deref() { return this.inner; }   // a place rooted at `this`
+}
+
+fn int32 main() {
+    BoxP b = BoxP(p: Point(x: 30, y: 12));
+    int32 viaMethod = b.sum();   // auto-deref to a Point method -> 42
+    int32 viaField  = b.x;       // auto-deref to a Point field  -> 30
+    return viaMethod + viaField; // 72
+}

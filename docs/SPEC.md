@@ -131,6 +131,28 @@ Res c = give b;   // move — b consumed
 Res d = a;        // ERROR: a is copyable — say `give` or `copy`
 ```
 
+**Auto-deref — the `Deref<T>` contract.** The built-in smart pointers forward member access to their
+pointee (`ptr.method()`/`ptr.field` reach the held `T`). Any type can opt into the same **auto-deref** by
+implementing the prelude contract `type contract Deref<T> { fn ref T deref(); }` — the `implements` is the
+explicit gate. When a member isn't found on the wrapper itself, it resolves on the pointee `T` and is
+called through `deref()` (which returns a *place* — a `T*` — into the pointee); resolution is recursive, so
+deref chains. `deref()` returns a place rooted at `this`, so it's bound by the same second-class-borrow
+rules as `ref T operator[]` (no lifetimes needed). This is how a smart pointer is written as an ordinary
+`resource` (RAII + move-only come free) rather than a compiler intrinsic.
+
+```cstar
+type value Point { public int32 x; public int32 y; public fn int32 sum() { return this.x + this.y; }
+                   public Point(int32 x, int32 y) { this.x = x; this.y = y; } }
+type value BoxP implements Deref<Point> {
+    Point inner;
+    public BoxP(Point p) { this.inner = p; }
+    public fn ref Point deref() { return this.inner; }
+}
+BoxP b = BoxP(p: Point(x: 30, y: 12));
+int32 s = b.sum();   // auto-deref -> Point__sum(BoxP__deref(&b))  (42)
+int32 x = b.x;       // auto-deref -> BoxP__deref(&b)->x           (30)
+```
+
 **The give/copy behavior matrix.** A marker is required exactly when *both* move and copy are plausible
 ("silent default, scream when ambiguous"); otherwise the one natural op is silent. The rule is uniform across
 all four hand-off positions — **initializer, assignment, argument, return** — and a *fresh* rvalue
@@ -302,9 +324,10 @@ calls** (no vtable), and the container is **borrowed, not consumed**.
   `Optional` can't carry a place, so mutable is a parallel iterator).
 - A borrowing iterator holds a `Ptr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
 
-*(The formal `type contract Iterator<T>` opt-in is not yet available — generic contracts aren't
-monomorphized — so the protocol is matched structurally today; a formal contract awaits generic-contract
-support.)*
+*(`foreach` matches the protocol **structurally** — no `implements` needed. A **formal** `type contract
+Iterator<T>` also exists now (generic contracts are monomorphized, see below), so you can *additionally*
+declare `implements Iterator<int32>` for a checkable opt-in or write generic-over-iterator code
+`fn sum<I: Iterator<int32>>(I it)`; the structural path is what `foreach` itself uses.)*
 
 Iterator safety: growing a *built-in* collection (`add`) while iterating it with `foreach` is a compile
 error (it would invalidate the loop) — collect and append after. (For a *user* container, mid-iteration
@@ -647,6 +670,18 @@ List<Shared<Shape>> scene;                              // nested generics, no s
   ```
   The concrete type's `operator+` satisfies the bound structurally, and `a + b` in the monomorphized body
   lowers to a direct call — no vtable, no boxing.
+- **Generic contracts** — a `contract` may itself be parameterized (`type contract Iterator<T>`), and is
+  **monomorphized per use** just like a generic type (`Iterator<int32>` → a specialized `Iterator_int32`).
+  It has **full value + bound parity** with a plain contract: usable as a static bound
+  `fn sum<I: Iterator<int32>>(I it)` (zero-cost, direct calls) *and* as a dynamic fat-pointer value
+  `fn drain(Iterator<int32> it)` (vtable dispatch). A type opts in with `implements Iterator<int32>`.
+  ```cstar
+  type contract Iterator<T> { fn Optional<T> next(); }
+  type value IntRange implements Iterator<int32> { /* … fn Optional<int32> next() … */ }
+  fn int32 sum<I: Iterator<int32>>(I it) { /* it.next() → static IntRange__next(&it) */ }
+  ```
+  (Both dispatch modes coexist by design — monomorphization can't express a heterogeneous
+  `List<Iterator<int32>>` or open-world runtime choice; the fat pointer can. See **Contracts**.)
 
 ## Access control ✅
 

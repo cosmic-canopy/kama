@@ -100,17 +100,22 @@ written entirely in cstar (`tests/opindex_vec`, ASan-clean):
   monomorphized to direct calls (no vtable). Proven on a generic heap `Vec<T>` and a non-contiguous
   linked list (`tests/iter_*`).
 
-### Generic contracts (`type contract Foo<T>`) — a tracked gap (not fundamental)
+### Generic contracts (`type contract Foo<T>`) — DONE
 
-Discovered while building the iterator protocol: a **generic contract** parses and collects, but emits
-a broken *eager* vtable (`Optional_T (*next)(…)` — bare `T`), because contracts are **not
-monomorphized-per-use** the way generic *types* are (kept out of the class table, specialized on
-demand). There is **no fundamental reason** — it's an unbuilt extension of the existing generic-type
-machinery to contracts (keep a generic contract out of `_interfaces` as a template; specialize per
-`(contract, args)` use; the bound/`This` static-dispatch path already exists). Until then, `foreach`
-matches its iterator protocol **structurally** (all it needs). Worth doing for a *formal*
-`Iterator<T>`/`Comparable<T>`/`Container<T>` opt-in + generic-over-iterator code — a real stdlib
-expressiveness win, tracked as its own feature (size **M**), not blocking.
+Shipped: a **generic contract** is monomorphized-per-use exactly like a generic *type* — the template is
+kept out of `_interfaces` (parked in `_genericContracts`) and each reachable `Iterator<int32>` becomes a
+specialized `Iterator_int32` interface emitted under a bound `_typeSubst`. **Full value + bound parity**
+with plain contracts: usable as a static bound `<I: Iterator<int32>>` (zero-cost, direct
+`Concrete__next(&x)`) *and* as a dynamic fat-pointer value `Iterator<int32> it` (vtable dispatch).
+Bound-checking matches by method **name** (type-parameter-independent), so it reads the template
+directly — no instance needed just to constrain a type. This gives a *formal*
+`Iterator<T>`/`Comparable<T>`/`Container<T>` opt-in + generic-over-iterator code. `foreach` still
+resolves its iterator protocol **structurally** (the formal contract is additive). Fixtures:
+`tests/gencontract_{bound,value,multi}`, `tests/xfail/gencontract_{unsat,arity}`.
+
+- **Boundary (first cut):** concrete type arguments everywhere. A generic contract parameterized by an
+  *enclosing template's own* type param (`class Foo<T> implements Iterator<T>`) is a **follow-up** —
+  structural `foreach` + concrete-arg bounds already cover the stdlib's functional needs.
 
 ### The standard-library shape — modular & opt-in (design question)
 
@@ -130,23 +135,107 @@ building it:
   reachability-pruned today, so a large module would bloat output — "pay for what you use" needs either
   dead-function elimination or explicit per-module opt-in. **A dedicated design pass is warranted**
   before the collection rewrite.
+- **Contracts: structural or nominal (require `implements`)? — decided: NOMINAL / opt-in via `implements`.**
+  Today `implements` is **advisory** for the two structural uses and required only for the fat-pointer
+  value: `foreach` resolves an iterator by method name (`iter_*` never declare `implements`), and a bound
+  `<T: Weighable>` accepts a type structurally (a `Rock` with the methods but no `implements` passes).
+  That hybrid reads as *implicit*, against GOALS' *explicit-over-implicit*. **Decision (user): go nominal
+  (Rust-like) — require `implements` for `foreach` and bounds too**, so the keyword is load-bearing
+  everywhere and errors pin to the declaration. Touches every bound + the shipped `iter_*`/
+  `generic_bound_*` fixtures, so execute it deliberately (a migration pass) here.
+- **The capability-contract family** — the compiler-recognized, **opt-in-via-`implements`** contracts that
+  form cstar's nominal, explicit vocabulary: **`Iterator<T>`** (exists; `foreach`/bounds still structural
+  until the nominal migration above), **`Deref<T>`** (DONE — auto-deref; see the sequence below),
+  **`Copyable`** (below), **`Comparable<T>`** (future). All are the same species — a contract the compiler
+  keys a capability off of. New ones follow the `Deref` template (prelude contract + a recognizer keyed on
+  the contract name/instance).
+- **`Copyable` as a formal contract (follow-up after `Deref`).** Today `Copyable` is *structural* — a
+  `resource` is copyable if it has a public nullary `copy()` returning its own type (the compiler
+  deep-copies a collection's copyable elements via it). Formalize as `type contract Copyable { This
+  copy(); }` (non-generic, uses `This` — no generic contracts needed) and make recognition **nominal**
+  (`implements Copyable`), bundled with the structural→nominal migration.
+- **Smart pointers: intrinsic or library?** RAII + move-only + use-after-move are already general
+  `resource` features, and the heap `Vec<T>` proved an RAII resource over `Ptr<T>`+`unsafe` works in pure
+  cstar. The one missing language piece is **auto-deref** — a **`Deref` contract** so `ptr.method()`
+  reaches the pointee (else the clunky `ptr.get().method()`). Auto-deref needs **no lifetime tracking and
+  opens no new hole**: it returns a *place* rooted at `this` (through the owned `Ptr`), governed by the
+  existing second-class-borrow rules (un-storable, root-at-`this`/ref-param, statement-scoped) — the same
+  ASan-clean pattern as `Vec`'s `ref T operator[]`. **Gate auto-deref behind implementing `Deref`** (the
+  *contract* is the gate — not a compiler-blessed smart-pointer list), keeping the one bit of implicit
+  magic opt-in and legible. Plan: **move `Owned` to the library first** (unique = the `Vec`-of-one
+  pattern; proves `Deref`), keep `Shared`/`Weak` intrinsic until their library versions (shared control
+  block + refcount + `tryUpgrade`) are proven. The contract becomes the guarantee; the pointers become code.
+- **Containers → library.** Make the collections library types, not compiler intrinsics (game devs roll
+  their own precisely because one-size containers don't fit). This is the natural first stress-test of the
+  module + `Deref` machinery. `Depth 2` (`ref T operator[]`) already unblocks writing them in cstar.
 
-**Sequencing (recommendation).** Land the three fast-follows soon (cheap; they harden `operator[]` and
-unblock cstar-written collections). Build the **math value types now** (no prereqs). Treat
-**collections-as-a-modular-cstar-stdlib** as its own milestone with the design pass above — it *is* the
-self-hosting / 2.0-IR project, worth doing deliberately rather than rushed. (Note: const generics,
-`Fixed<T,N>`, place-indexing, and `operator[]` all landed as language features *after* the "language
-complete" framing above — so where the **1.0 cut** falls, relative to these prerequisites, is itself
-part of this discussion.)
+**Sequencing (decided — the self-hosting stdlib path).** Generic contracts are **done** (above). The
+plan is bottom-up: build each enabling primitive, port an intrinsic to a cstar library type behind a
+contract, then delete the intrinsic — shrinking the compiler core toward a real modular stdlib.
+
+1. **`Deref` (auto-deref) — DONE.** Prelude `type contract Deref<T> { fn ref T deref(); }`; a type that
+   `implements Deref<T>` forwards `ptr.method()`/`ptr.field` to the pointee (recursive → transitive). One
+   central fallback at the `emitDispatch` "unknown method" point + parallels in `emitMemberAccess`/
+   `exprClass`, keyed on the deref method's `ref T` return; the intrinsic `isSmartPtr` path is untouched.
+   No lifetimes (place rooted at `this`, second-class-borrow rules), nominal/opt-in, inert when no
+   `Deref` is in scope. Fixtures `tests/deref_{basic,heap}` (heap = a `Ptr<T>`+`unsafe`+RAII `resource`,
+   the real smart-ptr shape, ASan-clean) + xfail `deref_missing`. Suite 280 green.
+   - **Prerequisite for step 3 (found while building step 1):** a **generic** wrapper
+     `type value Box<T> implements Deref<T>` does NOT yet auto-deref — it's the "generic class implements a
+     generic contract parameterized by its own type param" case (the same enclosing-template-param
+     follow-up noted under *Generic contracts*). Concrete `implements Deref<Point>` works. Since
+     `Owned<T>` is generic, **this case must be built before step 3** — likely the next task: resolve a
+     generic class's interface refs under its instance subst in `registerGenericTypeInst` (mangle
+     `Deref<T>`→`Deref_Point`, register the instance) so `Box_Point.interfaces` carries `Deref_Point`.
+2. **Smart-pointer contracts** — the contract(s) a smart pointer satisfies (`Deref` + RAII drop; a shared
+   variant for `Shared`/`Weak`).
+3. **Smart pointers as cstar library types** — write `Owned` (then `Shared`/`Weak`) in pure cstar over
+   `Ptr<T>` + `unsafe` + the contracts (the heap-`Vec` pattern proves it works). **Gated on the generic
+   `implements` prerequisite in step 1.**
+4. **Remove intrinsic smart pointers** — once the library versions are proven, delete the compiler's
+   `isSmartPtr` special-casing. Core shrinks.
+5. **Module / `import` system** — design it (the modular-stdlib pass above: prelude mechanism + the
+   reachability-pruning caveat) and move the new smart pointers into it.
+6. **Containers as cstar library types → remove intrinsic containers** — repeat the port for the
+   collections (`Depth 2` `ref T operator[]` already unblocks writing them in cstar).
+7. **Reflection + attributes** — the opt-in reflection system (design brief below); the attribute
+   language feature + serialization modules. Comes last, on top of the modular stdlib.
+
+In parallel, buildable anytime: the **math value types** (no prereqs — operator overloading + `Fixed`
+shipped); *package* them once the module mechanism exists. (Note: const generics, `Fixed<T,N>`,
+place-indexing, `operator[]`, and generic contracts all landed as language features *after* the "language
+complete" framing above — so where the **1.0 cut** falls, relative to these prerequisites, is itself part
+of this discussion.)
+
+### Reflection — design brief (step 7, after the smart-pointer + container ports)
+
+Opt-in compile-time reflection driving polymorphic serialization. Requirements (from the design owner):
+
+- **Opt-in / zero-cost when unused.** *Nobody pays a byte or a cycle if they don't reflect.* A type is
+  inert unless it opts in; no global registry, no per-type metadata emitted unless requested.
+- **Declarative marks on types** — an attribute syntax (e.g. `[Reflect]` / `@derive(...)` — spelling
+  TBD) on a type opts it in. This is the new language surface (grammar + AST + emit).
+- **Granular — opt-in reflectable members.** Per-field control (mark which fields are reflected /
+  serialized / skipped), not all-or-nothing.
+- **Scenegraph-capable (composition).** Reflect object graphs, not just flat structs — which typically
+  needs **temporary IDs** to identify references within the chain (so a serialized graph can round-trip
+  shared/back references without cycles).
+- **Polymorphic by serialization output.** One reflection description, many back ends — swap the
+  **serializer** to emit text / binary / YAML / JSON (little-endian canonical for binary). The serializer
+  is a module; reflection is the substrate it reads.
+
+Mostly codegen over `ClassInfo`; the only new *language* feature is the attribute mark (+ deciding how
+per-member opt-in is spelled). Serializers land later as modules once the module system exists.
 
 ## 1.x — systems & runtime (post-1.0)
 
 Built ON the finished language; mostly library + codegen, not new syntax. These are also the
 substrate the engine needs (asset I/O, scene serialization, networking).
 
-- **Reflection + declarative serialization** — opt-in compile-time attributes/reflection →
-  multi-format serialization (binary / json / yaml), little-endian canonical; scenegraph +
-  serializer selection.
+- **Reflection + declarative serialization** — the final step of the self-hosting-stdlib sequence
+  (after the smart-pointer + container ports); see the **Reflection — design brief** above for the full
+  requirements (opt-in/zero-cost, declarative marks, granular per-member, scenegraph via temp IDs,
+  polymorphic serializer output). Serialization back ends follow as modules.
 - **File I/O** — safe file APIs; gates serialization and engine asset loading.
 - **Networking** — native UDP/TCP sockets vs browser **WebRTC DataChannels** (unreliable) /
   **WebSockets** (reliable), via FFI (the browser has no raw sockets — a real wasm nuance).

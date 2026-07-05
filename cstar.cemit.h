@@ -195,7 +195,8 @@ struct CollectionInfo {
 // type + a fat-pointer value type. Implemented by classes via a C__as_I vtable. The method's
 // return type + params are stored directly (not a node pointer) so it can be built from a
 // `type contract` (ClassMethodDeclarationNode).
-struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedParameterList params; };
+struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedParameterList params;
+                         bool isPlaceReturn = false; };  // `fn ref T m()` — vtbl slot/cast spells `T*`
 struct InterfaceInfo {
     std::string                  name;
     std::vector<InterfaceMethod> methods;
@@ -315,7 +316,9 @@ private:
     std::map<std::string, InterfaceInfo>            _genericContracts;      // template name -> InterfaceInfo shape (NOT in _interfaces)
     std::map<std::string, std::vector<std::string>> _genericContractParams; // template name -> type-param names [T]
     std::map<std::string, NsCtx>                    _genericContractCtx;    // template name -> home namespace ctx
+    std::map<std::string, NsCtx>                    _genericContractInstCtx;// instance -> use-site ctx (its type args, e.g. a user `Point`, resolve here — like _genericTypeInstCtx)
     std::set<std::string>                           _genericContractInsts;  // mangled instance names already registered (dedup)
+    std::string                                     _derefContract;         // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
 
     // Namespaces: current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
@@ -433,6 +436,9 @@ private:
     // (a template). Bound-checking matches by method NAME, which is type-parameter-independent, so it
     // reads either table through this one accessor. Returns nullptr for an unknown name.
     const std::vector<InterfaceMethod>* contractMethods(const std::string& name);
+    // If `cls` implements the prelude `Deref<T>` contract, the pointee class `T` (auto-deref target);
+    // "" otherwise. Nominal — the `implements Deref<T>` is the opt-in gate. Inert when no Deref is in scope.
+    std::string derefTarget(const std::string& cls);
     // RAII: while emitting a generic-contract instance's vtbl / a class's impl-vtable for it, bind
     // T->concrete (and its home ctx) so the `T`-typed method sigs resolve — a no-op for a plain
     // contract. Mirrors emitGenericTypeInst's subst bind; nested so it can touch CEmitter's privates.

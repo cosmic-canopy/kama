@@ -1834,7 +1834,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         unsupported(("a `contract` method (`" + (md->name && md->name->value ? *md->name->value : std::string())
                                      + "`) has no body — it is a guarantee, not an implementation").c_str(), md->line);
                     if (md->name && md->name->value)
-                        ii.methods.push_back({*md->name->value, md->returnType, md->params});
+                        ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef});
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                     // an operator in a `contract` is a bound for generic math: `IArithmetic`
                     // declares `This operator+(This rhs)`. Register it under the SAME synthetic name
@@ -1861,6 +1861,9 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         // method sigs name the raw `T`, so an eager vtable would be bogus. Its shape is parked in
         // _genericContracts and specialized per concrete `Iterator<Arg>` at discovery (mirrors the
         // generic-TYPE divert in collectClasses).
+        // the prelude `Deref<T>` gates auto-deref — remember its resolved name (by source name, so a
+        // user's own `Deref` in a namespace still matches). Empty if no `Deref` is in scope → inert.
+        if (cd->name && cd->name->value && *cd->name->value == "Deref") _derefContract = ii.name;
         if (cd->typeParams && !cd->typeParams->empty()) {
             std::vector<std::string> ps;
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);
@@ -2803,6 +2806,7 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl, SharedIdenti
     if (!_genericContractInsts.insert(mangled).second) return;    // dedup (also stops self-recursion)
 
     NsCtx savedCtx = _nsCtx;
+    _genericContractInstCtx[mangled] = savedCtx;                  // use-site ctx: a user-type arg resolves here
     std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
     _nsCtx = _genericContractCtx[tmpl];
     _typeSubst.clear();
@@ -4122,6 +4126,29 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
         if (!mi || mi->visibility != Visibility::Public) return false;
     }
     return true;
+}
+
+// If `cls` implements the prelude `Deref<T>` contract, return the pointee class `T` (the auto-deref
+// target); "" otherwise. Nominal: keyed on `implements Deref<…>` (the contract is the opt-in gate), not
+// on any compiler-blessed smart-pointer list. The pointee is the concrete `ref T` return of the class's
+// own `deref()` (resolved under the instance's type-subst for a generic wrapper). Inert (always "") when
+// no `Deref` is in scope, so the whole feature is zero-cost when unused.
+std::string CEmitter::derefTarget(const std::string& cls)
+{
+    if (_derefContract.empty()) return "";
+    auto it = _classes.find(cls);
+    if (it == _classes.end()) return "";
+    for (auto& ifn : it->second.interfaces) {
+        auto ii = _interfaces.find(ifn);
+        if (ii == _interfaces.end() || !ii->second.isGenericInst || ii->second.templateKey != _derefContract)
+            continue;
+        ClassInfo* oc = nullptr;
+        MethodInfo* mi = findMethod(&it->second, "deref", &oc);
+        if (!mi || !mi->returnType) return "";
+        std::string t = cTypeInInstance(cls, mi->returnType);   // resolves `ref T` under a generic wrapper's subst
+        return isClass(t) ? t : "";
+    }
+    return "";
 }
 
 // at each monomorphization, verify the concrete type argument bound to `paramName` satisfies
@@ -5576,7 +5603,10 @@ CEmitter::ContractSubst::ContractSubst(CEmitter& e_, const InterfaceInfo& ii)
     : e(e_), savedCtx(e_._nsCtx), savedSubst(e_._typeSubst), active(ii.isGenericInst)
 {
     if (!active) return;
-    e._nsCtx = e._genericContractCtx.count(ii.templateKey) ? e._genericContractCtx[ii.templateKey] : e._nsCtx;
+    // emit under the USE-SITE ctx (where the instance's type args — e.g. a user `Point` — resolve),
+    // falling back to the template's home ctx. Mirrors emitGenericTypeInst's _genericTypeInstCtx.
+    e._nsCtx = e._genericContractInstCtx.count(ii.name) ? e._genericContractInstCtx[ii.name]
+             : e._genericContractCtx.count(ii.templateKey) ? e._genericContractCtx[ii.templateKey] : e._nsCtx;
     e._typeSubst.clear();
     const std::vector<std::string>& ps = e._genericContractParams[ii.templateKey];
     for (size_t i = 0; i < ps.size() && i < ii.typeArgs.size(); ++i) e._typeSubst[ps[i]] = ii.typeArgs[i];
@@ -5597,7 +5627,9 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     *_out << "struct " << ii.name << "_vtbl {\n";
     for (auto& m : ii.methods) {
         indent(1);
-        *_out << cType(m.returnType) << " (*" << m.name << ")" << ifaceSlotSig(m.params) << ";\n";
+        // a place-returning contract method (`fn ref T m()`) is lowered to a `T*`-returning slot.
+        *_out << cType(m.returnType) << (m.isPlaceReturn ? "*" : "") << " (*" << m.name << ")"
+              << ifaceSlotSig(m.params) << ";\n";
     }
     // a virtual-destructor slot so an OWNED interface (`Owned`/`Shared<I>`) can drop its
     // concrete object polymorphically. NULL for a non-destructible impl (drop just frees the obj).
@@ -5629,8 +5661,8 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                              + "' and must be declared `public`").c_str(),
                             mi->node ? mi->node->line : ci.node->line);
             indent(1);
-            *_out << "." << m.name << " = (" << cType(m.returnType) << "(*)" << ifaceSlotSig(m.params)
-                 << ")&" << mi->cName << ",\n";
+            *_out << "." << m.name << " = (" << cType(m.returnType) << (m.isPlaceReturn ? "*" : "")
+                 << "(*)" << ifaceSlotSig(m.params) << ")&" << mi->cName << ",\n";
         }
         // the virtual-destructor slot — the concrete dtor (cast to the erased signature),
         // or NULL when this impl owns nothing to free.
@@ -5963,6 +5995,7 @@ std::string CEmitter::exprClass(SharedExpression e)
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
         if (isSmartPtrClass(recv)) recv = _classes[recv].collElemClass;   // auto-deref: look up on T
+        else { std::string dt = derefTarget(recv); if (!dt.empty()) recv = dt; }   // user Deref<T> auto-deref
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)
@@ -6010,6 +6043,9 @@ std::string CEmitter::exprClass(SharedExpression e)
             if (!cls.empty() && _classes.count(cls)) {
                 ClassInfo* owner = nullptr;
                 MethodInfo* mi = findMethod(&_classes[cls], method, &owner);
+                // auto-deref via a user Deref<T> contract: the method may live on the pointee T.
+                if (!mi) { std::string dt = derefTarget(cls);
+                           if (!dt.empty() && _classes.count(dt)) mi = findMethod(&_classes[dt], method, &owner); }
                 if (mi && mi->returnType) { std::string rc = cType(mi->returnType); return isClass(rc) ? rc : ""; }
             }
             return "";
@@ -6089,6 +6125,19 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     if (!cls.empty() && _classes.count(cls)) {
         ClassInfo* owner = findFieldOwner(&_classes[cls], field);
         if (owner) { basePath = basePathTo(&_classes[cls], owner); checkFieldAccess(owner, field, ma->line); }
+        else {
+            // the field is NOT on the wrapper itself — auto-deref via a `Deref<T>` contract to the
+            // pointee: `w.field` -> `Cls__deref(&(w))->[base]field` (a T*). (Only when not on `cls`.)
+            std::string dtgt = derefTarget(cls);
+            ClassInfo* fo = dtgt.empty() || !_classes.count(dtgt) ? nullptr : findFieldOwner(&_classes[dtgt], field);
+            if (fo) {
+                ClassInfo* dc = nullptr;
+                MethodInfo* dref = findMethod(&_classes[cls], "deref", &dc);
+                std::string bp = basePathTo(&_classes[dtgt], fo);
+                checkFieldAccess(fo, field, ma->line);
+                if (dref) return dref->cName + "(&(" + emitExpression(ma->expression) + "))->" + bp + field;
+            }
+        }
     }
     if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
         if (_inStaticMethod) unsupported("a `static` method has no `this`", ma->line);
@@ -6107,7 +6156,19 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     if (!_classes.count(clsName)) { unsupported("call on unknown class", srcLine); return "0"; }
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(&_classes[clsName], method, &owner);
-    if (!mi) { unsupported("unknown method", srcLine); return "0"; }
+    if (!mi) {
+        // Auto-deref fallback: `method` is not on `clsName`, but `clsName` implements `Deref<T>` and the
+        // method IS on the pointee `T`. Resolve on `T` and call through `clsName__deref(recvPtr)` — a
+        // `T*` — as the receiver. Recursive, so `A: Deref<B>, B: Deref<T>` chains transitively.
+        std::string tgt = derefTarget(clsName);
+        ClassInfo* dc = nullptr;
+        MethodInfo* dref = tgt.empty() ? nullptr : findMethod(&_classes[clsName], "deref", &dc);
+        if (dref && _classes.count(tgt) && findMethod(&_classes[tgt], method, nullptr)) {
+            std::string derefed = dref->cName + "((" + clsName + "*)" + recvPtr + ")";
+            return emitDispatch(tgt, derefed, method, args, srcLine);
+        }
+        unsupported("unknown method", srcLine); return "0";
+    }
     if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);
 
     if (mi->isVirtual) {

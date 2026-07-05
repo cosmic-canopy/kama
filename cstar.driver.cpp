@@ -128,7 +128,11 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
 // namespace so `Optional`/`Result` resolve unqualified everywhere (like the builtin collections).
 static const char* PRELUDE_SRC =
     "enum Optional<T> { Some(T value), None }\n"
-    "enum Result<T, E> { Ok(T value), Err(E error) }\n";
+    "enum Result<T, E> { Ok(T value), Err(E error) }\n"
+    // Auto-deref opt-in: a type implementing Deref<T> forwards member access to its pointee `T`
+    // (`ptr.method()`/`ptr.field` -> the T). The contract is the gate (explicit, nominal); the smart
+    // pointers become ordinary cstar types over this instead of compiler intrinsics.
+    "type contract Deref<T> { fn ref T deref(); }\n";
 
 // Parse an in-memory cstar source string into a CompilationUnit (flex string buffer). nullptr on error.
 SharedCompilationUnit parseString(const char* src, const std::string& name)

@@ -1,0 +1,16 @@
+// Auto-deref forwards to the pointee, but a method that exists on NEITHER the wrapper nor the pointee
+// still fails cleanly — the Deref fallback doesn't invent methods.
+type value Point {
+    public int32 x;
+    public Point(int32 x) { this.x = x; }
+    public fn int32 get() { return this.x; }
+}
+type value BoxP implements Deref<Point> {
+    Point inner;
+    public BoxP(Point p) { this.inner = p; }
+    public fn ref Point deref() { return this.inner; }
+}
+fn int32 main() {
+    BoxP b = BoxP(p: Point(x: 1));
+    return b.nonexistent();   // not on BoxP, not on Point -> unknown method
+}
