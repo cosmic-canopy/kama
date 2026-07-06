@@ -189,6 +189,11 @@ struct CollectionInfo {
     bool         elemCopyable = false;   // element is a `Copyable` resource -> deep-copy each
     bool         elemIsInterface = false;   // owned-contract smart ptr (fat {obj, vtbl} element)
     int64_t      constValue = 0;         // Fixed<T,N> only: the compile-time size N (the array length)
+    // The paired smart-ptr INSTANCE name across the Shared<->Weak pair: for a Weak, the Shared it upgrades
+    // to (the `SHARED_NAME` for __upgrade + `Optional<that>`); for a Shared, the Weak it downgrades to.
+    // Defaults to the conventional `Shared_`/`Weak_` prefix; set explicitly for a library `Rc`/`RcWeak` pair.
+    std::string  ifacePartner;
+    std::string  downgradeName;    // a Shared with a library weak partner: the `downgrade` method name to emit ("" = none)
 };
 
 // A `contract`: a set of method prototypes, lowered to a vtable struct
@@ -396,7 +401,9 @@ private:
     std::string emitArrayLiteral(ArrayLiteralNode* al);   // `[a,b,c]` / `[v; N]` -> a Fixed value
     void registerSmartPtr(CollKind kind, SharedIdentifier elem, const std::string& customName = "");   // Owned/Shared/Weak (customName: a library `Box<Contract>` routed here)
     void registerOptionalOfShared(SharedIdentifier elem);          // Optional<Shared<elem>> for Weak.tryUpgrade
+    void registerOptionalOfName(const std::string& sharedName);    // Optional<sharedName> — a library `Rc_<elem>` partner
     void emitWeakTryUpgrade(const CollectionInfo& info);           // the tryUpgrade wrapper (builds the Optional)
+    void emitSharedToWeakDowngrade(const CollectionInfo& info);    // a library `Rc<Shape>`'s downgrade() (Shared IFACE -> Weak partner)
     void registerBindable(SharedIdentifier elem);                  // BindableFunctionPtr<Sig>
     // The CSTAR_*_DEFINE macros, split: typesOnly emits the struct typedefs (`_TYPE`,
     // before class struct bodies so a class may hold one BY VALUE); else the funcs

@@ -1,0 +1,44 @@
+// Weak polymorphic ref + a DESTRUCTIBLE implementer: the object's ~dtor runs (via vtbl->__dtor) when
+// strong hits 0 even with an outstanding weak; the control block frees when the last weak drops.
+// LeakSanitizer-clean == both freed exactly once across the strong/weak lifetimes.
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+type value Ctrl { public int32 strong; public int32 weak; }
+type contract Shape { fn int32 area(); }
+type resource Circle implements Shape {
+    Ptr<int32> buf;
+    public Circle(int32 r) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = r; } }
+    public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
+    ~Circle() { unsafe { free(p: cast<Ptr>(this.buf)); } }
+}
+type resource RcWeak<T> {
+    Ptr<T> p; Ptr<Ctrl> c;
+    public RcWeak(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
+    public fn Optional<Rc<T>> tryUpgrade() {
+        unsafe { if (this.c[0].strong > 0) { this.c[0].strong = this.c[0].strong + 1; return Optional::Some(value: Rc(p: this.p, c: this.c)); } }
+        return Optional::None;
+    }
+    ~RcWeak() { unsafe { this.c[0].weak = this.c[0].weak - 1; if (this.c[0].strong == 0 && this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } }
+}
+type resource Rc<T> implements Deref<T>, HeapOwner<T> {
+    Ptr<T> p; Ptr<Ctrl> c;
+    public Rc(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
+    public static fn Rc<T> adopt(Ptr<T> raw) { Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc(p: raw, c: k); }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    public fn Rc<T> copy() { unsafe { this.c[0].strong = this.c[0].strong + 1; } return Rc(p: this.p, c: this.c); }
+    public fn RcWeak<T> downgrade() { unsafe { this.c[0].weak = this.c[0].weak + 1; } return RcWeak(p: this.p, c: this.c); }
+    ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } } }
+}
+fn int32 main() {
+    RcWeak<Shape> w;
+    int32 v = 0;
+    {
+        Rc<Shape> a = new Circle(r: 7);
+        w = a.downgrade();
+        v = a.area();               // 49
+    }   // a drops: strong 0 -> Circle __dtor frees buf; ctrl stays (weak=1)
+    Optional<Rc<Shape>> o = w.tryUpgrade();
+    int32 up = match (o) { case Some(r): r.area(); case None: 0; };   // 0 (expired)
+    return v + up;                  // 49
+}

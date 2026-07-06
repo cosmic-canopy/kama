@@ -1,0 +1,46 @@
+// Weak POLYMORPHIC references — Rust's Weak<dyn Trait>. `RcWeak<Shape>` shares the control block with
+// `Rc<Shape>` (both the fat {obj,vtbl,ctrl} representation); `a.downgrade()` and `w.tryUpgrade()` are
+// compiler-provided for the contract case, mapping the library API onto the runtime IFACE conversions.
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+type value Ctrl { public int32 strong; public int32 weak; }
+type contract Shape { fn int32 area(); }
+type value Circle implements Shape { int32 r; public Circle(int32 r){this.r=r;} public fn int32 area(){return this.r*this.r;} }
+type value Square implements Shape { int32 s; public Square(int32 s){this.s=s;} public fn int32 area(){return this.s*this.s;} }
+
+type resource RcWeak<T> {
+    Ptr<T> p; Ptr<Ctrl> c;
+    public RcWeak(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
+    public fn Optional<Rc<T>> tryUpgrade() {
+        unsafe { if (this.c[0].strong > 0) { this.c[0].strong = this.c[0].strong + 1; return Optional::Some(value: Rc(p: this.p, c: this.c)); } }
+        return Optional::None;
+    }
+    ~RcWeak() { unsafe { this.c[0].weak = this.c[0].weak - 1; if (this.c[0].strong == 0 && this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } }
+}
+type resource Rc<T> implements Deref<T>, HeapOwner<T> {
+    Ptr<T> p; Ptr<Ctrl> c;
+    public Rc(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
+    public static fn Rc<T> adopt(Ptr<T> raw) { Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc(p: raw, c: k); }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    public fn Rc<T> copy() { unsafe { this.c[0].strong = this.c[0].strong + 1; } return Rc(p: this.p, c: this.c); }
+    public fn RcWeak<T> downgrade() { unsafe { this.c[0].weak = this.c[0].weak + 1; } return RcWeak(p: this.p, c: this.c); }
+    ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } } }
+}
+
+fn RcWeak<Shape> makeExpired() {
+    Rc<Shape> a = new Circle(r: 10);
+    return a.downgrade();   // `a` drops on return -> object freed -> expired weak
+}
+fn int32 main() {
+    Rc<Shape> a = new Circle(r: 5);
+    RcWeak<Shape> w = a.downgrade();
+    Optional<Rc<Shape>> o1 = w.tryUpgrade();
+    int32 alive = match (o1) { case Some(r): r.area(); case None: -1; };   // 25 (a alive)
+
+    RcWeak<Shape> dead = makeExpired();
+    Optional<Rc<Shape>> o2 = dead.tryUpgrade();
+    int32 expired = match (o2) { case Some(r): r.area(); case None: 90; }; // 90 (expired)
+
+    return alive + expired;   // 115
+}

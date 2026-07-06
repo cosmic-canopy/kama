@@ -2600,6 +2600,11 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem, const std:
     // An interface element's concrete object is dropped via its vtable's __dtor slot, not the
     // collection's ELEM_DTOR machinery, so elemDestructible stays false here.
     info.elemDestructible = !elemIface && _classes.count(elemClass) && _classes[elemClass].destructible;
+    // The paired instance across Shared<->Weak (conventional prefix by default; a library `Rc`/`RcWeak`
+    // pair overrides this after registration). A Weak upgrades to `Shared_<elem>`; a Shared downgrades to
+    // `Weak_<elem>`.
+    if (kind == CollKind::Weak)        info.ifacePartner = "Shared_" + elemMangle;
+    else if (kind == CollKind::Shared) info.ifacePartner = "Weak_" + elemMangle;
     _collections[cName] = info;
     _collectionOrder.push_back(cName);
 
@@ -2640,6 +2645,18 @@ void CEmitter::registerOptionalOfShared(SharedIdentifier elem)
     sh->genericArg  = elem;
     sh->genericArgs = std::make_shared<IdentifierList>();
     sh->genericArgs->push_back(elem);
+    auto optArgs = std::make_shared<IdentifierList>();
+    optArgs->push_back(sh);
+    registerGenericTypeInst("Optional", optArgs);
+}
+
+// register `Optional<sharedName>` where `sharedName` is an already-registered smart-ptr INSTANCE (a
+// library `Rc_<elem>`) — a bare type node naming it drives the monomorphization. For `RcWeak.tryUpgrade`.
+void CEmitter::registerOptionalOfName(const std::string& sharedName)
+{
+    if (sharedName.empty() || !_genericTypeParams.count("Optional")) return;
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto sh = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(sharedName));
     auto optArgs = std::make_shared<IdentifierList>();
     optArgs->push_back(sh);
     registerGenericTypeInst("Optional", optArgs);
@@ -2765,8 +2782,40 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
             for (auto& ifn : ti->second.interfaces)
                 if (resolveUserName(ifn, nullptr) == _heapOwnerContract) { implementsHeapOwner = true; break; }
         if (implementsHeapOwner) {
-            CollKind k = (ti != _genericTypes.end() && ti->second.copyable) ? CollKind::Shared : CollKind::Owned;
-            registerSmartPtr(k, concrete[0], mangled); return;
+            CollKind k = ti->second.copyable ? CollKind::Shared : CollKind::Owned;   // Copyable => refcounted
+            registerSmartPtr(k, concrete[0], mangled);
+            // A refcounted (Shared) owner may have a WEAK partner: a method (`downgrade`) returning a
+            // DIFFERENT generic resource `RcWeak<T>` (not the owner itself). Route the weak to the Weak
+            // IFACE + wire `downgrade`/`tryUpgrade` so the library API works on the type-erased pair.
+            if (k == CollKind::Shared) {
+                std::string downName, weakTmpl;
+                for (auto& kv : ti->second.methods) {   // find the downgrade: returns a non-self generic type
+                    SharedIdentifier rt = kv.second.returnType;
+                    if (!rt || !rt->value || !rt->genericArg) continue;
+                    std::string rn = resolveUserName(*rt->value, rt->qualifier);
+                    if (rn != tmpl && _genericTypes.count(rn)) { downName = kv.first; weakTmpl = rn; break; }
+                }
+                if (!weakTmpl.empty()) {
+                    std::string weakMangled = weakTmpl + "_" + mangleElem(concrete[0]);
+                    registerSmartPtr(CollKind::Weak, concrete[0], weakMangled);
+                    _collections[mangled].ifacePartner    = weakMangled;   // Rc_Shape downgrades to RcWeak_Shape
+                    _collections[mangled].downgradeName   = downName;
+                    _collections[weakMangled].ifacePartner = mangled;      // RcWeak_Shape upgrades to Rc_Shape
+                    registerOptionalOfName(mangled);                       // Optional<Rc_Shape> for tryUpgrade
+                    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+                    auto bare = [&](const std::string& n){ return std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(n)); };
+                    // downgrade intrinsic on Rc_Shape (-> RcWeak_Shape); dispatched via _classes[cls].methods
+                    MethodInfo dm; dm.cName = mangled + "__" + downName; dm.isIntrinsic = true; dm.returnType = bare(weakMangled);
+                    _classes[mangled].methods[downName] = dm;
+                    // RcWeak_Shape.tryUpgrade returns Optional<Rc_Shape> (not the default Optional<Shared<elem>>)
+                    auto opt = bare("Optional");
+                    opt->genericArg = bare(mangled); opt->genericArgs = std::make_shared<IdentifierList>();
+                    opt->genericArgs->push_back(opt->genericArg);
+                    if (_classes[weakMangled].methods.count("tryUpgrade"))
+                        _classes[weakMangled].methods["tryUpgrade"].returnType = opt;
+                }
+            }
+            return;
         }
     }
 
@@ -3409,10 +3458,25 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
 // Shared sentinel. Wraps the runtime macro's internal `__upgrade` (which does the strong++/empty):
 // a live Shared (ctrl != NULL) becomes `Some`, a dead one `None`. Emitted after the Weak macro,
 // where both the Shared and the Optional<Shared<T>> instance structs are already complete.
+// A library `Rc<Shape>`'s `downgrade()` (Shared IFACE -> its Weak partner): field-copy the fat pointer +
+// bump `weak`. Mirrors the intrinsic Shared->Weak assignment, as a named `static inline` method so
+// `rc.downgrade()` dispatches to it (registered as an intrinsic on the Shared instance).
+void CEmitter::emitSharedToWeakDowngrade(const CollectionInfo& info)
+{
+    const std::string& wk = info.ifacePartner;           // the Weak partner (RcWeak_<elem>)
+    *_out << "static inline " << wk << " " << info.cName << "__" << info.downgradeName
+          << "(" << info.cName << "* self) {\n"
+          << "    " << wk << " w;\n"
+          << "    w.obj = self->obj; w.vtbl = self->vtbl; w.ctrl = self->ctrl;\n"
+          << "    if (w.ctrl) w.ctrl->weak++;\n"
+          << "    return w;\n"
+          << "}\n";
+}
+
 void CEmitter::emitWeakTryUpgrade(const CollectionInfo& info)
 {
-    std::string sh  = "Shared_" + info.elemMangle;      // the pointee handle
-    std::string opt = "Optional_" + sh;                 // Optional_Shared_<elem>
+    std::string sh  = info.ifacePartner;                 // the Shared it upgrades to (Shared_<elem> or a library `Rc_<elem>`)
+    std::string opt = "Optional_" + sh;                 // Optional_<shared>
     if (!_genericTypeInsts.count(opt)) return;          // prelude Optional unavailable -> skip (upgrade stays)
     *_out << "static inline " << opt << " " << info.cName << "__tryUpgrade(" << info.cName << "* self) {\n"
           << "    " << sh << " s = " << info.cName << "__upgrade(self);\n"
@@ -3450,20 +3514,24 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                  << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : ")\n");
         else if (info.kind == CollKind::Owned)
             *_out << "CSTAR_OWNED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
-        else if (info.kind == CollKind::Shared && info.elemIsInterface)
+        else if (info.kind == CollKind::Shared && info.elemIsInterface) {
             *_out << "CSTAR_SHARED_IFACE_" << suf << "(" << info.cName
                  << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : ")\n");
+            // a library `Rc<Shape>` (Shared IFACE with a weak partner) gets a `downgrade()` that
+            // field-copies {obj,vtbl,ctrl} into its Weak partner + bumps `weak`.
+            if (!typesOnly && !info.downgradeName.empty()) emitSharedToWeakDowngrade(info);
+        }
         else if (info.kind == CollKind::Shared)
             *_out << "CSTAR_SHARED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Weak && info.elemIsInterface) {
-            // The C `__upgrade` (-> Shared<I>) stays an internal helper; `tryUpgrade` wraps it.
+            // The C `__upgrade` (-> the Shared partner) stays an internal helper; `tryUpgrade` wraps it.
             *_out << "CSTAR_WEAK_IFACE_" << suf << "(" << info.cName
-                 << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : (", Shared_" + info.elemMangle + ")\n"));
+                 << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : (", " + info.ifacePartner + ")\n"));
             if (!typesOnly) emitWeakTryUpgrade(info);
         }
         else if (info.kind == CollKind::Weak) {
             *_out << "CSTAR_WEAK_" << suf << "(" << info.elemCType << ", " << info.cName
-                 << (typesOnly ? ")\n" : (", Shared_" + info.elemMangle + ")\n"));
+                 << (typesOnly ? ")\n" : (", " + info.ifacePartner + ")\n"));
             if (!typesOnly) emitWeakTryUpgrade(info);
         }
         else if (info.kind == CollKind::Bindable)
