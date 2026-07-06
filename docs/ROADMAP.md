@@ -217,14 +217,19 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    the template's **Copyable** flag — Copyable (retain-on-copy) → refcounted `CSTAR_SHARED_IFACE`
    (`{obj,vtbl,ctrl}`), move-only → unique `OWNED_IFACE`. So `Rc<Shape>` is intrinsic-parity refcounted
    polymorphic ownership (`copy r` → `ctrl->strong++`, virtual dispatch, vtable `__dtor` at `strong==0`;
-   `tests/rc_iface{,_dtor}`, LeakSan-clean). **Remaining:** the WEAK interface — `RcWeak<Shape>` via
-   `rc.downgrade()` doesn't work (`Rc<Shape>` is the intrinsic Shared IFACE, which has no `downgrade`
-   method — the intrinsic converts Shared→Weak by *assignment*, not a method; errors cleanly, no hazard).
-   Bridging the library `downgrade`/`tryUpgrade` API to the intrinsic fat-pointer weak is a separate
-   follow-up (a real API-unification chunk, not a small add).
-4. **Remove/rename intrinsic smart pointers** — once the library `Owned`/`Shared`/`Weak` reach parity
-   (add the refcount interface case), swap them in (rename `Box`→`Owned`, `Rc`→`Shared`, `RcWeak`→`Weak`)
-   and delete the compiler's `isSmartPtr` special-casing. Core shrinks.
+   `tests/rc_iface{,_dtor}`, LeakSan-clean). **Weak interface `RcWeak<Shape>` — DONE (parity-complete):**
+   the divert discovers the weak partner (the method returning a non-self generic resource,
+   `Rc.downgrade -> RcWeak<T>`), routes `RcWeak<Shape>` to the intrinsic Weak IFACE, and generates the
+   library API on the erased pair — `Rc_Shape.downgrade()` (field-copy + `weak++`) and
+   `RcWeak_Shape.tryUpgrade() -> Optional<Rc_Shape>` (the runtime `__upgrade` wrapped). One friction —
+   names: `CollectionInfo.ifacePartner` stores the paired `Shared`↔`Weak` instance name (default =
+   conventional prefix, intrinsic path unchanged; overridden to `Rc_Shape`↔`RcWeak_Shape`).
+   `tests/weak_iface{,_dtor}`, LeakSan-clean. **THE FULL MATRIX IS COVERED — Owned/Shared/Weak ×
+   concrete/contract — the library smart pointers reach parity with the intrinsics.**
+4. **Remove/rename intrinsic smart pointers — now mechanical.** Rename `Box`→`Owned`, `Rc`→`Shared`,
+   `RcWeak`→`Weak`, move them to the prelude, and delete the compiler's intrinsic `isSmartPtr` registration
+   (the concrete path) — the interface/type-erasure IFACE machinery stays (it's what the library types
+   route to). Core shrinks.
 5. **Module / `import` system** — design it (the modular-stdlib pass above: prelude mechanism + the
    reachability-pruning caveat) and move the new smart pointers into it.
 6. **Containers as cstar library types → remove intrinsic containers** — repeat the port for the
