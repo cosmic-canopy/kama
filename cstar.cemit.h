@@ -136,6 +136,10 @@ struct ClassInfo {
     // its own type. Makes the give/copy marker MANDATORY on a `resource` value ("scream when
     // ambiguous"). Detected structurally (a public nullary `copy` method).
     bool                              copyable = false;
+    // `!Movable` in the `implements` list subtracts the implicit move. `Copyable` + `!Movable` = a
+    // COPY-ONLY (shared-ownership) resource: bare hand-off retains via `copy()`, `give` is an error.
+    bool                              notMovable = false;   // declared `!Movable`
+    bool                              copyOnly = false;     // copyable && notMovable (derived)
 
     // Inheritance + virtual dispatch
     std::string                       baseName;        // "" if no base
@@ -326,6 +330,8 @@ private:
     std::set<std::string>                           _genericContractInsts;  // mangled instance names already registered (dedup)
     std::string                                     _derefContract;         // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
     std::string                                     _heapOwnerContract;     // resolved name of the prelude `HeapOwner` contract — `new` placement-constructs into a type implementing it
+    std::string                                     _movableContract;       // resolved name of the prelude `Movable` marker (implicit on every resource; `!Movable` subtracts it)
+    std::string                                     _copyableContract;      // resolved name of the prelude `Copyable` marker
 
     // Namespaces: current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
@@ -510,6 +516,7 @@ private:
     // own type). Its presence makes the give/copy marker mandatory: bare hand-off = error, `copy`
     // deep-copies via copy(), `give` moves.
     bool isCopyable(const std::string& cls) const;
+    bool isCopyOnly(const std::string& cls) const;
     void markMoved(const std::string& cVar);                // state -> Moved
     void checkNotMoved(const std::string& cVar, int line);  // reject a use of a moved local
     // The source of a move hand-off: a bare move-only local -> its name (caller marks it moved);

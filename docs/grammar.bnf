@@ -704,10 +704,15 @@ class_base
   | IMPLEMENTS interface_type_list
   | EXTENDS type_name IMPLEMENTS interface_type_list
   ;
-/* The `implements <contract>[, …]` list. */
+/* The `implements <contract>[, …]` list. An entry may be negated (`!Movable`) to subtract a
+   compiler capability marker. */
 interface_type_list
+  : implements_entry
+  | interface_type_list COMMA implements_entry
+  ;
+implements_entry
   : type_name
-  | interface_type_list COMMA type_name
+  | EXCLAMATION type_name
   ;
 class_body
   : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE

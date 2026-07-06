@@ -192,7 +192,7 @@ struct cstaryystype {
 %type <strings> import_path export_manifest_opt export_name_list
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
-%type <identifier> type_param type_decl_head enum_underlying_opt
+%type <identifier> type_param type_decl_head enum_underlying_opt implements_entry
 %type <identifierlist> friend_member_list interface_type_list type_arg_list type_param_list bound_list type_params_opt
 %type <modifier> modifier function_modifier_opt parameter_modifier_opt
 %type <modifierlist> modifiers modifiers_opt
@@ -981,10 +981,15 @@ class_base
   | IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), $2); }
   | EXTENDS type_name IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
   ;
-/* The `implements <contract>[, …]` list. */
+/* The `implements <contract>[, …]` list. An entry may be negated (`!Movable`) to subtract a
+   compiler capability marker. */
 interface_type_list
-  : type_name   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
-  | interface_type_list COMMA type_name   { $1->push_back($3); }
+  : implements_entry   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | interface_type_list COMMA implements_entry   { $1->push_back($3); }
+  ;
+implements_entry
+  : type_name   { $$ = $1; }
+  | EXCLAMATION type_name   { $2->negated = true; $$ = $2; }
   ;
 class_body
   : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE   { $$ = $2; }

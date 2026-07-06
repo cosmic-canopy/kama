@@ -284,7 +284,12 @@ static const char* PRELUDE_SRC =
     // Heap-owner opt-in: a type implementing HeapOwner<T> can be a `new T(args)` target. `new`
     // placement-constructs T on the heap (0 copies) and hands the raw Ptr<T> to `adopt`, which wraps it.
     // `new` stays valid ONLY into such an owner, so it can never leak a bare raw pointer.
-    "type contract HeapOwner<T> { static fn This adopt(Ptr<T> raw); }\n";
+    "type contract HeapOwner<T> { static fn This adopt(Ptr<T> raw); }\n"
+    // Ownership capability markers (compiler-recognized). `Movable` is implicit on every `resource`
+    // (`!Movable` subtracts it → copy-only). `Copyable` = a public `copy()` returning `This`; a resource
+    // that implements it is duplicable. Together, `Copyable, !Movable` = shared-ownership (retain on copy).
+    "type contract Movable { }\n"
+    "type contract Copyable { fn This copy(); }\n";
 
 // Parse an in-memory cstar source string into a CompilationUnit (flex string buffer). nullptr on error.
 SharedCompilationUnit parseString(const char* src, const std::string& name)

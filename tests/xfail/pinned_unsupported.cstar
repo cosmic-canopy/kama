@@ -1,0 +1,5 @@
+type resource Pinned implements !Movable {
+    int32 v;
+    public Pinned(int32 v) { this.v = v; }
+}
+fn int32 main() { return 0; }

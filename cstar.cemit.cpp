@@ -1253,6 +1253,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // give: the plain `=` already transferred the struct; null the source's buffer.
                         else { indent(depth); *_out << "(" << emitExpression(init) << ").data = NULL; ("
                                                      << emitExpression(init) << ").len = 0;\n"; }
+                    } else if (isCopyOnly(ty) && isNamedValue(init.get())) {
+                        // a COPY-ONLY (shared-ownership) resource: a bare hand-off RETAINS via copy()
+                        // (never moves); `give` is an error. Overwrites the `=` blit with the real copy().
+                        if (handoff == 1)
+                            unsupported(("`" + ty + "` is copy-only (shared ownership) — it can't be `give`n; "
+                                         "a bare hand-off retains it").c_str(), n->line);
+                        indent(depth); *_out << nm << " = " << ty << "__copy(&(" << emitExpression(init) << "));\n";
                     } else if (isMoveOnlyValue(ty) && isNamedValue(init.get())) {
                         // a `resource` (destructible) VALUE. The `=` above blitted the
                         // struct. If the type opted into `Copyable`, the marker is MANDATORY (both
@@ -1347,6 +1354,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 if (doGive) *_out << smartPtrInvalidate(emitExpression(retExpr), k, isInterface(_classes[rc].collElemClass)) << "\n";
                 else        *_out << "(" << emitExpression(retExpr) << ").ctrl->"
                                   << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
+            }
+            // a COPY-ONLY (shared-ownership) resource returns a RETAIN via copy() (the local survives
+            // the unwind, its dtor releases); `give` is an error. Overwrite the blit captured into `tmp`.
+            else if (isCopyOnly(rc) && isNamedValue(retExpr.get())) {
+                if (handoff == 1)
+                    unsupported(("`" + rc + "` is copy-only (shared ownership) — it can't be `give`n; "
+                                 "returning it retains it").c_str(), n->line);
+                indent(depth); *_out << tmp << " = " << rc << "__copy(&(" << emitExpression(retExpr) << "));\n";
             }
             // returning a `resource` (destructible) VALUE moves it out — mark the source
             // moved so the unwind below skips its dtor; the caller now owns the returned bytes.
@@ -1612,6 +1627,27 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             return;
         }
         // assigning a `resource` (destructible) VALUE from a NAMED source is a MOVE —
+        // copy-only (shared-ownership) reassignment: release the old value, retain the new via copy().
+        // `give` is an error; self-assign is a no-op. A fresh rvalue keeps the generic path below.
+        if (as->token == EQ && isCopyOnly(exprClass(as->unaryExpression))) {
+            SharedExpression rhs = as->expression;
+            int handoff = 0;
+            if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
+            if (isNamedValue(rhs.get())) {
+                std::string lty = exprClass(as->unaryExpression);
+                checkConstWrite(as->unaryExpression, n->line);
+                if (handoff == 1)
+                    unsupported(("`" + lty + "` is copy-only (shared ownership) — it can't be `give`n; "
+                                 "assignment retains it").c_str(), n->line);
+                std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
+                if (b == src) return;                                                    // self-assign: no-op
+                line(n->line);
+                if (_classes.count(lty) && _classes[lty].destructible)                   // release the old (if it owns anything)
+                    { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
+                indent(depth); *_out << b << " = " << lty << "__copy(&(" << src << "));\n"; // retain the new
+                return;
+            }
+        }
         // drop the target's current value (unless it was already moved out), blit, mark the
         // source moved. A fresh rvalue (new/ctor/call) keeps the generic copy path below.
         if (as->token == EQ && isMoveOnlyValue(exprClass(as->unaryExpression))) {
@@ -1923,6 +1959,10 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (cd->name && cd->name->value && *cd->name->value == "Deref") _derefContract = ii.name;
         // the prelude `HeapOwner<T>` — a type implementing it is a `new` placement target (via `adopt`).
         if (cd->name && cd->name->value && *cd->name->value == "HeapOwner") _heapOwnerContract = ii.name;
+        // the prelude ownership markers — `Movable` (implicit on resources; `!Movable` subtracts it) and
+        // `Copyable` (duplicable). Recognized by source name so the give/copy discipline can consult them.
+        if (cd->name && cd->name->value && *cd->name->value == "Movable")  _movableContract  = ii.name;
+        if (cd->name && cd->name->value && *cd->name->value == "Copyable") _copyableContract = ii.name;
         if (cd->typeParams && !cd->typeParams->empty()) {
             std::vector<std::string> ps;
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);
@@ -2094,8 +2134,16 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             if (cd->baseTypes->base && cd->baseTypes->base->value)
                 ci.baseName = *cd->baseTypes->base->value;   // bare; resolved in linkBases
             if (cd->baseTypes->interfaces)
-                for (auto& itf : *cd->baseTypes->interfaces)
-                    if (itf && itf->value) ci.interfaces.push_back(*itf->value);  // bare; resolved in linkBases
+                for (auto& itf : *cd->baseTypes->interfaces) {
+                    if (!itf || !itf->value) continue;
+                    if (itf->negated) {                 // `!Movable` — subtract the implicit move capability
+                        if (*itf->value == "Movable") ci.notMovable = true;
+                        else unsupported(("only `!Movable` may be negated in an `implements` list; `!"
+                                          + *itf->value + "` is not a subtractable capability").c_str(), cd->line);
+                        continue;                       // a negated marker is not an implemented interface
+                    }
+                    ci.interfaces.push_back(*itf->value);  // bare; resolved in linkBases
+                }
         }
         // Class-level extensibility modifier: virtual | abstract | final.
         if (cd->modifiers)
@@ -3904,6 +3952,9 @@ bool CEmitter::isMoveOnlyValue(const std::string& cls) const
     if (it == _classes.end() || it->second.isCollection || it->second.isExternStruct || isSmartPtrClass(cls))
         return false;
     const ClassInfo& ci = it->second;
+    // A copy-only (shared-ownership) resource is NOT move-only — it retains on hand-off (never moved,
+    // never move-tracked).
+    if (ci.copyOnly) return false;
     // Move-only-ness is the declared kind: a `resource` moves even if it owns nothing (an empty
     // resource is a move-only identity/token); a `value` copies. An `Intrinsic` (a tagged-union enum;
     // collections/smart-ptrs already returned above) moves iff it owns a resource (is destructible).
@@ -3919,6 +3970,14 @@ bool CEmitter::isCopyable(const std::string& cls) const
 {
     auto it = _classes.find(cls);
     return it != _classes.end() && it->second.copyable;
+}
+
+// A COPY-ONLY (shared-ownership) resource: `Copyable` + `!Movable`. A bare hand-off retains via `copy()`;
+// `give` is rejected. Never move-only (see isMoveOnlyValue), never move-tracked.
+bool CEmitter::isCopyOnly(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.copyOnly;
 }
 
 void CEmitter::markMoved(const std::string& cVar)
@@ -4549,6 +4608,12 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 s += val;
             } else if (collArg && handoff) {
                 unsupported("passing a collection by value is not yet supported — pass it by `ref` to borrow", srcLine);
+            } else if (isCopyOnly(argCls) && isNamedValue(argExpr.get())) {
+                // a copy-only (shared-ownership) argument is passed as a RETAIN via copy(); `give` errors.
+                if (handoff == 1)
+                    unsupported(("`" + argCls + "` is copy-only (shared ownership) — it can't be `give`n; "
+                                 "passing it retains it").c_str(), srcLine);
+                s += argCls + "__copy(&(" + val + "))";
             } else if (isMoveOnlyValue(argCls) && isNamedValue(argExpr.get())) {
                 // a `resource` VALUE passed by value goes to the callee, which drops it at
                 // fn-end. A `Copyable` type demands the marker: `copy` passes a fresh deep copy (the
@@ -5394,6 +5459,11 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                                           : ("(" + val + ").ctrl->" + (k == CollKind::Weak ? "weak" : "strong") + "++;");
                 _hoisted.push_back(fcls + " " + t + " = (" + val + "); " + side);
                 field = t;
+            } else if (isCopyOnly(argCls) && isNamedValue(argExpr.get())) {
+                // a copy-only (shared-ownership) value RETAINS via copy() into the union; `give` errors.
+                if (handoff == 1)
+                    unsupported(("`" + argCls + "` is copy-only (shared ownership) — it can't be `give`n").c_str(), srcLine);
+                field = argCls + "__copy(&(" + val + "))";
             } else if (isMoveOnlyValue(argCls) && isNamedValue(argExpr.get())) {
                 // A named `resource` value MOVES into the union (source marked moved; its dtor suppressed).
                 if (handoff == 2) {
@@ -6579,6 +6649,19 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
     computeDestructible();
+
+    // Derive the copy-only (shared-ownership) discipline: a resource that is `Copyable` AND `!Movable`
+    // retains on a bare hand-off and can never be moved. A `!Movable` that is NOT copyable would be a
+    // fully-pinned (immovable + non-copyable) resource — a real category (Rust `Pin`) but not yet supported.
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (!ci.notMovable) continue;
+        if (!ci.copyable)
+            unsupported("a resource marked `!Movable` must also be `Copyable` — a pinned (immovable and "
+                        "non-copyable) resource isn't supported yet; use `type resource` (movable) or "
+                        "`implements Copyable, !Movable` (copy-only)", ci.node ? ci.node->line : 0);
+        else ci.copyOnly = true;
+    }
 
     // Validate export manifests: a name in `export { … };` must be a real top-level declaration in
     // that same file (catches typos + enforces per-file surfaces for directory-modules).
