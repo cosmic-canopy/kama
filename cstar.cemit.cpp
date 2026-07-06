@@ -1918,6 +1918,19 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (!cd || !cd->typeKind || *cd->typeKind != "contract" || !cd->name || !cd->name->value) continue;
         InterfaceInfo ii;
         ii.name = qualify(*cd->name->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
+        // Kind-gate: `for value|resource|both` is MANDATORY on a contract — the designer must state which
+        // kinds may implement it (`both` / listing both = either).
+        if (cd->forKinds) for (auto& k : *cd->forKinds) {
+            if (!k) continue;
+            if      (*k == "value")    ii.allowsValue = true;
+            else if (*k == "resource") ii.allowsResource = true;
+            else if (*k == "both")     { ii.allowsValue = true; ii.allowsResource = true; }
+            else unsupported(("a contract's `for` clause takes `value`, `resource`, or `both` — not `"
+                              + *k + "`").c_str(), cd->line);
+        }
+        if (!ii.allowsValue && !ii.allowsResource)
+            unsupported(("contract `" + *cd->name->value + "` must declare which kinds may implement it: "
+                         "`type contract " + *cd->name->value + " for value|resource|both { … }`").c_str(), cd->line);
         if (cd->members)
             for (auto& m : *cd->members) {
                 // a `contract` is a public guarantee: methods only, no bodies, no fields, no
@@ -2110,6 +2123,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             else unsupported(("unknown type kind `" + *cd->typeKind
                               + "` — expected `value`, `resource`, or `contract`").c_str(), cd->line);
         }
+        // A `for value|resource|both` clause gates a CONTRACT's implementers — meaningless on a value/resource.
+        if (cd->forKinds && !cd->forKinds->empty())
+            unsupported("a `for value|resource|both` clause applies only to a `type contract`", cd->line);
 
         // FFI: an `extern class`/`extern value` is an external C struct — keep its literal
         // C name (not namespace-mangled) and don't emit/own it.
@@ -6661,6 +6677,23 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         "non-copyable) resource isn't supported yet; use `type resource` (movable) or "
                         "`implements Copyable, !Movable` (copy-only)", ci.node ? ci.node->line : 0);
         else ci.copyOnly = true;
+    }
+
+    // Contract kind-gate enforcement: a class may `implements` a contract only if its kind (value/resource)
+    // is permitted by the contract's `for` clause.
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.kind != TypeKind::Value && ci.kind != TypeKind::Resource) continue;
+        for (auto& base : ci.interfaces) {
+            auto it = _interfaces.find(base);
+            if (it == _interfaces.end()) continue;   // a base class / unresolved — not a kind-gated contract
+            if (ci.kind == TypeKind::Value && !it->second.allowsValue)
+                unsupported(("`" + kv.first + "` is a `value`, but contract `" + base + "` is declared "
+                             "`for resource` — a value can't implement it").c_str(), ci.node ? ci.node->line : 0);
+            if (ci.kind == TypeKind::Resource && !it->second.allowsResource)
+                unsupported(("`" + kv.first + "` is a `resource`, but contract `" + base + "` is declared "
+                             "`for value` — a resource can't implement it").c_str(), ci.node ? ci.node->line : 0);
+        }
     }
 
     // Validate export manifests: a name in `export { … };` must be a real top-level declaration in

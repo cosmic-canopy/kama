@@ -4,7 +4,7 @@
 extern "<stdlib.h>";
 extern fn void free(Ptr p);
 
-type contract Shape { fn int32 area(); }
+type contract Shape for both { fn int32 area(); }
 type value Circle implements Shape { int32 r; public Circle(int32 r) { this.r = r; } public fn int32 area() { return this.r * this.r; } }
 type value Square implements Shape { int32 s; public Square(int32 s) { this.s = s; } public fn int32 area() { return this.s * this.s; } }
 

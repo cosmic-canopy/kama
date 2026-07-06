@@ -212,6 +212,9 @@ struct InterfaceInfo {
     std::vector<InterfaceMethod> methods;
     std::string                  scope;
     std::vector<std::string>     usings;
+    // Kind-gate (`for value|resource|both`): which kinds may `implements` this contract. Both true = `both`.
+    bool                         allowsValue = false;
+    bool                         allowsResource = false;
     // A specialized generic-contract instance (`Iterator_int32`) — emitted under a bound _typeSubst so
     // its `T`-typed method sigs resolve; the template itself lives in _genericContracts, not here.
     bool                         isGenericInst = false;

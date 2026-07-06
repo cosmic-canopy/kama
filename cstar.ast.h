@@ -635,6 +635,7 @@ public:
     SharedStringList typeParams;
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedStringList forKinds;     // `type contract X for value|resource|both` — which kinds may implement it
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
                         SharedIdentifier name,
                         SharedClassBaseDeclaration baseTypes,

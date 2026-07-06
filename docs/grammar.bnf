@@ -199,8 +199,18 @@ type_declaration
    is never reserved. `type` marks every type declaration (greppable, like `fn`). All three
    kinds share the class body; the emitter routes `contract` to the fat-pointer vtable path. */
 marked_type_declaration
-  : TYPE modifiers_opt IDENTIFIER type_decl_head class_base_opt class_body semicolon_opt
+  : TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
 
+  ;
+/* Kind-gate on a `type contract`: `for value | resource | both` (also `value, resource`). MANDATORY on a
+   contract (enforced by the emitter), forbidden on value/resource. Kind words are contextual identifiers. */
+for_kinds_opt
+  : /* Nothing */
+  | FOR kind_name_list
+  ;
+kind_name_list
+  : IDENTIFIER
+  | kind_name_list COMMA IDENTIFIER
   ;
 /* The NAME + type-parameter list in a type DECLARATION — decoupled from the type-USE production
    (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo` or `Foo<K: I + J, V>`. */

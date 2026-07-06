@@ -189,7 +189,7 @@ struct cstaryystype {
 %type <usingdeclarationlist> import_symbols
 %type <importdeclaration> import_directive
 %type <importdeclarationlist> import_directives_opt import_directives
-%type <strings> import_path export_manifest_opt export_name_list
+%type <strings> import_path export_manifest_opt export_name_list for_kinds_opt kind_name_list
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
 %type <identifier> type_param type_decl_head enum_underlying_opt implements_entry
@@ -435,8 +435,9 @@ type_declaration
    is never reserved. `type` marks every type declaration (greppable, like `fn`). All three
    kinds share the class body; the emitter routes `contract` to the fat-pointer vtable path. */
 marked_type_declaration
-  : TYPE modifiers_opt IDENTIFIER type_decl_head class_base_opt class_body semicolon_opt
-    { auto n = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6); n->typeKind = $3;
+  : TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
+    { auto n = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $6, $7); n->typeKind = $3;
+      n->forKinds = $5;   /* `for value|resource|both` — mandatory on a `type contract`, forbidden otherwise */
       /* `type value Pair<A, B>` / `type value Map<K: Hashable, V>` — the head parsed the
          params into genericArgs (each carrying its bounds). Capture names + bounds and strip them so
          the class NAME stays bare `Pair`/`Map`. */
@@ -453,6 +454,16 @@ marked_type_declaration
           $4->genericArg  = SharedIdentifier();
       }
       $$ = n; }
+  ;
+/* Kind-gate on a `type contract`: `for value | resource | both` (also `value, resource`). MANDATORY on a
+   contract (enforced by the emitter), forbidden on value/resource. Kind words are contextual identifiers. */
+for_kinds_opt
+  : /* Nothing */   { $$ = std::make_shared<StringList>(); }
+  | FOR kind_name_list   { $$ = $2; }
+  ;
+kind_name_list
+  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
+  | kind_name_list COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; }
   ;
 /* The NAME + type-parameter list in a type DECLARATION — decoupled from the type-USE production
    (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo` or `Foo<K: I + J, V>`. */

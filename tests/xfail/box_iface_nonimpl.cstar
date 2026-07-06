@@ -1,6 +1,6 @@
 extern "<stdlib.h>";
 extern fn void free(Ptr p);
-type contract Shape { fn int32 area(); }
+type contract Shape for both { fn int32 area(); }
 type value Circle implements Shape { int32 r; public Circle(int32 r){this.r=r;} public fn int32 area(){return this.r;} }
 type value Square { int32 s; public Square(int32 s){this.s=s;} }   // does NOT implement Shape
 type resource Box<T> implements Deref<T>, HeapOwner<T> {

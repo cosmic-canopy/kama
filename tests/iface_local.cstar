@@ -1,5 +1,4 @@
-type contract Shape
-{
+type contract Shape for both{
     fn int64 area();
 }
 type value Circle implements Shape

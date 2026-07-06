@@ -3,7 +3,7 @@
 // through a borrow). Crucially, `value`/`resource`/`contract` are NOT reserved — the `type` marker
 // (like `fn`) means they stay ordinary identifiers. Coexists with legacy `class`/`interface` (h-3
 // migrates those away). ASan-clean.
-type contract Shape { fn int32 area(); }
+type contract Shape for both { fn int32 area(); }
 type resource Box implements Shape {          // owns a List -> moves; satisfies a contract
     List<int32> sides;
     public Box(int32 w, int32 h) { this.sides.add(item: w); this.sides.add(item: h); }

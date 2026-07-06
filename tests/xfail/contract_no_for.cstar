@@ -1,0 +1,2 @@
+type contract Nameless { fn int32 x(); }
+fn int32 main() { return 0; }

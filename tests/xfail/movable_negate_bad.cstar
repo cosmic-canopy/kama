@@ -1,4 +1,4 @@
-type contract Drawable { fn void draw(); }
+type contract Drawable for both { fn void draw(); }
 type resource Widget implements Copyable, !Drawable {
     int32 x;
     public Widget(int32 x) { this.x = x; }

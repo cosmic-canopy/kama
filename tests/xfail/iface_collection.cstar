@@ -1,5 +1,5 @@
 // M26e — a collection of interface fat pointers would store borrows that dangle.
 // Store owning handles instead: a `List<Shared<Shape>>` (M26f).
-type contract Shape { fn int32 area(); }
+type contract Shape for both { fn int32 area(); }
 type value Sq implements Shape { int32 s; public Sq(int32 s){ this.s = s; } public fn int32 area(){ return this.s * this.s; } }
 fn int32 main() { List<Shape> xs; return 0; }

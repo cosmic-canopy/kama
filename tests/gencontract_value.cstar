@@ -2,7 +2,7 @@
 // erases the concrete type; `it.next()` dispatches through the monomorphized vtable
 // (`Iterator_int32_vtbl`). Proves generic contracts get full value + bound parity with plain
 // contracts — monomorphization (bound) and fat pointers (value) are complementary, not either/or.
-type contract Iterator<T> { fn Optional<T> next(); }
+type contract Iterator<T> for both { fn Optional<T> next(); }
 
 type value IntRange implements Iterator<int32> {
     int32 cur; int32 end;

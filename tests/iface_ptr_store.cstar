@@ -4,7 +4,7 @@
 // field's owner drops it in RAII order. (A `List<Shared<Shape> >` now works too — the collection
 // drops each stored handle in RAII order; see `list_shared_iface`. Only the `>>` split, dropping the
 // space, remains as a later ergonomic slice.)
-type contract Shape { fn int32 area(); }
+type contract Shape for both { fn int32 area(); }
 type resource Sq implements Shape {
     List<int32> side;
     public Sq(int32 s) { this.side.add(item: s); }

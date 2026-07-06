@@ -1,0 +1,7 @@
+type contract Drawable for resource { fn int32 draw(); }
+type value Bad implements Drawable {
+    int32 z;
+    public Bad(int32 z) { this.z = z; }
+    public fn int32 draw() { return this.z; }
+}
+fn int32 main() { return 0; }

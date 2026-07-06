@@ -1,6 +1,6 @@
 // A generic contract must be given exactly as many type arguments as it has parameters.
 // `Iterator<int32, int32>` supplies two args to a one-parameter contract — a compile-time error.
-type contract Iterator<T> { fn Optional<T> next(); }
+type contract Iterator<T> for both { fn Optional<T> next(); }
 
 fn void take(Iterator<int32, int32> it) { }
 

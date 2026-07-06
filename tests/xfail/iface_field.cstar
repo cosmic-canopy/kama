@@ -1,6 +1,6 @@
 // M26e — an interface borrows its object; storing one in a field would dangle.
 // Own the object instead (a `Shared<Shape>` — enabled by M26f).
-type contract Shape { fn int32 area(); }
+type contract Shape for both { fn int32 area(); }
 type value Sq implements Shape { int32 s; public Sq(int32 s){ this.s = s; } public fn int32 area(){ return this.s * this.s; } }
 type value Holder { Shape sh; public Holder(){ } }
 fn int32 main() { return 0; }
