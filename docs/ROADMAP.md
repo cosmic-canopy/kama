@@ -204,11 +204,20 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    `{obj,vtbl}`, virtual dispatch, vtable `__dtor`), **intrinsic perf parity — one malloc, verified in the
    emitted C** (`tests/box_iface{,_dtor}` + xfail). One user-facing `Box<T>`; lifetime/RAII in the library,
    **type erasure in the compiler** (it can't be safe library code — the Rust boundary). RAII/move/UAM are
-   general `resource` behavior, not smart-ptr magic. **Remaining for full parity:** `Shared`/`Weak` (a
-   refcount `resource` over `Ptr<ctrl>`, made `Copyable` so `copy s` = refcount++, + `tryUpgrade`).
+   general `resource` behavior, not smart-ptr magic.
+3b. **Reference-counted ownership (`Rc`/`Weak`) — DONE (concrete), pure library.** `Rc<T>` = a Copyable
+   `resource` over `{Ptr<T> p; Ptr<Ctrl> c}` — `copy r` retains (strong++), `~Rc` releases the object at
+   `strong==0` + the ctrl at `weak==0`; `RcWeak<T>` (non-`Deref`) with `downgrade()`/`tryUpgrade() ->
+   Optional<Rc<T>>` (Some while alive, None after drop). **Zero new compiler features** — retain-on-copy,
+   move, use-after-move, RAII all fall out of `type resource` + Copyable. `tests/rc_{basic,move,dtor}`,
+   `weak_upgrade` (ASan/LeakSan-clean) + xfails. Along the way, fixed a compiler segfault on
+   **mutually-recursive generic types** (`Rc`↔`RcWeak`): `deepSubstType` now substitutes a generic arg's
+   inner params so a nested arg isn't stored self-referentially in `_typeSubst` (was looping `mangleElem`).
+   **Remaining for full parity:** the *interface* case (`Rc<Shape>`/`RcWeak<Shape>`) — route to the
+   refcounted `CSTAR_SHARED_IFACE` variant (extend the `Box<Contract>` divert to a Shared kind + a marker).
 4. **Remove/rename intrinsic smart pointers** — once the library `Owned`/`Shared`/`Weak` reach parity
-   (interface boxing + refcount), swap them in (rename `Box`→`Owned`) and delete the compiler's
-   `isSmartPtr` special-casing. Core shrinks.
+   (add the refcount interface case), swap them in (rename `Box`→`Owned`, `Rc`→`Shared`, `RcWeak`→`Weak`)
+   and delete the compiler's `isSmartPtr` special-casing. Core shrinks.
 5. **Module / `import` system** — design it (the modular-stdlib pass above: prelude mechanism + the
    reachability-pruning caveat) and move the new smart pointers into it.
 6. **Containers as cstar library types → remove intrinsic containers** — repeat the port for the
