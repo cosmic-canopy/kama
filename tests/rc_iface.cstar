@@ -1,0 +1,28 @@
+// Refcounted POLYMORPHIC ownership — Rust's Rc<dyn Trait>. `Rc<Shape>` owns a concrete Circle/Square
+// behind the contract's fat pointer + a shared control block; `copy r` retains (strong++), virtual
+// dispatch, and the object is released once when the last handle drops. A Copyable HeapOwner over a
+// contract routes to the refcounted interface-owner variant (one alloc + inline {obj,vtbl,ctrl}).
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+type value Ctrl { public int32 strong; public int32 weak; }
+
+type contract Shape { fn int32 area(); }
+type value Circle implements Shape { int32 r; public Circle(int32 r){this.r=r;} public fn int32 area(){return this.r*this.r;} }
+type value Square implements Shape { int32 s; public Square(int32 s){this.s=s;} public fn int32 area(){return this.s*this.s;} }
+
+type resource Rc<T> implements Deref<T>, HeapOwner<T> {
+    Ptr<T> p; Ptr<Ctrl> c;
+    public Rc(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
+    public static fn Rc<T> adopt(Ptr<T> raw) { Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc(p: raw, c: k); }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    public fn Rc<T> copy() { unsafe { this.c[0].strong = this.c[0].strong + 1; } return Rc(p: this.p, c: this.c); }
+    ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } } }
+}
+
+fn int32 main() {
+    Rc<Shape> a = new Circle(r: 5);   // refcounted, fat {obj,vtbl,ctrl}
+    Rc<Shape> b = copy a;             // retain — same Circle, strong=2 (compiler-provided Shared IFACE)
+    Rc<Shape> q = new Square(s: 4);   // heterogeneous
+    return a.area() + b.area() + q.area();   // 25 + 25 + 16 = 66
+}

@@ -2751,18 +2751,23 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     for (auto& c : concrete) mangled += "_" + mangleElem(c);
     if (_genericTypeInsts.count(mangled)) return;               // dedup
 
-    // A library heap owner (`Box<T> implements HeapOwner<T>`) over a CONTRACT element is Rust's
+    // A library heap owner (`… implements HeapOwner<T>`) over a CONTRACT element is Rust's
     // `Box<dyn Trait>`: the type-erased `{obj,vtbl}` fat pointer + vtable dispatch/drop can't be safe
-    // library code, so route this instance through the intrinsic interface-owner path (an Owned-kind
-    // smart pointer under the `Box_Shape` name) — every downstream `isSmartPtrClass` path then applies.
-    // A concrete `Box<Counter>` falls through to the normal library-class instantiation below.
+    // library code, so route this instance through the intrinsic interface-owner path (a smart pointer
+    // under the specialized name) — every downstream `isSmartPtrClass` path then applies. A concrete
+    // element falls through to the normal library-class instantiation below.
+    // Kind: a **Copyable** heap owner retains-on-copy = reference-counted (`Shared` IFACE, with a ctrl
+    // block); a move-only one is unique (`Owned` IFACE). (`Rc<T>` has `copy()`; `Box<T>` does not.)
     if (!_heapOwnerContract.empty() && !concrete.empty() && concrete[0] && isInterface(cType(concrete[0]))) {
         bool implementsHeapOwner = false;
         auto ti = _genericTypes.find(tmpl);
         if (ti != _genericTypes.end())
             for (auto& ifn : ti->second.interfaces)
                 if (resolveUserName(ifn, nullptr) == _heapOwnerContract) { implementsHeapOwner = true; break; }
-        if (implementsHeapOwner) { registerSmartPtr(CollKind::Owned, concrete[0], mangled); return; }
+        if (implementsHeapOwner) {
+            CollKind k = (ti != _genericTypes.end() && ti->second.copyable) ? CollKind::Shared : CollKind::Owned;
+            registerSmartPtr(k, concrete[0], mangled); return;
+        }
     }
 
     // each concrete type argument must satisfy its parameter's contract bounds. Runs once per
