@@ -1,0 +1,2 @@
+namespace epriv;
+fn int32 hidden() { return 1; }        // no `export { }` -> not importable

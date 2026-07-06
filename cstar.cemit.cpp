@@ -73,12 +73,30 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
         ctx.scope = "_F" + std::to_string(fileIndex);
         ctx.isPublic = false;
     }
-    if (unit->usingDeclarationList)
-        for (auto& u : *unit->usingDeclarationList) {
-            if (!u || !u->identifier) continue;
-            std::string mangled = mangleNs(qualifiedName(u->identifier));
-            if (u->alias && u->alias->value) ctx.aliases[*u->alias->value] = mangled;
-            else ctx.usings.push_back(mangled);
+    // Imports (`::`-path already resolved to source by the driver). Populate scope bindings:
+    //   import a::b;            -- nothing (qualified-only, a::b::X)
+    //   import a::b as m;       -- module alias  -> aliases[m] = a__b, so m::X resolves
+    //   import a::b::{X,Y as Z} -- per-symbol    -> symbolAliases[X]=a__b__X, [Z]=a__b__Y (unqualified)
+    if (unit->importDeclarationList)
+        for (auto& imp : *unit->importDeclarationList) {
+            if (!imp || !imp->modulePath || imp->modulePath->empty()) continue;
+            std::string path;                                  // dotted, for mangleNs
+            for (auto& s : *imp->modulePath) path += (path.empty() ? "" : ".") + *s;
+            std::string mod = mangleNs(path);                  // "a__b"
+            if (imp->moduleAlias && !imp->moduleAlias->empty()) {
+                ctx.aliases[*imp->moduleAlias] = mod;
+            } else if (imp->symbols) {
+                for (auto& sym : *imp->symbols) {
+                    if (!sym || !sym->identifier || !sym->identifier->value) continue;
+                    std::string local = (sym->alias && sym->alias->value) ? *sym->alias->value
+                                                                          : *sym->identifier->value;
+                    std::string target = mod + "__" + *sym->identifier->value;
+                    auto it = ctx.symbolAliases.find(local);
+                    if (it != ctx.symbolAliases.end() && it->second != target)
+                        unsupported(("import of `" + local + "` collides with another import — disambiguate with `as`").c_str(), imp->line);
+                    ctx.symbolAliases[local] = target;
+                }
+            }
         }
     return ctx;
 }
@@ -109,6 +127,11 @@ std::string CEmitter::resolveUserName(const std::string& value, SharedStringList
     };
     // FFI: extern struct/handle names are global literal C names.
     if ((!qualifier || qualifier->empty()) && _externNames.count(value)) return value;
+    // A per-symbol import binds a bare local name to a fully-mangled global (`import a::b::{X as Y}`).
+    if (!qualifier || qualifier->empty()) {
+        auto sa = _nsCtx.symbolAliases.find(value);
+        if (sa != _nsCtx.symbolAliases.end() && known(sa->second)) return sa->second;
+    }
     if (qualifier && !qualifier->empty()) {
         // Qualified `A.B...value` — a namespace path (alias-expand a 1-segment head).
         std::string nsMangled;
@@ -135,6 +158,10 @@ std::string CEmitter::resolveUserName(const std::string& value, SharedStringList
 std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qualifier)
 {
     if (name == "main") return "cstar_main";
+    if (!qualifier || qualifier->empty()) {
+        auto sa = _nsCtx.symbolAliases.find(name);   // per-symbol `import a::b::{fn as g}`
+        if (sa != _nsCtx.symbolAliases.end() && _funcs.count(sa->second)) return sa->second;
+    }
     if (qualifier && !qualifier->empty()) {
         std::string nsMangled;
         if (qualifier->size() == 1 && _nsCtx.aliases.count(*(*qualifier)[0]))
@@ -1812,8 +1839,8 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
         if (!fn || !fn->name || !fn->name->value) continue;
 
-        if (fn->modifier && fn->modifier->value && *fn->modifier->value == "export")
-            unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fn->line);
+        if (fn->modifier && fn->modifier->value && *fn->modifier->value == "expose")
+            unsupported("`expose` is reserved (WASM/host export boundary) but not yet implemented", fn->line);
 
         // A bodiless top-level `fn ret Name(params);` (no body, not extern) is a
         // function-pointer SIGNATURE type, not a callable — register in _sigs.
@@ -2078,8 +2105,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (mv == "abstract") ci.isAbstractClass = true;
                 else if (mv == "virtual")  ci.isVirtualClass = true;
                 else if (mv == "final")    ci.isFinalClass = true;
-                else if (mv == "export")
-                    unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", cd->line);
+                else if (mv == "expose")
+                    unsupported("`expose` is reserved (WASM/host export boundary) but not yet implemented", cd->line);
                 else if (mv == "volatile")
                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", cd->line);
             }
@@ -2103,8 +2130,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             if (!mod->value) continue;
                             if (*mod->value == "volatile")
                                 unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", fd->line);
-                            if (*mod->value == "export")
-                                unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", fd->line);
+                            if (*mod->value == "expose")
+                                unsupported("`expose` is reserved (WASM/host export boundary) but not yet implemented", fd->line);
                         }
                     // A `value` picks field visibility PER FIELD (default private, `public` allowed;
                     // `protected` belongs to an extensible `resource`). A `resource` field is always
@@ -2148,8 +2175,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (*mod->value == "override") { mi.isVirtual = true; mi.isOverride = true; }
                                 if (*mod->value == "abstract") { mi.isVirtual = true; mi.isAbstract = true; }
                                 if (*mod->value == "static")   mi.isStatic = true;   // no implicit `self`
-                                if (*mod->value == "export")
-                                    unsupported("`export` is reserved (WASM/host export boundary) but not yet implemented", md->line);
+                                if (*mod->value == "expose")
+                                    unsupported("`expose` is reserved (WASM/host export boundary) but not yet implemented", md->line);
                                 if (*mod->value == "volatile")
                                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", md->line);
                             }
@@ -6478,6 +6505,15 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         _unitCtx[units[i].get()] = ctx;
         if (ctx.isPublic && !ctx.scope.empty()) _namespaces.insert(ctx.scope);
     }
+    // Record each module's PUBLIC SURFACE from its top-of-file `export { … };` manifest. Everything
+    // unlisted is module-private and cannot be pulled in by another module's per-symbol `import`
+    // (enforced below). A listed name is validated against real declarations after collect.
+    for (auto& u : units) {
+        if (!u || u == _preludeUnit || !u->exportList) continue;
+        _nsCtx = _unitCtx[u.get()];
+        for (auto& name : *u->exportList)
+            if (name) _exported.insert(qualify(*name));
+    }
     // Pre-register every type's mangled NAME so references resolve regardless of
     // file/declaration order (a class method param may reference a type declared
     // later, or in another file). The full collect below overwrites these.
@@ -6543,6 +6579,39 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
     computeDestructible();
+
+    // Validate export manifests: a name in `export { … };` must be a real top-level declaration in
+    // that same file (catches typos + enforces per-file surfaces for directory-modules).
+    for (auto& u : units) {
+        if (!u || u == _preludeUnit || !u->exportList) continue;
+        _nsCtx = _unitCtx[u.get()];
+        for (auto& name : *u->exportList) {
+            if (!name) continue;
+            std::string q = qualify(*name);
+            bool exists = _classes.count(q) || _enums.count(q) || _interfaces.count(q) || _funcs.count(q)
+                       || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q);
+            if (!exists)
+                unsupported(("export list names `" + *name + "` but there is no such top-level declaration in this module").c_str(),
+                            u->nameSpace && u->nameSpace->name ? u->nameSpace->name->line : 0);
+        }
+    }
+
+    // Enforce module privacy: a per-symbol `import a::b::{X}` may bind only an `export`ed X
+    // (an unmarked or missing symbol is not importable — "does not export").
+    for (auto& u : units) {
+        if (!u || !u->importDeclarationList) continue;
+        for (auto& imp : *u->importDeclarationList) {
+            if (!imp || !imp->symbols || !imp->modulePath || imp->modulePath->empty()) continue;
+            std::string path;
+            for (auto& s : *imp->modulePath) path += (path.empty() ? "" : ".") + *s;
+            std::string mod = mangleNs(path);
+            for (auto& sym : *imp->symbols) {
+                if (!sym || !sym->identifier || !sym->identifier->value) continue;
+                if (!_exported.count(mod + "__" + *sym->identifier->value))
+                    unsupported(("module `" + path + "` does not export `" + *sym->identifier->value + "`").c_str(), imp->line);
+            }
+        }
+    }
 }
 
 // All DECLARATIONS (the shared header): typedefs, enums, struct/vtable types,

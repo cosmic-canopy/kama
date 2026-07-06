@@ -96,7 +96,8 @@ struct NsCtx {
     std::string scope;        // mangle prefix: "Graphics" or "_F3"
     bool        isPublic = false;
     std::vector<std::string> usings;                  // imported public namespaces (mangled)
-    std::map<std::string, std::string> aliases;       // alias -> mangled namespace
+    std::map<std::string, std::string> aliases;       // alias -> mangled namespace (module alias / `using X = Y`)
+    std::map<std::string, std::string> symbolAliases; // per-symbol import: local name -> mangled global symbol
 };
 
 // A resolved `friend` grant on the OWNING class. `accessor` is a resolved key:
@@ -329,6 +330,7 @@ private:
     // Namespaces: current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
     std::set<std::string> _namespaces;   // registered public namespaces (mangled)
+    std::set<std::string> _exported;     // mangled names of `export`ed top-level decls (module public surface)
     std::set<std::string> _externNames;  // FFI: literal C names of extern structs
     void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)

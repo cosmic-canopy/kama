@@ -761,32 +761,57 @@ int32 idx = match (find(xs: list, target: 7)) {
 
 ## Modules / namespaces ✅
 
-Pass several source files to one build; the compiler emits a shared header (`<out>.gen.h`) + one `.c` of
-definitions per file, then compiles + links them:
-
-```sh
-cstar build graphics.cstar physics.cstar main.cstar -o app
-```
-
-**Private-by-default.** A file with no `namespace` keeps its top-level symbols **file-private** (invisible to
-other files) — so single-file programs/scripts need no boilerplate and you can never accidentally call
-another file's helper. To share across files, declare a namespace:
+A **module** is a namespaced source unit — a single file *or* a directory of files that all declare the same
+`namespace`. `import` names a module by its `::`-path; the compiler finds the source, compiles it, and scopes
+its public symbols. There is one keyword for depending on another module — `import` (it replaced `using`).
 
 ```cstar
-// graphics.cstar
-namespace Graphics;
-type resource Texture { ... }   // Graphics::Texture (owns a GPU handle → resource)
-fn int32 scale(int32 x) { ... } // Graphics::scale
+// lib/graphics.cstar          — module `graphics`
+namespace graphics;
+export { Texture, scale };             // the public surface, at a glance — mirrors `import`
+
+type resource Texture { ... }          // declarations carry NO visibility modifier
+fn int32 scale(int32 x) { ... }
+type resource GpuHandle { ... }        // unlisted → module-private
 
 // main.cstar
-using Graphics;              // import unqualified
-using Phys = Physics;        // alias
+import graphics::{Texture, scale};     // per-symbol, unqualified
+import physics as phys;                 // whole-module alias → phys::Body
+import audio;                           // load only; qualified-only access audio::Mixer
 fn int main() {
-    Texture t = ...;              // Graphics::Texture (via using)
-    Physics::Texture p = ...;     // qualified — distinct type, no collision
-    int n = Graphics::scale(x: 3);// qualified namespaced call
+    Texture t = ...;                    // imported, bare
+    phys::Body b = ...;                 // alias-qualified
+    int n = scale(x: 3);
 }
 ```
+
+**Four import forms:** `import a::b;` (load; qualified-only `a::b::X`) · `import a::b as m;` (whole-module
+alias → `m::X`) · `import a::b::{X, Y as Z};` (per-symbol into the bare namespace; `as` renames). There is no
+glob — unqualified-everything is deliberately not offered. Fully-qualified `a::b::X` is always available once
+imported; the symbol list only controls what's *also* unqualified. Two imports binding the same bare name is
+a compile error — disambiguate with `as`.
+
+**Visibility — a top-of-file `export { … };` manifest, module-private by default.** A module lists its public
+surface in one block at the top; a top-level `type`/`fn` is invisible to other modules unless named there
+(C#'s `internal`/`public` model), and a per-symbol import of a non-exported symbol is rejected. A listed name
+must be a top-level declaration in that same file — so a directory-module's files each state their own
+surface. Declarations carry **no** visibility keyword, keeping `type`/`fn` syntax uniform, and the manifest
+reads as the mirror of `import`. Member access (`public`/`protected`/`private`) is a separate axis; the
+cstar→host/WASM boundary (`expose`) is a third. A file with **no** `namespace` keeps its symbols file-private
+(single-file scripts need no boilerplate).
+
+**Resolution.** `import a::b::c` maps to `a/b/c.cstar` (file-module) or `a/b/c/` (directory-module: every
+`*.cstar` in it shares `namespace a::b::c`), searched under (1) the importing file's dir, (2) `$CSTAR_PATH`,
+(3) the **stdlib bundled with the compiler** (located relative to the binary like the runtime header, so
+`std::*` resolves on any install regardless of cwd). `std`/`core` are reserved roots (stdlib only). Loading is
+transitive and deduped by path, so import cycles load once. A namespace already in the compilation (e.g. a
+file also on the command line) satisfies an import without a disk lookup. The stdlib is **optional on disk**:
+no `import std::…` means the resolver never touches it, and nothing is auto-linked — a `no_std`-like floor
+(only `cstar_runtime.h` is mandatory; the prelude `Optional`/`Result`/`Deref`/`HeapOwner` is baked into the
+compiler).
+
+Passing several files to one build still works (`cstar build a.cstar b.cstar -o app`); the compiler emits a
+shared header (`<out>.gen.h`) + one `.c` per unit — imports just add the resolved module files to that set.
 
 **Scope resolution uses `::`** (namespaces, qualified types, enum variants: `Color::Blue`); `.` is
 **instance/value access only** (`obj.field`, `obj.method()`). The two are *syntactically* distinct, so

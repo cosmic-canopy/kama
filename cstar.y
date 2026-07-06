@@ -73,6 +73,8 @@ struct cstaryystype {
 
   SharedStringList strings;
   SharedUsingDeclarationList usingdeclarationlist;
+  SharedImportDeclaration importdeclaration;
+  SharedImportDeclarationList importdeclarationlist;
   SharedStatementList statementlist;
   SharedIdentifierList identifierlist;
   SharedModifierList modifierlist;
@@ -113,7 +115,7 @@ struct cstaryystype {
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BREAK
 %token <string> CASE CAST CONST CONTINUE
-%token <string> DO DOUBLE ELSE ENUM EXPORT EXTERN EXTENDS IMPLEMENTS
+%token <string> AS DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH IF IN
 %token <string> INT INT8 INT16 INT32 INT64
@@ -124,7 +126,7 @@ struct cstaryystype {
 %token <string> REF RETURN STATIC STRING
 %token <string> THIS TRUE TYPE
 %token <string> UINT8 UINT16 UINT32 UINT64
-%token <string> UNSAFE USING VIRTUAL VOID
+%token <string> UNSAFE VIRTUAL VOID
 %token <string> VOLATILE WHILE
 
 /* PUNCTUATION AND SINGLE CHARACTER OPERATORS */
@@ -183,8 +185,11 @@ struct cstaryystype {
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <namespacedeclaration> namespace_opt
-%type <usingdeclaration> using_directive using_alias_directive
-%type <usingdeclarationlist> using_directives_opt using_directives
+%type <usingdeclaration> import_symbol
+%type <usingdeclarationlist> import_symbols
+%type <importdeclaration> import_directive
+%type <importdeclarationlist> import_directives_opt import_directives
+%type <strings> import_path export_manifest_opt export_name_list
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
 %type <identifier> type_param type_decl_head enum_underlying_opt
@@ -234,7 +239,19 @@ struct cstaryystype {
 ------------------------------------------------------------------------------*/
 
 compilation_unit
-  : namespace_opt using_directives_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $1, $2, $3); }
+  : namespace_opt import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $1, $2, $3, $4); }
+  ;
+
+/* The module's PUBLIC SURFACE, declared once at the top: `export { A, B, C };`. A name here must be a
+   top-level declaration IN THIS FILE; everything unlisted is module-private. Declarations themselves carry
+   no visibility modifier (so `type`/`fn` syntax stays uniform). Mirrors `import a::b::{A, B}`. */
+export_manifest_opt
+  : /* Nothing */   { $$ = std::make_shared<StringList>(); }
+  | EXPORT LEFT_BRACE export_name_list RIGHT_BRACE SEMICOLON   { $$ = $3; }
+  ;
+export_name_list
+  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
+  | export_name_list COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; }
   ;
 
 namespace_opt
@@ -242,20 +259,37 @@ namespace_opt
   | NAMESPACE qualified_identifier_no_generic SEMICOLON  { $$ = std::make_shared<NamespaceDeclarationNode>(SCANNER_CODEGENCONTEXT, $2); }
   ;
 
-using_directives_opt
-  : /* Nothing */   { $$ = std::make_shared<UsingDeclarationList>(); }
-  | using_directives
+/* Module imports (`::`-path resolved to a source file by the driver). Four forms:
+     import a::b;                 -- load; qualified-only access (a::b::X)
+     import a::b as m;            -- load + module alias (m::X)
+     import a::b::{X, Y as Z};    -- load + per-symbol, unqualified (Y bound as Z)                       */
+import_directives_opt
+  : /* Nothing */   { $$ = std::make_shared<ImportDeclarationList>(); }
+  | import_directives
   ;
-using_directives
-  : using_directive  { $$ = std::make_shared<UsingDeclarationList>(); $$->push_back($1); }
-  | using_directives using_directive  { $1->push_back($2); }
+import_directives
+  : import_directive   { $$ = std::make_shared<ImportDeclarationList>(); $$->push_back($1); }
+  | import_directives import_directive   { $1->push_back($2); $$ = $1; }
   ;
-using_directive
-  : USING qualified_identifier_no_generic SEMICOLON  { $$ = std::make_shared<UsingDeclarationNode>(SCANNER_CODEGENCONTEXT, $2); }
-  | using_alias_directive
+import_directive
+  : IMPORT import_path SEMICOLON
+      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<UsingDeclarationList>(), SharedString()); }
+  | IMPORT import_path AS IDENTIFIER SEMICOLON
+      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<UsingDeclarationList>(), $4); }
+  | IMPORT import_path COLONCOLON LEFT_BRACE import_symbols RIGHT_BRACE SEMICOLON
+      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $5, SharedString()); }
   ;
-using_alias_directive
-  : USING IDENTIFIER EQ qualified_identifier_no_generic SEMICOLON  { $$ = std::make_shared<UsingDeclarationNode>(SCANNER_CODEGENCONTEXT, $4,std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2)); }
+import_path
+  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
+  | import_path COLONCOLON IDENTIFIER   { $1->push_back($3); $$ = $1; }
+  ;
+import_symbols
+  : import_symbol   { $$ = std::make_shared<UsingDeclarationList>(); $$->push_back($1); }
+  | import_symbols COMMA import_symbol   { $1->push_back($3); $$ = $1; }
+  ;
+import_symbol
+  : IDENTIFIER   { $$ = std::make_shared<UsingDeclarationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
+  | IDENTIFIER AS IDENTIFIER   { $$ = std::make_shared<UsingDeclarationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); }
   ;
 
 code_opt
@@ -455,7 +489,6 @@ modifier
   | STATIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | VIRTUAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | VOLATILE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | EXPORT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   ;
 
 friend_declaration
@@ -471,7 +504,7 @@ friend_member_list
 
 function_modifier_opt
   : /* Nothing */   { $$ = SharedModifier(); }
-  | EXPORT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | EXPOSE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* cstar→host boundary (reserved) */
   ;
 
 /*------------------------------------------------------------------------------ 

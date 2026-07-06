@@ -18,16 +18,21 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <set>
+#include <algorithm>
 
 #include <limits.h>
 #ifdef _WIN32
   #include <stdlib.h>          // _fullpath, _MAX_PATH
+  #include <windows.h>         // FindFirstFile (module directory listing)
   #ifndef PATH_MAX
     #define PATH_MAX _MAX_PATH
   #endif
 #else
   #include <unistd.h>
   #include <sys/wait.h>         // WEXITSTATUS
+  #include <sys/stat.h>         // stat (directory check)
+  #include <dirent.h>           // opendir/readdir (module directory listing)
 #endif
 
 #include "cstar.parser.hpp"
@@ -90,6 +95,149 @@ std::string resolveRuntimeDir(const char* argv0)
     if (fileExists(exeDir + "/../include/cstar_runtime.h")) return exeDir + "/../include";
     if (fileExists(exeDir + "/cstar_runtime.h"))            return exeDir;
     return ".";
+}
+
+bool dirExists(const std::string& p)
+{
+#ifdef _WIN32
+    DWORD a = GetFileAttributesA(p.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    struct stat st;
+    return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
+// The `*.cstar` files directly inside `dir`, sorted for deterministic emit order.
+std::vector<std::string> listCstarFiles(const std::string& dir)
+{
+    std::vector<std::string> out;
+    auto keep = [&](const std::string& name) {
+        return name.size() > 6 && name.compare(name.size() - 6, 6, ".cstar") == 0;
+    };
+#ifdef _WIN32
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do { std::string n = fd.cFileName; if (keep(n)) out.push_back(dir + "/" + n); }
+        while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    if (DIR* d = opendir(dir.c_str())) {
+        while (struct dirent* e = readdir(d)) { std::string n = e->d_name; if (keep(n)) out.push_back(dir + "/" + n); }
+        closedir(d);
+    }
+#endif
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// The stdlib root, resolved from the binary like resolveRuntimeDir: $CSTAR_HOME/lib,
+// else <exeDir>/../lib/cstar (installed, bin/cstar -> ../lib/cstar), else <exeDir>/lib
+// (repo/dev layout), else "lib". The stdlib ships INSIDE the install; `std::*` resolves here.
+std::string resolveStdlibDir(const char* argv0)
+{
+    if (const char* home = getenv("CSTAR_HOME")) return std::string(home) + "/lib";
+    std::string exeDir = dirName(absolutePath(argv0 ? argv0 : "cstar"));
+    if (dirExists(exeDir + "/../lib/cstar")) return exeDir + "/../lib/cstar";
+    if (dirExists(exeDir + "/lib"))          return exeDir + "/lib";
+    return "lib";
+}
+
+// Split a `:`-separated search-path env (CSTAR_PATH) into roots.
+std::vector<std::string> splitSearchPath(const char* env)
+{
+    std::vector<std::string> out;
+    if (!env) return out;
+    std::string cur;
+    for (const char* p = env; ; ++p) {
+        if (*p == ':' || *p == '\0') { if (!cur.empty()) out.push_back(cur); cur.clear(); if (!*p) break; }
+        else cur += *p;
+    }
+    return out;
+}
+
+// Resolve module segments (["std","memory"]) to source file(s) under the first matching
+// root: a file-module (<root>/std/memory.cstar) or every *.cstar in a directory-module
+// (<root>/std/memory/). Empty result => unresolved.
+std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs,
+                                            const std::vector<std::string>& roots)
+{
+    std::string rel;
+    for (size_t i = 0; i < segs.size(); ++i) rel += (i ? "/" : "") + segs[i];
+    for (auto& root : roots) {
+        std::string file = root + "/" + rel + ".cstar";
+        if (fileExists(file)) return { file };
+        std::string dir = root + "/" + rel;
+        if (dirExists(dir)) { auto fs = listCstarFiles(dir); if (!fs.empty()) return fs; }
+    }
+    return {};
+}
+
+SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
+
+// Parse the CLI inputs, then transitively resolve + parse imported modules. Dedup by
+// absolute path so cycles load exactly once. `std`/`core` are reserved roots (stdlib only);
+// other modules search the importing file's dir, then $CSTAR_PATH, then the stdlib. Returns
+// false on any parse/resolution failure. `units`/`paths` come back parallel, in load order.
+bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* argv0,
+                      std::vector<SharedCompilationUnit>& units,
+                      std::vector<std::string>& paths)
+{
+    std::string stdlibDir = resolveStdlibDir(argv0);
+    std::vector<std::string> extraRoots = splitSearchPath(getenv("CSTAR_PATH"));
+    // A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
+    auto nsKey = [](SharedCompilationUnit u) -> std::string {
+        if (!u || !u->nameSpace || !u->nameSpace->name) return "";
+        std::string s; auto id = u->nameSpace->name;
+        if (id->qualifier) for (auto& seg : *id->qualifier) s += *seg + "::";
+        if (id->value) s += *id->value;
+        return s;
+    };
+    std::set<std::string> seen;      // resolved absolute paths already parsed
+    std::set<std::string> provided;  // namespaces already in the compilation (satisfy an import w/o disk lookup)
+    for (auto& in : cliInputs) {
+        std::string abs = absolutePath(in);
+        if (!seen.insert(abs).second) continue;
+        SharedCompilationUnit u = parseFile(in);
+        if (!u) return false;
+        units.push_back(u); paths.push_back(abs);
+        std::string k = nsKey(u); if (!k.empty()) provided.insert(k);
+    }
+    for (size_t i = 0; i < units.size(); ++i) {          // grows as imports are discovered (BFS)
+        if (!units[i]->importDeclarationList) continue;
+        std::string here = dirName(paths[i]);
+        for (auto& imp : *units[i]->importDeclarationList) {
+            std::vector<std::string> segs;
+            if (imp->modulePath) for (auto& s : *imp->modulePath) segs.push_back(*s);
+            if (segs.empty()) continue;
+            std::string key;                                  // "a::b" — match against loaded namespaces
+            for (size_t k = 0; k < segs.size(); ++k) key += (k ? "::" : "") + segs[k];
+            if (provided.count(key)) continue;                // already in the compilation (CLI input / earlier import)
+            bool reserved = (segs[0] == "std" || segs[0] == "core");
+            std::vector<std::string> roots;
+            if (!reserved) { roots.push_back(here); for (auto& r : extraRoots) roots.push_back(r); }
+            roots.push_back(stdlibDir);
+            auto files = resolveModuleFiles(segs, roots);
+            if (files.empty()) {
+                std::string name;
+                for (size_t k = 0; k < segs.size(); ++k) name += (k ? "::" : "") + segs[k];
+                fprintf(stderr, "cstar: error: cannot resolve module '%s' (from %s)\n",
+                        name.c_str(), reserved ? stdlibDir.c_str() : here.c_str());
+                return false;
+            }
+            for (auto& f : files) {
+                std::string abs = absolutePath(f);
+                if (!seen.insert(abs).second) continue;
+                SharedCompilationUnit mu = parseFile(f);
+                if (!mu) return false;
+                units.push_back(mu); paths.push_back(abs);
+                std::string mk = nsKey(mu); if (!mk.empty()) provided.insert(mk);
+            }
+        }
+    }
+    return true;
 }
 
 // Parse one cstar file into a CompilationUnit. Returns nullptr on failure.
@@ -159,23 +307,19 @@ SharedCompilationUnit parseString(const char* src, const std::string& name)
 
 SharedCompilationUnit preludeUnit() { return parseString(PRELUDE_SRC, "<prelude>"); }
 
-// Transpile `inputFile` to C, writing to `outPath`. Returns 0 on success.
-int transpileToFile(const std::string& inputFile, const std::string& outPath, bool emitLines)
+// Emit an already-parsed unit to a single `.c` (`srcPath` drives #line). Returns 0 on success.
+int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
+                        const std::string& outPath, bool emitLines)
 {
-    SharedCompilationUnit unit = parseFile(inputFile);
-    if (!unit) return 1;
-
     std::ofstream out(outPath);
     if (!out) {
         fprintf(stderr, "cstar: error: cannot write '%s'\n", outPath.c_str());
         return 1;
     }
-
-    CEmitter emitter(out, absolutePath(inputFile), emitLines);
+    CEmitter emitter(out, srcPath, emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
     int unsupported = emitter.emit(unit);
     out.close();
-
     if (unsupported > 0) {
         fprintf(stderr, "cstar: %d unlowered construct(s) — see the warnings above.\n", unsupported);
         return 1;   // a construct cstar couldn't lower (incl. a safety-gate violation) is a hard error
@@ -183,22 +327,22 @@ int transpileToFile(const std::string& inputFile, const std::string& outPath, bo
     return 0;
 }
 
-// Transpile a multi-file program: parse every input, emit one shared header
-// (`headerPath`, included as `headerName`) + one `.c` per input (`cPaths`,
-// parallel to `inputs`). Returns 0 on success.
-int transpileProgram(const std::vector<std::string>& inputs,
+// Transpile `inputFile` to C, writing to `outPath`. Returns 0 on success.
+int transpileToFile(const std::string& inputFile, const std::string& outPath, bool emitLines)
+{
+    SharedCompilationUnit unit = parseFile(inputFile);
+    if (!unit) return 1;
+    return transpileUnitToFile(unit, absolutePath(inputFile), outPath, emitLines);
+}
+
+// Emit a multi-file program from already-parsed `units` (parallel to `sourcePaths`): one
+// shared header (`headerPath`, included as `headerName`) + one `.c` per unit (`cPaths`).
+// Returns 0 on success.
+int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
+                     const std::vector<std::string>& sourcePaths,
                      const std::string& headerPath, const std::string& headerName,
                      const std::vector<std::string>& cPaths, bool emitLines)
 {
-    std::vector<SharedCompilationUnit> units;
-    std::vector<std::string> sourcePaths;
-    for (auto& in : inputs) {
-        SharedCompilationUnit u = parseFile(in);
-        if (!u) return 1;
-        units.push_back(u);
-        sourcePaths.push_back(absolutePath(in));
-    }
-
     std::ofstream header(headerPath);
     if (!header) { fprintf(stderr, "cstar: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
 
@@ -336,19 +480,26 @@ int main(int argc, char** argv)
         std::vector<std::string> genFiles;   // generated files to remove afterwards
         std::string headerDir;
 
-        if (inputs.size() == 1) {
+        // Parse the CLI inputs and transitively pull in every imported module. A single
+        // file with no imports stays on the fast path (one .c, no shared header); anything
+        // that drags in more units (multiple inputs, or `import`s) uses the multi-file path.
+        std::vector<SharedCompilationUnit> units;
+        std::vector<std::string> unitPaths;
+        if (!loadProgramUnits(inputs, argv[0], units, unitPaths)) return 1;
+
+        if (units.size() == 1) {
             std::string cPath = stripExtension(input) + ".c";
-            if (transpileToFile(input, cPath, emitLines) != 0) return 1;
+            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines) != 0) return 1;
             cFiles.push_back(cPath);
             genFiles.push_back(cPath);
         } else {
             std::string headerName = baseName(stripExtension(outPath)) + ".gen.h";
             std::string headerPath = genDir + "/" + headerName;
             headerDir = genDir;
-            std::vector<std::string> cPaths;
-            for (auto& in : inputs)
-                cPaths.push_back(genDir + "/" + baseName(stripExtension(in)) + ".c");
-            if (transpileProgram(inputs, headerPath, headerName, cPaths, emitLines) != 0) return 1;
+            std::vector<std::string> cPaths;   // one per unit; index-suffixed so distinct dirs never collide
+            for (size_t i = 0; i < units.size(); ++i)
+                cPaths.push_back(genDir + "/" + stripExtension(baseName(unitPaths[i])) + "_" + std::to_string(i) + ".c");
+            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines) != 0) return 1;
             cFiles   = cPaths;
             genFiles = cPaths;
             genFiles.push_back(headerPath);

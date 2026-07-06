@@ -1,4 +1,5 @@
-// cstar grammar (BNF) — GENERATED from cstar.y by tools/gen-grammar. Do not edit.
+wrote /work/docs/grammar.bnf
+NERATED from cstar.y by tools/gen-grammar. Do not edit.
 // The Bison grammar is the source of truth; regenerate after any grammar change.
 
 
@@ -12,7 +13,19 @@
 ------------------------------------------------------------------------------*/
 
 compilation_unit
-  : namespace_opt using_directives_opt code_opt
+  : namespace_opt import_directives_opt export_manifest_opt code_opt
+  ;
+
+/* The module's PUBLIC SURFACE, declared once at the top: `export ;`. A name here must be a
+   top-level declaration IN THIS FILE; everything unlisted is module-private. Declarations themselves carry
+   no visibility modifier (so `type`/`fn` syntax stays uniform). Mirrors `import a::b::`. */
+export_manifest_opt
+  : /* Nothing */
+  | EXPORT LEFT_BRACE export_name_list RIGHT_BRACE SEMICOLON
+  ;
+export_name_list
+  : IDENTIFIER
+  | export_name_list COMMA IDENTIFIER
   ;
 
 namespace_opt
@@ -20,20 +33,37 @@ namespace_opt
   | NAMESPACE qualified_identifier_no_generic SEMICOLON
   ;
 
-using_directives_opt
+/* Module imports (`::`-path resolved to a source file by the driver). Four forms:
+     import a::b;                 -- load; qualified-only access (a::b::X)
+     import a::b as m;            -- load + module alias (m::X)
+     import a::b::;    -- load + per-symbol, unqualified (Y bound as Z)                       */
+import_directives_opt
   : /* Nothing */
-  | using_directives
+  | import_directives
   ;
-using_directives
-  : using_directive
-  | using_directives using_directive
+import_directives
+  : import_directive
+  | import_directives import_directive
   ;
-using_directive
-  : USING qualified_identifier_no_generic SEMICOLON
-  | using_alias_directive
+import_directive
+  : IMPORT import_path SEMICOLON
+
+  | IMPORT import_path AS IDENTIFIER SEMICOLON
+
+  | IMPORT import_path COLONCOLON LEFT_BRACE import_symbols RIGHT_BRACE SEMICOLON
+
   ;
-using_alias_directive
-  : USING IDENTIFIER EQ qualified_identifier_no_generic SEMICOLON
+import_path
+  : IDENTIFIER
+  | import_path COLONCOLON IDENTIFIER
+  ;
+import_symbols
+  : import_symbol
+  | import_symbols COMMA import_symbol
+  ;
+import_symbol
+  : IDENTIFIER
+  | IDENTIFIER AS IDENTIFIER
   ;
 
 code_opt
@@ -203,7 +233,6 @@ modifier
   | STATIC
   | VIRTUAL
   | VOLATILE
-  | EXPORT
   ;
 
 friend_declaration
@@ -219,7 +248,7 @@ friend_member_list
 
 function_modifier_opt
   : /* Nothing */
-  | EXPORT
+  | EXPOSE      /* cstar→host boundary (reserved) */
   ;
 
 /*------------------------------------------------------------------------------

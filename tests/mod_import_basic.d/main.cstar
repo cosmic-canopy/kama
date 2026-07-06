@@ -1,0 +1,3 @@
+// per-symbol import brings `area` in unqualified; `perimeter` is renamed with `as`.
+import geo::{area, perimeter as perim};
+fn int32 main() { return area() + perim(); }   // 10 + 20 = 30

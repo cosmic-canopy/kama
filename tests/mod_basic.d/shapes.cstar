@@ -1,4 +1,5 @@
 namespace Shapes;
+export { Box };
 
 type value Box
 {

@@ -50,17 +50,20 @@ class CompilationUnit : public StatementNode {
 public:
     SharedString name;
     SharedNamespaceDeclaration nameSpace;
-    SharedUsingDeclarationList usingDeclarationList;
+    SharedImportDeclarationList importDeclarationList;
+    SharedStringList exportList;              // the module's public surface (`export { … };`)
     SharedStatementList codeDeclarationList;
-    CompilationUnit(CodeGenContext& context, SharedString name, 
-                    SharedNamespaceDeclaration nameSpace, 
-                    SharedUsingDeclarationList usingDeclarationList,
-                    SharedStatementList codeDeclarationList) 
+    CompilationUnit(CodeGenContext& context, SharedString name,
+                    SharedNamespaceDeclaration nameSpace,
+                    SharedImportDeclarationList importDeclarationList,
+                    SharedStringList exportList,
+                    SharedStatementList codeDeclarationList)
         : ASTNode(context)
         , StatementNode(context)
         , name(name)
         , nameSpace(nameSpace)
-        , usingDeclarationList(usingDeclarationList)
+        , importDeclarationList(importDeclarationList)
+        , exportList(exportList)
         , codeDeclarationList(codeDeclarationList)
         { }
 };
@@ -88,6 +91,21 @@ public:
         : ASTNode(context),  StatementNode(context), identifier(identifier) { }
     UsingDeclarationNode(CodeGenContext& context, SharedIdentifier identifier, SharedIdentifier alias)
         : ASTNode(context),  StatementNode(context), identifier(identifier), alias(alias) { }
+};
+
+// `import a::b::c;` (bare) | `import a::b as m;` (module alias) | `import a::b::{X, Y as Z};`
+// (per-symbol). `modulePath` = the `::`-segments; `symbols` = per-symbol (each carries an
+// optional local alias, reusing UsingDeclarationNode's identifier+alias); `moduleAlias` is set
+// only for the `as m` form. Empty `symbols` + null `moduleAlias` = the bare (qualified-only) form.
+class ImportDeclarationNode : public StatementNode {
+public:
+    SharedStringList          modulePath;
+    SharedUsingDeclarationList symbols;
+    SharedString              moduleAlias;
+    ImportDeclarationNode(CodeGenContext& context, SharedStringList modulePath,
+                          SharedUsingDeclarationList symbols, SharedString moduleAlias)
+        : ASTNode(context), StatementNode(context)
+        , modulePath(modulePath), symbols(symbols), moduleAlias(moduleAlias) { }
 };
 
 //------------------------------------------------------------------------------ 

@@ -1,0 +1,3 @@
+namespace shapes;
+export { circ };
+fn int32 circ() { return 5; }

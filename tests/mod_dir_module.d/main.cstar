@@ -1,0 +1,2 @@
+import shapes::{sq};
+fn int32 main() { return sq(); }   // 5 + 3 = 8

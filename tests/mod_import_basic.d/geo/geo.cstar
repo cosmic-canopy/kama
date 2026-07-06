@@ -1,0 +1,5 @@
+namespace geo;
+export { area, perimeter };          // public surface, at a glance
+fn int32 area() { return 10; }
+fn int32 perimeter() { return 20; }
+fn int32 hidden() { return 99; }     // unlisted -> module-private

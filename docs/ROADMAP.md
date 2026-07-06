@@ -230,8 +230,20 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    `RcWeak`→`Weak`, move them to the prelude, and delete the compiler's intrinsic `isSmartPtr` registration
    (the concrete path) — the interface/type-erasure IFACE machinery stays (it's what the library types
    route to). Core shrinks.
-5. **Module / `import` system** — design it (the modular-stdlib pass above: prelude mechanism + the
-   reachability-pruning caveat) and move the new smart pointers into it.
+5. **Module / `import` system — ✅ DONE.** Explicit, per-symbol, TypeScript/Rust-flavored `import` on
+   cstar's existing `::`-namespace machinery. Four forms (`import a::b;` qualified-only · `import a::b as m;`
+   whole-module alias · `import a::b::{X, Y as Z};` per-symbol/renamed); no glob. Visibility is a **top-of-file
+   `export { A, B };` manifest** (module-private by default; non-exported = un-importable; declarations carry
+   no visibility modifier, so `type`/`fn` syntax stays uniform; mirrors `import`); the reserved wasm `export`
+   was renamed **`expose`** (three boundary vocabularies: `import`/`export` module, `public`/… member,
+   `expose`/`extern` host). Modules = a namespaced file *or* a directory of same-namespace files; resolved by `::`-path under
+   the importing dir, `$CSTAR_PATH`, then the **binary-anchored stdlib** (`std`/`core` reserved). Transitive,
+   dedup-by-path (cycles load once), already-loaded namespaces satisfy imports without disk lookup; pruning
+   stays the linker's `--gc-sections` job. **`using` retired** entirely (migrated to `import`). Suite **305**
+   green (native + wasm + ASan/UBSan); fixtures `mod_import_basic`/`mod_alias`/`mod_dir_module` + xfails
+   `mod_missing`/`mod_export_private`/`mod_collision`. The reachability-pruning "caveat" was a non-issue —
+   `--gc-sections` already ships in release builds. **Now unblocks step 4** (the smart-pointer purge lands
+   `Owned`/`Shared`/`Weak` into `lib/std/memory/` — the module's first residents).
 6. **Containers as cstar library types → remove intrinsic containers** — repeat the port for the
    collections (`Depth 2` `ref T operator[]` already unblocks writing them in cstar).
 7. **Reflection + attributes** — the opt-in reflection system (design brief below); the attribute

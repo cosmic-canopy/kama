@@ -1,0 +1,3 @@
+import cola::{val};
+import colb::{val};              // collides with cola's `val` -> must use `as`
+fn int32 main() { return val(); }
