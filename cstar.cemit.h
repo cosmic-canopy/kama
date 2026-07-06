@@ -423,6 +423,11 @@ private:
     // `ea` indexes a value whose class defines a place-returning `operator[]` (not a built-in collection).
     bool indexesUserOp(ElementAccessNode* ea);
 
+    // Deep-substitute a type node under the active _typeSubst: a bare param `T` -> its (already concrete)
+    // binding; a nested generic `Rc<T>` -> `Rc<Counter>` (recurse into args). Keeps a generic arg that
+    // carries a type-param from being stored raw in _typeSubst (a self-referential binding that loops
+    // mangleElem) — the case a mutually-recursive generic type (`Rc`↔`RcWeak`→`Optional<Rc<T>>`) hits.
+    SharedIdentifier deepSubstType(SharedIdentifier t);
     // Generic TYPES: discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
     void scanTypeForGenericTypes(SharedIdentifier t);
     void registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args);

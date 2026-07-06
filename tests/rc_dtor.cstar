@@ -1,0 +1,27 @@
+// A destructible pointee under `Rc`: the pointee's `~dtor` runs exactly once, when `strong` hits 0
+// (`drop(this.deref())`). Payload owns a heap buffer freed only in its dtor — LeakSanitizer-clean == the
+// dtor ran once despite two `Rc` handles.
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+type value Ctrl { public int32 strong; public int32 weak; }
+type resource Payload {
+    Ptr<int32> buf;
+    public Payload(int32 v) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = v; } }
+    public fn int32 val() { unsafe { return this.buf[0]; } }
+    ~Payload() { unsafe { free(p: cast<Ptr>(this.buf)); } }
+}
+type resource Rc<T> implements Deref<T>, HeapOwner<T> {
+    Ptr<T> p; Ptr<Ctrl> c;
+    public Rc(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
+    public static fn Rc<T> adopt(Ptr<T> raw) { Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc(p: raw, c: k); }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    public fn Rc<T> copy() { unsafe { this.c[0].strong = this.c[0].strong + 1; } return Rc(p: this.p, c: this.c); }
+    ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } } }
+}
+fn int32 main() {
+    Rc<Payload> a = new Payload(v: 8);
+    Rc<Payload> b = copy a;   // strong = 2, one Payload
+    int32 x = a.val();        // auto-deref -> 8
+    return x;                 // 8 (both drop; Payload __dtor runs once at strong=0)
+}

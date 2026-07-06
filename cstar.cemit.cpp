@@ -2704,6 +2704,26 @@ void CEmitter::scanTypeForGenericTypes(SharedIdentifier t)
     if (_genericTypes.count(tmpl)) registerGenericTypeInst(tmpl, t->genericArgs);
 }
 
+// Deep-substitute a type node under the active _typeSubst (see the header). A bare param -> its
+// (already-concrete) binding; a nested generic clones with each arg substituted; anything else is
+// returned unchanged. Bindings are kept fully concrete, so recursion terminates.
+SharedIdentifier CEmitter::deepSubstType(SharedIdentifier t)
+{
+    if (!t) return t;
+    if (!_typeSubst.empty() && t->value && !t->genericArg) {   // a bare type-param
+        auto s = _typeSubst.find(*t->value);
+        if (s != _typeSubst.end()) return s->second;           // its binding is already deep
+    }
+    if (t->genericArgs && !t->genericArgs->empty()) {          // a generic type — substitute its args
+        auto clone = std::make_shared<IdentifierNode>(*t);     // shallow copy (context + scalar fields)
+        clone->genericArgs = std::make_shared<IdentifierList>();
+        for (auto& a : *t->genericArgs) clone->genericArgs->push_back(deepSubstType(a));
+        clone->genericArg = clone->genericArgs->empty() ? SharedIdentifier() : (*clone->genericArgs)[0];
+        return clone;
+    }
+    return t;
+}
+
 // Build one synthetic specialized ClassInfo per `Box<Arg>` (mirrors registerCollection): copy the
 // template shape, rewrite identity (struct name + method cNames), re-derive param signatures under
 // _typeSubst, register in _classes, and transitively scan its substituted member types so a
@@ -2714,16 +2734,11 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     NsCtx savedCtxAtEntry = _nsCtx;   // the use-site ctx (the type args are mangled in it)
     const std::vector<std::string>& params = _genericTypeParams[tmpl];
 
-    // Resolve each bare-`T` arg (the nested/transitive case) to its concrete binding.
+    // Resolve each arg to its concrete binding — DEEPLY (a nested `Rc<T>` -> `Rc<Counter>`), so a
+    // generic arg carrying a type-param is never stored raw in _typeSubst (which would self-reference
+    // and loop mangleElem for a mutually-recursive generic type).
     std::vector<SharedIdentifier> concrete;
-    for (auto& a : *args) {
-        SharedIdentifier c = a;
-        if (a && !_typeSubst.empty() && a->value && !a->genericArg) {
-            auto s = _typeSubst.find(*a->value);
-            if (s != _typeSubst.end()) c = s->second;
-        }
-        concrete.push_back(c);
-    }
+    for (auto& a : *args) concrete.push_back(deepSubstType(a));
     // Arity: N type arguments must match the template's N type parameters.
     if (concrete.size() != params.size()) {
         unsupported(("wrong number of type arguments for generic type `" + tmpl + "` (expected "

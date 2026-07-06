@@ -1,0 +1,75 @@
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+
+type value Ctrl { public int32 strong; public int32 weak; }
+type value Counter { public int32 n; public Counter(int32 start) { this.n = start; } }
+
+type resource RcWeak<T> {
+    Ptr<T> p;
+    Ptr<Ctrl> c;
+    public RcWeak(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }   // shares an existing ctrl
+    public fn Optional<Rc<T>> tryUpgrade() {
+        unsafe {
+            if (this.c[0].strong > 0) {
+                this.c[0].strong = this.c[0].strong + 1;
+                return Optional::Some(value: Rc(p: this.p, c: this.c));   // fresh ctor -> no marker
+            }
+        }
+        return Optional::None;
+    }
+    ~RcWeak() {
+        unsafe {
+            this.c[0].weak = this.c[0].weak - 1;
+            if (this.c[0].strong == 0 && this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); }
+        }
+    }
+}
+
+type resource Rc<T> implements Deref<T>, HeapOwner<T> {
+    Ptr<T> p;
+    Ptr<Ctrl> c;
+    public Rc(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }       // shares an existing ctrl
+    public static fn Rc<T> adopt(Ptr<T> raw) {
+        Ptr<Ctrl> ctrl;
+        unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
+        return Rc(p: raw, c: ctrl);                                     // fresh ctor -> no marker
+    }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    public fn Rc<T> copy() {
+        unsafe { this.c[0].strong = this.c[0].strong + 1; }
+        return Rc(p: this.p, c: this.c);                               // retain
+    }
+    public fn RcWeak<T> downgrade() {
+        unsafe { this.c[0].weak = this.c[0].weak + 1; }
+        return RcWeak(p: this.p, c: this.c);
+    }
+    ~Rc() {
+        unsafe {
+            this.c[0].strong = this.c[0].strong - 1;
+            if (this.c[0].strong == 0) {
+                drop(value: this.deref());
+                free(p: cast<Ptr>(this.p));
+                if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); }
+            }
+        }
+    }
+}
+
+fn RcWeak<Counter> makeExpired() {
+    Rc<Counter> a = new Counter(start: 100);
+    return a.downgrade();   // `a` drops on return -> object freed -> the returned weak is expired
+}
+
+fn int32 main() {
+    Rc<Counter> a = new Counter(start: 7);
+    RcWeak<Counter> w = a.downgrade();
+    Optional<Rc<Counter>> o1 = w.tryUpgrade();
+    int32 alive = match (o1) { case Some(u): u.n; case None: -1; };   // 7 (a alive)
+
+    RcWeak<Counter> dead = makeExpired();
+    Optional<Rc<Counter>> o2 = dead.tryUpgrade();
+    int32 expired = match (o2) { case Some(u): u.n; case None: 90; }; // 90 (expired)
+
+    return alive + expired;   // 97
+}

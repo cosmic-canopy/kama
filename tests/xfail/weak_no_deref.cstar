@@ -1,0 +1,23 @@
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+type value Ctrl { public int32 strong; public int32 weak; }
+type value Counter { public int32 n; public Counter(int32 s){this.n=s;} public fn int32 get(){return this.n;} }
+type resource RcWeak<T> {
+    Ptr<T> p; Ptr<Ctrl> c;
+    public RcWeak(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
+    ~RcWeak() { unsafe { this.c[0].weak = this.c[0].weak - 1; } }
+}
+type resource Rc<T> implements Deref<T>, HeapOwner<T> {
+    Ptr<T> p; Ptr<Ctrl> c;
+    public Rc(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
+    public static fn Rc<T> adopt(Ptr<T> raw) { Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc(p: raw, c: k); }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    public fn RcWeak<T> downgrade() { unsafe { this.c[0].weak = this.c[0].weak + 1; } return RcWeak(p: this.p, c: this.c); }
+    ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; } }
+}
+fn int32 main() {
+    Rc<Counter> a = new Counter(s: 5);
+    RcWeak<Counter> w = a.downgrade();
+    return w.get();   // ERROR: RcWeak is not Deref -> `get` is unknown (must tryUpgrade first)
+}
