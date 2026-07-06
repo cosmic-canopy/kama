@@ -213,8 +213,15 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    `weak_upgrade` (ASan/LeakSan-clean) + xfails. Along the way, fixed a compiler segfault on
    **mutually-recursive generic types** (`Rc`↔`RcWeak`): `deepSubstType` now substitutes a generic arg's
    inner params so a nested arg isn't stored self-referentially in `_typeSubst` (was looping `mangleElem`).
-   **Remaining for full parity:** the *interface* case (`Rc<Shape>`/`RcWeak<Shape>`) — route to the
-   refcounted `CSTAR_SHARED_IFACE` variant (extend the `Box<Contract>` divert to a Shared kind + a marker).
+   **Interface `Rc<Shape>` (strong) — DONE:** the `Box<Contract>` divert now picks the smart-ptr kind by
+   the template's **Copyable** flag — Copyable (retain-on-copy) → refcounted `CSTAR_SHARED_IFACE`
+   (`{obj,vtbl,ctrl}`), move-only → unique `OWNED_IFACE`. So `Rc<Shape>` is intrinsic-parity refcounted
+   polymorphic ownership (`copy r` → `ctrl->strong++`, virtual dispatch, vtable `__dtor` at `strong==0`;
+   `tests/rc_iface{,_dtor}`, LeakSan-clean). **Remaining:** the WEAK interface — `RcWeak<Shape>` via
+   `rc.downgrade()` doesn't work (`Rc<Shape>` is the intrinsic Shared IFACE, which has no `downgrade`
+   method — the intrinsic converts Shared→Weak by *assignment*, not a method; errors cleanly, no hazard).
+   Bridging the library `downgrade`/`tryUpgrade` API to the intrinsic fat-pointer weak is a separate
+   follow-up (a real API-unification chunk, not a small add).
 4. **Remove/rename intrinsic smart pointers** — once the library `Owned`/`Shared`/`Weak` reach parity
    (add the refcount interface case), swap them in (rename `Box`→`Owned`, `Rc`→`Shared`, `RcWeak`→`Weak`)
    and delete the compiler's `isSmartPtr` special-casing. Core shrinks.
