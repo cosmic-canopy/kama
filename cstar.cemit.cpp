@@ -2121,7 +2121,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // `copy()` no longer implies it). Recognized by name — the capability markers are
                     // compiler-owned. The `(bare: …)` parameter is the mandatory bare-hand-off default;
                     // its presence + the `copy()` method are validated after the member loop below.
-                    if (*itf->value == "Copyable") { ci.copyable = true; ci.bareDefault = itf->bareDefault; }
+                    if (*itf->value == "Copyable") {
+                        ci.copyable = true; ci.bareDefault = itf->bareDefault;
+                        if (itf->whenParam && itf->whenParam->value) {   // conditional: `… when T: Bound`
+                            ci.copyableWhenParam = *itf->whenParam->value;
+                            ci.copyableWhenBound = (itf->whenBound && itf->whenBound->value) ? *itf->whenBound->value : "Copyable";
+                        }
+                    }
                 }
         }
         // Class-level extensibility modifier: virtual | abstract | final.
@@ -2907,6 +2913,17 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     ClassInfo ci = _genericTypes[tmpl];                         // copy the template shape
     ci.name = mangled;
     ci.isGenericInst = true;
+    // Conditional Copyable (`implements Copyable(bare: …) when T: Bound`): this instance is Copyable
+    // only when its gated type-param satisfies the bound. If not, drop the capability AND its `copy()`
+    // method so it is never emitted for this instance — this is what lets `List<Owned>` compile even
+    // though its element isn't copyable, while `copy list<int32>` still works.
+    bool copyableActive = ci.copyable;
+    if (!ci.copyableWhenParam.empty()) {
+        copyableActive = false;
+        for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
+            if (params[i] == ci.copyableWhenParam) { copyableActive = satisfiesBound(cType(concrete[i]), ci.copyableWhenBound); break; }
+        if (!copyableActive) { ci.copyable = false; ci.methods.erase("copy"); }
+    }
     for (auto& kv : ci.methods) kv.second.cName = mangled + "__" + kv.first;
     // Re-derive ParamSig under substitution so call-site arg typing is concrete (not a stale "T").
     if (ci.ctorNode && ci.ctorNode->declarator)
@@ -2923,6 +2940,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         ci.interfaces.clear();
         for (auto& itf : *ci.node->baseTypes->interfaces) {
             if (!itf || !itf->value) continue;
+            if (*itf->value == "Copyable" && itf->whenParam && !copyableActive) continue;   // gated off for this instance
             std::string base = resolveUserName(*itf->value, itf->qualifier);
             if (itf->genericArg && _genericContracts.count(base)) {
                 scanTypeForGenericContracts(itf);                     // register `Deref_Point` under subst
@@ -3954,6 +3972,22 @@ bool CEmitter::isCopyable(const std::string& cls) const
 {
     auto it = _classes.find(cls);
     return it != _classes.end() && it->second.copyable;
+}
+
+// Does concrete C-type `t` satisfy the contract `bound`? For `Copyable` (the conditional-implements
+// container case): a primitive or a `value` is copyable (bitwise), a `resource` only if it implements
+// Copyable. For any other contract: the concrete class must nominally implement it.
+bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound) const
+{
+    auto it = _classes.find(t);
+    if (bound == "Copyable") {
+        if (it == _classes.end()) return true;                 // primitive C type → bitwise-copyable
+        if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
+        return it->second.copyable;                            // a resource → only if `implements Copyable`
+    }
+    if (it == _classes.end()) return false;
+    for (auto& itf : it->second.interfaces) if (itf == bound) return true;
+    return false;
 }
 
 

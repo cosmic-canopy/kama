@@ -139,6 +139,11 @@ struct ClassInfo {
     // implicitly copyable (bitwise) and its bare-default is copy.
     bool                              copyable = false;
     int                               bareDefault = 0;   // GIVE or COPY token (the mandatory param on a Copyable resource); 0=none
+    // `implements Copyable(bare: …) when <param>: <bound>` on a generic type — the capability is
+    // CONDITIONAL: each instance is Copyable only when its `<param>` satisfies `<bound>` (evaluated in
+    // registerGenericTypeInst; the gated `copy()` is dropped from instances where it doesn't hold).
+    std::string                       copyableWhenParam;   // gated type-param name ("" = unconditional)
+    std::string                       copyableWhenBound;   // required contract (source name; "Copyable" for the container case)
 
     // Inheritance + virtual dispatch
     std::string                       baseName;        // "" if no base
@@ -527,6 +532,7 @@ private:
     // own type). Its presence makes the give/copy marker mandatory: bare hand-off = error, `copy`
     // deep-copies via copy(), `give` moves.
     bool isCopyable(const std::string& cls) const;
+    bool satisfiesBound(const std::string& t, const std::string& bound) const;   // does concrete C-type `t` satisfy contract `bound`? (Copyable: value/primitive yes, resource iff it implements it)
     void markMoved(const std::string& cVar);                // state -> Moved
     void checkNotMoved(const std::string& cVar, int line);  // reject a use of a moved local
     // The source of a move hand-off: a bare move-only local -> its name (caller marks it moved);

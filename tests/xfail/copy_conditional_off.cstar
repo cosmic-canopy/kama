@@ -1,0 +1,15 @@
+// `Cell<T> implements Copyable when T: Copyable` — for a move-only element the capability is OFF, so
+// `copy` on a `Cell<MoveOnly>` is a compile error (its copy() was never emitted), even though the
+// Cell is otherwise usable.
+type resource Cell<T> implements Copyable(bare: give) when T: Copyable {
+    T value;
+    public Cell(T v) { this.value = give v; }
+    public fn Cell<T> copy() { return Cell(v: copy this.value); }
+    ~Cell() { drop(value: this.value); }
+}
+type resource MoveOnly { int32 n; public MoveOnly(int32 n){this.n=n;} ~MoveOnly(){} public fn int32 val(){return this.n;} }
+fn int32 main() {
+    Cell<MoveOnly> m = Cell(v: MoveOnly(n: 9));
+    Cell<MoveOnly> c = copy m;   // ERROR: Cell<MoveOnly> is not Copyable
+    return 0;
+}

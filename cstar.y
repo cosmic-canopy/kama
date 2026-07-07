@@ -147,6 +147,7 @@ struct cstaryystype {
 %token <token> DOT "."
 %token <token> ELLIPSIS "..."
 %token <string> GIVE COPY
+%token <token> WHEN "when"
 %token <token> SLASH "/"
 %token <token> COLONCOLON "::"
 %token <token> COLON ":"
@@ -165,7 +166,7 @@ struct cstaryystype {
 %token <token> LEQ GEQ ANDAND OROR PLUSPLUS MINUSMINUS
 
 /* non-terminals */
-%type <token> assignment_operator overloadable_operator
+%type <token> assignment_operator overloadable_operator handoff_default
 %type <strings> qualifier
 %type <expression> expression expression_opt literal boolean_literal variable_initializer
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
@@ -1000,8 +1001,15 @@ interface_type_list
   ;
 implements_entry
   : type_name   { $$ = $1; }
-  | type_name LPAREN IDENTIFIER COLON GIVE RPAREN   { $1->bareDefault = GIVE; $$ = $1; }
-  | type_name LPAREN IDENTIFIER COLON COPY RPAREN   { $1->bareDefault = COPY; $$ = $1; }
+  | type_name LPAREN IDENTIFIER COLON handoff_default RPAREN   { $1->bareDefault = $5; $$ = $1; }
+  | type_name WHEN IDENTIFIER COLON type_name
+      { $1->whenParam = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); $1->whenBound = $5; $$ = $1; }
+  | type_name LPAREN IDENTIFIER COLON handoff_default RPAREN WHEN IDENTIFIER COLON type_name
+      { $1->bareDefault = $5; $1->whenParam = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $8); $1->whenBound = $10; $$ = $1; }
+  ;
+handoff_default
+  : GIVE   { $$ = GIVE; }
+  | COPY   { $$ = COPY; }
   ;
 class_body
   : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE   { $$ = $2; }

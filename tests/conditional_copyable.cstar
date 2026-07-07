@@ -1,0 +1,17 @@
+// Conditional implements: `Cell<T> implements Copyable(bare: give) when T: Copyable`. Cell<int32>
+// (value element) IS Copyable — its copy() deep-copies. Cell<MoveOnly> (move-only element) is NOT
+// Copyable — its copy() is never emitted — but the instance is fully usable (construct/get/drop).
+type resource Cell<T> implements Copyable(bare: give) when T: Copyable {
+    T value;
+    public Cell(T v) { this.value = give v; }
+    public fn ref T get() { return this.value; }
+    public fn Cell<T> copy() { return Cell(v: copy this.value); }
+    ~Cell() { drop(value: this.value); }
+}
+type resource MoveOnly { int32 n; public MoveOnly(int32 n){this.n=n;} ~MoveOnly(){} public fn int32 val(){return this.n;} }
+fn int32 main() {
+    Cell<int32> a = Cell(v: 5);
+    Cell<int32> b = copy a;                      // deep copy — a stays valid
+    Cell<MoveOnly> m = Cell(v: MoveOnly(n: 9));   // usable though not Copyable
+    return a.get() + b.get() + m.get().val();         // 5 + 5 + 9 = 19
+}
