@@ -313,8 +313,13 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    `copy()`/`iterator()` are emitted only when the element is Copyable). Intrinsic `List` recognition removed
    from `cType`/`isCollectionType`; ~35 fixtures + the `dispatch`/`alloc` benches migrated to `import
    std::collections::{List}` + `List()`. Resource elements borrow (`foreach (ref T …)`); the by-value
-   iterator is Copyable-elements-only. **`Array<T>` (fixed-size sibling) remains** — same pattern, ~4
-   fixtures, then the intrinsic `registerCollection`/`CollKind` path is fully retired.
+   iterator is Copyable-elements-only. **`Array<T>` DONE** (`lib/std/collections/array.cstar`, same
+   pattern) — only `Fixed<T,N>` + `BindableFunctionPtr` stay intrinsic in `registerCollection`.
+6b. **Iterator/foreach contract — DONE** (this session). `foreach` is now **nominal**: prelude
+   `Iterator<T>`/`IteratorMut<T>` (the iterators `implements`) + container-side `Iterable<T>`/
+   `IterableMut<T>`, and the C#-style iterator-invalidation guard (`addr(of:)` back-pointer) — see the
+   capability-contract-family + soundness-gap notes above. **`string` DONE** (core): `char` type,
+   byte `s[i]`, `.chars()` — see §Strings; Phase 3 (ergonomics) + interpolation remain there.
 7. **Reflection + attributes** — the opt-in reflection system (design brief below); the attribute
    language feature + serialization modules. Comes last, on top of the modular stdlib.
 
