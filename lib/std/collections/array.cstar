@@ -6,7 +6,7 @@ extern fn Ptr calloc(usize count, usize size);
 extern fn void free(Ptr p);
 
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
-type value ArrayIter<T> {
+type value ArrayIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len;
     public ArrayIter(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn Optional<T> next() {
@@ -17,7 +17,7 @@ type value ArrayIter<T> {
 }
 
 // A mutable iterator (the `foreach (ref T x in arr)` protocol): hasNext() + a place-returning next().
-type value ArrayIterMut<T> {
+type value ArrayIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len;
     public ArrayIterMut(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }

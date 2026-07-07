@@ -150,11 +150,15 @@ building it:
   everywhere and errors pin to the declaration. Touches every bound + the shipped `iter_*`/
   `generic_bound_*` fixtures, so execute it deliberately (a migration pass) here.
 - **The capability-contract family** — the compiler-recognized, **opt-in-via-`implements`** contracts that
-  form cstar's nominal, explicit vocabulary: **`Iterator<T>`** (exists; `foreach`/bounds still structural
-  until the nominal migration above — **follow-up (user):** give `foreach` an explicit `Iterable`/`Iterator`
-  contract that the library iterators (`ListIter`/`ListIterMut` in `std::collections`) **`implements`**, so
-  the protocol is nominal and load-bearing instead of matched by method name; this is also where the
-  iterator-invalidation guard returns, per the reopened soundness gap above), **`Deref<T>`** (DONE — auto-deref; see the sequence below),
+  form cstar's nominal, explicit vocabulary: **`Iterator<T>` / `IteratorMut<T>`** (**`foreach` is now
+  NOMINAL** — prelude contracts `Iterator<T> for both { fn Optional<T> next(); }` + `IteratorMut<T>
+  { fn bool hasNext(); fn ref T next(); }`; the library iterators (`ListIter`/`ArrayIter` → `Iterator<T>`,
+  `ListIterMut`/`ArrayIterMut` → `IteratorMut<T>`) and every user iterator `implements` them; `foreach`
+  verifies the declaration and rejects a structural-only match — xfail `iter_no_contract` — then emits the
+  same zero-cost direct calls. **Remaining:** (a) a container-side `Iterable`/`IterableMut` so the *type*
+  advertises iterability (today the `iterator()`/`iterMut()` factory is still found by name — trivial add);
+  (b) the **iterator-invalidation guard** (the reopened soundness gap — a C#-style modification counter in
+  the library `List`/`Array`, snapshotted by the iterator, checked in `next()`)), **`Deref<T>`** (DONE — auto-deref; see the sequence below),
   **`Copyable`** (below), **`Comparable<T>`** (future). All are the same species — a contract the compiler
   keys a capability off of. New ones follow the `Deref` template (prelude contract + a recognizer keyed on
   the contract name/instance).

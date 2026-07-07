@@ -3,7 +3,7 @@
 extern "<stdlib.h>";
 extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
-type value VecIter<T> {
+type value VecIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len;
     public VecIter(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn Optional<T> next() {

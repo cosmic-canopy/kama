@@ -2,8 +2,6 @@
 // `it.next()` to a direct `IntRange__next(&it)` — zero-cost, no vtable. The generic contract is
 // specialized per use (`Iterator_int32`) exactly like a generic type; `implements Iterator<int32>`
 // on the concrete type is checked against that instance.
-type contract Iterator<T> for both { fn Optional<T> next(); }
-
 type value IntRange implements Iterator<int32> {
     int32 cur; int32 end;
     public IntRange(int32 start, int32 end) { this.cur = start; this.end = end; }

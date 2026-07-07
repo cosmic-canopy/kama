@@ -7,7 +7,7 @@ extern fn Ptr realloc(Ptr p, usize n);
 extern fn void free(Ptr p);
 
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value.
-type value ListIter<T> {
+type value ListIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len;
     public ListIter(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn Optional<T> next() {
@@ -18,7 +18,7 @@ type value ListIter<T> {
 }
 
 // A mutable iterator (the `foreach (ref T x in list)` protocol): hasNext() + a place-returning next().
-type value ListIterMut<T> {
+type value ListIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len;
     public ListIterMut(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }

@@ -6,7 +6,7 @@ extern fn void free(Ptr p);
 type value Node { public int32 val; public Ptr<Node> nextp;
     public Node(int32 v) { this.val = v; this.nextp = cast<Ptr<Node>>(null); }
 }
-type value ListIter {                       // the iterator IS iterated directly (has next(), no iterator())
+type value ListIter implements Iterator<int32> {                       // the iterator IS iterated directly (has next(), no iterator())
     Ptr<Node> cur;
     public ListIter(Ptr<Node> head) { this.cur = head; }
     public fn Optional<int32> next() {

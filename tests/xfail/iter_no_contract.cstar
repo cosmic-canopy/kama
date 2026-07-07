@@ -1,0 +1,16 @@
+// `foreach` is NOMINAL: a type with the right `next()` shape but WITHOUT `implements Iterator<T>`
+// is rejected — the contract must be declared explicitly (structural match is not enough).
+type value Counter {
+    int32 cur; int32 end;
+    public Counter(int32 end) { this.cur = 0; this.end = end; }
+    public fn Optional<int32> next() {
+        if (this.cur >= this.end) { return Optional::None; }
+        int32 v = this.cur; this.cur = this.cur + 1; return Optional::Some(value: v);
+    }
+}
+fn int32 main() {
+    Counter c = Counter(end: 3);
+    int32 s = 0;
+    foreach (int32 x in c) { s = s + x; }   // ERROR: Counter does not `implements Iterator<int32>`
+    return s;
+}

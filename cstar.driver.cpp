@@ -289,7 +289,15 @@ static const char* PRELUDE_SRC =
     // (`!Movable` subtracts it → copy-only). `Copyable` = a public `copy()` returning `This`; a resource
     // that implements it is duplicable. Together, `Copyable, !Movable` = shared-ownership (retain on copy).
     "type contract Movable for resource { }\n"
-    "type contract Copyable for resource { fn This copy(); }\n";
+    "type contract Copyable for resource { fn This copy(); }\n"
+    // Iteration opt-in (the `foreach` protocol, nominal). An iterator declares which it provides;
+    // `foreach` verifies the declaration and emits DIRECT (monomorphized) calls — no vtable, zero-cost.
+    // `Iterator<T>` yields each element BY VALUE (a copy); `IteratorMut<T>` yields a mutable place
+    // (`ref T`) so `foreach (ref T x in c)` can write through it (Optional can't carry a place, so the
+    // two are parallel — Rust's iter()/iter_mut() split). A container hands one out via a nullary
+    // `iterator()` / `iterMut()` factory method.
+    "type contract Iterator<T> for both { fn Optional<T> next(); }\n"
+    "type contract IteratorMut<T> for both { fn bool hasNext(); fn ref T next(); }\n";
 
 // Parse an in-memory cstar source string into a CompilationUnit (flex string buffer). nullptr on error.
 SharedCompilationUnit parseString(const char* src, const std::string& name)

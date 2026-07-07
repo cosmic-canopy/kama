@@ -325,24 +325,28 @@ be written **in the language** rather than baked into the compiler. Three builti
   local — it would dangle), and it's second-class (used in-place, never stored).
 
 **`foreach` over a user type — the iterator protocol.** A user container is `foreach`-able (not just the
-built-in `Array`/`List`/`Fixed`) via a small **iterator protocol** — not indexing, so it works for any
-shape (list, tree, map, range). It's zero-cost: resolved structurally and monomorphized to **direct
-calls** (no vtable), and the container is **borrowed, not consumed**.
-- **value** — `foreach (T x in v)`: `v` provides `fn <Iter> iterator()` whose iterator has
-  `fn Optional<T> next()` (`Some` per element, `None` at the end); or `v` *is* the iterator (has `next()`).
-- **mutable** — `foreach (ref T x in v)`: `v` provides `fn <IterMut> iterMut()` whose iterator has
-  `fn bool hasNext()` + a place-returning `fn ref T next()` (Rust's `iter()`/`iter_mut()` split —
-  `Optional` can't carry a place, so mutable is a parallel iterator).
+built-in `Fixed`) via a small **iterator protocol** — not indexing, so it works for any shape (list, tree,
+map, range). It's zero-cost: monomorphized to **direct calls** (no vtable), and the container is
+**borrowed, not consumed**. The container hands out an iterator via a nullary factory method, and that
+**iterator must `implements` the matching prelude contract** — `foreach` is **nominal**: a type with the
+right method shape but no `implements` is rejected (explicit over implicit).
+- **value** — `foreach (T x in v)`: `v` provides `fn <Iter> iterator()` whose iterator
+  `implements Iterator<T>` (`fn Optional<T> next()` — `Some` per element, `None` at the end); or `v`
+  *is* the iterator (`implements Iterator<T>` + a nullary `next()`).
+- **mutable** — `foreach (ref T x in v)`: `v` provides `fn <IterMut> iterMut()` whose iterator
+  `implements IteratorMut<T>` (`fn bool hasNext()` + a place-returning `fn ref T next()` — Rust's
+  `iter()`/`iter_mut()` split; `Optional` can't carry a place, so mutable is a parallel iterator).
 - A borrowing iterator holds a `Ptr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
 
-*(`foreach` matches the protocol **structurally** — no `implements` needed. A **formal** `type contract
-Iterator<T>` also exists now (generic contracts are monomorphized, see below), so you can *additionally*
-declare `implements Iterator<int32>` for a checkable opt-in or write generic-over-iterator code
-`fn sum<I: Iterator<int32>>(I it)`; the structural path is what `foreach` itself uses.)*
+The prelude contracts (`type contract Iterator<T> for both { fn Optional<T> next(); }` and
+`IteratorMut<T>`) are ordinary monomorphized generic contracts, so they double as a static bound —
+`fn sum<I: Iterator<int32>>(I it)` (zero-cost, direct `Concrete__next`) or a dynamic fat-pointer value
+`Iterator<int32> it` (vtable). `foreach` uses the same `implements`, checked nominally.
 
-Iterator safety: growing a *built-in* collection (`add`) while iterating it with `foreach` is a compile
-error (it would invalidate the loop) — collect and append after. (For a *user* container, mid-iteration
-invalidation is the author's responsibility.)
+Iterator safety: growing a collection (`add`) while iterating it by `ref` is a use-after-free when the
+buffer reallocates. **Follow-up (not yet enforced for library containers):** the compile-time guard the
+built-in collections once had can't see through the opaque iterator protocol — it will return with the
+`Iterable` contract as a C#-style modification counter. Until then, don't mutate a container mid-`foreach`.
 
 ### Function pointers — `fnptr` ✅
 

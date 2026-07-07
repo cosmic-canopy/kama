@@ -1,0 +1,1 @@
+must `implements Iterator<T>`

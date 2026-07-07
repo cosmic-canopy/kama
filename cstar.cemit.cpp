@@ -3788,6 +3788,10 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             unsupported(("a mutable iterator (`" + iterCType + "`) needs `hasNext()` and a "
                          "place-returning `ref T next()`").c_str(), fe->line); *_out << "\n"; return;
         }
+        if (!implementsContractTemplate(ic, "IteratorMut")) {   // nominal: it must declare the protocol
+            unsupported(("the mutable iterator `" + iterCType + "` must `implements IteratorMut<T>` "
+                         "to be used in a `foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
+        }
         iterInit    = iterMi->cName + "(&(" + emitExpression(fe->expression) + "))";
         hasNextCall = hasNextMi->cName + "(&" + it + ")";
         nextCall    = nextMi->cName + "(&" + it + ")";
@@ -3804,6 +3808,10 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         if (!nextMi || !nextMi->params.empty()) {
             unsupported(("`foreach` over `" + container + "` needs a nullary `iterator()`, or a nullary "
                          "`next()` returning `Optional<T>`").c_str(), fe->line); *_out << "\n"; return;
+        }
+        if (!implementsContractTemplate(ic, "Iterator")) {   // nominal: it must declare the protocol
+            unsupported(("the iterator `" + iterCType + "` must `implements Iterator<T>` to be used "
+                         "in a `foreach`").c_str(), fe->line); *_out << "\n"; return;
         }
         optC     = cTypeInInstance(iterCType, nextMi->returnType);
         nextCall = nextMi->cName + "(&" + it + ")";
@@ -4418,6 +4426,17 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
         if (!mi || mi->visibility != Visibility::Public) return false;
     }
     return true;
+}
+
+bool CEmitter::implementsContractTemplate(ClassInfo* ci, const std::string& tmpl)
+{
+    if (!ci) return false;
+    for (auto& itf : ci->interfaces) {
+        if (itf == tmpl) return true;                              // a plain (non-generic) contract
+        auto it = _interfaces.find(itf);                          // a specialized generic-contract instance
+        if (it != _interfaces.end() && it->second.templateKey == tmpl) return true;
+    }
+    return false;
 }
 
 // If `cls` implements the prelude `Deref<T>` contract, return the pointee class `T` (the auto-deref

@@ -561,6 +561,9 @@ private:
     MethodInfo* findMethod(ClassInfo* ci, const std::string& name, ClassInfo** owner);
     // Does `ci` structurally satisfy contract `contract` (have all its methods, public)?
     bool classSatisfiesBound(ClassInfo* ci, const std::string& contract);
+    // Does `ci` NOMINALLY `implements` a contract whose template is `tmpl` (any instantiation)? Checks the
+    // recorded `interfaces` list (a plain name == tmpl, or a generic instance whose `templateKey` == tmpl).
+    bool implementsContractTemplate(ClassInfo* ci, const std::string& tmpl);
     // Verify a concrete type arg satisfies each contract bound on a type parameter (else diagnose).
     void checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
                      SharedIdentifierList bounds, int line);
