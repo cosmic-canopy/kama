@@ -34,7 +34,7 @@ jobs:
         run: make
 
       - name: Version
-        run: ./cstar --version
+        run: ./kama --version
 
       - name: Test suite
         run: ./run_tests.sh
@@ -49,5 +49,5 @@ jobs:
       - uses: mymindstorm/setup-emsdk@v14
       - name: Build a fixture to wasm and run it
         run: |
-          ./cstar build tests/arith.cstar -o out.js --target wasm --cc emcc
+          ./kama build tests/arith.kama -o out.js --target wasm --cc emcc
           test "$(node out.js; echo $?)" = "42"

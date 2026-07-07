@@ -1,4 +1,4 @@
-# cstar roadmap
+# kama roadmap
 
 The forward plan — near-term to long-term, read in sequence. The language's **history** lives in the git
 log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *what's next*.
@@ -10,7 +10,7 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 - **1.x — systems & runtime.** Capabilities built ON the finished language: reflection + serialization,
   file I/O, networking, an embedded/MCU target. Mostly library + codegen, little new syntax.
 - **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted, via a shared
-  IR feeding C, direct-wasm, and a bytecode VM — the `cstar` binary self-contained.
+  IR feeding C, direct-wasm, and a bytecode VM — the `kama` binary self-contained.
 - **Concurrency — shared-nothing by construction** (1.x/2.0 direction): data-race freedom by removing
   shared mutable state, not a borrow checker. 1.0 ships a single-threaded core.
 - **Engine track** (product north star): a portable lightweight **WebGPU** game engine, woven through
@@ -38,7 +38,7 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
   (single-byte + escapes + `'\u{…}'` only); write `'\u{E9}'`. A lexer pass to match + decode.
 - **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
   (also covers number→string); sequences with reflection (its to-string substrate).
-- **`export` keyword** — reserved, hard-errors today → **2.0** (the cstar→host boundary: wasm module
+- **`export` keyword** — reserved, hard-errors today → **2.0** (the kama→host boundary: wasm module
   exports + the scripting host interface). The engine's wasm build may pull a minimal `export` earlier.
 - **`volatile` keyword** — reserved → **1.x embedded** (emit C `volatile` for ISR↔loop flags / MMIO).
 - **`contract` refining a `contract`** (`type contract A : B`) — parses, but deep multi-level contract
@@ -57,8 +57,8 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
 ## 3. Open design questions (settle before the work they gate)
 
 - **Modular / opt-in stdlib — how does "pay for what you use" work?** The **prelude mechanism**
-  (`PRELUDE_SRC` — parsed cstar collected before user code, the model `Optional`/`Result`/`Chars` use) is
-  the seed: a stdlib = more prelude-collected cstar modules in a `Std` namespace. Generic types already
+  (`PRELUDE_SRC` — parsed kama collected before user code, the model `Optional`/`Result`/`Chars` use) is
+  the seed: a stdlib = more prelude-collected kama modules in a `Std` namespace. Generic types already
   emit only when instantiated, and `--gc-sections` prunes unused functions in release. Open: whether that
   pruning suffices, or explicit per-module opt-in / dead-function elimination is warranted before a large
   stdlib. A design pass before the container/math packaging.
@@ -103,16 +103,16 @@ serialization, networking).
   mode, avr/arm toolchains.
 - **Native dispatch devirtualization** *(optimization, not a gap).* On a *monomorphic* call site clang
   does not devirtualize the emitted C vtable while rustc does — a clang-vs-rustc optimizer gap (hand-written
-  C is equally behind), not a cstar defect. cstar can still win where it *sees* the concrete type by emitting
+  C is equally behind), not a kama defect. kama can still win where it *sees* the concrete type by emitting
   a **direct call** instead of a vtable call — a laddered pass:
   - **Tier 1 — sound static devirtualization (no inlining).** Direct-call when the target is provable: a
     **concrete-value receiver**, a **`final` class/method**, or a **method with no overrides
-    program-wide** (a slot→overridden map after `buildVtables()`). cstar's whole-program view makes the
+    program-wide** (a slot→overridden map after `buildVtables()`). kama's whole-program view makes the
     last one free where C++ needs LTO + `-fwhole-program-vtables`. (`isFinalClass` / `MethodInfo::isFinal`
     / `exprClass()` already exist.) Land this first.
   - **Tier 2 — intraprocedural type-flow.** Devirtualize a base-typed local with a proven concrete
     assignment. Sound, no inlining.
-  - **Tier 3 — inlining-enabled / guarded devirtualization.** A cstar-level inliner (hard part: integrating
+  - **Tier 3 — inlining-enabled / guarded devirtualization.** A kama-level inliner (hard part: integrating
     callee scope-cleanup / drop order / move-state with `emitScopeCleanup`/`emitUnwindAll`) then re-run
     Tier 1, or guarded/speculative inline caches. A separate, larger project — pursue only if a real hot
     path (engine ECS dispatch) proves Tier 1 insufficient.
@@ -120,9 +120,9 @@ serialization, networking).
 ## 6. Concurrency — shared-nothing by construction (design direction)
 
 The intended concurrency model. **1.0 ships a single-threaded core**; this is the 1.x/2.0 direction, not a
-shipped feature. It earns data-race freedom the way cstar earns null-safety — by making the hazard
+shipped feature. It earns data-race freedom the way kama earns null-safety — by making the hazard
 *unrepresentable*, not by checking it. Where Rust proves exclusivity over shared memory with a borrow
-checker, cstar **removes the shared mutable state**.
+checker, kama **removes the shared mutable state**.
 
 - **Model — isolates + ownership-transferring channels.** An *isolate* is a shared-nothing unit of
   execution (≈ an OS worker natively, a Web Worker on wasm). Crossing a channel reuses the existing
@@ -141,7 +141,7 @@ checker, cstar **removes the shared mutable state**.
 - **"Proceed until ready" without coloring.** The do-other-work-until-a-result-is-ready ergonomic is cheap
   tasks that block on a channel while a scheduler runs other ready work (the Go/Erlang model) — **not**
   Rust-style stackless `async/await`. Function coloring / `Pin` / self-referential state machines would be
-  cstar's least-cstar feature, against "one way / favor simplicity."
+  kama's least-kama feature, against "one way / favor simplicity."
 - **Lock-free default, locks as expert opt-in.** The default path has no shared state → no locks. Atomics
   power expert lock-free structures, built once in the engine/stdlib (as Rust's std/crossbeam do over
   `unsafe`). No mandatory mutex-everywhere model.
@@ -156,15 +156,15 @@ checker, cstar **removes the shared mutable state**.
   reintroduces the hazard the model removes. Capability is retained (via the seam + the two primitives);
   only some ergonomics move behind the seam. Reopen only if a concrete case the seam can't express appears.
 - **Positioning.** A *different, simpler, more portable* safe-concurrency model. Honest trade: Rust's
-  shared-memory-with-static-exclusivity is more flexible for max-perf shared mutation; cstar's
+  shared-memory-with-static-exclusivity is more flexible for max-perf shared mutation; kama's
   shared-nothing is far easier to reason about and portable to wasm. Prior art: **Dart isolates** (closest),
   **Erlang/Elixir** actors, **Web Workers** + SharedArrayBuffer, **structured concurrency**
   (Swift/Kotlin/Trio); **Pony** for the type-level ceiling.
 
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)
 
-The end goal is **one language, two modes** — the same cstar syntax usable both compiled and as a scripting
-language with a full REPL. The guiding constraint: **the `cstar` binary is the only tool you need.**
+The end goal is **one language, two modes** — the same kama syntax usable both compiled and as a scripting
+language with a full REPL. The guiding constraint: **the `kama` binary is the only tool you need.**
 External C toolchains stay *optional* — used for the portable-C release path, never required to write, run,
 or iterate.
 
@@ -188,27 +188,27 @@ backends.
 Every backend shares the same front end, so the safety analysis (ownership, move tracking, exhaustiveness)
 is proven **once**, before the IR.
 
-- **C backend — the portability moat (kept, always).** cstar → readable portable C → any C toolchain.
-  `clang`/`emcc` for release; a bundled **TinyCC** for near-instant in-process JIT (`cstar run foo.cstar`
+- **C backend — the portability moat (kept, always).** kama → readable portable C → any C toolchain.
+  `clang`/`emcc` for release; a bundled **TinyCC** for near-instant in-process JIT (`kama run foo.kama`
   and the REPL are **JIT-compiled, not tree-walked**). "Runs anywhere C runs" is the whole moat; the new
   backends are *additive*, never a replacement.
-- **WASM backend — the self-contained web path.** Direct cstar → wasm (no `emcc`), run in the browser or
+- **WASM backend — the self-contained web path.** Direct kama → wasm (no `emcc`), run in the browser or
   under Wasmtime. The web scripting/engine substrate; C→emcc remains the maximal-compatibility option.
-- **Bytecode + VM backend — the self-contained native REPL.** A cstar-owned VM gives a true interactive
+- **Bytecode + VM backend — the self-contained native REPL.** A kama-owned VM gives a true interactive
   REPL with zero external tooling.
 
 **The IR is the crux, and the real work.** Today there is no IR: the C emitter writes C text directly and
 *bakes in* monomorphization, RAII drop insertion, vtable layout, and match/operator desugaring
-(`cstar.cemit.*`, ~150 methods). The refactor pulls that **semantic lowering up into the shared IR**,
+(`kama.cemit.*`, ~150 methods). The refactor pulls that **semantic lowering up into the shared IR**,
 leaving each backend a comparatively dumb renderer. Design constraints:
 
 - **Keep the IR high-level and structured** (retain `if`/`while`/`for` and named locals), *not*
   SSA/basic-blocks — so the C backend can still emit the readable, `#line`-mapped C that is a headline
   feature.
-- **Move the runtime into cstar.** Collections/smart-pointers/`string` live as hand-tuned C in
-  `cstar_runtime.h` today (with a growing share already ported to cstar library types); a wasm or VM
+- **Move the runtime into kama.** Collections/smart-pointers/`string` live as hand-tuned C in
+  `kama_runtime.h` today (with a growing share already ported to kama library types); a wasm or VM
   backend can't `#include` it. Finishing the port so those flow through the shared IR and monomorphize into
-  *any* backend makes multi-backend and the cstar-stdlib/self-hosting goal the **same project**: do it once,
+  *any* backend makes multi-backend and the kama-stdlib/self-hosting goal the **same project**: do it once,
   all three backends inherit it.
 - **Contain semantic drift.** A VM is a second execution semantics — the main risk. Having the C backend
   and the VM consume the *same lowered IR* reduces drift from "two languages" to "two renderers of one IR."
@@ -219,7 +219,7 @@ dominates, JIT wins; if zero-install + interactivity dominate, the VM / direct-w
 only tool" constraint tilts the *default* iteration toward the VM + direct-wasm, with C/JIT for native speed
 or C compatibility.
 
-- **Why it beats other scripting languages:** Python/Ruby/Lua are bytecode interpreters; cstar scales from a
+- **Why it beats other scripting languages:** Python/Ruby/Lua are bytecode interpreters; kama scales from a
   self-contained VM up to JIT/AOT-native — the same source, at or near native speed.
 - *Licensing note:* TinyCC is LGPL; if a bundled JIT ships, confirm the linking terms against the
   MIT/permissive goal (GOALS #8). The VM / direct-wasm paths sidestep this entirely.
@@ -232,10 +232,10 @@ serialization for scenes). See [ENGINE_READINESS.md](ENGINE_READINESS.md).
 
 ## 9. Performance
 
-Current standing (full detail in [benchmarks/RESULTS.md](benchmarks/RESULTS.md)): cstar is at **C/C++
+Current standing (full detail in [benchmarks/RESULTS.md](benchmarks/RESULTS.md)): kama is at **C/C++
 parity** on native compute (fib/pi/collatz/fnptr/alloc **and** dynamic dispatch — all LLVM-AOT languages
 compiled at `-O3`), and wins decisively on footprint (~2 MB RSS, ~66 KB binary) and the no-GC `alloc`
-workload. `cstar→wasm` (optimized) **beats hand-written JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is
+workload. `kama→wasm` (optimized) **beats hand-written JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is
 near-parity on `alloc`/`dispatch`.
 
 - **WASM tiering.** Measure at the optimizing tier (`node --no-liftoff` — what a real long-running app
@@ -248,8 +248,9 @@ near-parity on `alloc`/`dispatch`.
 ## 10. Tooling / distribution (deferred)
 
 - **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
-  deferred (pair with an eventual rename).
-- **Brand rename → Kama** — the name is chosen (domain `kama-lang.org`); the mechanical rename (binary,
-  file extension, docs, repo) is a large branding pass, deferred until closer to publish.
+  deferred.
+- **Brand rename → Kama** — done: the mechanical rename (binary, `.kama` file extension, internal symbols,
+  docs) landed in one commit. Remaining external steps: rename the GitHub repo to `cosmic-canopy/kama` so the
+  flipped URLs resolve, and stand up `kama-lang.org`.
 - **FreeBSD CI** — a non-blocking `vmactions/freebsd-vm` job once Windows is proven on a tag.
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.

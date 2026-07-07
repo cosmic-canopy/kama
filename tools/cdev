@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# cdev — run cstar's build toolchain inside a container.
+# cdev — run kama's build toolchain inside a container.
 #
 # Portable across podman (preferred) and docker. The repo is bind-mounted at
 # /work so edits on the host are visible in the container with no image rebuild.
 #
-#   tools/cdev build-image          build the cstar-dev toolchain image
-#   tools/cdev make [args...]       run `make` in the container (build cstar)
+#   tools/cdev build-image          build the kama-dev toolchain image
+#   tools/cdev make [args...]       run `make` in the container (build kama)
 #   tools/cdev test                 run ./run_tests.sh in the container
 #   tools/cdev exec <cmd...>        run an arbitrary command in the container
 #   tools/cdev sh                   interactive shell in the container
 #
-# Override the engine with CSTAR_ENGINE=docker|podman.
+# Override the engine with KAMA_ENGINE=docker|podman.
 set -euo pipefail
 
-IMAGE="${CSTAR_IMAGE:-cstar-dev}"
+IMAGE="${KAMA_IMAGE:-kama-dev}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-ENGINE="${CSTAR_ENGINE:-}"
+ENGINE="${KAMA_ENGINE:-}"
 if [ -z "$ENGINE" ]; then
   if command -v podman >/dev/null 2>&1; then ENGINE=podman
   elif command -v docker >/dev/null 2>&1; then ENGINE=docker

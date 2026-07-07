@@ -1,0 +1,27 @@
+import std::collections::{List};
+// M26f-2 — branch merge: a `resource` value moved on BOTH arms of an if/else is `Moved` at
+// the join (not a conditional-drop). Its scope-exit dtor is skipped; exactly one drop happened
+// (inside sink). One drop of code 7 -> 7. (A broken merge that kept `a` live would fold to 224.)
+extern fn void kama_trace(int code);
+extern fn int kama_trace_get();
+
+type resource Res {
+    List<int32> items;
+    public Res(int32 v) { this.items.add(item: v); }
+    ~Res() { kama_trace(code: 7); }
+    public fn int32 head() { return this.items[0]; }
+}
+
+fn int32 sink(Res r) { return r.head(); }
+
+fn int32 pick(int32 c) {
+    Res a = Res(v: 1);
+    if (c > 0) { sink(r: give a); }    // moved on the then-arm
+    else       { sink(r: give a); }    // ...and the else-arm -> `a` is Moved at the join
+    return 0;                          // a's dtor skipped (already moved)
+}
+
+fn int32 main() {
+    int32 r = pick(c: 1);
+    return kama_trace_get();          // exactly one drop -> 7
+}

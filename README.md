@@ -1,4 +1,4 @@
-# cstar
+# kama
 
 > **The memory-safe, no-GC systems language that keeps traditional OOP — and compiles to
 > readable, portable C.**
@@ -7,19 +7,19 @@
 transpiles to portable C.** So it runs anywhere C runs: native on every platform, and in
 the browser as WebAssembly.
 
-> **TL;DR** — cstar gives you modern ergonomics (generics, sum types + exhaustive `match`,
+> **TL;DR** — kama gives you modern ergonomics (generics, sum types + exhaustive `match`,
 > operator overloading, RAII, smart pointers) over a **deterministic, no-GC** memory model,
 > and compiles to readable C you can build and debug like any C program. **Status: the
 > language is feature-complete (v0.1.75), on the road to 1.0.**
 >
 > ```sh
 > tools/cdev make                       # build the compiler (containerized toolchain)
-> tools/cdev exec ./cstar build hello.cstar -o hello && ./hello   # native
-> tools/cdev exec ./cstar build hello.cstar --target wasm         # -> hello.html + .js + .wasm
+> tools/cdev exec ./kama build hello.kama -o hello && ./hello   # native
+> tools/cdev exec ./kama build hello.kama --target wasm         # -> hello.html + .js + .wasm
 > ```
 > New here? Start with **[GETTING_STARTED.md](GETTING_STARTED.md)**.
 
-## What makes cstar cstar
+## What makes kama kama
 
 - **No GC, deterministic lifetimes (RAII).** Destruction is scope-driven; allocation is
   explicit in the generated C. No stop-the-world, no hidden runtime.
@@ -41,10 +41,10 @@ the browser as WebAssembly.
 The full language reference lives in **[docs/SPEC.md](docs/SPEC.md)**; the design philosophy
 in **[GOALS.md](GOALS.md)**; the forward plan in **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
-## Why cstar over…
+## Why kama over…
 
 - **…C** — everything C targets, plus safety by default: no `null`, bounds-checked indexing,
-  RAII, and compile-time use-after-move — without leaving C. The output *is* readable C, so cstar
+  RAII, and compile-time use-after-move — without leaving C. The output *is* readable C, so kama
   drops into an existing C codebase one file at a time.
 - **…C++** — one obvious construct per idea instead of five, safety on by default instead of
   opt-in, no exception overhead, smaller binaries — and portable-C output that slots into
@@ -54,19 +54,19 @@ in **[GOALS.md](GOALS.md)**; the forward plan in **[docs/ROADMAP.md](docs/ROADMA
   (deterministic latency, no stop-the-world) and **no runtime** (tiny deploys, real embedded,
   wasm without a multi-MB runtime). AOT-native speed, and it runs where a managed runtime never
   will.
-- **…Rust** — cstar keeps the memory-safety wins that bite in practice — no dangling, no
+- **…Rust** — kama keeps the memory-safety wins that bite in practice — no dangling, no
   use-after-free, no use-after-move, no `null`, no leaks, bounds checks — at a fraction of the
   cognitive cost, and hands back the **traditional OOP toolkit** (single inheritance + virtual
   dispatch, contracts for substitutability) that Rust declines to provide. The trade is
-  deliberate: cstar does **not** statically enforce Rust's aliasing-exclusivity or data-race
+  deliberate: kama does **not** statically enforce Rust's aliasing-exclusivity or data-race
   freedom today. *(The planned concurrency model is shared-nothing — data-race freedom by
   construction rather than by a borrow checker; see the [roadmap](docs/ROADMAP.md). The 1.0 core
   is single-threaded.)* It's a different point on the safety/effort curve — aimed at the
   OOP-shaped, borrow-checker-weary middle — not a superset of Rust.
 
-cstar's white space is the combination no one else occupies: **traditional OOP + no-GC/RAII +
+kama's white space is the combination no one else occupies: **traditional OOP + no-GC/RAII +
 transpiles to portable C.** Rust and Zig drop OOP; C# and Swift carry a GC/runtime; C++ keeps the
-footguns. That triangle is the reason to reach for cstar.
+footguns. That triangle is the reason to reach for kama.
 
 ## Toolchain
 
@@ -75,35 +75,35 @@ The build toolchain is **containerized** for reproducibility — same result und
 bison/flex/clang for building the compiler itself.
 
 ```sh
-tools/cdev build-image      # one-time: build the cstar-dev toolchain image
-tools/cdev make             # build the cstar compiler
+tools/cdev build-image      # one-time: build the kama-dev toolchain image
+tools/cdev make             # build the kama compiler
 tools/cdev test             # run the end-to-end test suite
 tools/cdev exec <cmd...>    # run any command in the toolchain
 tools/cdev sh               # interactive shell in the toolchain
 ```
 
-Override the engine with `CSTAR_ENGINE=docker`. A host-native build also works with bison
+Override the engine with `KAMA_ENGINE=docker`. A host-native build also works with bison
 ≥ 2.7, flex, and clang (`brew install bison` on macOS — the system bison is too old); just
 run `make`.
 
 ## Using the compiler
 
 ```sh
-# Transpile cstar to C (no C compiler invoked):
-cstar transpile hello.cstar -o hello.c
+# Transpile kama to C (no C compiler invoked):
+kama transpile hello.kama -o hello.c
 
 # Build a native executable:
-cstar build hello.cstar -o hello && ./hello
+kama build hello.kama -o hello && ./hello
 
 # Build a multi-file program (files with no `namespace` are file-private):
-cstar build graphics.cstar physics.cstar main.cstar -o app && ./app
+kama build graphics.kama physics.kama main.kama -o app && ./app
 
 # Build for the browser (WASM). Default output is an HTML harness:
-cstar build hello.cstar --target wasm            # -> hello.html + .js + .wasm
-cstar build hello.cstar --target wasm -o app.js  # -> app.js + app.wasm (headless: node app.js)
+kama build hello.kama --target wasm            # -> hello.html + .js + .wasm
+kama build hello.kama --target wasm -o app.js  # -> app.js + app.wasm (headless: node app.js)
 
 # Optimized release build (stripped, NDEBUG, no #line):
-cstar build hello.cstar --release
+kama build hello.kama --release
 ```
 
 Options: `--release`/`--debug` (default debug: `-g -O0`), `--target native|wasm`, `--webgpu`
@@ -111,21 +111,21 @@ Options: `--release`/`--debug` (default debug: `-g -O0`), `--target native|wasm`
 
 ## Debugging
 
-Generated C carries `#line` directives back to the original `.cstar`, so a native `-g` build
-is debuggable in lldb/gdb with breakpoints in your `.cstar` source, and a WASM
-`-g -gsource-map` build steps through `.cstar` in browser devtools. A VSCode extension
+Generated C carries `#line` directives back to the original `.kama`, so a native `-g` build
+is debuggable in lldb/gdb with breakpoints in your `.kama` source, and a WASM
+`-g -gsource-map` build steps through `.kama` in browser devtools. A VSCode extension
 (`editor/vscode/`) ships a CodeLLDB launch config and Build tasks.
 
 ## Layout
 
-- `cstar.l`, `cstar.y` — Flex lexer and Bison grammar (the language front end)
-- `cstar.ast.h`, `cstar.forward.h` — AST
-- `cstar.cemit.{h,cpp}` — the C-emitting backend
-- `cstar_runtime.h` — the small runtime included by generated C
-- `cstar.driver.cpp` — CLI (`transpile` / `build`)
+- `kama.l`, `kama.y` — Flex lexer and Bison grammar (the language front end)
+- `kama.ast.h`, `kama.forward.h` — AST
+- `kama.cemit.{h,cpp}` — the C-emitting backend
+- `kama_runtime.h` — the small runtime included by generated C
+- `kama.driver.cpp` — CLI (`transpile` / `build`)
 - `tests/`, `run_tests.sh` — end-to-end fixtures (assert on exit codes)
 - `Dockerfile`, `tools/cdev` — containerized toolchain
-- `docs/` — `SPEC.md` (language reference), `grammar.bnf` (generated from `cstar.y`),
+- `docs/` — `SPEC.md` (language reference), `grammar.bnf` (generated from `kama.y`),
   `TYPE_MODEL.md`, `KEYWORDS.md`, `ROADMAP.md`
 - `llms.txt`, `GOALS.md` — LLM-discovery entry point and design philosophy
 

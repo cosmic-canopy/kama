@@ -2,7 +2,7 @@
 # context tiny and free of host-built artifacts.
 .git
 *.o
-cstar
+kama
 build/
 *.output
 bison_report

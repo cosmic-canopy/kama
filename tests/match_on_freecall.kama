@@ -1,0 +1,11 @@
+// A free-function call is a valid `match` subject (named args, like every kama call). Locks in that
+// `match(poll(x: 5))` parses/compiles — it was never a real limitation (positional args are the error).
+enum Opt { Some(int32 v), None }
+fn Opt poll(int32 x) { if (x > 0) { return Opt::Some(v: x); } return Opt::None; }
+
+fn int main()
+{
+    int32 a = match (poll(x: 5)) { case Some(v): v; case None: 0; };
+    int32 b = match (poll(x: 0)) { case Some(v): v; case None: 100; };
+    return a + b;   // 5 + 100
+}

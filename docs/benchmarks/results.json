@@ -15,7 +15,7 @@
   "rows": [
     {
       "track": "native",
-      "lang": "cstar",
+      "lang": "kama",
       "workload": "fib",
       "time_ms": "5.91",
       "rss_kb": "2848",
@@ -96,7 +96,7 @@
     },
     {
       "track": "wasm",
-      "lang": "cstar-wasm",
+      "lang": "kama-wasm",
       "workload": "fib",
       "time_ms": "19.78",
       "rss_kb": "43712",
@@ -123,7 +123,7 @@
     },
     {
       "track": "native",
-      "lang": "cstar",
+      "lang": "kama",
       "workload": "pi",
       "time_ms": "11.79",
       "rss_kb": "2848",
@@ -204,7 +204,7 @@
     },
     {
       "track": "wasm",
-      "lang": "cstar-wasm",
+      "lang": "kama-wasm",
       "workload": "pi",
       "time_ms": "21.7",
       "rss_kb": "43708",
@@ -231,7 +231,7 @@
     },
     {
       "track": "native",
-      "lang": "cstar",
+      "lang": "kama",
       "workload": "collatz",
       "time_ms": "65.63",
       "rss_kb": "2848",
@@ -312,7 +312,7 @@
     },
     {
       "track": "wasm",
-      "lang": "cstar-wasm",
+      "lang": "kama-wasm",
       "workload": "collatz",
       "time_ms": "92.71",
       "rss_kb": "43840",
@@ -339,7 +339,7 @@
     },
     {
       "track": "native",
-      "lang": "cstar",
+      "lang": "kama",
       "workload": "dispatch",
       "time_ms": "6.15",
       "rss_kb": "2848",
@@ -420,7 +420,7 @@
     },
     {
       "track": "wasm",
-      "lang": "cstar-wasm",
+      "lang": "kama-wasm",
       "workload": "dispatch",
       "time_ms": "28.04",
       "rss_kb": "46060",
@@ -447,7 +447,7 @@
     },
     {
       "track": "native",
-      "lang": "cstar",
+      "lang": "kama",
       "workload": "alloc",
       "time_ms": "1.2",
       "rss_kb": "2848",
@@ -528,7 +528,7 @@
     },
     {
       "track": "wasm",
-      "lang": "cstar-wasm",
+      "lang": "kama-wasm",
       "workload": "alloc",
       "time_ms": "16.13",
       "rss_kb": "46048",
@@ -555,7 +555,7 @@
     },
     {
       "track": "native",
-      "lang": "cstar",
+      "lang": "kama",
       "workload": "fnptr",
       "time_ms": "2.51",
       "rss_kb": "2848",
@@ -636,7 +636,7 @@
     },
     {
       "track": "wasm",
-      "lang": "cstar-wasm",
+      "lang": "kama-wasm",
       "workload": "fnptr",
       "time_ms": "11.13",
       "rss_kb": "43840",
@@ -663,7 +663,7 @@
     }
   ],
   "compile": {
-    "cstar": {
+    "kama": {
       "compile_ms": "453",
       "artifacts": "6"
     },
@@ -691,7 +691,7 @@
       "compile_ms": "265",
       "artifacts": "1"
     },
-    "cstar-wasm": {
+    "kama-wasm": {
       "compile_ms": "3151",
       "artifacts": "6"
     },

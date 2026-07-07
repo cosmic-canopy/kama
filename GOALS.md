@@ -1,8 +1,8 @@
-# cstar — language goals & design philosophy
+# kama — language goals & design philosophy
 
-The durable "north star" for cstar. Decisions should be checked against these.
+The durable "north star" for kama. Decisions should be checked against these.
 
-## What cstar is
+## What kama is
 
 A C-family language with C#-like syntax, **no garbage collector** (RAII / deterministic destruction),
 and **explicit named parameters**. It **transpiles to portable C** — so it runs anywhere C runs (native
@@ -11,15 +11,15 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 ## Goals
 
 1. **Self-hosting eventually.** Developers should not need extra tooling; the compiler should ultimately
-   be written in cstar and bootstrap through the C transpiler. *Long-term — requires strings, collections,
+   be written in kama and bootstrap through the C transpiler. *Long-term — requires strings, collections,
    maps, file I/O, and tagged unions in the language first.*
    - *Tied to this:* the built-in containers/smart-pointers are compiler intrinsics with hand-tuned
      **C** runtime bodies. Generics unify the *surface* but keep those C bodies. **Reimplementing them
-     as cstar generic library types** (the Rust-`Vec` "unsafe core, safe API" model, in `unsafe`/`Ptr`)
+     as kama generic library types** (the Rust-`Vec` "unsafe core, safe API" model, in `unsafe`/`Ptr`)
      is a possible *later* step. It buys nothing for runtime performance (monomorphization makes both
      identical) and isn't needed for the language to be complete — its payoff is *this* goal,
-     self-hosting (a cstar stdlib for a cstar compiler). The generics engine is built so this is a
-     no-rework continuation (swap a generic type's body source from C-macro to cstar), never a redo.
+     self-hosting (a kama stdlib for a kama compiler). The generics engine is built so this is a
+     no-rework continuation (swap a generic type's body source from C-macro to kama), never a redo.
 
 2. **Fast compiles: single-pass, parallelizable.** Parsing stays essentially single-pass. Speed comes
    from per-file parallelism — parse + emit each translation unit independently, then compile the
@@ -29,15 +29,15 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 3. **Predictable allocation/deallocation, no GC.** Lifetimes are deterministic (RAII). Allocation is
    explicit in the generated C. Arena/pool allocators arrive as library types for the engine.
 
-3a. **No raw pointers in the *safe* surface.** The safe cstar surface never exposes raw pointers or raw
+3a. **No raw pointers in the *safe* surface.** The safe kama surface never exposes raw pointers or raw
    memory. Heap and buffers are reached only through safe abstractions: **collections** (`Array<T>`/
    `List<T>`/`string`) and the **smart-pointer family** (`Owned<T>` unique, `Shared<T>` ref-counted,
    `Weak<T>`). These are compiler-known intrinsics whose unsafe internals (raw pointers,
-   `malloc`/`free`) live ONLY in `cstar_runtime.h` — the Rust-`Vec`/Swift-`Array` model: unsafe core, safe
+   `malloc`/`free`) live ONLY in `kama_runtime.h` — the Rust-`Vec`/Swift-`Array` model: unsafe core, safe
    API. Indexing is **bounds-checked** (traps, not UB). The one deliberately contained exception is the
    **`unsafe { }`** block + `Ptr<T>` at the **FFI boundary**: a narrow, greppable seam for talking to C
    (GPU/OS APIs — the whole point of transpiling to C), never general-purpose escape, and the safe surface
-   never sees it. (Self-hosting the compiler in cstar — goal #1 — is the other place a contained escape may
+   never sees it. (Self-hosting the compiler in kama — goal #1 — is the other place a contained escape may
    matter.)
 
 3b. **No null in the safe surface.** A stack value, an `Owned<T>`/`Shared<T>`, a `ref`/`out` borrow, and a
@@ -50,14 +50,14 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    boundary** (checked inside `unsafe`), where you genuinely talk to C. This is the deliberate avoidance of
    the null-reference "billion-dollar mistake."
 
-3c. **Ownership is the type axis — `value` / `resource` / `contract`.** cstar organizes types by
+3c. **Ownership is the type axis — `value` / `resource` / `contract`.** kama organizes types by
    *what they own*, not the C/C++ `class`/`struct`/`pod` legacy. Every declaration is `type <kind>
    Name` (the `type` marker, parallel to `fn`): a **`type value`** owns nothing (raw data, **copied**;
    the stricter cousin of a "value type" — no smuggled shared refs; may still encapsulate private
    fields to guard an invariant). A **`type resource`** owns something, or has identity (**moved**,
-   RAII-dropped). A **`type contract`** is a public-only guarantee a type satisfies — cstar's word for
+   RAII-dropped). A **`type contract`** is a public-only guarantee a type satisfies — kama's word for
    an interface. Polymorphism's goal is **substitutability, not reuse**: inheritance bundles the two,
-   so cstar unbundles them — **generics** give reuse (zero-cost monomorphization), **contracts** give
+   so kama unbundles them — **generics** give reuse (zero-cost monomorphization), **contracts** give
    substitutability, and `type virtual`/`abstract resource` is only for sharing *implementation* up an
    owned hierarchy. Hand-offs follow **"silent default, scream when ambiguous"**: a `give`/`copy`
    marker is required exactly when *both* move and copy are plausible (a `resource` that has opted into
@@ -77,7 +77,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    `bring_up(): Result<…>`. (This composes static methods + `Result` + `Owned` + RAII;
    see `tests/fallible_factory`.)
 
-4. **One way to do a thing. Favor simplicity.** Unlike C++'s many syntaxes for one concept, cstar
+4. **One way to do a thing. Favor simplicity.** Unlike C++'s many syntaxes for one concept, kama
    prefers a single, obvious construct. Resist redundant syntax. (Already: named args only — no
    positional; one form per construct.)
 
@@ -89,13 +89,13 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
      access. Intent is visible to a human, a tool, or an LLM at a glance — no guessing which `Type name(`
      is a declaration vs a call, or which access crosses a namespace vs an object.
 
-6. **Scripting / no-compile iteration eventually.** A `cstar run` that transpiles and runs instantly
+6. **Scripting / no-compile iteration eventually.** A `kama run` that transpiles and runs instantly
    (e.g. via TinyCC) gives sub-second iteration while reusing the single C backend — preferred over a
    separate interpreter. A tree-walking interpreter / hot-reload are larger, later options.
 
-7. **Self-describing.** The grammar (`cstar.y`) is the single source of truth — the compiler embodies
+7. **Self-describing.** The grammar (`kama.y`) is the single source of truth — the compiler embodies
    the BNF. Generate machine-readable grammar/spec from it (`docs/grammar.bnf` via `tools/gen-grammar`)
-   so the language always describes itself. A future `cstar describe --json` exposes the language surface
+   so the language always describes itself. A future `kama describe --json` exposes the language surface
    (keywords, types, builtins, grammar) for tools.
 
 8. **MIT licensed.** Permissive and embeddable — see `LICENSE`.
@@ -107,16 +107,16 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 
 ## Production-grade build & debugging
 
-- **Debug / Release configs.** `cstar build` defaults to debug (`-g -O0`, `#line` on, asserts on);
+- **Debug / Release configs.** `kama build` defaults to debug (`-g -O0`, `#line` on, asserts on);
   `--release` opts into optimized (`-O2`/`-Oz`, `-DNDEBUG`, stripped, no `#line`).
-- **IDE breakpoint debugging (VSCode first).** Set breakpoints in `.cstar`, step, and inspect the call
-  stack + locals — enabled by the `#line` directives mapping generated C back to `.cstar` and by locals
-  keeping their cstar names. The VSCode extension ships a CodeLLDB launch config + Build Debug/Release
+- **IDE breakpoint debugging (VSCode first).** Set breakpoints in `.kama`, step, and inspect the call
+  stack + locals — enabled by the `#line` directives mapping generated C back to `.kama` and by locals
+  keeping their kama names. The VSCode extension ships a CodeLLDB launch config + Build Debug/Release
   tasks. WASM debugging works in the browser via emscripten source maps.
 
 ## Working principles (see `.claude/skills/`)
 
-Development of cstar follows two vendored guidance skills that reinforce goals #4 and #5:
+Development of kama follows two vendored guidance skills that reinforce goals #4 and #5:
 - **karpathy-guidelines** — think before coding, simplicity first, surgical changes, goal-driven.
 - **ponytail** — lazy-senior-dev YAGNI ladder: write the least code that works.
 

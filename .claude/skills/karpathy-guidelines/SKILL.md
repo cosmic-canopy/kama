@@ -4,7 +4,7 @@ description: Behavioral guidelines to reduce common LLM coding mistakes. Use whe
 license: MIT
 ---
 
-<!-- Vendored into the cstar repo from https://github.com/multica-ai/andrej-karpathy-skills
+<!-- Vendored into the kama repo from https://github.com/multica-ai/andrej-karpathy-skills
      (MIT licensed). Guidance text only; no hooks. -->
 
 # Karpathy Guidelines

@@ -1,26 +1,26 @@
-# cstar language specification (overview)
+# kama language specification (overview)
 
 This is a semantics overview. The **grammar is authoritative** — see
-[grammar.bnf](grammar.bnf) (generated from `cstar.y`). Executable examples live in
-[`../tests/`](../tests/) (`*.cstar` with a `.expect` exit code). The design philosophy — *one way to do a
+[grammar.bnf](grammar.bnf) (generated from `kama.y`). Executable examples live in
+[`../tests/`](../tests/) (`*.kama` with a `.expect` exit code). The design philosophy — *one way to do a
 thing, explicit over implicit, no GC / RAII* — lives in [../GOALS.md](../GOALS.md); this document is the
 semantics/feature reference. Status flags below: ✅ implemented, 🚧 reserved (not yet implemented).
 
 ## Model
 
-cstar compiles to **portable C** (native + WASM). No garbage collector — object lifetimes are deterministic
+kama compiles to **portable C** (native + WASM). No garbage collector — object lifetimes are deterministic
 (RAII). Calls use **named arguments** (no positional). Every type declaration is `type value` (owns nothing,
 copies), `type resource` (owns/has identity, moves, RAII-dropped), or `type contract` (an interface).
 
 ## Types ✅
 
-| cstar | C |
+| kama | C |
 |---|---|
 | `int8 int16 int32/int int64` | `int8_t … int64_t` |
 | `uint8 uint16 uint32 uint64` | `uint8_t … uint64_t` |
 | `float32` / `float64`/`double` | `float` / `double` |
 | `bool` | `bool` |
-| `string` | `cstar_string` (borrowed view or heap-owned RAII string) |
+| `string` | `kama_string` (borrowed view or heap-owned RAII string) |
 | `void` | `void` |
 | user `type value`/`type resource` | `struct` (value semantics) |
 
@@ -37,7 +37,7 @@ fat value that is one of two things, chosen automatically:
 - a **heap-owned** RAII string — allocated on the heap, **freed on drop** (produced by operations that must
   build a new buffer, e.g. `concat`).
 
-```cstar
+```kama
 string s = "ab";                    // borrowed literal — no alloc
 string t = s.concat(other: "cd");   // heap-owned, RAII-freed at scope exit
 bool eq = s.equals(other: t);   int len = s.length();
@@ -56,7 +56,7 @@ never blur:
   `foreach (char c in s.chars())` yields each Unicode scalar value as a **`char`**. It's a borrow, valid
   while the string is.
 
-```cstar
+```kama
 string s = "A\u{E9}\u{20AC}";           // "Aé€" — 6 UTF-8 bytes, 3 codepoints
 int n = 0;
 foreach (char c in s.chars()) { n = n + 1; }   // n == 3 (codepoints, not bytes)
@@ -76,7 +76,7 @@ a **place** (an lvalue): you can write a field through it (`a[i].x = v`), index 
 (`m[i][j] = v`), compound-assign it (`a[i] += x`), or borrow it (`ref a[i]`) — every form stays
 bounds-checked. (Reading `a[i]` still yields a copy.)
 
-```cstar
+```kama
 Array<int32> a = new Array<int32>(size: 4);   // fixed buffer, zero-initialized
 a[0] = 10;  a[1] = 20;                          // bounds-checked []
 int32 first = a[0];
@@ -99,20 +99,20 @@ collection by the ownership rules below (`give` to move, `copy` to duplicate, a 
 ## Smart pointers ✅
 
 The smart pointers are a **standard library**, not compiler intrinsics: `Owned`/`Shared`/`Weak` live in
-`std::memory`, written in ordinary cstar (RAII `resource`s over `Deref`/`HeapOwner`, refcounting in cstar),
+`std::memory`, written in ordinary kama (RAII `resource`s over `Deref`/`HeapOwner`, refcounting in kama),
 and are pulled in with `import std::memory::{…}`. The compiler adds only what a library can't express: the
 type-erasure (fat pointer + vtable) that makes `Owned<Shape>`/`Shared<Shape>` over a **contract** work, and
 `new T(args)` heap placement into any `HeapOwner<T>`.
 
-```cstar
+```kama
 import std::memory::{Owned, Shared, Weak};
 ```
 
 `Owned<T>` — unique heap ownership (= Rust `Box` / C++ `unique_ptr`), zero overhead, **move-only**,
-**auto-deref**, RAII-freed. The cstar surface stays pointer-free; the raw pointer is confined to the library.
+**auto-deref**, RAII-freed. The kama surface stays pointer-free; the raw pointer is confined to the library.
 Use it for heap objects, recursive data structures, and polymorphic ownership.
 
-```cstar
+```kama
 Owned<Counter> c = new Counter(start: 40);          // `new` heap-boxes the ELEMENT type
 c.bump();  int n = c.get();                          // auto-deref: . reaches the pointee
 Owned<Counter> d = c;                                // MOVE: c is now empty (moved-from)
@@ -133,7 +133,7 @@ to make — no footgun); a `value`/primitive just copies (and `give` on one is a
 argument and drops it at function end — `fn int use(Owned<T> p)` consumes it (`use(p: give x)`), `fn int
 peek(Shared<T> s)` retains it (`peek(s: x)`, `x` stays valid).
 
-```cstar
+```kama
 Owned<Counter> b = give a;   // explicit move (a consumed)
 Shared<Counter> t = s;       // copy/retain (default) — both valid
 Shared<Counter> u = copy s;  // explicit retain (same as bare); `give s` is an error (copy-only)
@@ -154,7 +154,7 @@ compile error and you must write **`give x`** (move) or **`copy x`** (deep-copy 
 stays valid). Because `copy`/`give` are markers only in expression position, they're **contextual keywords** —
 usable as method names, so the opt-in method is literally named `copy`.
 
-```cstar
+```kama
 type resource Res implements Copyable {
     List<int32> items;
     ~Res() { }
@@ -174,7 +174,7 @@ deref chains. `deref()` returns a place rooted at `this`, so it's bound by the s
 rules as `ref T operator[]` (no lifetimes needed). This is how a smart pointer is written as an ordinary
 `resource` (RAII + move-only come free) rather than a compiler intrinsic.
 
-```cstar
+```kama
 type value Point { public int32 x; public int32 y; public fn int32 sum() { return this.x + this.y; }
                    public Point(int32 x, int32 y) { this.x = x; this.y = y; } }
 type value BoxP implements Deref<Point> {
@@ -210,7 +210,7 @@ scope exit are all rejected — there is no runtime drop flag.
 `Shared<T>` — ref-counted shared ownership (= C++ `shared_ptr` / Rust `Rc`). **Copyable**: each copy retains
 (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.
 
-```cstar
+```kama
 Shared<Tex> a = new Tex(id: 7);
 Shared<Tex> b = a;     // retain — a and b share one Tex (both valid)
 b.use();  int n = a.id;
@@ -222,7 +222,7 @@ it **breaks reference cycles** that `Shared` alone would leak. You can't derefer
 dead) — **upgrade** it with the checked `tryUpgrade()`, which returns an `Optional<Shared<T>>` you must
 `match` on, so the dead case is impossible to ignore:
 
-```cstar
+```kama
 Weak<Tex> w = s.downgrade();                  // make a weak ref from a Shared (does not keep Tex alive)
 int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
     case Some(up): up.id;                     // alive: use the upgraded Shared
@@ -246,7 +246,7 @@ each handle in RAII order and dispatches polymorphically through it. See **Gener
 
 ## Functions ✅
 
-```cstar
+```kama
 fn int add(int a, int b) { return a + b; }
 fn int main() { return add(b: 20, a: 10); }   // named args; reordered to declared order
 ```
@@ -255,11 +255,11 @@ fn int main() { return add(b: 20, a: 10); }   // named args; reordered to declar
 ## FFI — calling C ✅
 
 `extern fn Ret name(params);` declares a C function's call signature (name + named params for lowering); the
-C **prototype comes from the header** you `extern "<header.h>";` — cstar never emits a prototype for an
+C **prototype comes from the header** you `extern "<header.h>";` — kama never emits a prototype for an
 extern function (so there's no redeclaration conflict, and a missing include is a plain C error). Link
 libraries with `--link`. The FFI boundary is the language's only "unsafe" seam (explicitly `extern`):
 
-```cstar
+```kama
 extern "<stdlib.h>";             // every C function comes from an explicit header
 extern "<math.h>";
 extern fn Ptr  malloc(usize n);     // Ptr = void* (opaque pointer/handle); usize = size_t
@@ -275,19 +275,19 @@ fn int main() {
 ```
 
 **The FFI rule (one sentence): declare C types/functions by `extern`-including their header.** An `extern`
-declaration is purely cstar's call-signature (name + named params, so it can lower the call) — the actual C
-prototype comes from the header you include with `extern "<header.h>";`. cstar never emits a C prototype for
+declaration is purely kama's call-signature (name + named params, so it can lower the call) — the actual C
+prototype comes from the header you include with `extern "<header.h>";`. kama never emits a C prototype for
 an extern function, so there are no redeclaration conflicts; and the runtime hides its own libc dependencies
 (block-scope declarations), so **no** C function (not even `malloc`) is available without its header — a
 missing include is a plain C error, never a silent guess.
 
 `Ptr` is `void*`; `Ptr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
-**no dereference** in cstar outside `unsafe`). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
-`cstar_` are reserved (runtime-provided).
+**no dereference** in kama outside `unsafe`). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
+`kama_` are reserved (runtime-provided).
 
 **FFI data — all controlled, no `unsafe` needed:**
 
-```cstar
+```kama
 extern "<stdlib.h>";                       // a C #include
 type extern value div_t { int32 quot; int32 rem; }   // bind an external C struct (not re-emitted)
 extern fn div_t div(int32 numer, int32 denom);
@@ -303,18 +303,18 @@ fn int main() {
 ```
 
 `type extern value Foo { ... }` is an **external** struct provided by an included header / linked code —
-cstar uses its fields (all public, the C layout) but never re-emits it (so no redefinition), and its name is
+kama uses its fields (all public, the C layout) but never re-emits it (so no redefinition), and its name is
 the literal C name. `addr(of: x)` takes the address of a real local (out-params, descriptor pointers) — a
 *controlled* op, no `unsafe`. `s.cstr()` yields a C `const char*`.
 
 ### `unsafe { }` — raw pointer memory access
 
-The **only** place cstar can touch arbitrary memory through a raw pointer. Raw `Ptr<T>` index/store is a
+The **only** place kama can touch arbitrary memory through a raw pointer. Raw `Ptr<T>` index/store is a
 **compile error outside** an `unsafe { }` block — so the entire dangerous surface is explicit and greppable
 (`grep -rn 'unsafe {'`). Everything else (collections, smart pointers, FFI structs/handles/out-params,
 `addr`) stays safe.
 
-```cstar
+```kama
 Ptr<int32> p = malloc(n: 16);    // void* -> int32_t* (implicit)
 unsafe {
     p[0] = 10;  p[1] = 32;       // raw store  (p[0] is *p)
@@ -329,10 +329,10 @@ Ptr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule); usi
 
 `a.dataPtr()`/`a.byteLen()` bridge a collection's buffer to C (safe to call; the returned `Ptr` is valid only
 while the collection is alive + unmodified, and dereferencing it requires `unsafe`). An unlowered construct
-(including a safety-gate violation) is a **hard build error** — cstar never emits incomplete C and claims
+(including a safety-gate violation) is a **hard build error** — kama never emits incomplete C and claims
 success.
 
-### Writing a collection *in* cstar — `sizeof`, `panic`/`assert`, place-returning methods ✅
+### Writing a collection *in* kama — `sizeof`, `panic`/`assert`, place-returning methods ✅
 
 The above pieces (a place-returning `operator[]`, `Ptr<T>` + `unsafe`, generics, RAII) let a `Vec`/matrix
 be written **in the language** rather than baked into the compiler. Three builtins complete the kit:
@@ -341,7 +341,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   `malloc(n: n * sizeof(T))` works in a generic `Vec<T>`.
 - **`panic(msg: string)` / `assert(cond: bool)`** — a clean **trap** (writes the message + `abort()`, not
   UB — the user-facing form of the built-in bounds trap). For a *bug that can't continue*; recoverable
-  errors use `Result<T, E>`. (cstar aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.)
+  errors use `Result<T, E>`. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.)
 - **`drop(value: place)`** — run a place's destructor now (a no-op for a non-destructible type); lets a
   library owner over `Ptr<T>` drop its heap pointee before `free`.
 - **`addr(of: place)`** — the address of a place (a field/local/element) as a `Ptr<T>`. Taking an address
@@ -375,19 +375,19 @@ buffer reallocates. The library `List` **guards against this at runtime** (C#-st
 counter is bumped on every structural change (`add`), each iterator snapshots it, and `next()`/
 `hasNext()` `panic`s if it changed — *before* the stale cursor is dereferenced. In-place element writes
 (`foreach (ref x in list) { x = … }`) don't touch the counter and are fine — that's the point of `ref`.
-The guard lives in `List`'s own cstar source (not the compiler), so it's a stdlib policy: a hand-rolled
+The guard lives in `List`'s own kama source (not the compiler), so it's a stdlib policy: a hand-rolled
 container chooses whether to pay for it. `Array`/`Fixed` are fixed-size and can't reallocate, so they
 need no guard. (The iterator's back-pointer to the counter uses the `addr(of: place)` builtin — the
 address of a place as a `Ptr<T>`; safe to take, `unsafe` to deref.)
 
 ### Function pointers — `fnptr` ✅
 
-cstar has no naked function pointers. **`fnptr`** declares an explicit, named function-pointer **type**
+kama has no naked function pointers. **`fnptr`** declares an explicit, named function-pointer **type**
 (independent of any user type) — **zero-cost** (a bare C function pointer, no wrapper). It is **non-null**
 (must be bound; no `null`, no null-check at the call), and binding a free function is **signature-checked**.
 (A bodiless `fn` is *not* a function pointer — a forgotten body is a clear error, never a silent type.)
 
-```cstar
+```kama
 fnptr int32 Comparator(int32 a, int32 b);       // an explicit function-pointer TYPE
 fn int32 cmp(int32 a, int32 b) { return a - b; }
 
@@ -402,7 +402,7 @@ op(…) }` — the core callback shape).
 **Unbound method references** — `Type::method` (zero-cost). A method lowers to `Class__method(Class* self,
 …)`, so it's a function pointer whose **first parameter is the receiver**; the object is passed explicitly:
 
-```cstar
+```kama
 type value Vec2 { public int32 x; public int32 y; fn int32 dot(ref Vec2 o) { return this.x*o.x + this.y*o.y; } }
 fnptr int32 DotFn(ref Vec2 self, ref Vec2 o);   // receiver is an explicit first param
 
@@ -414,7 +414,7 @@ int32 n = d(self: ref u, o: ref v);
 the zero-cost `fnptr`, it carries an object (opt-in cost) and is **RAII-managed**. It's constructed like any
 other object, and **the ownership model follows the pointer type you hand in** — no separate keyword:
 
-```cstar
+```kama
 fnptr int32 Compare(int32 a, int32 b);   // NB: receiver is HIDDEN here (the inverse of an unbound fnptr)
 type value Scaler { int32 k; public Scaler(int32 k){ this.k = k; }
                public fn int32 apply(int32 a, int32 b){ return (a - b) * this.k; } }
@@ -437,10 +437,10 @@ its object): returning one from a factory transfers ownership; the captured obje
 
 **FFI**: an `extern fn` may take an `fnptr` type as a param; passing it hands C the raw pointer. C requires an
 *exact* function-pointer-type match (incompatible fn-pointer types are a hard error), so when the C callback
-signature is one cstar's `fnptr` doesn't spell identically — most commonly `const`-qualified parameters —
+signature is one kama's `fnptr` doesn't spell identically — most commonly `const`-qualified parameters —
 name the callback via a header `typedef` and **cast** to it at the edge:
 
-```cstar
+```kama
 extern "<stdlib.h>";
 extern "cb.h";   // typedef int (*CompareFn)(const void*, const void*);
 fnptr int32 Comparator(Ptr<int32> a, Ptr<int32> b);
@@ -477,7 +477,7 @@ The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words 
 `contract` are **contextual, not reserved** — because they appear only right after `type`, they remain
 ordinary identifiers everywhere else (`int32 value = 5;`). Only `type` is a keyword.
 
-```cstar
+```kama
 type value Counter {
     int value;                                       // fields are private by default
     public Counter(int start) { value = start; }     // constructor (mark `public` to call from outside)
@@ -498,7 +498,7 @@ a stack value uses `Counter(start: 40)`, not `new Counter(...)`. A stack constru
 A type that owns a heap resource (a collection, an `Owned`/`Shared`/`Weak`, or another `resource`) is
 declared **`type resource`** and is move-only:
 
-```cstar
+```kama
 type resource Buffer {
     List<byte> data;                                 // owns heap → resource; fields stay private
     public Buffer(int n) { … }
@@ -517,12 +517,12 @@ order. No GC; allocation/deallocation is predictable.
 
 ## Fallible construction (no exceptions) ✅
 
-cstar has no exceptions, so **constructors are infallible** — trivial, in-place field setup that cannot fail.
+kama has no exceptions, so **constructors are infallible** — trivial, in-place field setup that cannot fail.
 Fallible resource acquisition is a **`static fn` factory returning `Result<T, E>`**: the fallible work lives
 in the factory, and on failure it returns `Err` *before* the resource exists, so no half-constructed object
 can escape and `match` forces the caller to handle the error.
 
-```cstar
+```kama
 type resource Buffer {
     int32 size;
     private Buffer(int32 size) { this.size = size; }              // trivial, infallible, private
@@ -544,7 +544,7 @@ Result<…>` method. (This reuses static methods + `Result` + `Owned` + RAII —
 Extensible hierarchies are a **`resource`** concern (an embedded vtable breaks a `value`'s free copy). The
 extensible base opts in with a qualifier after `type`:
 
-```cstar
+```kama
 type virtual resource Shape {                          // `type virtual resource` opts in to extension
     public fn int describe() { return this.area(); }   // public surface
     protected virtual fn int area() { return 0; }      // overridable hooks are written `protected`
@@ -568,7 +568,7 @@ table.
 A **`contract`** is a public-only guarantee — "some type satisfying this contract." It has methods only: no
 bodies, no fields, no ctor/dtor.
 
-```cstar
+```kama
 type contract Shape { fn int64 area(); }               // a public guarantee (a "type placeholder")
 type value Circle implements Shape {                   // a value satisfies a contract, too
     int64 r;
@@ -610,7 +610,7 @@ object. `Owned<Shape>` is move-only; `Shared<Shape>` retains/releases (`Weak<Sha
 Optional<Shared<Shape>>`). Because the handle is an ordinary value type, it **stores** — as a field or a
 function return:
 
-```cstar
+```kama
 type resource Holder { Shared<Shape> shape;  public fn int64 area() { return this.shape.area(); } }
 fn Owned<Shape> make(int64 s) { Owned<Shape> o = new Square(s: s); return give o; }
 ```
@@ -622,7 +622,7 @@ A `List<Shared<Shape>>` (the engine's scene) works — polymorphic elements stor
 **Static methods** — a `static fn` has **no implicit `self`** and is called at the type level with named
 args:
 
-```cstar
+```kama
 type value Vec2 {
     public float64 x;  public float64 y;
     public Vec2(float64 x, float64 y) { this.x = x; this.y = y; }
@@ -668,7 +668,7 @@ A user type may define a **place-returning index operator** — `public ref T op
 whose body returns a place (`return this.cells[i]`). It lowers to `T* C__op_index(C* self, size_t i)`,
 and the caller derefs the place, so `g[i] = v`, `g[i] += 1`, `m[i][j] = v`, `m[i].field = v`, and
 `ref g[i]` all work — the same place semantics as a built-in collection, now expressible in the
-language (so a `Vec`/matrix can be written *in* cstar). The place is a **second-class borrow** of
+language (so a `Vec`/matrix can be written *in* kama). The place is a **second-class borrow** of
 `self`: it is used transiently and cannot be stored (there is no `ref`-local/`ref`-field to hold it),
 and a `const` receiver makes it read-only. Bounds safety is the operator's responsibility — a
 `Fixed`/collection-backed body is auto-checked; a raw `Ptr<T>` body is `unsafe`. The same place-return
@@ -682,7 +682,7 @@ Used in a `contract`, an operator becomes a **bound** for generic math (see belo
 User-defined generics, **monomorphized** (one specialized copy per concrete type — elements inline, no
 boxing; identical layout and cost to the built-in collections).
 
-```cstar
+```kama
 type value Pair<A, B> { public A a; public B b; public Pair(A a, B b){ this.a = a; this.b = b; } }
 fn T max<T>(T a, T b) { return a > b ? a : b; }         // generic fn — type args INFERRED from the call
 Pair<int32, string> p = Pair(a: 1, b: "x");             // generic type
@@ -697,7 +697,7 @@ List<Shared<Shape>> scene;                              // nested generics, no s
   **return-only generic** whose type parameter never appears in an argument — spell them explicitly with
   `f::<int32>()` (the `::` before `<` is unambiguous). Turbofish reaches only generic *functions*; a generic
   *type* is still written `Box<int32>` in type position.
-  ```cstar
+  ```kama
   fn T zero<T>() { return cast<T>(0); }   // T appears only in the return — inference can't see it
   int32 x = zero::<int32>();              // turbofish supplies it
   int64 y = zero::<int64>();
@@ -711,7 +711,7 @@ List<Shared<Shape>> scene;                              // nested generics, no s
   dispatch is static. Chosen over `Self` to pair with the `this` value and the PascalCase-types convention.
 - **Generic math (operators as bounds)** — a `contract` may declare **operators**, giving generic code
   arithmetic over any conforming type at zero cost:
-  ```cstar
+  ```kama
   type contract Arithmetic { This operator+(This rhs); }
   fn T sum<T: Arithmetic>(T a, T b) { return a + b; }   // `a + b` -> static Concrete__op_add(&a, b)
   ```
@@ -722,7 +722,7 @@ List<Shared<Shape>> scene;                              // nested generics, no s
   It has **full value + bound parity** with a plain contract: usable as a static bound
   `fn sum<I: Iterator<int32>>(I it)` (zero-cost, direct calls) *and* as a dynamic fat-pointer value
   `fn drain(Iterator<int32> it)` (vtable dispatch). A type opts in with `implements Iterator<int32>`.
-  ```cstar
+  ```kama
   type contract Iterator<T> { fn Optional<T> next(); }
   type value IntRange implements Iterator<int32> { /* … fn Optional<int32> next() … */ }
   fn int32 sum<I: Iterator<int32>>(I it) { /* it.next() → static IntRange__next(&it) */ }
@@ -754,7 +754,7 @@ See `docs/KEYWORDS.md` for the full kind × visibility table.
 An `enum` declares either a plain (payload-less) set of variants or a **tagged union** (variants carry
 payloads, and the enum may be generic):
 
-```cstar
+```kama
 enum Color { Red, Green = 5, Blue }          // plain: Red=0, Green=5, Blue=6
 Color c = Color::Blue;                        // variants are scope-resolved with ::
 
@@ -769,7 +769,7 @@ scope-resolved with `::` and constructed with named args (`Shape::Rect(w: 3.0, h
 position), enforces **compile-time exhaustiveness**, and accepts a `_` wildcard for the catch-all case.
 Payload bindings are named in the arm:
 
-```cstar
+```kama
 int32 area = match (sh) {                     // expression position — yields a value
     case Circle(r): cast<int32>(r * r * 3);
     case Rect(w, h): cast<int32>(w * h);
@@ -794,7 +794,7 @@ The prelude provides two tagged-union types, so error handling needs no exceptio
 Both are ordinary tagged unions consumed by `match`, so the caller is *forced* to handle the empty/error
 case (exhaustiveness):
 
-```cstar
+```kama
 fn Optional<int32> find(List<int32> xs, int32 target) { … }
 
 int32 idx = match (find(xs: list, target: 7)) {
@@ -812,8 +812,8 @@ A **module** is a namespaced source unit — a single file *or* a directory of f
 `namespace`. `import` names a module by its `::`-path; the compiler finds the source, compiles it, and scopes
 its public symbols. There is one keyword for depending on another module — `import` (it replaced `using`).
 
-```cstar
-// lib/graphics.cstar          — module `graphics`
+```kama
+// lib/graphics.kama          — module `graphics`
 namespace graphics;
 export { Texture, scale };             // the public surface, at a glance — mirrors `import`
 
@@ -821,7 +821,7 @@ type resource Texture { ... }          // declarations carry NO visibility modif
 fn int32 scale(int32 x) { ... }
 type resource GpuHandle { ... }        // unlisted → module-private
 
-// main.cstar
+// main.kama
 import graphics::{Texture, scale};     // per-symbol, unqualified
 import physics as phys;                 // whole-module alias → phys::Body
 import audio;                           // load only; qualified-only access audio::Mixer
@@ -844,20 +844,20 @@ surface in one block at the top; a top-level `type`/`fn` is invisible to other m
 must be a top-level declaration in that same file — so a directory-module's files each state their own
 surface. Declarations carry **no** visibility keyword, keeping `type`/`fn` syntax uniform, and the manifest
 reads as the mirror of `import`. Member access (`public`/`protected`/`private`) is a separate axis; the
-cstar→host/WASM boundary (`expose`) is a third. A file with **no** `namespace` keeps its symbols file-private
+kama→host/WASM boundary (`expose`) is a third. A file with **no** `namespace` keeps its symbols file-private
 (single-file scripts need no boilerplate).
 
-**Resolution.** `import a::b::c` maps to `a/b/c.cstar` (file-module) or `a/b/c/` (directory-module: every
-`*.cstar` in it shares `namespace a::b::c`), searched under (1) the importing file's dir, (2) `$CSTAR_PATH`,
+**Resolution.** `import a::b::c` maps to `a/b/c.kama` (file-module) or `a/b/c/` (directory-module: every
+`*.kama` in it shares `namespace a::b::c`), searched under (1) the importing file's dir, (2) `$KAMA_PATH`,
 (3) the **stdlib bundled with the compiler** (located relative to the binary like the runtime header, so
 `std::*` resolves on any install regardless of cwd). `std`/`core` are reserved roots (stdlib only). Loading is
 transitive and deduped by path, so import cycles load once. A namespace already in the compilation (e.g. a
 file also on the command line) satisfies an import without a disk lookup. The stdlib is **optional on disk**:
 no `import std::…` means the resolver never touches it, and nothing is auto-linked — a `no_std`-like floor
-(only `cstar_runtime.h` is mandatory; the prelude `Optional`/`Result`/`Deref`/`HeapOwner` is baked into the
+(only `kama_runtime.h` is mandatory; the prelude `Optional`/`Result`/`Deref`/`HeapOwner` is baked into the
 compiler).
 
-Passing several files to one build still works (`cstar build a.cstar b.cstar -o app`); the compiler emits a
+Passing several files to one build still works (`kama build a.kama b.kama -o app`); the compiler emits a
 shared header (`<out>.gen.h`) + one `.c` per unit — imports just add the resolved module files to that set.
 
 **Scope resolution uses `::`** (namespaces, qualified types, enum variants: `Color::Blue`); `.` is
@@ -868,12 +868,12 @@ value. `main` is the global entry point (unmangled).
 ## Building & debugging ✅
 
 ```sh
-cstar build app.cstar                 # native debug (-g, breakpoints in .cstar via #line)
-cstar build app.cstar --release       # optimized, stripped, NDEBUG
-cstar build app.cstar --target wasm   # browser: .html + .js + .wasm
+kama build app.kama                 # native debug (-g, breakpoints in .kama via #line)
+kama build app.kama --release       # optimized, stripped, NDEBUG
+kama build app.kama --target wasm   # browser: .html + .js + .wasm
 ```
 
-Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back to `.cstar`).
+Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back to `.kama`).
 
 ## Reserved keywords not yet implemented 🚧
 
@@ -881,12 +881,12 @@ Two keywords are **reserved but not yet implemented** — using either today is 
 silent no-op), pending its future scope:
 
 - **`volatile`** 🚧 — reserved for the embedded/MMIO scope (ISR↔loop shared flags, peripheral registers);
-  implemented when cstar targets embedded.
-- **`export`** 🚧 — reserved for the cstar→host boundary (WASM module exports, scripting host interface),
+  implemented when kama targets embedded.
+- **`export`** 🚧 — reserved for the kama→host boundary (WASM module exports, scripting host interface),
   distinct from in-language `public`/`private`.
 
 ## Reserved/runtime
 
 Generated C reserves `__`-prefixed identifiers (`__base`, `__vptr`, `__ret_N`) and `Type__member` mangling.
-The runtime ([../cstar_runtime.h](../cstar_runtime.h)) provides `cstar_string` and a
-`cstar_trace`/`cstar_trace_get` hook used by tests.
+The runtime ([../kama_runtime.h](../kama_runtime.h)) provides `kama_string` and a
+`kama_trace`/`kama_trace_get` hook used by tests.

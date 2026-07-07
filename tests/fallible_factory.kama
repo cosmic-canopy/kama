@@ -1,0 +1,24 @@
+import std::memory::{Owned};
+// kama's answer to "how does construction fail without exceptions?": constructors are INFALLIBLE
+// (trivial, in-place), and fallible resource acquisition is a `static fn` factory returning
+// `Result<T, E>`. On failure it returns `Err` BEFORE the resource exists — so no half-built object can
+// escape, and `match` forces the caller to handle the error. No new feature: M31a static methods +
+// M28e Result + Owned + RAII.
+type resource Buffer {
+    int32 size;
+    private Buffer(int32 size) { this.size = size; }             // trivial, infallible, private
+    public fn int32 capacity() { return this.size; }
+    public static fn Result<Owned<Buffer>, int32> create(int32 size) {
+        if (size <= 0) { return Result::Err(error: -1); }        // fail before the resource exists
+        Owned<Buffer> b = new Buffer(size: size);                // bind local, then hand off
+        return Result::Ok(value: give b);
+    }
+    ~Buffer() { }                                                // RAII drop (proven by SAN on the Ok path)
+}
+fn int32 main() {
+    Result<Owned<Buffer>, int32> ok  = Buffer::create(size: 8);
+    Result<Owned<Buffer>, int32> bad = Buffer::create(size: 0);
+    int32 a = match (ok)  { case Ok(b): b.capacity(); case Err(e): e; };   // Ok  -> 8
+    int32 c = match (bad) { case Ok(b): b.capacity(); case Err(e): e; };   // Err -> -1
+    return a + c + 34;   // 41
+}

@@ -2,13 +2,13 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "cstar: debug current file",
+      "name": "kama: debug current file",
       "type": "lldb",
       "request": "launch",
       "program": "${fileDirname}/${fileBasenameNoExtension}",
       "args": [],
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "cstar: build (debug)",
+      "preLaunchTask": "kama: build (debug)",
       "sourceLanguages": ["c"]
     }
   ]

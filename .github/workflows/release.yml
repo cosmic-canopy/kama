@@ -42,7 +42,7 @@ jobs:
         run: make VERSION="$VERSION" EXTRA_CXXFLAGS="${{ matrix.extra }}"
 
       - name: Verify version stamp
-        run: ./cstar --version | grep -q "$VERSION"
+        run: ./kama --version | grep -q "$VERSION"
 
       - name: Smoke (fixtures)
         run: ./run_tests.sh
@@ -50,30 +50,30 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          PKG="cstar-${{ matrix.name }}-v${VERSION}"
+          PKG="kama-${{ matrix.name }}-v${VERSION}"
           mkdir -p "$PKG/bin" "$PKG/include"
-          cp cstar "$PKG/bin/cstar"
-          cp cstar_runtime.h "$PKG/include/"
+          cp kama "$PKG/bin/kama"
+          cp kama_runtime.h "$PKG/include/"
           cp LICENSE "$PKG/" 2>/dev/null || true
           cp GETTING_STARTED.md "$PKG/README.md" 2>/dev/null || true
           cat > "$PKG/install.sh" <<'EOS'
           #!/bin/sh
-          # Install cstar into a prefix (default /usr/local). cstar finds its runtime
-          # header via <prefix>/include/cstar_runtime.h relative to the binary.
+          # Install kama into a prefix (default /usr/local). kama finds its runtime
+          # header via <prefix>/include/kama_runtime.h relative to the binary.
           set -e
           PREFIX="${1:-/usr/local}"
           install -d "$PREFIX/bin" "$PREFIX/include"
-          install bin/cstar "$PREFIX/bin/cstar"
-          install -m 644 include/cstar_runtime.h "$PREFIX/include/cstar_runtime.h"
-          echo "installed cstar to $PREFIX/bin (add it to PATH)"
+          install bin/kama "$PREFIX/bin/kama"
+          install -m 644 include/kama_runtime.h "$PREFIX/include/kama_runtime.h"
+          echo "installed kama to $PREFIX/bin (add it to PATH)"
           EOS
           chmod +x "$PKG/install.sh"
           tar czf "${PKG}.tar.gz" "$PKG"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cstar-${{ matrix.name }}
-          path: cstar-*.tar.gz
+          name: kama-${{ matrix.name }}
+          path: kama-*.tar.gz
 
   windows:
     name: build windows-x64
@@ -98,21 +98,21 @@ jobs:
       - name: Build (version-stamped)
         run: make VERSION="$VERSION"
       - name: Verify version stamp
-        run: ./cstar --version | grep -q "$VERSION"
+        run: ./kama --version | grep -q "$VERSION"
       - name: Smoke (fixtures)
         continue-on-error: true   # don't let test flakiness block packaging the built binary
         run: ./run_tests.sh
       - name: Package
         run: |
-          PKG="cstar-windows-x64-v${VERSION}"
+          PKG="kama-windows-x64-v${VERSION}"
           mkdir -p "$PKG/bin" "$PKG/include"
-          cp cstar.exe "$PKG/bin/cstar.exe" 2>/dev/null || cp cstar "$PKG/bin/cstar.exe"
-          cp cstar_runtime.h "$PKG/include/"
+          cp kama.exe "$PKG/bin/kama.exe" 2>/dev/null || cp kama "$PKG/bin/kama.exe"
+          cp kama_runtime.h "$PKG/include/"
           cp LICENSE "$PKG/" 2>/dev/null || true
           cp GETTING_STARTED.md "$PKG/README.md" 2>/dev/null || true
           tar czf "${PKG}.tar.gz" "$PKG"
       - uses: actions/upload-artifact@v4
-        with: { name: cstar-windows-x64, path: cstar-*.tar.gz }
+        with: { name: kama-windows-x64, path: kama-*.tar.gz }
 
   vsix:
     name: package VSCode extension
@@ -126,9 +126,9 @@ jobs:
         run: |
           npm i -g @vscode/vsce
           cd editor/vscode
-          vsce package --allow-missing-repository -o "../../cstar-vscode-${GITHUB_REF_NAME#v}.vsix"
+          vsce package --allow-missing-repository -o "../../kama-vscode-${GITHUB_REF_NAME#v}.vsix"
       - uses: actions/upload-artifact@v4
-        with: { name: cstar-vsix, path: cstar-vscode-*.vsix }
+        with: { name: kama-vsix, path: kama-vscode-*.vsix }
 
   release:
     name: publish release
@@ -142,6 +142,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/cstar-*.tar.gz
-            dist/cstar-vscode-*.vsix
+            dist/kama-*.tar.gz
+            dist/kama-vscode-*.vsix
           generate_release_notes: true

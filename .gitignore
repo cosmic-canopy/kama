@@ -7,10 +7,10 @@ bison_report
 # all build artifacts (objects + generated parser/lexer) live here
 build/
 
-# the root compiler binary (anchored to root so it doesn't also ignore bench/src/cstar/)
-/cstar
+# the root compiler binary (anchored to root so it doesn't also ignore bench/src/kama/)
+/kama
 
-# generated C from `./cstar build foo.cstar` without -o (lands next to the source as foo.c);
+# generated C from `./kama build foo.kama` without -o (lands next to the source as foo.c);
 # anchored to root so hand-written C in tests/webgpu/ and bench/src/c/ stays tracked
 /*.c
 
@@ -19,7 +19,7 @@ out/
 *.wasm
 *.html
 *.js
-# generated C from `cstar transpile`/`build` (keep generated .c out of the tree)
+# generated C from `kama transpile`/`build` (keep generated .c out of the tree)
 tests/**/*.c
 !tests/webgpu/smoke.c
 

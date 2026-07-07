@@ -3,7 +3,7 @@
 
 Builds time / peak-RSS / artifact-size tables for the native and wasm tracks, and
 runs the fairness gate: every language must produce the same exit-code checksum as
-cstar for a given workload (a mismatch means the algorithms diverged).
+kama for a given workload (a mismatch means the algorithms diverged).
 """
 import csv, json, os, subprocess, sys, datetime
 
@@ -13,18 +13,18 @@ OUT_MD = os.path.join(ROOT, "docs/benchmarks/RESULTS.md")
 OUT_JSON = os.path.join(ROOT, "docs/benchmarks/results.json")
 
 WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr"]
-NATIVE = ["cstar", "c", "cpp", "rust", "go", "csharp", "java", "lua", "python"]
-WASM = ["cstar-wasm", "js", "ts"]
-LABEL = {"cstar": "cstar", "c": "C", "cpp": "C++", "rust": "Rust", "go": "Go",
+NATIVE = ["kama", "c", "cpp", "rust", "go", "csharp", "java", "lua", "python"]
+WASM = ["kama-wasm", "js", "ts"]
+LABEL = {"kama": "kama", "c": "C", "cpp": "C++", "rust": "Rust", "go": "Go",
          "csharp": "C# (JIT)", "java": "Java (JIT)", "lua": "Lua", "python": "Python",
-         "cstar-wasm": "cstar→wasm", "js": "JS", "ts": "TS"}
+         "kama-wasm": "kama→wasm", "js": "JS", "ts": "TS"}
 # What "package size" means per language: a self-contained native binary vs code that needs an
 # external runtime (managed assembly / interpreted source). Keeps the size table honest.
-RUNTIME = {"cstar": "self-contained", "c": "self-contained", "cpp": "self-contained",
+RUNTIME = {"kama": "self-contained", "c": "self-contained", "cpp": "self-contained",
            "rust": "self-contained", "go": "self-contained",
            "csharp": "+ .NET runtime", "java": "+ JVM",
            "lua": "source (+ Lua)", "python": "source (+ Python)",
-           "js": "source (+ node)", "ts": "source (+ node)", "cstar-wasm": "+ wasm/JS host"}
+           "js": "source (+ node)", "ts": "source (+ node)", "kama-wasm": "+ wasm/JS host"}
 
 # Compile time (bench/build/compile.tsv): lang -> (compile_ms, artifacts). Interpreted langs absent.
 COMPILE = {}
@@ -55,7 +55,7 @@ def cell(v, unit=""):
     return f"{v}{unit}"
 
 def time_table(track, langs):
-    base = langs[0]   # cstar / cstar-wasm — the per-workload baseline for the xN multiplier
+    base = langs[0]   # kama / kama-wasm — the per-workload baseline for the xN multiplier
     out = ["| workload | " + " | ".join(LABEL[l] for l in langs) + " |",
            "|" + "---|" * (len(langs) + 1)]
     for w in WORKLOADS:
@@ -104,7 +104,7 @@ def compile_table(langs):
 gate_lines = []
 ok = True
 for w in WORKLOADS:
-    ref = get("native", "cstar", w, "exit")
+    ref = get("native", "kama", w, "exit")
     if ref is None: continue
     mism = []
     for track, langs in (("native", NATIVE), ("wasm", WASM)):
@@ -129,23 +129,23 @@ env = {
     "python": sh("python3", "--version"),
 }
 
-md = f"""# cstar benchmark results
+md = f"""# kama benchmark results
 
-_Generated: {env['generated']} · arch: {env['arch']} ({env['kernel']}) · in the `cstar-bench` container_
+_Generated: {env['generated']} · arch: {env['arch']} ({env['kernel']}) · in the `kama-bench` container_
 
 Toolchains: clang `{env['clang']}` · {env['rustc']} · {env['go']} · dotnet {env['dotnet']} · {env['java']} · node {env['node']} · {env['lua']} · {env['python']}
-Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after each time is relative to cstar for that workload (native → cstar, wasm → cstar→wasm). Peak RSS: `/usr/bin/time -v`.
+Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after each time is relative to kama for that workload (native → kama, wasm → kama→wasm). Peak RSS: `/usr/bin/time -v`.
 
 ## How to read this (please read before drawing conclusions)
 
-cstar transpiles to C and is compiled by the **same clang** as the C baseline, so on native compute
-workloads cstar is expected to be **within measurement noise of C/C++** — that is the design, not a
-finding. All four LLVM-AOT languages (C, C++, Rust, cstar) are compiled at **`-O3`** for an apples-to-apples
+kama transpiles to C and is compiled by the **same clang** as the C baseline, so on native compute
+workloads kama is expected to be **within measurement noise of C/C++** — that is the design, not a
+finding. All four LLVM-AOT languages (C, C++, Rust, kama) are compiled at **`-O3`** for an apples-to-apples
 comparison — otherwise the optimization level, not the language, dominates a tiny kernel (e.g. `fib` at
 C-`-O2` vs Rust-`-O3` differs ~20%, but at equal `-O3` C and Rust are identical). The signals worth trusting here are:
-1. cstar (native) vs **managed/interpreted** languages (C#, Java, Go, Lua, Python),
+1. kama (native) vs **managed/interpreted** languages (C#, Java, Go, Lua, Python),
 2. **peak RSS**, **compile time**, and **package size** (the low-footprint / self-contained goal),
-3. on the WASM track, **cstar→wasm vs hand-written JS/TS** under the same node.
+3. on the WASM track, **kama→wasm vs hand-written JS/TS** under the same node.
 
 **Methodology — run isolated:** these are short workloads, so **parallel load badly skews them** — run the
 bench with nothing else competing for CPU/IO. (The `/work` bind mount, virtiofs/9p on macOS/Windows, adds
@@ -162,16 +162,16 @@ own) and a fair compare vs V8's auto-JIT'd JS. Strict IEEE throughout (no `-ffas
 The compute workloads (fib/pi/collatz) are tuned so the slow interpreters finish quickly; the fast
 compiled languages run in a few ms, so small absolute differences between them are noise — **except
 `dispatch`**, which measures *true* dynamic dispatch (see Workloads): the AOT cluster
-(cstar/C/C++/Rust) converges there, while **Go**'s interface dispatch trails ~2×. The
+(kama/C/C++/Rust) converges there, while **Go**'s interface dispatch trails ~2×. The
 **`alloc`** workload (added once `List<T>` landed in M9) is the one to watch for the no-GC story: it
-churns ~2M growable-list appends and 2000 collection lifetimes, so it contrasts cstar's deterministic
+churns ~2M growable-list appends and 2000 collection lifetimes, so it contrasts kama's deterministic
 **RAII** free against the **garbage collectors** (Go, C#, Java, Lua, Python, JS) and against the RAII
 peers (C++ `vector`, Rust `Vec`). Watch its **peak RSS** in particular — GC runtimes keep dead
 allocations resident until a collection runs.
 
 ## Fairness gate (checksum equality)
 
-Every language must produce the same exit-code checksum as cstar per workload, or the algorithms have
+Every language must produce the same exit-code checksum as kama per workload, or the algorithms have
 diverged:
 
 {chr(10).join(gate_lines)}
@@ -183,14 +183,14 @@ diverged:
 - **dispatch** — 8×10⁶ virtual calls over a **heterogeneous, heap-owned collection** of mixed
   concrete types built at runtime, so the concrete type is *not* knowable at the call site and the
   call **cannot be devirtualized** — a true dynamic-dispatch measurement. Each language uses its
-  idiomatic owning collection (cstar `List<Owned<Shape>>`, C++ `vector<unique_ptr>`, Rust
+  idiomatic owning collection (kama `List<Owned<Shape>>`, C++ `vector<unique_ptr>`, Rust
   `Vec<Box<dyn>>`, C array of heap `Shape*`, Go `[]interface`, C#/Java `Shape[]`).
 - **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
-  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — cstar `List<int32>`,
+  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — kama `List<int32>`,
   C++ `vector`, Rust `Vec`, Go slice, C# `List`, Java `ArrayList`, Lua table, Python/JS array, C manual realloc).
 - **fnptr** — 8×10⁶ indirect calls through a function pointer, routed through a function boundary
   (`apply(op, x)`) so the call stays genuinely indirect (the fnptr analog of `dispatch`'s virtual calls).
-  Each language uses its idiomatic callable — cstar `fnptr` (a bare C function pointer, zero-cost), C/C++
+  Each language uses its idiomatic callable — kama `fnptr` (a bare C function pointer, zero-cost), C/C++
   function pointers, Rust `fn` pointers, Go func values, **C# `Func<>` delegates**, **Java
   `LongUnaryOperator` method refs**, Lua/Python/JS functions.
 
@@ -213,10 +213,10 @@ assembly/source only and additionally require the noted runtime (.NET / JVM / in
 
 _Wall-clock to compile that language's bench artifacts (single build, not averaged). The compiled
 languages build **one binary per workload** (`binaries built` = 6); C# and Java build **one**
-multi-workload binary that dispatches on `args[0]`. cstar's figure is transpile-to-C **plus** clang.
+multi-workload binary that dispatches on `args[0]`. kama's figure is transpile-to-C **plus** clang.
 Interpreted languages (Lua, Python, JS) have no compile step and are omitted._
 
-{compile_table(["cstar", "c", "cpp", "rust", "go", "csharp", "java"])}
+{compile_table(["kama", "c", "cpp", "rust", "go", "csharp", "java"])}
 
 ## WASM track — execution time under node (median, ms)
 
@@ -232,9 +232,9 @@ Interpreted languages (Lua, Python, JS) have no compile step and are omitted._
 
 ## WASM track — compile time
 
-_cstar→wasm is transpile-to-C **plus** `emcc -O3`; TS is `tsc`. Hand-written JS has no compile step._
+_kama→wasm is transpile-to-C **plus** `emcc -O3`; TS is `tsc`. Hand-written JS has no compile step._
 
-{compile_table(["cstar-wasm", "ts"])}
+{compile_table(["kama-wasm", "ts"])}
 
 ## Caveats
 - **`dispatch` measures *true* dynamic dispatch.** An earlier variant called two stack locals of
@@ -242,7 +242,7 @@ _cstar→wasm is transpile-to-C **plus** `emcc -O3`; TS is `tsc`. Hand-written J
   — comparing Rust's *devirtualized* code against everyone else's real indirect calls (a ~5×
   artifact). The current variant dispatches over a heap-owned heterogeneous collection the optimizer
   cannot resolve, so every AOT language performs a genuine vtable call: **Rust converges to C** (the
-  artifact is gone) and **cstar ties the C/C++/Rust cluster**. Only **Go**'s interface dispatch
+  artifact is gone) and **kama ties the C/C++/Rust cluster**. Only **Go**'s interface dispatch
   trails (~2×).
 - **arm64 results** — not comparable to x86 runs (arch recorded above).
 - **JIT warmup** (C#, Java, node): mitigated by hyperfine warmups; tiny workloads still partly reflect

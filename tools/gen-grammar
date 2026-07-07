@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate docs/grammar.bnf from cstar.y — the Bison grammar is the single source
+# Generate docs/grammar.bnf from kama.y — the Bison grammar is the single source
 # of truth (the "self-describing" goal). Extracts the rules section (between the
 # %% markers) and strips the C++ semantic-action { ... } blocks, leaving clean BNF.
 #
@@ -7,12 +7,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/cstar.y"
+SRC="$ROOT/kama.y"
 OUT="${1:-$ROOT/docs/grammar.bnf}"
 mkdir -p "$(dirname "$OUT")"
 
 {
-  echo "// cstar grammar (BNF) — GENERATED from cstar.y by tools/gen-grammar. Do not edit."
+  echo "// kama grammar (BNF) — GENERATED from kama.y by tools/gen-grammar. Do not edit."
   echo "// The Bison grammar is the source of truth; regenerate after any grammar change."
   echo
   awk '

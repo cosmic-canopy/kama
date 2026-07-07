@@ -1,0 +1,24 @@
+import std::memory::{Shared};
+// M22: a Shared `obj:` is RETAINED (refcount), not moved — the object stays usable
+// independently of the bindable, and its destructor fires exactly once when BOTH
+// the bindable and the Shared handle drop. (use() returns 43 iff both call paths
+// work; trace fold then yields 9 iff the dtor ran exactly once.)
+extern fn void kama_trace(int code);
+extern fn int kama_trace_get();
+fnptr int32 Get(int32 d);
+type resource Probe {
+    int32 id;
+    Probe(int32 id) { this.id = id; }
+    ~Probe() { kama_trace(code: 9); }
+    public fn int32 read(int32 d) { return this.id + d; }
+}
+fn int use() {
+    Shared<Probe> p = new Probe(id: 1);
+    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    return g(d: 41) + p.read(d: 0);                  // 42 (via bindable) + 1 (via shared) = 43
+}
+fn int main() {
+    int r = use();
+    if (r != 43) { return 1; }
+    return kama_trace_get();                        // single dtor -> 9
+}

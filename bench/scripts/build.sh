@@ -4,7 +4,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."   # repo root (/work)
 
-mkdir -p bench/build/{cstar,c,cpp,rust,go,wasm,csharp,java}
+mkdir -p bench/build/{kama,c,cpp,rust,go,wasm,csharp,java}
 WORKLOADS="fib pi collatz dispatch alloc fnptr"
 
 # Compile-time metric: accumulate per-language wall-clock (ms) + artifact count while building,
@@ -14,25 +14,25 @@ now_ms() { date +%s%3N; }
 declare -A CT CN
 add_ct() { CT[$1]=$(( ${CT[$1]:-0} + $(now_ms) - $2 )); CN[$1]=$(( ${CN[$1]:-0} + 1 )); }
 
-echo "== building cstar compiler (clean, to match this image's toolchain) =="
+echo "== building kama compiler (clean, to match this image's toolchain) =="
 make clean >/dev/null 2>&1
-make cstar >/dev/null 2>&1 && echo "  ok cstar compiler" || echo "  FAIL cstar compiler"
-# NB: building the cstar compiler itself is toolchain setup, NOT counted as user compile time.
+make kama >/dev/null 2>&1 && echo "  ok kama compiler" || echo "  FAIL kama compiler"
+# NB: building the kama compiler itself is toolchain setup, NOT counted as user compile time.
 
 for w in $WORKLOADS; do
   echo "== $w =="
-  t=$(now_ms); ./cstar build bench/src/cstar/$w.cstar -o bench/build/cstar/$w --release >/dev/null 2>&1; rc=$?
-  add_ct cstar $t; [ $rc -eq 0 ] && echo "  ok cstar" || echo "  FAIL cstar"
-  # cstar→wasm at -O3 (speed) for a fair compute comparison vs JS — note `cstar
+  t=$(now_ms); ./kama build bench/src/kama/$w.kama -o bench/build/kama/$w --release >/dev/null 2>&1; rc=$?
+  add_ct kama $t; [ $rc -eq 0 ] && echo "  ok kama" || echo "  FAIL kama"
+  # kama→wasm at -O3 (speed) for a fair compute comparison vs JS — note `kama
   # build --release --target wasm` uses -Oz (size); here we transpile + emcc -O3.
   # Strict IEEE FP (NO -ffast-math): the JS/C/Rust baselines are all strict, so the wasm
   # build must be too for an apples-to-apples compare. The `pi` float loop legitimately
   # trails V8 here — see docs/ROADMAP.md (V8 tiers short-lived wasm via Liftoff, not the
   # optimizing TurboFan a long-running app would get).
   t=$(now_ms)
-  ( ./cstar transpile bench/src/cstar/$w.cstar -o bench/build/wasm/$w.c --no-line >/dev/null 2>&1 \
+  ( ./kama transpile bench/src/kama/$w.kama -o bench/build/wasm/$w.c --no-line >/dev/null 2>&1 \
     && emcc -std=c11 -O3 -DNDEBUG -I. bench/build/wasm/$w.c -o bench/build/wasm/$w.js >/dev/null 2>&1 ); rc=$?
-  add_ct cstar-wasm $t; [ $rc -eq 0 ] && echo "  ok cstar-wasm" || echo "  FAIL cstar-wasm"
+  add_ct kama-wasm $t; [ $rc -eq 0 ] && echo "  ok kama-wasm" || echo "  FAIL kama-wasm"
   t=$(now_ms); clang   -O3 -DNDEBUG -s bench/src/c/$w.c   -o bench/build/c/$w     2>/dev/null; rc=$?
   add_ct c $t;   [ $rc -eq 0 ] && echo "  ok c"   || echo "  FAIL c"
   t=$(now_ms); clang++ -O3 -DNDEBUG -s bench/src/cpp/$w.cpp -o bench/build/cpp/$w 2>/dev/null; rc=$?
@@ -65,7 +65,7 @@ add_ct ts $t; [ $rc -eq 0 ] && echo "  ok ts" || echo "  FAIL ts"
 # read fairly (total wall-clock to make that language's whole bench runnable).
 CT_TSV=bench/build/compile.tsv
 printf "lang\tcompile_ms\tartifacts\n" > "$CT_TSV"
-for k in cstar c cpp rust go csharp java cstar-wasm ts; do
+for k in kama c cpp rust go csharp java kama-wasm ts; do
   printf "%s\t%s\t%s\n" "$k" "${CT[$k]:-NA}" "${CN[$k]:-0}" >> "$CT_TSV"
 done
 

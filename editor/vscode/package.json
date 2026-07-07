@@ -1,43 +1,43 @@
 {
-  "name": "cstar",
-  "displayName": "cstar",
-  "description": "Syntax highlighting and zero-config debugging for the cstar language (.cstar). Press F5 in a .cstar to build + debug via CodeLLDB.",
+  "name": "kama",
+  "displayName": "kama",
+  "description": "Syntax highlighting and zero-config debugging for the kama language (.kama). Press F5 in a .kama to build + debug via CodeLLDB.",
   "version": "0.2.0",
   "publisher": "cosmic-canopy",
   "license": "MIT",
   "engines": { "vscode": "^1.75.0" },
   "categories": ["Programming Languages", "Debuggers"],
-  "keywords": ["cstar", "transpiler", "c", "wasm"],
-  "repository": { "type": "git", "url": "https://github.com/cosmic-canopy/cstar" },
+  "keywords": ["kama", "transpiler", "c", "wasm"],
+  "repository": { "type": "git", "url": "https://github.com/cosmic-canopy/kama" },
   "main": "./extension.js",
   "contributes": {
     "languages": [
       {
-        "id": "cstar",
-        "aliases": ["cstar", "Cstar"],
-        "extensions": [".cstar"],
+        "id": "kama",
+        "aliases": ["kama", "Kama"],
+        "extensions": [".kama"],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "cstar",
-        "scopeName": "source.cstar",
-        "path": "./syntaxes/cstar.tmLanguage.json"
+        "language": "kama",
+        "scopeName": "source.kama",
+        "path": "./syntaxes/kama.tmLanguage.json"
       }
     ],
     "commands": [
       {
-        "command": "cstar.debugCurrentFile",
+        "command": "kama.debugCurrentFile",
         "title": "Debug Current File",
-        "category": "cstar"
+        "category": "kama"
       }
     ],
     "keybindings": [
       {
-        "command": "cstar.debugCurrentFile",
+        "command": "kama.debugCurrentFile",
         "key": "f5",
-        "when": "editorLangId == cstar && !inDebugMode"
+        "when": "editorLangId == kama && !inDebugMode"
       }
     ]
   },

@@ -1,0 +1,15 @@
+// M24e: kama can now spell `const T*` for FFI. `const Ptr<int32>` lowers to
+// `const int32_t*`, so a const-qualified C API is declared and called with NO cast
+// (contrast the qsort callback, whose cast is intrinsic to C's `void*` API).
+import std::collections::{Array};
+extern "csum.h";   // int32_t csum(const int32_t* a, int32_t n);
+extern fn int32 csum(const Ptr<int32> data, int32 n);
+
+fn int main()
+{
+    Array<int32> a = Array(size: 4);
+    a[0] = 9; a[1] = 13; a[2] = 7; a[3] = 13;
+    int32 s = 0;
+    unsafe { s = csum(data: a.dataPtr(), n: 4); }   // 9+13+7+13 = 42, no cast at the const-ptr edge
+    return s;
+}

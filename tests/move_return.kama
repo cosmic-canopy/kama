@@ -1,0 +1,28 @@
+import std::collections::{List};
+// M26f-2 — the factory case: `return give r` moves the local OUT (its dtor is suppressed in
+// the factory), so the returned value is dropped exactly once by the caller — not twice (the
+// "factory landmine"). One drop of code 3 -> trace 3.
+extern fn void kama_trace(int code);
+extern fn int kama_trace_get();
+
+type resource Res {
+    List<int32> items;
+    public Res(int32 v) { this.items.add(item: v); }
+    ~Res() { kama_trace(code: 3); }
+    public fn int32 head() { return this.items[0]; }
+}
+
+fn Res make(int32 n) {
+    Res r = Res(v: n);
+    return give r;            // move out — r's dtor suppressed here; the caller owns it
+}
+
+fn int32 build() {
+    Res x = make(n: 9);       // fresh rvalue (call result) — bare
+    return x.head();          // 9;  x drops at build's end -> exactly one trace(3)
+}
+
+fn int32 main() {
+    int32 h = build();
+    return h + kama_trace_get();   // 9 + 3 = 12   (a double-drop would fold to 9 + 96)
+}

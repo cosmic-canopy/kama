@@ -1,0 +1,47 @@
+namespace std::memory;
+export { Shared };
+
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+
+// The strong/weak reference counts shared by a `Shared`/`Weak` family. Heap-allocated once at
+// `adopt`, freed when BOTH counts reach zero. Module-internal (not exported). `usize` counts match
+// the runtime `kama_ctrl` layout, so a `BindableFunctionPtr` can retain a Shared it binds.
+type value Ctrl { public usize strong; public usize weak; }
+
+// A reference-counted shared-ownership pointer (Rust's `Rc<T>`). `Copyable, !Movable` = copy-only:
+// a bare hand-off (`Shared b = a;`) RETAINS (strong++) via `copy()`; `give` is a compile error (there
+// is no move to make). The pointee is released exactly once, when the last strong handle drops.
+// `implements HeapOwner<T>` makes `new T(args)` a heap-placement + adopt; `Deref<T>` forwards access.
+type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
+    Ptr<T> p;
+    Ptr<Ctrl> c;
+    public Shared(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }   // shares an existing ctrl
+    public static fn Shared<T> adopt(Ptr<T> raw) {
+        Ptr<Ctrl> ctrl;
+        unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
+        return Shared(p: raw, c: ctrl);                               // fresh ctor -> no marker
+    }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    public fn Shared<T> copy() {                                      // Copyable -> retain
+        unsafe { this.c[0].strong = this.c[0].strong + 1; }
+        return Shared(p: this.p, c: this.c);
+    }
+    public fn Weak<T> downgrade() {
+        unsafe { this.c[0].weak = this.c[0].weak + 1; }
+        return Weak(p: this.p, c: this.c);
+    }
+    ~Shared() {
+        unsafe {
+            if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
+                this.c[0].strong = this.c[0].strong - 1;
+                if (this.c[0].strong == 0) {
+                    drop(value: this.deref());                        // run the pointee's dtor once
+                    free(p: cast<Ptr>(this.p));
+                    if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); }
+                }
+            }
+        }
+    }
+}

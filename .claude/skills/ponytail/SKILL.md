@@ -4,7 +4,7 @@ description: Lazy-senior-dev mode — write the least code that works. Use befor
 license: MIT
 ---
 
-<!-- Vendored into the cstar repo from https://github.com/DietrichGebert/ponytail
+<!-- Vendored into the kama repo from https://github.com/DietrichGebert/ponytail
      (MIT licensed, Copyright (c) 2026 DietrichGebert). Guidance text only — the
      upstream hooks/MCP/runtime were intentionally NOT installed. -->
 

@@ -1,10 +1,10 @@
-# cstar engine-readiness gap analysis
+# kama engine-readiness gap analysis
 
-cstar is general-purpose, but the reason to reach for it is a **fast, deterministic runtime with no GC**
+kama is general-purpose, but the reason to reach for it is a **fast, deterministic runtime with no GC**
 (RAII, transpiles to portable C → native + WASM). This document assesses what the language still needs to
 write a **modern game engine**, and recommends a sequence. Status: ✅ have · 🟡 partial · ❌ missing.
 
-## What cstar already has (the foundation)
+## What kama already has (the foundation)
 
 The entire language feature set is complete. In place today:
 
@@ -21,9 +21,9 @@ The entire language feature set is complete. In place today:
   (a bounds-checked value array; `Mat4 = Fixed<float32,16>` / `Fixed<Vec4,4>` is available today).
 - **Place-indexing**: an indexed element is an lvalue, so `m[i][j] = v`, `arr[i].x = v`, `a[i] += x`,
   `ref a[i]`, and `foreach (ref T e in c)` all work — and a **user type can define its own
-  `operator[]`** (and `fn ref T at(i)`), so a `Vec`/matrix can be written *in* cstar.
+  `operator[]`** (and `fn ref T at(i)`), so a `Vec`/matrix can be written *in* kama.
 - **Stdlib-prerequisite builtins**: `sizeof(T)` (compile-time, monomorphizes), `panic`/`assert` (a
-  clean abort trap), so a heap collection can be written in cstar (proven by `tests/opindex_vec`).
+  clean abort trap), so a heap collection can be written in kama (proven by `tests/opindex_vec`).
 - **Operator overloading** + **full static methods** (`Type::method()`) — including type-based dispatch, so
   ergonomic math types (`mat*vec` + `mat*mat`) are writable today.
 - **Tagged unions + pattern matching** (`match`, exhaustive) and the **error model** (`Optional<T>`/
@@ -86,7 +86,7 @@ matters once `Map` / custom containers land).
 
 | Goal | Status | Notes |
 |---|---|---|
-| **cstar-level WebGPU bindings** → first triangle → the engine spine | ❌ | The Tier-0 FFI keystone (extern structs + function pointers) is in place, **and a `--webgpu` build flag already links Emscripten's `emdawnwebgpu` port** (`cstar.driver.cpp`, `README.md`) — so the toolchain path is wired; only the cstar-side `extern` bindings against `webgpu.h` + a thin idiomatic wrapper remain. | L (binding layer) |
+| **kama-level WebGPU bindings** → first triangle → the engine spine | ❌ | The Tier-0 FFI keystone (extern structs + function pointers) is in place, **and a `--webgpu` build flag already links Emscripten's `emdawnwebgpu` port** (`kama.driver.cpp`, `README.md`) — so the toolchain path is wired; only the kama-side `extern` bindings against `webgpu.h` + a thin idiomatic wrapper remain. | L (binding layer) |
 
 ---
 

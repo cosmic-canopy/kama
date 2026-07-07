@@ -1,0 +1,111 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "kama",
+  "scopeName": "source.kama",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#numbers" },
+    { "include": "#cast" },
+    { "include": "#declarations" },
+    { "include": "#functions" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.kama", "match": "//.*$" },
+        { "name": "comment.block.kama", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.kama",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.kama", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" }
+          ]
+        },
+        {
+          "name": "string.quoted.verbatim.kama",
+          "begin": "@\"",
+          "end": "\""
+        }
+      ]
+    },
+    "chars": {
+      "name": "string.quoted.single.kama",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        { "name": "constant.character.escape.kama", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.kama", "match": "\\b(if|else|match|case|while|do|for|foreach|break|continue|return)\\b" },
+        { "name": "keyword.other.modifier.kama", "match": "\\b(abstract|override|virtual|final|static|private|protected|public|friend|const|volatile|ref|out|in|extern|export)\\b" },
+        { "name": "keyword.other.kama", "match": "\\b(fn|fnptr|type|namespace|using|extends|implements|operator|unsafe|give|copy|cast)\\b" },
+        { "name": "keyword.operator.new.kama", "match": "\\b(new)\\b" },
+        { "name": "variable.language.kama", "match": "\\b(this|base)\\b" }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(type)\\s+(value|resource|contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.kama" },
+            "2": { "name": "storage.modifier.kama" },
+            "3": { "name": "entity.name.type.kama" }
+          }
+        },
+        {
+          "match": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.kama" },
+            "2": { "name": "entity.name.type.kama" }
+          }
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "name": "storage.type.primitive.kama", "match": "\\b(bool|int|int8|int16|int32|int64|uint8|uint16|uint32|uint64|float32|float64|double|string|void)\\b" },
+        { "name": "entity.name.type.kama", "match": "\\b([A-Z][A-Za-z0-9_]*)\\b" }
+      ]
+    },
+    "constants": {
+      "name": "constant.language.kama",
+      "match": "\\b(true|false|null)\\b"
+    },
+    "cast": {
+      "match": "\\b(cast)\\s*<\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*>",
+      "captures": {
+        "1": { "name": "keyword.operator.cast.kama" },
+        "2": { "name": "entity.name.type.kama" }
+      }
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.kama", "match": "\\b0[xX][0-9A-Fa-f_]+(i8|i16|i32|i64|u8|u16|u32|u64)?\\b" },
+        { "name": "constant.numeric.octal.kama", "match": "\\b0[oO][0-7_]+(i8|i16|i32|i64|u8|u16|u32|u64)?\\b" },
+        { "name": "constant.numeric.float.kama", "match": "\\b[0-9][0-9_]*\\.[0-9_]+([eE][-+]?[0-9]+)?(f32|f64)?\\b" },
+        { "name": "constant.numeric.integer.kama", "match": "\\b[0-9][0-9_]*(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64)?\\b" }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "name": "entity.name.function.kama"
+        }
+      ]
+    }
+  }
+}

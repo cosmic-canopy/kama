@@ -1,0 +1,4 @@
+namespace shapes;
+export { sq };
+// same namespace as circle.kama (a directory-module) -> calls circ() with no import
+fn int32 sq() { return circ() + 3; }

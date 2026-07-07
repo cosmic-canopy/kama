@@ -1,4 +1,4 @@
-# cstar type model — `value` / `resource` / `contract`
+# kama type model — `value` / `resource` / `contract`
 
 Every type declaration is introduced by a `type` marker (`type value` / `type resource` / `type contract`);
 the vocabulary + access-control rules below are enforced by the compiler. This doc is the durable rationale
@@ -13,7 +13,7 @@ parallel to `fn` on every function. This makes declarations greppable and self-d
 stay ordinary identifiers everywhere else (`int32 value = 5;`, a field or method named `resource`, etc.).
 Only `type` itself is a keyword.
 
-```cstar
+```kama
 type value Name    { … }   // owns nothing — copies
 type resource Name { … }   // owns / has identity — moves, RAII-dropped
 type contract Name { … }   // a public-only guarantee (an interface)
@@ -24,7 +24,7 @@ type contract Name { … }   // a public-only guarantee (an interface)
 `class` / `struct` / `pod` (and value-vs-reference) are C/C++ legacy framings that encode the *wrong*
 axis. The axis a no-GC / RAII language actually turns on is: **does this type own a resource?** Rust
 (`Copy` vs move), Hylo/Val (value semantics), Swift (`~Copyable`), and Mojo are all converging here.
-cstar makes ownership the **declared nature** of a type, so the designer picks the right lever at
+kama makes ownership the **declared nature** of a type, so the designer picks the right lever at
 *design* time — a "type designer" language that retrains humans and LLMs to think ownership-first.
 
 ## The three kinds
@@ -41,9 +41,9 @@ These are the *nature* nouns. `virtual` / `abstract` / `final` are **qualifiers*
 
 A `value` is defined by its bits: copying it is a `memcpy`, and it owns nothing to free. It is the
 stricter cousin of a "value type" — where a C# `struct` can smuggle a heap reference (copying it
-shares that object), a cstar `value` owns **nothing**, so its copy has no hidden shared ownership.
+shares that object), a kama `value` owns **nothing**, so its copy has no hidden shared ownership.
 
-```cstar
+```kama
 type value Vec2 {
     public float x;         // fields choose visibility per field
     public float y;
@@ -70,7 +70,7 @@ A `resource` is moved by default and RAII-dropped. It becomes destructible by de
 **or** by owning a resource member (transitively) — you rarely hand-write a dtor; you compose owning
 members (`Owned`/`Shared`/`Weak`/collections).
 
-```cstar
+```kama
 type resource Buffer {
     List<byte> data;                       // owned → Buffer is a resource; fields stay private
     public fn int32 size() { return this.data.length(); }
@@ -93,7 +93,7 @@ type resource Token { }   // owns nothing, but move-only by *identity* — a cap
 is the abstract thing: a public-only guarantee a type promises to satisfy. A type's public members
 are just "its API."
 
-```cstar
+```kama
 type contract Drawable { fn void draw(); }
 type contract Animated : Drawable { fn void step(float dt); }   // refinement: requires Drawable + more
 ```
@@ -108,7 +108,7 @@ type contract Animated : Drawable { fn void step(float dt); }   // refinement: r
 
 Using polymorphism/inheritance **for DRY is the anti-pattern.** The goal of subtyping is
 **substitutability** ("is-a", Liskov — swap an implementation behind a guarantee); DRY is a *side
-effect*. Inheritance is overused because it **bundles** two goals. cstar unbundles them:
+effect*. Inheritance is overused because it **bundles** two goals. kama unbundles them:
 
 - **reuse / DRY** → **generics** (monomorphized, write-once-stamped-per-type, zero cost for values)
   and composition; shared *implementation up an owned hierarchy* → `virtual`/`abstract resource`.
@@ -193,7 +193,7 @@ Seven rules make the grid memorable:
 Because public-virtual is banned, a `contract` method that must vary per subclass is satisfied by a
 **public non-virtual** method that delegates to a **protected virtual/abstract** customization point:
 
-```cstar
+```kama
 type abstract resource Polygon : Shape {
     public fn float area() { return this.computeArea(); }   // public, non-virtual: the stable face
     protected abstract fn float computeArea();              // the protected customization point

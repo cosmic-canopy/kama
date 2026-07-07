@@ -1,0 +1,22 @@
+import std::memory::{Owned};
+// M22 RAII: the bound object's destructor fires EXACTLY ONCE when the bindable
+// drops. The moved-from Owned must NOT also drop it (trace fold a*31+code: one
+// drop -> 9, a double drop -> 288).
+extern fn void kama_trace(int code);
+extern fn int kama_trace_get();
+fnptr int32 Get(int32 d);
+type resource Probe {
+    int32 id;
+    Probe(int32 id) { this.id = id; }
+    ~Probe() { kama_trace(code: 9); }
+    fn int32 read(int32 d) { return this.id + d; }
+}
+fn int use() {
+    Owned<Probe> p = new Probe(id: 1);
+    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    return g(d: 41);                                 // 42; on exit g drops -> Probe::~ once
+}
+fn int main() {
+    int r = use();
+    return kama_trace_get();                        // single dtor -> 9
+}

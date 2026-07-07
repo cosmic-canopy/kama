@@ -1,0 +1,29 @@
+// M27 — `type resource Box<T>`: a GENERIC RESOURCE (move-only, per-instance ~dtor). Verifies the
+// template's `resource` kind flows to each specialization (`Box_int32` is move-only + destructible),
+// that a generic resource's own `~dtor` and its T-typed field/getter emit correctly under type
+// substitution, and that `give` + use-after-move analysis work on a `Box<int32>`. `kama_trace`
+// observes the dtor firing EXACTLY once (the moved-from inner `b` is suppressed; only the returned
+// box drops): fold([7]) = 7.
+extern fn void kama_trace(int code);
+extern fn int kama_trace_get();
+
+type resource Box<T> {
+    T value;
+    public Box(T v) { this.value = v; }
+    public fn T get() { return this.value; }
+    ~Box() { kama_trace(code: 7); }
+}
+
+fn Box<int32> make(int32 v) {
+    Box<int32> b = Box(v: v);
+    return give b;                            // move the box out (inner dtor suppressed)
+}
+
+fn int32 main() {
+    int32 g = 0;
+    {
+        Box<int32> a = make(v: 5);           // owns a Box_int32
+        g = a.get();                         // 5
+    }                                        // a drops here -> ~Box fires once (trace = 7)
+    return g + kama_trace_get();            // 5 + 7 = 12
+}

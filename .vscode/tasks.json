@@ -2,9 +2,9 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "cstar: build (debug)",
+      "label": "kama: build (debug)",
       "type": "shell",
-      "command": "${workspaceFolder}/cstar",
+      "command": "${workspaceFolder}/kama",
       "args": [
         "build",
         "${file}",
@@ -15,9 +15,9 @@
       "group": { "kind": "build", "isDefault": true }
     },
     {
-      "label": "cstar: build (release)",
+      "label": "kama: build (release)",
       "type": "shell",
-      "command": "${workspaceFolder}/cstar",
+      "command": "${workspaceFolder}/kama",
       "args": [
         "build",
         "${file}",

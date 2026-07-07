@@ -2,20 +2,20 @@
 # bench/run — drive the cross-language benchmark harness in a container.
 # Portable across podman (preferred) and docker; mirrors tools/cdev.
 #
-#   bench/run build-image     build the cstar-bench toolchain image (heavy, ~3-4 GB)
-#   bench/run build           compile cstar + every language into bench/build/
+#   bench/run build-image     build the kama-bench toolchain image (heavy, ~3-4 GB)
+#   bench/run build           compile kama + every language into bench/build/
 #   bench/run run [workload]  measure time/RSS/size (default: all 4 workloads)
 #   bench/run report          render docs/benchmarks/RESULTS.md from results
 #   bench/run all             build-image (if needed) + build + run + report
 #   bench/run sh              interactive shell in the bench image
 #
-# Override the engine with CSTAR_ENGINE=docker|podman.
+# Override the engine with KAMA_ENGINE=docker|podman.
 set -euo pipefail
 
-IMAGE="${CSTAR_BENCH_IMAGE:-cstar-bench}"
+IMAGE="${KAMA_BENCH_IMAGE:-kama-bench}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-ENGINE="${CSTAR_ENGINE:-}"
+ENGINE="${KAMA_ENGINE:-}"
 if [ -z "$ENGINE" ]; then
   if command -v podman >/dev/null 2>&1; then ENGINE=podman
   elif command -v docker >/dev/null 2>&1; then ENGINE=docker

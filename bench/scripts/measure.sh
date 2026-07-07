@@ -11,13 +11,13 @@ printf "track\tlang\tworkload\ttime_ms\trss_kb\tsize_bytes\texit\n" > "$OUT"
 WORKLOADS="${1:-all}"
 [ "$WORKLOADS" = "all" ] && WORKLOADS="fib pi collatz dispatch alloc fnptr"
 
-NATIVE="cstar c cpp rust go csharp java lua python"
-WASM="cstar-wasm js ts"
+NATIVE="kama c cpp rust go csharp java lua python"
+WASM="kama-wasm js ts"
 
 # Notes:
 # - Run the bench with NOTHING else competing for CPU/IO; parallel/thermal load skews short
 #   workloads. (The /work bind mount adds only ~0.3-1.7 ms — negligible; measured in place.)
-# - cstar-wasm runs under `node --no-liftoff`: by default V8 compiles short-lived wasm with the
+# - kama-wasm runs under `node --no-liftoff`: by default V8 compiles short-lived wasm with the
 #   BASELINE tier (Liftoff — fast compile, slow code) and may never reach the optimizing tier
 #   (TurboFan) before the process exits, especially under load — which made wasm look 4x slower
 #   and wildly variable (sigma up to 9.8 ms). `--no-liftoff` forces TurboFan, so we measure
@@ -26,7 +26,7 @@ WASM="cstar-wasm js ts"
 cmd_for() {  # lang workload -> run command (empty if artifact missing)
   local l=$1 w=$2
   case $l in
-    cstar)      [ -x bench/build/cstar/$w ]   && echo "bench/build/cstar/$w" ;;
+    kama)      [ -x bench/build/kama/$w ]   && echo "bench/build/kama/$w" ;;
     c)          [ -x bench/build/c/$w ]       && echo "bench/build/c/$w" ;;
     cpp)        [ -x bench/build/cpp/$w ]      && echo "bench/build/cpp/$w" ;;
     rust)       [ -x bench/build/rust/$w ]     && echo "bench/build/rust/$w" ;;
@@ -35,7 +35,7 @@ cmd_for() {  # lang workload -> run command (empty if artifact missing)
     java)       [ -f bench/build/java/Bench.class ] && echo "java -cp bench/build/java Bench $w" ;;
     lua)        echo "lua5.4 bench/src/lua/$w.lua" ;;
     python)     echo "python3 bench/src/python/$w.py" ;;
-    cstar-wasm) [ -f bench/build/wasm/$w.js ] && echo "node --no-liftoff bench/build/wasm/$w.js" ;;
+    kama-wasm) [ -f bench/build/wasm/$w.js ] && echo "node --no-liftoff bench/build/wasm/$w.js" ;;
     js)         echo "node bench/src/js/$w.js" ;;
     ts)         [ -f bench/build/ts/$w.js ]   && echo "node bench/build/ts/$w.js" ;;
   esac
@@ -46,9 +46,9 @@ size_for() {  # lang workload -> package size (bytes) or 0. Compiled langs -> th
               # authored source (needs the interpreter). report.py annotates which is which.
   local l=$1 w=$2 f=""
   case $l in
-    cstar) f=bench/build/cstar/$w ;;  c) f=bench/build/c/$w ;;  cpp) f=bench/build/cpp/$w ;;
+    kama) f=bench/build/kama/$w ;;  c) f=bench/build/c/$w ;;  cpp) f=bench/build/cpp/$w ;;
     rust) f=bench/build/rust/$w ;;    go) f=bench/build/go/$w ;;
-    csharp) f=bench/build/csharp/bench.dll ;;  cstar-wasm) f=bench/build/wasm/$w.wasm ;;
+    csharp) f=bench/build/csharp/bench.dll ;;  kama-wasm) f=bench/build/wasm/$w.wasm ;;
     java) f=bench/build/java/Bench.class ;;  # primary class only (javac also emits Bench$*.class)
     lua) f=bench/src/lua/$w.lua ;;  python) f=bench/src/python/$w.py ;;
     js)  f=bench/src/js/$w.js ;;    ts) f=bench/src/ts/$w.ts ;;

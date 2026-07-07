@@ -1,0 +1,25 @@
+// M21: a real libc callback driven through an `fnptr` type. `fnptr Comparator(...)`
+// declares a zero-cost function-pointer type; a free function binds by name. The cast
+// to the header's comparator is INTRINSIC to C's `void*`-based qsort API (the
+// comparator is `int(*)(const void*, const void*)`, so the typed pointer must be
+// bridged at the edge) — it is the correct idiom, not a missing feature. kama can
+// spell `const T*` since M24e; for a const-pointer C API that needs NO cast, see
+// tests/const_ffi.d.
+import std::collections::{Array};
+extern "<stdlib.h>";
+extern "cb.h";
+fnptr int32 Comparator(Ptr<int32> a, Ptr<int32> b);   // a function-pointer type
+extern fn void qsort(Ptr buf, usize nmemb, usize size, CompareFn compar);
+
+fn int32 cmp(Ptr<int32> a, Ptr<int32> b) { int32 r = 0; unsafe { r = a[0] - b[0]; } return r; }
+
+fn int main()
+{
+    Array<int32> a = Array(size: 4);
+    a[0] = 30; a[1] = 10; a[2] = 2; a[3] = 99;
+    Comparator c = cmp;                                                    // bind, zero-cost
+    qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));// hand the fn ptr to C
+    int32 r = 0;
+    unsafe { Ptr<int32> p = a.dataPtr(); r = p[3] - p[0] - 55; }           // sorted -> 99-2-55
+    return r;
+}

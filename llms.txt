@@ -1,10 +1,10 @@
-# cstar
+# kama
 
 > A C-family language (C#-like syntax, no garbage collector / RAII, explicit named
 > parameters) that transpiles to portable C — running natively everywhere and in the browser
 > via WebAssembly, with no runtime. MIT licensed.
 
-cstar's grammar is the source of truth: the compiler is a Flex lexer + Bison grammar + an
+kama's grammar is the source of truth: the compiler is a Flex lexer + Bison grammar + an
 AST → C emitter. The docs below are generated from, or point at, that source so they don't
 drift. For authoritative syntax read the grammar; for semantics read the spec; for runnable
 examples read the test fixtures.
@@ -15,24 +15,24 @@ examples read the test fixtures.
   smart pointers, collections, FFI, build/debug. Start here for semantics.
 - [Type model](docs/TYPE_MODEL.md): the ownership vocabulary in depth — `value` copies,
   `resource` moves, `contract` is the guarantee; the `type` marker + access-control rules.
-- [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `cstar.y` by
+- [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `kama.y` by
   `tools/gen-grammar`.
 - [Keyword reference](docs/KEYWORDS.md): every reserved word and what it does.
 - [Goals & design philosophy](GOALS.md): no-GC, one-way/simplicity, explicit>implicit,
   self-describing, LLM-discoverable.
 
 ## Examples
-- [tests/](tests/): each `*.cstar` is a runnable program with a `.expect` exit code.
-  Representative fixtures: `type_kinds.cstar` (value/resource/contract), `match_plain_enum.cstar`
-  and `optional_basic.cstar` (sum types + `match`), `generic_fn_explicit.cstar` (generics +
-  turbofish), `math_lib.cstar` (operator overloading + generic math), `owned_basic.cstar` /
-  `shared_iface.cstar` (smart pointers), `dtor_block.cstar` (RAII), `named_args.cstar`,
-  `refparam.cstar` (ref/out), `ffi_struct.cstar` (C interop).
+- [tests/](tests/): each `*.kama` is a runnable program with a `.expect` exit code.
+  Representative fixtures: `type_kinds.kama` (value/resource/contract), `match_plain_enum.kama`
+  and `optional_basic.kama` (sum types + `match`), `generic_fn_explicit.kama` (generics +
+  turbofish), `math_lib.kama` (operator overloading + generic math), `owned_basic.kama` /
+  `shared_iface.kama` (smart pointers), `dtor_block.kama` (RAII), `named_args.kama`,
+  `refparam.kama` (ref/out), `ffi_struct.kama` (C interop).
 
 ## Toolchain & runtime
 - [README](README.md): build/run via the containerized toolchain (`tools/cdev`); native +
-  wasm targets; `cstar build [--release] [--target native|wasm]`.
-- [Runtime header](cstar_runtime.h): the small C runtime included by generated code.
+  wasm targets; `kama build [--release] [--target native|wasm]`.
+- [Runtime header](kama_runtime.h): the small C runtime included by generated code.
 - [Repo guide for AI assistants](CLAUDE.md): working conventions and build commands.
 
 ## Status

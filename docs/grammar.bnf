@@ -1,5 +1,5 @@
 wrote /work/docs/grammar.bnf
-NERATED from cstar.y by tools/gen-grammar. Do not edit.
+NERATED from kama.y by tools/gen-grammar. Do not edit.
 // The Bison grammar is the source of truth; regenerate after any grammar change.
 
 
@@ -258,7 +258,7 @@ friend_member_list
 
 function_modifier_opt
   : /* Nothing */
-  | EXPOSE      /* cstar→host boundary (reserved) */
+  | EXPOSE      /* kama→host boundary (reserved) */
   ;
 
 /*------------------------------------------------------------------------------
