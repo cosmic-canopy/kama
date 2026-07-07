@@ -6,11 +6,16 @@ extern fn Ptr malloc(usize n);
 extern fn Ptr realloc(Ptr p, usize n);
 extern fn void free(Ptr p);
 
-// A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value.
+// A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a
+// live pointer to the list's mutation counter + the value it saw at creation, and rejects a structural
+// change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
 type value ListIter<T> implements Iterator<T> {
-    Ptr<T> data; int32 pos; int32 len;
-    public ListIter(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
+    public ListIter(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
+        this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
+    }
     public fn Optional<T> next() {
+        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "List modified during iteration"); } }
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
         unsafe { return Optional::Some(value: copy this.data[p]); }   // yield a COPY (the list keeps its element)
@@ -18,20 +23,27 @@ type value ListIter<T> implements Iterator<T> {
 }
 
 // A mutable iterator (the `foreach (ref T x in list)` protocol): hasNext() + a place-returning next().
+// The invalidation check lives in hasNext() (it runs before each next()).
 type value ListIterMut<T> implements IteratorMut<T> {
-    Ptr<T> data; int32 pos; int32 len;
-    public ListIterMut(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
-    public fn bool hasNext() { return this.pos < this.len; }
+    Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
+    public ListIterMut(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
+        this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public fn bool hasNext() {
+        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "List modified during iteration"); } }
+        return this.pos < this.len;
+    }
     public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
 }
 
 // A growable, heap-owning, bounds-checked list (= C++ `std::vector` / Rust `Vec`). Move-only by
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
-// A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves.
+// A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
+// modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
 type resource List<T> implements Copyable(bare: give) when T: Copyable, IterableMut<T>, Iterable<T> when T: Copyable {
-    Ptr<T> data; int32 len; int32 cap;
+    Ptr<T> data; int32 len; int32 cap; int32 mods;
 
-    public List() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; }
+    public List() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; this.mods = 0; }
 
     public fn void add(T item) {
         if (this.len == this.cap) {
@@ -41,6 +53,7 @@ type resource List<T> implements Copyable(bare: give) when T: Copyable, Iterable
         }
         unsafe { this.data[this.len] = give item; }   // relocate the element into the fresh slot (raw move)
         this.len = this.len + 1;
+        this.mods = this.mods + 1;                     // structural change — invalidates any live iterator
     }
 
     public fn int32 length() { return this.len; }
@@ -52,8 +65,13 @@ type resource List<T> implements Copyable(bare: give) when T: Copyable, Iterable
 
     // The by-value `foreach (T x in list)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements — `List<Owned>` — borrow instead: `foreach (ref T x in list)`.)
-    public fn ListIter<T> iterator() when T: Copyable { return ListIter::<T>(data: this.data, len: this.len); }
-    public fn ListIterMut<T> iterMut() { return ListIterMut::<T>(data: this.data, len: this.len); }
+    // Each iterator gets a live pointer to `mods` (its own address) + the current value (a snapshot).
+    public fn ListIter<T> iterator() when T: Copyable {
+        return ListIter::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    public fn ListIterMut<T> iterMut() {
+        return ListIterMut::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
+    }
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
     public fn List<T> copy() {

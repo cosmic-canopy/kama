@@ -320,6 +320,11 @@ be written **in the language** rather than baked into the compiler. Three builti
 - **`panic(msg: string)` / `assert(cond: bool)`** — a clean **trap** (writes the message + `abort()`, not
   UB — the user-facing form of the built-in bounds trap). For a *bug that can't continue*; recoverable
   errors use `Result<T, E>`. (cstar aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.)
+- **`drop(value: place)`** — run a place's destructor now (a no-op for a non-destructible type); lets a
+  library owner over `Ptr<T>` drop its heap pointee before `free`.
+- **`addr(of: place)`** — the address of a place (a field/local/element) as a `Ptr<T>`. Taking an address
+  is safe (a `Ptr` is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live
+  back-pointer to another's field (e.g. an iterator to its container's mutation counter).
 - **A place-returning method** — `public fn ref T at(usize i) { … }` returns a place, exactly like
   `operator[]`, so `v.at(i) = x` works. A `ref T` result must borrow `this` or a `ref` parameter (never a
   local — it would dangle), and it's second-class (used in-place, never stored).
@@ -343,10 +348,15 @@ The prelude contracts (`type contract Iterator<T> for both { fn Optional<T> next
 `fn sum<I: Iterator<int32>>(I it)` (zero-cost, direct `Concrete__next`) or a dynamic fat-pointer value
 `Iterator<int32> it` (vtable). `foreach` uses the same `implements`, checked nominally.
 
-Iterator safety: growing a collection (`add`) while iterating it by `ref` is a use-after-free when the
-buffer reallocates. **Follow-up (not yet enforced for library containers):** the compile-time guard the
-built-in collections once had can't see through the opaque iterator protocol — it will return with the
-`Iterable` contract as a C#-style modification counter. Until then, don't mutate a container mid-`foreach`.
+Iterator safety: growing a collection (`add`) while iterating it would be a use-after-free when the
+buffer reallocates. The library `List` **guards against this at runtime** (C#-style): a modification
+counter is bumped on every structural change (`add`), each iterator snapshots it, and `next()`/
+`hasNext()` `panic`s if it changed — *before* the stale cursor is dereferenced. In-place element writes
+(`foreach (ref x in list) { x = … }`) don't touch the counter and are fine — that's the point of `ref`.
+The guard lives in `List`'s own cstar source (not the compiler), so it's a stdlib policy: a hand-rolled
+container chooses whether to pay for it. `Array`/`Fixed` are fixed-size and can't reallocate, so they
+need no guard. (The iterator's back-pointer to the counter uses the `addr(of: place)` builtin — the
+address of a place as a `Ptr<T>`; safe to take, `unsafe` to deref.)
 
 ### Function pointers — `fnptr` ✅
 

@@ -5715,6 +5715,15 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             return cls + "__dtor(&(" + emitExpression(a) + "))";
         return "(void)0";   // nothing to drop (a value / non-destructible type)
     }
+    // `addr(of: place)` — the address of a PLACE (a field/local/element) as a `Ptr<T>`. Taking an
+    // address is safe (a `Ptr` is safe to hold); dereferencing it stays `unsafe`. Lets a library type
+    // keep a live back-pointer to another's field — e.g. an iterator to its container's mutation counter.
+    if (name == "addr" && bareCall && call->args && call->args->size() == 1) {
+        SharedExpression a = (*call->args)[0]->expression;
+        if (!isNamedValue(a.get()))
+            unsupported("`addr(of: …)` needs a place — a field, local, or element (not a temporary)", call->line);
+        return "(&(" + emitPlace(a) + "))";
+    }
 
     // (A bare function name is a value — its C function pointer — so `FunctionPtr<Sig> c = fn;`
     // and passing `fn` directly bind a callable; there is no separate `funcptr(of: fn)` builtin.)

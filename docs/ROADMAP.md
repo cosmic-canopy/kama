@@ -70,17 +70,16 @@ the no-GC and shared-nothing-concurrency positions. Concretely:
   - No first-class / stored borrows — patterns Rust writes as `&'a T` in a struct become refcounted
     ownership in cstar.
   - No static aliasing/exclusivity proof for the cases a borrow checker would cover.
-  - **A known soundness gap — REOPENED by the library-container port (follow-up).** Mutating a
-    collection *while iterating it by `ref`* — `foreach (ref e in v) { v.add(…); e = … }` — is a
-    **use-after-free** when the mutation reallocates. The old intrinsic `foreach` had a targeted
-    compile-time guard (`fc212e7`), but that guard knew it was iterating a compiler-owned `List`; the
-    **library `List`** (ROADMAP step 6) iterates through the opaque *iterator protocol*, so the compiler
-    no longer sees the alias and the guard is gone (xfail `foreach_mutate_add` retired). Reinstating it
-    belongs with the **formal `Iterable`/`Iterator` contract** follow-up below: either a C#-style
-    library-side modification counter (a `mods` field snapshotted by the iterator, checked in `next()` —
-    safety in the library, cstar's stated boundary) or borrow discipline encoded in the contract.
-    Place-return escape is still enforced (a `ref T` result must borrow `this`/a `ref` param, never a
-    local).
+  - **A known soundness gap — CLOSED (runtime, in the library).** Mutating a collection *while iterating
+    it* — `foreach (ref e in v) { v.add(…); e = … }` — would be a **use-after-free** when the mutation
+    reallocates. The old intrinsic `foreach` had a targeted *compile-time* guard (`fc212e7`), but the
+    **library `List`** iterates through the opaque iterator protocol, so the compiler can't see the alias.
+    Reinstated as a **C#-style runtime modification counter** living in `List`'s own cstar source: `add`
+    bumps a `mods` field, each iterator snapshots it (via the `addr(of: place)` builtin — a `Ptr` to the
+    counter) and `panic`s in `next()`/`hasNext()` if it changed, before the stale cursor is used. Safety
+    in the library, cstar's stated boundary — a hand-rolled container decides whether to pay for it;
+    `Array`/`Fixed` can't reallocate so they need none. Place-return escape is still enforced (a `ref T`
+    result must borrow `this`/a `ref` param, never a local).
 - **Position:** keep the no-borrow-checker stance (core to "favor simplicity" — no lifetime
   annotations), and *close the specific holes* the absence leaves (as done above) with targeted rules
   rather than a whole analysis — the way null-safety is enforced.
@@ -155,10 +154,10 @@ building it:
   { fn bool hasNext(); fn ref T next(); }`; the library iterators (`ListIter`/`ArrayIter` → `Iterator<T>`,
   `ListIterMut`/`ArrayIterMut` → `IteratorMut<T>`) and every user iterator `implements` them; `foreach`
   verifies the declaration and rejects a structural-only match — xfail `iter_no_contract` — then emits the
-  same zero-cost direct calls. **Remaining:** (a) a container-side `Iterable`/`IterableMut` so the *type*
-  advertises iterability (today the `iterator()`/`iterMut()` factory is still found by name — trivial add);
-  (b) the **iterator-invalidation guard** (the reopened soundness gap — a C#-style modification counter in
-  the library `List`/`Array`, snapshotted by the iterator, checked in `next()`)), **`Deref<T>`** (DONE — auto-deref; see the sequence below),
+  same zero-cost direct calls. Both sides are now nominal: container-side **`Iterable<T>` / `IterableMut<T>`**
+  (xfail `iter_no_iterable`) advertise iterability on the type itself, and the **iterator-invalidation
+  guard** is closed (C#-style `mods` counter in the library `List`, `addr(of:)` back-pointer — see the
+  soundness-gap note above)), **`Deref<T>`** (DONE — auto-deref; see the sequence below),
   **`Copyable`** (below), **`Comparable<T>`** (future). All are the same species — a contract the compiler
   keys a capability off of. New ones follow the `Deref` template (prelude contract + a recognizer keyed on
   the contract name/instance).
