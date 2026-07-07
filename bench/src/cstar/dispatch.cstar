@@ -3,7 +3,8 @@
 // call site: every `area()` is a genuine indirect (contract-vtable) call. That is the honest
 // dynamic-dispatch measurement — a monomorphic call site (two stack locals) instead lets an
 // optimizer devirtualize the call away, which is what the earlier variant inadvertently measured.
-type contract Shape { fn int64 area(); }
+import std::memory::{Owned};
+type contract Shape for both { fn int64 area(); }
 type resource Circle implements Shape
 {
     int64 r;
