@@ -8,7 +8,7 @@ extern fn void free(Ptr p);
 // no one — `tryUpgrade()` returns `Some(Shared)` only while a strong handle still exists, else `None`.
 // `Copyable, !Movable` = copy-only: a bare hand-off duplicates the weak handle (weak++); `give` errors.
 // `Ctrl` and `free` come from the `shared.cstar` sibling in this module.
-type resource Weak<T> implements Copyable, !Movable {
+type resource Weak<T> implements Copyable(bare: copy) {
     Ptr<T> p;
     Ptr<Ctrl> c;
     public Weak(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }

@@ -1,1 +1,1 @@
-opt into `Copyable`
+has no `copy` method

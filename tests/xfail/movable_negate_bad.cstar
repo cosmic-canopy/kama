@@ -1,7 +1,0 @@
-type contract Drawable for both { fn void draw(); }
-type resource Widget implements Copyable, !Drawable {
-    int32 x;
-    public Widget(int32 x) { this.x = x; }
-    public fn Widget copy() { return Widget(x: this.x); }
-}
-fn int32 main() { return 0; }

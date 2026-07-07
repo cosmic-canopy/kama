@@ -13,6 +13,6 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable {
 }
 fn int32 main() {
     Rc<Counter> a = new Counter(s: 5);
-    Rc<Counter> b = a;   // ERROR: copyable -> must say give or copy
+    Rc<Counter> b = a;   // (never reached: the type errors first)
     return b.n;
 }

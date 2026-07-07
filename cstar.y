@@ -992,15 +992,16 @@ class_base
   | IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), $2); }
   | EXTENDS type_name IMPLEMENTS interface_type_list   { $$ = std::make_shared<ClassBaseDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
   ;
-/* The `implements <contract>[, …]` list. An entry may be negated (`!Movable`) to subtract a
-   compiler capability marker. */
+/* The `implements <contract>[, …]` list. A `Copyable` entry carries a mandatory contract parameter
+   `(bare: give|copy)` — the bare-hand-off default (the first instance of contract parameters/metadata). */
 interface_type_list
   : implements_entry   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
   | interface_type_list COMMA implements_entry   { $1->push_back($3); }
   ;
 implements_entry
   : type_name   { $$ = $1; }
-  | EXCLAMATION type_name   { $2->negated = true; $$ = $2; }
+  | type_name LPAREN IDENTIFIER COLON GIVE RPAREN   { $1->bareDefault = GIVE; $$ = $1; }
+  | type_name LPAREN IDENTIFIER COLON COPY RPAREN   { $1->bareDefault = COPY; $$ = $1; }
   ;
 class_body
   : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE   { $$ = $2; }

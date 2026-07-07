@@ -14,7 +14,7 @@ type value Counter {
     public fn int32 bump() { this.n = this.n + 1; return this.n; }
 }
 
-type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable {
+type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     Ptr<T> p;
     Ptr<Ctrl> c;
     public static fn Rc<T> adopt(Ptr<T> raw) {

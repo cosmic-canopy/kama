@@ -1,2 +1,0 @@
-// `give` applies to an owned value — a plain value (primitive/pod) just copies.
-fn int main() { int x = 5; int y = give x; return 0; }

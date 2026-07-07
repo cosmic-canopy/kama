@@ -1,6 +1,0 @@
-type resource H implements Copyable, !Movable {
-    int32 id;
-    public H(int32 id) { this.id = id; }
-    public fn H copy() { return H(id: this.id); }
-}
-fn int32 main() { H a = H(id: 1); H b = give a; return 0; }

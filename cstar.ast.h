@@ -219,7 +219,9 @@ public:
     SharedIdentifierList bounds;       // when this node is a type-PARAMETER (`K` in `<K: I + J>`),
                                        // its contract bounds [I, J]; empty/unset otherwise.
     bool isConstParam = false;         // const generic PARAMETER (`const N: int`) — a value, not a type
-    bool negated = false;              // `!Marker` in an `implements` list (subtract a compiler capability, e.g. `!Movable`)
+    int  bareDefault = 0;              // `implements Copyable(bare: give|copy)` — the contract-parameter token (GIVE/COPY), 0=unset
+    SharedIdentifier whenParam;        // `implements C when T: Bound` — the type-param name (Phase B); null=unconditional
+    SharedIdentifier whenBound;        // `implements C when T: Bound` — the required contract (Phase B)
     SharedExpression constArgValue;    // const generic ARGUMENT that is a literal (`4` in `Fixed<T,4>`)
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 

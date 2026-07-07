@@ -133,13 +133,12 @@ struct ClassInfo {
     ClassDestructorDeclarationNode*   dtorNode = nullptr;
     bool                              destructible = false; // own dtor OR a destructible field (transitive)
     // Opted into the `Copyable` contract — declares a public nullary `copy` returning
-    // its own type. Makes the give/copy marker MANDATORY on a `resource` value ("scream when
-    // ambiguous"). Detected structurally (a public nullary `copy` method).
+    // `implements Copyable(bare: give|copy)`: this resource opts into copy (a public nullary `copy()`),
+    // and its `bareDefault` says what a BARE hand-off means (give=move, copy=`copy()`/retain). Movable +
+    // Droppable are universal (every value/resource); there is no `!Movable`/"copy-only". A value is
+    // implicitly copyable (bitwise) and its bare-default is copy.
     bool                              copyable = false;
-    // `!Movable` in the `implements` list subtracts the implicit move. `Copyable` + `!Movable` = a
-    // COPY-ONLY (shared-ownership) resource: bare hand-off retains via `copy()`, `give` is an error.
-    bool                              notMovable = false;   // declared `!Movable`
-    bool                              copyOnly = false;     // copyable && notMovable (derived)
+    int                               bareDefault = 0;   // GIVE or COPY token (the mandatory param on a Copyable resource); 0=none
 
     // Inheritance + virtual dispatch
     std::string                       baseName;        // "" if no base
@@ -528,7 +527,6 @@ private:
     // own type). Its presence makes the give/copy marker mandatory: bare hand-off = error, `copy`
     // deep-copies via copy(), `give` moves.
     bool isCopyable(const std::string& cls) const;
-    bool isCopyOnly(const std::string& cls) const;
     void markMoved(const std::string& cVar);                // state -> Moved
     void checkNotMoved(const std::string& cVar, int line);  // reject a use of a moved local
     // The source of a move hand-off: a bare move-only local -> its name (caller marks it moved);
