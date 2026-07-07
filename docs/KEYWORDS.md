@@ -15,7 +15,8 @@ Legend for the status column:
 
 | Keyword(s) | Status | Notes |
 |---|---|---|
-| `bool` `int8/16/32/64` `uint8/16/32/64` `float32` `float64` `void` `string` | ✅ | core types. `string` is a fat value: a borrowed literal/view (no alloc) or a heap-owned RAII string (freed on drop) |
+| `bool` `int8/16/32/64` `uint8/16/32/64` `float32` `float64` `void` `string` | ✅ | core types. `string` is a fat value: a borrowed literal/view (no alloc) or a heap-owned RAII string (freed on drop); UTF-8 bytes throughout (see SPEC §Strings) |
+| `char` | ✅ | a Unicode scalar value (codepoint), a distinct primitive backed by `uint32` (NOT a numeric type — no silent int mixing). Literals `'a'` / `'\n'` / `'\u{…}'`; equality + ordering; `char↔int` via `cast`. Yielded by `.chars()` |
 | `int` | ✅ | alias → `int32` |
 | `double` | ✅ | alias → `float64` (C `double`) |
 | `type` | ✅ | **the type-declaration marker** — every type is `type <kind> Name { … }` (parallel to `fn`). The kind is `value`/`resource`/`contract` (+ the `virtual`/`abstract`/`final` qualifiers after `type`). Greppable (`grep '^type '`) |

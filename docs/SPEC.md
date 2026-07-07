@@ -46,6 +46,28 @@ bool eq = s.equals(other: t);   int len = s.length();
 You never spell the borrowed-vs-owned distinction; the type carries it, and RAII frees exactly the owned
 ones. There is no separate capital-`String` collection type.
 
+**UTF-8 everywhere.** A `string` is **UTF-8 bytes**; `length()` is the **byte** length (O(1)), and literals
+encode `\u{…}` escapes to UTF-8. Two ways to traverse it, kept distinct by type so bytes and characters
+never blur:
+
+- **bytes** — `s[i]` returns the i-th byte as a **`uint8`** (bounds-checked); `foreach (uint8 b in s)`
+  iterates bytes. `foreach (char c in s)` is a type error — the byte/codepoint distinction is enforced.
+- **codepoints** — `s.chars()` is a **UTF-8 codepoint iterator** (`implements Iterator<char>`):
+  `foreach (char c in s.chars())` yields each Unicode scalar value as a **`char`**. It's a borrow, valid
+  while the string is.
+
+```cstar
+string s = "A\u{E9}\u{20AC}";           // "Aé€" — 6 UTF-8 bytes, 3 codepoints
+int n = 0;
+foreach (char c in s.chars()) { n = n + 1; }   // n == 3 (codepoints, not bytes)
+uint8 first = s[0];                     // 65 ('A'), a byte
+```
+
+**`char`** is a distinct primitive — a Unicode scalar value backed by `uint32` (not a numeric type, so it
+can't silently mix with ints). Literals: `'a'`, `'\n'`, `'\u{1F600}'`. Equality + ordering compare
+codepoints; `cast<int32>(c)` / `cast<char>(i)` convert (arithmetic on codepoints is explicit, the Rust
+model). (A multibyte *source* char literal like `'é'` isn't lexed yet — write `'\u{E9}'`.)
+
 ## Collections & strings ✅
 
 Built-in generics, monomorphized per element type and backed by the C runtime (unsafe internals, safe API —
