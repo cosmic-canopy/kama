@@ -154,6 +154,14 @@ public:
     UInt32Node(CodeGenContext& context, uint32_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
 };
 
+// A `char` literal (`'a'`, `'\n'`, `'\u{1F600}'`) — holds the Unicode scalar value (codepoint).
+// `char` is a distinct primitive backed by uint32_t; the value is the codepoint, not a UTF-8 byte.
+class CharNode : public ExpressionNode {
+public:
+    uint32_t value;   // Unicode scalar value (codepoint)
+    CharNode(CodeGenContext& context, uint32_t value) : ASTNode(context),  ExpressionNode(context), value(value) { }
+};
+
 class UInt64Node : public ExpressionNode {
 public:
     uint64_t value;
@@ -207,6 +215,7 @@ public:
 #define IDENTIFIER_FLOAT64_VAL 11
 #define IDENTIFIER_STRING_VAL 12
 #define IDENTIFIER_VOID_VAL 13
+#define IDENTIFIER_CHAR_VAL 14
 
 
 class IdentifierNode : public ExpressionNode {

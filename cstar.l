@@ -71,8 +71,9 @@ simple_esc_seq              \\[\'\"\\0abfnrtv]
 simple_esc_seq_literal      \'{simple_esc_seq}\'
 single_char_literal         \'{single_char}\'
 
-  /* Does not make sense for single char as we use UTF-8.  Range: U+0000 - U+10FFFF */
-uni_codepoint_esc_seq       \\u\{{hex_digit}{4,6}\} 
+  /* Range: U+0000 - U+10FFFF (1-6 hex digits). Used in string literals and, as `'\u{…}'`, as a `char`. */
+uni_codepoint_esc_seq       \\u\{{hex_digit}{1,6}\}
+uni_codepoint_char_literal  \'{uni_codepoint_esc_seq}\'
 single_string_char          [^\\\"]
 regular_string_start        \"
 regular_string_end          \"
@@ -147,8 +148,12 @@ identifier                  ({letter_char}|"_"){ident_char}*
 {float_literal32}                              { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return FLOAT_LITERAL_32; }
 {float_literal64}                              { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return FLOAT_LITERAL_64; }
 
-{simple_esc_seq_literal}                       { char c = getSimpleEscape(yytext, 2); SAVE_TOKEN(&c, 1, yyleng); return CHARACTER_LITERAL; }
-{single_char_literal}                          { char c = yytext[1]; SAVE_TOKEN(&c, 1, yyleng); return CHARACTER_LITERAL; }
+  /* A `char` literal carries its Unicode scalar value (codepoint) as a decimal string; the parser
+     builds a CharNode from it. ASCII `'a'` and simple escapes are one byte = one codepoint; `'\u{…}'`
+     is the hex codepoint. (A multibyte source char like `'é'` isn't matched here — use `'\u{E9}'`.) */
+{simple_esc_seq_literal}                       { unsigned cp = (unsigned char)getSimpleEscape(yytext, 2); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
+{single_char_literal}                          { unsigned cp = (unsigned char)yytext[1]; std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
+{uni_codepoint_char_literal}                   { std::string hexString(&(yytext[4])); hexString.pop_back(); hexString.pop_back(); unsigned cp = (unsigned)strtol(hexString.c_str(), NULL, 16); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
 
 {regular_string_start}                         {
                                                  yy_push_state(IN_REGULAR_STRING, yyscanner); 
@@ -267,6 +272,7 @@ static struct name_value keywords [] = {
     {"break",       BREAK},
     {"case",        CASE},
     {"cast",        CAST},
+    {"char",        CHAR},
     {"const",       CONST},
     {"continue",    CONTINUE},
     {"copy",        COPY},

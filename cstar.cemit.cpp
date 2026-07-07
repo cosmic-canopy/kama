@@ -251,6 +251,7 @@ std::string CEmitter::cType(SharedIdentifier type)
         case IDENTIFIER_FLOAT64_VAL: return "double";
         case IDENTIFIER_STRING_VAL:  return "cstar_string";
         case IDENTIFIER_VOID_VAL:    return "void";
+        case IDENTIFIER_CHAR_VAL:    return "uint32_t";   // `char` = a Unicode scalar value (codepoint)
         default:
             // User-defined type (class/enum/interface) — resolve through the
             // current file's namespace scope + usings to its mangled C name.
@@ -543,6 +544,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<UInt8Node*>(n))  return std::to_string((unsigned)v->value) + "U";
     if (auto* v = dynamic_cast<UInt16Node*>(n)) return std::to_string((unsigned)v->value) + "U";
     if (auto* v = dynamic_cast<UInt32Node*>(n)) return std::to_string(v->value) + "U";
+    if (auto* v = dynamic_cast<CharNode*>(n))   return std::to_string(v->value) + "U";   // codepoint literal
     if (auto* v = dynamic_cast<UInt64Node*>(n)) return std::to_string((unsigned long long)v->value) + "ULL";
 
     if (auto* v = dynamic_cast<Float64Node*>(n)) {
@@ -3238,6 +3240,7 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     if (dynamic_cast<Float32Node*>(n)) return primTypeNode(IDENTIFIER_FLOAT32_VAL);
     if (dynamic_cast<Float64Node*>(n)) return primTypeNode(IDENTIFIER_FLOAT64_VAL);
     if (dynamic_cast<BooleanNode*>(n)) return primTypeNode(IDENTIFIER_BOOL_VAL);
+    if (dynamic_cast<CharNode*>(n))    return primTypeNode(IDENTIFIER_CHAR_VAL);
     if (dynamic_cast<StringNode*>(n))  return primTypeNode(IDENTIFIER_STRING_VAL);
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (!id->value) return nullptr;

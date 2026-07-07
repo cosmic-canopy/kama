@@ -115,7 +115,7 @@ struct cstaryystype {
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BREAK
 %token <string> CASE CAST CONST CONTINUE
-%token <string> AS DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
+%token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH IF IN
 %token <string> INT INT8 INT16 INT32 INT64
@@ -327,7 +327,7 @@ literal
   | FLOAT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, std::stod (*$1)); }
   | FLOAT_LITERAL_32   { $$ = std::make_shared<Float32Node>(SCANNER_CODEGENCONTEXT, std::stof ($1->substr(0,$1->length() - 3))); }
   | FLOAT_LITERAL_64   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, std::stod ($1->substr(0,$1->length() - 3))); }
-  | CHARACTER_LITERAL   { $$ = std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | CHARACTER_LITERAL   { $$ = std::make_shared<CharNode>(SCANNER_CODEGENCONTEXT, (uint32_t)strtoul($1->c_str(), NULL, 10)); }
   | STRING_LITERAL   { $$ = std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1); }
   | NULL_LITERAL   { $$ = std::make_shared<NullNode>(SCANNER_CODEGENCONTEXT); }
   ;
@@ -401,6 +401,7 @@ simple_type
 primitive_type
   : numeric_type
   | BOOL   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_BOOL_VAL); }
+  | CHAR   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_CHAR_VAL); }
   ;
 numeric_type
   : integral_type
