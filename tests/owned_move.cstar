@@ -1,3 +1,4 @@
+import std::memory::{Owned};
 // Owned<T> move: initializing/assigning from an Owned lvalue transfers ownership
 // and invalidates the source, so the pointee is destructed exactly once.
 extern fn void cstar_trace(int code);

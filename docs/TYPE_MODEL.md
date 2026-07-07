@@ -212,6 +212,11 @@ A `give`/`copy` marker is required **exactly when both move and copy are plausib
   `give` is allowed as optional emphasis; `copy` is an error — nothing to copy with).
 - **`resource` with a copy contract** (opts into `Copyable`) → **ambiguous → scream**: a bare
   hand-off is a compile error; write `give` (move) or `copy` (duplicate).
+- **copy-only `resource`** (`implements Copyable, !Movable` — e.g. `Shared`/`Weak`, shared ownership) →
+  **retain** silently on a bare hand-off (one natural op — the `copy()`); **`give` is an error** (there
+  is no move to make, so no footgun). `!Movable` subtracts the one implicit capability a `resource`
+  carries; capability markers (`Copyable`/`Movable`) are compiler-owned, so a user contract can never
+  change how a type is handed off.
 
 A bare hand-off is **never a silent copy of a resource**, so the double-drop hole is closed in every
 case. This is compile-time move tracking with **zero runtime overhead by construction** — a value

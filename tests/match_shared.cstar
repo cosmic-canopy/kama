@@ -1,3 +1,4 @@
+import std::memory::{Shared};
 type resource Probe
 {
     int32 id;
@@ -9,7 +10,7 @@ enum Box { Full(Shared<Probe> p), Empty }
 fn int main()
 {
     Shared<Probe> s = new Probe(id: 42);
-    Box a = Box::Full(p: give s);
+    Box a = Box::Full(p: copy s);
     Box e = Box::Empty;
     int32 v = match (a) {
         case Full(p): p.val();

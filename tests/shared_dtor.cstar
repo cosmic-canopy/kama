@@ -1,3 +1,4 @@
+import std::memory::{Shared};
 // Shared<T> refcount: the pointee is destructed exactly once when the LAST
 // handle drops — not per-handle (no double-free), and not never (no leak).
 extern fn void cstar_trace(int code);

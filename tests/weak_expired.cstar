@@ -1,3 +1,4 @@
+import std::memory::{Shared, Weak};
 // Weak<T> does NOT keep the pointee alive: after the last Shared drops, tryUpgrade() returns
 // None (the type makes the absence unforgettable — no sentinel to remember to check).
 type value Counter
@@ -7,13 +8,15 @@ type value Counter
     fn int32 get() { return this.value; }
 }
 
+fn Weak<Counter> orphan()
+{
+    Shared<Counter> s = new Counter(start: 7);
+    return s.downgrade();   // s drops at fn-end -> Counter freed (strong 1->0); ctrl kept (weak=1)
+}
+
 fn int main()
 {
-    Weak<Counter> w;   // default-empty
-    {
-        Shared<Counter> s = new Counter(start: 7);
-        w = s;          // weak ref
-    }                   // s drops -> Counter freed (strong 1->0); ctrl kept (weak=1)
+    Weak<Counter> w = orphan();                      // its Shared already died
 
     Optional<Shared<Counter>> up = w.tryUpgrade();   // expired -> None
     return match (up) {

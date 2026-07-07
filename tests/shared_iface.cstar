@@ -1,3 +1,4 @@
+import std::memory::{Shared, Weak};
 // M26g-2 / M28d — `Shared<Shape>` / `Weak<Shape>`: ref-counted owning smart pointers over an
 // INTERFACE. A `Weak<I>` observes without keeping alive and `tryUpgrade()`s to `Optional<Shared<I>>`
 // (Some while the object lives, None after it dies). Polymorphic dispatch through the fat handle.

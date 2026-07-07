@@ -1,1 +1,1 @@
-names the element type
+name the element type

@@ -1,3 +1,4 @@
+import std::memory::{Shared};
 type resource Probe { int32 id; public Probe(int32 id){this.id=id;} ~Probe(){} public fn int32 val(){return this.id;} }
 enum E { A(int32 n), B }
 fn int main()

@@ -1,16 +1,16 @@
+import std::memory::{Shared, Weak};
 type resource Counter { int32 n; public Counter(int32 n){this.n=n;} ~Counter(){} public fn int32 get(){return this.n;} }
 fn Weak<Counter> orphan()
 {
     Shared<Counter> s = new Counter(n: 5);
-    Weak<Counter> w = s;
-    return w;
+    return s.downgrade();   // s dies at fn-end -> the returned weak is already expired
 }
 fn int main()
 {
     Shared<Counter> s = new Counter(n: 7);
-    Weak<Counter> live = s;
+    Weak<Counter> live = s.downgrade();
     Weak<Counter> gone = orphan();
     int32 a = match (live.tryUpgrade()) { case Some(sh): sh.get(); case None: 0; };
     int32 b = match (gone.tryUpgrade()) { case Some(sh): sh.get(); case None: 100; };
-    return a + b;
+    return a + b;   // 7 + 100 = 107
 }

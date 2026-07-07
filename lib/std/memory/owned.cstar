@@ -1,0 +1,16 @@
+namespace std::memory;
+export { Owned };
+
+extern "<stdlib.h>";
+extern fn void free(Ptr p);
+
+// A unique-owning heap pointer (Rust's `Box<T>`). `implements HeapOwner<T>` makes it a
+// `new T(args)` target (heap placement, 0 copies); `Deref<T>` forwards `.method()`/`.field`
+// to the pointee. Move-only: `Owned b = give a;`. RAII frees the heap object.
+type resource Owned<T> implements Deref<T>, HeapOwner<T> {
+    Ptr<T> p;
+    public static fn Owned<T> adopt(Ptr<T> raw) { Owned<T> b; b.p = raw; return b; }
+    public fn ref T deref() { unsafe { return this.p[0]; } }
+    // run pointee dtor, then free — guarding a null pointer (a zero-initialized/moved-from handle).
+    ~Owned() { unsafe { if (cast<usize>(this.p) != 0) { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); } } }
+}

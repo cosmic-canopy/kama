@@ -1,4 +1,5 @@
 // Entry (private file) pulling public symbols via per-symbol `import`.
+import std::memory::{Owned};
 import Math::{add, Counter};
 import Shapes::{Box};
 

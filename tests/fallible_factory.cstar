@@ -1,3 +1,4 @@
+import std::memory::{Owned};
 // cstar's answer to "how does construction fail without exceptions?": constructors are INFALLIBLE
 // (trivial, in-place), and fallible resource acquisition is a `static fn` factory returning
 // `Result<T, E>`. On failure it returns `Err` BEFORE the resource exists — so no half-built object can

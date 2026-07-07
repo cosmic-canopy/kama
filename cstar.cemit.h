@@ -172,10 +172,13 @@ struct ClassInfo {
     std::vector<VariantCase>          variants;
     std::string                       tagCType;              // "" -> the synthesized `Name_Tag` enum
 
-    // Namespaces: the declaring file's scope/usings, for resolving this
-    // type's field/base/method references during header emission.
+    // Namespaces: the declaring file's scope/usings/symbol-aliases, for resolving this
+    // type's field/base/method references during header emission (a field typed with an
+    // imported generic — `import std::memory::{Shared}` then a `Shared<T>` field — needs the
+    // per-symbol alias, not just scope+usings).
     std::string                       scope;                 // mangle prefix ("" for collections)
     std::vector<std::string>          usings;
+    std::map<std::string, std::string> symbolAliases;        // per-symbol import alias -> mangled global
 
     // FFI: an `extern class` is an external C struct — cstar uses its
     // fields for access but never emits it (a header/linked code provides it),
@@ -446,6 +449,12 @@ private:
     // carries a type-param from being stored raw in _typeSubst (a self-referential binding that loops
     // mangleElem) — the case a mutually-recursive generic type (`Rc`↔`RcWeak`→`Optional<Rc<T>>`) hits.
     SharedIdentifier deepSubstType(SharedIdentifier t);
+    // Rebind a (deep-substituted) type node so it resolves to the SAME C name in any namespace ctx:
+    // a user class/enum/contract name is replaced by its use-site-resolved mangled name (qualifier
+    // cleared), recursively for generic args. This lets a cross-module generic instance
+    // (`std::memory::Owned<Counter>` used in another file) carry its concrete args through the
+    // template's ctx without the arg's home mangle being stripped. Primitives/`Ptr`/`This` pass through.
+    SharedIdentifier absolutizeType(SharedIdentifier t);
     // Generic TYPES: discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
     void scanTypeForGenericTypes(SharedIdentifier t);
     void registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args);
@@ -576,6 +585,7 @@ private:
 
     // Classes
     bool isClass(const std::string& name) const { return _classes.count(name) != 0; }
+    bool isBaseOf(const std::string& base, const std::string& derived) const;   // base in derived's chain
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
     void emitStruct(ClassInfo& ci);
     void emitVariantStruct(ClassInfo& ci);   // tag + union layout of a discriminated-union enum

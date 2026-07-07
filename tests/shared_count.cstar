@@ -1,3 +1,4 @@
+import std::memory::{Shared};
 // Shared<T> refcount: two handles share one pointee. When one handle drops, the
 // pointee survives (strong 2->1); the other handle is still valid.
 type value Counter

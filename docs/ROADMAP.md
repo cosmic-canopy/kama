@@ -226,10 +226,23 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    conventional prefix, intrinsic path unchanged; overridden to `Rc_Shape`↔`RcWeak_Shape`).
    `tests/weak_iface{,_dtor}`, LeakSan-clean. **THE FULL MATRIX IS COVERED — Owned/Shared/Weak ×
    concrete/contract — the library smart pointers reach parity with the intrinsics.**
-4. **Remove/rename intrinsic smart pointers — now mechanical.** Rename `Box`→`Owned`, `Rc`→`Shared`,
-   `RcWeak`→`Weak`, move them to the prelude, and delete the compiler's intrinsic `isSmartPtr` registration
-   (the concrete path) — the interface/type-erasure IFACE machinery stays (it's what the library types
-   route to). Core shrinks.
+4. **Smart-pointer purge — ✅ DONE.** `Owned`/`Shared`/`Weak` now live in **`lib/std/memory/`** (ordinary
+   cstar), pulled in with `import std::memory::{…}`. The compiler's **concrete** `isSmartPtr` recognition is
+   deleted (`cType`/`isCollectionType`/`registerCollection` name-matches gone); the **IFACE type-erasure**
+   path stays (polymorphic `Shared<Shape>` still routes there via `registerGenericTypeInst`). `Shared`/`Weak`
+   are **copy-only** (`implements Copyable, !Movable`): bare hand-off retains, `give` is an error, `Weak` is
+   made with an explicit `.downgrade()` (no implicit `Weak w = s`, no default-empty `Weak`). The purge
+   surfaced and fixed real cross-cutting gaps: **cross-module generic instantiation** (`absolutizeType` +
+   emit generic instances under the *template* ctx, so a `std::memory::Owned<Counter>` used in another file
+   mangles its arg and its module-local `Ctrl` correctly), a **`symbolAliases`-on-`ClassInfo`** hole (an
+   imported generic used as a class/enum-payload *field* now resolves), method-return typing on a generic
+   instance (`match(w.tryUpgrade())`), library-owner **auto-deref in `ref` position**, **ctor field-init** of
+   a copy-only field (zero-init + null-guarded library dtors), and `BindableFunctionPtr` binding a library
+   owner. Suite **314** green (native + wasm + ASan/UBSan/LeakSan). *(Deferred, non-blocking:* `Copyable`
+   stays **structural** — a public nullary `copy()` — rather than nominal `implements Copyable`; the
+   discipline is correct either way, and going nominal is a self-contained follow-up that would migrate the
+   `rc_*`/`box_*` prototype fixtures.*) The `box_*`/`rc_*` fixtures stay as user-authored-smart-pointer
+   coverage (the library is written the same way — no compiler privilege).
 5. **Module / `import` system — ✅ DONE.** Explicit, per-symbol, TypeScript/Rust-flavored `import` on
    cstar's existing `::`-namespace machinery. Four forms (`import a::b;` qualified-only · `import a::b as m;`
    whole-module alias · `import a::b::{X, Y as Z};` per-symbol/renamed); no glob. Visibility is a **top-of-file

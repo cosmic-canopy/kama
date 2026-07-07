@@ -1,3 +1,4 @@
+import std::memory::{Owned, Shared};
 // M26d — `give`/`copy` in RETURN position. `give` moves a dying local out (the
 // scope dtor must not free what the caller now owns); `copy` retains (the refcount
 // bump that lets the source survive — exercised here on a Shared).

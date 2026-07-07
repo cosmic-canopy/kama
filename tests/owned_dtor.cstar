@@ -1,3 +1,4 @@
+import std::memory::{Owned};
 // Owned<T> RAII: the heap pointee's destructor fires exactly once on drop.
 extern fn void cstar_trace(int code);
 extern fn int cstar_trace_get();

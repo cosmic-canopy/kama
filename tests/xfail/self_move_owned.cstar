@@ -1,0 +1,10 @@
+// A move-only Owned can't be assigned onto itself — that would drop it, then read the freed
+// bytes. Rejected at compile time (Rust rejects self-move too). The copy-only case is a no-op
+// (tests/smartptr_selfassign).
+import std::memory::{Owned};
+type value Probe { int32 id; public Probe(int32 id){ this.id = id; } public fn int32 get(){ return this.id; } }
+fn int main() {
+    Owned<Probe> o = new Probe(id: 20);
+    o = o;
+    return o.get();
+}

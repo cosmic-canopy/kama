@@ -1,3 +1,4 @@
+import std::memory::{Owned};
 // Owned<T> factory: a function that returns an Owned<T> moves ownership out to
 // the caller — the pointee survives the callee's unwind and is freed exactly
 // once at the caller's scope exit (no callee-free, no leak, no double-free).

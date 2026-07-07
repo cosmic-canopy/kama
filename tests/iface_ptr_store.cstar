@@ -1,3 +1,4 @@
+import std::memory::{Owned, Shared};
 // M26g-3 — owning polymorphism can be STORED and RETURNED: an interface smart pointer is an ordinary
 // value type, so `Shared<Shape>` works as a class FIELD and `Owned`/`Shared<Shape>` as a function
 // RETURN (M26e only rejected a *bare* interface in those positions). Dispatch stays polymorphic; the

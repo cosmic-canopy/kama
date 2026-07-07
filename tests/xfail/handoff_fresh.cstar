@@ -1,3 +1,4 @@
+import std::memory::{Owned};
 // `give`/`copy` mark a NAMED value — a fresh constructor/call result needs no marker.
 type value C { int32 n; public C(int32 n){ this.n = n; } }
 fn int main() { Owned<C> a = give new C(n: 1); return 0; }

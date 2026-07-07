@@ -1,8 +1,9 @@
+import std::memory::{Shared};
 type resource Probe { int32 id; public Probe(int32 id){this.id=id;} ~Probe(){} public fn int32 val(){return this.id;} }
 fn int main()
 {
     Shared<Probe> s = new Probe(id: 9);
-    Optional<Shared<Probe>> a = Optional::Some(value: give s);
+    Optional<Shared<Probe>> a = Optional::Some(value: copy s);
     Optional<Shared<Probe>> b = Optional::None;
     int32 v = match (a) { case Some(p): p.val(); case None: 0; };
     int32 w = match (b) { case Some(p): p.val(); case None: 100; };

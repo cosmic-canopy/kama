@@ -223,12 +223,13 @@ std::string CEmitter::cType(SharedIdentifier type)
         for (auto& a : *type->genericArgs) m += "_" + mangleElem(a);
         return m;
     }
-    // Collection / smart-pointer types spell their mangled struct name:
-    // Array<int32> -> Array_int32; Owned<Node> -> Owned_Node;
-    // Shared<Tex> -> Shared_Tex; Weak<Tex> -> Weak_Tex.
+    // Collection types spell their mangled struct name:
+    // Array<int32> -> Array_int32; List<int32> -> List_int32.
+    // (Smart pointers Owned/Shared/Weak are library generic types now — they flow through
+    // the generic-type arm below; only the polymorphic `<Contract>` instances become IFACE
+    // smart-ptr collections, registered under their already-mangled name.)
     if (type->genericArg && type->value &&
-        (*type->value == "Array" || *type->value == "List" || *type->value == "Owned" ||
-         *type->value == "Shared" || *type->value == "Weak" || *type->value == "BindableFunctionPtr"))
+        (*type->value == "Array" || *type->value == "List" || *type->value == "BindableFunctionPtr"))
         return *type->value + "_" + mangleElem(type->genericArg);
     // a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box_int32`).
     // Reached only for a non-reserved name with a type arg; under _typeSubst the arg's `T` resolves.
@@ -1145,7 +1146,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // as the intrinsic. `new` stays valid ONLY into an RAII owner, so it can't leak.
                         std::string T = heapOwnerTarget(ty);
                         if (octy != T)
-                            unsupported(("`" + ty + "` owns `" + T + "`, but got `new " + octy + "(...)`").c_str(), n->line);
+                            unsupported(("`" + ty + "` owns `" + T + "`, but got `new " + octy
+                                         + "(...)` — name the element type (`new " + T + "(...)`), not the owner").c_str(), n->line);
                         else if (isClass(T) && _classes[T].isAbstractClass)
                             unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), n->line);
                         else {
@@ -2012,6 +2014,7 @@ ClassInfo CEmitter::buildVariantClassInfo(EnumDeclarationNode* ed, const std::st
     ci.kind      = TypeKind::Intrinsic;   // neutral; move-only-ness is driven by isVariant + destructible
     ci.scope     = _nsCtx.scope;
     ci.usings    = _nsCtx.usings;
+    ci.symbolAliases = _nsCtx.symbolAliases;
     ci.isVariant = true;
     ci.tagCType  = ed->underlyingType ? cType(ed->underlyingType) : "";
     if (ed->body)
@@ -2139,6 +2142,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ci.kind  = kind;
         ci.scope = _nsCtx.scope;
         ci.usings = _nsCtx.usings;
+        ci.symbolAliases = _nsCtx.symbolAliases;
         ci.isExternStruct = isExt;
         if (isExt) _externNames.insert(ci.name);
         ci.node = cd;
@@ -2479,9 +2483,10 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
 {
     if (!t) return false;
     if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string / String
+    // Owned/Shared/Weak are library generic types (std::memory), not intrinsic collections;
+    // they route through the generic-type instantiation path (registerGenericTypeInst).
     return t->genericArg && t->value &&
-           (*t->value == "Array" || *t->value == "List" || *t->value == "Owned" ||
-            *t->value == "Shared" || *t->value == "Weak" || *t->value == "BindableFunctionPtr" ||
+           (*t->value == "Array" || *t->value == "List" || *t->value == "BindableFunctionPtr" ||
             *t->value == "Fixed");
 }
 
@@ -2491,15 +2496,11 @@ void CEmitter::registerCollection(SharedIdentifier collType)
 {
     if (!isCollectionType(collType)) return;
 
+    // Smart pointers (Owned/Shared/Weak) are library generic types now; they never reach here — only
+    // their polymorphic `<Contract>` instances become smart-ptr collections, registered directly via
+    // registerSmartPtr from registerGenericTypeInst's interface-owner divert.
     bool isStr    = collType->builtInVal == IDENTIFIER_STRING_VAL;
-    bool isOwned  = !isStr && collType->value && *collType->value == "Owned";
-    bool isShared = !isStr && collType->value && *collType->value == "Shared";
-    bool isWeak   = !isStr && collType->value && *collType->value == "Weak";
-    bool isSmart  = isOwned || isShared || isWeak;
-    CollKind kind = isStr    ? CollKind::String
-                  : isOwned  ? CollKind::Owned
-                  : isShared ? CollKind::Shared
-                  : isWeak   ? CollKind::Weak
+    CollKind kind = isStr ? CollKind::String
                   : (*collType->value == "List") ? CollKind::List : CollKind::Array;
     SharedIdentifier elem = isStr ? SharedIdentifier() : collType->genericArg;
     std::string elemCType  = isStr ? "" : cType(elem);
@@ -2515,24 +2516,6 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     // Fixed<T, N> — the const-generic value array (a distinct shape: two args, value semantics).
     if (!isStr && collType->value && *collType->value == "Fixed") {
         registerFixed(collType);
-        return;
-    }
-
-    // Smart pointers (Owned/Shared/Weak) — registered via the shared helper.
-    if (isSmart) {
-        // a smart pointer over an INTERFACE owns the concrete object behind a fat element.
-        if (isInterface(elemCType)) {
-            if (isWeak) { registerSmartPtr(CollKind::Shared, elem); registerOptionalOfShared(elem); }  // tryUpgrade's Optional<Shared<I>>
-            registerSmartPtr(kind, elem);   // interface-element variant (elemClass = the interface)
-            return;
-        }
-        if (elemClass.empty()) {
-            unsupported("a smart pointer requires a class or interface element type", collType->line);
-            return;
-        }
-        // A Weak needs its Shared (tryUpgrade's pointee) + Optional<Shared<T>> (tryUpgrade's return).
-        if (isWeak) { registerSmartPtr(CollKind::Shared, elem); registerOptionalOfShared(elem); }
-        registerSmartPtr(kind, elem);
         return;
     }
 
@@ -2832,6 +2815,33 @@ SharedIdentifier CEmitter::deepSubstType(SharedIdentifier t)
     return t;
 }
 
+// Rebind a type node to its use-site-resolved absolute name so it mangles identically in any ctx.
+// Called on a generic instance's concrete args (under the use-site _nsCtx) so that when the template's
+// own ctx later drives interface/member scanning, a cross-module arg (`Counter` from another file)
+// keeps its home mangle instead of being resolved to a bare name against the template's scope.
+SharedIdentifier CEmitter::absolutizeType(SharedIdentifier t)
+{
+    if (!t || !t->value) return t;
+    auto clone = std::make_shared<IdentifierNode>(*t);
+    // A user class/enum/contract NAME is rebound to its use-site mangle (qualifier dropped); primitives,
+    // `Ptr`, `This`, usize/isize keep their spelling (they resolve context-free). Generic args recurse
+    // either way (`Ptr<Counter>`, `List<Counter>`, `Owned<Counter>`).
+    bool contextFree = (t->builtInVal != 0) || *t->value == "Ptr" || *t->value == "This"
+                     || *t->value == "usize" || *t->value == "isize";
+    if (!contextFree) {
+        clone->value = std::make_shared<std::string>(resolveUserName(*t->value, t->qualifier));
+        clone->qualifier = SharedStringList();                   // now an absolute name — no qualifier
+    }
+    if (t->genericArgs) {
+        clone->genericArgs = std::make_shared<IdentifierList>();
+        for (auto& a : *t->genericArgs) clone->genericArgs->push_back(absolutizeType(a));
+        clone->genericArg = clone->genericArgs->empty() ? SharedIdentifier() : (*clone->genericArgs)[0];
+    } else if (t->genericArg) {
+        clone->genericArg = absolutizeType(t->genericArg);
+    }
+    return clone;
+}
+
 // Build one synthetic specialized ClassInfo per `Box<Arg>` (mirrors registerCollection): copy the
 // template shape, rewrite identity (struct name + method cNames), re-derive param signatures under
 // _typeSubst, register in _classes, and transitively scan its substituted member types so a
@@ -2839,14 +2849,13 @@ SharedIdentifier CEmitter::deepSubstType(SharedIdentifier t)
 void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args)
 {
     if (!args || args->empty()) return;
-    NsCtx savedCtxAtEntry = _nsCtx;   // the use-site ctx (the type args are mangled in it)
     const std::vector<std::string>& params = _genericTypeParams[tmpl];
 
     // Resolve each arg to its concrete binding — DEEPLY (a nested `Rc<T>` -> `Rc<Counter>`), so a
     // generic arg carrying a type-param is never stored raw in _typeSubst (which would self-reference
     // and loop mangleElem for a mutually-recursive generic type).
     std::vector<SharedIdentifier> concrete;
-    for (auto& a : *args) concrete.push_back(deepSubstType(a));
+    for (auto& a : *args) concrete.push_back(absolutizeType(deepSubstType(a)));
     // Arity: N type arguments must match the template's N type parameters.
     if (concrete.size() != params.size()) {
         unsupported(("wrong number of type arguments for generic type `" + tmpl + "` (expected "
@@ -2921,11 +2930,11 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     _genericTypeInsts[mangled] = { tmpl, mangled, concrete };
     _genericTypeInstOf[mangled] = tmpl;
     _genericTypeInstOrder.push_back(mangled);
-    // remember the USE-SITE ctx (the type args were mangled in it). A prelude template
-    // (Optional/Result) lives in the global scope but its args may name user types — emit the
-    // instance's members under this ctx so those names resolve. For a same-scope user generic it
-    // equals the template ctx, so nothing changes there.
-    _genericTypeInstCtx[mangled] = savedCtxAtEntry;
+    // Emit the instance's members under the TEMPLATE's ctx, so a name the template body references in
+    // its own scope (a sibling generic `Weak<T>`, a module-local helper `Ctrl`) resolves. The concrete
+    // args were `absolutizeType`d to their use-site mangle, so they resolve context-free here too — no
+    // need to fall back to the use-site ctx. For a same-scope user generic the two ctxs coincide.
+    _genericTypeInstCtx[mangled] = _genericTypeCtx[tmpl];
 
     NsCtx savedCtx = _nsCtx;
     std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
@@ -4063,7 +4072,7 @@ void CEmitter::linkBases()
         // a generic INSTANCE resolved its base/interfaces under its own subst in registerGenericTypeInst
         // (its `node` is the template's, whose refs still name the raw param `T`) — don't re-resolve here.
         if (ci.isGenericInst) continue;
-        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
         if (ci.node && ci.node->baseTypes && ci.node->baseTypes->base && ci.node->baseTypes->base->value)
             ci.baseName = resolveUserName(*ci.node->baseTypes->base->value, ci.node->baseTypes->base->qualifier);
         // resolve each interface name; a generic-contract `implements Iterator<int32>` resolves to the
@@ -4159,7 +4168,7 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
             const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
             for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
         } else {
-            _nsCtx = NsCtx{}; _nsCtx.scope = ci->scope; _nsCtx.usings = ci->usings;
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci->scope; _nsCtx.usings = ci->usings; _nsCtx.symbolAliases = ci->symbolAliases;
             _typeSubst = savedSubstOuter;   // (typically empty here)
         }
 
@@ -4305,7 +4314,7 @@ void CEmitter::computeDestructible()
                 const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
                 for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
             } else {
-                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;   // resolve field types in ci's scope
+                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;   // resolve field types in ci's scope
             }
             bool d = (ci.base && ci.base->destructible);
             if (!d)
@@ -4406,6 +4415,16 @@ std::string CEmitter::derefTarget(const std::string& cls)
         return isClass(t) ? t : "";
     }
     return "";
+}
+
+// Is `base` reachable by walking `derived`'s single-inheritance chain (inclusive)? Used to admit a
+// `Derived -> ref Base` upcast while rejecting an unrelated `ref` (e.g. borrowing through a `Weak`).
+bool CEmitter::isBaseOf(const std::string& base, const std::string& derived) const
+{
+    auto it = _classes.find(derived);
+    for (const ClassInfo* c = (it != _classes.end() ? &it->second : nullptr); c; c = c->base)
+        if (c->name == base) return true;
+    return false;
 }
 
 // If `cls` implements the prelude `HeapOwner<T>` contract, return the owned element `T` (so `new T(args)`
@@ -4578,12 +4597,25 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // holding a T, auto-deref to its T* — `ref p` borrows the heap object, uniformly
             // with `ref stackValue`. (Weak can't be borrowed — it may be dead; tryUpgrade.)
             std::string argCls = exprClass(argExpr);
+            std::string dt = derefTarget(argCls);   // library Deref<T> pointee ("" if not a Deref type)
             if (isSmartPtrClass(argCls) && _classes[argCls].collElemClass == p.className) {
                 if (smartKind(argCls) == CollKind::Weak)
                     unsupported(("cannot borrow through a `Weak<" + p.className
                                  + ">` (it may be dead) — `tryUpgrade` to a `Shared` first").c_str(), srcLine);
                 s += "(" + val + ").ptr";
+            } else if (!dt.empty() && dt == p.className) {
+                // a library heap-owner (Owned/Shared) borrows its pointee via the Deref contract's
+                // `deref()` (-> T*), uniformly with `ref stackValue` — no `.ptr` field is assumed.
+                s += argCls + "__deref(&(" + val + "))";
             } else {
+                // A `ref T` arg must BE a T, a subclass of T (upcast to `ref Base`), or a
+                // smart-ptr / Deref<T> owner of T (both handled above). An unrelated class — most
+                // notably borrowing through a `Weak<T>` (no Deref) — is a type error, caught here
+                // instead of emitting a bad reinterpreting cast.
+                if (isClass(p.className) && isClass(argCls) && argCls != p.className
+                    && !isBaseOf(p.className, argCls))
+                    unsupported(("cannot borrow a `" + argCls + "` as `ref " + p.className
+                                 + "` — it is not that object (a `Weak` must `tryUpgrade` to a `Shared` first)").c_str(), srcLine);
                 s += isClass(p.className) ? ("(" + p.className + "*)&(" + val + ")")  // upcast for ref Base
                                           : ("&(" + val + ")");
             }
@@ -4820,7 +4852,7 @@ void CEmitter::resolveFriends()
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.friendGrantsRaw.empty()) continue;
-        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings;
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
         for (auto& rg : ci.friendGrantsRaw) {
             FriendGrant g; g.members = rg.members;
             SharedIdentifier acc = rg.accessor;
@@ -4929,13 +4961,18 @@ void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
         unsupported("BindableFunctionPtr needs obj: <Owned/Shared> and method: <Type::method>", ln); return;
     }
 
-    // The object: a smart-pointer lvalue (Owned/Shared, not Weak).
+    // The object: an owning smart-pointer lvalue — a library `Owned`/`Shared` (heap-owner over a
+    // concrete class) or a polymorphic IFACE owner (still intrinsic). A `Weak` doesn't keep the
+    // object alive, so it can't be bound. `retain` = shared ownership (bump the count); else MOVE.
     std::string objCls = exprClass(objArg);
-    if (!isSmartPtrClass(objCls) || smartKind(objCls) == CollKind::Weak) {
+    std::string libT   = heapOwnerTarget(objCls);               // library heap-owner pointee ("" otherwise)
+    bool isLibOwner    = !libT.empty();
+    bool isIntrinOwner = isSmartPtrClass(objCls) && smartKind(objCls) != CollKind::Weak;
+    if (!isLibOwner && !isIntrinOwner) {
         unsupported("BindableFunctionPtr obj: must be an Owned<T> or Shared<T>", ln); return;
     }
-    CollKind ok = smartKind(objCls);
-    std::string T = _classes[objCls].collElemClass;
+    bool retain = isLibOwner ? isCopyable(objCls) : (smartKind(objCls) == CollKind::Shared);
+    std::string T = isLibOwner ? libT : _classes[objCls].collElemClass;
     std::string objE = emitExpression(objArg);
 
     // The method: a `Type::method` unbound reference.
@@ -4960,14 +4997,23 @@ void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
         unsupported("the method does not match the BindableFunctionPtr signature (the receiver is hidden)", ln);
 
     bool destr = _classes.count(T) && _classes[T].destructible;
-    indent(depth); *_out << nm << ".obj = (void*)(" << objE << ").ptr;\n";
-    if (ok == CollKind::Shared) { indent(depth); *_out << nm << ".ctrl = (" << objE << ").ctrl;\n"; }
+    // The receiver pointer: a library owner exposes it via `deref()` (T*); an intrinsic owner's
+    // struct carries it in `.ptr`. The refcount block: library `.c`, intrinsic `.ctrl` (both a
+    // `cstar_ctrl`-compatible layout — the library `Ctrl` uses `usize` counts for this).
+    if (isLibOwner) { indent(depth); *_out << nm << ".obj = (void*)" << objCls << "__deref(&(" << objE << "));\n"; }
+    else            { indent(depth); *_out << nm << ".obj = (void*)(" << objE << ").ptr;\n"; }
+    if (retain) {
+        indent(depth); *_out << nm << ".ctrl = (cstar_ctrl*)(" << objE << ")." << (isLibOwner ? "c" : "ctrl") << ";\n";
+    }
     indent(depth); *_out << nm << ".fn = (void (*)(void))" << mi->cName << ";\n";
     indent(depth); *_out << nm << ".elemdtor = "
                          << (destr ? ("(void (*)(void*))" + T + "__dtor") : "0") << ";\n";
-    // Ownership transfer: Owned MOVES (invalidate the source); Shared RETAINS.
-    if (ok == CollKind::Owned) { indent(depth); *_out << "(" << objE << ").ptr = NULL;\n"; }
-    else { indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->strong++;\n"; }
+    // Ownership transfer: a shared owner RETAINS (bump strong); a unique owner MOVES — for a library
+    // Owned, consume the source at COMPILE time so its dtor is skipped (the bindable now owns and frees
+    // the pointee); an intrinsic Owned nulls its `.ptr` at runtime (its dtor guards a null pointer).
+    if (retain) { indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->strong++;\n"; }
+    else if (isLibOwner) { std::string mv = moveOnlySource(objArg, ln); if (!mv.empty()) markMoved(mv); }
+    else { indent(depth); *_out << "(" << objE << ").ptr = NULL;\n"; }
 }
 
 // `BindableFunctionPtr<Sig> b = <free fn | another bindable>;` — promote a free
@@ -5689,10 +5735,13 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
             // the OBJECT (`ref T`), or transfer ownership by value (`give`/`copy`). Borrowing
             // the handle never makes sense (and would make `ref p` ambiguous). `out` producing
             // a handle (tryUpgrade / factory-out) stays legal.
+            std::string pct = cType(p->type);
+            std::string libElem = heapOwnerTarget(pct);   // library Owned/Shared pointee ("" otherwise)
             if (paramByRef(p.get()) && p->modifier && p->modifier->value && *p->modifier->value == "ref"
-                && isSmartPtrClass(cType(p->type)))
-                unsupported(("a `ref` parameter may not name a smart pointer ('" + cType(p->type)
-                             + "') — borrow the object with `ref " + _classes[cType(p->type)].collElemClass
+                && (isSmartPtrClass(pct) || !libElem.empty()))
+                unsupported(("a `ref` parameter may not name a smart pointer ('" + pct
+                             + "') — borrow the object with `ref "
+                             + (libElem.empty() ? _classes[pct].collElemClass : libElem)
                              + "`, or transfer ownership by value (`give`/`copy`)").c_str(), p->line);
             s += std::string(constPtr ? "const " : "") + cType(p->type)
                + (paramByRef(p.get()) ? "* " : " ") + nm;
@@ -6182,10 +6231,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             } else {
                 // A collection / smart-pointer field with no initializer must start as a
                 // valid EMPTY value (zero = NULL buffer / null handle), or its first use
-                // (`.add(...)`) and its RAII drop would touch garbage. (Plain class-value
-                // fields still need their own ctor — a separate, deferred gap.)
+                // (`.add(...)`) and its RAII drop would touch garbage. This also covers a library
+                // owner (Owned/Shared/Weak) held as a field: the first `this.f = x` RELEASES the old
+                // value, which must be a null (no-op) handle — the library dtors guard a null pointer.
+                // (Plain class-value fields still need their own ctor — a separate, deferred gap.)
                 std::string fct = cType(f.type);
-                if (_classes.count(fct) && _classes[fct].isCollection) {
+                if (_classes.count(fct) && (_classes[fct].isCollection || _classes[fct].copyOnly
+                        || _classes[fct].copyable || !heapOwnerTarget(fct).empty())) {
                     indent(1);
                     *_out << "self->" << f.name << " = (" << fct << "){0};\n";
                 }
@@ -6347,7 +6399,27 @@ std::string CEmitter::exprClass(SharedExpression e)
                 // auto-deref via a user Deref<T> contract: the method may live on the pointee T.
                 if (!mi) { std::string dt = derefTarget(cls);
                            if (!dt.empty() && _classes.count(dt)) mi = findMethod(&_classes[dt], method, &owner); }
-                if (mi && mi->returnType) { std::string rc = cType(mi->returnType); return isClass(rc) ? rc : ""; }
+                if (mi && mi->returnType) {
+                    // A method on a generic INSTANCE returns the template's unbound type
+                    // (`Weak<T>.tryUpgrade() -> Optional<Shared<T>>`). Bind the owning instance's
+                    // type args + its ctx so the return mangles concretely (else `match(w.tryUpgrade())`
+                    // can't find the Optional variant). Mirrors emitGenericTypeInst's binding.
+                    std::string ownerCls = owner ? owner->name : cls;
+                    NsCtx savedCtx = _nsCtx;
+                    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+                    auto gi = _genericTypeInsts.find(ownerCls);
+                    if (gi != _genericTypeInsts.end()) {
+                        _typeSubst.clear();
+                        const std::vector<std::string>& ps = _genericTypeParams[gi->second.templateKey];
+                        for (size_t i = 0; i < ps.size() && i < gi->second.typeArgs.size(); ++i)
+                            _typeSubst[ps[i]] = gi->second.typeArgs[i];
+                        _nsCtx = _genericTypeInstCtx.count(ownerCls) ? _genericTypeInstCtx[ownerCls]
+                                                                     : _genericTypeCtx[gi->second.templateKey];
+                    }
+                    std::string rc = cType(mi->returnType);
+                    _typeSubst = savedSubst; _nsCtx = savedCtx;
+                    return isClass(rc) ? rc : "";
+                }
             }
             return "";
         }
@@ -6776,9 +6848,11 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     if (!_sigs.empty()) *_out << "\n";
 
-    // Set the name-resolution scope from the type/file being emitted.
-    auto scopeOf = [&](const std::string& scope, const std::vector<std::string>& usings) {
-        _nsCtx = NsCtx{}; _nsCtx.scope = scope; _nsCtx.usings = usings;
+    // Set the name-resolution scope from the type/file being emitted. `aliases` carries the
+    // declaring file's per-symbol imports (a field/base typed with an imported generic needs them).
+    auto scopeOf = [&](const std::string& scope, const std::vector<std::string>& usings,
+                       const std::map<std::string, std::string>& aliases = std::map<std::string, std::string>()) {
+        _nsCtx = NsCtx{}; _nsCtx.scope = scope; _nsCtx.usings = usings; _nsCtx.symbolAliases = aliases;
     };
 
     for (auto& kv : _enums) { scopeOf(kv.second.scope, kv.second.usings); emitEnum(kv.second); }
@@ -6809,7 +6883,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (ci->isGenericInst) {
             emitGenericTypeInst(_genericTypeInsts[ci->name], /*phase=*/0);   // body-only (forward split out)
         } else {
-            scopeOf(ci->scope, ci->usings);
+            scopeOf(ci->scope, ci->usings, ci->symbolAliases);
             if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
             emitStruct(*ci);   // dispatches to emitVariantStruct for a union
         }
@@ -6831,7 +6905,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (!ci->isCollection && !ci->isExternStruct && ci->copyable)
             *_out << ci->name << " " << ci->name << "__copy(" << ci->name << "* self);\n";
     emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
-    for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings); emitClassPrototypes(*ci); }
+    for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci); }
     // specialized generic-type instance prototypes (ctor/dtor/method), `static`.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/1);

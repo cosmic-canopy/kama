@@ -1,3 +1,4 @@
+import std::memory::{Owned};
 // Owned<T>: heap construction, auto-deref method calls, RAII free.
 type value Counter
 {

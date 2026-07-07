@@ -1,10 +1,10 @@
-// Step 4: self-assignment on a smart pointer must be a no-op, not a use-after-free
-// (it used to release the pointee then "copy" it back onto freed memory).
+// Self-assignment of a copy-only (shared-ownership) handle is a guarded no-op: it must not
+// release the pointee then "copy" it back onto freed memory. (A move-only Owned self-assign is a
+// compile error — see xfail/self_move_owned — so only the copy-only case is exercised here.)
+import std::memory::{Shared};
 type value Probe { int32 id; public Probe(int32 id){ this.id = id; } public fn int32 get(){ return this.id; } }
 fn int main() {
-    Owned<Probe> o = new Probe(id: 20);
-    o = o;                                  // no-op (guarded), pointee stays alive
-    Shared<Probe> s = new Probe(id: 22);
-    s = s;                                  // no double-decrement
-    return o.get() + s.get();               // 20 + 22 = 42
+    Shared<Probe> s = new Probe(id: 42);
+    s = s;                                  // no double-decrement (guarded no-op)
+    return s.get();                         // 42
 }

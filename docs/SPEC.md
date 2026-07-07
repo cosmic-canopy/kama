@@ -76,8 +76,18 @@ collection by the ownership rules below (`give` to move, `copy` to duplicate, a 
 
 ## Smart pointers ✅
 
+The smart pointers are a **standard library**, not compiler intrinsics: `Owned`/`Shared`/`Weak` live in
+`std::memory`, written in ordinary cstar (RAII `resource`s over `Deref`/`HeapOwner`, refcounting in cstar),
+and are pulled in with `import std::memory::{…}`. The compiler adds only what a library can't express: the
+type-erasure (fat pointer + vtable) that makes `Owned<Shape>`/`Shared<Shape>` over a **contract** work, and
+`new T(args)` heap placement into any `HeapOwner<T>`.
+
+```cstar
+import std::memory::{Owned, Shared, Weak};
+```
+
 `Owned<T>` — unique heap ownership (= Rust `Box` / C++ `unique_ptr`), zero overhead, **move-only**,
-**auto-deref**, RAII-freed. The cstar surface stays pointer-free; the raw pointer is confined to the runtime.
+**auto-deref**, RAII-freed. The cstar surface stays pointer-free; the raw pointer is confined to the library.
 Use it for heap objects, recursive data structures, and polymorphic ownership.
 
 ```cstar
@@ -94,8 +104,9 @@ pointee is freed exactly once (RAII, with the pointee's destructor).
 assignment, argument, or return — an explicit marker states the intent, uniformly in all four positions:
 **`give`** moves (invalidates the source), **`copy`** retains (`Shared`/`Weak`) or duplicates. The natural op
 is the default, so a marker is only required where a silent copy would be surprising: `Owned` defaults to
-`give` (and `copy Owned` is an error — it's unique); `Shared`/`Weak` default to `copy`/retain, with **`give`
-as the opt-in move** of the handle; a `value`/primitive just copies (and `give` on one is an error). A fresh
+`give` (and `copy Owned` is an error — it's unique); `Shared`/`Weak` are **copy-only** (shared ownership —
+`implements Copyable, !Movable`), so a bare hand-off **retains** and **`give` is an error** (there is no move
+to make — no footgun); a `value`/primitive just copies (and `give` on one is an error). A fresh
 `new`/constructor/call result needs no marker. Smart pointers also **pass by value**: the callee *owns* the
 argument and drops it at function end — `fn int use(Owned<T> p)` consumes it (`use(p: give x)`), `fn int
 peek(Shared<T> s)` retains it (`peek(s: x)`, `x` stays valid).
@@ -103,7 +114,7 @@ peek(Shared<T> s)` retains it (`peek(s: x)`, `x` stays valid).
 ```cstar
 Owned<Counter> b = give a;   // explicit move (a consumed)
 Shared<Counter> t = s;       // copy/retain (default) — both valid
-Shared<Counter> u = give s;  // opt-in move of the share (no retain)
+Shared<Counter> u = copy s;  // explicit retain (same as bare); `give s` is an error (copy-only)
 ```
 
 *(`copy` of a collection is a deep copy — a fresh buffer, element-wise: a bitwise-copyable element is copied
@@ -131,7 +142,7 @@ Res c = give b;   // move — b consumed
 Res d = a;        // ERROR: a is copyable — say `give` or `copy`
 ```
 
-**Auto-deref — the `Deref<T>` contract.** The built-in smart pointers forward member access to their
+**Auto-deref — the `Deref<T>` contract.** The standard smart pointers forward member access to their
 pointee (`ptr.method()`/`ptr.field` reach the held `T`). Any type can opt into the same **auto-deref** by
 implementing the prelude contract `type contract Deref<T> { fn ref T deref(); }` — the `implements` is the
 explicit gate. When a member isn't found on the wrapper itself, it resolves on the pointee `T` and is
@@ -162,8 +173,8 @@ all four hand-off positions — **initializer, assignment, argument, return** �
 |---|---|---|---|
 | primitive / `value` | **copy** (cheap) | ⛔ "applies to an owned value" | copy (redundant, allowed) |
 | `Owned<T>` (unique) | **move** | move (emphasis) | ⛔ "is unique" |
-| `Shared<T>` (ref-counted) | **retain** (strong++) | opt-in move | retain |
-| `Weak<T>` | **retain** (weak++) | opt-in move | retain |
+| `Shared<T>` (ref-counted, copy-only) | **retain** (strong++) | ⛔ "copy-only" | retain (explicit) |
+| `Weak<T>` (copy-only) | **retain** (weak++) | ⛔ "copy-only" | retain (explicit) |
 | collection (`Array`/`List`/`string`) | ⛔ marker required | **move** (buffer) | **deep copy** (fresh buffer) |
 | plain `resource` (move-only value) | **move** | move (emphasis) | ⛔ "opt into `Copyable`" |
 | `Copyable` resource (has `copy()`) | ⛔ ambiguous | move | **deep copy** via `copy()` |
@@ -189,12 +200,11 @@ dead) — **upgrade** it with the checked `tryUpgrade()`, which returns an `Opti
 `match` on, so the dead case is impossible to ignore:
 
 ```cstar
-Weak<Tex> w = s;                              // make a weak ref from a Shared (does not keep Tex alive)
+Weak<Tex> w = s.downgrade();                  // make a weak ref from a Shared (does not keep Tex alive)
 int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
     case Some(up): up.id;                     // alive: use the upgraded Shared
     case None: -1;                            // dead: the cycle-safe path
 };
-Weak<Tex> e;                                  // default-empty (already expired)
 ```
 
 **No null (safe surface) — see GOALS §3b.** A value, `Owned`/`Shared`, `ref`/`out` borrow, or contract value
