@@ -2163,6 +2163,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         continue;                       // a negated marker is not an implemented interface
                     }
                     ci.interfaces.push_back(*itf->value);  // bare; resolved in linkBases
+                    // Copyable is NOMINAL: `implements Copyable` is the opt-in (a lone `copy()` no
+                    // longer implies it). Recognized by name, like `Movable` above — the capability
+                    // markers are compiler-owned, so a user can't shadow them. The `copy()` method's
+                    // presence is validated after the member loop below.
+                    if (*itf->value == "Copyable") ci.copyable = true;
                 }
         }
         // Class-level extensibility modifier: virtual | abstract | final.
@@ -2278,16 +2283,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             unsupported(("`final abstract` on '" + *md->name->value + "' is a contradiction (an abstract method must be overridden)").c_str(), md->line);
                         else if (mi.isFinal && !mi.isVirtual)
                             unsupported(("`final` on '" + *md->name->value + "' applies only to an overridable (virtual/override) method").c_str(), md->line);
-                        // Opting into the `Copyable` contract — a public, nullary `copy`
-                        // returning the class's OWN type (unqualified, same simple name). Its presence
-                        // makes the give/copy marker mandatory on this `resource` value. Detected
-                        // structurally (a public nullary `copy` returning the class's own type).
-                        if (*md->name->value == "copy" && mi.params.empty()
-                            && mi.visibility == Visibility::Public
-                            && md->returnType && md->returnType->value
-                            && (!md->returnType->qualifier || md->returnType->qualifier->empty())
-                            && *md->returnType->value == *cd->name->value)
-                            ci.copyable = true;
                         ci.methods[*md->name->value] = mi;
                     }
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
@@ -2371,6 +2366,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             if (!hasOverridable)
                 unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
                              + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd->line);
+        }
+        // `implements Copyable` is the nominal opt-in, but the copy IS a `copy()` method — so a
+        // public nullary `copy()` (the contract's `fn This copy()`) must be present.
+        if (ci.copyable) {
+            auto cm = ci.methods.find("copy");
+            if (cm == ci.methods.end() || cm->second.visibility != Visibility::Public || !cm->second.params.empty())
+                unsupported(("`" + ci.name + "` implements `Copyable` but has no public nullary `copy()` method "
+                             "(the contract is `fn This copy()`)").c_str(), cd->line);
         }
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/

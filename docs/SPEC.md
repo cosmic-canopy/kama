@@ -124,18 +124,19 @@ memberwise, a `Copyable`-resource element is deep-copied via its own `copy()`. A
 **Move-only `resource` values + the `Copyable` contract.** A **`type resource`** value (it owns something, or
 has identity) is **move-only**: a bare named hand-off *moves* (the source is consumed, its destructor
 suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would double-free).
-`give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts into copy** by
-declaring a **public nullary `copy` returning its own type** (the `Copyable` contract). Once copyable, the
-marker is **mandatory** — both move and copy are plausible, so a *bare* hand-off is a compile error and you
-must write **`give x`** (move) or **`copy x`** (deep-copy via `copy()`; the source stays valid). Because
-`copy`/`give` are markers only in expression position, they're **contextual keywords** — usable as method
-names, so the opt-in method is literally named `copy`.
+`give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts into copy**
+**nominally** — `implements Copyable` (the prelude contract `Copyable { fn This copy(); }`) plus a **public
+nullary `copy()`** method (a lone `copy()` method without the `implements` does *not* make a type copyable).
+Once copyable, the marker is **mandatory** — both move and copy are plausible, so a *bare* hand-off is a
+compile error and you must write **`give x`** (move) or **`copy x`** (deep-copy via `copy()`; the source
+stays valid). Because `copy`/`give` are markers only in expression position, they're **contextual keywords** —
+usable as method names, so the opt-in method is literally named `copy`.
 
 ```cstar
-type resource Res {
+type resource Res implements Copyable {
     List<int32> items;
     ~Res() { }
-    public fn Res copy() { Res r = Res(v: this.items[0]); return give r; }   // opt into Copyable
+    public fn Res copy() { Res r = Res(v: this.items[0]); return give r; }   // the Copyable method
 }
 Res b = copy a;   // deep copy — a stays valid, b has its own buffer
 Res c = give b;   // move — b consumed

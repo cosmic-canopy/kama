@@ -238,11 +238,14 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    imported generic used as a class/enum-payload *field* now resolves), method-return typing on a generic
    instance (`match(w.tryUpgrade())`), library-owner **auto-deref in `ref` position**, **ctor field-init** of
    a copy-only field (zero-init + null-guarded library dtors), and `BindableFunctionPtr` binding a library
-   owner. Suite **314** green (native + wasm + ASan/UBSan/LeakSan). *(Deferred, non-blocking:* `Copyable`
-   stays **structural** — a public nullary `copy()` — rather than nominal `implements Copyable`; the
-   discipline is correct either way, and going nominal is a self-contained follow-up that would migrate the
-   `rc_*`/`box_*` prototype fixtures.*) The `box_*`/`rc_*` fixtures stay as user-authored-smart-pointer
-   coverage (the library is written the same way — no compiler privilege).
+   owner. Suite **314** green (native + wasm + ASan/UBSan/LeakSan). The `box_*`/`rc_*` fixtures stay as
+   user-authored-smart-pointer coverage (the library is written the same way — no compiler privilege).
+4b. **`Copyable` structural → nominal (Phase 3) — ✅ DONE.** `implements Copyable` (recognized by name,
+   like `Movable`) is now the opt-in for copyability; a lone public nullary `copy()` no longer implies it
+   (explicit over implicit). A class implementing `Copyable` must provide the `copy()` method (validated in
+   `collectClasses`). Migrated the `rc_*`/`weak_*`/`copy_*` fixtures to add `implements Copyable`; new
+   `tests/copyable_nominal` (lone `copy()` = move-only) + xfail `copyable_no_method`. Suite **316** green
+   (native + wasm + ASan/UBSan/LeakSan).
 5. **Module / `import` system — ✅ DONE.** Explicit, per-symbol, TypeScript/Rust-flavored `import` on
    cstar's existing `::`-namespace machinery. Four forms (`import a::b;` qualified-only · `import a::b as m;`
    whole-module alias · `import a::b::{X, Y as Z};` per-symbol/renamed); no glob. Visibility is a **top-of-file

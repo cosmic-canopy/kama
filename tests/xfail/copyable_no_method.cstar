@@ -1,0 +1,9 @@
+// `implements Copyable` is the nominal opt-in, but the copy IS a `copy()` method — declaring the
+// contract without providing a public nullary `copy()` is a compile error.
+type resource R implements Copyable {
+    int32 n;
+    public R(int32 n) { this.n = n; }
+    ~R() { }
+    public fn int32 get() { return this.n; }   // no `copy()` — invalid
+}
+fn int32 main() { R a = R(n: 1); return a.get(); }

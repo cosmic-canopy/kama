@@ -210,8 +210,9 @@ A `give`/`copy` marker is required **exactly when both move and copy are plausib
 - **`value`** → **copy** silently (one natural op; `give` is an error).
 - **`resource` without a copy contract** → **move** silently on a bare hand-off (one natural op;
   `give` is allowed as optional emphasis; `copy` is an error — nothing to copy with).
-- **`resource` with a copy contract** (opts into `Copyable`) → **ambiguous → scream**: a bare
-  hand-off is a compile error; write `give` (move) or `copy` (duplicate).
+- **`resource` with a copy contract** (`implements Copyable` + a public nullary `copy()` — nominal,
+  not a lone `copy()`) → **ambiguous → scream**: a bare hand-off is a compile error; write `give`
+  (move) or `copy` (duplicate).
 - **copy-only `resource`** (`implements Copyable, !Movable` — e.g. `Shared`/`Weak`, shared ownership) →
   **retain** silently on a bare hand-off (one natural op — the `copy()`); **`give` is an error** (there
   is no move to make, so no footgun). `!Movable` subtracts the one implicit capability a `resource`

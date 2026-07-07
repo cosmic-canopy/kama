@@ -1,0 +1,1 @@
+implements `Copyable` but has no public nullary `copy()`

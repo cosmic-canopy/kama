@@ -1,0 +1,15 @@
+// Nominal `Copyable`: a `copy()` method ALONE does not make a resource copyable — only
+// `implements Copyable` opts in. Without it, the resource stays move-only, so a bare hand-off
+// MOVES (no "scream", no accidental duplication) and the method named `copy` is just a method.
+type resource R {
+    int32 n;
+    public R(int32 n) { this.n = n; }
+    ~R() { }
+    public fn R copy() { return R(n: this.n); }   // a method named `copy` — NOT the Copyable opt-in
+    public fn int32 get() { return this.n; }
+}
+fn int32 main() {
+    R a = R(n: 42);
+    R b = a;            // MOVE (move-only — a lone `copy()` doesn't opt in); a is consumed
+    return b.get();     // 42
+}
