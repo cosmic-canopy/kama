@@ -10,6 +10,10 @@ build/
 # the root compiler binary (anchored to root so it doesn't also ignore bench/src/cstar/)
 /cstar
 
+# generated C from `./cstar build foo.cstar` without -o (lands next to the source as foo.c);
+# anchored to root so hand-written C in tests/webgpu/ and bench/src/c/ stays tracked
+/*.c
+
 # build output / generated transpiler artifacts
 out/
 *.wasm
