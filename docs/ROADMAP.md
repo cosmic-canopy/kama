@@ -46,6 +46,8 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
 - **By-value collection params/returns** — `give`-ing a collection into a variant works; general by-value
   collection params/returns (and deep-`copy` of a whole container into a variant) → **post-1.0** (same
   move-the-struct mechanism; not blocking).
+- **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
+  post-increment returning the old value in expression position (`i++` works as a statement today).
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by
