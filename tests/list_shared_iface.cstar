@@ -1,3 +1,4 @@
+import std::collections::{List};
 import std::memory::{Shared};
 // M27 — a `List<Shared<Shape>>` drops each stored smart pointer (ref-count decrement) at teardown
 // and dispatches polymorphically through the borrowed element in `foreach`. Exercises the nested
@@ -12,7 +13,7 @@ type resource Sq implements Shape {
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 fn int32 main() {
-    List<Shared<Shape>> xs = new List<Shared<Shape>>();
+    List<Shared<Shape>> xs = List();
     Shared<Shape> a = new Sq(s: 3);
     Shared<Shape> b = new Sq(s: 4);
     Shared<Shape> c = new Sq(s: 5);
@@ -20,6 +21,6 @@ fn int32 main() {
     xs.add(item: give b);
     xs.add(item: give c);
     int32 sum = 0;
-    foreach (Shared<Shape> s in xs) { sum = sum + s.area(); } // polymorphic dispatch through the handle
+    foreach (ref Shared<Shape> s in xs) { sum = sum + s.area(); } // borrow each handle; polymorphic dispatch
     return sum;                                                // 9 + 16 + 25 = 50; xs drops -> each Sq freed once
 }

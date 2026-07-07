@@ -223,13 +223,11 @@ std::string CEmitter::cType(SharedIdentifier type)
         for (auto& a : *type->genericArgs) m += "_" + mangleElem(a);
         return m;
     }
-    // Collection types spell their mangled struct name:
-    // Array<int32> -> Array_int32; List<int32> -> List_int32.
-    // (Smart pointers Owned/Shared/Weak are library generic types now — they flow through
-    // the generic-type arm below; only the polymorphic `<Contract>` instances become IFACE
-    // smart-ptr collections, registered under their already-mangled name.)
+    // Intrinsic collection types spell their mangled struct name: Array<int32> -> Array_int32.
+    // (List is a library generic type now — std::collections::List — and smart pointers likewise; they
+    // flow through the generic-type arm below.)
     if (type->genericArg && type->value &&
-        (*type->value == "Array" || *type->value == "List" || *type->value == "BindableFunctionPtr"))
+        (*type->value == "Array" || *type->value == "BindableFunctionPtr"))
         return *type->value + "_" + mangleElem(type->genericArg);
     // a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box_int32`).
     // Reached only for a non-reserved name with a type arg; under _typeSubst the arg's `T` resolves.
@@ -1565,6 +1563,30 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // an expression. a give/copy marker on the RHS overrides the default,
     // uniformly with init / argument / return.
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        // A RAW pointer-slot store `ptr[i] = give x` / `ptr[i] = x` in unsafe manual-memory code: the
+        // exprClass of a `Ptr<T>` index is unknown (not a collection / user `operator[]`), so it's a raw
+        // C store. Blit the value in, DON'T release the (uninitialized) old slot, and consume a moved
+        // resource source (mark it moved so its scope dtor is skipped). This is how a library container
+        // relocates an element into its buffer. Only intercepted for an owned RHS (marker or resource) —
+        // a plain `ptr[i] = value` or a value-producing RHS keeps the generic path below.
+        if (as->token == EQ && !ptrElemType(as->unaryExpression).empty()) {
+            SharedExpression rhs = as->expression;
+            bool give = false, marked = false;
+            if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { give = h->isGive; rhs = h->value; marked = true; }
+            std::string rc = exprClass(rhs);
+            bool ownedRhs = marked || (!rc.empty() && (isMoveOnlyValue(rc) || isSmartPtrClass(rc)));
+            if (ownedRhs) {
+                std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
+                line(n->line); indent(depth); *_out << b << " = " << src << ";\n";
+                if (give || !marked) {
+                    // consume the moved source so it isn't dropped again: an IFACE smart pointer is nulled
+                    // at runtime (its callee-drop then no-ops); a plain resource is move-tracked.
+                    if (isSmartPtrClass(rc)) { indent(depth); *_out << smartPtrInvalidate(src, smartKind(rc), isInterface(_classes[rc].collElemClass)) << "\n"; }
+                    else if (isMoveOnlyValue(rc)) { std::string mv = moveOnlySource(rhs, n->line); if (!mv.empty()) markMoved(mv); }
+                }
+                return;
+            }
+        }
         if (as->token == EQ && isSmartPtrExpr(as->unaryExpression)) {
             checkConstWrite(as->unaryExpression, n->line);   // no reseating a const smart ptr
             std::string b   = emitExpression(as->unaryExpression);
@@ -2190,6 +2212,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …`
+                        if (md->whenParam && md->whenParam->value) {   // `fn … when T: Bound` — conditional method
+                            mi.whenParam = *md->whenParam->value;
+                            mi.whenBound = (md->whenBound && md->whenBound->value) ? *md->whenBound->value : "Copyable";
+                        }
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
                         // `protected` belongs to a `resource` in an extensibility hierarchy
@@ -2450,12 +2476,11 @@ std::string CEmitter::genericTypeMangle(const std::string& tmpl, SharedIdentifie
 bool CEmitter::isCollectionType(SharedIdentifier t) const
 {
     if (!t) return false;
-    if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string / String
-    // Owned/Shared/Weak are library generic types (std::memory), not intrinsic collections;
-    // they route through the generic-type instantiation path (registerGenericTypeInst).
+    if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string
+    // List and the smart pointers are library generic types (std::collections / std::memory), not
+    // intrinsic collections; they route through registerGenericTypeInst.
     return t->genericArg && t->value &&
-           (*t->value == "Array" || *t->value == "List" || *t->value == "BindableFunctionPtr" ||
-            *t->value == "Fixed");
+           (*t->value == "Array" || *t->value == "BindableFunctionPtr" || *t->value == "Fixed");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -2923,6 +2948,18 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
             if (params[i] == ci.copyableWhenParam) { copyableActive = satisfiesBound(cType(concrete[i]), ci.copyableWhenBound); break; }
         if (!copyableActive) { ci.copyable = false; ci.methods.erase("copy"); }
+    }
+    // Conditional METHODS (`fn … when T: Bound`): drop any whose bound fails for this instance, so it's
+    // never emitted (the value `iterator()` needs a Copyable element — a `List<Owned>` simply lacks it).
+    for (auto it = ci.methods.begin(); it != ci.methods.end(); ) {
+        const MethodInfo& mi = it->second;
+        bool drop = false;
+        if (!mi.whenParam.empty()) {
+            drop = true;
+            for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
+                if (params[i] == mi.whenParam) { drop = !satisfiesBound(cType(concrete[i]), mi.whenBound); break; }
+        }
+        if (drop) it = ci.methods.erase(it); else ++it;
     }
     for (auto& kv : ci.methods) kv.second.cName = mangled + "__" + kv.first;
     // Re-derive ParamSig under substitution so call-site arg typing is concrete (not a stale "T").
@@ -3674,7 +3711,10 @@ std::string CEmitter::emitPlace(SharedExpression e)
         if (recv) if (MethodInfo* op = userIndexOp(exprClass(recv))) {
             std::string idxE = (ea->expressionlist && !ea->expressionlist->empty())
                                    ? emitExpression((*ea->expressionlist)[0]) : "0";
-            return "(*" + op->cName + "(&(" + emitPlace(recv) + "), " + idxE + "))";
+            // `this` is already `self` (a pointer) — pass it directly; any other lvalue's address is `&place`.
+            std::string recvAddr = dynamic_cast<ThisAccessNode*>(recv.get())
+                                       ? emitExpression(recv) : ("&(" + emitPlace(recv) + ")");
+            return "(*" + op->cName + "(" + recvAddr + ", " + idxE + "))";
         }
     }
     return emitExpression(e);
@@ -4400,6 +4440,26 @@ std::string CEmitter::derefTarget(const std::string& cls)
         std::string t = cTypeInInstance(cls, mi->returnType);   // resolves `ref T` under a generic wrapper's subst
         return isClass(t) ? t : "";
     }
+    return "";
+}
+
+// If `e` is `this.field[i]` (or `obj.field[i]`) where `field` is a raw `Ptr<T>`, return the element's
+// concrete C-type (resolving `T` under the current instance subst); else "". This is a raw pointer
+// slot (unsafe manual memory) — a container's own buffer — distinct from a collection / user operator[].
+std::string CEmitter::ptrElemType(SharedExpression e)
+{
+    auto* ea = dynamic_cast<ElementAccessNode*>(e.get());
+    if (!ea) return "";
+    SharedExpression recv = ea->expression ? ea->expression
+                                           : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+    auto* ma = dynamic_cast<MemberAccessNode*>(recv.get());
+    if (!ma || !ma->identifier || !ma->identifier->value || !_currentClass) return "";
+    ClassInfo* owner = findFieldOwner(_currentClass, *ma->identifier->value);
+    if (!owner) return "";
+    for (auto& f : owner->fields)
+        if (f.name == *ma->identifier->value && f.type && f.type->value
+            && *f.type->value == "Ptr" && f.type->genericArg)
+            return cType(f.type->genericArg);
     return "";
 }
 
@@ -5524,7 +5584,11 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 }
             } else {
                 // Primitive / plain value / fresh smart-ptr rvalue (factory result): consumed in place.
-                if (handoff && !isSmartPtrClass(argCls))
+                // A `give`/`copy` on a plain value (primitive or `value` struct) is a no-op — a value is
+                // always copied — so only a stray marker on a fell-through resource rvalue is an error.
+                bool plainValue = argCls.empty()
+                    || (_classes.count(argCls) && _classes[argCls].kind == TypeKind::Value);
+                if (handoff && !plainValue && !isSmartPtrClass(argCls))
                     unsupported("`give`/`copy` apply to a named smart pointer / resource value", srcLine);
                 field = val;
             }
@@ -6340,9 +6404,26 @@ std::string CEmitter::exprClass(SharedExpression e)
         // `m[i][j]` / `m[i].field` chain. Bind `This`/the instance's type args for the return type.
         if (MethodInfo* op = userIndexOp(cls)) {
             ScopedStr _ts(_thisType, cls);
+            // Bind the owning generic instance's type args so `operator[]`'s `ref T` resolves concretely
+            // (`v[i]` on a `List<Probe>` -> Probe), the same as a method return.
+            NsCtx savedCtx = _nsCtx;
+            std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+            auto gi = _genericTypeInsts.find(cls);
+            if (gi != _genericTypeInsts.end()) {
+                _typeSubst.clear();
+                const std::vector<std::string>& ps = _genericTypeParams[gi->second.templateKey];
+                for (size_t i = 0; i < ps.size() && i < gi->second.typeArgs.size(); ++i)
+                    _typeSubst[ps[i]] = gi->second.typeArgs[i];
+                _nsCtx = _genericTypeInstCtx.count(cls) ? _genericTypeInstCtx[cls] : _genericTypeCtx[gi->second.templateKey];
+            }
             std::string rt = cType(op->returnType);
+            _typeSubst = savedSubst; _nsCtx = savedCtx;
             return isClass(rt) ? rt : "";
         }
+        // A raw `Ptr<T>` field index (`this.data[i]` in unsafe container code): resolve to the pointer's
+        // element type, so a `drop`/`copy`/variant hand-off of the element knows what it is.
+        std::string pet = ptrElemType(e);
+        if (!pet.empty()) return isClass(pet) ? pet : "";
         return "";
     }
 

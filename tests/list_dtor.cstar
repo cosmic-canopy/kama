@@ -1,3 +1,4 @@
+import std::collections::{List};
 // List<T> RAII + element-dtor chaining over the LIVE length (len=3, cap=4):
 // the list's dtor must destroy exactly its 3 live elements, not its capacity.
 //
@@ -17,7 +18,7 @@ type resource Probe
 
 fn int build()
 {
-    List<Probe> xs = new List<Probe>();
+    List<Probe> xs = List();
     Probe a = Probe(id: 1);
     Probe b = Probe(id: 2);
     Probe c = Probe(id: 4);

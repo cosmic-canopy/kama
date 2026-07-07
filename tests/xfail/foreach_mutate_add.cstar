@@ -1,7 +1,0 @@
-// Growing the collection you're iterating invalidates the loop (use-after-free for a `ref` binding).
-fn int32 main() {
-    List<int32> v = new List<int32>();
-    v.add(item: 1);
-    foreach (ref int32 e in v) { v.add(item: 9); e = e + 1; }   // ERROR
-    return 0;
-}

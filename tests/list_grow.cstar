@@ -1,8 +1,9 @@
+import std::collections::{List};
 // List<T>: growable. add() past the doubling threshold (cap 0->4->8->16),
 // then sum via [] indexing and length().
 fn int main()
 {
-    List<int32> xs = new List<int32>();
+    List<int32> xs = List();
     for (int32 i = 1; i <= 10; i = i + 1)
     {
         xs.add(item: i);

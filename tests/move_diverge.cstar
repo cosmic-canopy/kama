@@ -1,3 +1,4 @@
+import std::collections::{List};
 // M26f-2 — branch divergence: a move inside a branch that then `return`s doesn't reach the
 // join, so a later move of the same local on the fall-through path is legal (not a
 // use-after-move / conditional-drop). One drop of code 2 -> 2.

@@ -1,3 +1,4 @@
+import std::collections::{List};
 enum Bag { Items(List<int32> xs), Empty }
 fn int main()
 {

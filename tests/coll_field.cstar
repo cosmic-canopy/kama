@@ -1,3 +1,4 @@
+import std::collections::{List};
 // M26f-1 — a class may hold a collection BY VALUE as a field. Needs (1) the collection
 // struct typedef emitted before the class struct body (macro TYPE/FUNCS split) and
 // (2) the field auto-initialized to a valid empty collection by the ctor.

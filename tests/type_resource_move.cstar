@@ -1,3 +1,4 @@
+import std::collections::{List};
 // M26h — a `type resource` value is move-only (declared, not inferred from destructibility): a bare
 // hand-off moves and the source is consumed. Here `give` moves it into the callee, which drops it
 // once (ASan-clean). An empty resource would be move-only too, by identity.

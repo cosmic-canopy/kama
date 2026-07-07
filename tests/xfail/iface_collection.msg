@@ -1,1 +1,1 @@
-collection element
+it would dangle; own the object instead

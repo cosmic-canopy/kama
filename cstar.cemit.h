@@ -76,6 +76,8 @@ struct MethodInfo {
     Visibility                   visibility = Visibility::Private;
     bool                         isFinal = false;     // `final fn` — seals a virtual slot
     bool                         isStatic = false;    // `static fn` — no implicit `self`; called `Type::m(...)`
+    std::string                  whenParam;   // `fn … when T: Bound` — the gated type-param ("" = unconditional)
+    std::string                  whenBound;   // the required contract (source name; e.g. "Copyable")
     // Operator overloads register as methods under a synthetic name (`op_add`, `op_neg`, …).
     // They are NOT ClassMethodDeclarationNode, so `node` stays null: emit from `opDecl` instead.
     bool                         isOperator = false;
@@ -590,6 +592,7 @@ private:
     // Classes
     bool isClass(const std::string& name) const { return _classes.count(name) != 0; }
     bool isBaseOf(const std::string& base, const std::string& derived) const;   // base in derived's chain
+    std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is Ptr<T>, the element C-type; else ""
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
     void emitStruct(ClassInfo& ci);
     void emitVariantStruct(ClassInfo& ci);   // tag + union layout of a discriminated-union enum

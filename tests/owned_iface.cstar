@@ -1,3 +1,4 @@
+import std::collections::{List};
 import std::memory::{Owned};
 // M26g-1 — `Owned<Shape>`: a UNIQUE-owning smart pointer over an INTERFACE. `new Rect(...)` boxes a
 // concrete class implementing the interface into a fat handle {obj, vtbl}; `s.area()` dispatches

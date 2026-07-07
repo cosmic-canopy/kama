@@ -1,7 +1,8 @@
+import std::collections::{List};
 // M26f-3 — `copy` of a collection is a real DEEP copy: the source and the copy have
 // independent buffers, so mutating one doesn't touch the other (and each frees its own).
 fn int32 main() {
-    List<int32> a = new List<int32>();
+    List<int32> a = List();
     a.add(item: 7);
     a.add(item: 8);
     List<int32> b = copy a;    // deep copy — independent buffer

@@ -1,9 +1,10 @@
+import std::collections::{List};
 // An indexed element is a PLACE (lvalue), so nested subscripts read AND write: m[i][j], m[i][j] = v.
 fn int32 main() {
     Fixed<Fixed<int32, 2>, 2> m = [[1, 2], [3, 4]];
     m[0][1] = 50;                       // nested write (value-array nesting)
     m[1][0] = 60;
-    List<Fixed<int32, 2>> g = new List<Fixed<int32, 2>>();
+    List<Fixed<int32, 2>> g = List();
     Fixed<int32, 2> row = [10, 20];
     g.add(item: row);
     g[0][1] = 5;                        // nested write through a heap collection

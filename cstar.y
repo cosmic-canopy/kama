@@ -193,7 +193,7 @@ struct cstaryystype {
 %type <strings> import_path export_manifest_opt export_name_list for_kinds_opt kind_name_list
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
-%type <identifier> type_param type_decl_head enum_underlying_opt implements_entry
+%type <identifier> type_param type_decl_head enum_underlying_opt implements_entry method_when_opt
 %type <identifierlist> friend_member_list interface_type_list type_arg_list type_param_list bound_list type_params_opt
 %type <modifier> modifier function_modifier_opt parameter_modifier_opt
 %type <modifierlist> modifiers modifiers_opt
@@ -1038,9 +1038,15 @@ field_declaration
   : modifiers_opt type variable_declarators SEMICOLON   { $$ = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
   ;
 method_declaration
-  : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
-  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isConst = ($2 != nullptr); $$ = m; }
-  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $10); m->isConst = ($2 != nullptr); m->isRef = true; $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
+  : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); m->isConst = ($2 != nullptr); if ($9) { m->whenBound = $9; m->whenParam = $9->whenParam; } $$ = m; }
+  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); m->isConst = ($2 != nullptr); if ($9) { m->whenBound = $9; m->whenParam = $9->whenParam; } $$ = m; }
+  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11); m->isConst = ($2 != nullptr); m->isRef = true; if ($10) { m->whenBound = $10; m->whenParam = $10->whenParam; } $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
+  ;
+/* `fn … when T: Bound` — a method present only when the type-param satisfies a bound (the value
+   `iterator()` needs a Copyable element). The bound type carries the param name in `whenParam`. */
+method_when_opt
+  : /* Nothing */   { $$ = SharedIdentifier(); }
+  | WHEN IDENTIFIER COLON type_name   { $4->whenParam = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); $$ = $4; }
   ;
 /* A method name is an identifier — but `copy`/`give` are hand-off markers only in expression
    position, so we let them name a member too (contextual keywords). This is what lets a `resource`

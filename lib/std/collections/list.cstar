@@ -1,0 +1,71 @@
+namespace std::collections;
+export { List };
+
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn Ptr realloc(Ptr p, usize n);
+extern fn void free(Ptr p);
+
+// A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value.
+type value ListIter<T> {
+    Ptr<T> data; int32 pos; int32 len;
+    public ListIter(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    public fn Optional<T> next() {
+        if (this.pos >= this.len) { return Optional::None; }
+        int32 p = this.pos; this.pos = this.pos + 1;
+        unsafe { return Optional::Some(value: copy this.data[p]); }   // yield a COPY (the list keeps its element)
+    }
+}
+
+// A mutable iterator (the `foreach (ref T x in list)` protocol): hasNext() + a place-returning next().
+type value ListIterMut<T> {
+    Ptr<T> data; int32 pos; int32 len;
+    public ListIterMut(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    public fn bool hasNext() { return this.pos < this.len; }
+    public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
+}
+
+// A growable, heap-owning, bounds-checked list (= C++ `std::vector` / Rust `Vec`). Move-only by
+// default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
+// A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves.
+type resource List<T> implements Copyable(bare: give) when T: Copyable {
+    Ptr<T> data; int32 len; int32 cap;
+
+    public List() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; }
+
+    public fn void add(T item) {
+        if (this.len == this.cap) {
+            int32 nc = this.cap == 0 ? 4 : this.cap * 2;
+            unsafe { this.data = cast<Ptr<T>>(realloc(p: cast<Ptr>(this.data), n: cast<usize>(nc) * sizeof(T))); }
+            this.cap = nc;
+        }
+        unsafe { this.data[this.len] = give item; }   // relocate the element into the fresh slot (raw move)
+        this.len = this.len + 1;
+    }
+
+    public fn int32 length() { return this.len; }
+
+    public ref T operator[](int32 i) {
+        if (i < 0 || i >= this.len) { panic(msg: "List index out of bounds"); }
+        unsafe { return this.data[i]; }
+    }
+
+    // The by-value `foreach (T x in list)` yields COPIES, so it exists only for a Copyable element.
+    // (Move-only elements — `List<Owned>` — borrow instead: `foreach (ref T x in list)`.)
+    public fn ListIter<T> iterator() when T: Copyable { return ListIter::<T>(data: this.data, len: this.len); }
+    public fn ListIterMut<T> iterMut() { return ListIterMut::<T>(data: this.data, len: this.len); }
+
+    // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
+    public fn List<T> copy() {
+        List<T> result = List();
+        int32 i = 0;
+        while (i < this.len) { result.add(item: copy this[i]); i = i + 1; }
+        return result;
+    }
+
+    ~List() {   // drop each element (a no-op for a value), then free the buffer
+        int32 i = 0;
+        while (i < this.len) { drop(value: this[i]); i = i + 1; }
+        unsafe { free(p: cast<Ptr>(this.data)); }
+    }
+}

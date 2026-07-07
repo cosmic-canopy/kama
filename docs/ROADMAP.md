@@ -70,12 +70,17 @@ the no-GC and shared-nothing-concurrency positions. Concretely:
   - No first-class / stored borrows — patterns Rust writes as `&'a T` in a struct become refcounted
     ownership in cstar.
   - No static aliasing/exclusivity proof for the cases a borrow checker would cover.
-  - **A known soundness gap — NOW CLOSED.** Mutating a collection *while iterating it by `ref`* —
-    `foreach (ref e in v) { v.add(…); e = … }` — used to compile but was a **use-after-free** (verified
-    under ASan) when the mutation reallocated. Fixed (`fc212e7`) with a targeted rule (no lifetimes):
-    growing the iterated collection (`add`) inside its own `foreach` is now a clean compile error naming
-    the collection. Place-return escape is also enforced (a `ref T` result must borrow `this`/a `ref`
-    param, never a local).
+  - **A known soundness gap — REOPENED by the library-container port (follow-up).** Mutating a
+    collection *while iterating it by `ref`* — `foreach (ref e in v) { v.add(…); e = … }` — is a
+    **use-after-free** when the mutation reallocates. The old intrinsic `foreach` had a targeted
+    compile-time guard (`fc212e7`), but that guard knew it was iterating a compiler-owned `List`; the
+    **library `List`** (ROADMAP step 6) iterates through the opaque *iterator protocol*, so the compiler
+    no longer sees the alias and the guard is gone (xfail `foreach_mutate_add` retired). Reinstating it
+    belongs with the **formal `Iterable`/`Iterator` contract** follow-up below: either a C#-style
+    library-side modification counter (a `mods` field snapshotted by the iterator, checked in `next()` —
+    safety in the library, cstar's stated boundary) or borrow discipline encoded in the contract.
+    Place-return escape is still enforced (a `ref T` result must borrow `this`/a `ref` param, never a
+    local).
 - **Position:** keep the no-borrow-checker stance (core to "favor simplicity" — no lifetime
   annotations), and *close the specific holes* the absence leaves (as done above) with targeted rules
   rather than a whole analysis — the way null-safety is enforced.
@@ -146,7 +151,10 @@ building it:
   `generic_bound_*` fixtures, so execute it deliberately (a migration pass) here.
 - **The capability-contract family** — the compiler-recognized, **opt-in-via-`implements`** contracts that
   form cstar's nominal, explicit vocabulary: **`Iterator<T>`** (exists; `foreach`/bounds still structural
-  until the nominal migration above), **`Deref<T>`** (DONE — auto-deref; see the sequence below),
+  until the nominal migration above — **follow-up (user):** give `foreach` an explicit `Iterable`/`Iterator`
+  contract that the library iterators (`ListIter`/`ListIterMut` in `std::collections`) **`implements`**, so
+  the protocol is nominal and load-bearing instead of matched by method name; this is also where the
+  iterator-invalidation guard returns, per the reopened soundness gap above), **`Deref<T>`** (DONE — auto-deref; see the sequence below),
   **`Copyable`** (below), **`Comparable<T>`** (future). All are the same species — a contract the compiler
   keys a capability off of. New ones follow the `Deref` template (prelude contract + a recognizer keyed on
   the contract name/instance).
@@ -261,7 +269,14 @@ contract, then delete the intrinsic — shrinking the compiler core toward a rea
    `--gc-sections` already ships in release builds. **Now unblocks step 4** (the smart-pointer purge lands
    `Owned`/`Shared`/`Weak` into `lib/std/memory/` — the module's first residents).
 6. **Containers as cstar library types → remove intrinsic containers** — repeat the port for the
-   collections (`Depth 2` `ref T operator[]` already unblocks writing them in cstar).
+   collections. **`List<T>` DONE** — `lib/std/collections/list.cstar` (growable, heap-owning, bounds-checked
+   `operator[]`, value + mutable iterators, deep-`copy()`, dtor); `implements Copyable(bare: give) when T:
+   Copyable` so `List<int32>` copies while `List<Owned<Shape>>` compiles + is fully usable (the conditional
+   `copy()`/`iterator()` are emitted only when the element is Copyable). Intrinsic `List` recognition removed
+   from `cType`/`isCollectionType`; ~35 fixtures + the `dispatch`/`alloc` benches migrated to `import
+   std::collections::{List}` + `List()`. Resource elements borrow (`foreach (ref T …)`); the by-value
+   iterator is Copyable-elements-only. **`Array<T>` (fixed-size sibling) remains** — same pattern, ~4
+   fixtures, then the intrinsic `registerCollection`/`CollKind` path is fully retired.
 7. **Reflection + attributes** — the opt-in reflection system (design brief below); the attribute
    language feature + serialization modules. Comes last, on top of the modular stdlib.
 

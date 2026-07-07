@@ -1,3 +1,4 @@
+import std::collections::{List};
 // M26f-4 — a `resource` (destructible) VALUE opts into the `Copyable` contract by declaring a
 // public nullary `copy` returning its own type. Its presence makes the give/copy marker MANDATORY
 // ("scream when ambiguous"): `copy x` deep-copies (the source stays valid), `give x` moves. This

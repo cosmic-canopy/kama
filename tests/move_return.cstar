@@ -1,3 +1,4 @@
+import std::collections::{List};
 // M26f-2 — the factory case: `return give r` moves the local OUT (its dtor is suppressed in
 // the factory), so the returned value is dropped exactly once by the caller — not twice (the
 // "factory landmine"). One drop of code 3 -> trace 3.
