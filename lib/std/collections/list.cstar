@@ -28,7 +28,7 @@ type value ListIterMut<T> implements IteratorMut<T> {
 // A growable, heap-owning, bounds-checked list (= C++ `std::vector` / Rust `Vec`). Move-only by
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves.
-type resource List<T> implements Copyable(bare: give) when T: Copyable {
+type resource List<T> implements Copyable(bare: give) when T: Copyable, IterableMut<T>, Iterable<T> when T: Copyable {
     Ptr<T> data; int32 len; int32 cap;
 
     public List() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; }

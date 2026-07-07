@@ -3780,6 +3780,10 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             unsupported(("`foreach (ref …)` over `" + container + "` needs a nullary `iterMut()` "
                          "(a mutable iterator)").c_str(), fe->line); *_out << "\n"; return;
         }
+        if (!implementsContractTemplate(cc, "IterableMut")) {   // nominal: the container must declare it
+            unsupported(("`" + container + "` must `implements IterableMut<T>` to be used in a "
+                         "`foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
+        }
         iterCType = cTypeInInstance(container, iterMi->returnType);
         ClassInfo* ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
         MethodInfo* hasNextMi = ic ? findMethod(ic, "hasNext", nullptr) : nullptr;
@@ -3801,9 +3805,13 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         ClassInfo* ic = nullptr;
         if (iterMi) { iterCType = cTypeInInstance(container, iterMi->returnType);
                       ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
-                      iterInit = iterMi->cName + "(&(" + emitExpression(fe->expression) + "))"; }
+                      iterInit = iterMi->cName + "(&(" + emitExpression(fe->expression) + "))";
+                      if (!implementsContractTemplate(cc, "Iterable")) {   // nominal: the container declares it
+                          unsupported(("`" + container + "` must `implements Iterable<T>` to be used in a "
+                                       "`foreach`").c_str(), fe->line); *_out << "\n"; return;
+                      } }
         else        { iterCType = container; ic = cc;                       // the container IS the iterator
-                      iterInit = emitExpression(fe->expression); }
+                      iterInit = emitExpression(fe->expression); }          // (needs only Iterator<T>, below)
         MethodInfo* nextMi = ic ? findMethod(ic, "next", nullptr) : nullptr;
         if (!nextMi || !nextMi->params.empty()) {
             unsupported(("`foreach` over `" + container + "` needs a nullary `iterator()`, or a nullary "

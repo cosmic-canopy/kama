@@ -27,7 +27,7 @@ type value ArrayIterMut<T> implements IteratorMut<T> {
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
 // `size` elements is live from construction (zero-initialized) to drop — unlike `List`, which tracks a
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
-type resource Array<T> implements Copyable(bare: give) when T: Copyable {
+type resource Array<T> implements Copyable(bare: give) when T: Copyable, IterableMut<T>, Iterable<T> when T: Copyable {
     Ptr<T> data; int32 size;
 
     public Array(int32 size) {

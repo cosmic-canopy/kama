@@ -297,7 +297,13 @@ static const char* PRELUDE_SRC =
     // two are parallel — Rust's iter()/iter_mut() split). A container hands one out via a nullary
     // `iterator()` / `iterMut()` factory method.
     "type contract Iterator<T> for both { fn Optional<T> next(); }\n"
-    "type contract IteratorMut<T> for both { fn bool hasNext(); fn ref T next(); }\n";
+    "type contract IteratorMut<T> for both { fn bool hasNext(); fn ref T next(); }\n"
+    // Container-side opt-in: a type that `implements Iterable<T>` hands out a by-value iterator via a
+    // nullary `iterator()`; `IterableMut<T>` hands out a mutable iterator via `iterMut()`. `foreach`
+    // requires the container to declare the matching one (nominal on both sides). A type that is its OWN
+    // iterator (implements `Iterator<T>` and is iterated directly) needs no `Iterable`.
+    "type contract Iterable<T> for both { fn Iterator<T> iterator(); }\n"
+    "type contract IterableMut<T> for both { fn IteratorMut<T> iterMut(); }\n";
 
 // Parse an in-memory cstar source string into a CompilationUnit (flex string buffer). nullptr on error.
 SharedCompilationUnit parseString(const char* src, const std::string& name)
