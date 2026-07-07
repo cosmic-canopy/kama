@@ -223,11 +223,10 @@ std::string CEmitter::cType(SharedIdentifier type)
         for (auto& a : *type->genericArgs) m += "_" + mangleElem(a);
         return m;
     }
-    // Intrinsic collection types spell their mangled struct name: Array<int32> -> Array_int32.
-    // (List is a library generic type now — std::collections::List — and smart pointers likewise; they
-    // flow through the generic-type arm below.)
-    if (type->genericArg && type->value &&
-        (*type->value == "Array" || *type->value == "BindableFunctionPtr"))
+    // `BindableFunctionPtr<Sig>` spells its mangled struct name. (List AND Array are library generic
+    // types now — std::collections — and smart pointers likewise; they flow through the generic-type
+    // arm below.)
+    if (type->genericArg && type->value && *type->value == "BindableFunctionPtr")
         return *type->value + "_" + mangleElem(type->genericArg);
     // a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box_int32`).
     // Reached only for a non-reserved name with a type arg; under _typeSubst the arg's `T` resolves.
@@ -2477,10 +2476,11 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
 {
     if (!t) return false;
     if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string
-    // List and the smart pointers are library generic types (std::collections / std::memory), not
-    // intrinsic collections; they route through registerGenericTypeInst.
+    // List, Array, and the smart pointers are library generic types (std::collections / std::memory),
+    // not intrinsic collections; they route through registerGenericTypeInst. `Fixed<T,N>` (the
+    // const-generic value array) stays intrinsic.
     return t->genericArg && t->value &&
-           (*t->value == "Array" || *t->value == "BindableFunctionPtr" || *t->value == "Fixed");
+           (*t->value == "BindableFunctionPtr" || *t->value == "Fixed");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the

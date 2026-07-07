@@ -5,6 +5,7 @@
 // bridged at the edge) — it is the correct idiom, not a missing feature. cstar can
 // spell `const T*` since M24e; for a const-pointer C API that needs NO cast, see
 // tests/const_ffi.d.
+import std::collections::{Array};
 extern "<stdlib.h>";
 extern "cb.h";
 fnptr int32 Comparator(Ptr<int32> a, Ptr<int32> b);   // a function-pointer type
@@ -14,7 +15,7 @@ fn int32 cmp(Ptr<int32> a, Ptr<int32> b) { int32 r = 0; unsafe { r = a[0] - b[0]
 
 fn int main()
 {
-    Array<int32> a = new Array<int32>(size: 4);
+    Array<int32> a = Array(size: 4);
     a[0] = 30; a[1] = 10; a[2] = 2; a[3] = 99;
     Comparator c = cmp;                                                    // bind, zero-cost
     qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));// hand the fn ptr to C

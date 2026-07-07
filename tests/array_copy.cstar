@@ -1,0 +1,11 @@
+import std::collections::{Array};
+// `copy` of an `Array<T>` whose element is Copyable makes a deep, independent copy (fresh buffer,
+// each element copied). Mutating the copy must not touch the original. ASan proves independence:
+// a shallow copy would alias + double-free the one buffer at scope exit.
+fn int main() {
+    Array<int32> a = Array(size: 3);
+    a[0] = 10; a[1] = 20; a[2] = 12;
+    Array<int32> b = copy a;     // deep copy — b owns its own buffer
+    b[0] = 0;                    // mutate the copy only
+    return a[0] + a[1] + a[2] + b[1] + b[2];   // 10+20+12 + 20+12 = 74
+}

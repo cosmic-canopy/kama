@@ -1,7 +1,8 @@
 // Array<T>: fixed buffer, indexed assignment, foreach iteration, RAII free.
+import std::collections::{Array};
 fn int main()
 {
-    Array<int32> a = new Array<int32>(size: 5);
+    Array<int32> a = Array(size: 5);
     a[0] = 10;
     a[1] = 8;
     a[2] = 7;

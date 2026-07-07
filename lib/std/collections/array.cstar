@@ -1,0 +1,66 @@
+namespace std::collections;
+export { Array };
+
+extern "<stdlib.h>";
+extern fn Ptr calloc(usize count, usize size);
+extern fn void free(Ptr p);
+
+// A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
+type value ArrayIter<T> {
+    Ptr<T> data; int32 pos; int32 len;
+    public ArrayIter(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    public fn Optional<T> next() {
+        if (this.pos >= this.len) { return Optional::None; }
+        int32 p = this.pos; this.pos = this.pos + 1;
+        unsafe { return Optional::Some(value: copy this.data[p]); }   // yield a COPY (the array keeps its element)
+    }
+}
+
+// A mutable iterator (the `foreach (ref T x in arr)` protocol): hasNext() + a place-returning next().
+type value ArrayIterMut<T> {
+    Ptr<T> data; int32 pos; int32 len;
+    public ArrayIterMut(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    public fn bool hasNext() { return this.pos < this.len; }
+    public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
+}
+
+// A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
+// `size` elements is live from construction (zero-initialized) to drop — unlike `List`, which tracks a
+// separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
+type resource Array<T> implements Copyable(bare: give) when T: Copyable {
+    Ptr<T> data; int32 size;
+
+    public Array(int32 size) {
+        unsafe { this.data = cast<Ptr<T>>(calloc(count: cast<usize>(size), size: sizeof(T))); }
+        this.size = size;
+    }
+
+    public fn int32 length() { return this.size; }
+
+    public ref T operator[](int32 i) {
+        if (i < 0 || i >= this.size) { panic(msg: "Array index out of bounds"); }
+        unsafe { return this.data[i]; }
+    }
+
+    // The safe Array->pointer bridge: obtaining the buffer pointer is safe; dereferencing it is `unsafe`.
+    public fn Ptr<T> dataPtr() { return this.data; }
+
+    // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.
+    // (Move-only elements borrow instead: `foreach (ref T x in arr)`.)
+    public fn ArrayIter<T> iterator() when T: Copyable { return ArrayIter::<T>(data: this.data, len: this.size); }
+    public fn ArrayIterMut<T> iterMut() { return ArrayIterMut::<T>(data: this.data, len: this.size); }
+
+    // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
+    public fn Array<T> copy() {
+        Array<T> result = Array(size: this.size);
+        int32 i = 0;
+        while (i < this.size) { result[i] = copy this[i]; i = i + 1; }
+        return result;
+    }
+
+    ~Array() {   // drop each element (a no-op for a value), then free the buffer
+        int32 i = 0;
+        while (i < this.size) { drop(value: this[i]); i = i + 1; }
+        unsafe { free(p: cast<Ptr>(this.data)); }
+    }
+}

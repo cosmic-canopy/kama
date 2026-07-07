@@ -1,4 +1,4 @@
-import std::collections::{List};
+import std::collections::{List, Array};
 // M26i — method call on a collection element access: `list[i].m()` / `a[i].m()`.
 // The element is borrowed IN PLACE (bounds-checked `__at`), so a const method reads the
 // stored element and a mutating method mutates it (uniform with every other `x.m()`).
@@ -25,7 +25,7 @@ fn int32 main()
     sum = sum + xs[1].get();                      // 30 + 25 = 55
 
     // same for a fixed Array
-    Array<Counter> ar = new Array<Counter>(size: 2);
+    Array<Counter> ar = Array(size: 2);
     Counter z = Counter(start: 3);
     ar[0] = z;
     ar[0].bump(by: 4);                            // 3 -> 7

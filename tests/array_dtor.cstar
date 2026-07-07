@@ -2,6 +2,7 @@
 // Probe's destructor on every live element when the array leaves scope (RAII),
 // then free the buffer. Each element dtor traces a constant code; the trace
 // fold proves exactly `size` dtor calls fired.
+import std::collections::{Array};
 extern fn void cstar_trace(int code);
 extern fn int cstar_trace_get();
 
@@ -13,7 +14,7 @@ type resource Probe
 
 fn int build()
 {
-    Array<Probe> a = new Array<Probe>(size: 3);
+    Array<Probe> a = Array(size: 3);
     return 0;   // `a` drops here -> Array_Probe__dtor -> 3x Probe__dtor
 }
 
