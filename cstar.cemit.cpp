@@ -2123,6 +2123,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ClassInfo ci;
         ci.name  = isExt ? *cd->name->value : qualify(*cd->name->value);   // scope-mangle / FFI literal name
         ci.kind  = kind;
+        // A non-generic prelude type (e.g. `Chars`, the codepoint iterator) has method bodies but no
+        // owning module to emit them — flag it so the header emits them static-inline.
+        if (unit == _preludeUnit && (!cd->typeParams || cd->typeParams->empty())) ci.preludeStatic = true;
         ci.scope = _nsCtx.scope;
         ci.usings = _nsCtx.usings;
         ci.symbolAliases = _nsCtx.symbolAliases;
@@ -2565,6 +2568,8 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("concat", { ParamSig{"other", false, ""} }, collType);   // returns a string
         addMethod("cstr",   {}, SharedIdentifier());                        // FFI: const char*
         addMethod("get",    { ParamSig{"index", false, ""} }, elem);        // `s[i]` -> the i-th byte (uint8)
+        if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
+        addMethod("chars",  {}, std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Chars")));   // codepoint iterator
     } else {
         if (kind == CollKind::List)
             addMethod("add", { ParamSig{"item", false, elemClass} }, SharedIdentifier());
@@ -6712,6 +6717,14 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 ? std::string("self")
                 : "&(" + emitExpression(receiver) + ")";
     }
+    // `s.chars()` — a UTF-8 codepoint iterator borrowing the string's bytes, built as a value (compound
+    // literal) so it works in expression position (a foreach subject). Fields (data, len, pos) by order.
+    if (cls == "cstar_string" && method == "chars") {
+        if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
+        std::string charsC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Chars")));
+        std::string sv = emitExpression(receiver);
+        return "((" + charsC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, 0 })";
+    }
     std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line);
     // a place-returning `fn ref T m(…)` returns a `T*`; deref it so the call is an lvalue EVERYWHERE
     // (read copies out; `m(…) = x` writes through; `m(…).f` / `ref m(…)` / nesting all compose via the
@@ -6984,7 +6997,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (!ci->isCollection && !ci->isExternStruct && ci->copyable)
             *_out << ci->name << " " << ci->name << "__copy(" << ci->name << "* self);\n";
     emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
-    for (ClassInfo* ci : classes) { scopeOf(ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci); }
+    for (ClassInfo* ci : classes) {
+        if (ci->preludeStatic) continue;   // emitted static-inline below (a non-generic prelude type)
+        scopeOf(ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci);
+    }
     // specialized generic-type instance prototypes (ctor/dtor/method), `static`.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/1);
@@ -7020,6 +7036,17 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // specialized generic-type instance BODIES (ctor/method/dtor), `static`, in the header.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/2);
+
+    // Non-generic prelude types (e.g. Chars): the prelude is collect-only, so no module emits their
+    // bodies — emit prototype + definition static-inline here (struct went out above with the others).
+    for (auto& kv : _classes) {
+        if (!kv.second.preludeStatic || kv.second.methods.empty()) continue;
+        scopeOf(kv.second.scope, kv.second.usings, kv.second.symbolAliases);
+        _emitStaticClass = true;
+        emitClassPrototypes(kv.second);
+        emitClassDefinitions(kv.second);
+        _emitStaticClass = false;
+    }
 }
 
 // This file's DEFINITIONS: its classes' vtable instances + interface vtables +

@@ -303,7 +303,30 @@ static const char* PRELUDE_SRC =
     // requires the container to declare the matching one (nominal on both sides). A type that is its OWN
     // iterator (implements `Iterator<T>` and is iterated directly) needs no `Iterable`.
     "type contract Iterable<T> for both { fn Iterator<T> iterator(); }\n"
-    "type contract IterableMut<T> for both { fn IteratorMut<T> iterMut(); }\n";
+    "type contract IterableMut<T> for both { fn IteratorMut<T> iterMut(); }\n"
+    // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
+    // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
+    // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is
+    // clamped to the available bytes rather than reading past the end.
+    "type value Chars implements Iterator<char> {\n"
+    "    Ptr<uint8> data; int32 len; int32 pos;\n"
+    "    public fn Optional<char> next() {\n"
+    "        if (this.pos >= this.len) { return Optional::None; }\n"
+    "        uint32 c0 = 0; unsafe { c0 = cast<uint32>(this.data[this.pos]); }\n"
+    "        uint32 cp = c0; int32 n = 1;\n"
+    "        if (c0 >= 240ui32) { cp = c0 & 7ui32; n = 4; }\n"
+    "        else if (c0 >= 224ui32) { cp = c0 & 15ui32; n = 3; }\n"
+    "        else if (c0 >= 192ui32) { cp = c0 & 31ui32; n = 2; }\n"
+    "        if (this.pos + n > this.len) { n = this.len - this.pos; }\n"
+    "        int32 i = 1;\n"
+    "        while (i < n) {\n"
+    "            uint32 cc = 0; unsafe { cc = cast<uint32>(this.data[this.pos + i]); }\n"
+    "            cp = (cp << 6ui32) | (cc & 63ui32); i = i + 1;\n"
+    "        }\n"
+    "        this.pos = this.pos + n;\n"
+    "        return Optional::Some(value: cast<char>(cp));\n"
+    "    }\n"
+    "}\n";
 
 // Parse an in-memory cstar source string into a CompilationUnit (flex string buffer). nullptr on error.
 SharedCompilationUnit parseString(const char* src, const std::string& name)

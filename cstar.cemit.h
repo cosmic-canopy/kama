@@ -126,6 +126,9 @@ struct ClassInfo {
     std::map<std::string, MethodInfo> methods;    // by cstar method name
     bool                              hasCtor = false;
     bool                              synthCtor = false;  // default ctor synthesized (vtable init)
+    bool                              preludeStatic = false;  // a non-generic prelude type (e.g. Chars) whose
+                                                              // method bodies must be emitted static-inline in
+                                                              // the header (the prelude is otherwise collect-only)
     std::vector<ParamSig>             ctorParams;
     ClassConstructorDeclarationNode*  ctorNode = nullptr;
     ClassDeclarationNode*             node    = nullptr;
