@@ -387,6 +387,43 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     return 0;
 }
 
+// Transpile a multi-unit program (a file plus every module it `import`s) into ONE self-contained .c.
+// Emits the normal shared-header + per-unit layout to temp siblings, then folds it into a single file:
+// the header verbatim (its include guard + runtime includes stay), then each unit's body with its
+// `#include "<name>.gen.h"` line dropped (the header is already inlined). Keeps `transpile`'s one-file
+// contract while supporting the module system (a single translation unit for downstream tools).
+int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units,
+                                 const std::vector<std::string>& unitPaths,
+                                 const std::string& outPath, bool emitLines)
+{
+    std::string dir = dirName(outPath);
+    std::string stem = stripExtension(baseName(outPath));
+    std::string headerName = stem + ".gen.h";
+    std::string headerPath = dir + "/" + headerName;
+    std::vector<std::string> cPaths;
+    for (size_t i = 0; i < units.size(); ++i)
+        cPaths.push_back(dir + "/" + stem + "__u" + std::to_string(i) + ".c.tmp");
+    if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines) != 0) return 1;
+
+    std::ofstream out(outPath);
+    if (!out) { fprintf(stderr, "cstar: error: cannot write '%s'\n", outPath.c_str()); return 1; }
+    { std::ifstream h(headerPath); out << h.rdbuf(); }
+    out << "\n";
+    std::string incLine = "#include \"" + headerName + "\"";
+    for (auto& cp : cPaths) {
+        std::ifstream u(cp);
+        std::string line;
+        while (std::getline(u, line)) {
+            if (line.find(incLine) != std::string::npos) continue;   // header already inlined above
+            out << line << "\n";
+        }
+    }
+    out.close();
+    remove(headerPath.c_str());
+    for (auto& cp : cPaths) remove(cp.c_str());
+    return 0;
+}
+
 int runCmd(const std::string& cmd)
 {
     int rc = system(cmd.c_str());
@@ -464,12 +501,16 @@ int main(int argc, char** argv)
     std::string runtimeDir = resolveRuntimeDir(argv[0]);
 
     if (subcommand == "transpile") {
-        if (inputs.size() > 1) {
-            fprintf(stderr, "cstar: transpile takes a single file; use `build` for multi-file programs\n");
-            return 2;
-        }
+        // Transpile to ONE .c. A file with no imports stays on the single-unit fast path; anything that
+        // `import`s modules pulls in every transitive unit (loadProgramUnits, as `build` does) and folds
+        // them into one self-contained translation unit.
         std::string outPath = output.empty() ? (stripExtension(input) + ".c") : output;
-        int rc = transpileToFile(input, outPath, emitLines);
+        std::vector<SharedCompilationUnit> units;
+        std::vector<std::string> unitPaths;
+        if (!loadProgramUnits(inputs, argv[0], units, unitPaths)) return 1;
+        int rc = (units.size() == 1)
+               ? transpileUnitToFile(units[0], unitPaths[0], outPath, emitLines)
+               : transpileProgramToSingleFile(units, unitPaths, outPath, emitLines);
         if (rc == 0) fprintf(stderr, "cstar: wrote %s\n", outPath.c_str());
         return rc;
     }
