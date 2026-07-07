@@ -344,6 +344,12 @@ static inline cstar_string cstar_string__concat(cstar_string* self, cstar_string
     buf[n] = '\0';
     cstar_string r; r.data = buf; r.len = n; r.cap = n + 1; return r;
 }
+// Bounds-checked byte access: `s[i]` returns the i-th UTF-8 byte (a uint8). Traps on out-of-range.
+// (Codepoints come from `.chars()`; this is the raw byte, honest to the UTF-8-bytes model.)
+static inline uint8_t cstar_string__get(cstar_string* self, size_t i) {
+    if (i >= self->len) cstar_bounds_fail(i, self->len);
+    return (uint8_t)self->data[i];
+}
 
 // User-triggerable trap for `panic(msg: …)` and a failed `assert(cond: …)`. Writes
 // "cstar: panic: <msg>" to stderr and `abort()`s — the same clean-abort mechanism as the bounds

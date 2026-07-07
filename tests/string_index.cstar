@@ -1,0 +1,10 @@
+// Byte indexing: `s[i]` returns the i-th UTF-8 byte (a uint8), bounds-checked. Codepoints via .chars().
+fn int main() {
+    string s = "ABC";                              // bytes 65, 66, 67
+    uint8 a = s[0];                                // 65
+    uint8 c = s[2];                                // 67
+    int32 r = cast<int32>(a) + cast<int32>(c);     // 132
+    int32 sum = 0;
+    foreach (uint8 b in s) { sum = sum + cast<int32>(b); }   // 65+66+67 = 198
+    return (r + sum) % 256;                        // (132 + 198) % 256 = 74
+}

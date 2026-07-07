@@ -2497,8 +2497,10 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     bool isStr    = collType->builtInVal == IDENTIFIER_STRING_VAL;
     CollKind kind = isStr ? CollKind::String
                   : (*collType->value == "List") ? CollKind::List : CollKind::Array;
-    SharedIdentifier elem = isStr ? SharedIdentifier() : collType->genericArg;
-    std::string elemCType  = isStr ? "" : cType(elem);
+    // A string's element is a raw byte (`s[i]` -> uint8), so byte iteration/indexing routes through the
+    // collection machinery; codepoints come from `.chars()` (a separate iterator).
+    SharedIdentifier elem = isStr ? primTypeNode(IDENTIFIER_UINT8_VAL) : collType->genericArg;
+    std::string elemCType  = isStr ? "uint8_t" : cType(elem);
     std::string elemMangle = isStr ? "" : mangleElem(elem);
     std::string elemClass  = (!isStr && isClass(elemCType)) ? elemCType : "";
 
@@ -2562,6 +2564,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("equals", { ParamSig{"other", false, ""} }, SharedIdentifier());
         addMethod("concat", { ParamSig{"other", false, ""} }, collType);   // returns a string
         addMethod("cstr",   {}, SharedIdentifier());                        // FFI: const char*
+        addMethod("get",    { ParamSig{"index", false, ""} }, elem);        // `s[i]` -> the i-th byte (uint8)
     } else {
         if (kind == CollKind::List)
             addMethod("add", { ParamSig{"item", false, elemClass} }, SharedIdentifier());
