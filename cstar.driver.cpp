@@ -572,10 +572,11 @@ int main(int argc, char** argv)
         // .cstar source. (Audit Step 2 — "no silent surprises".)
         cmd << compiler << " -std=c11 -Werror=return-type -Werror=uninitialized ";
         if (release) {
-            // Optimized, no debug info, asserts off. -ffunction/data-sections +
+            // Optimized, no debug info, asserts off. Native uses -O3 (max speed — matches Rust's release
+            // default); wasm uses -Oz (size — download cost dominates). -ffunction/data-sections +
             // --gc-sections let the linker drop unused (std)library code — the
             // "pay for what you use" pruning lever. Native also strips symbols.
-            cmd << (wasm ? "-Oz " : "-O2 ") << "-DNDEBUG -ffunction-sections -fdata-sections ";
+            cmd << (wasm ? "-Oz " : "-O3 ") << "-DNDEBUG -ffunction-sections -fdata-sections ";
             if (!wasm) {
 #ifdef __APPLE__
                 cmd << "-Wl,-dead_strip ";

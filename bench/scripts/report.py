@@ -140,7 +140,9 @@ Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after
 
 cstar transpiles to C and is compiled by the **same clang** as the C baseline, so on native compute
 workloads cstar is expected to be **within measurement noise of C/C++** — that is the design, not a
-finding. The signals worth trusting here are:
+finding. All four LLVM-AOT languages (C, C++, Rust, cstar) are compiled at **`-O3`** for an apples-to-apples
+comparison — otherwise the optimization level, not the language, dominates a tiny kernel (e.g. `fib` at
+C-`-O2` vs Rust-`-O3` differs ~20%, but at equal `-O3` C and Rust are identical). The signals worth trusting here are:
 1. cstar (native) vs **managed/interpreted** languages (C#, Java, Go, Lua, Python),
 2. **peak RSS**, **compile time**, and **package size** (the low-footprint / self-contained goal),
 3. on the WASM track, **cstar→wasm vs hand-written JS/TS** under the same node.

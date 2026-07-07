@@ -1,6 +1,6 @@
 # cstar benchmark results
 
-_Generated: 2026-07-07 16:59 · arch: aarch64 (Linux) · in the `cstar-bench` container_
+_Generated: 2026-07-07 17:13 · arch: aarch64 (Linux) · in the `cstar-bench` container_
 
 Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · openjdk version "21.0.11" 2026-04-21 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
 Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after each time is relative to cstar for that workload (native → cstar, wasm → cstar→wasm). Peak RSS: `/usr/bin/time -v`.
@@ -9,7 +9,9 @@ Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after
 
 cstar transpiles to C and is compiled by the **same clang** as the C baseline, so on native compute
 workloads cstar is expected to be **within measurement noise of C/C++** — that is the design, not a
-finding. The signals worth trusting here are:
+finding. All four LLVM-AOT languages (C, C++, Rust, cstar) are compiled at **`-O3`** for an apples-to-apples
+comparison — otherwise the optimization level, not the language, dominates a tiny kernel (e.g. `fib` at
+C-`-O2` vs Rust-`-O3` differs ~20%, but at equal `-O3` C and Rust are identical). The signals worth trusting here are:
 1. cstar (native) vs **managed/interpreted** languages (C#, Java, Go, Lua, Python),
 2. **peak RSS**, **compile time**, and **package size** (the low-footprint / self-contained goal),
 3. on the WASM track, **cstar→wasm vs hand-written JS/TS** under the same node.
@@ -70,22 +72,22 @@ diverged:
 
 | workload | cstar | C | C++ | Rust | Go | C# (JIT) | Java (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|---|
-| fib | 7.44 (1.0×) | 7.35 (1.0×) | 7.53 (1.0×) | 6.08 (0.8×) | 10.1 (1.4×) | 28.22 (3.8×) | 25.61 (3.4×) | 89.37 (12.0×) | 214.68 (28.9×) |
-| pi | 11.78 (1.0×) | 11.81 (1.0×) | 11.95 (1.0×) | 11.96 (1.0×) | 13.88 (1.2×) | 30.16 (2.6×) | 35.56 (3.0×) | 119.55 (10.1×) | 1612.48 (136.9×) |
-| collatz | 65.53 (1.0×) | 65.61 (1.0×) | 66.02 (1.0×) | 65.65 (1.0×) | 90.93 (1.4×) | 123.74 (1.9×) | 133.87 (2.0×) | 964.76 (14.7×) | 2937.23 (44.8×) |
-| dispatch | 6.2 (1.0×) | 6.21 (1.0×) | 7.38 (1.2×) | 6.4 (1.0×) | 13.64 (2.2×) | 25.32 (4.1×) | 28.48 (4.6×) | 103.17 (16.6×) | 624.38 (100.7×) |
-| alloc | 1.2 (1.0×) | 1.14 (0.9×) | 1.6 (1.3×) | 2.27 (1.9×) | 6.46 (5.4×) | 23.15 (19.3×) | 42.57 (35.5×) | 24.26 (20.2×) | 108.28 (90.2×) |
-| fnptr | 2.53 (1.0×) | 2.51 (1.0×) | 2.73 (1.1×) | 2.68 (1.1×) | 5.15 (2.0×) | 31.38 (12.4×) | 28.01 (11.1×) | 139.09 (55.0×) | 711.12 (281.1×) |
+| fib | 5.91 (1.0×) | 5.85 (1.0×) | 6.23 (1.1×) | 6.17 (1.0×) | 9.88 (1.7×) | 29.9 (5.1×) | 25.76 (4.4×) | 89.7 (15.2×) | 210.72 (35.7×) |
+| pi | 11.79 (1.0×) | 11.79 (1.0×) | 12.06 (1.0×) | 11.95 (1.0×) | 13.99 (1.2×) | 28.27 (2.4×) | 35.78 (3.0×) | 118.28 (10.0×) | 1649.76 (139.9×) |
+| collatz | 65.63 (1.0×) | 65.59 (1.0×) | 65.86 (1.0×) | 65.68 (1.0×) | 91.33 (1.4×) | 122.75 (1.9×) | 133.05 (2.0×) | 960.98 (14.6×) | 2932.38 (44.7×) |
+| dispatch | 6.15 (1.0×) | 6.18 (1.0×) | 6.4 (1.0×) | 6.43 (1.0×) | 13.51 (2.2×) | 27.77 (4.5×) | 28.68 (4.7×) | 103.51 (16.8×) | 626.4 (101.9×) |
+| alloc | 1.2 (1.0×) | 1.15 (1.0×) | 1.59 (1.3×) | 2.26 (1.9×) | 6.48 (5.4×) | 25.6 (21.3×) | 43.81 (36.5×) | 24.21 (20.2×) | 109.01 (90.8×) |
+| fnptr | 2.51 (1.0×) | 2.49 (1.0×) | 2.72 (1.1×) | 2.67 (1.1×) | 5.04 (2.0×) | 33.19 (13.2×) | 28.32 (11.3×) | 138.02 (55.0×) | 727.15 (289.7×) |
 
 ## NATIVE — peak resident memory (MB)
 
 | workload | cstar | C | C++ | Rust | Go | C# (JIT) | Java (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|---|
-| fib | 2 | 2 | 3 | 2 | 2 | 19 | 38 | 2 | 8 |
+| fib | 2 | 2 | 3 | 2 | 2 | 19 | 39 | 2 | 8 |
 | pi | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
 | collatz | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
 | dispatch | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
-| alloc | 2 | 2 | 3 | 2 | 7 | 25 | 79 | 2 | 8 |
+| alloc | 2 | 2 | 3 | 2 | 6 | 25 | 79 | 2 | 8 |
 | fnptr | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
 
 ## NATIVE — package size
@@ -114,24 +116,24 @@ Interpreted languages (Lua, Python, JS) have no compile step and are omitted._
 
 | lang | compile time | binaries built |
 |---|---|---|
-| cstar | 424 ms | 6 |
-| C | 227 ms | 6 |
-| C++ | 459 ms | 6 |
-| Rust | 1272 ms | 6 |
-| Go | 1313 ms | 6 |
-| C# (JIT) | 1505 ms | 1 |
-| Java (JIT) | 251 ms | 1 |
+| cstar | 453 ms | 6 |
+| C | 246 ms | 6 |
+| C++ | 480 ms | 6 |
+| Rust | 1266 ms | 6 |
+| Go | 1266 ms | 6 |
+| C# (JIT) | 1472 ms | 1 |
+| Java (JIT) | 265 ms | 1 |
 
 ## WASM track — execution time under node (median, ms)
 
 | workload | cstar→wasm | JS | TS |
 |---|---|---|---|
-| fib | 19.94 (1.0×) | 27.43 (1.4×) | 26.85 (1.3×) |
-| pi | 21.49 (1.0×) | 25.91 (1.2×) | 26.59 (1.2×) |
-| collatz | 92.62 (1.0×) | 415.34 (4.5×) | 417.63 (4.5×) |
-| dispatch | 27.52 (1.0×) | 21.73 (0.8×) | 22.29 (0.8×) |
-| alloc | 16.1 (1.0×) | 15.67 (1.0×) | 15.78 (1.0×) |
-| fnptr | 11.16 (1.0×) | 42.25 (3.8×) | 41.92 (3.8×) |
+| fib | 19.78 (1.0×) | 26.85 (1.4×) | 26.78 (1.4×) |
+| pi | 21.7 (1.0×) | 26.04 (1.2×) | 26.01 (1.2×) |
+| collatz | 92.71 (1.0×) | 422.63 (4.6×) | 416.63 (4.5×) |
+| dispatch | 28.04 (1.0×) | 21.94 (0.8×) | 22.35 (0.8×) |
+| alloc | 16.13 (1.0×) | 15.41 (1.0×) | 15.66 (1.0×) |
+| fnptr | 11.13 (1.0×) | 41.66 (3.7×) | 41.49 (3.7×) |
 
 ## WASM track — peak resident memory (MB)
 
@@ -158,8 +160,8 @@ _cstar→wasm is transpile-to-C **plus** `emcc -O3`; TS is `tsc`. Hand-written J
 
 | lang | compile time | binaries built |
 |---|---|---|
-| cstar→wasm | 3135 ms | 6 |
-| TS | 233 ms | 1 |
+| cstar→wasm | 3151 ms | 6 |
+| TS | 222 ms | 1 |
 
 ## Caveats
 - **`dispatch` measures *true* dynamic dispatch.** An earlier variant called two stack locals of

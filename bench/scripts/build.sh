@@ -33,9 +33,9 @@ for w in $WORKLOADS; do
   ( ./cstar transpile bench/src/cstar/$w.cstar -o bench/build/wasm/$w.c --no-line >/dev/null 2>&1 \
     && emcc -std=c11 -O3 -DNDEBUG -I. bench/build/wasm/$w.c -o bench/build/wasm/$w.js >/dev/null 2>&1 ); rc=$?
   add_ct cstar-wasm $t; [ $rc -eq 0 ] && echo "  ok cstar-wasm" || echo "  FAIL cstar-wasm"
-  t=$(now_ms); clang   -O2 -DNDEBUG -s bench/src/c/$w.c   -o bench/build/c/$w     2>/dev/null; rc=$?
+  t=$(now_ms); clang   -O3 -DNDEBUG -s bench/src/c/$w.c   -o bench/build/c/$w     2>/dev/null; rc=$?
   add_ct c $t;   [ $rc -eq 0 ] && echo "  ok c"   || echo "  FAIL c"
-  t=$(now_ms); clang++ -O2 -DNDEBUG -s bench/src/cpp/$w.cpp -o bench/build/cpp/$w 2>/dev/null; rc=$?
+  t=$(now_ms); clang++ -O3 -DNDEBUG -s bench/src/cpp/$w.cpp -o bench/build/cpp/$w 2>/dev/null; rc=$?
   add_ct cpp $t; [ $rc -eq 0 ] && echo "  ok cpp" || echo "  FAIL cpp"
   t=$(now_ms); rustc -C opt-level=3 -C strip=symbols bench/src/rust/$w.rs -o bench/build/rust/$w 2>/dev/null; rc=$?
   add_ct rust $t; [ $rc -eq 0 ] && echo "  ok rust" || echo "  FAIL rust"
