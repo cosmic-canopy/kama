@@ -47,6 +47,41 @@ non-goal.
   carry several `operator*` distinguished by operand type (`mat*vec`, `mat*mat`, `v*s`, `s*v`),
   matching C++/C#/Rust. Reopen only if a concrete example shows named params can't express it.
 
+## Strings (UTF-8)
+
+**Direction: UTF-8 everywhere** (utf8everywhere.org). `string` stays a compiler-known primitive
+(the type keyword + literals are compiler-emitted, like Rust's `str`), enriched with UTF-8 ergonomics
+rather than moved to a library — the representation was already UTF-8 bytes (`{ char* data; size_t len;
+size_t cap }`, `cap==0` = borrowed literal / `>0` = heap-owned RAII).
+
+**DONE (this session):**
+- **`char`** — a distinct primitive (a Unicode scalar value, backed by `uint32`, NOT a numeric type so
+  it can't silently mix with ints). Literals `'a'`, `'\n'`, `'\u{…}'` (1-6 hex). Equality + ordering;
+  `char↔int` via `cast` (arithmetic stays explicit — the Rust model). (`5dd3c0b`)
+- **Byte indexing** — `s[i]` → `uint8` (bounds-checked); `foreach (uint8 b in s)` iterates bytes. The
+  `uint8` type makes "this is a byte, not a character" explicit. (`fc833e6`)
+- **`.chars()`** — a UTF-8 codepoint iterator (`foreach (char c in s.chars())`), decoding one scalar
+  value per `next()`. Written in pure cstar (prelude `Chars implements Iterator<char>`), riding the
+  nominal iterator contract; a borrow, valid while the string is. (`5cb8d30`)
+
+**Phase 3 — ergonomics (next):**
+- **`+` / `==` operators** — special-case string operands in the binary-op emission (string is intrinsic,
+  so these are compiler special-cases, not user overloads): `+` → `cstar_string__concat`, `==`/`!=` →
+  `cstar_string__equals`. Keep `.concat()`/`.equals()` too.
+- **`substring(start:, end:)`** — an **owned** copy of the byte range `[start, end)` (safe without
+  lifetimes; a borrowed view would need lifetime tracking). Byte-range, consistent with byte indexing;
+  a codepoint-boundary-aware variant is a later refinement.
+- **Richer methods** — `find(needle:) -> int32` (byte index or -1), `contains`, `startsWith`,
+  `endsWith`, `isEmpty` (runtime helpers; keep minimal + composable). Optional `.bytes()` iterator for
+  symmetry with `.chars()` (though `s[i]` + `foreach (uint8…)` already cover byte access).
+
+**Deferred (own efforts):**
+- **Multibyte *source* char literals** — `'é'` (a multibyte UTF-8 char between quotes) isn't lexed
+  today (single-byte + escapes + `'\u{…}'` only). Workaround: `'\u{E9}'`. A lexer pass to match + decode
+  a multibyte source char.
+- **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
+  for arbitrary types (also covers number→string). Its own design pass; sequence with reflection.
+
 ## Reference model, the standard library & near-term prerequisites
 
 Three linked threads (policy: nothing untracked). The **prerequisites are now DONE** (the reference
