@@ -540,6 +540,7 @@ private:
     // A move-only VALUE — a destructible class value that isn't a smart-ptr/collection/
     // extern struct. It MOVES on hand-off (its dtor is suppressed) and is never silently copied.
     bool isMoveOnlyValue(const std::string& cls) const;
+    bool ownsByValue(const std::string& cls) const;   // move-only resource OR heap-owning collection/string (a by-value OWNING slot)
     // A move-only VALUE that opted into `Copyable` (a public nullary `copy` returning its
     // own type). Its presence makes the give/copy marker mandatory: bare hand-off = error, `copy`
     // deep-copies via copy(), `give` moves.
@@ -607,6 +608,7 @@ private:
     bool isBaseOf(const std::string& base, const std::string& derived) const;   // base in derived's chain
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is Ptr<T>, the element C-type; else ""
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
+    std::string lvalueCType(SharedExpression e);        // C type of an lvalue local/param/field, KEEPING collection/string types
     bool exprIsString(SharedExpression e);              // true iff `e` statically has kama type `string` (kama_string)
     std::string hoistStringTemp(SharedExpression e);    // owned-string RVALUE -> a scope-dtor'd temp (frees it); "" for lvalue/literal/non-string
     void emitStruct(ClassInfo& ci);

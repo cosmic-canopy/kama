@@ -1,0 +1,2 @@
+// a bare `s = t` reassignment of a named `string` aliases (double-free) — must say give/copy.
+fn int main() { string s = "ab"; string t = "cd"; s = t; return 0; }

@@ -1,0 +1,10 @@
+// A `resource` storing a `string` field: the by-value ctor param is OWNED, so `this.a = give x` moves it
+// into the field (zero copy). The caller chooses `give` (move `x` in) or `copy` (keep `x`). Here `copy x`
+// gives the ctor its own buffer, so the field and the callers `x` free independently. ASan-clean is the
+// proof (the confirmed double-free repro, now safe).
+type resource Box {
+    string a;
+    public Box(string x) { this.a = give x; }
+    public fn int32 len() { return cast<int32>(this.a.length()); }
+}
+fn int main() { string x = "he" + "llo"; Box b = Box(x: copy x); return b.len() + cast<int32>(x.length()); }  // 5 + 5 = 10

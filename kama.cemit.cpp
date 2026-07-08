@@ -912,7 +912,10 @@ void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::strin
 {
     if (!_scopes.empty())
         _scopes.back().locals.push_back({cVar, className});
-    if (isMoveOnlyValue(className)) _moveState[cVar] = MoveState::NotMoved;  // track for move analysis
+    // Track for move analysis: move-only resources AND heap-owning collections/strings (so `give s`
+    // suppresses the source's scope-drop, and a use-after-move is caught). A never-`give`n collection/
+    // string stays NotMoved → drops normally, exactly as before.
+    if (ownsByValue(className)) _moveState[cVar] = MoveState::NotMoved;
 }
 
 // --- Blocks ----------------------------------------------------------------
@@ -1407,6 +1410,24 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 if (doCopy) { indent(depth); *_out << tmp << " = " << rc << "__copy(&(" << emitExpression(retExpr) << "));\n"; }
                 else { std::string mv = moveOnlySource(retExpr, n->line); if (!mv.empty()) markMoved(mv); }
             }
+            // returning a named collection/`string` VALUE. `exprClass(retExpr)` is "" for a collection/
+            // string, so key on the function's return type. `give` OR a BARE dying local moves out (mark
+            // the source moved so the scope-unwind skips its dtor — the blit into `tmp` already relocated
+            // the buffer); `copy` deep-copies (`__copy`; the source survives + its own dtor releases).
+            else if (ownsByValue(_currentReturnCType) && _classes.count(_currentReturnCType)
+                     && _classes[_currentReturnCType].isCollection && isNamedValue(retExpr.get())) {
+                if (handoff == 2) {                                  // copy = deep copy
+                    auto ci = _collections.find(_currentReturnCType);
+                    if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
+                        unsupported(("`copy` of a `" + _currentReturnCType + "` needs copyable elements — "
+                                     "use `give` to move it out").c_str(), n->line);
+                    else { indent(depth); *_out << tmp << " = " << _currentReturnCType << "__copy(&("
+                                                << emitExpression(retExpr) << "));\n"; }
+                } else {                                             // give OR bare dying local: move out
+                    std::string mv = moveOnlySource(retExpr, n->line);
+                    if (!mv.empty()) markMoved(mv);
+                }
+            }
             // Same move-out for a returned BindableFunctionPtr: it may own its
             // bound object, so the scope dtor must NOT drop what the caller now owns.
             else if (auto* rid = dynamic_cast<IdentifierNode*>(retExpr.get())) {
@@ -1733,6 +1754,67 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
                 indent(depth); *_out << b << " = " << (doCopy ? (lty + "__copy(&(" + src + "))") : src) << ";\n";
                 if (!mv.empty()) markMoved(mv);
+                return;
+            }
+        }
+
+        // Reassigning a collection/`string` lvalue (`s = …`, `this.a = …`). exprClass() is "" for a
+        // collection/string, so resolve via lvalueCType. Release the target's old buffer, then: from a
+        // NAMED source require a marker (bare→error, like the decl handler) — `give` moves (relocate struct
+        // + null source + markMoved), `copy` deep-copies (`__copy`); a FRESH owned rvalue moves in bare.
+        // Without this branch a named RHS aliases (double-free) and a fresh-rvalue RHS leaks the old buffer.
+        if (as->token == EQ) {
+            std::string lty = lvalueCType(as->unaryExpression);
+            if (ownsByValue(lty) && _classes.count(lty) && _classes[lty].isCollection) {
+                SharedExpression rhs = as->expression;
+                int handoff = 0;
+                if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
+                checkConstWrite(as->unaryExpression, n->line);
+                std::string lname;
+                if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
+                    if (lid->value && (!lid->qualifier || lid->qualifier->empty())) lname = *lid->value;
+
+                if (isNamedValue(rhs.get())) {
+                    if (handoff == 0)
+                        unsupported("a collection/`string` hand-off must say `give` (move) or `copy` (deep) "
+                                    "— write `… = give …` or `… = copy …`, or pass by `ref` to borrow", n->line);
+                    std::string rname;
+                    if (auto* rid = dynamic_cast<IdentifierNode*>(rhs.get()))
+                        if (rid->value && (!rid->qualifier || rid->qualifier->empty())) rname = *rid->value;
+                    if (handoff == 2) {                                   // copy = deep copy via __copy
+                        auto ci = _collections.find(lty);
+                        if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
+                            unsupported(("`copy` of a `" + lty + "` needs copyable elements — its elements own "
+                                         "resources but aren't `Copyable`; use `give` to move").c_str(), n->line);
+                        if (!lname.empty() && rname == lname) return;     // self-copy: no-op
+                        std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
+                        line(n->line);
+                        indent(depth); *_out << lty << "__dtor(&" << b << ");\n";
+                        indent(depth); *_out << b << " = " << lty << "__copy(&(" << src << "));\n";
+                        return;
+                    }
+                    // give = move: relocate the struct, then null the source so its scope-drop is a no-op.
+                    std::string mv = moveOnlySource(rhs, n->line);
+                    if (!lname.empty() && !mv.empty() && mv == lname)
+                        unsupported("handing a value onto itself would use it after it was dropped", n->line);
+                    if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // target live again
+                    std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
+                    line(n->line);
+                    indent(depth); *_out << lty << "__dtor(&" << b << ");\n";
+                    indent(depth); *_out << b << " = " << src << ";\n";
+                    indent(depth); *_out << "(" << src << ").data = NULL; (" << src << ").len = 0;\n";
+                    if (!mv.empty()) markMoved(mv);
+                    return;
+                }
+                // Fresh owned rvalue (concat/substring/`List()`/literal): the RHS may READ the old LHS
+                // (`s = s.concat(…)`), so hoist it into a temp BEFORE releasing the old buffer, then assign.
+                std::string b = emitExpression(as->unaryExpression);
+                std::string rv = emitExpression(as->expression);
+                std::string t = "__asgn" + std::to_string(_tempCounter++);
+                line(n->line);
+                indent(depth); *_out << lty << " " << t << " = " << rv << ";\n";
+                indent(depth); *_out << lty << "__dtor(&" << b << ");\n";
+                indent(depth); *_out << b << " = " << t << ";\n";
                 return;
             }
         }
@@ -4155,6 +4237,19 @@ bool CEmitter::isMoveOnlyValue(const std::string& cls) const
     return ci.destructible;
 }
 
+// A by-value class value the SLOT/CALLEE OWNS: a move-only `resource`, or a heap-owning collection/string
+// (List/Array/string — NOT a `Fixed<T,N>`, a bitwise value; NOT a smart pointer, which has its own
+// give/copy-with-refcount path). The gate for "a NAMED hand-off here needs `give` (move) / `copy` (deep)".
+// Disjoint from isMoveOnlyValue (which excludes collections), so every existing isMoveOnlyValue(x) store
+// site reads ownsByValue(x) with no change for a non-collection type.
+bool CEmitter::ownsByValue(const std::string& cls) const
+{
+    if (cls.empty() || isSmartPtrClass(cls)) return false;
+    if (isMoveOnlyValue(cls)) return true;
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.isCollection && !isFixedColl(cls);
+}
+
 // has this type opted into the `Copyable` contract? (Detected structurally at collection
 // time — a public nullary `copy` returning the own type; see collectClasses.) Only ever consulted
 // for a move-only value, where it flips the marker from "silent move" to "mandatory give/copy".
@@ -4837,7 +4932,6 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // callee owns and drops at fn-end. The retain (copy) / invalidate (give) is a
             // statement, materialized as a HOISTED temp (pure ISO C).
             std::string argCls = exprClass(argExpr);
-            bool collArg = !argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection;
             if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
                 CollKind k = smartKind(argCls);
                 // Default the natural op: Owned -> give (move; copy illegal), Shared/Weak -> copy
@@ -4867,8 +4961,32 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call "
                                 "result needs no marker", srcLine);
                 s += val;
-            } else if (collArg && handoff) {
-                unsupported("passing a collection by value is not yet supported — pass it by `ref` to borrow", srcLine);
+            } else if (ownsByValue(p.className) && _classes.count(p.className)
+                       && _classes[p.className].isCollection && isNamedValue(argExpr.get())) {
+                // A collection/`string` passed BY VALUE to an OWNING param transfers ownership: the callee
+                // owns it and drops it at fn-end (param-drop registration). `give` MOVES it in (relocate
+                // struct + null source + markMoved); `copy` deep-copies (`__copy`); a BARE named arg is an
+                // error. Gated on the PARAM's declared type — the `kama_string__*` read-only intrinsics
+                // register their string args with `className == ""`, so this is skipped for them and they
+                // keep the borrow-hoist above (Phase-3 ergonomics unchanged). A fresh rvalue / literal arg
+                // (not isNamedValue) moves in bare via the `else` below.
+                if (handoff == 0)
+                    unsupported("passing a collection/`string` by value transfers ownership — say `give` "
+                                "(move) or `copy` (deep), or pass by `ref` to borrow", srcLine);
+                else if (handoff == 2) {                              // copy = deep
+                    auto ci = _collections.find(p.className);
+                    if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
+                        unsupported(("`copy` of a `" + p.className + "` needs copyable elements — its elements "
+                                     "own resources but aren't `Copyable`; use `give` to move").c_str(), srcLine);
+                    s += p.className + "__copy(&(" + val + "))";
+                } else {                                             // give = move: relocate + null source
+                    std::string t = "__kama_carg" + std::to_string(_tempCounter++);
+                    std::string blit = p.className + " " + t + " = (" + val + "); ("
+                                     + val + ").data = NULL; (" + val + ").len = 0;";
+                    if (_hoistOK) { _hoisted.push_back(blit); s += t; }
+                    else          { s += "({ " + blit + " " + t + "; })"; }
+                    std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv);
+                }
             } else if (isMoveOnlyValue(argCls) && isNamedValue(argExpr.get())) {
                 // A `resource` VALUE passed by value → the callee owns it and drops it at fn-end. `give`
                 // MOVES it in (mark the source moved); `copy` passes a fresh copy (source survives); a
@@ -5990,11 +6108,13 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
             _localCTypes[pn] = pty;                    // full C type (incl. enums/primitives) — e.g. a plain-enum `match` subject
-            // a by-value smart-ptr param is OWNED by the callee — drop it at fn-end.
-            // The function-root scope is created later (emitBlockScoped); stash it there.
-            if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || isMoveOnlyValue(pty))) {
+            // a by-value smart-ptr OR owning collection/`string` param is OWNED by the callee — drop it at
+            // fn-end (a `ref` param is a borrow — never). The function-root scope is created later
+            // (emitBlockScoped); stash it there. Sound because the arg path now forces the caller to
+            // `give`/`copy` a named owned collection/string (it can't pass a live-owned one bare).
+            if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || ownsByValue(pty))) {
                 _pendingParamDtors.push_back({pn, pty});
-                if (isMoveOnlyValue(pty)) _moveState[pn] = MoveState::NotMoved;   // track move-only param
+                if (ownsByValue(pty)) _moveState[pn] = MoveState::NotMoved;   // track move-only / collection / string param
             }
         }
     }
@@ -6400,9 +6520,10 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
             _localCTypes[pn] = pty;                    // full C type (incl. enums/primitives) — e.g. a plain-enum `match` subject
-            // a by-value smart-ptr param is owned by the callee — drop it at fn-end.
-            // The root scope is already on the stack, so record it directly (dropped last).
-            if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || isMoveOnlyValue(pty))) recordDestructibleLocal(pn, pty);
+            // a by-value smart-ptr OR owning collection/`string` param is owned by the callee — drop it at
+            // fn-end (a `ref` is a borrow — never). The root scope is already on the stack, so record it
+            // directly (dropped last). recordDestructibleLocal also move-tracks an ownsByValue param.
+            if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || ownsByValue(pty))) recordDestructibleLocal(pn, pty);
         }
     }
 
@@ -6567,6 +6688,40 @@ std::string CEmitter::hoistStringTemp(SharedExpression e)
 }
 
 // The static class type of an expression ("" if primitive/unknown).
+// The C type of an assignable lvalue (a local/param or a field) — like exprClass, but KEEPS
+// collection/string/Fixed types (exprClass drops them via its `isClass` filter, returning ""). Used by the
+// assignment handler to detect an `ownsByValue` LHS (a `string`/collection local, param, or `this.`-field).
+std::string CEmitter::lvalueCType(SharedExpression e)
+{
+    if (!e) return "";
+    ASTNode* n = e.get();
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (!id->value) return "";
+        auto it = _localCTypes.find(*id->value);                     // a local / param (incl. kama_string / List_*)
+        if (it != _localCTypes.end()) return it->second;
+        if (_currentClass) {                                         // a bare or `this.`-qualified field of the current class
+            ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
+            if (owner)
+                for (auto& f : owner->fields)
+                    if (f.name == *id->value && f.type) return cType(f.type);
+        }
+        return "";
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {             // `obj.field` — resolve the receiver's field
+        std::string recv = exprClass(ma->expression);
+        if (isSmartPtrClass(recv)) recv = _classes[recv].collElemClass;
+        else { std::string dt = derefTarget(recv); if (!dt.empty()) recv = dt; }
+        if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
+            ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
+            if (owner)
+                for (auto& f : owner->fields)
+                    if (f.name == *ma->identifier->value && f.type) return cType(f.type);
+        }
+        return "";
+    }
+    return "";
+}
+
 std::string CEmitter::exprClass(SharedExpression e)
 {
     if (!e) return "";
