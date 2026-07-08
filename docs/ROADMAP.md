@@ -101,8 +101,10 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
      All 29 binding signatures verified identical to the POSIX branch (a mismatch = guaranteed Windows
      compile error). **Blind write — not compilable on the Linux/macOS dev boxes; first green Windows CI
      run is the real verification.** Flip the CI leg to required once reliably green.
-   - **WASM — honestly scoped.** Builds via emscripten's POSIX shims but fs is a *virtual* FS and there are
-     no browser sockets — wasm net defers to the WebRTC/host path (2.0). Confirm-it-builds + a docs note.
+   - ✅ **WASM — build-checked.** `std::fs` **builds and runs** under emscripten (`--target wasm --cc emcc`,
+     verified `fs_roundtrip` → exit 42 under node's in-memory MEMFS — the virtual FS is fully functional).
+     `std::net` **compiles** to wasm (emscripten ships the `<sys/socket.h>` shims) but does not run without a
+     WebSocket proxy — wasm net stays deferred to the WebRTC/host path (2.0). Native is the first-class target.
    - **Deferred (tracked):** UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`, buffered readers, richer
      `Metadata` (mtime/perms), path helpers, `mkdir`. Follow-up: `examples/httpd.kama` end-to-end over `curl`.
 4. **Math layer.** `Vec2/3/4`, `Mat4` (`Fixed<float32,16>` or `Fixed<Vec4,4>`), `Quat` as ordinary `value`
