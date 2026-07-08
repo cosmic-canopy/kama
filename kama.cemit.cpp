@@ -6833,9 +6833,10 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
 
 // obj.method(args) — the member-access callee form (incl. this.method()).
 // A "stable" string reference: re-evaluating it is side-effect-free and yields the same bytes+length —
-// a variable, a literal, `this`, or a field access rooted in one of those. Used to gate `.split()`, which
-// reads its receiver/separator twice and borrows their bytes for the whole loop, so a call/operator
-// rvalue (owned or side-effecting) must be bound to a local first.
+// a variable, a literal, `this`, or a field access rooted in one of those. Gates `.chars()`/`.split()`,
+// which read their receiver (and separator) twice and BORROW the bytes for the whole loop; a call/operator
+// rvalue (owned or side-effecting) would desync the two reads (OOB) and leak/dangle, so it must be bound
+// to a local first.
 static bool isStableStringRef(ASTNode* n)
 {
     if (!n) return false;
@@ -6907,7 +6908,15 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     }
     // `s.chars()` — a UTF-8 codepoint iterator borrowing the string's bytes, built as a value (compound
     // literal) so it works in expression position (a foreach subject). Fields (data, len, pos) by order.
+    // Reads the receiver TWICE and borrows its bytes for the whole loop, so require a stable reference —
+    // an owned/side-effecting rvalue (`s.trim().chars()`) would desync the two reads and leak/dangle.
     if (cls == "kama_string" && method == "chars") {
+        if (!isStableStringRef(receiver.get())) {
+            unsupported("`.chars()` borrows and re-reads its receiver across the whole loop, so it must be "
+                        "a stable reference (a variable, literal, or field) — bind an expression like "
+                        "`s.trim()` to a local first", call->line);
+            return "0";
+        }
         if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
         std::string charsC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Chars")));
         std::string sv = emitExpression(receiver);
