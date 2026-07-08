@@ -1,0 +1,14 @@
+// `==` / `!=` on strings, both paths; a borrowed literal and a heap-owned concat compare the same.
+fn int main() {
+    string a = "hello";
+    string b = "hello";
+    string c = "world";
+    int32 r = 0;
+    if (a == b) { r = r + 1; }
+    if (a == c) { r = r + 100; }       // skipped
+    if (a != c) { r = r + 2; }
+    if (a != b) { r = r + 100; }       // skipped
+    string ab = a + "!";               // heap-owned
+    if (ab == "hello!") { r = r + 4; }
+    return r;                          // 7
+}

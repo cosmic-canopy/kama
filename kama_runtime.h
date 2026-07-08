@@ -351,6 +351,139 @@ static inline uint8_t kama_string__get(kama_string* self, size_t i) {
     return (uint8_t)self->data[i];
 }
 
+// --- Strings Phase 3 (ergonomics) -------------------------------------------
+// Owned byte-range copy of `[start, end)` — a fresh heap-owned string (cap>0). Traps
+// (kama_bounds_fail, the same clean abort as __get) on `start > end || end > len`. This is a
+// BYTE range, NOT codepoint-validated — honest to the UTF-8-bytes model; use .chars() for codepoints.
+static inline kama_string kama_string__substring(kama_string* self, size_t start, size_t end) {
+    if (start > end || end > self->len) kama_bounds_fail(end, self->len);
+    size_t n = end - start;
+    kama_string r; r.len = n;
+    if (n == 0) { r.data = NULL; r.cap = 0; return r; }
+    char* buf = (char*)kama_alloc(n + 1);
+    kama_copy(buf, self->data + start, n);
+    buf[n] = '\0';
+    r.data = buf; r.cap = n + 1;   // heap-owned
+    return r;
+}
+// Byte offset of the first occurrence of `needle`; an empty needle matches at 0. Internal helper
+// (raw found-flag + offset); the emitter wraps it as `Optional<usize>` for `.find()`. A plain
+// borrowed-safe byte scan (no <string.h>).
+static inline bool kama_string__find_raw(kama_string* self, kama_string needle, size_t* out) {
+    if (needle.len == 0) { *out = 0; return true; }
+    if (needle.len > self->len) return false;
+    for (size_t i = 0; i + needle.len <= self->len; ++i)
+        if (kama_cmp(self->data + i, needle.data, needle.len) == 0) { *out = i; return true; }
+    return false;
+}
+static inline bool kama_string__contains(kama_string* self, kama_string needle) {
+    size_t o; return kama_string__find_raw(self, needle, &o);
+}
+static inline bool kama_string__startsWith(kama_string* self, kama_string prefix) {
+    return prefix.len <= self->len &&
+           (prefix.len == 0 || kama_cmp(self->data, prefix.data, prefix.len) == 0);
+}
+static inline bool kama_string__endsWith(kama_string* self, kama_string suffix) {
+    return suffix.len <= self->len &&
+           (suffix.len == 0 || kama_cmp(self->data + (self->len - suffix.len), suffix.data, suffix.len) == 0);
+}
+static inline bool kama_string__isEmpty(kama_string* self) { return self->len == 0; }
+
+// ASCII whitespace only (space, tab, LF, VT, FF, CR). Unicode whitespace is deferred to a Unicode module.
+static inline int kama_string__is_ws(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+}
+// Owned copy of `[lo, hi)` (a heap string, or the empty string). Shared by the trim family.
+static inline kama_string kama_string__slice_owned(kama_string* self, size_t lo, size_t hi) {
+    size_t n = hi - lo;
+    kama_string r; r.len = n;
+    if (n == 0) { r.data = NULL; r.cap = 0; return r; }
+    char* buf = (char*)kama_alloc(n + 1);
+    kama_copy(buf, self->data + lo, n);
+    buf[n] = '\0';
+    r.data = buf; r.cap = n + 1;
+    return r;
+}
+static inline kama_string kama_string__trimStart(kama_string* self) {
+    size_t lo = 0;
+    while (lo < self->len && kama_string__is_ws(self->data[lo])) ++lo;
+    return kama_string__slice_owned(self, lo, self->len);
+}
+static inline kama_string kama_string__trimEnd(kama_string* self) {
+    size_t hi = self->len;
+    while (hi > 0 && kama_string__is_ws(self->data[hi - 1])) --hi;
+    return kama_string__slice_owned(self, 0, hi);
+}
+static inline kama_string kama_string__trim(kama_string* self) {
+    size_t lo = 0, hi = self->len;
+    while (lo < hi && kama_string__is_ws(self->data[lo])) ++lo;
+    while (hi > lo && kama_string__is_ws(self->data[hi - 1])) --hi;
+    return kama_string__slice_owned(self, lo, hi);
+}
+// Owned copy with every non-overlapping occurrence of `old` replaced by `with` (byte-literal, greedy
+// left-to-right). Two-pass: count matches, allocate exactly, fill. An empty (or too-long) `old`
+// returns a copy of self — no infinite loop. `n = len - count*old.len + count*with.len` never
+// underflows: non-overlapping matches guarantee `count*old.len <= len`.
+static inline kama_string kama_string__replace(kama_string* self, kama_string old, kama_string with) {
+    if (old.len == 0 || old.len > self->len) return kama_string__copy(self);
+    size_t count = 0, j = 0;
+    while (j + old.len <= self->len) {
+        if (kama_cmp(self->data + j, old.data, old.len) == 0) { ++count; j += old.len; }
+        else ++j;
+    }
+    if (count == 0) return kama_string__copy(self);
+    size_t n = self->len - count * old.len + count * with.len;
+    kama_string r; r.len = n;
+    if (n == 0) { r.data = NULL; r.cap = 0; return r; }
+    char* buf = (char*)kama_alloc(n + 1);
+    size_t w = 0, i = 0;
+    while (i + old.len <= self->len) {
+        if (kama_cmp(self->data + i, old.data, old.len) == 0) {
+            if (with.len) kama_copy(buf + w, with.data, with.len);
+            w += with.len; i += old.len;
+        } else buf[w++] = self->data[i++];
+    }
+    while (i < self->len) buf[w++] = self->data[i++];
+    buf[n] = '\0';
+    r.data = buf; r.cap = n + 1;
+    return r;
+}
+// ASCII-only case mapping — bytes >= 0x80 (signed char < 0) are left untouched, which is UTF-8-safe
+// (an ASCII byte never occurs inside a multibyte sequence). Full Unicode casing is deferred.
+static inline kama_string kama_string__toLower(kama_string* self) {
+    if (self->len == 0) { kama_string r; r.data = NULL; r.len = 0; r.cap = 0; return r; }
+    char* buf = (char*)kama_alloc(self->len + 1);
+    for (size_t i = 0; i < self->len; ++i) {
+        char c = self->data[i];
+        buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+    }
+    buf[self->len] = '\0';
+    kama_string r; r.data = buf; r.len = self->len; r.cap = self->len + 1; return r;
+}
+static inline kama_string kama_string__toUpper(kama_string* self) {
+    if (self->len == 0) { kama_string r; r.data = NULL; r.len = 0; r.cap = 0; return r; }
+    char* buf = (char*)kama_alloc(self->len + 1);
+    for (size_t i = 0; i < self->len; ++i) {
+        char c = self->data[i];
+        buf[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+    }
+    buf[self->len] = '\0';
+    kama_string r; r.data = buf; r.len = self->len; r.cap = self->len + 1; return r;
+}
+// Owned (heap) string from a raw byte range `base[start .. start+len)`. This lets the `.split()`
+// iterator hold a borrowed `Ptr<uint8>` (so it stays a POD `value` type, like Chars) yet yield OWNED
+// pieces, without exposing raw allocation to kama source. Declared in the prelude as
+// `extern fn string kama_string_from_raw(Ptr<uint8> base, int32 start, int32 len);`. len<=0 -> "".
+static inline kama_string kama_string_from_raw(const uint8_t* base, int32_t start, int32_t len) {
+    kama_string r;
+    if (start < 0 || len <= 0) { r.data = NULL; r.len = 0; r.cap = 0; return r; }   // defensive: caller (Split) always passes >=0
+    char* buf = (char*)kama_alloc((size_t)len + 1);
+    kama_copy(buf, base + start, (size_t)len);
+    buf[len] = '\0';
+    r.data = buf; r.len = (size_t)len; r.cap = (size_t)len + 1;
+    return r;
+}
+
 // User-triggerable trap for `panic(msg: …)` and a failed `assert(cond: …)`. Writes
 // "kama: panic: <msg>" to stderr and `abort()`s — the same clean-abort mechanism as the bounds
 // trap (no <stdio.h>, no undefined behavior). Never returns.

@@ -1,0 +1,11 @@
+// `toLower` / `toUpper` — ASCII-only mapping; bytes >= 0x80 (inside "é") are left untouched (UTF-8-safe).
+fn int main() {
+    string s = "AbC";
+    int32 r = 0;
+    if (s.toLower() == "abc") { r = r + 1; }
+    if (s.toUpper() == "ABC") { r = r + 2; }
+    string acc = "A\u{E9}Z";                          // "AéZ" — é is 2 bytes, both >= 0x80
+    if (acc.toLower() == "a\u{E9}z") { r = r + 4; }   // A->a, Z->z, é bytes unchanged
+    if (acc.toUpper() == "A\u{E9}Z") { r = r + 8; }   // already upper ASCII; é unchanged
+    return r;                                         // 15
+}

@@ -1,0 +1,8 @@
+// mixed `string + <number>` must be rejected at compile time (no implicit conversion; a
+// Display/to-string substrate is a later roadmap item), not silently converted.
+fn int main() {
+    string s = "x";
+    int32 n = 1;
+    string bad = s + n;
+    return 0;
+}

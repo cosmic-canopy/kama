@@ -383,6 +383,12 @@ private:
     // inline ctor cleanly falls back to the existing rejection rather than emit a dangling temp.
     std::vector<std::string> _hoisted;
     bool                     _hoistOK = false;
+    // A `while`/`for` condition re-evaluates each iteration and its hoisted temps are declared INSIDE the
+    // loop-and-a-half `while(1){…}` rewrite, which has no matching per-iteration RAII-drop slot. So an
+    // owned-string temp (which needs a drop) must NOT hoist there — `hoistStringTemp` returns "" and the
+    // operand falls back to the leak-but-valid compound-literal path (an uncommon corner). `if` conditions
+    // (single-shot, wrapper-block drop wired) are unaffected.
+    bool                     _loopCond = false;
     void flushHoisted(int depth);
     // Emit an if/while/for condition with value-producing constructs allowed (they hoist a temp);
     // any hoisted temps are left in `_hoisted` for the caller to flush (empty => the fast path).
@@ -426,6 +432,7 @@ private:
     void registerOptionalOfShared(SharedIdentifier elem);          // Optional<Shared<elem>> for Weak.tryUpgrade
     void registerOptionalOfName(const std::string& sharedName);    // Optional<sharedName> — a library `Rc_<elem>` partner
     void emitWeakTryUpgrade(const CollectionInfo& info);           // the tryUpgrade wrapper (builds the Optional)
+    void emitStringFind(const CollectionInfo& info);               // `.find()` wrapper: kama_string__find_raw -> Optional<usize>
     void emitSharedToWeakDowngrade(const CollectionInfo& info);    // a library `Rc<Shape>`'s downgrade() (Shared IFACE -> Weak partner)
     void registerBindable(SharedIdentifier elem);                  // BindableFunctionPtr<Sig>
     // The KAMA_*_DEFINE macros, split: typesOnly emits the struct typedefs (`_TYPE`,
@@ -600,6 +607,8 @@ private:
     bool isBaseOf(const std::string& base, const std::string& derived) const;   // base in derived's chain
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is Ptr<T>, the element C-type; else ""
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
+    bool exprIsString(SharedExpression e);              // true iff `e` statically has kama type `string` (kama_string)
+    std::string hoistStringTemp(SharedExpression e);    // owned-string RVALUE -> a scope-dtor'd temp (frees it); "" for lvalue/literal/non-string
     void emitStruct(ClassInfo& ci);
     void emitVariantStruct(ClassInfo& ci);   // tag + union layout of a discriminated-union enum
     void emitClassPrototypes(ClassInfo& ci);

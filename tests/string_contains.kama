@@ -1,0 +1,10 @@
+// `contains(substring:)` — true/false, empty needle (true), needle longer than haystack (false).
+fn int main() {
+    string s = "hello";
+    int32 r = 0;
+    if (s.contains(substring: "ell")) { r = r + 1; }
+    if (s.contains(substring: "xyz")) { r = r + 100; }          // skipped
+    if (s.contains(substring: "")) { r = r + 2; }               // empty -> true
+    if (s.contains(substring: "hello world")) { r = r + 100; }  // longer -> false
+    return r;                                                   // 3
+}

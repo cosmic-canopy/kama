@@ -341,6 +341,41 @@ static const char* PRELUDE_SRC =
     "        this.pos = this.pos + n;\n"
     "        return Optional::Some(value: cast<char>(cp));\n"
     "    }\n"
+    "}\n"
+    // The `.split(separator:)` iterator over a string's UTF-8 bytes. Like `Chars` it borrows the source
+    // bytes (a raw `Ptr<uint8>`, so `Split` stays a POD `value` type) — valid while the source string is —
+    // but here it ALSO borrows the separator's bytes, and yields each piece as an OWNED string. The
+    // byte-range copy is done by a tiny runtime helper (kama can't allocate a string from raw bytes on its
+    // own). Byte semantics (a literal separator), Go `strings.Split` behaviour: consecutive/trailing
+    // separators yield "" pieces; an empty separator yields the whole string once.
+    "extern fn string kama_string_from_raw(Ptr<uint8> src, int32 start, int32 len);\n"
+    "type value Split implements Iterator<string> {\n"
+    "    Ptr<uint8> data; int32 len; Ptr<uint8> sep; int32 seplen; int32 pos; bool done;\n"
+    "    public fn Optional<string> next() {\n"
+    "        if (this.done) { return Optional::None; }\n"
+    "        if (this.seplen == 0) {\n"
+    "            this.done = true;\n"
+    "            return Optional::Some(value: kama_string_from_raw(src: this.data, start: this.pos, len: this.len - this.pos));\n"
+    "        }\n"
+    "        int32 i = this.pos;\n"
+    "        while (i + this.seplen <= this.len) {\n"
+    "            bool m = true; int32 k = 0;\n"
+    "            while (k < this.seplen) {\n"
+    "                uint8 a = 0ui8; uint8 b = 0ui8;\n"
+    "                unsafe { a = this.data[i + k]; b = this.sep[k]; }\n"
+    "                if (a != b) { m = false; break; }\n"
+    "                k = k + 1;\n"
+    "            }\n"
+    "            if (m) {\n"
+    "                int32 st = this.pos;\n"
+    "                this.pos = i + this.seplen;\n"
+    "                return Optional::Some(value: kama_string_from_raw(src: this.data, start: st, len: i - st));\n"
+    "            }\n"
+    "            i = i + 1;\n"
+    "        }\n"
+    "        this.done = true;\n"
+    "        return Optional::Some(value: kama_string_from_raw(src: this.data, start: this.pos, len: this.len - this.pos));\n"
+    "    }\n"
     "}\n";
 
 // Parse an in-memory kama source string into a CompilationUnit (flex string buffer). nullptr on error.

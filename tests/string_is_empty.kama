@@ -1,0 +1,10 @@
+// `isEmpty()` — true for "" and an empty substring (an rvalue receiver), false otherwise.
+fn int main() {
+    string s = "x";
+    string e = "";
+    int32 r = 0;
+    if (e.isEmpty()) { r = r + 1; }
+    if (s.isEmpty()) { r = r + 100; }                            // skipped
+    if (s.substring(start: 0, end: 0).isEmpty()) { r = r + 2; }  // rvalue receiver
+    return r;                                                    // 3
+}

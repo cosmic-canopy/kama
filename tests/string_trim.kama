@@ -1,0 +1,14 @@
+// `trim` / `trimStart` / `trimEnd` — owned copies stripping ASCII whitespace (space/tab/newline/...).
+// Receivers here are rvalue `trim()` results feeding `==` — string ops compose. Unicode whitespace deferred.
+fn int main() {
+    string s = "  hi  ";
+    int32 r = 0;
+    if (s.trim() == "hi") { r = r + 1; }
+    if (s.trimStart() == "hi  ") { r = r + 2; }
+    if (s.trimEnd() == "  hi") { r = r + 4; }
+    string tabs = "\thi\n";
+    if (tabs.trim() == "hi") { r = r + 8; }
+    string ws = "   ";
+    if (ws.trim().isEmpty()) { r = r + 16; }
+    return r;                                    // 31
+}

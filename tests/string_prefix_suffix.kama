@@ -1,0 +1,12 @@
+// `startsWith(prefix:)` / `endsWith(suffix:)` — true/false, empty and whole-string cases.
+fn int main() {
+    string s = "hello";
+    int32 r = 0;
+    if (s.startsWith(prefix: "he")) { r = r + 1; }
+    if (s.startsWith(prefix: "lo")) { r = r + 100; }   // skipped
+    if (s.endsWith(suffix: "lo")) { r = r + 2; }
+    if (s.endsWith(suffix: "he")) { r = r + 100; }     // skipped
+    if (s.startsWith(prefix: "")) { r = r + 4; }       // empty -> true
+    if (s.endsWith(suffix: "hello")) { r = r + 8; }    // whole -> true
+    return r;                                          // 15
+}

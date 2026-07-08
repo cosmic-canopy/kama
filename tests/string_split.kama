@@ -1,0 +1,20 @@
+// `split(separator:)` -> a lazy `Split` iterator yielding OWNED pieces (no collections import).
+// Go `strings.Split` semantics: consecutive/trailing separators yield "" pieces; empty separator -> whole.
+fn int main() {
+    string s = "a,b,cd";
+    int32 count = 0; int32 chars = 0;
+    foreach (string p in s.split(separator: ",")) { count = count + 1; chars = chars + cast<int32>(p.length()); }
+    int32 r = 0;
+    if (count == 3) { r = r + 1; }
+    if (chars == 4) { r = r + 2; }                   // "a"+"b"+"cd"
+    string t = "x,y,";
+    int32 tc = 0; int32 empties = 0;
+    foreach (string p in t.split(separator: ",")) { tc = tc + 1; if (p.isEmpty()) { empties = empties + 1; } }
+    if (tc == 3) { r = r + 4; }                      // "x","y",""
+    if (empties == 1) { r = r + 8; }                 // trailing ""
+    string whole = "abc";
+    int32 wc = 0;
+    foreach (string p in whole.split(separator: "")) { wc = wc + 1; }
+    if (wc == 1) { r = r + 16; }                     // empty sep -> whole once
+    return r;                                        // 31
+}

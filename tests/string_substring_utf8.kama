@@ -1,0 +1,12 @@
+// Byte semantics (NOT codepoints): substring/find operate on UTF-8 BYTES. "A\u{E9}\u{20AC}" = "Aé€"
+// is 1 + 2 + 3 = 6 bytes / 3 codepoints. substring(1,3) is the 2-byte é; find("€") is byte offset 3.
+fn int main() {
+    string s = "A\u{E9}\u{20AC}";                    // "Aé€"
+    int32 r = 0;
+    if (s.length() == 6) { r = r + 1; }              // 6 bytes, not 3
+    string e = s.substring(start: 1, end: 3);        // the 2-byte é
+    if (e == "\u{E9}") { r = r + 2; }
+    int32 off = match (s.find(substring: "\u{20AC}")) { case Some(i): cast<int32>(i); case None: -1; };
+    if (off == 3) { r = r + 4; }                     // byte offset 3, not codepoint 2
+    return r;                                        // 7
+}

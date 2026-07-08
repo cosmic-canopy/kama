@@ -5,8 +5,8 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 ## The shape
 
-- **1.0 — language complete.** Strings + math are the last core pieces; after them the language surface is
-  stable — you build *with* it, not *on* it.
+- **1.0 — language complete.** Strings are **done** (Phase 3 shipped); **math** is the last core piece,
+  after which the language surface is stable — you build *with* it, not *on* it.
 - **1.x — systems & runtime.** Capabilities built ON the finished language: reflection + serialization,
   file I/O, networking, an embedded/MCU target. Mostly library + codegen, little new syntax.
 - **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted, via a shared
@@ -18,16 +18,45 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 ## 1. Remaining before 1.0
 
-1. **Strings — Phase 3 (ergonomics).** `+` / `==` operators (compiler special-cases string operands →
-   `concat`/`equals`; `string` is a primitive, so not a user overload), an owned `substring(start:, end:)`
-   (byte-range copy — safe without lifetimes; a borrowed view would need lifetime tracking), and richer
-   methods (`find`, `contains`, `startsWith`, `endsWith`, `isEmpty`). The core is done — see SPEC §Strings
-   (`char`, byte `s[i]`, `.chars()`).
-2. **Math layer.** `Vec2/3/4`, `Mat4` (`Fixed<float32,16>` or `Fixed<Vec4,4>`), `Quat` as ordinary `value`
+1. ~~**Strings — Phase 3 (ergonomics).**~~ **Done.** `+` / `==` / `!=` operators (compiler special-cases
+   string operands → `concat`/`equals`; `string` is a primitive, so not a user overload); owned
+   `substring(start:, end:)` (byte-range copy); search `find` (→ `Optional<usize>`, null-safe),
+   `contains`, `startsWith`, `endsWith`, `isEmpty`; transforms `trim`/`trimStart`/`trimEnd`, `replace`,
+   ASCII `toLower`/`toUpper`; and a lazy `split(separator:)` → `Split` iterator (no collections import).
+   All intrinsic on the primitive, native + wasm, ASan/UBSan-clean. Owned-string temporaries now RAII-drop
+   correctly in operator/receiver/`if`-condition/chained-method positions, in string-intrinsic arguments,
+   and as `foreach`-yielded owned values (`s.trim() == "x"`, `foreach (p in s.split(...))`). **Tracked
+   limitation:** an owned-string rvalue passed by value to a *non-string-intrinsic* call (a user function,
+   or an ownership-taking method) still leaks — bind it to a local; a general owned-temporary drop pass is a
+   later refinement (the ownership of a by-value arg is call-specific). **Deferred to a later Unicode
+   module** (tracked): Unicode-correct casing + whitespace (this phase is ASCII), `'é'` multibyte source
+   char literals, string interpolation/`Display` (which also gives `string + <number>`), and an eager
+   `List<string>` collect for `split`.
+2. **Memory-safety hardening (1.0 blockers).** Pre-existing safety holes surfaced during the strings work
+   — a double-free in *safe* code violates kama's core guarantee, so these must close before 1.0. Each is
+   independent of the strings feature (reproduced with plain resources/collections):
+   - **Unmarked hand-off in call-argument / constructor positions → double-free (or leak).** The
+     `give`/`copy` hand-off rule is enforced for a **local assignment** (`string b = a` correctly errors
+     "must say `give` or `copy`") but **not** for a bare owned collection/`string` passed **by value to a
+     call or constructor argument**, nor for a ctor's `this.field = param`. The value then aliases (shared
+     buffer, `cap>0`): into an owning field it **double-frees** (`type resource Box { string a; Box(string
+     x){ this.a = x; } }` + `Box(x: x)` with `x` owned → ASan double-free); into a borrow-only callee it
+     leaks. Fix: extend the hand-off-marker enforcement (and move-tracking) to argument + ctor-field
+     positions, so a bare owned by-value hand-off is the same error there as in an assignment.
+   - **`.chars()` double-evaluates its receiver** (the emitter emits it twice, for `.data` and `.len`). A
+     side-effecting or owned rvalue receiver (`readLine().chars()`, `s.trim().chars()`) desyncs the two
+     reads → OOB / leak. `.split()` already guards this (rejects a non-stable operand — see the strings
+     work); apply the same stable-ref gate (or a single-eval lowering) to `.chars()`.
+   - **No general destroy-temporaries-at-end-of-full-expression pass.** Owned rvalues in expression
+     positions the compiler doesn't specifically drop leak (Phase 3 covered the common string cases:
+     operators, receivers, `if`-conditions, string-intrinsic args, `foreach` yields). The durable fix is a
+     general temporary-drop pass; until then the residual leaks (non-string-intrinsic by-value args; owned
+     temps in `while`/`for` conditions) are the tracked tail.
+3. **Math layer.** `Vec2/3/4`, `Mat4` (`Fixed<float32,16>` or `Fixed<Vec4,4>`), `Quat` as ordinary `value`
    types — **no prerequisites** (operator overloading + `Fixed` shipped). Unblocks the engine's Tier-0 math.
    Buildable as value types now; package as a stdlib module once the packaging question (§3) is settled —
    forward-compatible either way.
-3. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
+4. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
    (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`).
 
 ## 2. Deferred language bits (tracked)

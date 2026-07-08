@@ -473,6 +473,35 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     std::string rc = exprClass(rhs);
     bool lUser = userOperandType(lc, _classes);
     bool rUser = userOperandType(rc, _classes);
+    // `string` is a primitive (kama_string), not a user-operator type, so `+`/`==`/`!=` are compiler
+    // special-cases lowered to the runtime intrinsics — not overloads. Both operands must be `string`
+    // (no implicit conversion; `string + number` would need a Display/to-string substrate — a later
+    // roadmap item). `self` goes by pointer (an rvalue literal / nested `a+b` wraps in a compound-literal
+    // temp via addrOfOperand), the other operand by value, exactly like the user-operator lowering.
+    bool lStr = exprIsString(lhs), rStr = exprIsString(rhs);
+    if (lStr || rStr) {
+        if (!(lStr && rStr)) {
+            unsupported("operator on `string` requires both operands to be `string` "
+                        "(no implicit conversion — build the other side into a string first)", line);
+            return "0";
+        }
+        // An owned-string rvalue operand is hoisted into a scope-dtor'd temp so it isn't leaked; a
+        // literal/lvalue keeps the leak-free addrOfOperand/by-value path.
+        auto ptrOf = [&](SharedExpression e) {
+            std::string t = hoistStringTemp(e);
+            return t.empty() ? addrOfOperand(e, "kama_string", line) : ("&" + t);
+        };
+        auto valOf = [&](SharedExpression e) {
+            std::string t = hoistStringTemp(e);
+            return t.empty() ? emitOperandByValue(e) : t;
+        };
+        if (token == PLUS)  return "kama_string__concat(" + ptrOf(lhs) + ", " + valOf(rhs) + ")";
+        if (token == EQEQ)  return "kama_string__equals(" + ptrOf(lhs) + ", " + valOf(rhs) + ")";
+        if (token == NOTEQ) return "(!kama_string__equals(" + ptrOf(lhs) + ", " + valOf(rhs) + "))";
+        unsupported(("operator '" + binaryOperator(token) + "' is not defined for `string` "
+                     "(only `+`, `==`, `!=`)").c_str(), line);
+        return "0";
+    }
     if (!lUser && !rUser)
         return "(" + emitExpression(lhs) + " " + binaryOperator(token) + " "
                    + emitExpression(rhs) + ")";   // primitives — unchanged
@@ -1402,6 +1431,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         line(n->line);
         // A value-producing construct in the condition (an inline ctor / `match`) hoists a temp; a raw
         // condition has no statement slot, so wrap the whole `if` in a block and flush the temps first.
+        // An owned-string temp hoisted here (`if (s.trim() == "x")`) is registered destructible in the
+        // current scope but *declared* in this wrapper block, so we dtor+unregister it before the wrapper
+        // closes (below) rather than at the outer scope — else its drop would name an out-of-scope temp.
+        size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
         std::string cond = emitCondition(f->booleanExpression);
         bool hoist = !_hoisted.empty();
         int bd = depth;
@@ -1434,13 +1467,26 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             _moveState[kv.first] = merged;
         }
         *_out << "\n";
-        if (hoist) { indent(depth); *_out << "}\n"; }
+        if (hoist) {
+            // dtor + unregister the destructible temps hoisted for the condition (declared in this wrapper
+            // block). A diverging arm already dropped them via emitUnwindAll, so on that path this line is
+            // simply not reached — each temp is dropped exactly once.
+            if (!_scopes.empty()) {
+                auto& locs = _scopes.back().locals;
+                for (size_t i = locs.size(); i-- > preLoc; )
+                    { indent(bd); *_out << locs[i].className << "__dtor(&" << locs[i].cVar << ");\n"; }
+                if (locs.size() > preLoc) locs.erase(locs.begin() + preLoc, locs.end());
+            }
+            indent(depth); *_out << "}\n";
+        }
         return;
     }
 
     if (auto* w = dynamic_cast<WhileNode*>(n)) {
         line(n->line);
+        _loopCond = true;
         std::string cond = emitCondition(w->booleanExpression);
+        _loopCond = false;
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
             *_out << "while (" << cond << ") ";
@@ -1470,7 +1516,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* f = dynamic_cast<ForNode*>(n)) {
         line(n->line);
         std::string init = emitForClause(f->initializerStatements);
+        _loopCond = true;
         std::string cond = emitCondition(f->booleanExpression);
+        _loopCond = false;
         std::string iter = emitForClause(f->iteratorStatements);
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
@@ -2583,6 +2631,38 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("get",    { ParamSig{"index", false, ""} }, elem);        // `s[i]` -> the i-th byte (uint8)
         if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
         addMethod("chars",  {}, std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Chars")));   // codepoint iterator
+        // Phase 3 ergonomics. Bool-returning methods pass a NULL returnType (the `equals` pattern — the
+        // emitter emits the raw C call and the C `bool` return governs). `substring`/`trim`/`replace`/case
+        // return `collType` (a `string`), so their owned result is RAII-freed exactly like `.concat()`.
+        addMethod("substring", { ParamSig{"start", false, ""}, ParamSig{"end", false, ""} }, collType);
+        addMethod("contains",   { ParamSig{"substring", false, ""} }, SharedIdentifier());
+        addMethod("startsWith", { ParamSig{"prefix", false, ""} },    SharedIdentifier());
+        addMethod("endsWith",   { ParamSig{"suffix", false, ""} },    SharedIdentifier());
+        addMethod("isEmpty",    {}, SharedIdentifier());
+        addMethod("trim",       {}, collType);
+        addMethod("trimStart",  {}, collType);
+        addMethod("trimEnd",    {}, collType);
+        addMethod("replace",    { ParamSig{"old", false, ""}, ParamSig{"with", false, ""} }, collType);  // `with:` (`new` is reserved)
+        addMethod("toLower",    {}, collType);
+        addMethod("toUpper",    {}, collType);
+        // `find` -> Optional<usize> (null-safe byte offset). Register the Optional<usize> instance so its C
+        // struct + Some/None variants exist, and give `find` that return type; the emitter emits a wrapper
+        // (emitStringFind) that builds the Optional. Mirrors Weak.tryUpgrade / registerOptionalOfShared.
+        if (_genericTypeParams.count("Optional")) {
+            auto usizeArg = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("usize"));
+            auto optArgs = std::make_shared<IdentifierList>();
+            optArgs->push_back(usizeArg);
+            registerGenericTypeInst("Optional", optArgs);
+            auto optRet = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Optional"));
+            optRet->genericArg  = usizeArg;
+            optRet->genericArgs = std::make_shared<IdentifierList>();
+            optRet->genericArgs->push_back(usizeArg);
+            addMethod("find", { ParamSig{"substring", false, ""} }, optRet);
+        }
+        // `split(separator:)` -> a lazy `Split` iterator (prelude value type; see the `.split()`
+        // special-case in emitMethodCall). No collections import: pieces come out one at a time.
+        addMethod("split", { ParamSig{"separator", false, ""} },
+                  std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Split")));
     } else {
         if (kind == CollKind::List)
             addMethod("add", { ParamSig{"item", false, elemClass} }, SharedIdentifier());
@@ -3626,6 +3706,22 @@ void CEmitter::emitWeakTryUpgrade(const CollectionInfo& info)
           << "}\n";
 }
 
+// `.find(substring:)` -> Optional<usize>: wrap the raw byte-scan helper so an absent match is `None`,
+// never a sentinel. Mirrors emitWeakTryUpgrade — pure ISO C compound literals (no statement-expression),
+// emitted in the collection FUNCS phase where the Optional<usize> instance struct is already complete.
+void CEmitter::emitStringFind(const CollectionInfo& info)
+{
+    const std::string opt = "Optional_usize";
+    if (!_genericTypeInsts.count(opt)) return;   // Optional<usize> unavailable -> skip (find unregistered)
+    *_out << "static inline " << opt << " " << info.cName << "__find(" << info.cName
+          << "* self, kama_string needle) {\n"
+          << "    size_t off;\n"
+          << "    if (kama_string__find_raw(self, needle, &off))\n"
+          << "        return (" << opt << "){ .tag = " << opt << "_Some, .u.Some = { .value = off } };\n"
+          << "    return (" << opt << "){ .tag = " << opt << "_None };\n"
+          << "}\n";
+}
+
 // Emit the KAMA_*_{TYPE,FUNCS}(...) macro line per registered instantiation.
 // `typesOnly` picks the struct-typedef half (emitted before class struct bodies so a
 // class may hold a collection/smart-ptr BY VALUE) vs the funcs half (after class
@@ -3685,6 +3781,11 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
             if (!typesOnly)
                 *_out << "KAMA_FIXED_FUNCS(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName << ")\n";
+        }
+        else if (info.kind == CollKind::String) {
+            // kama_string itself is predefined in the runtime header; only the `.find()` Optional wrapper
+            // (which needs the program-specific Optional_usize struct) is emitted here, in the FUNCS phase.
+            if (!typesOnly) emitStringFind(info);
         }
     }
     if (!_collections.empty()) *_out << "\n";
@@ -3867,6 +3968,15 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         indent(depth + 2); *_out << optC << " " << ot << " = " << nextCall << ";\n";
         indent(depth + 2); *_out << "if (" << ot << ".tag == " << optC << "_None) break;\n";
         indent(depth + 2); *_out << elemTy << " " << nm << " = " << ot << ".u.Some.value;\n";
+        // A destructible by-value element that the binding OWNS must RAII-drop each iteration, else it
+        // leaks — but only if `next()` yields a FRESH owned value. The compiler-provided `Split` iterator
+        // does (its pieces come from `kama_string_from_raw`, a fresh heap copy). A USER iterator that
+        // returns a bare owned field (`return Optional::Some(value: this.a)`) yields an ALIAS the object
+        // still owns; dropping that would double-free (the language doesn't deep-copy on yield). Kama has
+        // no ownership-transfer tracking through a `next()` return yet, so restrict the drop to `Split`
+        // (whose yield is known-fresh); user iterators keep the prior borrow-like, no-drop behaviour.
+        if (container == "Split" && _classes.count(elemTy) && _classes[elemTy].destructible)
+            recordDestructibleLocal(nm, elemTy);
     }
     // Mutation guard: mutating the container mid-loop is the author's concern for a user iterator (its
     // `Ptr` cursor would dangle) — the built-in `add`-reject can't see into user methods. Still push the
@@ -4663,7 +4773,13 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // `__get` rvalue. Folds to `NAME__at(&a, i)`.
             val = emitPlace(argExpr);
         } else {
-            val = emitExpression(argExpr);
+            // An owned-string rvalue argument to a string INTRINSIC (`kama_string__*`) is borrowed by the
+            // callee (read-only — none of concat/equals/contains/... store it), so hoist it into a
+            // scope-dtor'd temp and free it instead of leaking. Scoped to the borrow-only string
+            // intrinsics: a general call may CONSUME a by-value string arg (e.g. `List.add` relocates it),
+            // where freeing the caller's temp would double-free — there, bind to a local first.
+            std::string st = (cName.rfind("kama_string__", 0) == 0) ? hoistStringTemp(argExpr) : std::string();
+            val = st.empty() ? emitExpression(argExpr) : st;
         }
         if (handoff && (p.byRef || isInterface(p.className)))
             unsupported("`give`/`copy` transfer ownership by value — they don't apply to a `ref`/`out` "
@@ -6416,11 +6532,47 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     _nsCtx = savedCtx;
 }
 
+// True iff `e` statically has kama type `string` (lowers to `kama_string`): a string literal, a `string`
+// local/param or a string-returning call (both surface via `exprClass(e) == "kama_string"`), or a nested
+// `+` chain with a string operand. `exprClass`/`operatorResultClass` only class USER operators, so the
+// string `+` result is invisible there — recurse here. Keeps string knowledge localized to this predicate
+// + the `emitBinaryOperator` string branch, leaving `exprClass`/`operatorResultClass` string-free.
+bool CEmitter::exprIsString(SharedExpression e)
+{
+    if (!e) return false;
+    if (dynamic_cast<StringNode*>(e.get())) return true;
+    if (auto* be = dynamic_cast<BinaryExpressionNode*>(e.get()))
+        if (be->token == PLUS && (exprIsString(be->LHS) || exprIsString(be->RHS))) return true;
+    return exprClass(e) == "kama_string";
+}
+
+// A `string`-typed RVALUE that isn't a plain lvalue or a borrowed literal — a call/operator result
+// (concat, substring, trim, replace, case, find/split pieces...) — may own a heap buffer. Used as an
+// operand/receiver it would otherwise be materialized into a throwaway compound-literal and LEAK. Hoist
+// it into a named temp registered for RAII drop at scope exit so the buffer is freed. Returns the temp
+// name, or "" for a literal / lvalue / non-string (the caller keeps its normal, leak-free path) or when
+// there is no statement slot to hoist into (a rare raw `if`/`while` operand — `_hoistOK` false).
+// A borrowed result (an empty piece, cap==0) is harmless: kama_string__dtor is a no-op on it.
+std::string CEmitter::hoistStringTemp(SharedExpression e)
+{
+    if (!e || !_hoistOK || _loopCond) return "";   // loop conditions have no per-iteration drop slot (see header)
+    ASTNode* n = e.get();
+    if (dynamic_cast<StringNode*>(n) || dynamic_cast<IdentifierNode*>(n)
+        || dynamic_cast<MemberAccessNode*>(n) || dynamic_cast<ThisAccessNode*>(n)) return "";
+    if (!exprIsString(e)) return "";
+    std::string t = "__strtmp" + std::to_string(_tempCounter++);
+    _hoisted.push_back("kama_string " + t + " = " + emitExpression(e) + ";");
+    recordDestructibleLocal(t, "kama_string");
+    return t;
+}
+
 // The static class type of an expression ("" if primitive/unknown).
 std::string CEmitter::exprClass(SharedExpression e)
 {
     if (!e) return "";
     ASTNode* n = e.get();
+
+    if (dynamic_cast<StringNode*>(n)) return "kama_string";   // a string literal is the `string` primitive
 
     if (dynamic_cast<ThisAccessNode*>(n))
         return _currentClass ? _currentClass->name : "";
@@ -6680,11 +6832,28 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
 }
 
 // obj.method(args) — the member-access callee form (incl. this.method()).
+// A "stable" string reference: re-evaluating it is side-effect-free and yields the same bytes+length —
+// a variable, a literal, `this`, or a field access rooted in one of those. Used to gate `.split()`, which
+// reads its receiver/separator twice and borrows their bytes for the whole loop, so a call/operator
+// rvalue (owned or side-effecting) must be bound to a local first.
+static bool isStableStringRef(ASTNode* n)
+{
+    if (!n) return false;
+    if (dynamic_cast<IdentifierNode*>(n) || dynamic_cast<StringNode*>(n) || dynamic_cast<ThisAccessNode*>(n))
+        return true;
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) return isStableStringRef(ma->expression.get());
+    return false;
+}
+
 std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* recv)
 {
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
     SharedExpression receiver = recv->expression;
     std::string cls = exprClass(receiver);
+    // A `string` receiver that `exprClass` can't name — a bare literal (`"x".trim()`) or a `+` chain
+    // (`(a + b).length()`) — still classes as the `string` primitive. Localizes string knowledge to
+    // `exprIsString`; the rvalue is made addressable below (addrOfOperand), like `.concat()` composes.
+    if (cls.empty() && exprIsString(receiver)) cls = "kama_string";
     // Iterator invalidation: growing a collection (`add`) while a `foreach` iterates it reallocs the
     // buffer and dangles the loop's element refs (a use-after-free for a `ref` binding). Reject it — a
     // local rule (the loop already names the collection), no lifetimes; collect + append after the loop.
@@ -6725,6 +6894,12 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             recvPtr = coll + "__at(&(" + recvExpr + "), " + idx + ")";
         else
             recvPtr = "&(" + emitExpression(receiver) + ")";
+    } else if (cls == "kama_string") {
+        // A string receiver may be an rvalue — a chained `s.trim().toLower()`, a `"lit".method()`, or an
+        // `(a + b).length()`. An OWNED rvalue is hoisted into a scope-dtor'd temp (so its buffer is freed,
+        // not leaked); a literal/lvalue keeps the addressable compound-literal / `&(x)` path.
+        std::string t = hoistStringTemp(receiver);
+        recvPtr = t.empty() ? addrOfOperand(receiver, "kama_string", call->line) : ("&" + t);
     } else {
         recvPtr = dynamic_cast<ThisAccessNode*>(receiver.get())
                 ? std::string("self")
@@ -6737,6 +6912,31 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         std::string charsC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Chars")));
         std::string sv = emitExpression(receiver);
         return "((" + charsC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, 0 })";
+    }
+    // `s.split(separator:)` — a lazy `Split` iterator (like `.chars()`): borrows the receiver's bytes AND
+    // the separator's bytes (both raw `Ptr<uint8>`, so `Split` stays a POD value type) and yields OWNED
+    // pieces. Valid while the source string is (the `.chars()` borrow contract). Fields by declaration
+    // order: data, len, sep, seplen, pos, done.
+    if (cls == "kama_string" && method == "split") {
+        if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
+        std::string splitC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Split")));
+        // The Split BORROWS the receiver's and separator's bytes for the whole loop, and this compound
+        // literal reads each TWICE (for `.data` and `.len`). A non-stable operand (a call/operator result
+        // — an owned or side-effecting rvalue) would (a) desync the two reads if it yields different bytes
+        // each eval (OOB read), and (b) leak/dangle its owned buffer (nothing keeps it alive for the loop).
+        // Require a stable reference (a variable/literal/field); bind an expression to a local first.
+        SharedExpression sepExpr = (call->args && call->args->size() == 1) ? (*call->args)[0]->expression
+                                                                          : SharedExpression();
+        if (!isStableStringRef(receiver.get()) || (sepExpr && !isStableStringRef(sepExpr.get()))) {
+            unsupported("`.split()` borrows and re-reads its receiver and separator across the whole loop, "
+                        "so each must be a stable reference (a variable, literal, or field) — bind an "
+                        "expression like `s.trim()` or `a + b` to a local first", call->line);
+            return "0";
+        }
+        std::string sv  = emitExpression(receiver);
+        std::string sep = sepExpr ? emitExpression(sepExpr) : std::string("kama_string_lit(\"\", 0)");
+        return "((" + splitC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, (uint8_t*)("
+             + sep + ").data, (int32_t)(" + sep + ").len, 0, false })";
     }
     std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line);
     // a place-returning `fn ref T m(…)` returns a `T*`; deref it so the call is an lvalue EVERYWHERE

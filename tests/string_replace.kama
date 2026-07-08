@@ -1,0 +1,10 @@
+// `replace(old:, with:)` — owned copy, ALL non-overlapping occurrences; empty `old` -> a copy.
+fn int main() {
+    string s = "a.b.c";
+    int32 r = 0;
+    if (s.replace(old: ".", with: "-") == "a-b-c") { r = r + 1; }
+    if (s.replace(old: ".", with: "..") == "a..b..c") { r = r + 2; }   // grows
+    if (s.replace(old: "x", with: "y") == "a.b.c") { r = r + 4; }      // miss -> unchanged
+    if (s.replace(old: "", with: "z") == "a.b.c") { r = r + 8; }       // empty old -> copy
+    return r;                                                          // 15
+}

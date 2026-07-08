@@ -68,6 +68,35 @@ can't silently mix with ints). Literals: `'a'`, `'\n'`, `'\u{1F600}'`. Equality 
 codepoints; `cast<int32>(c)` / `cast<char>(i)` convert (arithmetic on codepoints is explicit, the Rust
 model). (A multibyte *source* char literal like `'é'` isn't lexed yet — write `'\u{E9}'`.)
 
+**Operators & methods.** `string` carries the small, always-available ergonomic surface every language
+ships — all compiler intrinsics on the primitive (no import), byte-oriented like `s[i]`:
+
+- **`+` / `==` / `!=`** — `a + b` concatenates (a fresh heap-owned string), `a == b` / `a != b` compare
+  bytes. The compiler special-cases string operands (not a user overload — `string` is a primitive); both
+  operands must be `string` (`string + <number>` is a compile error — a to-string/`Display` substrate is
+  future work). Chains and compose: `a + b + c`, `s.trim() == "x"`.
+- **slice** — `substring(start:, end:)` copies the byte range `[start, end)` into an owned string
+  (bounds-checked; a **byte** range, not codepoint-validated — use `.chars()` for codepoints).
+- **search** — `find(substring:)` returns `Optional<usize>` (the first byte offset, `None` when absent —
+  null-safe, no `-1` sentinel); `contains(substring:)`, `startsWith(prefix:)`, `endsWith(suffix:)` return
+  `bool`; `isEmpty()`.
+- **transform** (each returns a fresh owned string) — `trim()` / `trimStart()` / `trimEnd()` strip **ASCII**
+  whitespace; `replace(old:, with:)` swaps all non-overlapping occurrences; `toLower()` / `toUpper()` map
+  **ASCII** case (bytes ≥ 0x80 untouched — UTF-8-safe). Unicode whitespace/casing are deferred to a later
+  Unicode module.
+- **`split(separator:)`** — a lazy `Split` iterator (`implements Iterator<string>`, like `.chars()`),
+  yielding each piece as an owned string with no collections import: `foreach (string p in s.split(separator:
+  ","))`. Go `strings.Split` semantics (consecutive/trailing separators yield `""`; an empty separator
+  yields the whole string once). Collect into a `List<string>` explicitly if you need random access.
+
+```kama
+string path = "/usr/local/bin";
+foreach (string part in path.split(separator: "/")) { … }   // "", "usr", "local", "bin"
+string greet = "Hello, " + name + "!";
+if (greet.toLower().contains(substring: "hello")) { … }
+match (greet.find(substring: ",")) { case Some(i): …; case None: …; }
+```
+
 ## Collections & strings ✅
 
 Built-in generics, monomorphized per element type and backed by the C runtime (unsafe internals, safe API —
