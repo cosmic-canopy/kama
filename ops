@@ -1,0 +1,25 @@
+#!/bin/sh
+# ops — maintainer/release tasks. Auto-loads .env (copy .env.example first). Run `./ops` for help.
+set -eu
+[ -f .env ] && { set -a; . ./.env; set +a; }
+usage() { cat <<'EOF'
+kama ops — usage: ./ops <task>          (loads secrets from .env)
+
+  provision      tofu init + apply in provisioning/pages    (CLOUDFLARE_*, TF_VAR_*)
+  deploy-site    build + deploy the site to Cloudflare Pages (CLOUDFLARE_*)
+  ext-publish    publish the extension to Marketplace + Open VSX (VSCE_PAT, OVSX_PAT)
+  release        how to cut a release (tag vX.Y.Z -> CI builds binaries + publishes)
+  exec <cmd...>  run any command with .env loaded (e.g. ./ops exec tofu plan)
+  help           this help
+EOF
+}
+task="${1:-help}"; [ $# -gt 0 ] && shift || true
+case "$task" in
+  provision)      cd provisioning/pages && tofu init -input=false && tofu apply ;;
+  deploy-site)    sh tools/build-site; npx --yes wrangler@3 pages deploy _site --project-name=kama --branch=main ;;
+  ext-publish)    ( cd editor/vscode && npx --yes @vscode/vsce publish ) && ( cd editor/vscode && npx --yes ovsx publish ) ;;
+  release)        echo "cut a release:  git tag vX.Y.Z && git push --tags   (CI builds binaries + publishes the extension)" ;;
+  exec)           exec "$@" ;;
+  -h|--help|help) usage ;;
+  *)              echo "unknown task: $task" >&2; usage; exit 2 ;;
+esac

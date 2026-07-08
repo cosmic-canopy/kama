@@ -1,0 +1,15 @@
+#!/bin/sh
+# Regenerate every derived brand asset from assets/logo.png (the single source of truth).
+# Re-run after changing the logo, then commit the outputs. Uses `sips` (macOS built-in).
+set -eu
+cd "$(dirname "$0")/.."   # repo root
+SRC=assets/logo.png
+[ -f "$SRC" ] || { echo "gen-assets: missing $SRC" >&2; exit 1; }
+gen() { mkdir -p "$(dirname "$1")"; sips -s format png -z "$2" "$2" "$SRC" --out "$1" >/dev/null; echo "  $1 (${2}px)"; }
+echo "regenerating brand assets from $SRC"
+gen editor/vscode/icon.png           128     # VS Code / Open VSX listing icon
+gen site/assets/logo.png             256     # landing-page hero
+gen site/assets/apple-touch-icon.png 180
+gen site/assets/favicon-32.png       32
+gen site/assets/favicon-16.png       16
+echo "done"

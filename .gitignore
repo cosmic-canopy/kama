@@ -37,5 +37,13 @@ bench/src/csharp/obj/
 !bench/src/js/*.js
 # the VSCode extension's hand-written JS is real, too
 !editor/vscode/*.js
+# the website sources are real (override the global *.html/*.js ignores)
+!site/**
 *.wasm.map
 *.wasm
+
+# local secrets — seed from .env.example
+.env
+# assembled site output (from tools/build-site) and packaged extension
+/_site/
+*.vsix

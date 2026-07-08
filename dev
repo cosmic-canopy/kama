@@ -1,0 +1,28 @@
+#!/bin/sh
+# dev — everyday contributor tasks (no secrets). Run `./dev` for help.
+set -eu
+usage() { cat <<'EOF'
+kama dev — usage: ./dev <task>
+
+  build        build the native kama compiler (host `make`; container: `tools/cdev make`)
+  test         run the fixture suite
+  assets       regenerate icon + favicons from assets/logo.png
+  site         build the static site into _site/ and print the preview command
+  ext-package  package the VS Code extension (.vsix), no publish
+  clean        make clean
+  help         this help
+
+Deploy / publish / provision live in ./ops (they need secrets from .env).
+EOF
+}
+task="${1:-help}"; [ $# -gt 0 ] && shift || true
+case "$task" in
+  build)          make ;;
+  test)           ./run_tests.sh ;;
+  assets)         sh tools/gen-assets ;;
+  site)           sh tools/build-site; echo "preview: python3 -m http.server -d _site" ;;
+  ext-package)    cd editor/vscode && npx --yes @vscode/vsce package ;;
+  clean)          make clean ;;
+  -h|--help|help) usage ;;
+  *)              echo "unknown task: $task (deploy/publish live in ./ops)" >&2; usage; exit 2 ;;
+esac
