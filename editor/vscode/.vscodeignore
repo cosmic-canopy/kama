@@ -1,0 +1,5 @@
+.vscodeignore
+**/.DS_Store
+**/*.map
+node_modules/**
+*.vsix

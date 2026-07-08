@@ -5,10 +5,14 @@
   "version": "0.2.0",
   "publisher": "cosmic-canopy",
   "license": "MIT",
+  "icon": "icon.png",
+  "galleryBanner": { "color": "#B01C2E", "theme": "dark" },
   "engines": { "vscode": "^1.75.0" },
   "categories": ["Programming Languages", "Debuggers"],
   "keywords": ["kama", "transpiler", "c", "wasm"],
   "repository": { "type": "git", "url": "https://github.com/cosmic-canopy/kama" },
+  "bugs": { "url": "https://github.com/cosmic-canopy/kama/issues" },
+  "homepage": "https://kama-lang.org",
   "main": "./extension.js",
   "contributes": {
     "languages": [
