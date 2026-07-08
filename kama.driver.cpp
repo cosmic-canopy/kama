@@ -145,6 +145,21 @@ std::string resolveStdlibDir(const char* argv0)
     return "lib";
 }
 
+// The native C compiler. A "-bundled" install ships a static zig at
+// <exe>/../libexec/zig/zig[.exe]; prefer it so `kama build` works with no system
+// toolchain. Otherwise fall back to system clang. (--cc overrides both, upstream.)
+std::string resolveCCompiler(const char* argv0)
+{
+    std::string exeDir = dirName(absolutePath(argv0 ? argv0 : "kama"));
+#ifdef _WIN32
+    std::string zig = exeDir + "/../libexec/zig/zig.exe";
+#else
+    std::string zig = exeDir + "/../libexec/zig/zig";
+#endif
+    if (fileExists(zig)) return "\"" + zig + "\" cc";
+    return "clang";
+}
+
 // Split a `:`-separated search-path env (KAMA_PATH) into roots.
 std::vector<std::string> splitSearchPath(const char* env)
 {
@@ -458,6 +473,21 @@ int runCmd(const std::string& cmd)
 #endif
 }
 
+// `kama update [--version vX.Y.Z]` — self-update by re-running the canonical installer,
+// which re-detects a C compiler (slim vs bundled zig) so the install flavor stays consistent.
+int cmdUpdate(const std::string& pinned)
+{
+#ifdef _WIN32
+    std::string env = pinned.empty() ? "" : "$env:KAMA_VERSION='" + pinned + "'; ";
+    std::string cmd = "powershell -NoProfile -Command \"" + env +
+                      "irm https://kama-lang.org/install.ps1 | iex\"";
+#else
+    std::string env = pinned.empty() ? "" : "KAMA_VERSION=" + pinned + " ";
+    std::string cmd = env + "curl -fsSL https://kama-lang.org/install.sh | sh";
+#endif
+    return runCmd(cmd);   // the installer prints old->new; verify with `kama --version`
+}
+
 void usage()
 {
     fprintf(stderr,
@@ -465,7 +495,9 @@ void usage()
         "  kama transpile <in.kama> [-o out.c] [--no-line]\n"
         "  kama build     <in.kama>... [-o out] [--target native|wasm] [--release|--debug]\n"
         "                             [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
-        "                  (pass multiple .kama files to build a multi-file program)\n");
+        "                  (pass multiple .kama files to build a multi-file program)\n"
+        "  kama update    [--version vX.Y.Z]   self-update via the installer\n"
+        "  kama --version\n");
 }
 
 } // namespace
@@ -479,6 +511,17 @@ int main(int argc, char** argv)
     if (argc < 2) { usage(); return 2; }
 
     std::string subcommand = argv[1];
+
+    if (subcommand == "update") {
+        std::string pinned;
+        for (int i = 2; i < argc; ++i) {
+            std::string a = argv[i];
+            if (a == "--version" && i + 1 < argc) pinned = argv[++i];
+            else { fprintf(stderr, "kama update: unexpected arg '%s'\n", a.c_str()); return 2; }
+        }
+        return cmdUpdate(pinned);
+    }
+
     std::vector<std::string> inputs;      // one or more .kama source files
     std::string output;
     std::string cc;                       // empty => pick default per target
@@ -539,15 +582,15 @@ int main(int argc, char** argv)
     }
 
     if (subcommand == "build") {
-        // Compiler: native uses clang; wasm uses emcc (emcc keys output format
-        // off the -o extension). --cc / $EMCC override.
+        // Compiler: native uses a bundled `zig cc` if present else system clang; wasm uses
+        // emcc (emcc keys output format off the -o extension). --cc / $EMCC override.
         std::string compiler = cc;
         if (compiler.empty()) {
             if (wasm) {
                 const char* env = getenv("EMCC");
                 compiler = env ? env : "emcc";
             } else {
-                compiler = "clang";
+                compiler = resolveCCompiler(argv[0]);   // bundled zig cc, else system clang
             }
         }
 

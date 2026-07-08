@@ -7,6 +7,11 @@ on:
 permissions:
   contents: write   # create the GitHub Release
 
+env:
+  # Bundled-toolchain version for the "-bundled" installer variant (zero-dependency
+  # `kama build`). Bumpable; uses zig's modern `zig-<arch>-<os>-<ver>` tarball naming.
+  ZIG_VERSION: "0.15.2"
+
 jobs:
   build:
     name: build ${{ matrix.name }}
@@ -14,12 +19,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,    name: linux-x64,       extra: "" }
-          - { os: ubuntu-24.04-arm, name: linux-arm64,     extra: "" }
-          # One macOS UNIVERSAL2 artifact (arm64 + x86_64) built on the Apple-Silicon
-          # runner — covers Intel Macs without the deprecated/unschedulable macos-13
-          # Intel runner that used to hang every release.
-          - { os: macos-14,         name: macos-universal, extra: "-arch arm64 -arch x86_64" }
+          - { os: ubuntu-latest,    name: linux-x64,       extra: "",                         zig: x86_64-linux }
+          - { os: ubuntu-24.04-arm, name: linux-arm64,     extra: "",                         zig: aarch64-linux }
+          # One macOS UNIVERSAL2 artifact (arm64 + x86_64). The bundled zig is arm64-only
+          # (zig ships per-arch, not universal): the bundled macOS variant targets Apple
+          # Silicon; Intel Macs without a compiler should use the slim build + Xcode CLT.
+          - { os: macos-14,         name: macos-universal, extra: "-arch arm64 -arch x86_64", zig: aarch64-macos }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -47,33 +52,43 @@ jobs:
       - name: Smoke (fixtures)
         run: ./run_tests.sh
 
-      - name: Package
+      - name: Stage payload
+        shell: bash
+        run: |
+          # Tarball tree == install prefix (~/.kama): bin/ include/ lib/kama/. kama
+          # resolves its runtime header + stdlib relative to the binary, so a plain
+          # extract + PATH works; the installer does exactly that.
+          rm -rf payload && mkdir -p payload/bin payload/include payload/lib/kama
+          cp kama payload/bin/kama
+          cp kama_runtime.h payload/include/
+          cp -R lib/std payload/lib/kama/std
+          cp LICENSE payload/ 2>/dev/null || true
+          cp GETTING_STARTED.md payload/README.md 2>/dev/null || true
+
+      - name: Package (slim)
         shell: bash
         run: |
           PKG="kama-${{ matrix.name }}-v${VERSION}"
-          mkdir -p "$PKG/bin" "$PKG/include"
-          cp kama "$PKG/bin/kama"
-          cp kama_runtime.h "$PKG/include/"
-          cp LICENSE "$PKG/" 2>/dev/null || true
-          cp GETTING_STARTED.md "$PKG/README.md" 2>/dev/null || true
-          cat > "$PKG/install.sh" <<'EOS'
-          #!/bin/sh
-          # Install kama into a prefix (default /usr/local). kama finds its runtime
-          # header via <prefix>/include/kama_runtime.h relative to the binary.
-          set -e
-          PREFIX="${1:-/usr/local}"
-          install -d "$PREFIX/bin" "$PREFIX/include"
-          install bin/kama "$PREFIX/bin/kama"
-          install -m 644 include/kama_runtime.h "$PREFIX/include/kama_runtime.h"
-          echo "installed kama to $PREFIX/bin (add it to PATH)"
-          EOS
-          chmod +x "$PKG/install.sh"
+          cp -R payload "$PKG"
           tar czf "${PKG}.tar.gz" "$PKG"
+          shasum -a 256 "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
+
+      - name: Package (bundled — adds zig cc)
+        shell: bash
+        continue-on-error: true   # a zig URL/version hiccup must not block the slim release
+        run: |
+          PKG="kama-${{ matrix.name }}-bundled-v${VERSION}"
+          cp -R payload "$PKG"
+          mkdir -p "$PKG/libexec/zig"
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${{ matrix.zig }}-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+          tar xf zig.tar.xz --strip-components=1 -C "$PKG/libexec/zig"
+          tar czf "${PKG}.tar.gz" "$PKG"
+          shasum -a 256 "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
           name: kama-${{ matrix.name }}
-          path: kama-*.tar.gz
+          path: kama-*.tar.gz*
 
   windows:
     name: build windows-x64
@@ -91,7 +106,7 @@ jobs:
           msystem: UCRT64
           update: true
           install: >-
-            make bison flex
+            make bison flex unzip
             mingw-w64-ucrt-x86_64-clang
       - name: Derive version (from tag)
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -102,17 +117,33 @@ jobs:
       - name: Smoke (fixtures)
         continue-on-error: true   # don't let test flakiness block packaging the built binary
         run: ./run_tests.sh
-      - name: Package
+      - name: Stage payload
+        run: |
+          rm -rf payload && mkdir -p payload/bin payload/include payload/lib/kama
+          cp kama.exe payload/bin/kama.exe 2>/dev/null || cp kama payload/bin/kama.exe
+          cp kama_runtime.h payload/include/
+          cp -R lib/std payload/lib/kama/std
+          cp LICENSE payload/ 2>/dev/null || true
+          cp GETTING_STARTED.md payload/README.md 2>/dev/null || true
+      - name: Package (slim)
         run: |
           PKG="kama-windows-x64-v${VERSION}"
-          mkdir -p "$PKG/bin" "$PKG/include"
-          cp kama.exe "$PKG/bin/kama.exe" 2>/dev/null || cp kama "$PKG/bin/kama.exe"
-          cp kama_runtime.h "$PKG/include/"
-          cp LICENSE "$PKG/" 2>/dev/null || true
-          cp GETTING_STARTED.md "$PKG/README.md" 2>/dev/null || true
+          cp -R payload "$PKG"
           tar czf "${PKG}.tar.gz" "$PKG"
+          sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
+      - name: Package (bundled — adds zig cc)
+        continue-on-error: true
+        run: |
+          PKG="kama-windows-x64-bundled-v${VERSION}"
+          cp -R payload "$PKG"
+          mkdir -p "$PKG/libexec/zig"
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-windows-${ZIG_VERSION}.zip" -o zig.zip
+          unzip -q zig.zip -d zigtmp
+          mv zigtmp/zig-*/* "$PKG/libexec/zig/"
+          tar czf "${PKG}.tar.gz" "$PKG"
+          sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
-        with: { name: kama-windows-x64, path: kama-*.tar.gz }
+        with: { name: kama-windows-x64, path: kama-*.tar.gz* }
 
   vsix:
     name: package VSCode extension
@@ -130,6 +161,26 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: kama-vsix, path: kama-vscode-*.vsix }
 
+  publish-extension:
+    name: publish VSCode extension
+    needs: [vsix]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: kama-vsix, path: . }
+      - name: VS Code Marketplace
+        continue-on-error: true   # skips cleanly until VSCE_PAT is configured
+        env: { VSCE_PAT: "${{ secrets.VSCE_PAT }}" }
+        run: |
+          VSIX=$(ls kama-vscode-*.vsix)
+          npx --yes @vscode/vsce publish --packagePath "$VSIX" -p "$VSCE_PAT"
+      - name: Open VSX
+        continue-on-error: true   # skips cleanly until OVSX_PAT is configured
+        env: { OVSX_PAT: "${{ secrets.OVSX_PAT }}" }
+        run: |
+          VSIX=$(ls kama-vscode-*.vsix)
+          npx --yes ovsx publish "$VSIX" -p "$OVSX_PAT"
+
   release:
     name: publish release
     # `windows` is continue-on-error, so it satisfies `needs` even if it fails —
@@ -143,5 +194,6 @@ jobs:
         with:
           files: |
             dist/kama-*.tar.gz
+            dist/kama-*.tar.gz.sha256
             dist/kama-vscode-*.vsix
           generate_release_notes: true

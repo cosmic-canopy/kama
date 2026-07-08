@@ -8,18 +8,38 @@ Prebuilt packages are published for **Linux** (x64 + arm64), **macOS** (one univ
 Apple Silicon), and **Windows** (x64). On **\*BSD** (FreeBSD etc.) build from source — it's the same
 `flex`/`bison`/`clang` toolchain (`pkg install`) and the standard `make` below.
 
-**From a release** (recommended): download the package for your platform from the
-[Releases](https://github.com/cosmic-canopy/kama/releases) page, then:
+**One-line install** (recommended) — installs into `~/.kama`, no admin:
 
 ```sh
-tar xzf kama-<os>-<arch>-vX.Y.Z.tar.gz
-cd kama-<os>-<arch>-vX.Y.Z
-./install.sh /usr/local         # or any prefix on your PATH
-kama --version
+# macOS / Linux
+curl -fsSL https://kama-lang.org/install.sh | sh
+```
+```powershell
+# Windows (PowerShell)
+irm https://kama-lang.org/install.ps1 | iex
 ```
 
-The package ships `bin/kama` and `include/kama_runtime.h`; `kama` finds the runtime header relative to
-its own location, so it works from any directory.
+The installer detects your OS/arch and whether a C compiler is present: if so it grabs the small build;
+if not, it grabs a self-contained build that bundles `zig cc`, so `kama build` works with nothing else
+installed. Then add `~/.kama/bin` to your PATH (the installer prints the line) and:
+
+```sh
+kama --version
+kama update            # self-update to the latest release (kama update --version vX.Y.Z to pin)
+```
+
+Flags: `--no-std` (or `KAMA_NO_STD=1`) skips the standard library; `KAMA_VERSION=vX.Y.Z` installs a
+specific release.
+
+**Manual install:** download the package for your platform from the
+[Releases](https://github.com/cosmic-canopy/kama/releases) page, extract it, and add its `bin/` to your
+PATH — `kama` finds its runtime header and stdlib relative to the binary, so it runs from any directory:
+
+```sh
+tar xzf kama-<os>-<arch>-vX.Y.Z.tar.gz -C ~/.kama --strip-components=1
+export PATH="$HOME/.kama/bin:$PATH"
+kama --version
+```
 
 **From source:** you need `flex`, `bison ≥ 2.7`, and `clang`. On macOS: `brew install bison flex`
 (the Makefile auto-detects the keg-only bison). Then:
