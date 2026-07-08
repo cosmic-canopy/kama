@@ -1,0 +1,14 @@
+// A `List<string>` owns its OWNED string elements: `add(item: give s)` moves them in, by-value
+// `foreach` yields owned copies (dropped each pass), and `~List` frees each — ASan-clean is the proof.
+// (A literal element mixes in fine — it is borrowed, cap==0, a no-op to drop.)
+import std::collections::{List};
+fn int main() {
+    List<string> xs;
+    string a = "ab" + ""; string b = "cde" + "";
+    xs.add(item: give a);
+    xs.add(item: give b);
+    xs.add(item: "f");
+    int32 total = 0;
+    foreach (string p in xs) { total = total + cast<int32>(p.length()); }   // 2 + 3 + 1 = 6
+    return total;
+}

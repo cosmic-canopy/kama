@@ -1,0 +1,11 @@
+// The ergonomic the lazy `split` enables: collect its owned pieces into a `List<string>`
+// (`add(item: give p)`), then iterate by value. All owned, all freed once — ASan-clean.
+import std::collections::{List};
+fn int main() {
+    string path = "usr/local/bin";
+    List<string> parts;
+    foreach (string p in path.split(separator: "/")) { parts.add(item: give p); }
+    int32 n = 0;
+    foreach (string q in parts) { n = n + cast<int32>(q.length()); }   // 3 + 5 + 3 = 11
+    return n;
+}

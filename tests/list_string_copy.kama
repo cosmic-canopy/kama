@@ -1,0 +1,10 @@
+// `copy` of a `List<string>` is a deep, independent copy — clone and original own separate element
+// buffers, so both free cleanly. ASan-clean proves the independence (a shallow copy would double-free).
+import std::collections::{List};
+fn int main() {
+    List<string> a; a.add(item: "he" + "llo"); a.add(item: "hi");
+    List<string> b = copy a;
+    int32 t = 0;
+    foreach (string s in b) { t = t + cast<int32>(s.length()); }   // 5 + 2 = 7
+    return t;
+}

@@ -1660,12 +1660,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             bool ownedRhs = marked || (!rc.empty() && (isMoveOnlyValue(rc) || isSmartPtrClass(rc)));
             if (ownedRhs) {
                 std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
-                line(n->line); indent(depth); *_out << b << " = " << src << ";\n";
+                line(n->line);
+                // `copy` of an owning collection/`string` into the raw slot deep-copies (`__copy`), so the
+                // slot and the source own separate buffers (the source survives). Otherwise blit.
+                if (marked && !give && ownsByValue(rc) && !isMoveOnlyValue(rc)) {
+                    indent(depth); *_out << b << " = " << rc << "__copy(&(" << src << "));\n";
+                    return;
+                }
+                indent(depth); *_out << b << " = " << src << ";\n";
                 if (give || !marked) {
                     // consume the moved source so it isn't dropped again: an IFACE smart pointer is nulled
-                    // at runtime (its callee-drop then no-ops); a plain resource is move-tracked.
+                    // at runtime (its callee-drop then no-ops); a resource OR collection/`string` is
+                    // move-tracked (its scope-drop is skipped — the raw slot now owns the buffer).
                     if (isSmartPtrClass(rc)) { indent(depth); *_out << smartPtrInvalidate(src, smartKind(rc), isInterface(_classes[rc].collElemClass)) << "\n"; }
-                    else if (isMoveOnlyValue(rc)) { std::string mv = moveOnlySource(rhs, n->line); if (!mv.empty()) markMoved(mv); }
+                    else if (ownsByValue(rc)) { std::string mv = moveOnlySource(rhs, n->line); if (!mv.empty()) markMoved(mv); }
                 }
                 return;
             }
@@ -2692,6 +2700,9 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     ci.collKind = kind;
     ci.collElemClass = elemClass;
     ci.destructible = true;                    // owns heap -> RAII frees
+    ci.copyable = isStr;                        // `string` is deep-copyable (kama_string__copy) -> satisfies
+                                               // `Copyable` as a type arg, so `List<string>` gets its
+                                               // `when T: Copyable` methods (copy / by-value foreach).
     ci.hasCtor = !isStr;                        // strings come from literals/concat
     ci.ctorParams = (kind == CollKind::Array)
                         ? std::vector<ParamSig>{ ParamSig{"size", false, ""} }
@@ -4052,12 +4063,11 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         indent(depth + 2); *_out << elemTy << " " << nm << " = " << ot << ".u.Some.value;\n";
         // A destructible by-value element that the binding OWNS must RAII-drop each iteration, else it
         // leaks — but only if `next()` yields a FRESH owned value. The compiler-provided `Split` iterator
-        // does (its pieces come from `kama_string_from_raw`, a fresh heap copy). A USER iterator that
-        // returns a bare owned field (`return Optional::Some(value: this.a)`) yields an ALIAS the object
-        // still owns; dropping that would double-free (the language doesn't deep-copy on yield). Kama has
-        // no ownership-transfer tracking through a `next()` return yet, so restrict the drop to `Split`
-        // (whose yield is known-fresh); user iterators keep the prior borrow-like, no-drop behaviour.
-        if (container == "Split" && _classes.count(elemTy) && _classes[elemTy].destructible)
+        // does. `Iterator<T>` yields BY VALUE (a copy — SPEC), so the binding OWNS a destructible element
+        // and must drop it each iteration. This is sound because a `next()` returning an owning value into
+        // its `Optional<T>` must hand it off with `give`/`copy` (a bare named payload is rejected at variant
+        // construction), so the yield is always a fresh/owned value, never an alias the iterator still owns.
+        if (_classes.count(elemTy) && _classes[elemTy].destructible)
             recordDestructibleLocal(nm, elemTy);
     }
     // Mutation guard: mutating the container mid-loop is the author's concern for a user iterator (its
@@ -5854,10 +5864,16 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 if (doCopy) field = argCls + "__copy(&(" + val + "))";
                 else { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); field = val; }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection && handoff) {
-                // `give` a collection into the union — transfer the struct (buffer) and null the
-                // source so its scope-drop is a no-op; the union now owns it (dropped by the tag dtor).
-                if (handoff == 2)
-                    unsupported("`copy` of a collection into a variant is not yet supported — use `give` to move it", srcLine);
+                // Hand a collection/`string` into the union: `copy` deep-copies (`__copy`; the union owns
+                // the clone, the source survives), `give` transfers the struct (buffer) and nulls the
+                // source so its scope-drop is a no-op (the union now owns it, dropped by the tag dtor).
+                if (handoff == 2) {                                  // copy = deep copy into the payload
+                    auto ci = _collections.find(argCls);
+                    if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
+                        unsupported(("`copy` of a `" + argCls + "` needs copyable elements — use `give` to "
+                                     "move it").c_str(), srcLine);
+                    else field = argCls + "__copy(&(" + val + "))";
+                }
                 else if (!_hoistOK)
                     unsupported("moving a collection into a variant here needs a statement slot — bind the "
                                 "constructed value to a local first", srcLine);
@@ -5867,6 +5883,14 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                                        + val + ").data = NULL; (" + val + ").len = 0;");
                     field = t;
                 }
+            } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection
+                       && isNamedValue(argExpr.get())) {
+                // A bare NAMED collection/`string` into a variant would alias (the union owns it AND the
+                // source frees it → double-free / dangle). Ownership transfer must be explicit — `give`
+                // (move) or `copy` (deep). A fresh rvalue payload (a call result / literal) needs no marker.
+                unsupported("a collection/`string` into a variant transfers ownership — say `give` (move) "
+                            "or `copy` (deep)", srcLine);
+                field = val;
             } else {
                 // Primitive / plain value / fresh smart-ptr rvalue (factory result): consumed in place.
                 // A `give`/`copy` on a plain value (primitive or `value` struct) is a no-op — a value is
