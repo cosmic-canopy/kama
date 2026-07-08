@@ -1054,7 +1054,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // track empty resources for move analysis
-                if (!d->initializer) return;   // declared but uninitialized (non-const)
+                if (!d->initializer) {
+                    // No initializer: the scope-exit dtor recorded above WILL run, so the object must be
+                    // brought to a valid state now — not left as stack garbage (which frees fine on glibc
+                    // but aborts on macOS's malloc: "pointer being freed was not allocated"). If the class
+                    // has a zero-arg default ctor, call it (runs its field-init / vtable setup, exactly like
+                    // `= List()`); intrinsic collections / extern structs have no kama ctor — the `= {0}`
+                    // above is their default empty state.
+                    if (!zeroInit && !_classes[ty].isAbstractClass
+                        && ((_classes[ty].hasCtor && _classes[ty].ctorParams.empty()) || _classes[ty].synthCtor)) {
+                        line(n->line); indent(depth);
+                        *_out << emitCtorCall(nm, _classes[ty], nullptr, n->line) << ";\n";
+                    }
+                    return;   // otherwise declared-only (a non-destructible value; nothing to construct)
+                }
 
                 // unwrap a give/copy hand-off marker — the inner NAMED value drives
                 // move (give) vs duplicate (copy). A fresh rvalue never takes a marker.
