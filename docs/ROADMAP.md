@@ -43,12 +43,13 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
      slot **OWNS** it (drops at fn-end), `ref` borrows, and read-only `kama_string__*` intrinsics keep
      borrowing (marker-free). Closes the confirmed `Box(x: x)` double-free; native + ASan/UBSan clean. The
      old "by-value collection params → post-1.0" deferral is **retired**.
-   - **Owning-value collection ELEMENTS** (`List<string>`, `Array<string>`, nested collections). The
-     library `List<T>` is `Copyable when T: Copyable` and its `~List()` `drop`s each element — but `string`
-     (and collections) aren't yet recognized as `Copyable`/droppable **elements**, so a `List<string>`
-     **leaks** owned elements on drop, can't `copy`, and has no by-value `foreach` (only `ref`). Fix: make
-     `string`/collections first-class `Copyable`/`Droppable` so `give`/`copy`/`drop` of an element resolve
-     at the generic-bounds level. `List<string>` is common → a real 1.0 item (the next hardening step).
+   - ✅ **Owning-value collection ELEMENTS — `List<string>` DONE** (commit `55f45f1`). `string`/collections
+     are now first-class `Copyable`/owning elements: `string` satisfies `Copyable`, `copy` of a
+     collection/string into a variant deep-copies, a bare named payload into a variant is rejected, the raw
+     `Ptr` element store honors `give`/`copy`, and `foreach` drops its owned by-value binding. `List<string>`
+     now supports `add(item: give s)`, by-value `foreach`, `copy`, and collecting `split` pieces into a list
+     — ASan/UBSan-clean. **Remaining (smaller, same axis):** `Array<string>` element place-store
+     (`a[i] = <owned>`) and nested collections (`List<List<string>>` — recursive element copyability).
    - **`.chars()` double-evaluates its receiver** (emits it twice, for `.data`/`.len`) — a side-effecting /
      owned rvalue receiver desyncs → OOB/leak. Apply the same stable-ref gate `.split()`/`.chars()` already
      use, or a single-eval lowering. Small.
