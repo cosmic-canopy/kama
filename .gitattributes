@@ -1,0 +1,20 @@
+# Kama is the point of this repo — keep the GitHub language bar reading as Kama.
+# The benchmark comparison sources and the parked LLVM backend are not the project's
+# code; mark them vendored so they don't dominate the stats. The C++ compiler sources
+# stay counted — that's the honest implementation language.
+bench/src/c/**       linguist-vendored
+bench/src/cpp/**     linguist-vendored
+bench/src/go/**      linguist-vendored
+bench/src/rust/**    linguist-vendored
+bench/src/java/**    linguist-vendored
+bench/src/csharp/**  linguist-vendored
+bench/src/lua/**     linguist-vendored
+bench/src/ts/**      linguist-vendored
+bench/src/js/**      linguist-vendored
+bench/src/python/**  linguist-vendored
+legacy-llvm/**       linguist-vendored
+
+# Until Linguist ships a Kama entry this is a harmless no-op; once it lands, `.kama`
+# files classify as Kama on github.com. (Not `linguist-language=C` — that would
+# mislabel .kama as C in the stats.)
+*.kama               linguist-language=Kama

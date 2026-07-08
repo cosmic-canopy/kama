@@ -1,0 +1,17 @@
+# Staged entry for the github-linguist PR (Phase D). Submit ONLY once `.kama` clears
+# Linguist's usage bar (~200 unique repos and ~2000 files indexed in the last year) —
+# a brand-new language won't qualify at first. The PR also needs:
+#   - the grammar registered in grammars.yml (submodule -> editor/vscode/syntaxes/kama.tmLanguage.json,
+#     scopeName "source.kama"), and
+#   - 2+ real programs under samples/Kama/, with the sample license stated in the PR body,
+#   - GitHub-search evidence of in-the-wild usage.
+# language_id is assigned/confirmed by a Linguist maintainer in review.
+
+Kama:
+  type: programming
+  color: "#B01C2E"          # hinomaru red
+  extensions:
+    - ".kama"
+  tm_scope: source.kama
+  ace_mode: c_cpp           # closest built-in editor mode (kama is C-like)
+  language_id: 999999       # placeholder — Linguist assigns the real id
