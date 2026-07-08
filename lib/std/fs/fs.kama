@@ -1,0 +1,146 @@
+namespace std::fs;
+
+import std::io::{IoError, lastError};
+import std::collections::{List, Array};
+
+export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove };
+
+// POSIX/Windows file bindings — see kama_os.h. Structs (`stat`, `dirent`, `DIR`) stay opaque; kama holds
+// only `int32` fds, `Ptr` handles, and scalar out-params.
+extern "kama_os.h";
+extern fn int32  kama_open_read(Ptr<int8> path);
+extern fn int32  kama_open_create(Ptr<int8> path);
+extern fn isize  kama_read(int32 fd, Ptr<uint8> buf, usize n);
+extern fn isize  kama_write(int32 fd, Ptr<uint8> buf, usize n);
+extern fn int32  kama_close_fd(int32 fd);
+extern fn int32  kama_fstat_size(int32 fd, Ptr<uint64> outSize, Ptr<int32> outIsDir);
+extern fn int32  kama_path_stat(Ptr<int8> path, Ptr<uint64> outSize, Ptr<int32> outIsDir);
+extern fn int32  kama_unlink(Ptr<int8> path);
+extern fn Ptr    kama_diropen(Ptr<int8> path);
+extern fn string kama_dirnext(Ptr dirp);
+extern fn int32  kama_dirclose(Ptr dirp);
+extern fn int32  kama_last_error();
+extern fn int32  kama_EINTR();
+
+enum OpenMode { Read, Write }
+
+// File metadata (extensible — mtime/permissions later).
+type value Metadata {
+    public usize size;
+    public bool isDir;
+    public Metadata(usize size, bool isDir) { this.size = size; this.isDir = isDir; }
+}
+
+// An open file that closes its descriptor on drop (RAII). Move-only.
+type resource File {
+    int32 fd;
+    private File(int32 fd) { this.fd = fd; }
+
+    // Open a file for reading or writing (Write creates/truncates). The returned `File` closes on drop.
+    public static fn Result<File, IoError> open(ref string path, OpenMode mode) {
+        int32 fd = match (mode) {
+            case Read:  kama_open_read(path: path.cstr());
+            case Write: kama_open_create(path: path.cstr());
+        };
+        if (fd < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: File(fd: fd));
+    }
+
+    // Read up to `into.length()` bytes into `into`; returns the count (0 = end of file). EINTR-retried.
+    public fn Result<usize, IoError> read(ref Array<uint8> into) {
+        while (true) {
+            isize n = kama_read(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+            if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+
+    // Read the whole file to EOF into an owning byte buffer.
+    public fn Result<List<uint8>, IoError> readAll() {
+        List<uint8> buf = List();
+        Array<uint8> scratch = Array(size: 65536);
+        bool eof = false;
+        while (!eof) {
+            isize n = kama_read(fd: this.fd, buf: addr(of: scratch[0]), n: cast<usize>(scratch.length()));
+            if (n < 0) {
+                if (kama_last_error() == kama_EINTR()) { continue; }
+                return Result::Err(error: lastError());
+            }
+            if (n == 0) {
+                eof = true;
+            } else {
+                int32 got = cast<int32>(n);
+                int32 i = 0;
+                while (i < got) { buf.add(item: scratch[i]); i = i + 1; }
+            }
+        }
+        return Result::Ok(value: give buf);
+    }
+
+    // Write the whole buffer, looping until every byte is sent (partial writes + EINTR handled).
+    public fn Result<usize, IoError> writeAll(ref List<uint8> bytes) {
+        int32 total = cast<int32>(bytes.length());
+        int32 off = 0;
+        while (off < total) {
+            int32 remaining = total - off;
+            isize n = kama_write(fd: this.fd, buf: addr(of: bytes[off]), n: cast<usize>(remaining));
+            if (n < 0) {
+                if (kama_last_error() == kama_EINTR()) { continue; }
+                return Result::Err(error: lastError());
+            }
+            off = off + cast<int32>(n);
+        }
+        return Result::Ok(value: cast<usize>(total));
+    }
+
+    ~File() { if (this.fd >= 0) { int32 rc = kama_close_fd(fd: this.fd); } }
+}
+
+// Read an entire file into an owning byte buffer (opens, reads to EOF, closes on drop).
+fn Result<List<uint8>, IoError> readFile(ref string path) {
+    Result<File, IoError> r = File::open(path: path, mode: OpenMode::Read);
+    return match (r) {
+        case Ok(f):  f.readAll();                       // f closes at arm end (RAII)
+        case Err(e): Result::Err(error: e);
+    };
+}
+
+// Create/truncate a file and write the whole buffer to it.
+fn Result<usize, IoError> writeFile(ref string path, ref List<uint8> bytes) {
+    Result<File, IoError> r = File::open(path: path, mode: OpenMode::Write);
+    return match (r) {
+        case Ok(f):  f.writeAll(bytes: bytes);
+        case Err(e): Result::Err(error: e);
+    };
+}
+
+// Size + directory flag for a path.
+fn Result<Metadata, IoError> stat(ref string path) {
+    uint64 sz = 0ui64;
+    int32 isdir = 0;
+    int32 rc = kama_path_stat(path: path.cstr(), outSize: addr(of: sz), outIsDir: addr(of: isdir));
+    if (rc != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Metadata(size: cast<usize>(sz), isDir: isdir != 0));
+}
+
+// Delete a file. Ok on success; Err(NotFound) if the path did not exist.
+fn Result<Unit, IoError> remove(ref string path) {
+    if (kama_unlink(path: path.cstr()) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Unit::Unit);
+}
+
+// List a directory's entries (excluding "." and ".."), each as an owned string.
+fn Result<List<string>, IoError> readDir(ref string path) {
+    Ptr dirp = kama_diropen(path: path.cstr());
+    if (dirp == null) { return Result::Err(error: lastError()); }
+    List<string> names = List();
+    while (true) {
+        string name = kama_dirnext(dirp: dirp);
+        if (name.isEmpty()) { break; }              // end of directory
+        if (name == ".")  { continue; }
+        if (name == "..") { continue; }
+        names.add(item: give name);
+    }
+    int32 rc = kama_dirclose(dirp: dirp);
+    return Result::Ok(value: give names);
+}

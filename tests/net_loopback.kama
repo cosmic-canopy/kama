@@ -1,0 +1,65 @@
+// std::net loopback — client connects + sends a patterned buffer + closes; server accepts and reads
+// to EOF in a loop, verifying length + checksum. Single-threaded and deadlock-free: the client runs to
+// completion (backlog-queued connect, buffered send, FIN) before the server accepts. Returns 55.
+import std::net::{TcpListener, TcpStream};
+import std::io::{IoError};
+import std::collections::{List, Array};
+
+fn int32 sendBytes(ref TcpStream s, int32 n) {
+    List<uint8> data = List();
+    int32 i = 0;
+    int32 sum = 0;
+    while (i < n) {
+        int32 v = (i * 37 + 11) % 251;
+        data.add(item: cast<uint8>(v));
+        sum = (sum + v) % 1000;
+        i = i + 1;
+    }
+    return match (s.writeAll(bytes: data)) {
+        case Ok(w): ((cast<int32>(w) == n) ? sum : -2);
+        case Err(e): -3;
+    };
+}
+
+// Connect, send n bytes, return the checksum (>=0) or a negative error. Closes the socket on return.
+fn int32 clientSend(uint16 port, int32 n) {
+    string host = "127.0.0.1";
+    Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
+    return match (rc) { case Ok(s): sendBytes(s: s, n: n); case Err(e): -1; };
+}
+
+// Read to EOF with a small buffer (forces multiple recvs); check total length + checksum.
+fn int32 serverRecv(ref TcpStream s, int32 expectSum, int32 expectLen) {
+    Array<uint8> buf = Array(size: 1024);
+    int32 total = 0;
+    int32 sum = 0;
+    bool done = false;
+    while (!done) {
+        int32 got = match (s.read(into: buf)) { case Ok(c): cast<int32>(c); case Err(e): -1; };
+        if (got < 0) { return 91; }
+        if (got == 0) {
+            done = true;
+        } else {
+            int32 k = 0;
+            while (k < got) { sum = (sum + cast<int32>(buf[k])) % 1000; total = total + 1; k = k + 1; }
+        }
+    }
+    if (total != expectLen) { return 92; }
+    if (sum != expectSum) { return 93; }
+    return 55;
+}
+
+fn int32 runServer(ref TcpListener listener, uint16 port, int32 n) {
+    int32 sentSum = clientSend(port: port, n: n);   // client completes first (buffered), then we accept
+    if (sentSum < 0) { return 85; }
+    Result<TcpStream, IoError> ra = listener.accept();
+    return match (ra) { case Ok(server): serverRecv(s: server, expectSum: sentSum, expectLen: n); case Err(e): 86; };
+}
+
+fn int main() {
+    string host = "127.0.0.1";
+    uint16 port = cast<uint16>(47654);
+    int32 n = 8000;
+    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    return match (rl) { case Ok(listener): runServer(listener: listener, port: port, n: n); case Err(e): 80; };
+}

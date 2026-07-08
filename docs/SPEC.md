@@ -819,6 +819,10 @@ The prelude provides two tagged-union types, so error handling needs no exceptio
 
 - **`Optional<T>`** — `Some(T)` or `None`. A value that may be absent.
 - **`Result<T, E>`** — `Ok(T)` or `Err(E)`. A value or an error.
+- **`Unit`** — a single-variant enum (`Unit::Unit`), the empty value. It is the payload for a fallible
+  operation that succeeds with nothing to return: `Result<Unit, E>` (the analogue of Rust's `Result<(), E>`),
+  so **one** error convention — always `Result` — covers valued and void operations alike, with no
+  placeholder payload. Example: `fn Result<Unit, IoError> remove(ref string path)` in `std::fs`.
 
 Both are ordinary tagged unions consumed by `match`, so the caller is *forced* to handle the empty/error
 case (exhaustiveness):

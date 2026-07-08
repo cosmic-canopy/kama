@@ -56,17 +56,57 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
    - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop leak
      (Phase 3 covered operators / receivers / `if`-conditions / string-intrinsic args / `foreach` yields;
      residual = non-string-intrinsic by-value args, owned temps in `while`/`for` conditions). Durable fix:
-     a full temporary-drop pass.
+     a full temporary-drop pass. **Also unblocks passing a string literal to a `ref string` param** —
+     today that hard-errors ("cannot take the address of an rvalue"); materializing the temporary into a
+     hidden local (C++ const-ref lifetime-extension style) fixes it and makes read-only `ref` args ergonomic
+     for literals as well as named vars. (Surfaced building `std::fs`/`std::net`, which take `ref string`
+     paths/hosts; callers bind literals to a local for now.)
+   - **Parser/typer accept a narrower grammar than expected — surprising ergonomics gaps** (each with a
+     clean workaround, none miscompile; found building `std::fs`/`std::net`). Worth closing before 1.0 since
+     they bite constantly:
+     - `cast<T>(...)` rejects a **binary-expression** operand — `cast<int32>(a + b)` is a syntax error;
+       the operand must be a postfix/primary (var, call, index, or parenthesized). Bind to a local
+       (`int32 t = a + b; cast<int32>(t)`). The cast grammar should accept a full expression.
+     - A **value-producing `match` block arm** (`case X: { …stmts…; tail }`) must end in a **call** — a bare
+       identifier / arithmetic / ternary tail is a syntax error. (Non-block arms `case X: <expr>` accept any
+       expression, incl. ternaries.) Wrap the tail in a helper call, or use a non-block arm.
+     - Inline `match (Type::staticFn(...))` where the `Ok` payload is a **resource** fails ("requires an
+       enum subject") — bind the call to a typed local (`Result<File,IoError> r = File::open(...); match (r)`)
+       first. Free-function calls returning `Result<value,…>` match inline fine; the gap is static-method /
+       resource-payload calls in subject position.
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered.
    - **Multibyte source char literal `'é'`** — lexer gap (write `'\u{E9}'` today).
    - **Verify-then-1.0-or-downgrade:** explicit type args when inference fails
      ([kama.cemit.cpp:3467] — does turbofish `f::<T>()` already cover it?); inline `new Concrete` into a
      smart-ptr-over-interface ([kama.cemit.cpp:5623] — has a bind-to-local workaround).
-3. **Math layer.** `Vec2/3/4`, `Mat4` (`Fixed<float32,16>` or `Fixed<Vec4,4>`), `Quat` as ordinary `value`
+3. **Standard library — native I/O foundation (`std::io` / `std::fs` / `std::net`).** Landed to unlock a
+   native single-binary HTTP static-file server (the first real Kama program). **Library over the existing
+   FFI — no compiler features** beyond a one-line prelude addition (`enum Unit`, the empty `Result<Unit,E>`
+   payload — the analogue of Rust's `Result<(),E>`, chosen so std keeps **one** error convention). Platform
+   differences live in a single bundled C bindings header, **`kama_os.h`** (pay-for-what-you-use: pulled in
+   only via `extern "kama_os.h";`), which keeps OS aggregates (`struct stat`, `sockaddr_in`, `dirent`, `DIR`)
+   opaque behind `static inline` accessors — the standard FFI boundary (Rust `libc` / Zig `@cImport` /
+   Go `syscall`), forced by "extern struct emits the literal C name, no typedef."
+   - ✅ **POSIX (Linux/macOS/iOS/Android) — DONE.** `std::io` (`IoError` + `lastError` classification);
+     `std::fs` (`File` RAII fd + `open`/`read`/`readAll`/`writeAll`, free `readFile`/`writeFile`/`stat`/
+     `readDir`/`remove`); `std::net` (`TcpListener` bind/accept, `TcpStream` connect/read/writeAll, both
+     RAII-closing). Production bar on the shipped subset: `EINTR` retry, write-to-completion, errno→`IoError`,
+     no fd leak on any error path (capture error before close). 6 fixtures (fs roundtrip >64 KiB / notfound /
+     readdir / raii-5000-opens; net loopback / refused) — native + ASan/UBSan clean (347/347).
+   - **Windows (first-class) — TODO.** `kama_os.h` has the `#if defined(_WIN32)` slot stubbed (`#error`);
+     fill the Winsock (`WSAStartup`/`SOCKET`/`closesocket`/`WSAGetLastError`) + CRT (`_open`/`_stat`/
+     `FindFirstFile`) branch, map Winsock codes onto the same `IoError` set, add `windows-latest` to the CI
+     matrix (`release.yml` already builds `windows-x64`, so the toolchain exists). The kama modules are 100%
+     platform-agnostic — only this header changes.
+   - **WASM — honestly scoped.** Builds via emscripten's POSIX shims but fs is a *virtual* FS and there are
+     no browser sockets — wasm net defers to the WebRTC/host path (2.0). Confirm-it-builds + a docs note.
+   - **Deferred (tracked):** UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`, buffered readers, richer
+     `Metadata` (mtime/perms), path helpers, `mkdir`. Follow-up: `examples/httpd.kama` end-to-end over `curl`.
+4. **Math layer.** `Vec2/3/4`, `Mat4` (`Fixed<float32,16>` or `Fixed<Vec4,4>`), `Quat` as ordinary `value`
    types — **no prerequisites** (operator overloading + `Fixed` shipped). Unblocks the engine's Tier-0 math.
    Buildable as value types now; package as a stdlib module once the packaging question (§3) is settled —
    forward-compatible either way.
-4. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
+5. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
    (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`).
 
 ## 2. Deferred language bits (tracked)

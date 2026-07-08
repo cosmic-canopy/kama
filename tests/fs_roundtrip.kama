@@ -1,0 +1,59 @@
+// std::fs — write a >64 KiB buffer, stat it, read it back, verify byte-for-byte, delete it.
+// Exercises write-to-completion + read-loop + stat + remove. Returns 42 on full success.
+import std::fs::{writeFile, readFile, stat, remove, Metadata};
+import std::io::{IoError};
+import std::collections::{List};
+
+// Checksum a read-back buffer against the expected length + rolling sum (0 = match).
+fn int32 verifyBuf(ref List<uint8> got, int32 n, int32 want) {
+    int32 len = cast<int32>(got.length());
+    if (len != n) { return 60; }
+    int32 rsum = 0;
+    int32 k = 0;
+    while (k < len) { rsum = (rsum + cast<int32>(got[k])) % 1000; k = k + 1; }
+    if (rsum != want) { return 61; }
+    return 0;
+}
+
+fn int main() {
+    string p = "_fs_roundtrip.tmp";
+    int32 n = 100000;                       // > 64 KiB scratch buffer -> multi-iteration loops
+
+    List<uint8> data = List();
+    int32 i = 0;
+    int32 sum = 0;
+    while (i < n) {
+        int32 v = (i * 31 + 7) % 251;
+        data.add(item: cast<uint8>(v));
+        sum = (sum + v) % 1000;
+        i = i + 1;
+    }
+
+    Result<usize, IoError> wr = writeFile(path: p, bytes: data);
+    usize written = match (wr) { case Ok(w): w; case Err(e): cast<usize>(0); };
+    if (written != cast<usize>(n)) { return 50; }
+
+    int32 stCode = match (stat(path: p)) {
+        case Ok(m): (m.isDir ? 51 : ((m.size == cast<usize>(n)) ? 0 : 52));
+        case Err(e): 53;
+    };
+    if (stCode != 0) { return stCode; }
+
+    int32 back = match (readFile(path: p)) {
+        case Ok(got): verifyBuf(got: got, n: n, want: sum);
+        case Err(e): 62;
+    };
+    if (back != 0) { return back; }
+
+    int32 rmCode = match (remove(path: p)) { case Ok(u): 0; case Err(e): 70; };
+    if (rmCode != 0) { return rmCode; }
+
+    // Deleting again must now fail with NotFound (proves the unlink happened).
+    int32 gone = match (remove(path: p)) {
+        case Ok(u): 71;
+        case Err(e): match (e) { case NotFound: 0; case _: 72; };
+    };
+    if (gone != 0) { return gone; }
+
+    return 42;
+}

@@ -1,0 +1,26 @@
+// std::fs RAII — File closes its fd on drop. Open the same file 5000x, each dropped at arm end;
+// if the descriptor leaked we would exhaust the fd table (~1024) and an open would fail. Returns 0.
+import std::fs::{writeFile, remove, File, OpenMode};
+import std::io::{IoError};
+import std::collections::{List};
+
+fn int main() {
+    string self = "_fs_raii.tmp";
+    List<uint8> data = List();
+    data.add(item: cast<uint8>(65));
+    int32 w = match (writeFile(path: self, bytes: data)) { case Ok(x): 0; case Err(e): 40; };
+    if (w != 0) { return w; }
+
+    int32 i = 0;
+    while (i < 5000) {
+        Result<File, IoError> ro = File::open(path: self, mode: OpenMode::Read);
+        int32 rc = match (ro) {
+            case Ok(f):  0;                     // f drops here -> fd closed (RAII)
+            case Err(e): 41;                    // fires if fds leaked and hit the limit
+        };
+        if (rc != 0) { return rc; }
+        i = i + 1;
+    }
+
+    return match (remove(path: self)) { case Ok(u): 0; case Err(e): 42; };
+}

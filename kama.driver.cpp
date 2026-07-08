@@ -292,6 +292,11 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
 static const char* PRELUDE_SRC =
     "enum Optional<T> { Some(T value), None }\n"
     "enum Result<T, E> { Ok(T value), Err(E error) }\n"
+    // The empty value — the payload for a fallible op that succeeds with nothing to return
+    // (`Result<Unit, E>`, the analogue of Rust's `Result<(), E>`). Keeps ONE error convention
+    // (always Result) whether or not there is a value; no dead/placeholder payload. A single-variant
+    // enum (like `None`) so it lives in the prelude without needing value-type ctor emission.
+    "enum Unit { Unit }\n"
     // Auto-deref opt-in: a type implementing Deref<T> forwards member access to its pointee `T`
     // (`ptr.method()`/`ptr.field` -> the T). The contract is the gate (explicit, nominal); the smart
     // pointers become ordinary kama types over this instead of compiler intrinsics.

@@ -1,0 +1,39 @@
+namespace std::io;
+export { IoError, lastError };
+
+// Bindings for the platform's last-error accessor + errno constants (see kama_os.h). The constant
+// accessors let us classify without hardcoding per-OS errno numbers; they are module-internal.
+extern "kama_os.h";
+extern fn int32 kama_last_error();
+extern fn int32 kama_ENOENT();
+extern fn int32 kama_EACCES();
+extern fn int32 kama_EAGAIN();
+extern fn int32 kama_ECONNREFUSED();
+extern fn int32 kama_ECONNRESET();
+extern fn int32 kama_EADDRINUSE();
+
+// A classified I/O error. The named kinds cover the common cases callers branch on; `Other` carries the
+// raw platform error code for everything else, keeping the set small but complete. `UnexpectedEof` is a
+// logical error (a read returned 0 where more was required) — it has no errno, so callers raise it directly.
+enum IoError {
+    NotFound,
+    PermissionDenied,
+    WouldBlock,
+    ConnectionRefused,
+    ConnectionReset,
+    AddrInUse,
+    UnexpectedEof,
+    Other(int32 code)
+}
+
+// Read the platform's last-error ONCE (call this immediately after a failed syscall) and classify it.
+fn IoError lastError() {
+    int32 e = kama_last_error();
+    if (e == kama_ENOENT())       { return IoError::NotFound; }
+    if (e == kama_EACCES())       { return IoError::PermissionDenied; }
+    if (e == kama_EAGAIN())       { return IoError::WouldBlock; }
+    if (e == kama_ECONNREFUSED()) { return IoError::ConnectionRefused; }
+    if (e == kama_ECONNRESET())   { return IoError::ConnectionReset; }
+    if (e == kama_EADDRINUSE())   { return IoError::AddrInUse; }
+    return IoError::Other(code: e);
+}

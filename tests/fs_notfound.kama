@@ -1,0 +1,22 @@
+// std::fs error path — reading / opening / stat-ing a missing path yields Err(NotFound).
+import std::fs::{readFile, stat, File, OpenMode};
+import std::io::{IoError};
+import std::collections::{List};
+
+fn int32 isNotFound(IoError e) { return match (e) { case NotFound: 1; case _: 0; }; }
+
+fn int main() {
+    string missing = "_no_such_file_zzz.tmp";
+
+    int32 a = match (readFile(path: missing)) { case Ok(b): 10; case Err(e): isNotFound(e: e); };
+    if (a != 1) { return 20; }
+
+    Result<File, IoError> rb = File::open(path: missing, mode: OpenMode::Read);
+    int32 b = match (rb) { case Ok(f): 11; case Err(e): isNotFound(e: e); };
+    if (b != 1) { return 21; }
+
+    int32 c = match (stat(path: missing)) { case Ok(m): 12; case Err(e): isNotFound(e: e); };
+    if (c != 1) { return 22; }
+
+    return 0;
+}

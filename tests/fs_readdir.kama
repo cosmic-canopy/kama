@@ -1,0 +1,21 @@
+// std::fs — readDir returns real entries and filters "." / "..".
+import std::fs::{readDir};
+import std::io::{IoError};
+import std::collections::{List};
+
+fn int32 checkNames(ref List<string> names) {
+    int32 n = cast<int32>(names.length());
+    if (n <= 0) { return 31; }                 // the working dir must have entries
+    bool bad = false;
+    foreach (ref string nm in names) {
+        if (nm == ".")  { bad = true; }
+        if (nm == "..") { bad = true; }
+    }
+    if (bad) { return 32; }                     // "." / ".." must have been filtered
+    return 0;
+}
+
+fn int main() {
+    string dot = ".";
+    return match (readDir(path: dot)) { case Ok(names): checkNames(names: names); case Err(e): 30; };
+}
