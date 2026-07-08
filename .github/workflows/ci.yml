@@ -45,6 +45,31 @@ jobs:
       - name: Test suite
         run: ./run_tests.sh
 
+  windows-test:
+    name: build + test (windows-x64, best-effort)
+    runs-on: windows-latest
+    # std::fs/std::net's Windows branch (kama_os.h Winsock/CRT) can only be verified here — it has no local
+    # equivalent on the Linux/macOS dev boxes. Best-effort (continue-on-error) so a Windows-only regression
+    # reports status without blocking dev/main CI while it stabilizes; flip to required once reliably green.
+    continue-on-error: true
+    defaults:
+      run: { shell: 'msys2 {0}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make bison flex
+            mingw-w64-ucrt-x86_64-clang
+      - name: Build
+        run: make
+      - name: Version
+        run: ./kama --version
+      - name: Test suite   # full suite incl. fs_* / net_* over the Windows kama_os.h branch
+        run: ./run_tests.sh
+
   wasm-smoke:
     name: wasm smoke (emit + run under node)
     runs-on: ubuntu-latest

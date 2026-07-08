@@ -93,11 +93,14 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
      RAII-closing). Production bar on the shipped subset: `EINTR` retry, write-to-completion, errno→`IoError`,
      no fd leak on any error path (capture error before close). 6 fixtures (fs roundtrip >64 KiB / notfound /
      readdir / raii-5000-opens; net loopback / refused) — native + ASan/UBSan clean (347/347).
-   - **Windows (first-class) — TODO.** `kama_os.h` has the `#if defined(_WIN32)` slot stubbed (`#error`);
-     fill the Winsock (`WSAStartup`/`SOCKET`/`closesocket`/`WSAGetLastError`) + CRT (`_open`/`_stat`/
-     `FindFirstFile`) branch, map Winsock codes onto the same `IoError` set, add `windows-latest` to the CI
-     matrix (`release.yml` already builds `windows-x64`, so the toolchain exists). The kama modules are 100%
-     platform-agnostic — only this header changes.
+   - **Windows (first-class) — WRITTEN, CI-verifying.** `kama_os.h`'s `#if defined(_WIN32)` branch is
+     filled: Winsock (`WSAStartup`/`SOCKET`/`closesocket`, `WSAGetLastError`→`errno` translation so
+     `kama_last_error()` is uniform) + CRT (`_open`+`_O_BINARY`/`_stat64`/`_read`/`_write`) +
+     `FindFirstFileA` dir cursor. Driver links `-lws2_32` on native Windows; release payloads now ship
+     `kama_os.h`; a best-effort `windows-latest` leg runs the full suite in CI (MSYS2 UCRT + clang).
+     All 29 binding signatures verified identical to the POSIX branch (a mismatch = guaranteed Windows
+     compile error). **Blind write — not compilable on the Linux/macOS dev boxes; first green Windows CI
+     run is the real verification.** Flip the CI leg to required once reliably green.
    - **WASM — honestly scoped.** Builds via emscripten's POSIX shims but fs is a *virtual* FS and there are
      no browser sockets — wasm net defers to the WebRTC/host path (2.0). Confirm-it-builds + a docs note.
    - **Deferred (tracked):** UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`, buffered readers, richer

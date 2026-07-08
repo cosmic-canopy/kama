@@ -61,6 +61,7 @@ jobs:
           rm -rf payload && mkdir -p payload/bin payload/include payload/lib/kama
           cp kama payload/bin/kama
           cp kama_runtime.h payload/include/
+          cp kama_os.h payload/include/           # std::io/fs/net bindings header (beside kama_runtime.h)
           cp -R lib/std payload/lib/kama/std
           cp LICENSE payload/ 2>/dev/null || true
           cp GETTING_STARTED.md payload/README.md 2>/dev/null || true
@@ -122,6 +123,7 @@ jobs:
           rm -rf payload && mkdir -p payload/bin payload/include payload/lib/kama
           cp kama.exe payload/bin/kama.exe 2>/dev/null || cp kama payload/bin/kama.exe
           cp kama_runtime.h payload/include/
+          cp kama_os.h payload/include/           # std::io/fs/net bindings header (beside kama_runtime.h)
           cp -R lib/std payload/lib/kama/std
           cp LICENSE payload/ 2>/dev/null || true
           cp GETTING_STARTED.md payload/README.md 2>/dev/null || true

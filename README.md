@@ -122,6 +122,8 @@ is debuggable in lldb/gdb with breakpoints in your `.kama` source, and a WASM
 - `kama.ast.h`, `kama.forward.h` — AST
 - `kama.cemit.{h,cpp}` — the C-emitting backend
 - `kama_runtime.h` — the small runtime included by generated C
+- `kama_os.h` — cross-platform OS/IO bindings header (POSIX + Windows), pulled in only by `std::io`/`std::fs`/`std::net`
+- `lib/std/` — the self-hosted standard library (`memory`, `collections`, `io`, `fs`, `net`)
 - `kama.driver.cpp` — CLI (`transpile` / `build`)
 - `tests/`, `run_tests.sh` — end-to-end fixtures (assert on exit codes)
 - `Dockerfile`, `tools/cdev` — containerized toolchain

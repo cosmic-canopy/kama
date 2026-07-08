@@ -700,6 +700,11 @@ int main(int argc, char** argv)
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
         for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
         for (auto& lib : links) cmd << "-l" << lib << " ";       // FFI link flags
+#if defined(_WIN32)
+        // std::net uses Winsock (kama_os.h). Link ws2_32 on native Windows builds; harmless (and pruned by
+        // --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.
+        if (!wasm) cmd << "-lws2_32 ";
+#endif
         cmd << "-o \"" << outPath << "\"";
         int rc = runCmd(cmd.str());
 
