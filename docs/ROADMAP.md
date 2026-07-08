@@ -32,26 +32,35 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
    module** (tracked): Unicode-correct casing + whitespace (this phase is ASCII), `'é'` multibyte source
    char literals, string interpolation/`Display` (which also gives `string + <number>`), and an eager
    `List<string>` collect for `split`.
-2. **Memory-safety hardening (1.0 blockers).** Pre-existing safety holes surfaced during the strings work
-   — a double-free in *safe* code violates kama's core guarantee, so these must close before 1.0. Each is
-   independent of the strings feature (reproduced with plain resources/collections):
-   - **Unmarked hand-off in call-argument / constructor positions → double-free (or leak).** The
-     `give`/`copy` hand-off rule is enforced for a **local assignment** (`string b = a` correctly errors
-     "must say `give` or `copy`") but **not** for a bare owned collection/`string` passed **by value to a
-     call or constructor argument**, nor for a ctor's `this.field = param`. The value then aliases (shared
-     buffer, `cap>0`): into an owning field it **double-frees** (`type resource Box { string a; Box(string
-     x){ this.a = x; } }` + `Box(x: x)` with `x` owned → ASan double-free); into a borrow-only callee it
-     leaks. Fix: extend the hand-off-marker enforcement (and move-tracking) to argument + ctor-field
-     positions, so a bare owned by-value hand-off is the same error there as in an assignment.
-   - **`.chars()` double-evaluates its receiver** (the emitter emits it twice, for `.data` and `.len`). A
-     side-effecting or owned rvalue receiver (`readLine().chars()`, `s.trim().chars()`) desyncs the two
-     reads → OOB / leak. `.split()` already guards this (rejects a non-stable operand — see the strings
-     work); apply the same stable-ref gate (or a single-eval lowering) to `.chars()`.
-   - **No general destroy-temporaries-at-end-of-full-expression pass.** Owned rvalues in expression
-     positions the compiler doesn't specifically drop leak (Phase 3 covered the common string cases:
-     operators, receivers, `if`-conditions, string-intrinsic args, `foreach` yields). The durable fix is a
-     general temporary-drop pass; until then the residual leaks (non-string-intrinsic by-value args; owned
-     temps in `while`/`for` conditions) are the tracked tail.
+2. **Language completeness & memory-safety hardening (1.0 blockers).** "1.0 = language complete" can't ship
+   with a **fundamental** (non-library) gap open — least of all a double-free in *safe* code. These are the
+   fundamental gaps surfaced while hardening strings, promoted here from §2 (each reproduces with plain
+   resources/collections, independent of the strings feature). Reserved-for-a-later-track keywords
+   (`expose`, `volatile`) stay deferred — they hard-error, never miscompile, and aren't core semantics.
+   - ✅ **By-value ownership of collections & `string` — DONE** (commit `f873a7c`). The `give`/`copy` +
+     move-tracking machinery now covers a by-value collection/`string` in every hand-off position:
+     assignment / field store (`this.a = give x`), function/constructor arguments, and returns. A by-value
+     slot **OWNS** it (drops at fn-end), `ref` borrows, and read-only `kama_string__*` intrinsics keep
+     borrowing (marker-free). Closes the confirmed `Box(x: x)` double-free; native + ASan/UBSan clean. The
+     old "by-value collection params → post-1.0" deferral is **retired**.
+   - **Owning-value collection ELEMENTS** (`List<string>`, `Array<string>`, nested collections). The
+     library `List<T>` is `Copyable when T: Copyable` and its `~List()` `drop`s each element — but `string`
+     (and collections) aren't yet recognized as `Copyable`/droppable **elements**, so a `List<string>`
+     **leaks** owned elements on drop, can't `copy`, and has no by-value `foreach` (only `ref`). Fix: make
+     `string`/collections first-class `Copyable`/`Droppable` so `give`/`copy`/`drop` of an element resolve
+     at the generic-bounds level. `List<string>` is common → a real 1.0 item (the next hardening step).
+   - **`.chars()` double-evaluates its receiver** (emits it twice, for `.data`/`.len`) — a side-effecting /
+     owned rvalue receiver desyncs → OOB/leak. Apply the same stable-ref gate `.split()`/`.chars()` already
+     use, or a single-eval lowering. Small.
+   - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop leak
+     (Phase 3 covered operators / receivers / `if`-conditions / string-intrinsic args / `foreach` yields;
+     residual = non-string-intrinsic by-value args, owned temps in `while`/`for` conditions). Durable fix:
+     a full temporary-drop pass.
+   - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered.
+   - **Multibyte source char literal `'é'`** — lexer gap (write `'\u{E9}'` today).
+   - **Verify-then-1.0-or-downgrade:** explicit type args when inference fails
+     ([kama.cemit.cpp:3467] — does turbofish `f::<T>()` already cover it?); inline `new Concrete` into a
+     smart-ptr-over-interface ([kama.cemit.cpp:5623] — has a bind-to-local workaround).
 3. **Math layer.** `Vec2/3/4`, `Mat4` (`Fixed<float32,16>` or `Fixed<Vec4,4>`), `Quat` as ordinary `value`
    types — **no prerequisites** (operator overloading + `Fixed` shipped). Unblocks the engine's Tier-0 math.
    Buildable as value types now; package as a stdlib module once the packaging question (§3) is settled —
@@ -61,10 +70,11 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 ## 2. Deferred language bits (tracked)
 
-Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal.
+Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
+**fundamental** gaps (multibyte char literals, `contract`-refining-`contract`, by-value collection
+ownership + owning elements) were promoted to §1.2 — a "language complete" 1.0 closes them. What remains
+here is genuinely later-track or opt-in.
 
-- **Multibyte source char literals** — `'é'` (a multibyte UTF-8 char between quotes) isn't lexed yet
-  (single-byte + escapes + `'\u{…}'` only); write `'\u{E9}'`. A lexer pass to match + decode.
 - **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
   (also covers number→string); sequences with reflection (its to-string substrate).
 - **`export` keyword** — reserved, hard-errors today. **Split by scope:** a **minimal `export`** (C-ABI
@@ -73,11 +83,7 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
   slot is reserved at 1.0 either way, so activating it in 1.x follows the same reserved-then-lit pattern
   as `volatile`.
 - **`volatile` keyword** — reserved → **1.x embedded** (emit C `volatile` for ISR↔loop flags / MMIO).
-- **`contract` refining a `contract`** (`type contract A : B`) — parses, but deep multi-level contract
-  inheritance isn't lowered yet; revisit if a real case needs it.
-- **By-value collection params/returns** — `give`-ing a collection into a variant works; general by-value
-  collection params/returns (and deep-`copy` of a whole container into a variant) → **post-1.0** (same
-  move-the-struct mechanism; not blocking).
+  (`contract`-refining-`contract` and by-value collection ownership moved to §1.2 as 1.0 items.)
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today).
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
