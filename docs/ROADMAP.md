@@ -38,8 +38,11 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
   (single-byte + escapes + `'\u{…}'` only); write `'\u{E9}'`. A lexer pass to match + decode.
 - **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
   (also covers number→string); sequences with reflection (its to-string substrate).
-- **`export` keyword** — reserved, hard-errors today → **2.0** (the kama→host boundary: wasm module
-  exports + the scripting host interface). The engine's wasm build may pull a minimal `export` earlier.
+- **`export` keyword** — reserved, hard-errors today. **Split by scope:** a **minimal `export`** (C-ABI
+  linkage for `--shared` reload entry points) is **pulled forward to 1.x** (§5, engine dev-loop); the
+  **full `export`** (wasm module exports + the scripting host interface) stays **2.0** (§7). The keyword
+  slot is reserved at 1.0 either way, so activating it in 1.x follows the same reserved-then-lit pattern
+  as `volatile`.
 - **`volatile` keyword** — reserved → **1.x embedded** (emit C `volatile` for ISR↔loop flags / MMIO).
 - **`contract` refining a `contract`** (`type contract A : B`) — parses, but deep multi-level contract
   inheritance isn't lowered yet; revisit if a real case needs it.
@@ -95,6 +98,12 @@ sequences here.
 Capabilities built on the finished language — the substrate the engine needs (asset I/O, scene
 serialization, networking).
 
+- **Shared-lib build + minimal `export` (pulled forward from 2.0 — engine-unblocking).** `kama build
+  --shared` → `.so`/`.dylib`/`.dll` and a **minimal `export`** (C-ABI linkage for entry points) — the two
+  small compiler primitives under the engine's desktop **dev-loop hot-reload** (§8). Both are independent
+  of the 2.0 IR refactor, so they land here to make engine iteration fast *early* rather than waiting on
+  the VM. The reload loop itself is a library (`dlopen`/watch/rebind over `unsafe`/`Ptr`), not roadmap
+  work. Deliberately excludes the full 2.0 `export` (wasm module exports + scripting host, §7).
 - **Reflection + declarative serialization** — see the brief above; back ends follow as modules.
 - **File I/O** — safe file APIs; gates serialization and engine asset loading.
 - **Networking** — native UDP/TCP sockets vs browser **WebRTC DataChannels** (unreliable) /
@@ -230,6 +239,25 @@ A portable lightweight **WebGPU** game engine. Tiers: **math types** (Tier 0 —
 buffers/bindings → first triangle → scene/material. Depends on the 1.x systems (file I/O for assets,
 serialization for scenes). See [ENGINE_READINESS.md](ENGINE_READINESS.md).
 
+- **Dev-loop hot-reload — a *library* on two small compiler primitives.** Live-reload of gameplay code
+  (edit → rebuild → swap without restarting) splits cleanly by layer, and *most of it is not the
+  compiler's job* — which answers "language or engine feature?": mostly library, on a thin compiler base.
+  - **Compiler (small — scheduled 1.x, §5):** a `kama build --shared` mode emitting a
+    `.so`/`.dylib`/`.dll` (`-fPIC -shared`; on Windows the `dllexport` decoration + copy-before-load), and
+    reuse of the reserved **`export`** keyword (§2) to give reload entry points **C-ABI linkage**. That is
+    the *same* kama→host boundary the **wasm exports** and the **scripting host** (§7) already need — so
+    hot-reload adds **no new language surface**, it consumes planned surface. One boundary, three consumers.
+  - **Library:** the `dlopen`/`dlsym`/`dlclose` + file-watch + function-pointer rebind loop — pure FFI over
+    `unsafe`/`Ptr`, **zero compiler changes**. This is the bulk of the feature and it lives in a module.
+  - **Engine:** the *data-in-host, code-in-module* architecture (world state lives in the platform-layer
+    arena, passed *into* the reloaded module) so a reload doesn't wipe the world. Prior art: Handmade Hero,
+    Our Machinery, Unreal Live Coding (Live++), Godot GDExtension, Bevy `hot_lib_reloader`.
+  - **Scope — desktop dev only.** dlopen is absent/forbidden on the *ship* targets: no `dlopen` in wasm
+    (host re-instantiates a module instead), **banned on iOS** (no loading non-bundled native code, no
+    JIT), Android/Quest only via a **pushed** `.so` (no on-device compile). Cross-platform *shipping*
+    scripting is the §7 **VM**, not this. This path buys fast native iteration on Linux/Mac/Windows —
+    nothing more, and that is enough to justify the two tiny primitives.
+
 ## 9. Performance
 
 Current standing (full detail in [benchmarks/RESULTS.md](benchmarks/RESULTS.md)): kama is at **C/C++
@@ -244,6 +272,13 @@ near-parity on `alloc`/`dispatch`.
 - **Bench methodology (don't re-chase).** Short workloads skew under parallel load — run with nothing else
   competing. The `/work` bind mount adds only ~0.3–1.7 ms (negligible). Keep all LLVM-AOT languages at the
   same `-O` level (`-O3`), or the optimization level, not the language, dominates a tiny kernel.
+- **Bench cohort — add Zig.** The bench covers the no-GC AOT peers (C/C++/Rust/Go) but not **Zig** —
+  kama's closest *language* rival (no-GC, AOT, and, as `zig cc`, already kama's bundled backend). Add a
+  `zig` track: port the 4 workloads to `.zig`, add the toolchain to `bench/Dockerfile` + `build.sh` (or
+  reuse the pinned zig from the release pipeline). Expect it to **cluster with C/Rust on raw compute**
+  (all LLVM at `-O3`) — the signal is in the *compile-time / binary-size / RSS* columns and cohort
+  completeness, not the perf ranking. Low-value on the perf axis; worth it for "kama vs its actual peers"
+  being visibly complete.
 
 ## 10. Tooling / distribution (deferred)
 

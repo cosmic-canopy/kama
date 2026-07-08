@@ -2,9 +2,15 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]   # dev = long-lived integration branch: runs CI only.
+    # Website (deploy-site.yml) is main+site-paths; releases (release.yml) are v* tags.
+    # Neither triggers on dev, so pushing here builds + tests but ships nothing.
   pull_request:
     branches: [main]
+
+concurrency:                 # cancel superseded runs on the same branch (rapid pushes)
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-test:

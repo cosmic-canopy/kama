@@ -1,0 +1,3 @@
+# kama-lang.org
+User-agent: *
+Allow: /
