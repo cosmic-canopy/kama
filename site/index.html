@@ -1,0 +1,79 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>kama — a lean, no-GC language that compiles to C</title>
+<meta name="description" content="kama is a lean, no-GC / RAII language with named parameters that compiles to portable C. Native or WebAssembly.">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16.png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<style>
+  :root{--red:#B01C2E;--bg:#0f1115;--fg:#e8e8ea;--mut:#9aa0aa;--card:#161a21;--line:#232833}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
+    font:16px/1.6 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:4rem 1.25rem}
+  .logo{width:96px;height:96px}h1{font-size:2.6rem;margin:.4rem 0 0}
+  .tag{color:var(--mut);font-size:1.15rem}.k{color:var(--red);font-weight:700}
+  .lbl{color:var(--mut);font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;margin:1.6rem 0 .4rem}
+  .tabs{display:flex;gap:.25rem;margin-bottom:-1px}
+  .tabs button{background:transparent;color:var(--mut);border:1px solid transparent;border-bottom:none;
+    padding:.4rem .9rem;border-radius:8px 8px 0 0;cursor:pointer;font:inherit}
+  .tabs button[aria-selected=true]{color:var(--fg);background:var(--card);border-color:var(--line)}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:0 10px 10px 10px;padding:1rem;
+    display:none;position:relative}.panel.on{display:block}
+  code{font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+  .copy{position:absolute;top:.6rem;right:.6rem;background:#0f1115;color:var(--mut);border:1px solid var(--line);
+    border-radius:6px;padding:.2rem .5rem;cursor:pointer;font-size:.75rem}
+  ul{padding-left:1.1rem}li{margin:.35rem 0}a{color:#7db3ff}
+  .pills a{display:inline-block;margin:.2rem .5rem .2rem 0;padding:.35rem .7rem;border:1px solid var(--line);
+    border-radius:999px;text-decoration:none;color:var(--fg)}
+</style></head><body><div class="wrap">
+  <img class="logo" src="/assets/logo.png" alt="kama logo">
+  <h1><span class="k">kama</span></h1>
+  <p class="tag">A lean, no-GC / RAII language with named params — compiles to portable C.</p>
+
+  <div class="lbl">Install</div>
+  <div class="tabs" role="tablist">
+    <button role="tab" data-os="mac"     aria-selected="false">macOS</button>
+    <button role="tab" data-os="linux"   aria-selected="false">Linux</button>
+    <button role="tab" data-os="windows" aria-selected="false">Windows</button>
+  </div>
+  <div class="panel" data-os="mac"><button class="copy">copy</button>
+    <code>curl -fsSL https://kama-lang.org/install.sh | sh</code></div>
+  <div class="panel" data-os="linux"><button class="copy">copy</button>
+    <code>curl -fsSL https://kama-lang.org/install.sh | sh</code></div>
+  <div class="panel" data-os="windows"><button class="copy">copy</button>
+    <code>irm https://kama-lang.org/install.ps1 | iex</code></div>
+  <p class="tag" style="font-size:.9rem">Auto-detects a C compiler; installs a self-contained
+     build (bundled <code>zig cc</code>) if you don't have one. Update anytime: <code>kama update</code>.</p>
+
+  <div class="lbl">Why kama</div>
+  <ul>
+    <li>No GC — deterministic RAII lifetimes, no runtime.</li>
+    <li>Memory-safe by construction, no borrow checker.</li>
+    <li>Transpiles to readable, portable C11 — native or WebAssembly.</li>
+  </ul>
+  <div class="lbl">More</div>
+  <p class="pills">
+    <a href="https://github.com/cosmic-canopy/kama">GitHub</a>
+    <a href="https://github.com/cosmic-canopy/kama/blob/main/GETTING_STARTED.md">Getting started</a>
+    <a href="https://github.com/cosmic-canopy/kama/blob/main/docs/SPEC.md">Spec</a>
+  </p>
+</div>
+<script>
+  const os = (() => {                          // best-effort platform detect
+    const s = (navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || '').toLowerCase();
+    if (s.includes('win')) return 'windows';
+    if (s.includes('mac')) return 'mac';
+    if (s.includes('linux') || s.includes('x11')) return 'linux';
+    return 'mac';                              // sensible default
+  })();
+  const tabs = [...document.querySelectorAll('.tabs button')];
+  const panels = [...document.querySelectorAll('.panel')];
+  const show = t => { tabs.forEach(b => b.setAttribute('aria-selected', b.dataset.os === t));
+                      panels.forEach(p => p.classList.toggle('on', p.dataset.os === t)); };
+  tabs.forEach(b => b.onclick = () => show(b.dataset.os));
+  show(os);
+  document.querySelectorAll('.copy').forEach(b => b.onclick = () => {
+    navigator.clipboard?.writeText(b.nextElementSibling.textContent.trim());
+    b.textContent = 'copied'; setTimeout(() => b.textContent = 'copy', 1200); });
+</script>
+</body></html>

@@ -1,0 +1,5 @@
+# OpenTofu/Terraform state + provider cache. Never commit state (it can hold secrets).
+# account_id / zone_id come from TF_VAR_* in the root .env, so there is no .tfvars.
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
