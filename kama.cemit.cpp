@@ -507,9 +507,15 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
                      "(only `+`, `==`, `!=`)").c_str(), line);
         return "0";
     }
-    if (!lUser && !rUser)
+    if (!lUser && !rUser) {
+        // A signed LEFT shift into the sign bit is UB in C; route it through `kama_lshift` (shifts in the
+        // matching unsigned type — defined) so there's no UB even in debug (release's `-fwrapv` also
+        // defines it, but debug has none). Right shift of a signed value is impl-defined, not UB.
+        if (token == LTLT)
+            return "kama_lshift(" + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";
         return "(" + emitExpression(lhs) + " " + binaryOperator(token) + " "
                    + emitExpression(rhs) + ")";   // primitives — unchanged
+    }
 
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findBinaryOperator(token, lc, rc, &owner);

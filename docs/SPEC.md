@@ -381,6 +381,20 @@ Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Ma
 `minf`/`maxf`/… `import std::num::{int32Max, minI32, …}`. (A generic `min<T: Comparable>` waits on a
 `Comparable`/`Ordering` contract, which lands with the sorted containers.)
 
+**No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
+UB:
+- **Signed overflow** (`+`/`-`/`*`) **traps** in debug builds (catches the accidental-overflow bug during
+  development) and **wraps** two's-complement in release (`-fwrapv`, zero-cost, *defined* — not UB).
+  Intentional signed wrapping is opt-in: use unsigned math (unsigned overflow is always defined-wrap) or
+  the planned `wrapping*` helpers. **Unsigned overflow always wraps** (as C already defines).
+- **Divide by zero** and **`INT_MIN / -1`** **trap** (a clean abort) in every build — always bugs, never UB.
+- **Shift ≥ the type width** **traps**; a **signed left shift into the sign bit** (`1 << 31`) is **defined**
+  (computed in the unsigned type — a defined bit pattern), so bit-twiddling is safe.
+- **Out-of-range `float → int`** **traps**; in-range truncates toward zero. Integer narrowing wraps mod 2ⁿ.
+
+Enforced by `-fsanitize-trap` (a bare `__builtin_trap`, no sanitizer-runtime dependency) + `-fwrapv` +
+the `kama_lshift` runtime shim — so a kama program can't hit arithmetic UB whether built debug or release.
+
 ```kama
 import std::math::{Vec3, Mat4};
 fn int main() {

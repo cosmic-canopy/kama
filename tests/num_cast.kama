@@ -1,0 +1,21 @@
+// Numeric conversions + shifts at the bounds we expect, all DEFINED (no UB): narrowing wraps mod 2^n
+// (impl-defined, not UB), widening sign/zero-extends, float->int truncates toward zero, a signed left
+// shift into the sign bit is defined, and unsigned overflow wraps. (Overflow/div-by-zero/out-of-range
+// float-cast TRAP instead of wrapping — not exercised here since a trap aborts.)
+import std::num::{int32Min};
+fn int main() {
+    int32 r = 0;
+    if (cast<int8>(300i32) == 44i8)                  { r = r + 4; }   // 300 - 256
+    if (cast<uint8>(511i32) == 255ui8)               { r = r + 4; }   // 511 & 0xFF
+    if (cast<int64>(0i32 - 5i32) == 0i64 - 5i64)     { r = r + 4; }   // sign-extend
+    if (cast<int32>(cast<uint8>(200i32)) == 200)     { r = r + 4; }   // zero-extend (unsigned widen)
+    if (cast<int32>(3.9f64) == 3)                    { r = r + 4; }   // truncate toward zero
+    if (cast<int32>(0.0f64 - 3.9f64) == 0 - 3)       { r = r + 4; }   // toward zero (negative)
+    if ((1i32 << 31) < 0)                            { r = r + 4; }   // sign bit set (defined)
+    if ((1i32 << 31) == int32Min())                  { r = r + 4; }   // == INT_MIN
+    uint8 u = 255ui8; u = u + 1ui8;
+    if (u == 0ui8)                                   { r = r + 5; }   // unsigned wrap (defined)
+    uint32 big = 4000000000ui32; big = big + big;                     // 8e9 wraps in uint32
+    if (big == 3705032704ui32)                       { r = r + 5; }   // (8e9 mod 2^32)
+    return r;   // 42
+}

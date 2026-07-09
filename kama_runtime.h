@@ -200,6 +200,18 @@ static inline void kama_bounds_fail(size_t i, size_t len) {
     abort();
 }
 
+// Left shift with NO undefined behavior. A signed left shift into/past the sign bit is UB in C; do the
+// shift in the matching UNSIGNED type (a defined two's-complement bitwise shift) and convert back. Unsigned
+// operands shift as-is. `_Generic` dispatches on the operand's static type (evaluating `a`/`b` once each),
+// so no per-call type info is needed at the emitter. The shift AMOUNT is untouched, so an out-of-range
+// exponent still trips `-fsanitize=shift-exponent` (a clean trap) exactly as a plain `<<` would.
+#define kama_lshift(a, b) _Generic((a),                 \
+    int8_t:   (int8_t) ((uint8_t) (a) << (b)),          \
+    int16_t:  (int16_t)((uint16_t)(a) << (b)),          \
+    int32_t:  (int32_t)((uint32_t)(a) << (b)),          \
+    int64_t:  (int64_t)((uint64_t)(a) << (b)),          \
+    default:  ((a) << (b)))
+
 // Array<T> — fixed-size, owns a zero-initialized contiguous buffer (RAII frees).
 #define KAMA_ARRAY_TYPE(T, NAME) typedef struct NAME { T* data; size_t len; } NAME;
 #define KAMA_ARRAY_FUNCS(T, NAME, ELEM_DTOR, ELEM_COPY)                        \

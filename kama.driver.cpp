@@ -692,6 +692,20 @@ int main(int argc, char** argv)
             // Debug: faithful stepping + breakpoints in .kama via #line.
             cmd << (wasm ? "-g -gsource-map -O0 " : "-g -O0 ");
         }
+        // Numeric safety — no arithmetic UB (Rust's model). Divide-by-zero, shift-past-width, and
+        // out-of-range float->int all TRAP in EVERY build (they're always bugs). Signed overflow TRAPS in
+        // debug (catch the accidental-overflow bug in dev) and WRAPS (defined two's-complement, -fwrapv,
+        // zero-cost) in release. `-fsanitize-trap` lowers to `__builtin_trap` — a clean abort with NO
+        // sanitizer-runtime dependency. `shift-exponent` only (not `shift-base`), so `1 << 31` (setting the
+        // sign bit) stays legal. Intentional signed wrap is opt-in (unsigned math, or a `wrapping*` helper).
+        cmd << "-fsanitize=integer-divide-by-zero,shift-exponent,float-cast-overflow "
+               "-fsanitize-trap=integer-divide-by-zero,shift-exponent,float-cast-overflow ";
+        // Signed overflow: debug TRAPS it; release `-fwrapv`-WRAPS `+`/`-`/`*` (defined). `INT_MIN / -1` is
+        // NOT defined by `-fwrapv`, so we ALSO keep the overflow-trap in release — it wraps the ordinary
+        // ops (trap suppressed by `-fwrapv`) but still traps that one pathological division. Net: no
+        // arithmetic UB in either build.
+        cmd << "-fsanitize=signed-integer-overflow -fsanitize-trap=signed-integer-overflow ";
+        if (release) cmd << "-fwrapv ";
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
         if (!headerDir.empty()) cmd << "-I" << headerDir << " ";   // the shared generated header
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
