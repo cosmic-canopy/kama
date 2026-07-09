@@ -906,8 +906,10 @@ post_decrement_expression
   ;
 cast_expression
     /* The mid-rules track genericDepth across the cast's `<…>` so `cast<List<int>>(x)` needs no space;
-       the `--` fires before `( unary_expression )` so a `>>` shift inside the cast body stays a shift. */
-  : CAST LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN unary_expression RPAREN   { $$ = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $4, $8 ); }
+       the `--` fires before `( expression )` so a `>>` shift inside the cast body stays a shift. The
+       operand is a full `expression` (like a parenthesized primary) so `cast<T>(a + b)` needs no inner
+       parens — the surrounding `( … )` already delimits it. */
+  : CAST LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN expression RPAREN   { $$ = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $4, $8 ); }
   ;
 sizeof_expression
   /* `sizeof(T)` / `alignof(T)` — the compile-time byte size / alignment of a type as a `usize`

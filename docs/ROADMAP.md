@@ -64,9 +64,9 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
    - **Parser/typer accept a narrower grammar than expected — surprising ergonomics gaps** (each with a
      clean workaround, none miscompile; found building `std::fs`/`std::net`). Worth closing before 1.0 since
      they bite constantly:
-     - `cast<T>(...)` rejects a **binary-expression** operand — `cast<int32>(a + b)` is a syntax error;
-       the operand must be a postfix/primary (var, call, index, or parenthesized). Bind to a local
-       (`int32 t = a + b; cast<int32>(t)`). The cast grammar should accept a full expression.
+     - ✅ **DONE** — `cast<T>(...)` now accepts a full **`expression`** operand (was `unary_expression`,
+       so `cast<int32>(a + b)` was a syntax error). The `( … )` already delimits it, like a parenthesized
+       primary; no new grammar conflicts. Fixture `tests/cast_expr.kama` (arithmetic/modulo/ternary).
      - A **value-producing `match` block arm** (`case X: { …stmts…; tail }`) must end in a **call** — a bare
        identifier / arithmetic / ternary tail is a syntax error. (Non-block arms `case X: <expr>` accept any
        expression, incl. ternaries.) Wrap the tail in a helper call, or use a non-block arm.

@@ -1,0 +1,11 @@
+// cast<T>(...) accepts a full expression operand (not just a unary/postfix), so common
+// arithmetic/comparison/ternary casts need no inner-parens or hoisted local. Returns 22.
+fn int main() {
+    int32 a = 3;
+    int32 b = 4;
+    int32 s = cast<int32>(a + b);           // 7  — binary arithmetic
+    int32 m = cast<int32>((a + 1) % 4);     // 0  — parenthesized + modulo
+    usize u = cast<usize>(a * b - 2);       // 10 — mixed precedence
+    int32 t = cast<int32>(a < b ? 5 : 9);   // 5  — ternary operand
+    return s + m + cast<int32>(u) + t;      // 7 + 0 + 10 + 5 = 22
+}
