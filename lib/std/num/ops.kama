@@ -1,0 +1,19 @@
+namespace std::num;
+
+// Integer min/max/clamp/abs/sign for the two common signed widths (parallel to std::math's float32
+// `minf`/`maxf`/`clampf`/`absf`/`signf`). No overloading, so the width is in the name. `absI*` of the
+// type minimum overflows (no positive counterpart) — the caller's responsibility, like C.
+export { minI32, maxI32, clampI32, absI32, signI32,
+         minI64, maxI64, clampI64, absI64, signI64 };
+
+fn int32 minI32(int32 a, int32 b) { return a < b ? a : b; }
+fn int32 maxI32(int32 a, int32 b) { return a > b ? a : b; }
+fn int32 clampI32(int32 x, int32 lo, int32 hi) { return x < lo ? lo : (x > hi ? hi : x); }
+fn int32 absI32(int32 x)  { return x < 0i32 ? 0i32 - x : x; }
+fn int32 signI32(int32 x) { return x > 0i32 ? 1i32 : (x < 0i32 ? 0i32 - 1i32 : 0i32); }
+
+fn int64 minI64(int64 a, int64 b) { return a < b ? a : b; }
+fn int64 maxI64(int64 a, int64 b) { return a > b ? a : b; }
+fn int64 clampI64(int64 x, int64 lo, int64 hi) { return x < lo ? lo : (x > hi ? hi : x); }
+fn int64 absI64(int64 x)  { return x < 0i64 ? 0i64 - x : x; }
+fn int64 signI64(int64 x) { return x > 0i64 ? 1i64 : (x < 0i64 ? 0i64 - 1i64 : 0i64); }

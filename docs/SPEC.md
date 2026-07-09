@@ -373,6 +373,14 @@ right-handed. `Quat` is a unit quaternion (`fromAxisAngle`/`fromEuler`, Hamilton
 `nlerp`, `toMat3`/`toMat4`). All literals are `f32`-suffixed (a bare `1.0` is float64). SIMD is a later
 implementation swap behind this API (the layout is SIMD-ready).
 
+### Numbers (`std::num`) ✅
+
+Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Max`, `uint8Max` … `uint64Max`,
+`float32Max`/`float32MinNormal`/`float32Epsilon` (signed min is `-max - 1`) — and per-width integer
+**operations** `minI32/maxI32/clampI32/absI32/signI32` (+ the `I64` set), parallel to `std::math`'s float32
+`minf`/`maxf`/… `import std::num::{int32Max, minI32, …}`. (A generic `min<T: Comparable>` waits on a
+`Comparable`/`Ordering` contract, which lands with the sorted containers.)
+
 ```kama
 import std::math::{Vec3, Mat4};
 fn int main() {
