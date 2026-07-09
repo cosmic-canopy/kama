@@ -126,7 +126,9 @@ is debuggable in lldb/gdb with breakpoints in your `.kama` source, and a WASM
 - `lib/std/` — the self-hosted standard library (`memory`, `collections`, `io`, `fs`, `net`)
 - `kama.driver.cpp` — CLI (`transpile` / `build`)
 - `tests/`, `run_tests.sh` — end-to-end fixtures (assert on exit codes)
+- `examples/` — worked programs (e.g. `httpd/`, a static-file server in Kama)
 - `Dockerfile`, `tools/cdev` — containerized toolchain
+- `tools/serve` — preview the site locally via the Kama-written `examples/httpd` (`tools/serve` → http://localhost:8080)
 - `docs/` — `SPEC.md` (language reference), `grammar.bnf` (generated from `kama.y`),
   `TYPE_MODEL.md`, `KEYWORDS.md`, `ROADMAP.md`
 - `llms.txt`, `GOALS.md` — LLM-discovery entry point and design philosophy

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# serve — preview the kama-lang.org site locally, served by the example httpd (itself written in Kama).
+#
+#   tools/serve               # assemble _site/, build the httpd, serve on http://localhost:8080
+#   tools/serve 9000          # a different port
+#   tools/serve 8080 site     # serve a different directory (e.g. the raw, unbuilt source)
+#
+# Dogfooding: the site is served by examples/httpd — Kama's own std::net + std::fs. Because the
+# toolchain is containerized, the httpd binary is Linux; it runs inside the kama-dev container with the
+# port published to the host (bound to 0.0.0.0 in the container so the published port is reachable).
+# Override the container engine with KAMA_ENGINE=docker|podman. Ctrl-C to stop.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+PORT="${1:-8080}"
+DIR="${2:-_site}"
+IMAGE="${KAMA_IMAGE:-kama-dev}"
+
+ENGINE="${KAMA_ENGINE:-}"
+if [ -z "$ENGINE" ]; then
+  if command -v podman >/dev/null 2>&1; then ENGINE=podman
+  elif command -v docker >/dev/null 2>&1; then ENGINE=docker
+  else echo "serve: need podman or docker on PATH" >&2; exit 1; fi
+fi
+
+# Assemble the deployable _site/ (the default) so the preview matches what ships. A custom dir is served as-is.
+if [ "$DIR" = "_site" ]; then tools/build-site >/dev/null; fi
+if [ ! -d "$DIR" ]; then echo "serve: '$DIR' is not a directory" >&2; exit 1; fi
+
+# Build the compiler (only if missing) and the httpd binary, inside the container.
+"$ENGINE" run --rm -v "$ROOT:/work" -w /work "$IMAGE" sh -c \
+  '[ -x ./kama ] || make >/dev/null 2>&1; ./kama build examples/httpd/httpd.kama -o build/httpd >/dev/null'
+
+echo "kama httpd: serving ./$DIR on http://localhost:$PORT   (Ctrl-C to stop)"
+exec "$ENGINE" run --rm -it -p "$PORT:$PORT" -v "$ROOT:/work" -w /work "$IMAGE" \
+  env HTTPD_HOST=0.0.0.0 HTTPD_PORT="$PORT" HTTPD_ROOT="$DIR" ./build/httpd
