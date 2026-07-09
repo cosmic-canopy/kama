@@ -28,8 +28,13 @@ void CEmitter::indent(int depth)
 void CEmitter::line(int srcLine)
 {
     if (srcLine > 0) _curLine = srcLine;   // track for conditional-drop diagnostics
-    if (_lines && srcLine > 0)
-        *_out << "#line " << srcLine << " \"" << _sourcePath << "\"\n";
+    if (_lines && srcLine > 0) {
+        // The path is a C string literal: escape `\` and `"` so a Windows path (`D:\a\…\tests\foo.kama`)
+        // isn't read as escape sequences (`\o`/`\x`/… are errors, not just the file name we meant).
+        *_out << "#line " << srcLine << " \"";
+        for (char c : _sourcePath) { if (c == '\\' || c == '"') *_out << '\\'; *_out << c; }
+        *_out << "\"\n";
+    }
 }
 
 void CEmitter::unsupported(const char* what, int srcLine)
