@@ -1,0 +1,18 @@
+namespace std::num;
+
+// Explicit wrapping (two's-complement) signed arithmetic — the opt-in escape hatch for INTENTIONAL
+// overflow (hashing, checksums, PRNGs, bit tricks), which otherwise TRAPS in debug builds. Each is
+// computed in the unsigned type — unsigned overflow is always defined-wrap and never traps — then
+// reinterpreted back to signed. So these never trap, in any build.
+export { wrappingAddI32, wrappingSubI32, wrappingMulI32, wrappingNegI32,
+         wrappingAddI64, wrappingSubI64, wrappingMulI64, wrappingNegI64 };
+
+fn int32 wrappingAddI32(int32 a, int32 b) { return cast<int32>(cast<uint32>(a) + cast<uint32>(b)); }
+fn int32 wrappingSubI32(int32 a, int32 b) { return cast<int32>(cast<uint32>(a) - cast<uint32>(b)); }
+fn int32 wrappingMulI32(int32 a, int32 b) { return cast<int32>(cast<uint32>(a) * cast<uint32>(b)); }
+fn int32 wrappingNegI32(int32 a)          { return cast<int32>(0ui32 - cast<uint32>(a)); }
+
+fn int64 wrappingAddI64(int64 a, int64 b) { return cast<int64>(cast<uint64>(a) + cast<uint64>(b)); }
+fn int64 wrappingSubI64(int64 a, int64 b) { return cast<int64>(cast<uint64>(a) - cast<uint64>(b)); }
+fn int64 wrappingMulI64(int64 a, int64 b) { return cast<int64>(cast<uint64>(a) * cast<uint64>(b)); }
+fn int64 wrappingNegI64(int64 a)          { return cast<int64>(0ui64 - cast<uint64>(a)); }

@@ -1,0 +1,15 @@
+// Explicit wrapping arithmetic (std::num) — intentional two's-complement overflow that must WRAP, not
+// trap, even in a debug build (where `int32Max() + 1` would trap). The escape hatch for hashing/PRNGs.
+import std::num::{wrappingAddI32, wrappingSubI32, wrappingMulI32, wrappingNegI32,
+                  wrappingAddI64, wrappingMulI64, int32Max, int32Min, int64Min};
+fn int main() {
+    int32 r = 0;
+    if (wrappingAddI32(a: int32Max(), b: 1) == int32Min())  { r = r + 6; }   // max+1 -> min
+    if (wrappingSubI32(a: int32Min(), b: 1) == int32Max())  { r = r + 6; }   // min-1 -> max
+    if (wrappingMulI32(a: int32Max(), b: 2) == 0 - 2)       { r = r + 6; }   // (2^31-1)*2 = -2
+    if (wrappingNegI32(a: int32Min()) == int32Min())        { r = r + 6; }   // -MIN wraps to MIN
+    if (wrappingAddI32(a: 100, b: 200) == 300)              { r = r + 6; }   // ordinary case intact
+    if (wrappingAddI64(a: int64Min(), b: 0i64 - 1i64) == 9223372036854775807i64) { r = r + 6; }
+    if (wrappingMulI64(a: int64Min(), b: 2i64) == 0i64)     { r = r + 6; }   // MIN*2 -> 0
+    return r;   // 42
+}

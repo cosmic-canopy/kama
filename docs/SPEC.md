@@ -378,15 +378,18 @@ implementation swap behind this API (the layout is SIMD-ready).
 Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Max`, `uint8Max` … `uint64Max`,
 `float32Max`/`float32MinNormal`/`float32Epsilon` (signed min is `-max - 1`) — and per-width integer
 **operations** `minI32/maxI32/clampI32/absI32/signI32` (+ the `I64` set), parallel to `std::math`'s float32
-`minf`/`maxf`/… `import std::num::{int32Max, minI32, …}`. (A generic `min<T: Comparable>` waits on a
-`Comparable`/`Ordering` contract, which lands with the sorted containers.)
+`minf`/`maxf`/…, and explicit **wrapping** arithmetic `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
+`wrappingNegI32` (+ `I64`) for intentional overflow. `import std::num::{int32Max, minI32, wrappingAddI32,
+…}`. (A generic `min<T: Comparable>` waits on a `Comparable`/`Ordering` contract, which lands with the
+sorted containers.)
 
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:
 - **Signed overflow** (`+`/`-`/`*`) **traps** in debug builds (catches the accidental-overflow bug during
   development) and **wraps** two's-complement in release (`-fwrapv`, zero-cost, *defined* — not UB).
-  Intentional signed wrapping is opt-in: use unsigned math (unsigned overflow is always defined-wrap) or
-  the planned `wrapping*` helpers. **Unsigned overflow always wraps** (as C already defines).
+  Intentional signed wrapping is opt-in: `std::num`'s `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
+  `wrappingNegI32` (+ the `I64` set) always wrap and never trap (computed in the unsigned type), or just use
+  unsigned math directly. **Unsigned overflow always wraps** (as C already defines).
 - **Divide by zero** and **`INT_MIN / -1`** **trap** (a clean abort) in every build — always bugs, never UB.
 - **Shift ≥ the type width** **traps**; a **signed left shift into the sign bit** (`1 << 31`) is **defined**
   (computed in the unsigned type — a defined bit pattern), so bit-twiddling is safe.
