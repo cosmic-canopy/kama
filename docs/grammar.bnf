@@ -1,5 +1,4 @@
-wrote /work/docs/grammar.bnf
-NERATED from kama.y by tools/gen-grammar. Do not edit.
+// kama grammar (BNF) — GENERATED from kama.y by tools/gen-grammar. Do not edit.
 // The Bison grammar is the source of truth; regenerate after any grammar change.
 
 
@@ -164,6 +163,7 @@ simple_type
 primitive_type
   : numeric_type
   | BOOL
+  | CHAR
   ;
 numeric_type
   : integral_type
@@ -373,7 +373,13 @@ embedded_statement
   | selection_statement
   | iteration_statement
   | jump_statement
+  | arm_value_statement
   | unsafe_statement
+  ;
+arm_value_statement
+    /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
+       to). A distinct statement (not a jump); the emitter requires it be the arm block's last statement. */
+  : WALRUS expression SEMICOLON
   ;
 unsafe_statement
   : UNSAFE block
@@ -626,8 +632,10 @@ post_decrement_expression
   ;
 cast_expression
     /* The mid-rules track genericDepth across the cast's `<…>` so `cast<List<int>>(x)` needs no space;
-       the `--` fires before `( unary_expression )` so a `>>` shift inside the cast body stays a shift. */
-  : CAST LT  type GT  LPAREN unary_expression RPAREN
+       the `--` fires before `( expression )` so a `>>` shift inside the cast body stays a shift. The
+       operand is a full `expression` (like a parenthesized primary) so `cast<T>(a + b)` needs no inner
+       parens — the surrounding `( … )` already delimits it. */
+  : CAST LT  type GT  LPAREN expression RPAREN
   ;
 sizeof_expression
   /* `sizeof(T)` / `alignof(T)` — the compile-time byte size / alignment of a type as a `usize`
@@ -714,15 +722,23 @@ class_base
   | IMPLEMENTS interface_type_list
   | EXTENDS type_name IMPLEMENTS interface_type_list
   ;
-/* The `implements <contract>[, …]` list. An entry may be negated (`!Movable`) to subtract a
-   compiler capability marker. */
+/* The `implements <contract>[, …]` list. A `Copyable` entry carries a mandatory contract parameter
+   `(bare: give|copy)` — the bare-hand-off default (the first instance of contract parameters/metadata). */
 interface_type_list
   : implements_entry
   | interface_type_list COMMA implements_entry
   ;
 implements_entry
   : type_name
-  | EXCLAMATION type_name
+  | type_name LPAREN IDENTIFIER COLON handoff_default RPAREN
+  | type_name WHEN IDENTIFIER COLON type_name
+
+  | type_name LPAREN IDENTIFIER COLON handoff_default RPAREN WHEN IDENTIFIER COLON type_name
+
+  ;
+handoff_default
+  : GIVE
+  | COPY
   ;
 class_body
   : LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
@@ -751,9 +767,15 @@ field_declaration
   : modifiers_opt type variable_declarators SEMICOLON
   ;
 method_declaration
-  : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_body
-  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_body
-  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_body      /* `fn ref T at(…)` — a place-returning method */
+  : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
+  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
+  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body      /* `fn ref T at(…)` — a place-returning method */
+  ;
+/* `fn … when T: Bound` — a method present only when the type-param satisfies a bound (the value
+   `iterator()` needs a Copyable element). The bound type carries the param name in `whenParam`. */
+method_when_opt
+  : /* Nothing */
+  | WHEN IDENTIFIER COLON type_name
   ;
 /* A method name is an identifier — but `copy`/`give` are hand-off markers only in expression
    position, so we let them name a member too (contextual keywords). This is what lets a `resource`
