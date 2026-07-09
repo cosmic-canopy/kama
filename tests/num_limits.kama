@@ -1,0 +1,24 @@
+// std::num numeric type limits. Signed min = `-max - 1` (the positive 2^(n-1) doesn't fit); each is a
+// zero-arg fn (clang inlines it). Verifies each round-trips to its exact boundary.
+import std::num::{int8Max, int8Min, int16Max, int16Min, int32Max, int32Min, int64Max, int64Min,
+                  uint8Max, uint16Max, uint32Max, uint64Max, float32Max, float32MinNormal, float32Epsilon};
+
+fn int main() {
+    int32 r = 0;
+    if (int8Max()  == 127i8)                             { r = r + 3; }
+    if (int8Min()  == 0i8 - 127i8 - 1i8)                 { r = r + 3; }
+    if (int16Max() == 32767i16)                          { r = r + 3; }
+    if (int16Min() == 0i16 - 32767i16 - 1i16)            { r = r + 3; }
+    if (int32Max() == 2147483647i32)                     { r = r + 3; }
+    if (int32Min() == 0i32 - 2147483647i32 - 1i32)       { r = r + 3; }
+    if (int64Max() == 9223372036854775807i64)            { r = r + 3; }
+    if (int64Min() == 0i64 - 9223372036854775807i64 - 1i64) { r = r + 3; }
+    if (uint8Max()  == 255ui8)                           { r = r + 3; }
+    if (uint16Max() == 65535ui16)                        { r = r + 3; }
+    if (uint32Max() == 4294967295ui32)                   { r = r + 3; }
+    if (uint64Max() == 18446744073709551615ui64)         { r = r + 3; }
+    if (float32Max() > 3.0e38f32)                        { r = r + 2; }   // finite, huge (not inf)
+    if (float32MinNormal() > 0.0f32 && float32MinNormal() < 1.0e-30f32) { r = r + 2; }
+    if (float32Epsilon() > 0.0f32 && float32Epsilon() < 0.001f32)       { r = r + 2; }
+    return r;   // 3*12 + 2*3 = 42
+}

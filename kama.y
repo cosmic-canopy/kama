@@ -326,9 +326,12 @@ literal
   | OCT_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  8, $1->substr(2) ); }
   | BASED_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  0, $1->substr(2) ); }
 
-  | FLOAT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, std::stod (*$1)); }
-  | FLOAT_LITERAL_32   { $$ = std::make_shared<Float32Node>(SCANNER_CODEGENCONTEXT, std::stof ($1->substr(0,$1->length() - 3))); }
-  | FLOAT_LITERAL_64   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, std::stod ($1->substr(0,$1->length() - 3))); }
+  /* strtof/strtod (not std::stof/stod): a float literal at/above the type max (e.g. FLT_MAX) makes the
+     std:: versions THROW std::out_of_range, which was uncaught and terminated the compiler. strtof/strtod
+     saturate to ±inf on overflow (C-idiomatic) instead — no crash on a boundary literal. */
+  | FLOAT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod ($1->c_str(), nullptr)); }
+  | FLOAT_LITERAL_32   { $$ = std::make_shared<Float32Node>(SCANNER_CODEGENCONTEXT, strtof ($1->substr(0,$1->length() - 3).c_str(), nullptr)); }
+  | FLOAT_LITERAL_64   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod ($1->substr(0,$1->length() - 3).c_str(), nullptr)); }
   | CHARACTER_LITERAL   { $$ = std::make_shared<CharNode>(SCANNER_CODEGENCONTEXT, (uint32_t)strtoul($1->c_str(), NULL, 10)); }
   | STRING_LITERAL   { $$ = std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1); }
   | NULL_LITERAL   { $$ = std::make_shared<NullNode>(SCANNER_CODEGENCONTEXT); }

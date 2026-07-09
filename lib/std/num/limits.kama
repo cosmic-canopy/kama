@@ -1,0 +1,25 @@
+namespace std::num;
+
+// Numeric type limits, as zero-arg functions (no module-level-const feature needed; clang inlines them).
+// Signed minimums are `-max - 1` since the positive `2^(n-1)` doesn't fit the type. Unsigned minimum is 0.
+export { int8Min, int8Max, int16Min, int16Max, int32Min, int32Max, int64Min, int64Max,
+         uint8Max, uint16Max, uint32Max, uint64Max,
+         float32Max, float32MinNormal, float32Epsilon };
+
+fn int8  int8Max()  { return 127i8; }
+fn int8  int8Min()  { return 0i8 - 127i8 - 1i8; }                       // -128
+fn int16 int16Max() { return 32767i16; }
+fn int16 int16Min() { return 0i16 - 32767i16 - 1i16; }                 // -32768
+fn int32 int32Max() { return 2147483647i32; }
+fn int32 int32Min() { return 0i32 - 2147483647i32 - 1i32; }           // -2147483648
+fn int64 int64Max() { return 9223372036854775807i64; }
+fn int64 int64Min() { return 0i64 - 9223372036854775807i64 - 1i64; }  // -9223372036854775808
+
+fn uint8  uint8Max()  { return 255ui8; }
+fn uint16 uint16Max() { return 65535ui16; }
+fn uint32 uint32Max() { return 4294967295ui32; }
+fn uint64 uint64Max() { return 18446744073709551615ui64; }
+
+fn float32 float32Max()       { return 3.40282347e38f32; }           // largest finite
+fn float32 float32MinNormal() { return 1.17549435e-38f32; }          // smallest positive normal
+fn float32 float32Epsilon()   { return 1.19209290e-7f32; }           // 2^-23
