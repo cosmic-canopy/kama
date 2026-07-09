@@ -56,11 +56,12 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
    - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop leak
      (Phase 3 covered operators / receivers / `if`-conditions / string-intrinsic args / `foreach` yields;
      residual = non-string-intrinsic by-value args, owned temps in `while`/`for` conditions). Durable fix:
-     a full temporary-drop pass. **Also unblocks passing a string literal to a `ref string` param** —
-     today that hard-errors ("cannot take the address of an rvalue"); materializing the temporary into a
-     hidden local (C++ const-ref lifetime-extension style) fixes it and makes read-only `ref` args ergonomic
-     for literals as well as named vars. (Surfaced building `std::fs`/`std::net`, which take `ref string`
-     paths/hosts; callers bind literals to a local for now.)
+     a full temporary-drop pass. **The string-`ref` slice of this is ✅ DONE** — a string rvalue (literal /
+     `+` concat / call result) passed to a `ref string` param is now materialized into a scope-freed temp so
+     `&temp` is legal C (was "cannot take the address of an rvalue"); the borrow is read-only and the temp
+     frees at scope end (ASan/LSan clean). `readFile("foo.txt")` / `f(a + b)` work; named lvalues keep their
+     direct `&`. Fixture `tests/ref_string_temp.kama`. The general (non-string, arbitrary-owned-temp) pass
+     remains.
    - **Parser/typer accept a narrower grammar than expected — surprising ergonomics gaps** (each with a
      clean workaround, none miscompile; found building `std::fs`/`std::net`). Worth closing before 1.0 since
      they bite constantly:

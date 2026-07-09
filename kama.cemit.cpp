@@ -4884,6 +4884,20 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // intrinsics: a general call may CONSUME a by-value string arg (e.g. `List.add` relocates it),
             // where freeing the caller's temp would double-free — there, bind to a local first.
             std::string st = (cName.rfind("kama_string__", 0) == 0) ? hoistStringTemp(argExpr) : std::string();
+            // A `ref string` borrow of a string RVALUE has no address to take: `&(rvalue)` is illegal C
+            // ("cannot take the address of an rvalue"). Materialize it into a scope-dtor'd temp so the
+            // `&temp` below is legal — makes `f("literal")` / `f(a + b)` work for a `ref string` param.
+            // The borrow is read-only and the temp frees at scope end; an addressable lvalue (a named
+            // var / field / `this`) keeps its direct `&`. hoistStringTemp handles concat/call rvalues but
+            // keeps a bare LITERAL on its normal path, so materialize the literal here too.
+            if (st.empty() && p.byRef && _hoistOK && !_loopCond && exprIsString(argExpr)) {
+                st = hoistStringTemp(argExpr);
+                if (st.empty() && dynamic_cast<StringNode*>(argExpr.get())) {
+                    st = "__strtmp" + std::to_string(_tempCounter++);
+                    _hoisted.push_back("kama_string " + st + " = " + emitExpression(argExpr) + ";");
+                    recordDestructibleLocal(st, "kama_string");
+                }
+            }
             val = st.empty() ? emitExpression(argExpr) : st;
         }
         if (handoff && (p.byRef || isInterface(p.className)))
