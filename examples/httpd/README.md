@@ -34,12 +34,13 @@ HTTPD_ROOT=./my-site HTTPD_PORT=9000 ./httpd
 
 ### Preview the kama-lang.org site
 
-From a checkout of the Kama repo, the one-command wrapper builds the deployable `_site/`, builds this
-server, and serves it (in the dev container, port published to your host):
+From a checkout of the Kama repo, one command builds the deployable `_site/`, builds this server, and
+serves it (host-native if you have a runnable `kama`, else in the dev container with the port published):
 
 ```sh
-tools/serve                 # http://localhost:8080
-tools/serve 9000            # a different port
+./dev serve                 # http://localhost:8080
+./dev serve 9000            # a different port
+./dev serve 8080 site       # serve the raw source instead of the built _site/
 ```
 
 Or drive it by hand against the raw source in [`site/`](../../site):

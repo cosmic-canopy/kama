@@ -8,6 +8,7 @@ kama dev — usage: ./dev <task>
   test         run the fixture suite
   assets       regenerate icon + favicons from assets/logo.png
   site         build the static site into _site/ and print the preview command
+  serve [port] [dir]  build + serve the site over examples/httpd (Kama's own server; default :8080, _site/)
   ext-package  package the VS Code extension (.vsix), no publish
   clean        make clean
   help         this help
@@ -20,7 +21,20 @@ case "$task" in
   build)          make ;;
   test)           ./run_tests.sh ;;
   assets)         sh tools/gen-assets ;;
-  site)           sh tools/build-site; echo "preview: python3 -m http.server -d _site" ;;
+  site)           sh tools/build-site; echo "preview: ./dev serve   (dogfoods examples/httpd; or: python3 -m http.server -d _site)" ;;
+  serve)
+    # Serve the site with Kama's own httpd. Prefer a runnable host-built ./kama; otherwise fall back to
+    # the container path (tools/serve), which also builds the binary and publishes the port to the host.
+    port="${1:-8080}"; dir="${2:-_site}"
+    if ./kama --version >/dev/null 2>&1; then
+      [ "$dir" = "_site" ] && sh tools/build-site >/dev/null
+      ./kama build examples/httpd/httpd.kama -o build/httpd
+      echo "kama httpd: serving ./$dir on http://localhost:$port   (Ctrl-C to stop)"
+      HTTPD_HOST=127.0.0.1 HTTPD_PORT="$port" HTTPD_ROOT="$dir" exec ./build/httpd
+    else
+      exec tools/serve "$port" "$dir"
+    fi
+    ;;
   ext-package)    cd editor/vscode && npx --yes @vscode/vsce package ;;
   clean)          make clean ;;
   -h|--help|help) usage ;;
