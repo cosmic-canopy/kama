@@ -23,6 +23,7 @@ static int isValidChar(const char );
 static int getToken(const char *);
 char getSimpleEscape(const char* input, int index);
 std::string hexToUTF8(int cp);
+unsigned decodeUTF8Codepoint(const char* bytes, int len);
 
 void error(const char *, yyscan_t scanner);
 %}
@@ -74,6 +75,12 @@ single_char_literal         \'{single_char}\'
   /* Range: U+0000 - U+10FFFF (1-6 hex digits). Used in string literals and, as `'\u{…}'`, as a `char`. */
 uni_codepoint_esc_seq       \\u\{{hex_digit}{1,6}\}
 uni_codepoint_char_literal  \'{uni_codepoint_esc_seq}\'
+
+  /* A single multibyte UTF-8 codepoint written directly as a `char` literal (`'é'`, `'😀'`): 2–4 bytes =
+     one scalar value. Overlong / surrogate / out-of-range forms are decoded then rejected in the action. */
+utf8_cont                   [\x80-\xBF]
+utf8_multibyte              [\xC2-\xDF]{utf8_cont}|[\xE0-\xEF]{utf8_cont}{2}|[\xF0-\xF4]{utf8_cont}{3}
+multibyte_char_literal      \'{utf8_multibyte}\'
 single_string_char          [^\\\"]
 regular_string_start        \"
 regular_string_end          \"
@@ -150,10 +157,12 @@ identifier                  ({letter_char}|"_"){ident_char}*
 
   /* A `char` literal carries its Unicode scalar value (codepoint) as a decimal string; the parser
      builds a CharNode from it. ASCII `'a'` and simple escapes are one byte = one codepoint; `'\u{…}'`
-     is the hex codepoint. (A multibyte source char like `'é'` isn't matched here — use `'\u{E9}'`.) */
+     is the hex codepoint; a multibyte source char (`'é'`, `'😀'`) is decoded from its UTF-8 bytes.
+     `char` is exactly one scalar value — a multi-codepoint grapheme is a string, not a char. */
 {simple_esc_seq_literal}                       { unsigned cp = (unsigned char)getSimpleEscape(yytext, 2); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
 {single_char_literal}                          { unsigned cp = (unsigned char)yytext[1]; std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
 {uni_codepoint_char_literal}                   { std::string hexString(&(yytext[4])); hexString.pop_back(); hexString.pop_back(); unsigned cp = (unsigned)strtol(hexString.c_str(), NULL, 16); std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; }
+{multibyte_char_literal}                       { unsigned cp = decodeUTF8Codepoint(&(yytext[1]), yyleng - 2); if (cp == 0xFFFFFFFFu) { error("invalid multibyte char literal (overlong, surrogate, or out of range)", yyscanner); } else { std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; } }
 
 {regular_string_start}                         {
                                                  yy_push_state(IN_REGULAR_STRING, yyscanner); 
@@ -395,6 +404,25 @@ char getSimpleEscape(const char* input, int index)
   }
 
   return rtn;
+}
+
+/* Decode a single UTF-8 codepoint from `len` bytes (1–4). Returns 0xFFFFFFFF on an overlong, surrogate,
+   or out-of-range encoding (the caller rejects it). The flex pattern already constrains lead/continuation
+   bytes; the min-value + surrogate + max-value checks reject the residual invalid forms. */
+unsigned decodeUTF8Codepoint(const char* bytes, int len)
+{
+  const unsigned char* b = (const unsigned char*)bytes;
+  unsigned cp;
+  if (len == 1) { return b[0]; }
+  if (len == 2) { cp = ((unsigned)(b[0] & 0x1F) << 6) | (unsigned)(b[1] & 0x3F);
+                  return cp < 0x80u ? 0xFFFFFFFFu : cp; }
+  if (len == 3) { cp = ((unsigned)(b[0] & 0x0F) << 12) | ((unsigned)(b[1] & 0x3F) << 6) | (unsigned)(b[2] & 0x3F);
+                  if (cp < 0x800u || (cp >= 0xD800u && cp <= 0xDFFFu)) return 0xFFFFFFFFu;
+                  return cp; }
+  if (len == 4) { cp = ((unsigned)(b[0] & 0x07) << 18) | ((unsigned)(b[1] & 0x3F) << 12)
+                     | ((unsigned)(b[2] & 0x3F) << 6) | (unsigned)(b[3] & 0x3F);
+                  return (cp < 0x10000u || cp > 0x10FFFFu) ? 0xFFFFFFFFu : cp; }
+  return 0xFFFFFFFFu;
 }
 
 static int getToken(const char *lexeme)
