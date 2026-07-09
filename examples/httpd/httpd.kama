@@ -1,0 +1,220 @@
+// httpd.kama — a tiny static-file HTTP/1.1 server, written in Kama.
+//
+// The "python -m http.server" spirit: point it at a directory and it serves the files over HTTP.
+// It exists to show std::net + std::fs + the string library composing into a real, single-binary
+// program — and it's handy for previewing a static site locally.
+//
+//   kama build httpd.kama -o httpd
+//   ./httpd                                       # serves ./public on http://127.0.0.1:8080
+//   HTTPD_ROOT=../../site HTTPD_PORT=9000 ./httpd  # serve any directory / port
+//
+// Honest scope (a dev/preview server): GET only, one request per connection (Connection: close),
+// the request is read in a single recv (fine for GETs), no keep-alive, no directory listings, no
+// query-string handling. Path traversal ("..") is rejected. Numeric host only.
+
+import std::net::{TcpListener, TcpStream};
+import std::fs::{readFile};
+import std::io::{IoError};
+import std::collections::{List, Array};
+
+extern "<stdlib.h>";
+extern fn Ptr<int8> getenv(Ptr<int8> name);
+extern "<string.h>";
+extern fn usize strlen(Ptr<int8> s);
+extern "<stdio.h>";
+extern fn int32 puts(Ptr<int8> s);
+
+// ---- small utilities --------------------------------------------------------
+
+// The value of environment variable `name`, or a copy of `dflt` if it is unset.
+fn string envOr(string name, string dflt) {
+    Ptr<int8> p = getenv(name: name.cstr());
+    if (p == null) { return copy dflt; }
+    int32 len = cast<int32>(strlen(s: p));
+    unsafe { return kama_string_from_raw(src: cast<Ptr<uint8>>(p), start: 0, len: len); }
+}
+
+// Parse a decimal port; fall back to `dflt` on anything non-numeric.
+fn uint16 parsePort(ref string s, uint16 dflt) {
+    int32 n = cast<int32>(s.length());
+    if (n == 0) { return dflt; }
+    int32 v = 0;
+    int32 i = 0;
+    while (i < n) {
+        int32 c = cast<int32>(s[i]);
+        if (c < 48) { return dflt; }
+        if (c > 57) { return dflt; }
+        int32 d = c - 48;
+        v = v * 10 + d;
+        i = i + 1;
+    }
+    return cast<uint16>(v);
+}
+
+// Append every byte of `s` to `dst`.
+fn void appendStr(ref List<uint8> dst, string s) {
+    int32 n = cast<int32>(s.length());
+    int32 i = 0;
+    while (i < n) { dst.add(item: s[i]); i = i + 1; }
+}
+
+// Append the decimal digits of `n` (>= 0) to `dst`.
+fn void appendDec(ref List<uint8> dst, int32 n) {
+    if (n == 0) { dst.add(item: cast<uint8>(48)); return; }
+    Array<uint8> tmp = Array(size: 20);
+    int32 count = 0;
+    int32 v = n;
+    while (v > 0) {
+        int32 d = v % 10;
+        int32 code = 48 + d;
+        tmp[count] = cast<uint8>(code);
+        count = count + 1;
+        v = v / 10;
+    }
+    int32 i = count - 1;
+    while (i >= 0) { dst.add(item: tmp[i]); i = i - 1; }
+}
+
+// Append every byte of `body` to `dst`.
+fn void appendBytes(ref List<uint8> dst, ref List<uint8> body) {
+    int32 n = cast<int32>(body.length());
+    int32 i = 0;
+    while (i < n) { dst.add(item: body[i]); i = i + 1; }
+}
+
+// Content-Type for a request path, by extension (a small common set).
+fn string mimeType(ref string path) {
+    if (path.endsWith(suffix: ".html")) { return "text/html; charset=utf-8"; }
+    if (path.endsWith(suffix: ".css"))  { return "text/css; charset=utf-8"; }
+    if (path.endsWith(suffix: ".js"))   { return "text/javascript"; }
+    if (path.endsWith(suffix: ".json")) { return "application/json"; }
+    if (path.endsWith(suffix: ".svg"))  { return "image/svg+xml"; }
+    if (path.endsWith(suffix: ".png"))  { return "image/png"; }
+    if (path.endsWith(suffix: ".jpg"))  { return "image/jpeg"; }
+    if (path.endsWith(suffix: ".ico"))  { return "image/x-icon"; }
+    if (path.endsWith(suffix: ".wasm")) { return "application/wasm"; }
+    if (path.endsWith(suffix: ".txt"))  { return "text/plain; charset=utf-8"; }
+    return "application/octet-stream";
+}
+
+// Null-terminate `bytes` and write it to stdout as one line (cross-platform via CRT puts).
+fn void logLine(ref List<uint8> bytes) {
+    bytes.add(item: cast<uint8>(0));
+    unsafe { puts(s: cast<Ptr<int8>>(addr(of: bytes[0]))); }
+}
+
+// ---- request handling -------------------------------------------------------
+
+// The request-target (2nd whitespace token of the request line), e.g. "/assets/logo.png".
+fn string requestPath(ref string req) {
+    string path = "/";
+    int32 idx = 0;
+    foreach (string tok in req.split(separator: " ")) {
+        if (idx == 1) { path = copy tok; }
+        idx = idx + 1;
+    }
+    return give path;
+}
+
+// Map a URL path to a relative filesystem path: "/" and any trailing "/" resolve to "index.html".
+fn string toRelPath(ref string path) {
+    if (path == "/") { return "/index.html"; }
+    if (path.endsWith(suffix: "/")) { return path + "index.html"; }
+    return copy path;
+}
+
+// Send a full response (status line + headers + body). Returns 0 (fire-and-forget).
+fn int32 respond(ref TcpStream client, string status, string contentType, ref List<uint8> body) {
+    List<uint8> resp = List();
+    appendStr(dst: resp, s: "HTTP/1.1 ");
+    appendStr(dst: resp, s: give status);
+    appendStr(dst: resp, s: "\r\nContent-Type: ");
+    appendStr(dst: resp, s: give contentType);
+    appendStr(dst: resp, s: "\r\nContent-Length: ");
+    appendDec(dst: resp, n: cast<int32>(body.length()));
+    appendStr(dst: resp, s: "\r\nConnection: close\r\n\r\n");
+    appendBytes(dst: resp, body: body);
+    Result<usize, IoError> w = client.writeAll(bytes: resp);
+    return match (w) { case Ok(x): 0; case Err(e): 0; };
+}
+
+// A tiny text/plain error page (404 / 400 / 405).
+fn int32 respondText(ref TcpStream client, string status, string text) {
+    List<uint8> body = List();
+    appendStr(dst: body, s: give text);
+    return respond(client: client, status: give status, contentType: "text/plain; charset=utf-8", body: body);
+}
+
+// Handle one connection: read the request, resolve a file under `root`, send it (or an error).
+fn int32 handle(ref TcpStream client, ref string root) {
+    Array<uint8> buf = Array(size: 8192);
+    Result<usize, IoError> rr = client.read(into: buf);
+    int32 got = match (rr) { case Ok(c): cast<int32>(c); case Err(e): 0 - 1; };
+    if (got <= 0) { return 0; }                                   // empty / failed read: drop the connection
+
+    string req = kama_string_from_raw(src: addr(of: buf[0]), start: 0, len: got);
+    if (!req.startsWith(prefix: "GET ")) {
+        return respondText(client: client, status: "405 Method Not Allowed", text: "405 Method Not Allowed\n");
+    }
+
+    string path = requestPath(req: req);
+    if (path.contains(substring: "..")) {                         // path-traversal guard
+        return respondText(client: client, status: "400 Bad Request", text: "400 Bad Request\n");
+    }
+
+    string rel  = toRelPath(path: path);
+    string full = root + rel;
+    Result<List<uint8>, IoError> rf = readFile(path: full);
+    return match (rf) {
+        case Ok(body): respond(client: client, status: "200 OK", contentType: mimeType(path: rel), body: body);
+        case Err(e):   respondText(client: client, status: "404 Not Found", text: "404 Not Found\n");
+    };
+}
+
+// Accept loop: serve forever. A failed accept or handler never stops the server.
+fn int32 serve(ref TcpListener listener, ref string root) {
+    while (true) {
+        Result<TcpStream, IoError> ra = listener.accept();
+        int32 rc = match (ra) {
+            case Ok(client): handle(client: client, root: root);  // client (socket) closes at arm end
+            case Err(e):     0;
+        };
+    }
+    return 0;                                                     // unreachable; satisfies the return type
+}
+
+fn int32 run(ref TcpListener listener, ref string host, ref string root, uint16 port) {
+    List<uint8> banner = List();
+    appendStr(dst: banner, s: "kama httpd: serving '");
+    appendStr(dst: banner, s: copy root);
+    appendStr(dst: banner, s: "' on http://");
+    appendStr(dst: banner, s: copy host);
+    appendStr(dst: banner, s: ":");
+    appendDec(dst: banner, n: cast<int32>(port));
+    logLine(bytes: banner);
+    return serve(listener: listener, root: root);
+}
+
+fn int32 fail(ref string host, uint16 port) {
+    List<uint8> msg = List();
+    appendStr(dst: msg, s: "kama httpd: could not bind ");
+    appendStr(dst: msg, s: copy host);
+    appendStr(dst: msg, s: ":");
+    appendDec(dst: msg, n: cast<int32>(port));
+    appendStr(dst: msg, s: " (port in use or not permitted)");
+    logLine(bytes: msg);
+    return 1;
+}
+
+fn int main() {
+    string host    = envOr(name: "HTTPD_HOST", dflt: "127.0.0.1");
+    string root    = envOr(name: "HTTPD_ROOT", dflt: "public");
+    string portStr = envOr(name: "HTTPD_PORT", dflt: "8080");
+    uint16 port    = parsePort(s: portStr, dflt: cast<uint16>(8080));
+
+    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    return match (rl) {
+        case Ok(listener): run(listener: listener, host: host, root: root, port: port);
+        case Err(e):       fail(host: host, port: port);
+    };
+}

@@ -1,0 +1,8 @@
+# build artifacts
+/httpd
+/httpd.exe
+*.o
+*.gen.h
+*.c
+*.wasm
+*.js

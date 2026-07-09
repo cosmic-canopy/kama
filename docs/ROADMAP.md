@@ -106,7 +106,14 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
      `std::net` **compiles** to wasm (emscripten ships the `<sys/socket.h>` shims) but does not run without a
      WebSocket proxy — wasm net stays deferred to the WebRTC/host path (2.0). Native is the first-class target.
    - **Deferred (tracked):** UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`, buffered readers, richer
-     `Metadata` (mtime/perms), path helpers, `mkdir`. Follow-up: `examples/httpd.kama` end-to-end over `curl`.
+     `Metadata` (mtime/perms), path helpers, `mkdir`.
+   - ✅ **End-to-end proof — `examples/httpd/`.** A ~200-line static-file HTTP/1.1 server (the
+     `python -m http.server` spirit) over `std::net` + `std::fs` + strings — the first real Kama program.
+     Serves the actual `site/` (kama-lang.org) locally: verified over `curl` — `200` html/png/txt
+     (binary-safe, correct `Content-Type`/`Content-Length`), `404`/`400`(traversal)/`405`; ASan/UBSan-clean
+     under live traffic and LSan-clean on the startup path. Self-contained (installed `kama` only) so the
+     folder seeds a standalone repo. `GET`-only, `Connection: close`, single-`recv` request — honestly a
+     dev/preview server (keep-alive, dir listings, percent-decoding, threading deferred).
 4. **Math layer.** `Vec2/3/4`, `Mat4` (`Fixed<float32,16>` or `Fixed<Vec4,4>`), `Quat` as ordinary `value`
    types — **no prerequisites** (operator overloading + `Fixed` shipped). Unblocks the engine's Tier-0 math.
    Buildable as value types now; package as a stdlib module once the packaging question (§3) is settled —
