@@ -293,7 +293,7 @@ extern "<stdlib.h>";             // every C function comes from an explicit head
 extern "<math.h>";
 extern fn Ptr  malloc(usize n);     // Ptr = void* (opaque pointer/handle); usize = size_t
 extern fn void free(Ptr p);
-extern fn float64 sqrt(float64 x);  // build with: --link m
+extern fn float64 sqrt(float64 x);  // libm auto-links when a program `extern "<math.h>";`s (pay-for-use)
 
 fn int main() {
     Ptr p = malloc(n: 64);
@@ -313,6 +313,28 @@ missing include is a plain C error, never a silent guess.
 `Ptr` is `void*`; `Ptr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
 **no dereference** in kama outside `unsafe`). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
 `kama_` are reserved (runtime-provided).
+
+### Math (`std::math`) ✅
+
+Engine Tier-0 linear algebra — concrete **float32** value types: `Vec2/3/4`, `Mat2/3/4`, `Quat`, plus scalar
+helpers (`radians`/`degrees`/`lerp`/`clampf`/`pi()`/… over libm). `import std::math::{Vec3, Mat4, Quat, …}`.
+Methods + operators (one `operator*` per type: matrices/quaternions **compose**, vector transform / rotate
+are named methods — no overloading). Matrices are **column-major** with the **column-vector** convention
+(`result = M * v`, GPU/WebGPU-native); `perspective`/`orthographic`/`lookAt` target **WebGPU 0..1 depth**,
+right-handed. `Quat` is a unit quaternion (`fromAxisAngle`/`fromEuler`, Hamilton `*`, `rotate`, `slerp`/
+`nlerp`, `toMat3`/`toMat4`). All literals are `f32`-suffixed (a bare `1.0` is float64). SIMD is a later
+implementation swap behind this API (the layout is SIMD-ready).
+
+```kama
+import std::math::{Vec3, Mat4};
+fn int main() {
+    Mat4 vp = Mat4::perspective(fovyRad: 1.0472f32, aspect: 1.777f32, near: 0.1f32, far: 100.0f32)
+            * Mat4::lookAt(eye: Vec3(x: 0.0f32, y: 2.0f32, z: 5.0f32),
+                           center: Vec3::zero(), up: Vec3::unitY());   // method chaining
+    Vec3 p = vp.transformPoint(p: Vec3(x: 1.0f32, y: 0.0f32, z: 0.0f32));
+    return cast<int>(p.length());
+}
+```
 
 **FFI data — all controlled, no `unsafe` needed:**
 

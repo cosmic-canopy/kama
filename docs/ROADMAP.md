@@ -5,8 +5,10 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 ## The shape
 
-- **1.0 — language complete.** Strings are **done** (Phase 3 shipped); **math** is the last core piece,
-  after which the language surface is stable — you build *with* it, not *on* it.
+- **1.0 — language complete.** Strings are **done** (Phase 3 shipped); the **std I/O** foundation
+  (`std::io`/`fs`/`net`) and the **math layer** (`std::math` — Vec/Mat/Quat) are **shipped** — the remaining
+  gate is the docs reconcile + naming pass, after which the language surface is stable: you build *with* it,
+  not *on* it.
 - **1.x — systems & runtime.** Capabilities built ON the finished language: reflection + serialization,
   file I/O, networking, an embedded/MCU target. Mostly library + codegen, little new syntax.
 - **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted, via a shared
@@ -133,10 +135,18 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
      under live traffic and LSan-clean on the startup path. Self-contained (installed `kama` only) so the
      folder seeds a standalone repo. `GET`-only, `Connection: close`, single-`recv` request — honestly a
      dev/preview server (keep-alive, dir listings, percent-decoding, threading deferred).
-4. **Math layer.** `Vec2/3/4`, `Mat4` (`Fixed<float32,16>` or `Fixed<Vec4,4>`), `Quat` as ordinary `value`
-   types — **no prerequisites** (operator overloading + `Fixed` shipped). Unblocks the engine's Tier-0 math.
-   Buildable as value types now; package as a stdlib module once the packaging question (§3) is settled —
-   forward-compatible either way.
+4. ✅ **Math layer — SHIPPED** as `lib/std/math/` (`import std::math::{…}`), concrete **float32** value
+   types: `Vec2/3/4`, `Mat2/3/4`, `Quat`, plus scalar helpers (`radians/lerp/clampf/pi()/…` + libm FFI).
+   **Column-major**, column-vector (`M * v`), WebGPU 0..1-depth `perspective`/`ortho`/`lookAt`, general
+   Mat4 `inverse` (adjugate), full Quat (Hamilton `*`, `rotate`, slerp/nlerp, `toMat3/4`). Methods+operators
+   (one `operator*` per type — Mat/Quat compose; transform/rotate are named). Fixtures (scalar/vec/mat/quat/
+   chain) exact-value-checksummed, native + ASan + wasm. Concrete-not-generic (scalar literals + per-scalar
+   `sqrtf`); a concrete `f64` (`DVec`) family can follow. **Landed four compiler foundations it needed:**
+   `this`-by-value args, whole-number float32 literals (`1.0f32` was invalid C), libm pay-for-what-you-use
+   auto-link (`-lm` on `<math.h>`), and value-rvalue **method chaining** (`m.transpose().inverse()`).
+   **Follow-up (1.x / engine era): `std::math` SIMD backend** — portable C vector extensions
+   (`vector_size(16)` → SSE2/NEON/wasm128), a pure implementation swap behind the unchanged API (v1's
+   layout is already SIMD-ready). Rotors deferred.
 5. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
    (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`).
 
