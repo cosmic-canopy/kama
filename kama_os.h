@@ -178,12 +178,21 @@ static inline int32_t kama_close_socket(ptrdiff_t fd) { return (int32_t)closesoc
 #include <errno.h>
 #include <string.h>       // memset, strlen
 #include <fcntl.h>        // open, O_*
-#include <unistd.h>       // read, write, close, unlink
 #include <sys/stat.h>     // fstat, stat, S_ISDIR
 #include <dirent.h>       // opendir, readdir, closedir
 #include <sys/socket.h>   // socket, bind, listen, accept, connect, setsockopt, send, recv
 #include <netinet/in.h>   // sockaddr_in, htons, htonl, INADDR_ANY
 #include <arpa/inet.h>    // inet_addr
+
+// NOT <unistd.h>: on macOS its `write`/`read` carry a `__DARWIN_ALIAS_C` asm label, and because
+// kama_runtime.h already declared+used `write` (its bounds-trap, block scope) BEFORE this header is
+// reached, clang errors "cannot apply asm label to function after its first use." Declare the handful we
+// need directly — they link to the same libc symbols — matching kama_runtime.h's own block-scoped-extern
+// style (and keeping these decls out of user code).
+extern long read(int, void*, size_t);
+extern long write(int, const void*, size_t);
+extern int  close(int);
+extern int  unlink(const char*);
 
 // ---- errno / last-error ----------------------------------------------------
 // A stable accessor + constant accessors, so kama never hardcodes per-OS errno numbers. (The Windows
