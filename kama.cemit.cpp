@@ -6864,6 +6864,26 @@ std::string CEmitter::exprClass(SharedExpression e)
             }
             return "";
         }
+        // Static method call `Class::method(args)` — a qualified identifier with no receiver expression
+        // (`File::open(...)`). Resolve the class, find the method, return its (class) return type, so a
+        // fallible factory is usable inline as a `match` subject / value site — not only after binding to
+        // a typed local. Mirrors the `Type::method` resolution in emitFnPtrBind.
+        if (inv->identifier && inv->identifier->value && !inv->expression
+            && inv->identifier->qualifier && !inv->identifier->qualifier->empty()) {
+            auto prefix = std::make_shared<StringList>();
+            for (size_t i = 0; i + 1 < inv->identifier->qualifier->size(); ++i)
+                prefix->push_back((*inv->identifier->qualifier)[i]);
+            std::string cls = resolveUserName(*inv->identifier->qualifier->back(), prefix);
+            if (_classes.count(cls)) {
+                ClassInfo* owner = nullptr;
+                MethodInfo* mi = findMethod(&_classes[cls], *inv->identifier->value, &owner);
+                if (mi && mi->returnType) {
+                    std::string rc = cType(mi->returnType);
+                    if (isClass(rc)) return rc;
+                }
+            }
+        }
+
         // Q3: a bare inline constructor `Vec3(x: …)` — its own class (so an inline ctor works as an
         // operator operand). Checked before _funcs since a class name is never a function.
         if (inv->identifier && inv->identifier->value && !inv->expression

@@ -70,10 +70,12 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
      - A **value-producing `match` block arm** (`case X: { …stmts…; tail }`) must end in a **call** — a bare
        identifier / arithmetic / ternary tail is a syntax error. (Non-block arms `case X: <expr>` accept any
        expression, incl. ternaries.) Wrap the tail in a helper call, or use a non-block arm.
-     - Inline `match (Type::staticFn(...))` where the `Ok` payload is a **resource** fails ("requires an
-       enum subject") — bind the call to a typed local (`Result<File,IoError> r = File::open(...); match (r)`)
-       first. Free-function calls returning `Result<value,…>` match inline fine; the gap is static-method /
-       resource-payload calls in subject position.
+     - ✅ **DONE** — inline `match (Type::staticFn(...))` now works. `exprClass` inferred return types for
+       instance-method and free-function calls but not **static-method calls** (`File::open(...)` — a
+       qualified identifier, not a `MemberAccessNode`), so the subject's type was unknown → "requires an
+       enum subject." Added the `Class::method` resolution (mirrors `emitFnPtrBind`). Fixture
+       `tests/match_static_factory.kama`. (The Ok payload being a resource was a red herring — the gap was
+       purely the static call.)
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered.
    - **Multibyte source char literal `'é'`** — lexer gap (write `'\u{E9}'` today).
    - **Verify-then-1.0-or-downgrade:** explicit type args when inference fails

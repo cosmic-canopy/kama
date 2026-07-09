@@ -1,0 +1,18 @@
+// A static-method factory result can be a `match` subject inline (no typed-binding first), even when
+// the Ok payload is a move-only resource. Returns 6.
+type resource Widget {
+    int32 id;
+    private Widget(int32 id) { this.id = id; }
+    public static fn Result<Widget, int32> make(int32 n) {
+        if (n < 0) { return Result::Err(error: 0 - 1); }
+        return Result::Ok(value: Widget(id: n));
+    }
+    public fn int32 value() { return this.id; }
+    ~Widget() {}
+}
+
+fn int main() {
+    int32 a = match (Widget::make(n: 7))     { case Ok(w): w.value(); case Err(e): 0 - 1; };  // 7
+    int32 b = match (Widget::make(n: 0 - 5)) { case Ok(w): 100;       case Err(e): e; };       // -1
+    return a + b;                                                                              // 6
+}
