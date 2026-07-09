@@ -588,8 +588,14 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
     if (auto* v = dynamic_cast<Float32Node*>(n)) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "%.9gf", (double)v->value);
-        return buf;
+        std::snprintf(buf, sizeof(buf), "%.9g", (double)v->value);
+        std::string s(buf);
+        // A whole-number %g (`16`) needs a decimal point before the `f` suffix — `16f` is an INVALID C
+        // literal (integer with a float suffix). Make it `16.0f`. (`2.5`/`1e9` already have `.`/`e`.)
+        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos
+            && s.find('E') == std::string::npos && s.find_first_of("0123456789") != std::string::npos)
+            s += ".0";
+        return s + "f";
     }
     if (auto* v = dynamic_cast<BooleanNode*>(n)) return v->value ? "true" : "false";
     if (dynamic_cast<NullNode*>(n))              return "NULL";
@@ -5045,6 +5051,13 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 else doCopy = cpy && _classes[argCls].bareDefault == COPY;
                 if (doCopy) s += argCls + "__copy(&(" + val + "))";
                 else { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); s += val; }
+            } else if (dynamic_cast<ThisAccessNode*>(argExpr.get()) && !p.className.empty()
+                       && _classes.count(p.className) && _classes[p.className].kind == TypeKind::Value) {
+                // A bare `this` is `self` (a `T*` — the receiver pointer). Passed to a by-value value-type
+                // parameter it must be dereferenced: `*self` is the value. (Field args are MemberAccessNodes,
+                // never ThisAccessNode, and a primitive param's className is empty — so this only fires for a
+                // whole-`this` value arg, e.g. `this.dot(r: this)` in `length()`.)
+                s += "*(" + val + ")";
             } else {
                 s += val;   // plain value copy (primitive / value / collection borrow); `give` on a value is just that copy
             }
@@ -7569,7 +7582,9 @@ void CEmitter::emitIncludes(const std::vector<SharedCompilationUnit>& units)
         for (auto& decl : *u->codeDeclarationList)
             if (auto* inc = dynamic_cast<IncludeNode*>(decl.get())) {
                 std::string h = inc->header ? *inc->header : "";
-                if (h.empty() || seen.count(h)) continue;
+                if (h.empty()) continue;
+                _externedHeaders.insert(h);   // record for the driver's link hints (e.g. <math.h> -> -lm)
+                if (seen.count(h)) continue;
                 seen.insert(h);
                 if (h[0] == '<') *_out << "#include " << h << "\n";       // <stdlib.h>
                 else             *_out << "#include \"" << h << "\"\n";    // "my.h"

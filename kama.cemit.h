@@ -264,7 +264,12 @@ public:
                     const std::vector<std::ostream*>& moduleStreams,
                     const std::vector<std::string>& sourcePaths);  // per-module #line paths
 
+    // FFI link hint: was this C header `extern "<…>";`'d anywhere? (pay-for-what-you-use — the driver
+    // appends `-lm` only when `<math.h>` is used, `-lws2_32` only for sockets, etc.)
+    bool externsHeader(const std::string& h) const { return _externedHeaders.count(h) > 0; }
+
 private:
+    std::set<std::string> _externedHeaders;   // every `extern "<h>";` seen (populated by emitIncludes)
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only
     std::string   _sourcePath;       // absolute path, used in #line directives

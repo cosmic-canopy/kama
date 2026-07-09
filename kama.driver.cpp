@@ -393,7 +393,7 @@ SharedCompilationUnit preludeUnit() { return parseString(PRELUDE_SRC, "<prelude>
 
 // Emit an already-parsed unit to a single `.c` (`srcPath` drives #line). Returns 0 on success.
 int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
-                        const std::string& outPath, bool emitLines)
+                        const std::string& outPath, bool emitLines, bool* externsMathH = nullptr)
 {
     std::ofstream out(outPath);
     if (!out) {
@@ -403,6 +403,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     CEmitter emitter(out, srcPath, emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
     int unsupported = emitter.emit(unit);
+    if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     out.close();
     if (unsupported > 0) {
         fprintf(stderr, "kama: %d unlowered construct(s) — see the warnings above.\n", unsupported);
@@ -425,7 +426,8 @@ int transpileToFile(const std::string& inputFile, const std::string& outPath, bo
 int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      const std::vector<std::string>& sourcePaths,
                      const std::string& headerPath, const std::string& headerName,
-                     const std::vector<std::string>& cPaths, bool emitLines)
+                     const std::vector<std::string>& cPaths, bool emitLines,
+                     bool* externsMathH = nullptr)   // link hint: did the program `extern "<math.h>";`?
 {
     std::ofstream header(headerPath);
     if (!header) { fprintf(stderr, "kama: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
@@ -442,6 +444,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     CEmitter emitter(header, "", emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
+    if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     header.close();
     for (auto& f : moduleFiles) f->close();
 
@@ -640,9 +643,10 @@ int main(int argc, char** argv)
         std::vector<std::string> unitPaths;
         if (!loadProgramUnits(inputs, argv[0], units, unitPaths)) return 1;
 
+        bool needsLibm = false;   // set if the program `extern "<math.h>";`'s (std::math / libm) -> link -lm
         if (units.size() == 1) {
             std::string cPath = stripExtension(input) + ".c";
-            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines) != 0) return 1;
+            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm) != 0) return 1;
             cFiles.push_back(cPath);
             genFiles.push_back(cPath);
         } else {
@@ -652,7 +656,7 @@ int main(int argc, char** argv)
             std::vector<std::string> cPaths;   // one per unit; index-suffixed so distinct dirs never collide
             for (size_t i = 0; i < units.size(); ++i)
                 cPaths.push_back(genDir + "/" + stripExtension(baseName(unitPaths[i])) + "_" + std::to_string(i) + ".c");
-            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines) != 0) return 1;
+            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm) != 0) return 1;
             cFiles   = cPaths;
             genFiles = cPaths;
             genFiles.push_back(headerPath);
@@ -687,6 +691,9 @@ int main(int argc, char** argv)
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
         for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
         for (auto& lib : links) cmd << "-l" << lib << " ";       // FFI link flags
+        // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm
+        // FFI). Native only — wasm/emscripten bundles libm. (--gc-sections still prunes unused code.)
+        if (needsLibm && !wasm) cmd << "-lm ";
 #if defined(_WIN32)
         // std::net uses Winsock (kama_os.h). Link ws2_32 on native Windows builds; harmless (and pruned by
         // --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.
