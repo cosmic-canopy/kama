@@ -1,0 +1,45 @@
+// Mat4 identity/scale/translate/compose/transpose (exact), general inverse (dyadic), ortho, 90° rotation;
+// Mat2/Mat3 inverse round-trips. All exact-value / +0.5-round checksums.
+import std::math::{Vec2, Vec3, Vec4, Mat2, Mat3, Mat4, radians};
+fn int main() {
+    Mat4 I = Mat4::identity();
+    Vec4 iv = I.transform(v: Vec4(x: 2.0f32, y: 3.0f32, z: 4.0f32, w: 1.0f32));
+    int32 a = cast<int32>(iv.x + iv.y + iv.z + iv.w);                     // 10
+
+    Mat4 T = Mat4::translation(t: Vec3(x: 10.0f32, y: 20.0f32, z: 30.0f32));
+    Mat4 S = Mat4::scale(s: Vec3(x: 2.0f32, y: 2.0f32, z: 2.0f32));
+    Mat4 M = T * S;
+    Vec3 p = M.transformPoint(p: Vec3(x: 1.0f32, y: 1.0f32, z: 1.0f32));  // (12,22,32)
+    int32 b = cast<int32>(p.x + p.y + p.z);                              // 66
+
+    Mat4 MT = M.transpose();
+    Mat4 MTT = MT.transpose();
+    int32 c = cast<int32>(MTT.get(c: 3, r: 0));                          // 10
+
+    Mat4 D  = Mat4::translation(t: Vec3(x: 5.0f32, y: 0.0f32, z: 0.0f32));
+    Mat4 SC = Mat4::scale(s: Vec3(x: 2.0f32, y: 4.0f32, z: 8.0f32));
+    Mat4 M2 = D * SC;
+    Mat4 M2I = M2.inverse();
+    Mat4 P = M2 * M2I;
+    int32 e = cast<int32>(P.get(c:0,r:0) + P.get(c:1,r:1) + P.get(c:2,r:2) + P.get(c:3,r:3));  // 4
+
+    Mat4 O = Mat4::orthographic(l: 0.0f32-1.0f32, r: 1.0f32, b: 0.0f32-1.0f32, t: 1.0f32, near: 0.0f32, far: 1.0f32);
+    Vec4 corner = O.transform(v: Vec4(x: 1.0f32, y: 1.0f32, z: 0.0f32, w: 1.0f32));
+    int32 f = cast<int32>(corner.x + corner.y);                         // 2
+
+    Mat4 Rz = Mat4::fromRotationZ(rad: radians(deg: 90.0f32));
+    Vec3 rp = Rz.transformDir(d: Vec3::unitX());
+    int32 g = cast<int32>(rp.y + 0.5f32);                               // 1
+
+    Mat2 A2 = Mat2::fromCols(c0: Vec2(x: 2.0f32, y: 0.0f32), c1: Vec2(x: 0.0f32, y: 4.0f32));
+    Mat2 A2I = A2.inverse();
+    Mat2 P2 = A2 * A2I;
+    int32 h = cast<int32>(P2.get(c:0,r:0) + P2.get(c:1,r:1));           // 2
+
+    Mat3 B3 = Mat3::fromCols(c0: Vec3(x:2.0f32,y:0.0f32,z:0.0f32), c1: Vec3(x:0.0f32,y:4.0f32,z:0.0f32), c2: Vec3(x:0.0f32,y:0.0f32,z:8.0f32));
+    Mat3 B3I = B3.inverse();
+    Mat3 P3 = B3 * B3I;
+    int32 j = cast<int32>(P3.get(c:0,r:0) + P3.get(c:1,r:1) + P3.get(c:2,r:2));  // 3
+
+    return a + b + c + e + f + g + h + j;   // 10+66+10+4+2+1+2+3 = 98
+}
