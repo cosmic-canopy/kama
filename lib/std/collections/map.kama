@@ -1,5 +1,5 @@
 namespace std::collections;
-export { Map };
+export { Map, MapKeyIter };
 
 extern "<stdlib.h>";
 extern fn Ptr malloc(usize n);
@@ -40,15 +40,39 @@ implements Equatable for int32 {
 }
 
 // A general open-addressing hash map over `K: Hashable + Equatable` -> `V`. Linear probing with
+// A by-value iterator over a map's KEYS (the `foreach (K k in map)` protocol; `Set` hands out the same).
+// It borrows the map's key + state buffers, walks only FULL slots, and yields each key BY VALUE (a copy),
+// so it exists only for a `Copyable` key. Like `ListIter` it snapshots the map's mutation counter and
+// rejects a structural change (a `put`/`remove` that could rehash) made mid-iteration.
+type value MapKeyIter<K> implements Iterator<K> {
+    Ptr<K> keys; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
+    public MapKeyIter(Ptr<K> keys, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
+        this.keys = keys; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    // Deep-copy a key through a typed `ref K` borrow — a bare `copy this.keys[p]` on the raw buffer can't
+    // (its element class is unknown, so the `copy` marker is dropped and it aliases). Same trick as `get`.
+    fn K cloneKey(ref K k) { return copy k; }
+    public fn Optional<K> next() {
+        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); } }
+        while (this.pos < this.cap) {
+            int32 p = this.pos; this.pos = this.pos + 1;
+            uint8 s = 0ui8; unsafe { s = this.state[p]; }
+            if (s == 1ui8) { unsafe { return Optional::Some(value: this.cloneKey(k: this.keys[p])); } }
+        }
+        return Optional::None;
+    }
+}
+
 // tombstones; grows (and sheds tombstones) at a 0.75 load factor. Move-only: it owns three parallel
 // heap buffers (keys, values, per-slot state) and every live key/value, dropping them at end of life.
 //
 //   state[i]: 0 = EMPTY (never used), 1 = FULL (a live entry), 2 = TOMB (removed — probe past it).
 //
 // Keys are hashed/compared by content, so a lookup key built any way finds the stored entry. Lookups
-// borrow the key (`ref K`); `put` consumes the key + value it stores (by value). To duplicate a map,
-// rebuild it — a two-type-parameter `Copyable` isn't expressible with single-parameter `when` today.
-type resource Map<K: Hashable + Equatable, V> {
+// borrow the key (`ref K`); `put` consumes the key + value it stores (by value). `foreach (K k in m)`
+// iterates the keys (needs a `Copyable` key). To duplicate a map, rebuild it — a two-type-parameter
+// `Copyable` (and entry-wise iteration `foreach (Entry e in m)`) awaits multi-parameter `when`.
+type resource Map<K: Hashable + Equatable, V> implements Iterable<K> when K: Copyable {
     Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 len; int32 cap; int32 tombs; int32 mods;
 
     public Map() {
@@ -61,6 +85,13 @@ type resource Map<K: Hashable + Equatable, V> {
     }
 
     public fn int32 length() { return this.len; }
+
+    // `foreach (K k in map)` — a by-value key iterator (present only for a `Copyable` key). It borrows the
+    // key + state buffers and a live pointer to `mods` so a mid-iteration structural change is caught.
+    public fn MapKeyIter<K> iterator() when K: Copyable {
+        return MapKeyIter::<K>(keys: this.keys, state: this.state, cap: this.cap,
+                               modsp: addr(of: this.mods), modsAt: this.mods);
+    }
 
     // Key hashing/equality go through these `ref K` helpers so the receiver is always a plain borrow the
     // contract dispatch resolves — for a `string` OR user key (a class receiver) and for a PRIMITIVE key
