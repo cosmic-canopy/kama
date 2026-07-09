@@ -68,9 +68,17 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
      - ✅ **DONE** — `cast<T>(...)` now accepts a full **`expression`** operand (was `unary_expression`,
        so `cast<int32>(a + b)` was a syntax error). The `( … )` already delimits it, like a parenthesized
        primary; no new grammar conflicts. Fixture `tests/cast_expr.kama` (arithmetic/modulo/ternary).
-     - A **value-producing `match` block arm** (`case X: { …stmts…; tail }`) must end in a **call** — a bare
-       identifier / arithmetic / ternary tail is a syntax error. (Non-block arms `case X: <expr>` accept any
-       expression, incl. ternaries.) Wrap the tail in a helper call, or use a non-block arm.
+     - **A value-producing `match` block arm (`case X: { …stmts…; tail }`) must end in a `statement_expression`
+       (call / assignment / `++`/`--` / inline-ctor / nested `match`)** — a bare identifier / arithmetic /
+       ternary tail is a syntax error, because the block's value is its last *statement* and Kama (like C#)
+       does not treat a bare `x + 1;` as a statement. **Deferred — a genuine design fork, not a quick fix:**
+       (a) a Rust-style tail expression `{ stmts; tailExpr }` (no trailing `;`) is the clean answer but is
+       LALR(1)-hard (after an identifier, "start of a `;`-statement" vs "the `;`-less tail" is a
+       shift/reduce conflict); (b) relaxing `expression_statement` to any `expression` is easy and
+       conflict-free but silently allows no-op statements (`x + 1;`) everywhere, against the "explicit /
+       catch bugs" ethos. **Workaround is clean and idiomatic** (extract the tail into a helper and call it,
+       or use a non-block `case X: <expr>` arm — which already accepts any expression incl. ternaries), so
+       this stays parked pending an explicit call on (a) vs (b).
      - ✅ **DONE** — inline `match (Type::staticFn(...))` now works. `exprClass` inferred return types for
        instance-method and free-function calls but not **static-method calls** (`File::open(...)` — a
        qualified identifier, not a `MemberAccessNode`), so the subject's type was unknown → "requires an
