@@ -77,9 +77,9 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
        accepts ANY expression (arithmetic / ternary / owned), unlike the old call-only rule. Cleanly
        distinct from `return` (which leaves the function). The `match` *is* an assignment from outside
        (`x = match … { … := v; }`), so `:=` reads as "bind this out." Fixture `tests/match_arm_value.kama`
-       (int + accumulator + owned-string, ASan-clean). **Follow-up (not a blocker):** the old "block ends in
-       a call/expression" form still works for back-compat — migrate existing block arms to `:=` and then
-       require it, for one-way-to-do-a-thing. (Separately noticed, pre-existing and unrelated: an
+       (int + accumulator + owned-string, ASan-clean). `:=` is now the **one** way: the old "block ends in a
+       call/expression" form was migrated (`match_block_value.kama`) and the emitter fallback removed, so a
+       value-producing block arm must end in `:= <expr>;`. (Separately noticed, pre-existing and unrelated: an
        **owned-typed `match` result in a `local-variable initializer`** — `string s = match(...)` used to
        error "must appear in a typed position." ✅ **Fixed for `string`** (the class/collection local-init
        branch now sets `_matchTargetCType`, mirroring the primitive branch; the lifted `__match` temp is a

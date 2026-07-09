@@ -5542,19 +5542,15 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     continue;
                 }
                 if (resultTemp && i + 1 == nstmt) {
-                    // The arm's value: an explicit `:= expr;`, else (backward-compat) a trailing call /
-                    // assignment expression-statement.
-                    SharedExpression valExpr = armv ? armv->value
-                                                    : std::dynamic_pointer_cast<ExpressionNode>(st);
-                    if (valExpr) {
+                    // A value-producing arm's block states its value with `:= expr;` as the final statement.
+                    if (armv) {
                         bool ph = _hoistOK; _hoistOK = true;
-                        std::string av = emitExpression(valExpr);
+                        std::string av = emitExpression(armv->value);
                         _hoistOK = ph;
                         flushHoisted(depth + 2);
                         indent(depth + 2); *_out << *resultTemp << " = " << av << ";\n";
                     } else {
-                        unsupported("a value-producing `match` arm block must end in a value "
-                                    "(`:= expr;`, a call, or an assignment)", a->line);
+                        unsupported("a value-producing `match` arm block must end in `:= <expr>;`", a->line);
                     }
                 } else {
                     emitStatement(st, depth + 2);
@@ -5723,17 +5719,15 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                     continue;
                 }
                 if (resultTemp && i + 1 == nstmt) {
-                    SharedExpression valExpr = armv ? armv->value
-                                                    : std::dynamic_pointer_cast<ExpressionNode>(st);
-                    if (valExpr) {
+                    // A value-producing arm's block states its value with `:= expr;` as the final statement.
+                    if (armv) {
                         bool ph = _hoistOK; _hoistOK = true;
-                        std::string av = emitExpression(valExpr);
+                        std::string av = emitExpression(armv->value);
                         _hoistOK = ph;
                         flushHoisted(depth + 2);
                         indent(depth + 2); *_out << *resultTemp << " = " << av << ";\n";
                     } else {
-                        unsupported("a value-producing `match` arm block must end in a value "
-                                    "(`:= expr;`, a call, or an assignment)", a->line);
+                        unsupported("a value-producing `match` arm block must end in `:= <expr>;`", a->line);
                     }
                 } else {
                     emitStatement(st, depth + 2);
