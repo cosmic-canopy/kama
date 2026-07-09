@@ -97,6 +97,18 @@ remains here is genuinely later-track or opt-in.
   pass over the bound fixtures.
 - **`Copyable` as a formal contract.** Today it's recognized nominally by name (`implements Copyable`);
   formalize as `type contract Copyable { This copy(); }` — bundle with the structural→nominal migration.
+- **Retroactive contract conformance (scheduled — active near-term work, not deferred).** A library (and
+  std) can make **any** type — including primitives and foreign types — satisfy a contract via an external
+  `implements C for T { … }` block, with coherence guarded by an **orphan rule**: the impl is allowed only
+  if the compilation declares the contract *or* the target type. kama's whole-program view makes enforcement
+  a global duplicate-check → a clean compile error, so the footgun overloading / C#-extension-methods carry
+  is **removed** (conflicts can't compile), not quarantined. This ends per-contract compiler patching: std
+  expresses primitive conformances (`Hashable`/`Equatable` for `string`/`int`, later `Comparable`) **in
+  kama, not C++**, and third-party libraries extend foreign types without touching the compiler. **Not**
+  C#-style extension methods (which add call-syntax, not conformance — weaker). The structural/universal
+  markers (`Movable`; value/primitive `Copyable`) stay compiler rules; only *behavioral* special-cases
+  (string `==`→`equals`) port to external kama impls. Unifies the structural→nominal + formal-`Copyable`
+  items above.
 
 ## 4. Reflection + attributes (1.x — design brief)
 
@@ -129,6 +141,15 @@ serialization, networking).
   work. Deliberately excludes the full 2.0 `export` (wasm module exports + scripting host, §7).
 - **Reflection + declarative serialization** — see the brief above; back ends follow as modules. Rides on
   the shipped `std::fs`/`std::io` for asset + scene load.
+- **Container / data-structure reach.** Beyond the shipped `List`/`Array`/`string`/`Fixed` and the near-term
+  `Map`/`Set`: **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer
+  to a system or a GPU upload with no copy and no ownership transfer), **priority queue / binary heap** (A*
+  pathfinding, event/timer scheduling), **deque / ring buffer** (job & event queues, audio), **slot map /
+  generational arena** (stable handles with generation counters — *the* ECS/asset-registry structure,
+  catches use-after-free), and a **sorted / tree map** (ordered iteration + range queries; needs
+  `Comparable`/`Ordering`). Honest caveat: general **linked lists** are mostly a cache anti-pattern in
+  data-oriented engines (the useful form is an intrusive free-list / LRU); raw **BSTs** are subsumed by the
+  sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
 - **Browser networking transports** — native TCP ships (`std::net`); the browser has no raw sockets, so the
   wasm path needs **WebRTC DataChannels** (unreliable) / **WebSockets** (reliable) via a host FFI shim (a
   real wasm nuance). Native UDP/DNS and the rest of the stdlib reach are the §1 follow-ups.
@@ -196,66 +217,80 @@ checker, kama **removes the shared mutable state**.
 
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)
 
-The end goal is **one language, two modes** — the same kama syntax usable both compiled and as a scripting
-language with a full REPL. The guiding constraint: **the `kama` binary is the only tool you need.**
-External C toolchains stay *optional* — used for the portable-C release path, never required to write, run,
-or iterate.
+**One language, two modes** — the *same static kama* (identical syntax, semantics, ownership rules; dynamic
+only in *execution*, never in typing) usable both compiled and as a scripting language with a full REPL. The
+target is a REPL that **replaces the Python/Ruby/Lua REPL** for fast iteration and compile-→-run-on-demand,
+at or near native speed. Guiding constraint: **the `kama` binary is the only tool you need** — external C
+toolchains stay *optional* (the portable-C release path), never required to write, run, or iterate.
 
-This rests on a **polymorphic emitter**: one front end lowered to a **shared IR**, then rendered by several
-backends.
+**Two tiers, chosen by what dominates:**
+
+| Tier | Path | Optimized for |
+|---|---|---|
+| **Release / AOT** | `kama → C → clang`/`emcc` | maximum runtime speed, the portability moat |
+| **Iteration / scripting / REPL** | direct-wasm (+ `wasm-opt`), then a bytecode VM | compile speed, zero external toolchain, interactivity |
+
+The release tier ships today and is untouched; the new work is the *iteration* tier, and it is **additive** —
+never a replacement for C.
 
 ```
-   Frontend  (parser → type checker → ownership/move analysis)
+   Frontend  (parser → type checker → ownership/move analysis)   ── safety proven ONCE
                           │
-                          ▼
-                     shared IR          (monomorphized, drops inserted,
-                          │              vtables + match/operators desugared)
-          ┌───────────────┼────────────────┐
-          ▼               ▼                 ▼
-          C              WASM            Bytecode
-          │               │                 │
-     TinyCC / clang    browser /          native VM
-     (JIT + release)   Wasmtime         (REPL, self-contained)
+                   semantic lowering   (monomorphize, insert drops,
+                          │             desugar vtables / match / operators)
+          ┌───────────────┼────────────────────┐
+          ▼               ▼                      ▼
+    C (clang/emcc)   direct WASM            Bytecode VM
+    RELEASE — max    + wasm-opt             REPL, self-contained
+    speed, moat      ITERATION / web        (IR extracted here, if ever)
 ```
 
 Every backend shares the same front end, so the safety analysis (ownership, move tracking, exhaustiveness)
-is proven **once**, before the IR.
+is proven **once**, before lowering.
 
-- **C backend — the portability moat (kept, always).** kama → readable portable C → any C toolchain.
-  `clang`/`emcc` for release; a bundled **TinyCC** for near-instant in-process JIT (`kama run foo.kama`
-  and the REPL are **JIT-compiled, not tree-walked**). "Runs anywhere C runs" is the whole moat; the new
-  backends are *additive*, never a replacement.
-- **WASM backend — the self-contained web path.** Direct kama → wasm (no `emcc`), run in the browser or
-  under Wasmtime. The web scripting/engine substrate; C→emcc remains the maximal-compatibility option.
-- **Bytecode + VM backend — the self-contained native REPL.** A kama-owned VM gives a true interactive
-  REPL with zero external tooling.
+**Sequencing — polymorphic emitter first, a shared IR only when the VM forces it.** The emitter
+(`kama.cemit.*`, ~150 methods) doesn't merely translate syntax — it *bakes in* the semantic lowering
+(monomorphization, RAII drop insertion, vtable layout, match/operator desugaring). A "shared IR" is just
+that lowering **factored out** into a data structure the backends consume — so *polymorphic emitter* and
+*shared IR* are the same idea at two points on a spectrum, not opposed choices. The pragmatic path:
 
-**The IR is the crux, and the real work.** Today there is no IR: the C emitter writes C text directly and
-*bakes in* monomorphization, RAII drop insertion, vtable layout, and match/operator desugaring
-(`kama.cemit.*`, ~150 methods). The refactor pulls that **semantic lowering up into the shared IR**,
-leaving each backend a comparatively dumb renderer. Design constraints:
+1. **Refactor the emitter to an abstract interface**, C as the first implementation, the shared lowering in
+   the base. Low risk.
+2. **Add a direct-wasm backend** as a sibling — same lowering, different rendering. Drops the `emcc`
+   dependency for self-contained web/scripting builds and proves the seam. (C→emcc still produces the
+   maximal-compatibility release wasm.)
+3. **Extract an explicit IR only when the VM needs it** — a bytecode VM is a genuinely different execution
+   model (stack/register machine), so re-deriving the lowering a *third* time is where a shared lowered form
+   actually pays off. Build the IR then; the VM becomes a low-drift renderer of the *same* lowered form the
+   C backend uses (containing the "second execution semantics" drift risk).
 
-- **Keep the IR high-level and structured** (retain `if`/`while`/`for` and named locals), *not*
-  SSA/basic-blocks — so the C backend can still emit the readable, `#line`-mapped C that is a headline
-  feature.
+**Design constraints (hold across the whole spectrum):**
+- **Keep the lowered form high-level and structured** (retain `if`/`while`/`for` and named locals), *not*
+  SSA/basic-blocks — so the C backend still emits the readable, `#line`-mapped C that is a headline feature.
 - **Move the runtime into kama.** Collections/smart-pointers/`string` live as hand-tuned C in
-  `kama_runtime.h` today (with a growing share already ported to kama library types); a wasm or VM
-  backend can't `#include` it. Finishing the port so those flow through the shared IR and monomorphize into
-  *any* backend makes multi-backend and the kama-stdlib/self-hosting goal the **same project**: do it once,
-  all three backends inherit it.
-- **Contain semantic drift.** A VM is a second execution semantics — the main risk. Having the C backend
-  and the VM consume the *same lowered IR* reduces drift from "two languages" to "two renderers of one IR."
-  Build the IR first; then a VM is a legitimate, low-drift option.
+  `kama_runtime.h` (a growing share already ported to kama library types); a wasm or VM backend can't
+  `#include` it. Finishing the port makes multi-backend and the kama-stdlib/self-hosting goal the **same
+  project** — do it once, all backends inherit it.
 
-**Speed ladder** (fastest last): tree-walk < bytecode VM < TinyCC-JIT < AOT C→clang. If raw scripting speed
-dominates, JIT wins; if zero-install + interactivity dominate, the VM / direct-wasm win. The "binary is the
-only tool" constraint tilts the *default* iteration toward the VM + direct-wasm, with C/JIT for native speed
-or C compatibility.
+**Direct-wasm optimization — lean on Binaryen, don't write an optimizer.** A naive direct `kama → wasm`
+backend emits ~`-O0`/`-O1`-quality code (no inlining, redundant locals). The fix is **`wasm-opt`**
+(Binaryen), a standalone optimizer that runs on *any* wasm regardless of producer — the AssemblyScript
+model. `kama → wasm → wasm-opt -O3` recovers most of the gap (inlining, DCE, local coalescing, precompute).
+It is **not** equal to `C→emcc -O3`: LLVM's mid-level IR optimizer (alias analysis, loop transforms) and its
+SIMD **autovectorization** stay ahead — so heavy numeric loops still favor the release tier, while typical
+logic/scripting is near-parity. The honest trade: direct-wasm buys **compile speed + zero dependency + a
+REPL** (which emcc structurally cannot give), at **near-native**, not emcc-`-O3`, runtime.
+
+**Speed ladder** (fastest last): tree-walk < bytecode VM < direct-wasm/`wasm-opt` < AOT C→clang. The "binary
+is the only tool" constraint tilts the *default* iteration toward the VM + direct-wasm; C/emcc is the release
+path.
 
 - **Why it beats other scripting languages:** Python/Ruby/Lua are bytecode interpreters; kama scales from a
-  self-contained VM up to JIT/AOT-native — the same source, at or near native speed.
-- *Licensing note:* TinyCC is LGPL; if a bundled JIT ships, confirm the linking terms against the
-  MIT/permissive goal (GOALS #8). The VM / direct-wasm paths sidestep this entirely.
+  self-contained VM up to AOT-native — the *same source*, at or near native speed.
+- **Licensing.** **Binaryen (`wasm-opt`) is Apache-2.0** — clean against the MIT/permissive goal (GOALS #8),
+  so the direct-wasm path is unencumbered. A bundled **TinyCC**-JIT (a near-instant native `kama run`) is a
+  possible *optional* alternative but is **LGPL** — confirm the linking terms before shipping it; the VM /
+  direct-wasm paths sidestep it entirely.
 
 ## 8. Engine track (product north star)
 
@@ -311,3 +346,11 @@ near-parity on `alloc`/`dispatch`.
 - **FreeBSD CI** — a non-blocking `vmactions/freebsd-vm` job (Windows is now proven; FreeBSD is the next
   platform to cover).
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.
+- **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries
+  distribute without vendoring — the point at which the **orphan rule** (§3, retroactive conformance) stops
+  being a nicety and becomes load-bearing (separately-compiled packages can no longer be globally
+  dedup-checked at once). Gates a real third-party ecosystem.
+- **Longer-term — a "node.js-class" application framework in kama.** A fast, low-overhead server/app
+  framework (HTTP already dogfooded via `examples/httpd`), aiming to beat the Node/Deno overhead profile on
+  the no-GC/AOT (or VM-scripted) runtime — the flagship *application* of the language + package manager +
+  scripting tiers together. Aspirational, post-ecosystem.
