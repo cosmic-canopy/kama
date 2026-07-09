@@ -12,7 +12,7 @@ TSV = os.path.join(ROOT, "bench/build/results.tsv")
 OUT_MD = os.path.join(ROOT, "docs/benchmarks/RESULTS.md")
 OUT_JSON = os.path.join(ROOT, "docs/benchmarks/results.json")
 
-WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr"]
+WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr", "map"]
 NATIVE = ["kama", "c", "cpp", "rust", "go", "csharp", "java", "lua", "python"]
 WASM = ["kama-wasm", "js", "ts"]
 LABEL = {"kama": "kama", "c": "C", "cpp": "C++", "rust": "Rust", "go": "Go",
@@ -193,6 +193,10 @@ diverged:
   Each language uses its idiomatic callable — kama `fnptr` (a bare C function pointer, zero-cost), C/C++
   function pointers, Rust `fn` pointers, Go func values, **C# `Func<>` delegates**, **Java
   `LongUnaryOperator` method refs**, Lua/Python/JS functions.
+- **map** — a hash-map throughput test: insert 100 000 int keys, then look every key up 10× in a
+  scrambled (bijective LCG) order (hash + probe cost). Each language uses its idiomatic map — kama
+  `Map<int32, int64>`, C **hand-rolled open-addressing** (no stdlib hashmap), C++ `unordered_map`, Rust
+  `HashMap`, Go `map`, C# `Dictionary`, Java `HashMap` (boxed), Lua table, Python `dict`, JS `Map`.
 
 ## NATIVE — execution time (median, ms)
 
