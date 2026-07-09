@@ -1,0 +1,27 @@
+// Map growth + rehash: fill well past the 0.75 load factor (several doublings), then confirm EVERY key
+// still resolves to its value after the buffers were reallocated and entries re-homed.
+import std::collections::{Map};
+
+fn string keyN(int32 n) {
+    string s = "k";
+    int32 i = 0;
+    while (i < n) { s = s + "x"; i = i + 1; }   // distinct-length keys "k", "kx", "kxx", …
+    return s;
+}
+
+fn int main() {
+    Map<string, int32> m = Map();
+    int32 i = 0;
+    while (i < 50) { m.put(key: keyN(n: i), value: i * 2); i = i + 1; }   // forces several grows
+
+    int32 r = 0;
+    r = r + m.length();                              // 50
+    i = 0; int32 ok = 0;
+    while (i < 50) {
+        int32 v = match (m.get(key: keyN(n: i))) { case Some(x): x; case None: 0 - 1; };
+        if (v == i * 2) { ok = ok + 1; }
+        i = i + 1;
+    }
+    r = r + ok;                                      // +50 -> 100
+    return r;   // 100
+}

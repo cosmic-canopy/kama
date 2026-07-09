@@ -1,0 +1,24 @@
+// Array completion: contains / indexOf over an Equatable element. Uses a user `value` element (Tag) — its
+// `equals` routes the same generic `when T: Equatable` path as `string`; a value element also sidesteps the
+// still-open owning-element place-store (`Array<string>` `a[i] = <owned>`, ROADMAP §1).
+import std::collections::{Array};
+
+type value Tag implements Equatable {
+    int32 id;
+    public Tag(int32 id) { this.id = id; }
+    public fn bool equals(Tag other) { return this.id == other.id; }
+}
+
+fn int main() {
+    Array<Tag> a = Array(size: 3);
+    Tag t0 = Tag(id: 10); Tag t1 = Tag(id: 20); Tag t2 = Tag(id: 30);
+    a[0] = t0; a[1] = t1; a[2] = t2;
+    int32 r = 0;
+    Tag q20 = Tag(id: 20);
+    Tag q30 = Tag(id: 30);
+    Tag q99 = Tag(id: 99);
+    if (a.contains(item: q20)) { r = r + 10; }   // +10
+    r = r + a.indexOf(item: q30);                // +2 -> 12
+    if (a.indexOf(item: q99) < 0) { r = r + 8; } // +8 -> 20 (absent)
+    return r;   // 20
+}

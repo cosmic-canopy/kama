@@ -297,6 +297,12 @@ static const char* PRELUDE_SRC =
     // that implements it is duplicable. Together, `Copyable, !Movable` = shared-ownership (retain on copy).
     "type contract Movable for resource { }\n"
     "type contract Copyable for resource { fn This copy(); }\n"
+    // Hashing + equality opt-in (the `Map`/`Set` key protocol, nominal). A generic bound `<K: Hashable +
+    // Equatable>` is checked STRUCTURALLY (the type must expose a public `hash()` / `equals(This)`), so
+    // `string` satisfies `Equatable` through its built-in `equals` with no impl block; `Hashable` it gets
+    // from the pure-kama `implements` below. Both live in the prelude because they are language-level bounds.
+    "type contract Hashable for both { fn uint64 hash(); }\n"
+    "type contract Equatable for both { fn bool equals(This other); }\n"
     // Iteration opt-in (the `foreach` protocol, nominal). An iterator declares which it provides;
     // `foreach` verifies the declaration and emits DIRECT (monomorphized) calls — no vtable, zero-cost.
     // `Iterator<T>` yields each element BY VALUE (a copy); `IteratorMut<T>` yields a mutable place

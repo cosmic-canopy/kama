@@ -1,0 +1,163 @@
+namespace std::collections;
+export { Map };
+
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn Ptr calloc(usize count, usize size);
+extern fn void free(Ptr p);
+
+// `string`'s `Hashable` conformance, written in pure kama (retroactive `implements` — NO compiler
+// blessing; the prelude declares the `Hashable`/`Equatable` contracts). This is std's mechanism for
+// primitive keys, co-located with its one consumer. FNV-1a over the UTF-8 bytes: content-based, so a
+// concat key and a literal of the same text hash equal and `Map<string, V>` lookups hit. (`Equatable`
+// for `string` is satisfied structurally by its built-in `equals`, so it needs no impl block.)
+implements Hashable for string {
+    public fn uint64 hash() {
+        uint64 h = 2166136261ui64;                          // FNV-1a offset basis
+        int32 i = 0;
+        while (i < cast<int32>(this.length())) {
+            h = (h ^ cast<uint64>(this[i])) * 16777619ui64;   // xor the byte, mul the FNV prime
+            i = i + 1;
+        }
+        return h;
+    }
+}
+
+// A general open-addressing hash map over `K: Hashable + Equatable` -> `V`. Linear probing with
+// tombstones; grows (and sheds tombstones) at a 0.75 load factor. Move-only: it owns three parallel
+// heap buffers (keys, values, per-slot state) and every live key/value, dropping them at end of life.
+//
+//   state[i]: 0 = EMPTY (never used), 1 = FULL (a live entry), 2 = TOMB (removed — probe past it).
+//
+// Keys are hashed/compared by content, so a lookup key built any way finds the stored entry. Lookups
+// borrow the key (`ref K`); `put` consumes the key + value it stores (by value). To duplicate a map,
+// rebuild it — a two-type-parameter `Copyable` isn't expressible with single-parameter `when` today.
+type resource Map<K: Hashable + Equatable, V> {
+    Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 len; int32 cap; int32 tombs; int32 mods;
+
+    public Map() {
+        unsafe {
+            this.keys = cast<Ptr<K>>(cast<usize>(0));
+            this.vals = cast<Ptr<V>>(cast<usize>(0));
+            this.state = cast<Ptr<uint8>>(cast<usize>(0));
+        }
+        this.len = 0; this.cap = 0; this.tombs = 0; this.mods = 0;
+    }
+
+    public fn int32 length() { return this.len; }
+
+    // The slot an entry lives in (or would): probe from hash(key) until the key is found (returns its
+    // FULL slot) or an EMPTY slot ends the run (returns -1). Tombstones are probed past, never stop it.
+    fn int32 slotOf(ref K key) {
+        if (this.cap == 0) { return 0 - 1; }
+        int32 i = cast<int32>(key.hash() % cast<uint64>(this.cap));
+        while (true) {
+            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+            if (s == 0ui8) { return 0 - 1; }                                  // EMPTY — not present
+            if (s == 1ui8) { unsafe { if (this.keys[i].equals(other: key)) { return i; } } }
+            i = i + 1; if (i >= this.cap) { i = 0; }
+        }
+        return 0 - 1;
+    }
+
+    public fn bool contains(ref K key) { return this.slotOf(key: key) >= 0; }
+
+    // Deep-copy a stored value through a typed `ref V` borrow. `copy this.vals[i]` directly can't deep-copy
+    // an owning element: `this.vals` is a raw `Ptr<V>`, whose index has no known element class, so the `copy`
+    // marker is dropped and it aliases (a use-after-free once both are dropped). Routing through a `ref V`
+    // param gives the emitter the concrete `V`, so `copy v` emits the real element `__copy`.
+    fn V cloneVal(ref V v) when V: Copyable { return copy v; }
+
+    public fn Optional<V> get(ref K key) when V: Copyable {
+        int32 i = this.slotOf(key: key);
+        if (i < 0) { return Optional::None; }
+        unsafe { return Optional::Some(value: this.cloneVal(v: this.vals[i])); }   // hand back a copy; map keeps its own
+    }
+
+    // Insert or overwrite. Consumes both `key` and `value` (owns what it stores). On overwrite the
+    // existing key stays, so the incoming key and the old value are dropped. The probe loop only LOCATES
+    // the slot; the moves (`give`) happen after it, since `give` inside a loop is rejected (it could
+    // re-move on a later iteration — here the loop can't, but the check is conservative).
+    public fn void put(K key, V value) {
+        if ((this.len + this.tombs + 1) * 4 >= this.cap * 3) { this.grow(); }
+        int32 i = cast<int32>(key.hash() % cast<uint64>(this.cap));
+        int32 slot = 0 - 1;                                                   // chosen slot (set = loop done)
+        int32 free = 0 - 1;                                                   // first tomb we may reuse
+        bool overwrite = false;
+        while (slot < 0) {
+            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+            if (s == 0ui8) { slot = free >= 0 ? free : i; }                  // EMPTY — key is new
+            else if (s == 2ui8) { if (free < 0) { free = i; } }              // TOMB — remember, keep probing
+            else { unsafe { if (this.keys[i].equals(other: key)) { slot = i; overwrite = true; } } }
+            if (slot < 0) { i = i + 1; if (i >= this.cap) { i = 0; } }
+        }
+        if (overwrite) {                                                     // replace the stored (equal) key + value
+            unsafe {
+                drop(value: this.keys[slot]); drop(value: this.vals[slot]);
+                this.keys[slot] = give key; this.vals[slot] = give value;
+            }
+            this.mods = this.mods + 1;
+        } else {
+            if (free >= 0) { this.tombs = this.tombs - 1; }                   // reclaiming a tombstone
+            unsafe { this.keys[slot] = give key; this.vals[slot] = give value; this.state[slot] = 1ui8; }
+            this.len = this.len + 1; this.mods = this.mods + 1;
+        }
+    }
+
+    // Remove the entry for `key`. Returns whether one was present. The slot becomes a tombstone so the
+    // probe runs of other keys stay intact; its key + value are dropped.
+    public fn bool remove(ref K key) {
+        int32 i = this.slotOf(key: key);
+        if (i < 0) { return false; }
+        unsafe { drop(value: this.keys[i]); drop(value: this.vals[i]); this.state[i] = 2ui8; }
+        this.len = this.len - 1; this.tombs = this.tombs + 1; this.mods = this.mods + 1;
+        return true;
+    }
+
+    public fn void clear() {
+        int32 i = 0;
+        while (i < this.cap) {
+            unsafe { if (this.state[i] == 1ui8) { drop(value: this.keys[i]); drop(value: this.vals[i]); }
+                     this.state[i] = 0ui8; }
+            i = i + 1;
+        }
+        this.len = 0; this.tombs = 0; this.mods = this.mods + 1;
+    }
+
+    // Grow to the next capacity and re-home the live entries (which sheds all tombstones). Each entry is
+    // RELOCATED bitwise into the fresh buffers — a move, not a copy or a drop — then the old buffers are
+    // freed raw (no per-slot dtor: ownership already left them). Mirrors `List`'s realloc relocation.
+    fn void grow() {
+        int32 nc = this.cap == 0 ? 8 : this.cap * 2;
+        Ptr<K> nk; Ptr<V> nv; Ptr<uint8> ns;
+        unsafe {
+            nk = cast<Ptr<K>>(malloc(n: cast<usize>(nc) * sizeof(K)));
+            nv = cast<Ptr<V>>(malloc(n: cast<usize>(nc) * sizeof(V)));
+            ns = cast<Ptr<uint8>>(calloc(count: cast<usize>(nc), size: sizeof(uint8)));
+        }
+        int32 i = 0;
+        while (i < this.cap) {
+            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+            if (s == 1ui8) {
+                int32 j = 0;
+                unsafe {
+                    j = cast<int32>(this.keys[i].hash() % cast<uint64>(nc));
+                    while (ns[j] == 1ui8) { j = j + 1; if (j >= nc) { j = 0; } }
+                    nk[j] = this.keys[i]; nv[j] = this.vals[i]; ns[j] = 1ui8;   // bitwise relocate (no drop)
+                }
+            }
+            i = i + 1;
+        }
+        unsafe { free(p: cast<Ptr>(this.keys)); free(p: cast<Ptr>(this.vals)); free(p: cast<Ptr>(this.state)); }
+        this.keys = nk; this.vals = nv; this.state = ns; this.cap = nc; this.tombs = 0;
+    }
+
+    ~Map() {   // drop each live key + value, then free the three buffers
+        int32 i = 0;
+        while (i < this.cap) {
+            unsafe { if (this.state[i] == 1ui8) { drop(value: this.keys[i]); drop(value: this.vals[i]); } }
+            i = i + 1;
+        }
+        unsafe { free(p: cast<Ptr>(this.keys)); free(p: cast<Ptr>(this.vals)); free(p: cast<Ptr>(this.state)); }
+    }
+}

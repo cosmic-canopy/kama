@@ -2725,6 +2725,10 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     ci.copyable = isStr;                        // `string` is deep-copyable (kama_string__copy) -> satisfies
                                                // `Copyable` as a type arg, so `List<string>` gets its
                                                // `when T: Copyable` methods (copy / by-value foreach).
+    if (isStr) {                                // `string` IS `Equatable` — it has a real `equals`. Record it
+        ci.interfaces.push_back("Equatable");   // NOMINALLY so `when T: Equatable` gating (satisfiesBound, which
+        ci.retroInterfaces.push_back("Equatable"); // reads `interfaces`) keeps `List<string>.contains` etc.;
+    }                                           // retroInterfaces => static dispatch only, no fat-pointer vtable.
     ci.hasCtor = !isStr;                        // strings come from literals/concat
     ci.ctorParams = (kind == CollKind::Array)
                         ? std::vector<ParamSig>{ ParamSig{"size", false, ""} }
@@ -2736,6 +2740,8 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.params = std::move(params);
         mi.returnType = ret;
         mi.isIntrinsic = true;
+        mi.visibility = Visibility::Public;   // an intrinsic (string/List/Array op) IS that type's public API —
+                                              // so a structural bound like `<K: Equatable>` sees string's `equals`
         ci.methods[mname] = mi;
     };
     if (kind == CollKind::String) {
@@ -3935,6 +3941,12 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     // (`m[i]` in `m[i][j]`) becomes `(*Outer__at(&m, i))` so `&recvExpr` is a real `T*`, not the
     // address of a by-value `__get` rvalue. This is what makes chained/field-write indexing valid C.
     recvExpr = emitPlace(recv);
+    // `this` inside a retro `implements C for <collection>` body is `self` — ALREADY a pointer, not a
+    // by-value lvalue. Every caller takes `&(recvExpr)`, so hand back the place `(*self)` → `&(*self)` == self
+    // (without this, `this[i]` emits `__get(&self, i)`, indexing the pointer's own address — a string-key
+    // `hash`/`equals` would read struct bytes, not content, and Map lookups would miss).
+    if (dynamic_cast<ThisAccessNode*>(recv.get()))
+        recvExpr = "(*" + recvExpr + ")";
     idx      = idxExpr ? emitExpression(idxExpr) : "0";
     return true;
 }
@@ -4805,7 +4817,11 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
                          + paramName + "`").c_str(), line);
             continue;
         }
-        if (!ci || !classSatisfiesBound(ci, contract))
+        // A retroactive `implements <bound> for <this type>` also satisfies it. Consult the pre-scan so a
+        // bound check that runs during collection (before applyRetroactive injects the methods) still sees
+        // it — matched on the raw source name, the same key both the pre-scan and applyRetroactive use.
+        bool retro = _retroConformances.count(cls) && _retroConformances[cls].count(*b->value);
+        if (!retro && (!ci || !classSatisfiesBound(ci, contract)))
             unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
                          + "` does not satisfy bound `" + *b->value + "`").c_str(), line);
     }
@@ -5505,11 +5521,16 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                    || dynamic_cast<ThisAccessNode*>(m->subject.get())
                    || dynamic_cast<ElementAccessNode*>(m->subject.get());
     std::string subjOwner;
+    // Evaluate the subject FIRST, then flush any temps it hoisted (e.g. a `string` literal materialized for
+    // a `ref string` param — `match (map.get("k"))`), so their decls land BEFORE the subject line, not
+    // inside the first arm body (which would leave them undeclared at the point of use).
+    std::string subjExpr = emitExpression(m->subject);
+    flushHoisted(depth);
     if (subjLvalue) {
-        indent(depth); *_out << subjCls << "* " << sp << " = &(" << emitExpression(m->subject) << ");\n";
+        indent(depth); *_out << subjCls << "* " << sp << " = &(" << subjExpr << ");\n";
     } else {
         subjOwner = "__msubj" + std::to_string(_tempCounter++);
-        indent(depth); *_out << subjCls << " " << subjOwner << " = " << emitExpression(m->subject) << ";\n";
+        indent(depth); *_out << subjCls << " " << subjOwner << " = " << subjExpr << ";\n";
         indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
     }
     indent(depth); *_out << "switch (" << sp << "->tag) {\n";
@@ -6652,8 +6673,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
                 // value, which must be a null (no-op) handle — the library dtors guard a null pointer.
                 // (Plain class-value fields still need their own ctor — a separate, deferred gap.)
                 std::string fct = cType(f.type);
+                // Also a destructible `resource` field (e.g. a `Map`/`Set` member, or any user resource
+                // that owns a buffer): zero it so the FIRST `this.f = give x` releases a valid empty value
+                // (cap=0 / NULL → its dtor is a no-op), not uninitialized garbage — a garbage free is UB
+                // that aborts only when the stack happens to be non-null.
                 if (_classes.count(fct) && (_classes[fct].isCollection
-                        || _classes[fct].copyable || !heapOwnerTarget(fct).empty())) {
+                        || _classes[fct].copyable || !heapOwnerTarget(fct).empty()
+                        || (_classes[fct].destructible && _classes[fct].kind == TypeKind::Resource))) {
                     indent(1);
                     *_out << "self->" << f.name << " = (" << fct << "){0};\n";
                 }
@@ -7315,6 +7341,19 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     linkBases();
     buildVtables();
     resolveFriends();   // after all classes/functions are registered
+    // Pre-scan retroactive `implements C for T` blocks into _retroConformances (target cType -> contracts)
+    // BEFORE collectCollections. A `Map<string, V>` local drives a generic-type-arg bound check DURING
+    // collection, which is earlier than applyRetroactive injects `hash` into `string`; without this the
+    // check would falsely reject `string: Hashable`. The real methods + coherence are still handled below.
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
+        for (auto& decl : *u->codeDeclarationList) {
+            auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
+            if (ri && ri->contract && ri->contract->value && ri->target && ri->target->value)
+                _retroConformances[cType(ri->target)].insert(*ri->contract->value);
+        }
+    }
     // register collections BEFORE the destructibility fixpoint, so a class whose only
     // owning member is a collection field (`List<T>` etc., no explicit `~dtor`) is correctly seen
     // as a resource (destructible + move-only). computeDestructible then re-derives each

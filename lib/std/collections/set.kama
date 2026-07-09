@@ -1,0 +1,20 @@
+namespace std::collections;
+import std::collections::{Map};
+export { Set };
+
+// A hash set over `K: Hashable + Equatable` — a thin wrapper on `Map<K, Unit>` (the value carries no
+// information, so `Unit` is the zero-size payload). Move-only: it owns the backing map, which owns every
+// key; the compiler-derived destructor drops the map (and thus the keys). Lookups borrow the key.
+type resource Set<K: Hashable + Equatable> {
+    Map<K, Unit> m;
+
+    // `this.m = Map()` won't infer the map's type args from the field, so build it in a typed local
+    // first, then move it in (the tracked bare-generic-ctor-in-a-non-local-init gap).
+    public Set() { Map<K, Unit> inner = Map(); this.m = give inner; }
+
+    public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
+    public fn bool contains(ref K key) { return this.m.contains(key: key); }
+    public fn bool remove(ref K key) { return this.m.remove(key: key); }
+    public fn int32 length() { return this.m.length(); }
+    public fn void clear() { this.m.clear(); }
+}

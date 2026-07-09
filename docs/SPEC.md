@@ -125,6 +125,45 @@ call on an element** works directly — `list[i].method()` borrows the element *
 mutates the stored element; a `const` collection allows only const methods on its elements. Elements enter a
 collection by the ownership rules below (`give` to move, `copy` to duplicate, a `value` copies).
 
+`List` / `Array` also offer `reserve(n:)` (List — preallocate to skip incremental growth), `remove(index:)`
+(List — drop the element and shift the tail), `clear()` (List), and `contains(item:)` / `indexOf(item:)`
+(both — present **only when the element is `Equatable`**, i.e. `string` or a user type with `equals`).
+
+### Hash maps & sets (`std::collections`) ✅
+
+`Map<K, V>` (open-addressing, linear-probing, tombstoned, grows at 0.75 load) and `Set<K>` (a thin wrapper
+over `Map<K, Unit>`), over a key `K: Hashable + Equatable`. These two contracts are in the **prelude**:
+
+```kama
+type contract Hashable  for both { fn uint64 hash(); }
+type contract Equatable for both { fn bool equals(This other); }
+```
+
+Keys are hashed and compared **by content**, so a lookup key built any way (a concat, a fresh
+construction) finds the stored entry. `string` satisfies both out of the box — `Equatable` structurally
+through its built-in `equals`, `Hashable` via a **pure-kama** `implements Hashable for string` (FNV-1a) that
+ships in `std::collections` (the retroactive-conformance mechanism, *no* compiler blessing). A **user key**
+just declares `implements Hashable, Equatable` and provides the two methods.
+
+```kama
+import std::collections::{Map, Set};
+
+Map<string, int32> counts = Map();
+counts.put(key: "a", value: 1);
+counts.put(key: "a", value: 2);                        // overwrite (drops the old value)
+int32 v = match (counts.get(key: "a")) { case Some(x): x; case None: 0; };   // 2
+counts.remove(key: "a");   bool has = counts.contains(key: "b");   int32 n = counts.length();
+
+Set<string> seen = Set();
+seen.add(key: "x");   bool member = seen.contains(key: "x");
+```
+
+`Map` is **move-only**: it owns its keys and values (dropping them on overwrite, `remove`, `clear`, and at
+end of life — ASan/UBSan-clean for owning keys *and* values, e.g. `Map<string, List<string>>`). Lookups
+**borrow** the key (`ref K`), so they don't consume a key you're holding; `get(key:)` returns
+`Optional<V>` with a **deep copy** of the value (present only when `V` is `Copyable`). Keys that are inline
+rvalues (a user-type ctor, non-`string` primitives) are bound to a local first; see *Known limitations*.
+
 ## Smart pointers ✅
 
 The smart pointers are a **standard library**, not compiler intrinsics: `Owned`/`Shared`/`Weak` live in

@@ -1,0 +1,24 @@
+// Map<string, V> core: put / get (-> Optional) / contains / remove / overwrite / length, string keys.
+// Keys are hashed + compared by content (the prelude `Hashable`/`Equatable` contracts; `hash` from std's
+// pure-kama `implements Hashable for string`, `equals` structural), so a lookup key built any way hits.
+import std::collections::{Map};
+
+fn int main() {
+    Map<string, int32> m = Map();
+    m.put(key: "one", value: 1);
+    m.put(key: "two", value: 2);
+    m.put(key: "three", value: 3);
+    m.put(key: "two", value: 22);        // overwrite — length unchanged, value replaced
+
+    int32 r = 0;
+    r = r + m.length();                   // 3
+    int32 a = match (m.get(key: "one"))  { case Some(v): v; case None: 0; };    // 1
+    int32 b = match (m.get(key: "t" + "wo")) { case Some(v): v; case None: 0; };  // 22 (concat key still hits)
+    int32 c = match (m.get(key: "kama")) { case Some(v): 100; case None: 5; };  // 5 (absent)
+    r = r + a + b + c;
+    if (m.contains(key: "three")) { r = r + 4; }         // +4
+    if (m.remove(key: "one"))     { r = r + 7; }         // +7
+    if (!m.contains(key: "one"))  { r = r + 3; }         // +3
+    r = r + m.length();                   // +2
+    return r;   // 3+1+22+5+4+7+3+2 = 47
+}

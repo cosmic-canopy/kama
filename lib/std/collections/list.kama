@@ -81,6 +81,46 @@ type resource List<T> implements Copyable(bare: give) when T: Copyable, Iterable
         return result;
     }
 
+    // Grow the buffer so at least `n` elements fit without a later reallocation (a no-op if already big
+    // enough). Lets a caller who knows the size up front skip the incremental doublings.
+    public fn void reserve(int32 n) {
+        if (n > this.cap) {
+            unsafe { this.data = cast<Ptr<T>>(realloc(p: cast<Ptr>(this.data), n: cast<usize>(n) * sizeof(T))); }
+            this.cap = n;
+        }
+    }
+
+    // Remove the element at `index` (dropping it) and shift the tail down one slot. Bounds-checked.
+    public fn void remove(int32 index) {
+        if (index < 0 || index >= this.len) { panic(msg: "List.remove index out of bounds"); }
+        drop(value: this[index]);
+        int32 i = index;
+        // Relocate the tail down one slot through a LOCAL pointer alias: `d[i] = d[i+1]` is a raw store
+        // (a bitwise move that leaves no owner holding a moved-from field), whereas `this.data[i] = …`
+        // routes an owning element through the move-tracker and is rejected.
+        Ptr<T> d = this.data;
+        unsafe { while (i + 1 < this.len) { d[i] = d[i + 1]; i = i + 1; } }
+        this.len = this.len - 1;
+        this.mods = this.mods + 1;                     // structural change — invalidates any live iterator
+    }
+
+    // Drop every element and reset to empty (keeps the allocated buffer for reuse).
+    public fn void clear() {
+        int32 i = 0;
+        while (i < this.len) { drop(value: this[i]); i = i + 1; }
+        this.len = 0;
+        this.mods = this.mods + 1;
+    }
+
+    // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
+    // (routes through its `equals`, so it works for `string` and any user `Equatable` element).
+    public fn bool contains(ref T item) when T: Equatable { return this.indexOf(item: item) >= 0; }
+    public fn int32 indexOf(ref T item) when T: Equatable {
+        int32 i = 0;
+        while (i < this.len) { if (this[i].equals(other: item)) { return i; } i = i + 1; }
+        return 0 - 1;
+    }
+
     ~List() {   // drop each element (a no-op for a value), then free the buffer
         int32 i = 0;
         while (i < this.len) { drop(value: this[i]); i = i + 1; }

@@ -1,15 +1,16 @@
-// Retroactive conformance for a PRIMITIVE: `implements Hashable for string` gives the built-in `string`
-// type a real (pure-kama) FNV-1a hash, with no compiler blessing — the exact mechanism std will use so
-// `Map<string, V>` keys hash. Exercises the generic bound `<K: Hashable>` with a primitive arg + method
-// bodies (`this.length()`, `this[i]`) on a primitive receiver. Returns 42.
-type contract Hashable for both { fn uint64 hash(); }
-
+// Retroactive conformance for the PRIMITIVE `string`: a pure-kama `implements Hashable for string` (the
+// prelude declares the `Hashable`/`Equatable` contracts; the impl is written here — NO compiler blessing).
+// This is the exact mechanism `lib/std/collections/map.kama` uses to hash string keys. Exercises a generic
+// bound `<K: Hashable + Equatable>` with a primitive `string` arg, method bodies on a primitive receiver
+// (`this.length()`, `this[i]`), and `Equatable` satisfied STRUCTURALLY through string's built-in `equals`.
+// The key invariant (what `Map<string, V>` relies on): a DIFFERENTLY-sourced key — a concat with a distinct
+// data pointer — hashes AND compares equal to the literal (content-based, not pointer-based). Returns 42.
 implements Hashable for string {
     public fn uint64 hash() {
-        uint64 h = 2166136261ui64;                         // FNV-1a basis
+        uint64 h = 2166136261ui64;                         // FNV-1a offset basis
         int32 i = 0;
         while (i < cast<int32>(this.length())) {
-            h = (h ^ cast<uint64>(this[i])) * 16777619ui64;   // xor the byte, mul the prime
+            h = (h ^ cast<uint64>(this[i])) * 16777619ui64;   // xor the byte, mul the FNV prime
             i = i + 1;
         }
         return h;
@@ -18,12 +19,15 @@ implements Hashable for string {
 
 fn uint64 hashOf<K: Hashable>(K k) { return k.hash(); }    // string must satisfy the bound
 
+fn bool sameKey<K: Hashable + Equatable>(K a, K b) {
+    return a.hash() == b.hash() && a.equals(other: b);
+}
+
 fn int main() {
-    uint64 a = hashOf(k: "kama");
-    uint64 b = hashOf(k: "kama");
-    uint64 c = hashOf(k: "lang");
     int32 r = 0;
-    if (a == b) { r = r + 21; }        // deterministic — equal keys hash equal
-    if (a != c) { r = r + 21; }        // distinct keys differ (FNV-1a)
-    return r;                           // 42
+    if (hashOf(k: "kama") == hashOf(k: "kama")) { r = r + 10; }   // deterministic — equal keys hash equal
+    if (hashOf(k: "kama") != hashOf(k: "lang")) { r = r + 11; }   // distinct content differs (FNV-1a)
+    if (sameKey(a: "kam" + "a", b: "kama"))      { r = r + 10; }  // content-based: concat == literal
+    if (!sameKey(a: "kama", b: "lang"))          { r = r + 11; }  // different content, not equal
+    return r;                                                      // 42
 }

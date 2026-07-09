@@ -1,0 +1,29 @@
+// Map generality beyond primitives: a USER `value` key that nominally `implements Hashable, Equatable`
+// (the prelude contracts) is a valid `Map<K, V>` key — the same generic `<K: Hashable + Equatable>` path
+// as `string`, no special-casing. Lookups borrow the key (`ref K`), so the keys are bound to locals here.
+import std::collections::{Map};
+
+type value Point implements Hashable, Equatable {
+    int32 x; int32 y;
+    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
+    public fn uint64 hash() { return cast<uint64>(this.x) * 2654435761ui64 + cast<uint64>(this.y); }
+    public fn bool equals(Point other) { return this.x == other.x && this.y == other.y; }
+}
+
+fn int main() {
+    Map<Point, int32> m = Map();
+    m.put(key: Point(x: 1, y: 2), value: 10);
+    m.put(key: Point(x: 3, y: 4), value: 20);
+    m.put(key: Point(x: 1, y: 2), value: 99);       // overwrite (equal key)
+
+    int32 r = 0;
+    r = r + m.length();                              // 2
+    Point p12 = Point(x: 1, y: 2);
+    Point p34 = Point(x: 3, y: 4);
+    Point p99 = Point(x: 9, y: 9);
+    int32 a = match (m.get(key: p12)) { case Some(v): v; case None: 0; };   // 99
+    int32 b = match (m.get(key: p34)) { case Some(v): v; case None: 0; };   // 20
+    r = r + a + b;
+    if (!m.contains(key: p99)) { r = r + 1; }        // absent -> +1
+    return r;   // 2+99+20+1 = 122
+}

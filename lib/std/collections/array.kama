@@ -50,6 +50,15 @@ type resource Array<T> implements Copyable(bare: give) when T: Copyable, Iterabl
     public fn ArrayIter<T> iterator() when T: Copyable { return ArrayIter::<T>(data: this.data, len: this.size); }
     public fn ArrayIterMut<T> iterMut() { return ArrayIterMut::<T>(data: this.data, len: this.size); }
 
+    // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
+    // (routes through its `equals`, so it works for `string` and any user `Equatable` element).
+    public fn bool contains(ref T item) when T: Equatable { return this.indexOf(item: item) >= 0; }
+    public fn int32 indexOf(ref T item) when T: Equatable {
+        int32 i = 0;
+        while (i < this.size) { if (this[i].equals(other: item)) { return i; } i = i + 1; }
+        return 0 - 1;
+    }
+
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
     public fn Array<T> copy() {
         Array<T> result = Array(size: this.size);

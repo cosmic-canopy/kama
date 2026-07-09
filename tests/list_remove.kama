@@ -1,0 +1,22 @@
+// List completion: reserve / remove(index) (drops + shifts) / clear / contains / indexOf, over an OWNING
+// element (List<string>) so ASan covers the element drops on remove + clear.
+import std::collections::{List};
+
+fn int main() {
+    List<string> xs = List();
+    xs.reserve(n: 8);                       // preallocate — no reallocation across the adds
+    xs.add(item: "a"); xs.add(item: "b"); xs.add(item: "c"); xs.add(item: "d");
+
+    int32 r = 0;
+    r = r + xs.length();                    // 4
+    if (xs.contains(item: "c")) { r = r + 5; }        // +5
+    r = r + xs.indexOf(item: "c");          // +2 -> index 2
+    xs.remove(index: 1);                    // drop "b", shift -> [a, c, d]
+    r = r + xs.length();                    // +3 -> 14
+    if (!xs.contains(item: "b")) { r = r + 6; }        // +6 -> 20
+    r = r + xs.indexOf(item: "d");          // +2 -> d now at index 2 -> 22
+    xs.clear();                             // drops a, c, d
+    r = r + xs.length();                    // +0
+    if (xs.indexOf(item: "a") < 0) { r = r + 9; }      // +9 -> 30 (absent after clear)
+    return r;   // 31
+}

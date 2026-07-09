@@ -310,6 +310,11 @@ private:
     std::set<std::pair<std::string,std::string>> _overriddenSlots;  // (vtableRoot, slot) overridden somewhere -> keep dynamic
 
     std::map<std::string, InterfaceInfo> _interfaces;        // contract name -> info
+    // Pre-scanned retroactive conformances: target cType -> the contracts a top-level `implements C for T`
+    // grants it. Populated before the collection pass so a generic-type-arg bound check that fires during
+    // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods
+    // themselves are injected later in applyRetroactive, which also validates completeness/coherence.
+    std::map<std::string, std::set<std::string>> _retroConformances;
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info
     std::map<std::string, CollectionInfo> _collections;      // cName -> info
     std::vector<std::string>              _collectionOrder;  // registration order (inner-first; a

@@ -43,6 +43,12 @@ remains to call the language **complete**:
      in the residual positions: non-string-intrinsic by-value args, and owned temps in `while`/`for`
      conditions (no per-iteration drop slot). The operator/receiver/`foreach`/string-`ref` slices are done;
      the durable fix is one general temporary-drop pass.
+   - **Target-typed rvalue in a non-local-init position** *(ergonomic; surfaced building the containers)*. An
+     inline construction that needs its type from context works in a `Type x = …` initializer but not yet
+     elsewhere: a **bare generic ctor into a field** (`this.m = Map()` — infer the field's type args; bind to a
+     typed local first), an **inline ctor into an `operator[]`/`ref` param** (`a[i] = Tag(…)`, `map.get(Tag(…))`
+     — bind to a local first; `string` literals already materialize into a `ref string`). Clean workarounds
+     today; the fix is to propagate the target type into these positions like the local-initializer does.
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
      (`buildVtables` doesn't merge a parent contract's slots into the child).
    - **Inline `new Concrete` into a smart-ptr-over-interface** — the fat-pointer box isn't constructed
@@ -137,15 +143,22 @@ serialization, networking).
   work. Deliberately excludes the full 2.0 `export` (wasm module exports + scripting host, §7).
 - **Reflection + declarative serialization** — see the brief above; back ends follow as modules. Rides on
   the shipped `std::fs`/`std::io` for asset + scene load.
-- **Container / data-structure reach.** Beyond the shipped `List`/`Array`/`string`/`Fixed` and the near-term
-  `Map`/`Set`: **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer
-  to a system or a GPU upload with no copy and no ownership transfer), **priority queue / binary heap** (A*
-  pathfinding, event/timer scheduling), **deque / ring buffer** (job & event queues, audio), **slot map /
-  generational arena** (stable handles with generation counters — *the* ECS/asset-registry structure,
-  catches use-after-free), and a **sorted / tree map** (ordered iteration + range queries; needs
+- **Container / data-structure reach.** Now **shipped**: `List`/`Array`/`string`/`Fixed`, plus **`Map<K,V>`**
+  (open-addressing/tombstoned, `K: Hashable + Equatable`, owning keys+values, ASan-clean) and **`Set<K>`**
+  (= `Map<K, Unit>`); `List`/`Array` gained `reserve`/`remove`/`clear`/`contains`/`indexOf`. Still ahead:
+  **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a system or
+  a GPU upload with no copy and no ownership transfer), **priority queue / binary heap** (A* pathfinding,
+  event/timer scheduling), **deque / ring buffer** (job & event queues, audio), **slot map / generational
+  arena** (stable handles with generation counters — *the* ECS/asset-registry structure, catches
+  use-after-free), and a **sorted / tree map** (ordered iteration + range queries; needs
   `Comparable`/`Ordering`). Honest caveat: general **linked lists** are mostly a cache anti-pattern in
   data-oriented engines (the useful form is an intrusive free-list / LRU); raw **BSTs** are subsumed by the
   sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
+- **Custom allocators.** The collections hardcode `malloc`/`realloc`/`calloc`/`free`. Thread an **allocator**
+  parameter through the generic containers (arena/pool/stack/bump allocators for hot loops; a *fallible*
+  allocator for the no-heap embedded target). Bigger surface than it looks — the allocator has to reach
+  element construction/relocation and RAII drop — so it rides with the embedded target rather than 1.0.
+  `Map<K, V, A>` / `List<T, A>` with an allocator default is the likely shape (a default keeps today's API).
 - **Browser networking transports** — native TCP ships (`std::net`); the browser has no raw sockets, so the
   wasm path needs **WebRTC DataChannels** (unreliable) / **WebSockets** (reliable) via a host FFI shim (a
   real wasm nuance). Native UDP/DNS and the rest of the stdlib reach are the §1 follow-ups.
