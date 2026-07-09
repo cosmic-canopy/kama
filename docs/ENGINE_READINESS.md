@@ -37,9 +37,10 @@ The entire language feature set is complete. In place today:
 - **Native + WASM**, debug/release, `#line` source debugging. The *safe* surface stays pointer-free; heap is
   reached only through safe abstractions.
 
-That is a complete systems-language core. The remaining engine work is **library and platform reach**, not
-language features: a math layer, more C bindings, slices, allocators, and threading (already *designed* — the
-shared-nothing model in ROADMAP.md).
+That is a complete systems-language core. The math layer (`std::math`) and native file/socket I/O
+(`std::fs`/`std::io`/`std::net`) are **shipped**; the remaining engine work is further **library and
+platform reach**, not language features: WebGPU bindings, more C bindings, slices, allocators, and threading
+(already *designed* — the shared-nothing model in ROADMAP.md).
 
 ---
 
@@ -71,7 +72,8 @@ shared-nothing model in ROADMAP.md).
 |---|---|---|---|
 | **Threading / atomics / memory model** | ❌ built · ✅ *designed* — the **shared-nothing model** (isolates + ownership-transferring channels + `Atomic<T>`, mapping 1:1 onto WASM Web Workers) is specified in [ROADMAP.md](ROADMAP.md) (§ Concurrency). That model **is** the engine's job-system / parallel-ECS substrate; only the runtime remains. | Job system, parallel ECS, async asset streaming. | XL (build) |
 | **Bit/byte manipulation**: reinterpret/bitcast, byte buffers, endianness | 🟡 partial (bitwise ops only) | (De)serialization, networking, binary asset/scene formats. | M |
-| **String formatting / interpolation + I/O** (file, stdout, logging) | ❌ (the `string` type + `concat`/compare/`length` only) | Logging, config, text assets, tooling. | M |
+| **File / network I/O** (files, sockets) | ✅ — **`std::fs`/`std::io`/`std::net` shipped** (RAII `File`, `readFile`/`writeFile`/`stat`/`readDir`; blocking TCP `TcpListener`/`TcpStream`; `Result<…,IoError>`), POSIX + Windows, over the bundled `kama_os.h` FFI boundary. `examples/httpd/` is a real static-file server on it. Follow-ups (UDP/DNS, buffered readers) tracked in ROADMAP §1. | Asset/scene loading, config, tooling, networking. | done |
+| **String formatting / interpolation** (`"${x}"`, number→string, logging) | 🟡 — the `string` type is rich (ops, `substring`/`find`/`trim`/`replace`/`split`, UTF-8 + `.chars()`), but there is no `Display`/to-string or interpolation yet (ROADMAP §2). | Logging, text assets, tooling. | M |
 | **comptime / const-eval** | 🟡 partial — `const` values, **const generics** (`Fixed<T,N>`, integer type params), and **`sizeof(T)`** (a monomorphizing compile-time builtin) are shipped; general compile-time *evaluation* (arithmetic on const params, lookup-table generation) is not. `alignof(T)` is the obvious missing sibling for allocators. | Lookup tables, shader/permutation specialization, asserts. | M |
 | **Reflection / metadata** | ❌ built · **mostly codegen, not a language gap** — the compiler's `ClassInfo` already holds every field's name/type/order + sum-type variants, so a serializer generator can walk it; the only *possible* new language surface is opt-in **attributes** on types/fields (needed only for per-field control like rename/skip). | Auto-serialization, editor property panels, ECS introspection. | M (codegen) + S (opt-in attrs, if field-level) |
 

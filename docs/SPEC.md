@@ -336,6 +336,33 @@ fn int main() {
 }
 ```
 
+### Standard I/O (`std::io` / `std::fs` / `std::net`) ✅
+
+A native, single-binary I/O foundation — **library over FFI, no new language surface** beyond the prelude's
+`enum Unit` (the empty `Result<Unit, E>` payload — one error convention for void-fallible ops). `std::io`
+gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor) plus free
+`readFile`/`writeFile`/`stat`/`readDir`/`remove`; `std::net` gives RAII `TcpListener`/`TcpStream` (blocking
+TCP). All fallible calls return `Result<…, IoError>`, consumed by `match`.
+
+```kama
+import std::fs::{readFile, writeFile};
+fn int main() {
+    match writeFile(path: "out.txt", data: "hi") {
+        case Ok: {}
+        case Err(e): { return 1; }
+    }
+    return 0;
+}
+```
+
+Every platform difference lives in one bundled C bindings header, **`kama_os.h`** (pulled in only when a
+module `extern "kama_os.h";`s it — pay-for-what-you-use), which keeps OS aggregates (`struct stat`,
+`sockaddr_in`, `dirent`) opaque behind `static inline` accessors — the standard FFI boundary (Rust `libc` /
+Zig `@cImport`), forced by "an `extern` struct emits the literal C name." POSIX (Linux/macOS/iOS/Android) and
+Windows (Winsock + CRT) both ship; under wasm the virtual FS works, sockets need a host proxy. Sockets link
+`-lws2_32` on Windows (pay-for-use, like `-lm` for `<math.h>`). `examples/httpd/` is a ~200-line static-file
+HTTP server built on these three modules.
+
 **FFI data — all controlled, no `unsafe` needed:**
 
 ```kama

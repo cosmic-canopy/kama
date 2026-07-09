@@ -5,12 +5,13 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 ## The shape
 
-- **1.0 — language complete.** Strings are **done** (Phase 3 shipped); the **std I/O** foundation
-  (`std::io`/`fs`/`net`) and the **math layer** (`std::math` — Vec/Mat/Quat) are **shipped** — the remaining
-  gate is the docs reconcile + naming pass, after which the language surface is stable: you build *with* it,
-  not *on* it.
-- **1.x — systems & runtime.** Capabilities built ON the finished language: reflection + serialization,
-  file I/O, networking, an embedded/MCU target. Mostly library + codegen, little new syntax.
+- **1.0 — language complete.** Strings, the **std I/O** foundation (`std::io`/`fs`/`net`), and the **math
+  layer** (`std::math` — Vec/Mat/Quat) are **shipped**; the remaining gate is a small set of
+  language-completeness residuals + the docs-reconcile/naming pass, after which the language surface is
+  stable: you build *with* it, not *on* it.
+- **1.x — systems & runtime.** Capabilities built ON the finished language: reflection + serialization, a
+  shared-lib/`export` build, an embedded/MCU target, and deeper stdlib reach (extending the shipped I/O +
+  math). Mostly library + codegen, little new syntax.
 - **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted, via a shared
   IR feeding C, direct-wasm, and a bytecode VM — the `kama` binary self-contained.
 - **Concurrency — shared-nothing by construction** (1.x/2.0 direction): data-race freedom by removing
@@ -20,152 +21,58 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 ## 1. Remaining before 1.0
 
-1. ~~**Strings — Phase 3 (ergonomics).**~~ **Done.** `+` / `==` / `!=` operators (compiler special-cases
-   string operands → `concat`/`equals`; `string` is a primitive, so not a user overload); owned
-   `substring(start:, end:)` (byte-range copy); search `find` (→ `Optional<usize>`, null-safe),
-   `contains`, `startsWith`, `endsWith`, `isEmpty`; transforms `trim`/`trimStart`/`trimEnd`, `replace`,
-   ASCII `toLower`/`toUpper`; and a lazy `split(separator:)` → `Split` iterator (no collections import).
-   All intrinsic on the primitive, native + wasm, ASan/UBSan-clean. Owned-string temporaries now RAII-drop
-   correctly in operator/receiver/`if`-condition/chained-method positions, in string-intrinsic arguments,
-   and as `foreach`-yielded owned values (`s.trim() == "x"`, `foreach (p in s.split(...))`). **Tracked
-   limitation:** an owned-string rvalue passed by value to a *non-string-intrinsic* call (a user function,
-   or an ownership-taking method) still leaks — bind it to a local; a general owned-temporary drop pass is a
-   later refinement (the ownership of a by-value arg is call-specific). **Deferred to a later Unicode
-   module** (tracked): Unicode-correct casing + whitespace (this phase is ASCII), `'é'` multibyte source
-   char literals, string interpolation/`Display` (which also gives `string + <number>`), and an eager
-   `List<string>` collect for `split`.
-2. **Language completeness & memory-safety hardening (1.0 blockers).** "1.0 = language complete" can't ship
-   with a **fundamental** (non-library) gap open — least of all a double-free in *safe* code. These are the
-   fundamental gaps surfaced while hardening strings, promoted here from §2 (each reproduces with plain
-   resources/collections, independent of the strings feature). Reserved-for-a-later-track keywords
-   (`expose`, `volatile`) stay deferred — they hard-error, never miscompile, and aren't core semantics.
-   - ✅ **By-value ownership of collections & `string` — DONE** (commit `f873a7c`). The `give`/`copy` +
-     move-tracking machinery now covers a by-value collection/`string` in every hand-off position:
-     assignment / field store (`this.a = give x`), function/constructor arguments, and returns. A by-value
-     slot **OWNS** it (drops at fn-end), `ref` borrows, and read-only `kama_string__*` intrinsics keep
-     borrowing (marker-free). Closes the confirmed `Box(x: x)` double-free; native + ASan/UBSan clean. The
-     old "by-value collection params → post-1.0" deferral is **retired**.
-   - ✅ **Owning-value collection ELEMENTS — `List<string>` DONE** (commit `55f45f1`). `string`/collections
-     are now first-class `Copyable`/owning elements: `string` satisfies `Copyable`, `copy` of a
-     collection/string into a variant deep-copies, a bare named payload into a variant is rejected, the raw
-     `Ptr` element store honors `give`/`copy`, and `foreach` drops its owned by-value binding. `List<string>`
-     now supports `add(item: give s)`, by-value `foreach`, `copy`, and collecting `split` pieces into a list
-     — ASan/UBSan-clean. **Remaining (smaller, same axis):** `Array<string>` element place-store
-     (`a[i] = <owned>`) and nested collections (`List<List<string>>` — recursive element copyability).
-   - **`.chars()` double-evaluates its receiver** (emits it twice, for `.data`/`.len`) — a side-effecting /
-     owned rvalue receiver desyncs → OOB/leak. Apply the same stable-ref gate `.split()`/`.chars()` already
-     use, or a single-eval lowering. Small.
-   - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop leak
-     (Phase 3 covered operators / receivers / `if`-conditions / string-intrinsic args / `foreach` yields;
-     residual = non-string-intrinsic by-value args, owned temps in `while`/`for` conditions). Durable fix:
-     a full temporary-drop pass. **The string-`ref` slice of this is ✅ DONE** — a string rvalue (literal /
-     `+` concat / call result) passed to a `ref string` param is now materialized into a scope-freed temp so
-     `&temp` is legal C (was "cannot take the address of an rvalue"); the borrow is read-only and the temp
-     frees at scope end (ASan/LSan clean). `readFile("foo.txt")` / `f(a + b)` work; named lvalues keep their
-     direct `&`. Fixture `tests/ref_string_temp.kama`. The general (non-string, arbitrary-owned-temp) pass
-     remains.
-   - **Parser/typer accept a narrower grammar than expected — surprising ergonomics gaps** (each with a
-     clean workaround, none miscompile; found building `std::fs`/`std::net`). Worth closing before 1.0 since
-     they bite constantly:
-     - ✅ **DONE** — `cast<T>(...)` now accepts a full **`expression`** operand (was `unary_expression`,
-       so `cast<int32>(a + b)` was a syntax error). The `( … )` already delimits it, like a parenthesized
-       primary; no new grammar conflicts. Fixture `tests/cast_expr.kama` (arithmetic/modulo/ternary).
-     - ✅ **DONE — the `:=` arm-value statement.** A value-producing `match` block arm now names its value
-       explicitly: `case X: { …stmts…; := <expr>; }`. Chosen over (a) a Rust-style bare tail expression
-       (LALR-hard: statement-start vs `;`-less-tail) and (b) relaxing `expression_statement` to any
-       expression (silently allows no-op statements, against the explicit/catch-bugs ethos). `:=` is a
-       distinct `;`-terminated statement (new token, no grammar conflict), **required as the arm block's
-       final statement** — one entry, one value site — so it needs no exhaustive-yield analysis, and it
-       accepts ANY expression (arithmetic / ternary / owned), unlike the old call-only rule. Cleanly
-       distinct from `return` (which leaves the function). The `match` *is* an assignment from outside
-       (`x = match … { … := v; }`), so `:=` reads as "bind this out." Fixture `tests/match_arm_value.kama`
-       (int + accumulator + owned-string, ASan-clean). `:=` is now the **one** way: the old "block ends in a
-       call/expression" form was migrated (`match_block_value.kama`) and the emitter fallback removed, so a
-       value-producing block arm must end in `:= <expr>;`. (Separately noticed, pre-existing and unrelated: an
-       **owned-typed `match` result in a `local-variable initializer`** — `string s = match(...)` used to
-       error "must appear in a typed position." ✅ **Fixed for `string`** (the class/collection local-init
-       branch now sets `_matchTargetCType`, mirroring the primitive branch; the lifted `__match` temp is a
-       transient so ownership moves cleanly into the local — ASan-clean). **Still open for collections:**
-       `List<T> l = match(...)` now gets past that but hits two deeper gaps — bare `List()` construction in
-       an arm-value position ("unknown function"), and `:= give x` (a hand-off marker in a `:=` value is
-       rejected — fails in `return` position too, so it's a `:=` completeness gap, not local-init).)
-     - ✅ **DONE** — inline `match (Type::staticFn(...))` now works. `exprClass` inferred return types for
-       instance-method and free-function calls but not **static-method calls** (`File::open(...)` — a
-       qualified identifier, not a `MemberAccessNode`), so the subject's type was unknown → "requires an
-       enum subject." Added the `Class::method` resolution (mirrors `emitFnPtrBind`). Fixture
-       `tests/match_static_factory.kama`. (The Ok payload being a resource was a red herring — the gap was
-       purely the static call.)
+Strings, the std I/O foundation (`std::io`/`fs`/`net` + the `examples/httpd` proof), and the math layer
+(`std::math` — Vec/Mat/Quat) are **shipped**. What the language *is* lives in [SPEC.md](SPEC.md); the
+engine capability matrix in [ENGINE_READINESS.md](ENGINE_READINESS.md); the history in the git log. What
+remains to call the language **complete**:
+
+1. **Language-completeness residuals (1.0 blockers).** The fundamental (non-library) gaps still open — each
+   reproduces with plain resources/collections; a "language-complete" 1.0 must close them. (Reserved
+   later-track keywords `expose`/`volatile` stay deferred — they hard-error, never miscompile.)
+   - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop still leak
+     in the residual positions: non-string-intrinsic by-value args, and owned temps in `while`/`for`
+     conditions (no per-iteration drop slot). The operator/receiver/`foreach`/string-`ref` slices are done;
+     the durable fix is one general temporary-drop pass.
+   - **Owning collection ELEMENTS — the last axis.** `string` locals + `List<string>` are done; still open:
+     `Array<string>` element place-store (`a[i] = <owned>`), nested `List<List<string>>` (recursive element
+     copyability), and the owned-typed-`match`-into-a-collection-local gaps (bare `List()` in a `:=` arm
+     value → "unknown function"; `:= give x` — a hand-off marker in a `:=`/`return` value is rejected, a
+     `:=` completeness gap).
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered.
    - **Multibyte source char literal `'é'`** — lexer gap (write `'\u{E9}'` today).
    - **Verify-then-1.0-or-downgrade:** explicit type args when inference fails
      ([kama.cemit.cpp:3467] — does turbofish `f::<T>()` already cover it?); inline `new Concrete` into a
      smart-ptr-over-interface ([kama.cemit.cpp:5623] — has a bind-to-local workaround).
-3. **Standard library — native I/O foundation (`std::io` / `std::fs` / `std::net`).** Landed to unlock a
-   native single-binary HTTP static-file server (the first real Kama program). **Library over the existing
-   FFI — no compiler features** beyond a one-line prelude addition (`enum Unit`, the empty `Result<Unit,E>`
-   payload — the analogue of Rust's `Result<(),E>`, chosen so std keeps **one** error convention). Platform
-   differences live in a single bundled C bindings header, **`kama_os.h`** (pay-for-what-you-use: pulled in
-   only via `extern "kama_os.h";`), which keeps OS aggregates (`struct stat`, `sockaddr_in`, `dirent`, `DIR`)
-   opaque behind `static inline` accessors — the standard FFI boundary (Rust `libc` / Zig `@cImport` /
-   Go `syscall`), forced by "extern struct emits the literal C name, no typedef."
-   - ✅ **POSIX (Linux/macOS/iOS/Android) — DONE.** `std::io` (`IoError` + `lastError` classification);
-     `std::fs` (`File` RAII fd + `open`/`read`/`readAll`/`writeAll`, free `readFile`/`writeFile`/`stat`/
-     `readDir`/`remove`); `std::net` (`TcpListener` bind/accept, `TcpStream` connect/read/writeAll, both
-     RAII-closing). Production bar on the shipped subset: `EINTR` retry, write-to-completion, errno→`IoError`,
-     no fd leak on any error path (capture error before close). 6 fixtures (fs roundtrip >64 KiB / notfound /
-     readdir / raii-5000-opens; net loopback / refused) — native + ASan/UBSan clean (347/347).
-   - **Windows (first-class) — WRITTEN, CI-verifying.** `kama_os.h`'s `#if defined(_WIN32)` branch is
-     filled: Winsock (`WSAStartup`/`SOCKET`/`closesocket`, `WSAGetLastError`→`errno` translation so
-     `kama_last_error()` is uniform) + CRT (`_open`+`_O_BINARY`/`_stat64`/`_read`/`_write`) +
-     `FindFirstFileA` dir cursor. Driver links `-lws2_32` on native Windows; release payloads now ship
-     `kama_os.h`; a best-effort `windows-latest` leg runs the full suite in CI (MSYS2 UCRT + clang).
-     All 29 binding signatures verified identical to the POSIX branch (a mismatch = guaranteed Windows
-     compile error). **Blind write — not compilable on the Linux/macOS dev boxes; first green Windows CI
-     run is the real verification.** Flip the CI leg to required once reliably green.
-   - ✅ **WASM — build-checked.** `std::fs` **builds and runs** under emscripten (`--target wasm --cc emcc`,
-     verified `fs_roundtrip` → exit 42 under node's in-memory MEMFS — the virtual FS is fully functional).
-     `std::net` **compiles** to wasm (emscripten ships the `<sys/socket.h>` shims) but does not run without a
-     WebSocket proxy — wasm net stays deferred to the WebRTC/host path (2.0). Native is the first-class target.
-   - **Deferred (tracked):** UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`, buffered readers, richer
-     `Metadata` (mtime/perms), path helpers, `mkdir`.
-   - ✅ **End-to-end proof — `examples/httpd/`.** A ~200-line static-file HTTP/1.1 server (the
-     `python -m http.server` spirit) over `std::net` + `std::fs` + strings — the first real Kama program.
-     Serves the actual `site/` (kama-lang.org) locally: verified over `curl` — `200` html/png/txt
-     (binary-safe, correct `Content-Type`/`Content-Length`), `404`/`400`(traversal)/`405`; ASan/UBSan-clean
-     under live traffic and LSan-clean on the startup path. Self-contained (installed `kama` only) so the
-     folder seeds a standalone repo. `GET`-only, `Connection: close`, single-`recv` request — honestly a
-     dev/preview server (keep-alive, dir listings, percent-decoding, threading deferred).
-4. ✅ **Math layer — SHIPPED** as `lib/std/math/` (`import std::math::{…}`), concrete **float32** value
-   types: `Vec2/3/4`, `Mat2/3/4`, `Quat`, plus scalar helpers (`radians/lerp/clampf/pi()/…` + libm FFI).
-   **Column-major**, column-vector (`M * v`), WebGPU 0..1-depth `perspective`/`ortho`/`lookAt`, general
-   Mat4 `inverse` (adjugate), full Quat (Hamilton `*`, `rotate`, slerp/nlerp, `toMat3/4`). Methods+operators
-   (one `operator*` per type — Mat/Quat compose; transform/rotate are named). Fixtures (scalar/vec/mat/quat/
-   chain) exact-value-checksummed, native + ASan + wasm. Concrete-not-generic (scalar literals + per-scalar
-   `sqrtf`); a concrete `f64` (`DVec`) family can follow. **Landed four compiler foundations it needed:**
-   `this`-by-value args, whole-number float32 literals (`1.0f32` was invalid C), libm pay-for-what-you-use
-   auto-link (`-lm` on `<math.h>`), and value-rvalue **method chaining** (`m.transpose().inverse()`).
-   **Follow-up (1.x / engine era): `std::math` SIMD backend** — portable C vector extensions
-   (`vector_size(16)` → SSE2/NEON/wasm128), a pure implementation swap behind the unchanged API (v1's
-   layout is already SIMD-ready). Rotors deferred.
-5. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
+2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
+   math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
+   - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
+   - **`std::fs` / `std::io`** — buffered readers, richer `Metadata` (mtime/perms), path helpers, `mkdir`.
+   - **`std::math`** — a **SIMD backend** (portable C vector extensions, `vector_size(16)` → SSE2/NEON/
+     wasm128) as a pure implementation swap behind the unchanged, SIMD-ready-layout API (1.x / engine era);
+     and a concrete `f64` (`DVec`) family alongside the `float32` one. Rotors deferred.
+   - **Windows CI** — the `windows-latest` leg now passes the full suite (the `kama_os.h` `_WIN32` branch is
+     verified); promote the leg from best-effort to **required** so a Windows regression blocks a merge.
+3. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
    (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`).
 
 ## 2. Deferred language bits (tracked)
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
-**fundamental** gaps (multibyte char literals, `contract`-refining-`contract`, by-value collection
-ownership + owning elements) were promoted to §1.2 — a "language complete" 1.0 closes them. What remains
-here is genuinely later-track or opt-in.
+**fundamental** gaps that a "language complete" 1.0 must close (the general temp-drop pass, remaining owning
+collection-element cases, `contract`-refining-`contract`, multibyte char literals) are §1's residuals. What
+remains here is genuinely later-track or opt-in.
 
+- **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
+  **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
+  `List<string>` collect for `split` (the lazy `Split` iterator ships today).
 - **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
-  (also covers number→string); sequences with reflection (its to-string substrate).
+  (also covers `string + <number>`); sequences with reflection (its to-string substrate).
 - **`export` keyword** — reserved, hard-errors today. **Split by scope:** a **minimal `export`** (C-ABI
   linkage for `--shared` reload entry points) is **pulled forward to 1.x** (§5, engine dev-loop); the
   **full `export`** (wasm module exports + the scripting host interface) stays **2.0** (§7). The keyword
   slot is reserved at 1.0 either way, so activating it in 1.x follows the same reserved-then-lit pattern
   as `volatile`.
 - **`volatile` keyword** — reserved → **1.x embedded** (emit C `volatile` for ISR↔loop flags / MMIO).
-  (`contract`-refining-`contract` and by-value collection ownership moved to §1.2 as 1.0 items.)
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today).
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
@@ -181,7 +88,8 @@ here is genuinely later-track or opt-in.
   the seed: a stdlib = more prelude-collected kama modules in a `Std` namespace. Generic types already
   emit only when instantiated, and `--gc-sections` prunes unused functions in release. Open: whether that
   pruning suffices, or explicit per-module opt-in / dead-function elimination is warranted before a large
-  stdlib. A design pass before the container/math packaging.
+  stdlib grows. (`std::math` / `std::io` already ship as directory modules under this mechanism — the open
+  question is whether pruning scales, not whether the packaging shape works.)
 - **Structural → nominal contracts for bounds.** `foreach` is now nominal (an iterator must `implements
   Iterator`/`IteratorMut`, a container `Iterable`/`IterableMut`), but a generic bound `<T: Weighable>`
   still accepts a type **structurally**. Decision (user): go fully nominal — require `implements` for
@@ -189,8 +97,6 @@ here is genuinely later-track or opt-in.
   pass over the bound fixtures.
 - **`Copyable` as a formal contract.** Today it's recognized nominally by name (`implements Copyable`);
   formalize as `type contract Copyable { This copy(); }` — bundle with the structural→nominal migration.
-- **Math: language-level value types vs a stdlib module.** Recommendation: build as `value` types now (no
-  prereqs), and *package* as a module once the modular-stdlib question above is settled.
 
 ## 4. Reflection + attributes (1.x — design brief)
 
@@ -221,10 +127,11 @@ serialization, networking).
   of the 2.0 IR refactor, so they land here to make engine iteration fast *early* rather than waiting on
   the VM. The reload loop itself is a library (`dlopen`/watch/rebind over `unsafe`/`Ptr`), not roadmap
   work. Deliberately excludes the full 2.0 `export` (wasm module exports + scripting host, §7).
-- **Reflection + declarative serialization** — see the brief above; back ends follow as modules.
-- **File I/O** — safe file APIs; gates serialization and engine asset loading.
-- **Networking** — native UDP/TCP sockets vs browser **WebRTC DataChannels** (unreliable) /
-  **WebSockets** (reliable), via FFI (the browser has no raw sockets — a real wasm nuance).
+- **Reflection + declarative serialization** — see the brief above; back ends follow as modules. Rides on
+  the shipped `std::fs`/`std::io` for asset + scene load.
+- **Browser networking transports** — native TCP ships (`std::net`); the browser has no raw sockets, so the
+  wasm path needs **WebRTC DataChannels** (unreliable) / **WebSockets** (reliable) via a host FFI shim (a
+  real wasm nuance). Native UDP/DNS and the rest of the stdlib reach are the §1 follow-ups.
 - **Embedded / MCU target** — globals/statics for ISR flags, `volatile` *emit*, ISR attributes, no-heap
   mode, avr/arm toolchains.
 - **Native dispatch devirtualization** *(optimization, not a gap).* On a *monomorphic* call site clang
@@ -401,8 +308,6 @@ near-parity on `alloc`/`dispatch`.
 
 - **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
   deferred.
-- **Brand rename → Kama** — done: the mechanical rename (binary, `.kama` file extension, internal symbols,
-  docs) landed in one commit. Remaining external steps: rename the GitHub repo to `cosmic-canopy/kama` so the
-  flipped URLs resolve, and stand up `kama-lang.org`.
-- **FreeBSD CI** — a non-blocking `vmactions/freebsd-vm` job once Windows is proven on a tag.
+- **FreeBSD CI** — a non-blocking `vmactions/freebsd-vm` job (Windows is now proven; FreeBSD is the next
+  platform to cover).
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.
