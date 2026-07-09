@@ -1,0 +1,31 @@
+// `:= expr;` names the value a match arm's block produces: single-exit (must be the block's LAST
+// statement), and it accepts ANY expression — arithmetic, ternary, an owned value — unlike the old
+// "a block arm must end in a call" rule. Returns 42.
+enum Band { Low, Mid, High }
+
+// int result, in a local-variable initializer
+fn int32 score(Band b, int32 n) {
+    return match (b) {
+        case Low:  n;
+        case Mid:  { int32 bump = n + 2; := bump * 2; }             // binary expression as the value
+        case High: { int32 v = n; if (v < 10) { v = 10; } := v + 100; }  // single-tail accumulator
+    };
+}
+
+// owned (string) result via := in return position — exercises move-out + scope cleanup (ASan-checked)
+fn string tag(Band b) {
+    return match (b) {
+        case Low:  "low";
+        case Mid:  { string s = "mi"; := s + "d"; }
+        case High: "high";
+    };
+}
+
+fn int32 slen(ref string s) { return cast<int32>(s.length()); }
+
+fn int main() {
+    if (score(b: Band::Low,  n: 0)  != 0)   { return 90; }
+    if (score(b: Band::High, n: 5)  != 110) { return 92; }
+    if (slen(s: tag(b: Band::Mid))  != 3)   { return 93; }   // "mid"
+    return score(b: Band::Mid, n: 19);                       // (19 + 2) * 2 = 42
+}

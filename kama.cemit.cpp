@@ -981,6 +981,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (!stmt) return;
     ASTNode* n = stmt.get();
 
+    // `:= expr;` is the value of a value-producing `match` arm — the match emitter consumes it as the
+    // arm's final statement. Reaching it here means it is misplaced (not last, or in a match used as a
+    // statement, or outside any match).
+    if (dynamic_cast<ArmValueNode*>(n)) {
+        unsupported("`:=` produces a match arm's value — it is only valid as the final statement of a "
+                    "value-producing `match` arm", n->line);
+        return;
+    }
+
     if (auto* block = dynamic_cast<BlockNode*>(n)) {
         line(n->line);
         indent(depth);
@@ -3335,6 +3344,8 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         scanTypeForCollections(cd->type);
     } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
         scanExprForCollections(r->expression);
+    } else if (auto* av = dynamic_cast<ArmValueNode*>(n)) {
+        scanExprForCollections(av->value);
     } else if (auto* f = dynamic_cast<IfNode*>(n)) {
         scanExprForCollections(f->booleanExpression);
         scanStmtForCollections(f->ifStatement); scanStmtForCollections(f->elseStatement);
@@ -3677,6 +3688,8 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
         }
     } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
         scanExprForGenerics(r->expression, localTys);
+    } else if (auto* av = dynamic_cast<ArmValueNode*>(n)) {
+        scanExprForGenerics(av->value, localTys);
     } else if (auto* f = dynamic_cast<IfNode*>(n)) {
         scanExprForGenerics(f->booleanExpression, localTys);
         scanStmtForGenerics(f->ifStatement, localTys); scanStmtForGenerics(f->elseStatement, localTys);
@@ -5521,16 +5534,25 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             size_t nstmt = stmts ? stmts->size() : 0;
             for (size_t i = 0; i < nstmt; ++i) {
                 SharedStatement st = (*stmts)[i];
+                auto armv = std::dynamic_pointer_cast<ArmValueNode>(st);   // `:= expr;` — the arm's value
+                if (armv && i + 1 != nstmt) {
+                    unsupported("`:=` must be the final statement of a match arm", armv->line);
+                    continue;
+                }
                 if (resultTemp && i + 1 == nstmt) {
-                    if (auto es = std::dynamic_pointer_cast<ExpressionNode>(st)) {
+                    // The arm's value: an explicit `:= expr;`, else (backward-compat) a trailing call /
+                    // assignment expression-statement.
+                    SharedExpression valExpr = armv ? armv->value
+                                                    : std::dynamic_pointer_cast<ExpressionNode>(st);
+                    if (valExpr) {
                         bool ph = _hoistOK; _hoistOK = true;
-                        std::string av = emitExpression(es);
+                        std::string av = emitExpression(valExpr);
                         _hoistOK = ph;
                         flushHoisted(depth + 2);
                         indent(depth + 2); *_out << *resultTemp << " = " << av << ";\n";
                     } else {
-                        unsupported("a value-producing `match` arm block must end in a value expression "
-                                    "(a call/assignment) — this arm ends in a statement", a->line);
+                        unsupported("a value-producing `match` arm block must end in a value "
+                                    "(`:= expr;`, a call, or an assignment)", a->line);
                     }
                 } else {
                     emitStatement(st, depth + 2);
@@ -5693,15 +5715,23 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
             size_t nstmt = stmts ? stmts->size() : 0;
             for (size_t i = 0; i < nstmt; ++i) {
                 SharedStatement st = (*stmts)[i];
+                auto armv = std::dynamic_pointer_cast<ArmValueNode>(st);   // `:= expr;` — the arm's value
+                if (armv && i + 1 != nstmt) {
+                    unsupported("`:=` must be the final statement of a match arm", armv->line);
+                    continue;
+                }
                 if (resultTemp && i + 1 == nstmt) {
-                    if (auto es = std::dynamic_pointer_cast<ExpressionNode>(st)) {
+                    SharedExpression valExpr = armv ? armv->value
+                                                    : std::dynamic_pointer_cast<ExpressionNode>(st);
+                    if (valExpr) {
                         bool ph = _hoistOK; _hoistOK = true;
-                        std::string av = emitExpression(es);
+                        std::string av = emitExpression(valExpr);
                         _hoistOK = ph;
                         flushHoisted(depth + 2);
                         indent(depth + 2); *_out << *resultTemp << " = " << av << ";\n";
                     } else {
-                        unsupported("a value-producing `match` arm block must end in a value expression", a->line);
+                        unsupported("a value-producing `match` arm block must end in a value "
+                                    "(`:= expr;`, a call, or an assignment)", a->line);
                     }
                 } else {
                     emitStatement(st, depth + 2);

@@ -861,6 +861,16 @@ public:
 //------------------------------------------------------------------------------
 
 // One arm: `case Variant(bind1, bind2): expr;` (or `case _: expr;` — the wildcard).
+// `:= expr;` — the value a match arm's block evaluates to (the arm's result), assigned to whatever the
+// whole `match` is bound to. Must be the arm block's FINAL statement (single-exit). Distinct from
+// `return`, which leaves the enclosing function.
+class ArmValueNode : public StatementNode {
+public:
+    SharedExpression value;
+    ArmValueNode(CodeGenContext& context, SharedExpression value)
+        : ASTNode(context), StatementNode(context), value(value) { }
+};
+
 class MatchArmNode : public StatementNode {
 public:
     SharedString     variantName;   // the variant matched; "_" = wildcard

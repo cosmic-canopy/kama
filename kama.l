@@ -236,6 +236,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 "."     { RETURN_TOKEN(DOT, 1); }
 "/"     { RETURN_TOKEN(SLASH, 1); }
 "::"    { RETURN_TOKEN(COLONCOLON, 2); }
+":="    { RETURN_TOKEN(WALRUS, 2); }
 ":"     { RETURN_TOKEN(COLON, 1); }
 ";"     { RETURN_TOKEN(SEMICOLON, 1); }
 "<"     { RETURN_TOKEN(LT, 1); }

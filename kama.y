@@ -150,6 +150,7 @@ struct kamayystype {
 %token <token> WHEN "when"
 %token <token> SLASH "/"
 %token <token> COLONCOLON "::"
+%token <token> WALRUS ":="
 %token <token> COLON ":"
 %token <token> SEMICOLON ";"
 %token <token> LT "<"
@@ -182,7 +183,7 @@ struct kamayystype {
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
-%type <statement> marked_type_declaration unsafe_statement
+%type <statement> marked_type_declaration unsafe_statement arm_value_statement
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <namespacedeclaration> namespace_opt
@@ -650,7 +651,13 @@ embedded_statement
   | selection_statement
   | iteration_statement
   | jump_statement
+  | arm_value_statement
   | unsafe_statement
+  ;
+arm_value_statement
+    /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
+       to). A distinct statement (not a jump); the emitter requires it be the arm block's last statement. */
+  : WALRUS expression SEMICOLON   { $$ = std::make_shared<ArmValueNode>(SCANNER_CODEGENCONTEXT, $2); }
   ;
 unsafe_statement
   : UNSAFE block   { $$ = std::make_shared<UnsafeNode>(SCANNER_CODEGENCONTEXT, $2); }

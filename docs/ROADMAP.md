@@ -68,17 +68,20 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
      - ✅ **DONE** — `cast<T>(...)` now accepts a full **`expression`** operand (was `unary_expression`,
        so `cast<int32>(a + b)` was a syntax error). The `( … )` already delimits it, like a parenthesized
        primary; no new grammar conflicts. Fixture `tests/cast_expr.kama` (arithmetic/modulo/ternary).
-     - **A value-producing `match` block arm (`case X: { …stmts…; tail }`) must end in a `statement_expression`
-       (call / assignment / `++`/`--` / inline-ctor / nested `match`)** — a bare identifier / arithmetic /
-       ternary tail is a syntax error, because the block's value is its last *statement* and Kama (like C#)
-       does not treat a bare `x + 1;` as a statement. **Deferred — a genuine design fork, not a quick fix:**
-       (a) a Rust-style tail expression `{ stmts; tailExpr }` (no trailing `;`) is the clean answer but is
-       LALR(1)-hard (after an identifier, "start of a `;`-statement" vs "the `;`-less tail" is a
-       shift/reduce conflict); (b) relaxing `expression_statement` to any `expression` is easy and
-       conflict-free but silently allows no-op statements (`x + 1;`) everywhere, against the "explicit /
-       catch bugs" ethos. **Workaround is clean and idiomatic** (extract the tail into a helper and call it,
-       or use a non-block `case X: <expr>` arm — which already accepts any expression incl. ternaries), so
-       this stays parked pending an explicit call on (a) vs (b).
+     - ✅ **DONE — the `:=` arm-value statement.** A value-producing `match` block arm now names its value
+       explicitly: `case X: { …stmts…; := <expr>; }`. Chosen over (a) a Rust-style bare tail expression
+       (LALR-hard: statement-start vs `;`-less-tail) and (b) relaxing `expression_statement` to any
+       expression (silently allows no-op statements, against the explicit/catch-bugs ethos). `:=` is a
+       distinct `;`-terminated statement (new token, no grammar conflict), **required as the arm block's
+       final statement** — one entry, one value site — so it needs no exhaustive-yield analysis, and it
+       accepts ANY expression (arithmetic / ternary / owned), unlike the old call-only rule. Cleanly
+       distinct from `return` (which leaves the function). The `match` *is* an assignment from outside
+       (`x = match … { … := v; }`), so `:=` reads as "bind this out." Fixture `tests/match_arm_value.kama`
+       (int + accumulator + owned-string, ASan-clean). **Follow-up (not a blocker):** the old "block ends in
+       a call/expression" form still works for back-compat — migrate existing block arms to `:=` and then
+       require it, for one-way-to-do-a-thing. (Separately noticed, pre-existing and unrelated: an
+       **owned/`string`-typed** `match` result works in `return` position but not yet as a `local-variable
+       initializer** — `string s = match(...)` errors "must appear in a typed position"; tracked here.)
      - ✅ **DONE** — inline `match (Type::staticFn(...))` now works. `exprClass` inferred return types for
        instance-method and free-function calls but not **static-method calls** (`File::open(...)` — a
        qualified identifier, not a `MemberAccessNode`), so the subject's type was unknown → "requires an

@@ -810,8 +810,27 @@ match (color) {                               // statement position — a plain 
 };
 ```
 
-The `match` subject can be a variable, a method call, or a free-function call (`match (poll(x: 5)) { … }`).
-Arbitrary-integer branching (not on an enum) is done with `if` / `else if` — there is no `switch`.
+An arm is either a **single expression** (`case X: <expr>;`) or a **block** (`case X: { … }`). A block
+arm names the value it produces with a **`:= <expr>;`** statement, which must be the block's **final**
+statement (single-exit) — it accepts any expression, and reads as "bind this value out" (a `match` in a
+typed position *is* an assignment from the outside, `x = match … { … := v; }`). `:=` is distinct from
+`return`, which leaves the enclosing function:
+
+```kama
+string label = match (reading) {
+    case Some(c): {
+        string name = "mild";
+        if (c < 0)  { name = "freezing"; }
+        if (c > 30) { name = "hot"; }
+        := name;                              // the arm's value (must be last)
+    }
+    case None: "unknown";
+};
+```
+
+The `match` subject can be a variable, a method call, a static-method call, or a free-function call
+(`match (File::open(path: p, mode: OpenMode::Read)) { … }`). Arbitrary-integer branching (not on an enum)
+is done with `if` / `else if` — there is no `switch`.
 
 ## Error model — `Optional` / `Result` ✅
 

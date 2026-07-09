@@ -1,1 +1,1 @@
-must end in a value expression
+must end in a value
