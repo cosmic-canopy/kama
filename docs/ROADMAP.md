@@ -80,8 +80,13 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
        (int + accumulator + owned-string, ASan-clean). **Follow-up (not a blocker):** the old "block ends in
        a call/expression" form still works for back-compat — migrate existing block arms to `:=` and then
        require it, for one-way-to-do-a-thing. (Separately noticed, pre-existing and unrelated: an
-       **owned/`string`-typed** `match` result works in `return` position but not yet as a `local-variable
-       initializer** — `string s = match(...)` errors "must appear in a typed position"; tracked here.)
+       **owned-typed `match` result in a `local-variable initializer`** — `string s = match(...)` used to
+       error "must appear in a typed position." ✅ **Fixed for `string`** (the class/collection local-init
+       branch now sets `_matchTargetCType`, mirroring the primitive branch; the lifted `__match` temp is a
+       transient so ownership moves cleanly into the local — ASan-clean). **Still open for collections:**
+       `List<T> l = match(...)` now gets past that but hits two deeper gaps — bare `List()` construction in
+       an arm-value position ("unknown function"), and `:= give x` (a hand-off marker in a `:=` value is
+       rejected — fails in `return` position too, so it's a `:=` completeness gap, not local-init).)
      - ✅ **DONE** — inline `match (Type::staticFn(...))` now works. `exprClass` inferred return types for
        instance-method and free-function calls but not **static-method calls** (`File::open(...)` — a
        qualified identifier, not a `MemberAccessNode`), so the subject's type was unknown → "requires an

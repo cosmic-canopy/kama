@@ -1274,7 +1274,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     line(n->line);
                     bool ph = _hoistOK; _hoistOK = true;               // inline-ctor hoisting
                     std::string pvt = _variantTargetType; _variantTargetType = ty;   // `Optional<int32> o = Optional::Some(…)`
+                    std::string pmt = _matchTargetCType; _matchTargetCType = ty;      // `string s = match(…)` / `List l = match(…)`
                     std::string iv = emitExpression(init);
+                    _matchTargetCType = pmt;
                     _variantTargetType = pvt;
                     _hoistOK = ph;
                     flushHoisted(depth);
