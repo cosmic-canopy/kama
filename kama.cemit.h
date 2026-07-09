@@ -180,6 +180,10 @@ struct ClassInfo {
     CollKind                          collKind = CollKind::Array;
     std::string                       collElemClass;         // element class name ("" if primitive)
     bool                              isGenericInst = false; // a specialized generic-type instance (Box_int32)
+    // A synthetic ClassInfo for a PRIMITIVE target of a retroactive `implements C for int32` — it carries
+    // only the injected contract methods, whose receiver `this` is the SCALAR itself (by value), not a
+    // `T* self`. So `k.hash()` -> `int32_t__hash(k)` (value), and the method emits `int32_t self`.
+    bool                              isScalarRecv = false;
 
     // Tagged unions: a payload/generic `enum` is backed by a ClassInfo whose layout is a
     // discriminant tag + a union of per-variant payloads (not the flat `fields`). `variants` drives
@@ -309,6 +313,10 @@ private:
     std::map<std::string, std::vector<VSlot>> _rootVtables;   // root class name -> slots
     std::set<std::pair<std::string,std::string>> _overriddenSlots;  // (vtableRoot, slot) overridden somewhere -> keep dynamic
 
+    // Retroactive conformances of a PRIMITIVE (`implements Hashable for int32`). Kept OUT of `_classes`
+    // (an entry there would make every "user type?" test treat the primitive as a struct). Keyed by the
+    // primitive cType (int32_t); the ClassInfo holds only the injected methods + `isScalarRecv`.
+    std::map<std::string, ClassInfo>     _primConformances;
     std::map<std::string, InterfaceInfo> _interfaces;        // contract name -> info
     // Pre-scanned retroactive conformances: target cType -> the contracts a top-level `implements C for T`
     // grants it. Populated before the collection pass so a generic-type-arg bound check that fires during
@@ -589,6 +597,7 @@ private:
     MethodInfo* findMethod(ClassInfo* ci, const std::string& name, ClassInfo** owner);
     // Does `ci` structurally satisfy contract `contract` (have all its methods, public)?
     bool classSatisfiesBound(ClassInfo* ci, const std::string& contract);
+    ClassInfo* retroTargetInfo(const std::string& tkey);   // collection/primitive retro-conformance ClassInfo
     // Does `ci` NOMINALLY `implements` a contract whose template is `tmpl` (any instantiation)? Checks the
     // recorded `interfaces` list (a plain name == tmpl, or a generic instance whose `templateKey` == tmpl).
     bool implementsContractTemplate(ClassInfo* ci, const std::string& tmpl);

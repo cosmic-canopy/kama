@@ -53,10 +53,12 @@ remains to call the language **complete**:
      (`buildVtables` doesn't merge a parent contract's slots into the child).
    - **Inline `new Concrete` into a smart-ptr-over-interface** — the fat-pointer box isn't constructed
      inline (bind the `new` to a local first; a clean error, documented in SPEC).
-   - **Retroactive `implements C for T` for a non-`string` primitive target** (`int32`, …). The mechanism
-     ships for user-type and `string` targets (see SPEC → *Retroactive conformance*); a bare integer/float
-     primitive needs a synthetic `ClassInfo` + `this`-as-scalar lowering in the impl body. `Map<int32, V>`
-     keys wait on this; `Map<string, V>` + user-key maps work today.
+   - ~~Retroactive `implements C for T` for a non-`string` primitive target~~ **DONE.** A primitive target
+     (`int32`) now conforms via a scalar-receiver synthetic conformance (`this` is the value; methods emit
+     `T self` by value). `Map<int32, V>` / `Set<int32>` ship. Remaining primitive widths (`int64`/`uint*`/
+     `float*`) are one-line std `implements` blocks each — added on demand. The narrower residual is that a
+     bare **primitive/ctor rvalue into a `ref` parameter** still needs a local (`int32 k = 5; m.get(key: k)`)
+     — same family as the target-typed-rvalue gap above (a `string` literal already materializes).
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.

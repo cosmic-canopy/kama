@@ -1,0 +1,27 @@
+// Integer keys: Map<int32, V> / Set<int32> work out of the box via std's pure-kama retroactive
+// `implements Hashable/Equatable for int32` — a conformance on a PRIMITIVE (`this` is the scalar
+// itself). Same generic `<K: Hashable + Equatable>` path as string/user keys; the entity-ID case.
+import std::collections::{Map, Set};
+
+fn int main() {
+    Map<int32, int32> sq = Map();
+    int32 i = 0;
+    while (i < 100) { sq.put(key: i, value: i * i); i = i + 1; }  // forces grows; splitmix hash spreads
+    sq.put(key: 7, value: 999);                                   // overwrite
+
+    int32 r = 0;
+    r = r + sq.length();                          // 100
+    int32 a = 7; int32 k50 = 50; int32 miss = 500;
+    int32 v = match (sq.get(key: a))   { case Some(x): x; case None: 0 - 1; };   // 999
+    if (v == 999)  { r = r + 5; }
+    int32 w = match (sq.get(key: k50)) { case Some(x): x; case None: 0 - 1; };   // 2500
+    if (w == 2500) { r = r + 5; }
+    if (!sq.contains(key: miss)) { r = r + 5; }   // absent
+
+    Set<int32> s = Set();
+    s.add(key: 1); s.add(key: 2); s.add(key: 2); // idempotent
+    r = r + s.length();                           // 2
+    int32 one = 1;
+    if (s.contains(key: one)) { r = r + 3; }
+    return r;   // 100+5+5+5+2+3 = 120
+}

@@ -140,10 +140,11 @@ type contract Equatable for both { fn bool equals(This other); }
 ```
 
 Keys are hashed and compared **by content**, so a lookup key built any way (a concat, a fresh
-construction) finds the stored entry. `string` satisfies both out of the box — `Equatable` structurally
-through its built-in `equals`, `Hashable` via a **pure-kama** `implements Hashable for string` (FNV-1a) that
-ships in `std::collections` (the retroactive-conformance mechanism, *no* compiler blessing). A **user key**
-just declares `implements Hashable, Equatable` and provides the two methods.
+construction) finds the stored entry. `string` and **`int32`** satisfy both out of the box, via
+**pure-kama** `implements` blocks that ship in `std::collections` (the retroactive-conformance mechanism,
+*no* compiler blessing): `string` gets FNV-1a `Hashable` + structural `Equatable`; `int32` gets a
+splitmix64 `Hashable` + scalar `equals` (a conformance on a **primitive** — `this` is the scalar itself).
+A **user key** just declares `implements Hashable, Equatable` and provides the two methods.
 
 ```kama
 import std::collections::{Map, Set};
@@ -161,8 +162,10 @@ seen.add(key: "x");   bool member = seen.contains(key: "x");
 `Map` is **move-only**: it owns its keys and values (dropping them on overwrite, `remove`, `clear`, and at
 end of life — ASan/UBSan-clean for owning keys *and* values, e.g. `Map<string, List<string>>`). Lookups
 **borrow** the key (`ref K`), so they don't consume a key you're holding; `get(key:)` returns
-`Optional<V>` with a **deep copy** of the value (present only when `V` is `Copyable`). Keys that are inline
-rvalues (a user-type ctor, non-`string` primitives) are bound to a local first; see *Known limitations*.
+`Optional<V>` with a **deep copy** of the value (present only when `V` is `Copyable`). A key that is an
+inline rvalue (a user-type ctor, or a bare `int` literal) is bound to a local first —
+`int32 k = 5; m.get(key: k)` — the primitive/ctor-rvalue-into-a-`ref` materialization gap (see
+*Known limitations*); a `string` literal materializes automatically.
 
 ## Smart pointers ✅
 
@@ -762,8 +765,10 @@ fn uint64 hashOf<K: Hashable>(K k) { return k.hash(); }   // `string` now satisf
 contract **or** the target type — so third parties can't give conflicting conformances. kama's whole-program
 view makes this a direct duplicate check (a conflicting or duplicated impl is a compile error), which is *also*
 the future package-manager guard. A retroactively-conformed contract dispatches **statically** (through
-generic bounds); it does not add a fat-pointer interface vtable. *(Targeting a non-`string` primitive such as
-`int32` is tracked — the `string` and user-type paths ship today.)*
+generic bounds); it does not add a fat-pointer interface vtable. A **scalar primitive** target (`int32`)
+works too: its `this` is the value itself, so a method takes `T self` by value and the call is a plain
+`int32_t__hash(k)` — this is how `Map<int32, V>` / `Set<int32>` get their keys. (Other primitive widths are
+one-line std `implements` blocks, added on demand.)
 
 ## Static methods & operator overloading ✅
 

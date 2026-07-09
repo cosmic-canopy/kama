@@ -4699,6 +4699,18 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
 // a concrete type satisfies a contract BOUND when it has every one of the contract's methods,
 // public (structural — this is exactly what makes the monomorphized call resolve to a static
 // `Concrete__m(&x)`; nominal `implements` is not required, matching the codegen reality).
+// The ClassInfo carrying a retroactive impl's injected methods for target C-type `tkey`: a collection's
+// `_classes` entry (`kama_string`), or a primitive's `_primConformances` entry (scalar receiver). nullptr
+// for a user-type target (which emits through the normal class machinery, not the retro emission path).
+ClassInfo* CEmitter::retroTargetInfo(const std::string& tkey)
+{
+    auto ti = _classes.find(tkey);
+    if (ti != _classes.end() && ti->second.isCollection) return &ti->second;
+    auto pi = _primConformances.find(tkey);
+    if (pi != _primConformances.end()) return &pi->second;
+    return nullptr;
+}
+
 bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
 {
     // matched by method NAME (type-parameter-independent), so a generic-contract bound checks against
@@ -6151,7 +6163,9 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
 {
     std::string s;
     bool first = true;
-    if (selfType) { s += std::string(selfType) + "* self"; first = false; }
+    // A retroactively-conformed PRIMITIVE (`implements Hashable for int32`) takes `this` (= `self`) as the
+    // SCALAR by value — `int32_t self`, not `int32_t* self`.
+    if (selfType) { s += std::string(selfType) + (_primConformances.count(selfType) ? " self" : "* self"); first = false; }
     if (params) {
         for (auto& p : *params) {
             if (!first) s += ", ";
@@ -7169,6 +7183,23 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         return emitSmartPtrCall(cls, emitExpression(receiver), method, call->args, call->line);
     if (isInterface(cls))
         return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line);
+    // A PRIMITIVE receiver with a retroactive conformance (`implements Hashable for int32`): the method's
+    // `this` is the SCALAR itself, passed BY VALUE. `exprClass` is "" for a primitive, so recover the
+    // receiver's C type from `_localCTypes` (params/locals record it there). Resolve on `_primConformances`;
+    // the call is a plain free function `int32_t__hash(k)` (no pointer, no vtable).
+    {
+        std::string primTy = cls;
+        if (primTy.empty())
+            if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get()))
+                if (rid->value && _localCTypes.count(*rid->value)) primTy = _localCTypes[*rid->value];
+        auto pit = _primConformances.find(primTy);
+        if (pit != _primConformances.end()) {
+            ClassInfo* powner = nullptr;
+            MethodInfo* pmi = findMethod(&pit->second, method, &powner);
+            if (!pmi) { unsupported(("unknown method `" + method + "` on `" + primTy + "`").c_str(), call->line); return "0"; }
+            return emitReorderedCall(pmi->cName, emitExpression(receiver), pmi->params, call->args, call->line);
+        }
+    }
     if (cls.empty() || !_classes.count(cls)) {
         unsupported("method call on unresolved receiver", call->line);
         return "0";
@@ -7377,9 +7408,21 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             std::string tkey = cType(ri->target);   // string→kama_string, a user type→its mangled name
             auto ti = _classes.find(tkey);
             if (ti == _classes.end()) {
-                unsupported(("`implements " + contract + " for " + *ri->target->value +
-                             "` — unknown target type").c_str(), ri->line);
-                continue;
+                // A PRIMITIVE target (`int32`, …): it has NO ClassInfo, and it must NOT get one — every
+                // "is this a user type?" test keys on `_classes`, so an entry there would break int
+                // operators/ownership. Hang the injected methods on a SEPARATE `_primConformances` registry
+                // (scalar-receiver: `this` is the value itself). Method calls + bound checks consult it.
+                if (ri->target->builtInVal != 0) {
+                    ClassInfo& pci = _primConformances[tkey];
+                    pci.name = tkey;
+                    pci.kind = TypeKind::Value;
+                    pci.isScalarRecv = true;
+                    ti = _primConformances.find(tkey);
+                } else {
+                    unsupported(("`implements " + contract + " for " + *ri->target->value +
+                                 "` — unknown target type").c_str(), ri->line);
+                    continue;
+                }
             }
             ClassInfo& tci = ti->second;
             for (auto& ex : tci.interfaces)
@@ -7592,9 +7635,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
             if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
             std::string tkey = cType(ri->target);
-            auto ti = _classes.find(tkey);
-            if (ti == _classes.end() || !ti->second.isCollection) continue;
-            ClassInfo& tci = ti->second;
+            ClassInfo* tcip = retroTargetInfo(tkey);   // a collection ClassInfo OR a primitive conformance
+            if (!tcip) continue;
+            ClassInfo& tci = *tcip;
             ScopedStr _ts(_thisType, tci.name);
             for (auto& m : *ri->members) {
                 auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
@@ -7683,9 +7726,9 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
         if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
         std::string tkey = cType(ri->target);
-        auto ti = _classes.find(tkey);
-        if (ti == _classes.end() || !ti->second.isCollection) continue;
-        ClassInfo& tci = ti->second;
+        ClassInfo* tcip = retroTargetInfo(tkey);   // collection ClassInfo OR primitive conformance
+        if (!tcip) continue;
+        ClassInfo& tci = *tcip;
         ScopedStr _ts(_thisType, tci.name);
         for (auto& m : *ri->members) {
             auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());

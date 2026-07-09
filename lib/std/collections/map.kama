@@ -23,6 +23,22 @@ implements Hashable for string {
     }
 }
 
+// `int32` keys, also pure kama (a retroactive impl on a PRIMITIVE — `this` is the scalar itself). A
+// splitmix64-style finalizer so patterned keys (sequential IDs, multiples) still spread across the table
+// instead of clustering. `Equatable` for a primitive needs a real `equals` (unlike `string`, an `int32`
+// has no built-in method), so it ships too — scalar `this == other`.
+implements Hashable for int32 {
+    public fn uint64 hash() {
+        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;
+        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
+        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
+        return x ^ (x >> 31ui64);
+    }
+}
+implements Equatable for int32 {
+    public fn bool equals(int32 other) { return this == other; }
+}
+
 // A general open-addressing hash map over `K: Hashable + Equatable` -> `V`. Linear probing with
 // tombstones; grows (and sheds tombstones) at a 0.75 load factor. Move-only: it owns three parallel
 // heap buffers (keys, values, per-slot state) and every live key/value, dropping them at end of life.
@@ -46,15 +62,22 @@ type resource Map<K: Hashable + Equatable, V> {
 
     public fn int32 length() { return this.len; }
 
+    // Key hashing/equality go through these `ref K` helpers so the receiver is always a plain borrow the
+    // contract dispatch resolves — for a `string` OR user key (a class receiver) and for a PRIMITIVE key
+    // (`int32`, whose `hash`/`equals` are scalar-receiver retro impls). A raw-buffer element `this.keys[i]`
+    // is handed in by `ref`, never used as a receiver directly.
+    fn uint64 hashKey(ref K k) { return k.hash(); }
+    fn bool eqKeys(ref K a, ref K b) { return a.equals(other: b); }
+
     // The slot an entry lives in (or would): probe from hash(key) until the key is found (returns its
     // FULL slot) or an EMPTY slot ends the run (returns -1). Tombstones are probed past, never stop it.
     fn int32 slotOf(ref K key) {
         if (this.cap == 0) { return 0 - 1; }
-        int32 i = cast<int32>(key.hash() % cast<uint64>(this.cap));
+        int32 i = cast<int32>(this.hashKey(k: key) % cast<uint64>(this.cap));
         while (true) {
             uint8 s = 0ui8; unsafe { s = this.state[i]; }
             if (s == 0ui8) { return 0 - 1; }                                  // EMPTY — not present
-            if (s == 1ui8) { unsafe { if (this.keys[i].equals(other: key)) { return i; } } }
+            if (s == 1ui8) { unsafe { if (this.eqKeys(a: this.keys[i], b: key)) { return i; } } }
             i = i + 1; if (i >= this.cap) { i = 0; }
         }
         return 0 - 1;
@@ -80,7 +103,7 @@ type resource Map<K: Hashable + Equatable, V> {
     // re-move on a later iteration — here the loop can't, but the check is conservative).
     public fn void put(K key, V value) {
         if ((this.len + this.tombs + 1) * 4 >= this.cap * 3) { this.grow(); }
-        int32 i = cast<int32>(key.hash() % cast<uint64>(this.cap));
+        int32 i = cast<int32>(this.hashKey(k: key) % cast<uint64>(this.cap));
         int32 slot = 0 - 1;                                                   // chosen slot (set = loop done)
         int32 free = 0 - 1;                                                   // first tomb we may reuse
         bool overwrite = false;
@@ -88,7 +111,7 @@ type resource Map<K: Hashable + Equatable, V> {
             uint8 s = 0ui8; unsafe { s = this.state[i]; }
             if (s == 0ui8) { slot = free >= 0 ? free : i; }                  // EMPTY — key is new
             else if (s == 2ui8) { if (free < 0) { free = i; } }              // TOMB — remember, keep probing
-            else { unsafe { if (this.keys[i].equals(other: key)) { slot = i; overwrite = true; } } }
+            else { unsafe { if (this.eqKeys(a: this.keys[i], b: key)) { slot = i; overwrite = true; } } }
             if (slot < 0) { i = i + 1; if (i >= this.cap) { i = 0; } }
         }
         if (overwrite) {                                                     // replace the stored (equal) key + value
@@ -141,7 +164,7 @@ type resource Map<K: Hashable + Equatable, V> {
             if (s == 1ui8) {
                 int32 j = 0;
                 unsafe {
-                    j = cast<int32>(this.keys[i].hash() % cast<uint64>(nc));
+                    j = cast<int32>(this.hashKey(k: this.keys[i]) % cast<uint64>(nc));
                     while (ns[j] == 1ui8) { j = j + 1; if (j >= nc) { j = 0; } }
                     nk[j] = this.keys[i]; nv[j] = this.vals[i]; ns[j] = 1ui8;   // bitwise relocate (no drop)
                 }
