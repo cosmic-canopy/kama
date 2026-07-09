@@ -6404,6 +6404,10 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
 {
     for (auto& ifn : ci.interfaces) {
+        // A retroactively-implemented contract dispatches statically (monomorphized) — no fat-pointer vtable.
+        bool retro = false;
+        for (auto& r : ci.retroInterfaces) if (r == ifn) { retro = true; break; }
+        if (retro) continue;
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end()) { unsupported("unknown interface in implements", ci.node->line); continue; }
         InterfaceInfo& ii = it->second;
@@ -7317,6 +7321,62 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // collection's elemDestructible from the final class destructibility.
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectCollections(u); }
+    // Retroactive contract conformance — `implements C for T { … }` blocks. Runs AFTER collectCollections
+    // so a primitive/collection target (`string` → `kama_string`) already has its ClassInfo. Inject each
+    // block's methods into the target's ClassInfo (mangled `Target__method`, so the existing dispatch +
+    // method emission pick them up unchanged) and record the conformance. Coherence: reject a duplicate
+    // impl of the same contract for the same type, and reject an impl method that clobbers an existing
+    // method — under the whole-program view a duplicate/conflict is directly visible, which is how the
+    // orphan rule (declare the contract or the type) is enforced here.
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
+        for (auto& decl : *u->codeDeclarationList) {
+            auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
+            if (!ri || !ri->contract || !ri->contract->value || !ri->target || !ri->target->value) continue;
+            std::string contract = *ri->contract->value;
+            std::string tkey = cType(ri->target);   // string→kama_string, a user type→its mangled name
+            auto ti = _classes.find(tkey);
+            if (ti == _classes.end()) {
+                unsupported(("`implements " + contract + " for " + *ri->target->value +
+                             "` — unknown target type").c_str(), ri->line);
+                continue;
+            }
+            ClassInfo& tci = ti->second;
+            for (auto& ex : tci.interfaces)
+                if (ex == contract) { unsupported(("`" + tkey + "` already implements `" + contract
+                                                   + "`").c_str(), ri->line); break; }
+            if (ri->members)
+                for (auto& m : *ri->members) {
+                    auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+                    if (!md || !md->name || !md->name->value) continue;
+                    std::string mname = *md->name->value;
+                    if (tci.methods.count(mname)) {
+                        unsupported(("retroactive `implements " + contract + " for " + tkey + "`: method `"
+                                     + mname + "` conflicts with an existing method on the type").c_str(), md->line);
+                        continue;
+                    }
+                    MethodInfo mi;
+                    mi.cName        = tkey + "__" + mname;
+                    mi.returnType   = md->returnType;
+                    mi.params       = paramSigsOf(md->params);
+                    mi.node         = md;
+                    mi.isConst      = md->isConst;
+                    mi.isPlaceReturn = md->isRef;
+                    mi.visibility   = Visibility::Public;   // a contract's methods are public
+                    mi.isRetro      = true;                 // emitted static-inline in the header (below)
+                    tci.methods[mname] = mi;
+                }
+            tci.interfaces.push_back(contract);
+            tci.retroInterfaces.push_back(contract);   // static dispatch only — no fat-pointer vtable
+            // Completeness: the impl must supply every method the contract requires.
+            if (const std::vector<InterfaceMethod>* need = contractMethods(contract))
+                for (auto& nm : *need)
+                    if (!tci.methods.count(nm.name))
+                        unsupported(("`implements " + contract + " for " + tkey + "` is missing method `"
+                                     + nm.name + "` required by the contract").c_str(), ri->line);
+        }
+    }
     // discover generic-function instantiations after collections (a specialization may use
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
     for (auto& u : units)
@@ -7481,6 +7541,31 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (ci->preludeStatic) continue;   // emitted static-inline below (a non-generic prelude type)
         scopeOf(ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci);
     }
+    // Retroactive `implements C for T { … }` for a COLLECTION/primitive target (`string` → `kama_string`):
+    // the normal per-class emitters early-out for a collection, so emit a non-static PROTOTYPE here — BEFORE
+    // the generic-function instances below, which may call it (e.g. a `<K: Hashable>` body calling
+    // `k.hash()` monomorphized for `string`). The body lands once in the impl's module `.c`
+    // (emitModuleContent). A USER-type target emits through the normal machinery (skipped here).
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
+        for (auto& decl : *u->codeDeclarationList) {
+            auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
+            if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
+            std::string tkey = cType(ri->target);
+            auto ti = _classes.find(tkey);
+            if (ti == _classes.end() || !ti->second.isCollection) continue;
+            ClassInfo& tci = ti->second;
+            ScopedStr _ts(_thisType, tci.name);
+            for (auto& m : *ri->members) {
+                auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+                if (!md || !md->name || !md->name->value) continue;
+                std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+                *_out << ret << " " << tci.name << "__" << *md->name->value << "("
+                      << paramListC(md->params, tci.name.c_str()) << ");\n";
+            }
+        }
+    }
     // specialized generic-type instance prototypes (ctor/dtor/method), `static`.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/1);
@@ -7527,6 +7612,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         emitClassDefinitions(kv.second);
         _emitStaticClass = false;
     }
+
 }
 
 // This file's DEFINITIONS: its classes' vtable instances + interface vtables +
@@ -7551,6 +7637,28 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // class definitions, then free-function definitions.
     for (auto& decl : *unit->codeDeclarationList)
         if (ClassInfo* ci = classOf(decl.get())) emitClassDefinitions(*ci);
+    // Retroactive-impl method BODIES for a collection/primitive target (`string` → `kama_string`): the
+    // normal class machinery early-outs for a collection, so the body lands here, non-static (its prototype
+    // is in the shared header). A user-type target already emitted through emitClassDefinitions above.
+    for (auto& decl : *unit->codeDeclarationList) {
+        auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
+        if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
+        std::string tkey = cType(ri->target);
+        auto ti = _classes.find(tkey);
+        if (ti == _classes.end() || !ti->second.isCollection) continue;
+        ClassInfo& tci = ti->second;
+        ScopedStr _ts(_thisType, tci.name);
+        for (auto& m : *ri->members) {
+            auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+            if (!md || !md->name || !md->name->value) continue;
+            std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+            line(md->line);
+            _returnIsPlace = md->isRef;
+            emitMethodOrCtorBody(tci.name + "__" + *md->name->value, ret.c_str(),
+                                 md->params, md->body, tci, false, md->isConst, false);
+            _returnIsPlace = false;
+        }
+    }
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
             if (fn->typeParams && !fn->typeParams->empty()) continue;   // template — instantiations live in the header
@@ -7567,6 +7675,9 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             }
         } else if (dynamic_cast<IncludeNode*>(decl.get())) {
             // FFI #include — emitted in the header by emitIncludes
+        } else if (dynamic_cast<RetroactiveImplNode*>(decl.get())) {
+            // `implements C for T { … }` — its methods were injected into T's ClassInfo (applyRetroactive
+            // pass) and emit with T's other methods; nothing to emit at this top-level site.
         } else if (decl) {
             unsupported("top-level declaration", decl->line);
             *_out << "\n";

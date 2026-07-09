@@ -668,6 +668,22 @@ public:
         , interfaces(interfaces) { }
 };
 
+// `implements C for T { …methods… }` — RETROACTIVE contract conformance: an external block that makes an
+// existing type `target` (a primitive like `string`/`int32`, a stdlib type, or a foreign user type) satisfy
+// contract `contract`, without editing target's own declaration. Coherence is guarded by the orphan rule
+// (the compilation must declare either the contract or the target). The methods lower like ordinary class
+// methods (mangled `Target__method`), so dispatch resolves them with no changes.
+class RetroactiveImplNode : public StatementNode {
+public:
+    SharedIdentifier contract;                    // C — the contract being satisfied
+    SharedIdentifier target;                      // T — the type gaining the conformance
+    SharedClassMemberDeclarationList members;     // the method definitions
+    RetroactiveImplNode(CodeGenContext& context, SharedIdentifier contract, SharedIdentifier target,
+                        SharedClassMemberDeclarationList members)
+        : ASTNode(context), StatementNode(context)
+        , contract(contract), target(target), members(members) { }
+};
+
 class ClassMemberDeclarationNode : public StatementNode {
 public:
     ClassMemberDeclarationNode(CodeGenContext& context) : ASTNode(context),  StatementNode(context) { }

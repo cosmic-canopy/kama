@@ -695,6 +695,37 @@ fn Owned<Shape> make(int64 s) { Owned<Shape> o = new Square(s: s); return give o
 
 A `List<Shared<Shape>>` (the engine's scene) works — polymorphic elements stored and dropped in RAII order.
 
+### Retroactive conformance — `implements C for T` ✅
+
+A type can be given a contract **after the fact**, from outside its declaration — including a **primitive**
+(`string`, …) or a type from another module — with a top-level `implements C for T { … }` block. The methods
+lower exactly like ordinary methods on `T` (mangled `T__method`), so they dispatch with zero overhead through
+a generic bound `<K: C>`; there is **no method overloading and no "extension method" call-syntax** — the block
+adds real conformance, not sugar. This is how std gives primitives their behavioral contracts *in kama* (e.g.
+`Hashable`/`Equatable` for `string`, so `Map<string, V>` keys hash) rather than hard-coding them in the
+compiler.
+
+```kama
+type contract Hashable for both { fn uint64 hash(); }
+
+implements Hashable for string {                    // a primitive gains a contract, in pure kama
+    public fn uint64 hash() {
+        uint64 h = 2166136261ui64;                  // FNV-1a
+        int32 i = 0;
+        while (i < cast<int32>(this.length())) { h = (h ^ cast<uint64>(this[i])) * 16777619ui64; i = i + 1; }
+        return h;
+    }
+}
+fn uint64 hashOf<K: Hashable>(K k) { return k.hash(); }   // `string` now satisfies the bound
+```
+
+**Coherence (orphan rule).** A retroactive impl is permitted only when the compilation declares **either** the
+contract **or** the target type — so third parties can't give conflicting conformances. kama's whole-program
+view makes this a direct duplicate check (a conflicting or duplicated impl is a compile error), which is *also*
+the future package-manager guard. A retroactively-conformed contract dispatches **statically** (through
+generic bounds); it does not add a fat-pointer interface vtable. *(Targeting a non-`string` primitive such as
+`int32` is tracked — the `string` and user-type paths ship today.)*
+
 ## Static methods & operator overloading ✅
 
 **Static methods** — a `static fn` has **no implicit `self`** and is called at the type level with named

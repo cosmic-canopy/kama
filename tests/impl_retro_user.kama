@@ -1,0 +1,19 @@
+// Retroactive contract conformance: `implements C for T { … }` makes an existing type satisfy a contract
+// without editing its declaration. Here a foreign `value` gains `Weighable`, then flows through a generic
+// bound `<T: Weighable>` (satisfiesBound sees the retro conformance) and a direct call. Returns 42.
+type contract Weighable for both { fn int32 weight(); }
+
+type value Widget { public int32 w; public Widget(int32 w) { this.w = w; } }
+
+implements Weighable for Widget {
+    public fn int32 weight() { return this.w; }
+}
+
+fn int32 total<T: Weighable>(T a, T b) { return a.weight() + b.weight(); }
+
+fn int main() {
+    Widget x = Widget(w: 20);
+    Widget y = Widget(w: 22);
+    if (x.weight() != 20) { return 1; }        // direct call on the retro method
+    return total::<Widget>(a: x, b: y);        // via the generic bound → 42
+}

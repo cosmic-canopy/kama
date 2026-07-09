@@ -76,6 +76,9 @@ struct MethodInfo {
     Visibility                   visibility = Visibility::Private;
     bool                         isFinal = false;     // `final fn` — seals a virtual slot
     bool                         isStatic = false;    // `static fn` — no implicit `self`; called `Type::m(...)`
+    bool                         isRetro = false;     // injected by a retroactive `implements C for T` block —
+                                                      // emitted static-inline in the header, skipped by the
+                                                      // per-class proto/body loops (avoids a dup for a user target)
     std::string                  whenParam;   // `fn … when T: Bound` — the gated type-param ("" = unconditional)
     std::string                  whenBound;   // the required contract (source name; e.g. "Copyable")
     // Operator overloads register as methods under a synthetic name (`op_add`, `op_neg`, …).
@@ -166,6 +169,10 @@ struct ClassInfo {
 
     // Contracts
     std::vector<std::string>          interfaces;            // implemented contract names
+    // Contracts satisfied via a retroactive `implements C for T { … }` block (a subset of `interfaces`).
+    // These dispatch statically/monomorphized through the injected methods, so they get NO fat-pointer
+    // interface vtable (a primitive/foreign target can't be boxed as one) — skipped in vtable emission.
+    std::vector<std::string>          retroInterfaces;
 
     // Collections: a monomorphized Coll<T> is a synthetic ClassInfo whose
     // method bodies come from a C-template macro (not kama AST).

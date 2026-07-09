@@ -183,7 +183,7 @@ struct kamayystype {
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
-%type <statement> marked_type_declaration unsafe_statement arm_value_statement
+%type <statement> marked_type_declaration unsafe_statement arm_value_statement retroactive_impl_declaration
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <namespacedeclaration> namespace_opt
@@ -305,6 +305,7 @@ code_declarations
 code_declaration
   : function_declaration
   | type_declaration
+  | retroactive_impl_declaration
   ;
 
 /*------------------------------------------------------------------------------ 
@@ -458,6 +459,17 @@ marked_type_declaration
       }
       $$ = n; }
   ;
+
+/* `implements C for T { …methods… }` — RETROACTIVE contract conformance: an external top-level block that
+   gives an existing type T (a primitive/stdlib/foreign type) the methods of contract C. Distinct from the
+   `implements` CLAUSE inside a type declaration (which lists contracts a type opts into on its own line).
+   Unambiguous at top level — nothing else here begins with IMPLEMENTS. Coherence (orphan rule) is enforced
+   by the emitter. */
+retroactive_impl_declaration
+  : IMPLEMENTS type_name FOR type class_body semicolon_opt   /* target is `type` so a primitive (string/int32) is accepted */
+    { $$ = std::make_shared<RetroactiveImplNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5); }
+  ;
+
 /* Kind-gate on a `type contract`: `for value | resource | both` (also `value, resource`). MANDATORY on a
    contract (enforced by the emitter), forbidden on value/resource. Kind words are contextual identifiers. */
 for_kinds_opt

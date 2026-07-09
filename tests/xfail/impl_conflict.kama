@@ -1,0 +1,10 @@
+// Coherence: a type may not be given the SAME contract twice (conflicting retroactive impls). Under the
+// whole-program view the duplicate is directly visible → a compile error (this is how the orphan rule is
+// enforced here).
+type contract Weighable for both { fn int32 weight(); }
+type value Widget { public int32 w; public Widget(int32 w) { this.w = w; } }
+
+implements Weighable for Widget { public fn int32 weight() { return this.w; } }
+implements Weighable for Widget { public fn int32 weight() { return 0; } }   // duplicate → rejected
+
+fn int main() { return 0; }

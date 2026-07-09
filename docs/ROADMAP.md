@@ -47,6 +47,10 @@ remains to call the language **complete**:
      (`buildVtables` doesn't merge a parent contract's slots into the child).
    - **Inline `new Concrete` into a smart-ptr-over-interface** — the fat-pointer box isn't constructed
      inline (bind the `new` to a local first; a clean error, documented in SPEC).
+   - **Retroactive `implements C for T` for a non-`string` primitive target** (`int32`, …). The mechanism
+     ships for user-type and `string` targets (see SPEC → *Retroactive conformance*); a bare integer/float
+     primitive needs a synthetic `ClassInfo` + `this`-as-scalar lowering in the impl body. `Map<int32, V>`
+     keys wait on this; `Map<string, V>` + user-key maps work today.
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
@@ -101,18 +105,6 @@ remains here is genuinely later-track or opt-in.
   pass over the bound fixtures.
 - **`Copyable` as a formal contract.** Today it's recognized nominally by name (`implements Copyable`);
   formalize as `type contract Copyable { This copy(); }` — bundle with the structural→nominal migration.
-- **Retroactive contract conformance (scheduled — active near-term work, not deferred).** A library (and
-  std) can make **any** type — including primitives and foreign types — satisfy a contract via an external
-  `implements C for T { … }` block, with coherence guarded by an **orphan rule**: the impl is allowed only
-  if the compilation declares the contract *or* the target type. kama's whole-program view makes enforcement
-  a global duplicate-check → a clean compile error, so the footgun overloading / C#-extension-methods carry
-  is **removed** (conflicts can't compile), not quarantined. This ends per-contract compiler patching: std
-  expresses primitive conformances (`Hashable`/`Equatable` for `string`/`int`, later `Comparable`) **in
-  kama, not C++**, and third-party libraries extend foreign types without touching the compiler. **Not**
-  C#-style extension methods (which add call-syntax, not conformance — weaker). The structural/universal
-  markers (`Movable`; value/primitive `Copyable`) stay compiler rules; only *behavioral* special-cases
-  (string `==`→`equals`) port to external kama impls. Unifies the structural→nominal + formal-`Copyable`
-  items above.
 
 ## 4. Reflection + attributes (1.x — design brief)
 

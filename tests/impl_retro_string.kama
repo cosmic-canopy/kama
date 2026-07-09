@@ -1,0 +1,29 @@
+// Retroactive conformance for a PRIMITIVE: `implements Hashable for string` gives the built-in `string`
+// type a real (pure-kama) FNV-1a hash, with no compiler blessing — the exact mechanism std will use so
+// `Map<string, V>` keys hash. Exercises the generic bound `<K: Hashable>` with a primitive arg + method
+// bodies (`this.length()`, `this[i]`) on a primitive receiver. Returns 42.
+type contract Hashable for both { fn uint64 hash(); }
+
+implements Hashable for string {
+    public fn uint64 hash() {
+        uint64 h = 2166136261ui64;                         // FNV-1a basis
+        int32 i = 0;
+        while (i < cast<int32>(this.length())) {
+            h = (h ^ cast<uint64>(this[i])) * 16777619ui64;   // xor the byte, mul the prime
+            i = i + 1;
+        }
+        return h;
+    }
+}
+
+fn uint64 hashOf<K: Hashable>(K k) { return k.hash(); }    // string must satisfy the bound
+
+fn int main() {
+    uint64 a = hashOf(k: "kama");
+    uint64 b = hashOf(k: "kama");
+    uint64 c = hashOf(k: "lang");
+    int32 r = 0;
+    if (a == b) { r = r + 21; }        // deterministic — equal keys hash equal
+    if (a != c) { r = r + 21; }        // distinct keys differ (FNV-1a)
+    return r;                           // 42
+}
