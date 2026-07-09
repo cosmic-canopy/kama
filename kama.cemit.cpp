@@ -7159,9 +7159,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         std::string t = hoistStringTemp(receiver);
         recvPtr = t.empty() ? addrOfOperand(receiver, "kama_string", call->line) : ("&" + t);
     } else {
-        recvPtr = dynamic_cast<ThisAccessNode*>(receiver.get())
-                ? std::string("self")
-                : "&(" + emitExpression(receiver) + ")";
+        // `this` -> `self` (a pointer); a named var / field -> `&x`; a value-type RVALUE (a chained call
+        // `m.transpose().inverse()`, an inline ctor `Vec2(x, y).length()`, an operator result
+        // `(a - b).length()`) -> a hoisted / compound-literal temp so `&` is legal. addrOfOperand covers all.
+        recvPtr = addrOfOperand(receiver, cls, call->line);
     }
     // `s.chars()` — a UTF-8 codepoint iterator borrowing the string's bytes, built as a value (compound
     // literal) so it works in expression position (a foreach subject). Fields (data, len, pos) by order.
