@@ -1,0 +1,28 @@
+// A primitive LITERAL or an inline CONSTRUCTOR passed to a `ref` parameter is materialized into a temp
+// (an addressable lvalue) instead of being rejected — so `m.get(key: 5)` / `m.get(key: Point(1,2))` work
+// without binding a local first (a `string` literal already did). The temp is a read-only borrow here.
+import std::collections::{Map};
+
+type value Point implements Hashable, Equatable {
+    int32 x; int32 y;
+    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
+    public fn uint64 hash() { return cast<uint64>(this.x) * 31ui64 + cast<uint64>(this.y); }
+    public fn bool equals(Point other) { return this.x == other.x && this.y == other.y; }
+}
+
+fn int main() {
+    Map<int32, int32> m = Map();
+    m.put(key: 5, value: 50);
+    int32 r = 0;
+    int32 v = match (m.get(key: 5)) { case Some(x): x; case None: 0; };   // inline int literal key
+    if (v == 50)            { r = r + 10; }
+    if (m.contains(key: 5)) { r = r + 10; }                              // inline literal again
+
+    Map<Point, int32> pm = Map();
+    Point origin = Point(x: 1, y: 2);
+    pm.put(key: origin, value: 99);
+    int32 pv = match (pm.get(key: Point(x: 1, y: 2))) { case Some(x): x; case None: 0; };  // inline ctor key
+    if (pv == 99)                          { r = r + 10; }
+    if (!pm.contains(key: Point(x: 9, y: 9))) { r = r + 12; }            // inline ctor, absent
+    return r;   // 42
+}

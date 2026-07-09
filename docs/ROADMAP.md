@@ -44,11 +44,12 @@ remains to call the language **complete**:
      conditions (no per-iteration drop slot). The operator/receiver/`foreach`/string-`ref` slices are done;
      the durable fix is one general temporary-drop pass.
    - **Target-typed rvalue in a non-local-init position** *(ergonomic; surfaced building the containers)*. An
-     inline construction that needs its type from context works in a `Type x = …` initializer but not yet
-     elsewhere: a **bare generic ctor into a field** (`this.m = Map()` — infer the field's type args; bind to a
-     typed local first), an **inline ctor into an `operator[]`/`ref` param** (`a[i] = Tag(…)`, `map.get(Tag(…))`
-     — bind to a local first; `string` literals already materialize into a `ref string`). Clean workarounds
-     today; the fix is to propagate the target type into these positions like the local-initializer does.
+     inline construction that needs its type from context works in a `Type x = …` initializer but not yet in
+     every position. **DONE:** a primitive/`string` **literal or inline ctor into a `ref` param** now
+     materializes into a temp (`map.get(key: 5)` / `map.get(key: Point(…))` work). Still open: a **bare
+     generic ctor into a field** (`this.m = Map()` — infer the field's type args; bind to a typed local
+     first) and an **inline ctor into an `operator[]` place-store** (`a[i] = Tag(…)`). The fix is to
+     propagate the target type into these positions like the local-initializer does.
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
      (`buildVtables` doesn't merge a parent contract's slots into the child).
    - **Inline `new Concrete` into a smart-ptr-over-interface** — the fat-pointer box isn't constructed

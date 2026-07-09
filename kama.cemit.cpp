@@ -4893,6 +4893,25 @@ bool CEmitter::isExtern(FunctionDeclarationNode* fn)
 // NOTE: arguments are emitted in declared (param) order, which can differ from
 // source order. With side-effecting args this changes evaluation order; a
 // temp-hoisting pass (plan risk #3) is a later refinement.
+// The C type of a primitive LITERAL rvalue ("" if not a literal). Used to materialize a bare literal
+// into a temp when it's passed to a `ref` parameter (which needs an addressable lvalue).
+static std::string litRvalueCType(ASTNode* n)
+{
+    if (dynamic_cast<Int8Node*>(n))    return "int8_t";
+    if (dynamic_cast<Int16Node*>(n))   return "int16_t";
+    if (dynamic_cast<Int32Node*>(n))   return "int32_t";
+    if (dynamic_cast<Int64Node*>(n))   return "int64_t";
+    if (dynamic_cast<UInt8Node*>(n))   return "uint8_t";
+    if (dynamic_cast<UInt16Node*>(n))  return "uint16_t";
+    if (dynamic_cast<UInt32Node*>(n))  return "uint32_t";
+    if (dynamic_cast<UInt64Node*>(n))  return "uint64_t";
+    if (dynamic_cast<CharNode*>(n))    return "uint32_t";   // `char` = a uint32-backed codepoint
+    if (dynamic_cast<Float32Node*>(n)) return "float";
+    if (dynamic_cast<Float64Node*>(n)) return "double";
+    if (dynamic_cast<BooleanNode*>(n)) return "bool";
+    return "";
+}
+
 std::string CEmitter::emitReorderedCall(const std::string& cName, const std::string& leadArg,
                                         const std::vector<ParamSig>& params,
                                         SharedArgumentList args, int srcLine)
@@ -4944,16 +4963,19 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             else { auto g = _genericTypeInstOf.find(p.className);
                    if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = p.className; }
         }
-        // an inline ctor is a temporary rvalue — it can't be borrowed (`ref`/`out`) or aliased
-        // as an interface. Give a clear diagnostic instead of the generic "unknown function".
-        if (!ctorCls.empty() && !_classes[ctorCls].isCollection && (p.byRef || isInterface(p.className)))
-            unsupported("cannot pass an inline constructor to a `ref`/`out` or interface parameter — "
+        // An inline ctor is a temporary rvalue. To an INTERFACE `ref`/`out` param it can't be a fat pointer
+        // inline — reject (bind first). To a concrete-class param (by value OR `ref`) it's materialized into
+        // a hoisted temp below, so `f(Point(1, 2))` / `m.get(key: Point(1, 2))` work.
+        if (!ctorCls.empty() && !_classes[ctorCls].isCollection && p.byRef && isInterface(p.className))
+            unsupported("cannot pass an inline constructor to an interface `ref`/`out` parameter — "
                         "bind it to a local first, then pass that", srcLine);
         if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
-            && !p.byRef && !isInterface(p.className) && !_classes[ctorCls].isCollection) {
+            && !isInterface(p.className) && !_classes[ctorCls].isCollection) {
             std::string t = "__ctorarg" + std::to_string(_tempCounter++);
             std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
             _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
+            // A `ref` borrow keeps the temp alive through the call; if it owns anything, drop it at scope end.
+            if (p.byRef && _classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
             val = t;
         } else if (p.byRef && dynamic_cast<ElementAccessNode*>(argExpr.get())) {
             // `ref a[i]` borrows the ELEMENT: emit it as a place (`*NAME__at(...)`) so the `&(...)`
@@ -4979,6 +5001,16 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     st = "__strtmp" + std::to_string(_tempCounter++);
                     _hoisted.push_back("kama_string " + st + " = " + emitExpression(argExpr) + ";");
                     recordDestructibleLocal(st, "kama_string");
+                }
+            }
+            // A bare primitive LITERAL to a `ref`-primitive param (`m.get(key: 5)`) has no address —
+            // materialize it into a temp of the literal's C type so the `&temp` below is legal. No drop
+            // (a primitive owns nothing).
+            if (st.empty() && p.byRef && _hoistOK && !_loopCond) {
+                std::string lct = litRvalueCType(argExpr.get());
+                if (!lct.empty()) {
+                    st = "__primtmp" + std::to_string(_tempCounter++);
+                    _hoisted.push_back(lct + " " + st + " = " + emitExpression(argExpr) + ";");
                 }
             }
             val = st.empty() ? emitExpression(argExpr) : st;

@@ -170,9 +170,8 @@ gated by a **multi-condition `when [K: Copyable, V: Copyable]`**. Entry-wise ite
 end of life — ASan/UBSan-clean for owning keys *and* values, e.g. `Map<string, List<string>>`). Lookups
 **borrow** the key (`ref K`), so they don't consume a key you're holding; `get(key:)` returns
 `Optional<V>` with a **deep copy** of the value (present only when `V` is `Copyable`). A key that is an
-inline rvalue (a user-type ctor, or a bare `int` literal) is bound to a local first —
-`int32 k = 5; m.get(key: k)` — the primitive/ctor-rvalue-into-a-`ref` materialization gap (see
-*Known limitations*); a `string` literal materializes automatically.
+inline rvalue — a `string`/number literal or a user-type ctor — is materialized into a temp automatically,
+so `m.get(key: 5)` / `m.get(key: Point(1, 2))` work without binding a local first.
 
 ## Smart pointers ✅
 
