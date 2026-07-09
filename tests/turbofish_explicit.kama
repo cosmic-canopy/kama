@@ -1,0 +1,7 @@
+// When a type parameter can't be inferred from the arguments (it appears only in the body/return),
+// pass it explicitly with turbofish `f::<T>()`. Here T is used only in `sizeof(T)`.
+fn int32 byteSize<T>() { return cast<int32>(sizeof(T)); }
+
+fn int main() {
+    return byteSize::<int32>() + byteSize::<uint8>() * 38;   // 4 + 1*38 = 42
+}

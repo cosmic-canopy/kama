@@ -986,6 +986,19 @@ silent no-op), pending its future scope:
 - **`export`** 🚧 — reserved for the kama→host boundary (WASM module exports, scripting host interface),
   distinct from in-language `public`/`private`.
 
+## Known limitations (tracked → [ROADMAP.md](ROADMAP.md) §1)
+
+A few ownership-lowering edge cases are open at 1.0. Each **hard-errors** (never miscompiles) and has a
+clean workaround:
+
+- **Owned value into an indexed place** — `a[i] = give s` / `a[i] = "…"` (assigning an owning
+  `string`/collection/resource into an `operator[]` slot) isn't lowered. Mutate through a borrow —
+  `foreach (ref T e in a) { … }` — or work in a local. (Non-owning elements like `Array<int32>` are fine.)
+- **Owned value out of a `match` arm** — `:= give x`, and a bare generic constructor `:= List()`, in an
+  arm-value position aren't lowered. Build the value in a local before the `match`.
+- **Inline `new Concrete` into a smart-pointer-over-interface** — `Shared<Iface> s = new Concrete(…)` inline
+  isn't boxed; bind the `new` to a local first.
+
 ## Reserved/runtime
 
 Generated C reserves `__`-prefixed identifiers (`__base`, `__vptr`, `__ret_N`) and `Type__member` mangling.

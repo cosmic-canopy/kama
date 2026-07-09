@@ -26,23 +26,27 @@ Strings, the std I/O foundation (`std::io`/`fs`/`net` + the `examples/httpd` pro
 engine capability matrix in [ENGINE_READINESS.md](ENGINE_READINESS.md); the history in the git log. What
 remains to call the language **complete**:
 
-1. **Language-completeness residuals (1.0 blockers).** The fundamental (non-library) gaps still open — each
-   reproduces with plain resources/collections; a "language-complete" 1.0 must close them. (Reserved
-   later-track keywords `expose`/`volatile` stay deferred — they hard-error, never miscompile.)
+1. **Language-completeness residuals (1.0 blockers — deep emitter work).** The fundamental (non-library)
+   gaps still open, all in the move-tracking / ownership-lowering core; each reproduces with plain
+   resources/collections and has a clean workaround, so a "language-complete" 1.0 closes them but they don't
+   block the stdlib/engine work. (Reserved later-track keywords `expose`/`volatile` stay deferred — they
+   hard-error, never miscompile.)
+   - **Owned-value hand-off into a place or `match`-arm-value position** *(one shared root)*. Assigning an
+     owned value (`string`/collection/resource) into a **place** returned by `operator[]` — `a[i] = give s`
+     / `a[i] = <owned>` (there's no assignment branch for an owned-element place-store, so it hits the
+     "hand-off not in a recognized position" path and won't build) — and naming an owned value *out of* a
+     `match` arm — `:= give x`, or a bare generic ctor `:= List()` (the arm-value site doesn't unwrap a
+     `HandoffNode` or resolve a bare generic ctor from the match-target type). Workarounds: mutate elements
+     via `foreach (ref …)`; build the value in a local before the `match`. Needs new assignment / arm-value
+     lowering branches.
    - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop still leak
      in the residual positions: non-string-intrinsic by-value args, and owned temps in `while`/`for`
      conditions (no per-iteration drop slot). The operator/receiver/`foreach`/string-`ref` slices are done;
      the durable fix is one general temporary-drop pass.
-   - **Owning collection ELEMENTS — the last axis.** `string` locals + `List<string>` are done; still open:
-     `Array<string>` element place-store (`a[i] = <owned>`), nested `List<List<string>>` (recursive element
-     copyability), and the owned-typed-`match`-into-a-collection-local gaps (bare `List()` in a `:=` arm
-     value → "unknown function"; `:= give x` — a hand-off marker in a `:=`/`return` value is rejected, a
-     `:=` completeness gap).
-   - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered.
-   - **Multibyte source char literal `'é'`** — lexer gap (write `'\u{E9}'` today).
-   - **Verify-then-1.0-or-downgrade:** explicit type args when inference fails
-     ([kama.cemit.cpp:3467] — does turbofish `f::<T>()` already cover it?); inline `new Concrete` into a
-     smart-ptr-over-interface ([kama.cemit.cpp:5623] — has a bind-to-local workaround).
+   - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
+     (`buildVtables` doesn't merge a parent contract's slots into the child).
+   - **Inline `new Concrete` into a smart-ptr-over-interface** — the fat-pointer box isn't constructed
+     inline (bind the `new` to a local first; a clean error, documented in SPEC).
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.

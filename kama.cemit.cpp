@@ -3581,7 +3581,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     for (auto& tp : *tmpl->typeParams) {
         if (tp && !bind.count(*tp)) {
             unsupported(("cannot infer type parameter '" + *tp + "' from the call arguments "
-                         "(explicit type arguments are not yet supported)").c_str(), line);
+                         "— pass it explicitly with turbofish, e.g. `f::<T>(...)`").c_str(), line);
             return false;
         }
     }
