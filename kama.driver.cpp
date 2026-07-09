@@ -22,17 +22,19 @@
 #include <algorithm>
 
 #include <limits.h>
+#include <sys/stat.h>           // stat / S_ISDIR (directory check) — POSIX + mingw-w64 UCRT
+#include <dirent.h>             // opendir / readdir (module directory listing) — POSIX + mingw-w64 UCRT
 #ifdef _WIN32
-  #include <stdlib.h>          // _fullpath, _MAX_PATH
-  #include <windows.h>         // FindFirstFile (module directory listing)
+  // NB: do NOT include <windows.h> here — it is compiled in the same TU as kama.parser.hpp, whose token
+  // enum (BOOL, CHAR, CONST, INT8, VOID, …) collides with windows.h typedefs/macros. mingw-w64's POSIX
+  // dirent/stat cover everything the driver needs, so windows.h is unnecessary.
+  #include <stdlib.h>           // _fullpath, _MAX_PATH
   #ifndef PATH_MAX
     #define PATH_MAX _MAX_PATH
   #endif
 #else
   #include <unistd.h>
   #include <sys/wait.h>         // WEXITSTATUS
-  #include <sys/stat.h>         // stat (directory check)
-  #include <dirent.h>           // opendir/readdir (module directory listing)
 #endif
 
 #include "kama.parser.hpp"
@@ -99,13 +101,8 @@ std::string resolveRuntimeDir(const char* argv0)
 
 bool dirExists(const std::string& p)
 {
-#ifdef _WIN32
-    DWORD a = GetFileAttributesA(p.c_str());
-    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
-#else
     struct stat st;
-    return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
-#endif
+    return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);   // POSIX + mingw-w64
 }
 
 // The `*.kama` files directly inside `dir`, sorted for deterministic emit order.
@@ -115,20 +112,10 @@ std::vector<std::string> listKamaFiles(const std::string& dir)
     auto keep = [&](const std::string& name) {
         return name.size() > 5 && name.compare(name.size() - 5, 5, ".kama") == 0;
     };
-#ifdef _WIN32
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do { std::string n = fd.cFileName; if (keep(n)) out.push_back(dir + "/" + n); }
-        while (FindNextFileA(h, &fd));
-        FindClose(h);
-    }
-#else
-    if (DIR* d = opendir(dir.c_str())) {
+    if (DIR* d = opendir(dir.c_str())) {   // POSIX + mingw-w64 (wraps FindFirstFile internally on Windows)
         while (struct dirent* e = readdir(d)) { std::string n = e->d_name; if (keep(n)) out.push_back(dir + "/" + n); }
         closedir(d);
     }
-#endif
     std::sort(out.begin(), out.end());
     return out;
 }
