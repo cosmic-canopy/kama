@@ -79,8 +79,9 @@ struct MethodInfo {
     bool                         isRetro = false;     // injected by a retroactive `implements C for T` block —
                                                       // emitted static-inline in the header, skipped by the
                                                       // per-class proto/body loops (avoids a dup for a user target)
-    std::string                  whenParam;   // `fn … when T: Bound` — the gated type-param ("" = unconditional)
-    std::string                  whenBound;   // the required contract (source name; e.g. "Copyable")
+    // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
+    std::vector<std::string>     whenParams;
+    std::vector<std::string>     whenBounds;
     // Operator overloads register as methods under a synthetic name (`op_add`, `op_neg`, …).
     // They are NOT ClassMethodDeclarationNode, so `node` stays null: emit from `opDecl` instead.
     bool                         isOperator = false;
@@ -150,8 +151,10 @@ struct ClassInfo {
     // `implements Copyable(bare: …) when <param>: <bound>` on a generic type — the capability is
     // CONDITIONAL: each instance is Copyable only when its `<param>` satisfies `<bound>` (evaluated in
     // registerGenericTypeInst; the gated `copy()` is dropped from instances where it doesn't hold).
-    std::string                       copyableWhenParam;   // gated type-param name ("" = unconditional)
-    std::string                       copyableWhenBound;   // required contract (source name; "Copyable" for the container case)
+    // `implements Copyable(bare: …) when [P1: B1, …]` — the gated type-params + contracts (index-aligned,
+    // AND) that make this instance Copyable. Empty = unconditional.
+    std::vector<std::string>          copyableWhenParams;
+    std::vector<std::string>          copyableWhenBounds;
 
     // Inheritance + virtual dispatch
     std::string                       baseName;        // "" if no base
@@ -598,6 +601,12 @@ private:
     // Does `ci` structurally satisfy contract `contract` (have all its methods, public)?
     bool classSatisfiesBound(ClassInfo* ci, const std::string& contract);
     ClassInfo* retroTargetInfo(const std::string& tkey);   // collection/primitive retro-conformance ClassInfo
+    // AND over a `when [P: B, …]` gate: every gated param's concrete arg must satisfy its bound. `params`
+    // are the template's type-param names, `concrete` the instance's args (index-aligned).
+    bool whenConditionsHold(const std::vector<std::string>& whenParams,
+                            const std::vector<std::string>& whenBounds,
+                            const std::vector<std::string>& params,
+                            const std::vector<SharedIdentifier>& concrete);
     // Does `ci` NOMINALLY `implements` a contract whose template is `tmpl` (any instantiation)? Checks the
     // recorded `interfaces` list (a plain name == tmpl, or a generic instance whose `templateKey` == tmpl).
     bool implementsContractTemplate(ClassInfo* ci, const std::string& tmpl);

@@ -229,8 +229,10 @@ public:
                                        // its contract bounds [I, J]; empty/unset otherwise.
     bool isConstParam = false;         // const generic PARAMETER (`const N: int`) — a value, not a type
     int  bareDefault = 0;              // `implements Copyable(bare: give|copy)` — the contract-parameter token (GIVE/COPY), 0=unset
-    SharedIdentifier whenParam;        // `implements C when T: Bound` — the type-param name (Phase B); null=unconditional
-    SharedIdentifier whenBound;        // `implements C when T: Bound` — the required contract (Phase B)
+    // `implements C when [P1: B1, P2: B2, …]` — the gate's per-condition type-param names + required
+    // contracts (index-aligned). Empty = unconditional. Multiple = AND (the impl holds only when all do).
+    SharedIdentifierList whenParams;
+    SharedIdentifierList whenBounds;
     SharedExpression constArgValue;    // const generic ARGUMENT that is a literal (`4` in `Fixed<T,4>`)
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
@@ -738,8 +740,9 @@ public:
     SharedBlock body;
     bool isConst = false;   // `const fn …` — a non-mutating method
     bool isRef = false;     // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller
-    SharedIdentifier whenParam;   // `fn … when T: Bound` — the gated type-param name (Phase C); null=unconditional
-    SharedIdentifier whenBound;   // `fn … when T: Bound` — the required contract
+    // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
+    SharedIdentifierList whenParams;
+    SharedIdentifierList whenBounds;
     ClassMethodDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
             SharedIdentifier returnType,
             SharedIdentifier name,

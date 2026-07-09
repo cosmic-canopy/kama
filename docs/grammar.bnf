@@ -731,10 +731,8 @@ interface_type_list
 implements_entry
   : type_name
   | type_name LPAREN IDENTIFIER COLON handoff_default RPAREN
-  | type_name WHEN IDENTIFIER COLON type_name
-
-  | type_name LPAREN IDENTIFIER COLON handoff_default RPAREN WHEN IDENTIFIER COLON type_name
-
+  | type_name when_clause
+  | type_name LPAREN IDENTIFIER COLON handoff_default RPAREN when_clause
   ;
 handoff_default
   : GIVE
@@ -771,11 +769,19 @@ method_declaration
   | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
   | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body      /* `fn ref T at(…)` — a place-returning method */
   ;
-/* `fn … when T: Bound` — a method present only when the type-param satisfies a bound (the value
-   `iterator()` needs a Copyable element). The bound type carries the param name in `whenParam`. */
+/* `fn … when [P: B, …]` — a method (or implements entry) present only when EVERY gated type-param
+   satisfies its bound (AND). Square brackets are mandatory for one condition or many; multiple conditions
+   gate on distinct params (`Map.copy() when [K: Copyable, V: Copyable]`). Shared by method + implements. */
 method_when_opt
   : /* Nothing */
-  | WHEN IDENTIFIER COLON type_name
+  | when_clause
+  ;
+when_clause
+  : WHEN LEFT_BRACKET when_cond_list RIGHT_BRACKET
+  ;
+when_cond_list
+  : IDENTIFIER COLON type_name
+  | when_cond_list COMMA IDENTIFIER COLON type_name
   ;
 /* A method name is an identifier — but `copy`/`give` are hand-off markers only in expression
    position, so we let them name a member too (contextual keywords). This is what lets a `resource`

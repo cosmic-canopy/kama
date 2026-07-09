@@ -6,7 +6,7 @@ export { Set };
 // information, so `Unit` is the zero-size payload). Move-only: it owns the backing map, which owns every
 // key; the compiler-derived destructor drops the map (and thus the keys). Lookups borrow the key.
 // `foreach (K k in set)` iterates the members (the map's key iterator), for a `Copyable` key.
-type resource Set<K: Hashable + Equatable> implements Iterable<K> when K: Copyable {
+type resource Set<K: Hashable + Equatable> implements Iterable<K> when [K: Copyable] {
     Map<K, Unit> m;
 
     // `this.m = Map()` won't infer the map's type args from the field, so build it in a typed local
@@ -18,5 +18,5 @@ type resource Set<K: Hashable + Equatable> implements Iterable<K> when K: Copyab
     public fn bool remove(ref K key) { return this.m.remove(key: key); }
     public fn int32 length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
-    public fn MapKeyIter<K> iterator() when K: Copyable { return this.m.iterator(); }
+    public fn MapKeyIter<K> iterator() when [K: Copyable] { return this.m.iterator(); }
 }

@@ -40,7 +40,7 @@ type value ListIterMut<T> implements IteratorMut<T> {
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
-type resource List<T> implements Copyable(bare: give) when T: Copyable, IterableMut<T>, Iterable<T> when T: Copyable {
+type resource List<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable] {
     Ptr<T> data; int32 len; int32 cap; int32 mods;
 
     public List() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; this.mods = 0; }
@@ -66,7 +66,7 @@ type resource List<T> implements Copyable(bare: give) when T: Copyable, Iterable
     // The by-value `foreach (T x in list)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements — `List<Owned>` — borrow instead: `foreach (ref T x in list)`.)
     // Each iterator gets a live pointer to `mods` (its own address) + the current value (a snapshot).
-    public fn ListIter<T> iterator() when T: Copyable {
+    public fn ListIter<T> iterator() when [T: Copyable] {
         return ListIter::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
     public fn ListIterMut<T> iterMut() {
@@ -114,8 +114,8 @@ type resource List<T> implements Copyable(bare: give) when T: Copyable, Iterable
 
     // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
     // (routes through its `equals`, so it works for `string` and any user `Equatable` element).
-    public fn bool contains(ref T item) when T: Equatable { return this.indexOf(item: item) >= 0; }
-    public fn int32 indexOf(ref T item) when T: Equatable {
+    public fn bool contains(ref T item) when [T: Equatable] { return this.indexOf(item: item) >= 0; }
+    public fn int32 indexOf(ref T item) when [T: Equatable] {
         int32 i = 0;
         while (i < this.len) { if (this[i].equals(other: item)) { return i; } i = i + 1; }
         return 0 - 1;

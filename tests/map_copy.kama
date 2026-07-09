@@ -1,0 +1,28 @@
+// `copy m` deep-copies a Map (present only when BOTH key and value are Copyable, via multi-`when`): the
+// clone is fully independent of the original — for int keys AND owning string keys.
+import std::collections::{Map};
+
+fn int main() {
+    Map<int32, int32> m = Map();
+    int32 i = 0;
+    while (i < 20) { m.put(key: i, value: i * 10); i = i + 1; }
+    Map<int32, int32> c = copy m;
+    int32 k5 = 5;
+    c.put(key: k5, value: 999);                                          // mutate the copy only
+    int32 c5 = match (c.get(key: k5)) { case Some(x): x; case None: 0; };  // 999
+    int32 m5 = match (m.get(key: k5)) { case Some(x): x; case None: 0; };  // 50 (original independent)
+
+    int32 r = 0;
+    if (c5 == 999) { r = r + 10; }
+    if (m5 == 50)  { r = r + 10; }
+
+    Map<string, int32> s = Map();                                       // owning (string) keys
+    s.put(key: "a", value: 1); s.put(key: "b", value: 2);
+    Map<string, int32> sc = copy s;
+    sc.put(key: "a", value: 100);                                       // mutate the copy only
+    int32 sca = match (sc.get(key: "a")) { case Some(x): x; case None: 0; };  // 100
+    int32 sa  = match (s.get(key: "a"))  { case Some(x): x; case None: 0; };  // 1
+    if (sca == 100) { r = r + 10; }
+    if (sa == 1)    { r = r + 12; }
+    return r;   // 42
+}

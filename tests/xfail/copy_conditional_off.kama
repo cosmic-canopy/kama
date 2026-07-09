@@ -1,7 +1,7 @@
-// `Cell<T> implements Copyable when T: Copyable` — for a move-only element the capability is OFF, so
+// `Cell<T> implements Copyable when [T: Copyable]` — for a move-only element the capability is OFF, so
 // `copy` on a `Cell<MoveOnly>` is a compile error (its copy() was never emitted), even though the
 // Cell is otherwise usable.
-type resource Cell<T> implements Copyable(bare: give) when T: Copyable {
+type resource Cell<T> implements Copyable(bare: give) when [T: Copyable] {
     T value;
     public Cell(T v) { this.value = give v; }
     public fn Cell<T> copy() { return Cell(v: copy this.value); }

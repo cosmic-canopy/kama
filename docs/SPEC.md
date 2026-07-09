@@ -160,9 +160,11 @@ seen.add(key: "x");   bool member = seen.contains(key: "x");
 ```
 
 `foreach (K k in map)` / `foreach (K k in set)` iterates the keys (a by-value key iterator, present for a
-`Copyable` key; it guards against a mid-iteration `put`/`remove` like the `List` iterator). Entry-wise
-iteration (`foreach (Entry e in map)`) and a `Map` deep-`copy` both await multi-parameter `when` (they
-need *both* `K` and `V` `Copyable`) — tracked.
+`Copyable` key; it guards against a mid-iteration `put`/`remove` like the `List` iterator). `copy m`
+deep-copies a whole map (independent clone) — present only when **both** key and value are `Copyable`,
+gated by a **multi-condition `when [K: Copyable, V: Copyable]`**. Entry-wise iteration
+(`foreach (Entry e in m.entries())`) is a tracked follow-up (a generic `Entry<K,V>` value yielded through
+`Optional` doesn't monomorphize yet).
 
 `Map` is **move-only**: it owns its keys and values (dropping them on overwrite, `remove`, `clear`, and at
 end of life — ASan/UBSan-clean for owning keys *and* values, e.g. `Map<string, List<string>>`). Lookups

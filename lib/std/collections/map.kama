@@ -39,7 +39,6 @@ implements Equatable for int32 {
     public fn bool equals(int32 other) { return this == other; }
 }
 
-// A general open-addressing hash map over `K: Hashable + Equatable` -> `V`. Linear probing with
 // A by-value iterator over a map's KEYS (the `foreach (K k in map)` protocol; `Set` hands out the same).
 // It borrows the map's key + state buffers, walks only FULL slots, and yields each key BY VALUE (a copy),
 // so it exists only for a `Copyable` key. Like `ListIter` it snapshots the map's mutation counter and
@@ -63,16 +62,20 @@ type value MapKeyIter<K> implements Iterator<K> {
     }
 }
 
-// tombstones; grows (and sheds tombstones) at a 0.75 load factor. Move-only: it owns three parallel
-// heap buffers (keys, values, per-slot state) and every live key/value, dropping them at end of life.
+// A general open-addressing hash map over `K: Hashable + Equatable` -> `V`. Linear probing with
+// tombstones; grows (and sheds tombstones) at a 0.75 load factor. Move-only by default: it owns three
+// parallel heap buffers (keys, values, per-slot state) and every live key/value, dropping them at end of
+// life.
 //
 //   state[i]: 0 = EMPTY (never used), 1 = FULL (a live entry), 2 = TOMB (removed — probe past it).
 //
 // Keys are hashed/compared by content, so a lookup key built any way finds the stored entry. Lookups
 // borrow the key (`ref K`); `put` consumes the key + value it stores (by value). `foreach (K k in m)`
-// iterates the keys (needs a `Copyable` key). To duplicate a map, rebuild it — a two-type-parameter
-// `Copyable` (and entry-wise iteration `foreach (Entry e in m)`) awaits multi-parameter `when`.
-type resource Map<K: Hashable + Equatable, V> implements Iterable<K> when K: Copyable {
+// iterates the keys, and `copy m` deep-copies — each present only when its keys (and, for `copy`, values)
+// are `Copyable` (multi-`when`). Entry-wise iteration is a tracked follow-up (a generic `Entry<K,V>` value
+// yielded through `Optional` doesn't monomorphize yet).
+type resource Map<K: Hashable + Equatable, V>
+        implements Copyable(bare: give) when [K: Copyable, V: Copyable], Iterable<K> when [K: Copyable] {
     Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 len; int32 cap; int32 tombs; int32 mods;
 
     public Map() {
@@ -88,7 +91,7 @@ type resource Map<K: Hashable + Equatable, V> implements Iterable<K> when K: Cop
 
     // `foreach (K k in map)` — a by-value key iterator (present only for a `Copyable` key). It borrows the
     // key + state buffers and a live pointer to `mods` so a mid-iteration structural change is caught.
-    public fn MapKeyIter<K> iterator() when K: Copyable {
+    public fn MapKeyIter<K> iterator() when [K: Copyable] {
         return MapKeyIter::<K>(keys: this.keys, state: this.state, cap: this.cap,
                                modsp: addr(of: this.mods), modsAt: this.mods);
     }
@@ -120,9 +123,25 @@ type resource Map<K: Hashable + Equatable, V> implements Iterable<K> when K: Cop
     // an owning element: `this.vals` is a raw `Ptr<V>`, whose index has no known element class, so the `copy`
     // marker is dropped and it aliases (a use-after-free once both are dropped). Routing through a `ref V`
     // param gives the emitter the concrete `V`, so `copy v` emits the real element `__copy`.
-    fn V cloneVal(ref V v) when V: Copyable { return copy v; }
+    fn V cloneVal(ref V v) when [V: Copyable] { return copy v; }
+    fn K cloneKey(ref K k) when [K: Copyable] { return copy k; }   // same trick for an owning key
 
-    public fn Optional<V> get(ref K key) when V: Copyable {
+    // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
+    // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
+    public fn Map<K,V> copy() when [K: Copyable, V: Copyable] {
+        Map<K,V> result = Map();
+        int32 i = 0;
+        while (i < this.cap) {
+            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+            if (s == 1ui8) {
+                unsafe { result.put(key: this.cloneKey(k: this.keys[i]), value: this.cloneVal(v: this.vals[i])); }
+            }
+            i = i + 1;
+        }
+        return result;
+    }
+
+    public fn Optional<V> get(ref K key) when [V: Copyable] {
         int32 i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
         unsafe { return Optional::Some(value: this.cloneVal(v: this.vals[i])); }   // hand back a copy; map keeps its own

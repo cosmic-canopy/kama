@@ -2322,10 +2322,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // its presence + the `copy()` method are validated after the member loop below.
                     if (*itf->value == "Copyable") {
                         ci.copyable = true; ci.bareDefault = itf->bareDefault;
-                        if (itf->whenParam && itf->whenParam->value) {   // conditional: `… when T: Bound`
-                            ci.copyableWhenParam = *itf->whenParam->value;
-                            ci.copyableWhenBound = (itf->whenBound && itf->whenBound->value) ? *itf->whenBound->value : "Copyable";
-                        }
+                        if (itf->whenParams)   // conditional: `… when [P: B, …]` — record each gated param+bound
+                            for (size_t c = 0; c < itf->whenParams->size(); ++c) {
+                                auto& p = (*itf->whenParams)[c];
+                                auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
+                                ci.copyableWhenParams.push_back(p && p->value ? *p->value : "");
+                                ci.copyableWhenBounds.push_back(b && b->value ? *b->value : "Copyable");
+                            }
                     }
                 }
         }
@@ -2389,10 +2392,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …`
-                        if (md->whenParam && md->whenParam->value) {   // `fn … when T: Bound` — conditional method
-                            mi.whenParam = *md->whenParam->value;
-                            mi.whenBound = (md->whenBound && md->whenBound->value) ? *md->whenBound->value : "Copyable";
-                        }
+                        if (md->whenParams)   // `fn … when [P: B, …]` — conditional method (AND of all)
+                            for (size_t c = 0; c < md->whenParams->size(); ++c) {
+                                auto& p = (*md->whenParams)[c];
+                                auto& b = md->whenBounds ? (*md->whenBounds)[c] : p;
+                                mi.whenParams.push_back(p && p->value ? *p->value : "");
+                                mi.whenBounds.push_back(b && b->value ? *b->value : "Copyable");
+                            }
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
                         // `protected` belongs to a `resource` in an extensibility hierarchy
@@ -3167,22 +3173,16 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // method so it is never emitted for this instance — this is what lets `List<Owned>` compile even
     // though its element isn't copyable, while `copy list<int32>` still works.
     bool copyableActive = ci.copyable;
-    if (!ci.copyableWhenParam.empty()) {
-        copyableActive = false;
-        for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
-            if (params[i] == ci.copyableWhenParam) { copyableActive = satisfiesBound(cType(concrete[i]), ci.copyableWhenBound); break; }
+    if (!ci.copyableWhenParams.empty()) {
+        copyableActive = whenConditionsHold(ci.copyableWhenParams, ci.copyableWhenBounds, params, concrete);
         if (!copyableActive) { ci.copyable = false; ci.methods.erase("copy"); }
     }
     // Conditional METHODS (`fn … when T: Bound`): drop any whose bound fails for this instance, so it's
     // never emitted (the value `iterator()` needs a Copyable element — a `List<Owned>` simply lacks it).
     for (auto it = ci.methods.begin(); it != ci.methods.end(); ) {
         const MethodInfo& mi = it->second;
-        bool drop = false;
-        if (!mi.whenParam.empty()) {
-            drop = true;
-            for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
-                if (params[i] == mi.whenParam) { drop = !satisfiesBound(cType(concrete[i]), mi.whenBound); break; }
-        }
+        bool drop = !mi.whenParams.empty()
+                 && !whenConditionsHold(mi.whenParams, mi.whenBounds, params, concrete);
         if (drop) it = ci.methods.erase(it); else ++it;
     }
     for (auto& kv : ci.methods) kv.second.cName = mangled + "__" + kv.first;
@@ -3201,7 +3201,19 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         ci.interfaces.clear();
         for (auto& itf : *ci.node->baseTypes->interfaces) {
             if (!itf || !itf->value) continue;
-            if (*itf->value == "Copyable" && itf->whenParam && !copyableActive) continue;   // gated off for this instance
+            // A conditional interface (`Copyable(bare:) when […]`, `Iterable<T> when […]`) is present only
+            // when its when-conditions hold for this instance — drop it otherwise (generalizes the old
+            // Copyable-only gate; the methods it fronts are dropped by the method gate above).
+            if (itf->whenParams && !itf->whenParams->empty()) {
+                std::vector<std::string> wp, wb;
+                for (size_t c = 0; c < itf->whenParams->size(); ++c) {
+                    auto& p = (*itf->whenParams)[c];
+                    auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
+                    wp.push_back(p && p->value ? *p->value : "");
+                    wb.push_back(b && b->value ? *b->value : "Copyable");
+                }
+                if (!whenConditionsHold(wp, wb, params, concrete)) continue;
+            }
             std::string base = resolveUserName(*itf->value, itf->qualifier);
             if (itf->genericArg && _genericContracts.count(base)) {
                 scanTypeForGenericContracts(itf);                     // register `Deref_Point` under subst
@@ -4709,6 +4721,23 @@ ClassInfo* CEmitter::retroTargetInfo(const std::string& tkey)
     auto pi = _primConformances.find(tkey);
     if (pi != _primConformances.end()) return &pi->second;
     return nullptr;
+}
+
+// A `when [P1: B1, …]` gate holds iff EVERY condition holds: the concrete arg bound to each gated param
+// satisfies its required contract. A condition naming a param that isn't a type-param of this template
+// fails conservatively (as the old single-param gate did — it left the capability off).
+bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
+                                  const std::vector<std::string>& whenBounds,
+                                  const std::vector<std::string>& params,
+                                  const std::vector<SharedIdentifier>& concrete)
+{
+    for (size_t c = 0; c < whenParams.size() && c < whenBounds.size(); ++c) {
+        bool held = false;
+        for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
+            if (params[i] == whenParams[c]) { held = satisfiesBound(cType(concrete[i]), whenBounds[c]); break; }
+        if (!held) return false;
+    }
+    return true;
 }
 
 bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)

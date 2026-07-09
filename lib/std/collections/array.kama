@@ -27,7 +27,7 @@ type value ArrayIterMut<T> implements IteratorMut<T> {
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
 // `size` elements is live from construction (zero-initialized) to drop — unlike `List`, which tracks a
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
-type resource Array<T> implements Copyable(bare: give) when T: Copyable, IterableMut<T>, Iterable<T> when T: Copyable {
+type resource Array<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable] {
     Ptr<T> data; int32 size;
 
     public Array(int32 size) {
@@ -47,13 +47,13 @@ type resource Array<T> implements Copyable(bare: give) when T: Copyable, Iterabl
 
     // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements borrow instead: `foreach (ref T x in arr)`.)
-    public fn ArrayIter<T> iterator() when T: Copyable { return ArrayIter::<T>(data: this.data, len: this.size); }
+    public fn ArrayIter<T> iterator() when [T: Copyable] { return ArrayIter::<T>(data: this.data, len: this.size); }
     public fn ArrayIterMut<T> iterMut() { return ArrayIterMut::<T>(data: this.data, len: this.size); }
 
     // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
     // (routes through its `equals`, so it works for `string` and any user `Equatable` element).
-    public fn bool contains(ref T item) when T: Equatable { return this.indexOf(item: item) >= 0; }
-    public fn int32 indexOf(ref T item) when T: Equatable {
+    public fn bool contains(ref T item) when [T: Equatable] { return this.indexOf(item: item) >= 0; }
+    public fn int32 indexOf(ref T item) when [T: Equatable] {
         int32 i = 0;
         while (i < this.size) { if (this[i].equals(other: item)) { return i; } i = i + 1; }
         return 0 - 1;

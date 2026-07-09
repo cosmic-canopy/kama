@@ -146,8 +146,12 @@ serialization, networking).
 - **Reflection + declarative serialization** — see the brief above; back ends follow as modules. Rides on
   the shipped `std::fs`/`std::io` for asset + scene load.
 - **Container / data-structure reach.** Now **shipped**: `List`/`Array`/`string`/`Fixed`, plus **`Map<K,V>`**
-  (open-addressing/tombstoned, `K: Hashable + Equatable`, owning keys+values, ASan-clean) and **`Set<K>`**
-  (= `Map<K, Unit>`); `List`/`Array` gained `reserve`/`remove`/`clear`/`contains`/`indexOf`. Still ahead:
+  (open-addressing/tombstoned, `K: Hashable + Equatable`, owning keys+values, ASan-clean; deep `copy` +
+  key iteration) and **`Set<K>`** (= `Map<K, Unit>`); `List`/`Array` gained
+  `reserve`/`remove`/`clear`/`contains`/`indexOf`. The gating uses **multi-condition `when [K: Copyable,
+  V: Copyable]`** (`Map.copy` needs both). **Tracked:** entry-wise iteration `foreach (Entry e in
+  m.entries())` — a generic `Entry<K,V>` value yielded through `Optional` doesn't monomorphize yet. Still
+  ahead:
   **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a system or
   a GPU upload with no copy and no ownership transfer), **priority queue / binary heap** (A* pathfinding,
   event/timer scheduling), **deque / ring buffer** (job & event queues, audio), **slot map / generational
