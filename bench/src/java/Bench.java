@@ -5,6 +5,7 @@
 // because every workload's running sum stays well under 2^63, so `% 256` agrees, and `pi`
 // is pure IEEE-754 double.
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.function.LongUnaryOperator;
 
 public class Bench {
@@ -29,6 +30,7 @@ public class Bench {
     else if(w.equals("dispatch")){ final int N=512; Shape[] shapes=new Shape[N]; for(int j=0;j<N;j++) shapes[j]=(j%2==0)?new Circle(3):new Square(4); for(long i=0;i<8000000;i++) sum+=shapes[(int)(i%N)].area(); }
     else if(w.equals("alloc")){ for(int iter=0;iter<2000;iter++){ ArrayList<Integer> xs=new ArrayList<>(); for(int j=1;j<=1000;j++) xs.add(j); long s=0; for(int v: xs) s+=v; sum+=s; } }
     else if(w.equals("fnptr")){ LongUnaryOperator a=Bench::add1, b=Bench::mul3; for(long i=0;i<8000000;i++){ if(i%2==0) sum+=apply(a,i); else sum+=apply(b,i); } }
+    else if(w.equals("map")){ final long N=100000, PASSES=10; HashMap<Integer,Long> m=new HashMap<>(); for(long i=0;i<N;i++) m.put((int)i, i*2); for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=m.get(k); } }
     System.exit((int)(sum%256));
   }
 }

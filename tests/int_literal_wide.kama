@@ -1,0 +1,13 @@
+// A suffixed integer literal whose value exceeds 32 bits must keep its width. Regression: the `i16`/`i64`
+// suffix was mis-parsed as 32-bit (the width's first digit was read one position off), truncating any
+// value that didn't fit int32 — e.g. `2654435761i64` became -1640531535.
+fn int main() {
+    int64 big = 2654435761i64;                 // > int32 max (2147483647)
+    int64 mask = 1099511627776i64;             // 2^40 — needs 64 bits
+    int32 r = 0;
+    if (big == 2654435761i64)     { r = r + 10; }   // roundtrips (not truncated)
+    if (big > 2147483647i64)      { r = r + 10; }   // genuinely larger than int32 max
+    if (mask == 1099511627776i64) { r = r + 10; }   // 2^40 intact
+    if ((big % 100000i64) == 35761i64) { r = r + 12; }  // low digits correct -> LCG scrambles bijectively
+    return r;   // 42
+}

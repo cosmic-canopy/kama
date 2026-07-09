@@ -1222,7 +1222,10 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
   }
   else
   {
-    char firstDigit = str[index-2];
+    // The width's FIRST digit is at index-1 ('6' of "…64", '1' of "…16", '3' of "…32"); index-2 is the
+    // type char ('i'/'u'), so reading it here left every `i16`/`i64` literal parsed as 32-bit — truncating
+    // any value that didn't fit int32 (`2654435761i64` → -1640531535). Unsigned masked it (values fit uint32).
+    char firstDigit = str[index-1];
     if(firstDigit == '1')
     {
       bits = 16;

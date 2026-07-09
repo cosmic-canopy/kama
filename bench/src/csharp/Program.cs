@@ -17,6 +17,7 @@ class P {
     else if(w=="dispatch"){ const int N=512; Shape[] shapes=new Shape[N]; for(int j=0;j<N;j++) shapes[j]=(j%2==0)?(Shape)new Circle(3):new Square(4); for(ulong i=0;i<8000000;i++) sum+=(ulong)shapes[(int)(i%(ulong)N)].Area(); }
     else if(w=="alloc"){ for(int iter=0;iter<2000;iter++){ var xs=new System.Collections.Generic.List<int>(); for(int j=1;j<=1000;j++) xs.Add(j); ulong s=0; foreach(var v in xs) s+=(ulong)v; sum+=s; } }
     else if(w=="fnptr"){ System.Func<long,long> a=Add1, b=Mul3; for(ulong i=0;i<8000000;i++){ if(i%2==0) sum+=(ulong)Apply(a,(long)i); else sum+=(ulong)Apply(b,(long)i); } }
+    else if(w=="map"){ const long N=100000, PASSES=10; var m=new System.Collections.Generic.Dictionary<int,long>(); for(long i=0;i<N;i++) m[(int)i]=i*2; for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=(ulong)m[k]; } }
     return (int)(sum%256);
   }
 }

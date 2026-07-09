@@ -9,7 +9,7 @@ OUT=bench/build/results.tsv
 printf "track\tlang\tworkload\ttime_ms\trss_kb\tsize_bytes\texit\n" > "$OUT"
 
 WORKLOADS="${1:-all}"
-[ "$WORKLOADS" = "all" ] && WORKLOADS="fib pi collatz dispatch alloc fnptr"
+[ "$WORKLOADS" = "all" ] && WORKLOADS="fib pi collatz dispatch alloc fnptr map"
 
 NATIVE="kama c cpp rust go csharp java lua python"
 WASM="kama-wasm js ts"

@@ -1,0 +1,28 @@
+// Hash-map throughput: insert N int keys, then look every key up PASSES times in a scrambled
+// (bijective LCG-strided) order. Deterministic checksum -> exit code (cross-language cross-check).
+import std::collections::{Map};
+
+fn int main()
+{
+    int32 N = 100000;
+    int32 PASSES = 10;
+    Map<int32, int64> m = Map();
+    int32 i = 0;
+    while (i < N) { m.put(key: i, value: cast<int64>(i) * 2i64); i = i + 1; }
+
+    uint64 sum = 0ui64;
+    int32 p = 0;
+    while (p < PASSES)
+    {
+        i = 0;
+        while (i < N)
+        {
+            int32 k = cast<int32>((cast<int64>(i) * 2654435761i64) % cast<int64>(N));   // bijection over 0..N-1
+            int64 got = match (m.get(key: k)) { case Some(x): x; case None: 0i64; };
+            sum = sum + cast<uint64>(got);
+            i = i + 1;
+        }
+        p = p + 1;
+    }
+    return cast<int>(sum % 256ui64);
+}
