@@ -1,0 +1,26 @@
+// Map intrinsics at the bounds we expect: empty get -> None, absent remove/contains, single entry,
+// overwrite doesn't grow length, remove-to-empty.
+import std::collections::{Map};
+fn int main() {
+    int32 r = 0;
+    Map<int32, int32> m = Map();
+    if (m.length() == 0)              { r = r + 3; }               // empty
+    if (!m.contains(key: 1))          { r = r + 3; }               // absent in empty
+    if (!m.remove(key: 1))            { r = r + 3; }               // remove absent -> false
+    int32 g0 = match (m.get(key: 1)) { case Some(x): x; case None: 0 - 1; };
+    if (g0 == 0 - 1)                  { r = r + 3; }               // empty get -> None
+
+    m.put(key: 7, value: 70);                                      // single entry
+    if (m.length() == 1)             { r = r + 3; }
+    int32 g7 = match (m.get(key: 7)) { case Some(x): x; case None: 0; };
+    if (g7 == 70)                    { r = r + 3; }
+    m.put(key: 7, value: 700);                                     // overwrite -> length unchanged
+    if (m.length() == 1)             { r = r + 3; }
+    int32 g7b = match (m.get(key: 7)) { case Some(x): x; case None: 0; };
+    if (g7b == 700)                  { r = r + 3; }
+    if (m.contains(key: 7))          { r = r + 3; }
+    if (m.remove(key: 7))            { r = r + 3; }                // remove present -> true
+    if (m.length() == 0)             { r = r + 3; }               // back to empty
+    if (!m.contains(key: 7))         { r = r + 9; }
+    return r;   // 39 checks-weighted to 42
+}

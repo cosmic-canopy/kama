@@ -4330,6 +4330,11 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound) co
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
         return it->second.copyable;                            // a resource → only if `implements Copyable`
     }
+    // A retroactive `implements <bound> for t` also satisfies it — including a PRIMITIVE target (`int32`),
+    // whose conformance lives in _primConformances (NOT _classes). Consult the pre-scan so a `when
+    // [T: Equatable]` gate on `List<int32>` sees int32's retro `Equatable` (matched on the raw source name).
+    auto rc = _retroConformances.find(t);
+    if (rc != _retroConformances.end() && rc->second.count(bound)) return true;
     if (it == _classes.end()) return false;
     for (auto& itf : it->second.interfaces) if (itf == bound) return true;
     return false;

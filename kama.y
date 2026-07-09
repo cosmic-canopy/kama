@@ -101,6 +101,12 @@ struct kamayystype {
 %expect 1
 %defines
 %define api.pure full
+/* Better syntax errors: "syntax error, unexpected X, expecting Y" (using the token string-aliases below,
+   e.g. "when" / "[" / ":="). Zero runtime cost (the parser isn't in the runtime); the message is built
+   only on an error. LAC makes the expected-set exact — its per-token parse cost is negligible next to
+   codegen + the C compiler invocation, so it's on. */
+%define parse.error detailed
+%define parse.lac full
 %lex-param   { yyscan_t scanner }
 %parse-param { yyscan_t scanner }
 

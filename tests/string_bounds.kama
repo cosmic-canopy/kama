@@ -1,0 +1,40 @@
+// String intrinsics at the bounds we expect: empty, first/last byte, multibyte (UTF-8 bytes vs
+// codepoints), and substring / find / contains / startsWith / endsWith edges. (+1 per check.)
+fn int32 charCount(ref string s) {
+    int32 n = 0;
+    foreach (char c in s.chars()) { n = n + 1; }
+    return n;
+}
+fn int main() {
+    string empty = ""; string a = "a"; string abc = "abc";
+    string e = "é"; string cafe = "café"; string hello = "hello";
+    int32 r = 0;
+    if (cast<int32>(empty.length()) == 0)    { r = r + 1; }   // empty
+    if (empty.isEmpty())                     { r = r + 1; }
+    if (!a.isEmpty())                        { r = r + 1; }
+    if (charCount(s: empty) == 0)            { r = r + 1; }
+    if (abc[0] == 97ui8)                     { r = r + 1; }   // first byte 'a'
+    if (abc[2] == 99ui8)                     { r = r + 1; }   // last byte 'c'
+    if (cast<int32>(abc.length()) == 3)      { r = r + 1; }
+    if (cast<int32>(e.length()) == 2)        { r = r + 1; }   // U+00E9 = 2 UTF-8 bytes
+    if (charCount(s: e) == 1)                { r = r + 1; }   // 1 codepoint
+    if (cast<int32>(cafe.length()) == 5)     { r = r + 1; }
+    if (charCount(s: cafe) == 4)             { r = r + 1; }
+    if (hello.substring(start: 0, end: 5).equals(other: "hello"))  { r = r + 1; }  // whole
+    if (hello.substring(start: 0, end: 0).isEmpty())               { r = r + 1; }  // empty at start
+    if (hello.substring(start: 5, end: 5).isEmpty())               { r = r + 1; }  // empty at end
+    if (hello.substring(start: 1, end: 3).equals(other: "el"))     { r = r + 1; }
+    if (hello.contains(substring: "ell"))    { r = r + 1; }
+    if (hello.startsWith(prefix: "he"))      { r = r + 1; }
+    if (hello.endsWith(suffix: "lo"))        { r = r + 1; }
+    if (!hello.contains(substring: "xyz"))   { r = r + 1; }
+    int32 fh  = match (hello.find(substring: "h"))  { case Some(i): cast<int32>(i); case None: 0 - 1; };
+    int32 fll = match (hello.find(substring: "ll")) { case Some(i): cast<int32>(i); case None: 0 - 1; };
+    int32 fo  = match (hello.find(substring: "o"))  { case Some(i): cast<int32>(i); case None: 0 - 1; };
+    int32 fz  = match (hello.find(substring: "z"))  { case Some(i): cast<int32>(i); case None: 0 - 1; };
+    if (fh == 0)     { r = r + 1; }   // find at start
+    if (fll == 2)    { r = r + 1; }   // find in middle
+    if (fo == 4)     { r = r + 1; }   // find at end
+    if (fz == 0 - 1) { r = r + 1; }   // not found -> None
+    return r;   // 23
+}

@@ -48,18 +48,27 @@ remains to call the language **complete**:
      every position. **DONE:** a primitive/`string` **literal or inline ctor into a `ref` param** now
      materializes into a temp (`map.get(key: 5)` / `map.get(key: Point(…))` work). Still open: a **bare
      generic ctor into a field** (`this.m = Map()` — infer the field's type args; bind to a typed local
-     first) and an **inline ctor into an `operator[]` place-store** (`a[i] = Tag(…)`). The fix is to
-     propagate the target type into these positions like the local-initializer does.
+     first), an **inline ctor into an `operator[]` place-store** (`a[i] = Tag(…)`), and **indexing a
+     `string`/rvalue receiver** (`"abc"[0]` — a string *literal* method call already materializes its
+     receiver, but indexing it doesn't; bind to a local first). The fix is to propagate the target type /
+     materialize the receiver in these positions like the local-initializer + method-call paths already do.
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
      (`buildVtables` doesn't merge a parent contract's slots into the child).
    - **Inline `new Concrete` into a smart-ptr-over-interface** — the fat-pointer box isn't constructed
      inline (bind the `new` to a local first; a clean error, documented in SPEC).
    - ~~Retroactive `implements C for T` for a non-`string` primitive target~~ **DONE.** A primitive target
      (`int32`) now conforms via a scalar-receiver synthetic conformance (`this` is the value; methods emit
-     `T self` by value). `Map<int32, V>` / `Set<int32>` ship. Remaining primitive widths (`int64`/`uint*`/
-     `float*`) are one-line std `implements` blocks each — added on demand. The narrower residual is that a
-     bare **primitive/ctor rvalue into a `ref` parameter** still needs a local (`int32 k = 5; m.get(key: k)`)
-     — same family as the target-typed-rvalue gap above (a `string` literal already materializes).
+     `T self` by value). `Map<int32, V>` / `Set<int32>` ship, and `satisfiesBound` consults the retro
+     conformances so a `when [T: Equatable]` gate (e.g. `List<int32>.contains`) sees them. Remaining
+     primitive widths (`int64`/`uint*`/`float*`) are one-line std `implements` blocks each — added on demand.
+     - **DX wart — primitive conformances aren't universal.** `int32`'s `Hashable`/`Equatable` live in
+       `lib/std/collections/map.kama`, so `List<int32>.contains` (and int-keyed maps) only resolve when
+       `Map` is imported — importing just `List` leaves them out (a silently-missing method). The fix is to
+       host the primitive conformances where every collection sees them (a shared collections file always
+       compiled, or the prelude once retro-impl bodies emit from it — see the deferred prelude-retro note).
+     - **String/rvalue receiver indexing** — `"abc"[0]` (a literal) or an rvalue receiver can't be indexed
+       (its address isn't takeable); a literal *method call* already materializes its receiver, so indexing
+       should too. Bind to a local meanwhile.
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.

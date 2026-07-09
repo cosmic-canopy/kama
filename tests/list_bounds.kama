@@ -1,0 +1,33 @@
+// List/Array intrinsics at the bounds we expect: empty, first/last valid index, single element, remove at
+// ends, contains/indexOf present/absent, clear, reserve-then-fill. Uses `string` elements for the equality
+// ops (universally `Equatable`); a `List<int32>.contains` currently also needs `int32`'s Equatable in scope
+// (import Map) — a tracked DX wart. Array index bounds use int32 (no equality needed).
+import std::collections::{List, Array};
+fn int main() {
+    int32 r = 0;
+    List<string> xs = List();
+    if (xs.length() == 0)             { r = r + 2; }   // empty
+    if (!xs.contains(item: "z"))      { r = r + 2; }   // absent in empty
+    if (xs.indexOf(item: "z") == 0 - 1) { r = r + 2; }
+    xs.reserve(n: 4);
+    xs.add(item: "a"); xs.add(item: "b"); xs.add(item: "c");
+    if (xs.length() == 3)             { r = r + 2; }
+    if (xs[0].equals(other: "a"))     { r = r + 2; }   // first
+    if (xs[2].equals(other: "c"))     { r = r + 2; }   // last
+    if (xs.contains(item: "b"))       { r = r + 2; }
+    if (xs.indexOf(item: "c") == 2)   { r = r + 2; }
+    if (xs.indexOf(item: "z") == 0 - 1) { r = r + 2; } // absent
+    xs.remove(index: 0);              // remove first -> [b, c]
+    if (xs[0].equals(other: "b") && xs.length() == 2) { r = r + 3; }
+    xs.remove(index: 1);              // remove last  -> [b]
+    if (xs[0].equals(other: "b") && xs.length() == 1) { r = r + 3; }
+    xs.clear();
+    if (xs.length() == 0)             { r = r + 2; }
+
+    Array<int32> a = Array(size: 3);                  // zero-initialized, all slots live
+    if (a[0] == 0 && a[2] == 0)       { r = r + 2; }   // zeroed
+    a[0] = 5; a[2] = 9;
+    if (a[0] == 5 && a[2] == 9)       { r = r + 2; }   // first/last write
+    if (a.length() == 3)              { r = r + 12; }
+    return r;   // 42
+}
