@@ -1,0 +1,30 @@
+namespace std::math;
+
+// Scalar helpers + the libm bindings shared by the vector/matrix/quaternion types. Constants are zero-arg
+// functions (`pi()`), not consts, so the module needs no module-level-const feature. All float32.
+export { pi, tau, halfPi, epsilon, radians, degrees, lerp, clampf, minf, maxf, absf, signf, sqrt };
+
+extern "<math.h>";
+extern fn float32 sqrtf(float32 x);
+extern fn float32 sinf(float32 x);
+extern fn float32 cosf(float32 x);
+extern fn float32 tanf(float32 x);
+extern fn float32 acosf(float32 x);
+extern fn float32 asinf(float32 x);
+extern fn float32 atan2f(float32 y, float32 x);
+extern fn float32 fabsf(float32 x);
+
+fn float32 pi()      { return 3.14159265f32; }
+fn float32 tau()     { return 6.28318531f32; }
+fn float32 halfPi()  { return 1.57079633f32; }
+fn float32 epsilon() { return 0.000001f32; }
+
+fn float32 radians(float32 deg) { return deg * 0.0174532925f32; }   // deg * PI/180
+fn float32 degrees(float32 rad) { return rad * 57.2957795f32; }     // rad * 180/PI
+fn float32 lerp(float32 a, float32 b, float32 t) { return a + (b - a) * t; }
+fn float32 clampf(float32 x, float32 lo, float32 hi) { return x < lo ? lo : (x > hi ? hi : x); }
+fn float32 minf(float32 a, float32 b) { return a < b ? a : b; }
+fn float32 maxf(float32 a, float32 b) { return a > b ? a : b; }
+fn float32 absf(float32 x) { return fabsf(x: x); }
+fn float32 signf(float32 x) { return x > 0.0f32 ? 1.0f32 : (x < 0.0f32 ? -1.0f32 : 0.0f32); }
+fn float32 sqrt(float32 x) { return sqrtf(x: x); }

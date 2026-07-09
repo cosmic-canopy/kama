@@ -1,0 +1,94 @@
+namespace std::math;
+
+// Float32 vectors — Vec2/Vec3/Vec4. Value types (stack, no alloc); layout is contiguous floats (Vec4 = 16B),
+// SIMD-ready for a later backend. Operators `+ - *(scalar) /(scalar) -unary ==`; methods dot/length/etc.
+// `sqrt` comes from scalar.kama (same `std::math` module).
+export { Vec2, Vec3, Vec4 };
+
+type value Vec2 {
+    public float32 x;
+    public float32 y;
+    public Vec2(float32 x, float32 y) { this.x = x; this.y = y; }
+
+    public static fn Vec2 zero()            { return Vec2(x: 0.0f32, y: 0.0f32); }
+    public static fn Vec2 one()             { return Vec2(x: 1.0f32, y: 1.0f32); }
+    public static fn Vec2 splat(float32 s)  { return Vec2(x: s, y: s); }
+    public static fn Vec2 unitX()           { return Vec2(x: 1.0f32, y: 0.0f32); }
+    public static fn Vec2 unitY()           { return Vec2(x: 0.0f32, y: 1.0f32); }
+
+    public Vec2 operator+(Vec2 r)   { return Vec2(x: this.x + r.x, y: this.y + r.y); }
+    public Vec2 operator-(Vec2 r)   { return Vec2(x: this.x - r.x, y: this.y - r.y); }
+    public Vec2 operator*(float32 s){ return Vec2(x: this.x * s, y: this.y * s); }
+    public Vec2 operator/(float32 s){ return Vec2(x: this.x / s, y: this.y / s); }
+    public Vec2 operator-()         { return Vec2(x: -this.x, y: -this.y); }
+    public bool operator==(Vec2 r)  { return this.x == r.x && this.y == r.y; }
+
+    public fn float32 dot(Vec2 r)     { return this.x * r.x + this.y * r.y; }
+    public fn float32 lengthSq()      { return this.dot(r: this); }
+    public fn float32 length()        { return sqrt(x: this.lengthSq()); }
+    public fn Vec2 normalized()       { float32 k = 1.0f32 / this.length(); return Vec2(x: this.x * k, y: this.y * k); }
+    public fn Vec2 hadamard(Vec2 r)   { return Vec2(x: this.x * r.x, y: this.y * r.y); }
+    public fn float32 distance(Vec2 r){ float32 dx = this.x - r.x; float32 dy = this.y - r.y; return sqrt(x: dx*dx + dy*dy); }
+
+    public static fn Vec2 lerp(Vec2 a, Vec2 b, float32 t) {
+        return Vec2(x: a.x + (b.x-a.x)*t, y: a.y + (b.y-a.y)*t);
+    }
+}
+
+type value Vec3 {
+    public float32 x;
+    public float32 y;
+    public float32 z;
+    public Vec3(float32 x, float32 y, float32 z) { this.x = x; this.y = y; this.z = z; }
+
+    public static fn Vec3 zero()            { return Vec3(x: 0.0f32, y: 0.0f32, z: 0.0f32); }
+    public static fn Vec3 one()             { return Vec3(x: 1.0f32, y: 1.0f32, z: 1.0f32); }
+    public static fn Vec3 splat(float32 s)  { return Vec3(x: s, y: s, z: s); }
+    public static fn Vec3 unitX()           { return Vec3(x: 1.0f32, y: 0.0f32, z: 0.0f32); }
+    public static fn Vec3 unitY()           { return Vec3(x: 0.0f32, y: 1.0f32, z: 0.0f32); }
+    public static fn Vec3 unitZ()           { return Vec3(x: 0.0f32, y: 0.0f32, z: 1.0f32); }
+
+    public Vec3 operator+(Vec3 r)   { return Vec3(x: this.x + r.x, y: this.y + r.y, z: this.z + r.z); }
+    public Vec3 operator-(Vec3 r)   { return Vec3(x: this.x - r.x, y: this.y - r.y, z: this.z - r.z); }
+    public Vec3 operator*(float32 s){ return Vec3(x: this.x * s, y: this.y * s, z: this.z * s); }
+    public Vec3 operator/(float32 s){ return Vec3(x: this.x / s, y: this.y / s, z: this.z / s); }
+    public Vec3 operator-()         { return Vec3(x: -this.x, y: -this.y, z: -this.z); }
+    public bool operator==(Vec3 r)  { return this.x == r.x && this.y == r.y && this.z == r.z; }
+
+    public fn float32 dot(Vec3 r)     { return this.x*r.x + this.y*r.y + this.z*r.z; }
+    public fn float32 lengthSq()      { return this.dot(r: this); }
+    public fn float32 length()        { return sqrt(x: this.lengthSq()); }
+    public fn Vec3 normalized()       { float32 k = 1.0f32 / this.length(); return Vec3(x: this.x*k, y: this.y*k, z: this.z*k); }
+    public fn Vec3 hadamard(Vec3 r)   { return Vec3(x: this.x*r.x, y: this.y*r.y, z: this.z*r.z); }
+    public fn Vec3 cross(Vec3 r)      { return Vec3(x: this.y*r.z - this.z*r.y, y: this.z*r.x - this.x*r.z, z: this.x*r.y - this.y*r.x); }
+    public fn float32 distance(Vec3 r){ float32 dx=this.x-r.x; float32 dy=this.y-r.y; float32 dz=this.z-r.z; return sqrt(x: dx*dx+dy*dy+dz*dz); }
+
+    public static fn Vec3 lerp(Vec3 a, Vec3 b, float32 t) {
+        return Vec3(x: a.x+(b.x-a.x)*t, y: a.y+(b.y-a.y)*t, z: a.z+(b.z-a.z)*t);
+    }
+}
+
+type value Vec4 {
+    public float32 x;
+    public float32 y;
+    public float32 z;
+    public float32 w;
+    public Vec4(float32 x, float32 y, float32 z, float32 w) { this.x = x; this.y = y; this.z = z; this.w = w; }
+
+    public static fn Vec4 zero()            { return Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32); }
+    public static fn Vec4 splat(float32 s)  { return Vec4(x: s, y: s, z: s, w: s); }
+    public static fn Vec4 fromVec3(Vec3 v, float32 w) { return Vec4(x: v.x, y: v.y, z: v.z, w: w); }
+
+    public Vec4 operator+(Vec4 r)   { return Vec4(x: this.x+r.x, y: this.y+r.y, z: this.z+r.z, w: this.w+r.w); }
+    public Vec4 operator-(Vec4 r)   { return Vec4(x: this.x-r.x, y: this.y-r.y, z: this.z-r.z, w: this.w-r.w); }
+    public Vec4 operator*(float32 s){ return Vec4(x: this.x*s, y: this.y*s, z: this.z*s, w: this.w*s); }
+    public Vec4 operator/(float32 s){ return Vec4(x: this.x/s, y: this.y/s, z: this.z/s, w: this.w/s); }
+    public Vec4 operator-()         { return Vec4(x: -this.x, y: -this.y, z: -this.z, w: -this.w); }
+    public bool operator==(Vec4 r)  { return this.x==r.x && this.y==r.y && this.z==r.z && this.w==r.w; }
+
+    public fn float32 dot(Vec4 r)  { return this.x*r.x + this.y*r.y + this.z*r.z + this.w*r.w; }
+    public fn float32 lengthSq()   { return this.dot(r: this); }
+    public fn float32 length()     { return sqrt(x: this.lengthSq()); }
+    public fn Vec4 normalized()    { float32 k = 1.0f32 / this.length(); return Vec4(x: this.x*k, y: this.y*k, z: this.z*k, w: this.w*k); }
+    public fn Vec3 xyz()           { return Vec3(x: this.x, y: this.y, z: this.z); }
+}
