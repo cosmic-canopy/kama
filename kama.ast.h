@@ -555,6 +555,17 @@ public:
         : ASTNode(context),  ExpressionNode(context), type(type) { }
 };
 
+// COMPILER-INTERNAL zero-initialization of a type (lowers to the C compound literal `(T){0}`). It has
+// NO grammar rule — the serialization deserialize codegen splices it into a synthesized `deserialize`
+// (bypass-ctor construction: zero the struct, then populate fields). Never user-writable, so no one can
+// hand-craft a half-initialized resource; see kama.driver.cpp `injectZeroInitForDeserialize`.
+class ZeroValueNode : public ExpressionNode {
+public:
+    SharedIdentifier type;
+    ZeroValueNode(CodeGenContext& context, SharedIdentifier type)
+        : ASTNode(context),  ExpressionNode(context), type(type) { }
+};
+
 class BinaryExpressionNode : public ExpressionNode {
 public:
     int token;

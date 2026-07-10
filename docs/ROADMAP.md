@@ -135,26 +135,44 @@ Deserialize)` (per-direction opt-in) with mandatory per-field `@field` / `@field
 contracts; codegen that synthesizes `serialize`/`deserialize` as kama and merges them into the type;
 `std::fmt` (number→string); the `std::serialization::json` backend (`JsonWriter`/`JsonReader`) with
 `json::toString(v)` + `json::tryParse::<T>(src)`. **Serialize** covers scalars/string/nested/`List`/`Array`/
-`Optional`; **deserialize** covers flat scalar/string structs (value + resource). Format is chosen by module
+`Optional` (containers indexed via `operator[]`, so `List<resource>` works — no `Copyable` `foreach`
+requirement). **Deserialize** now matches it — scalars/string/**nested `@generate` types**/`Optional<T>`/
+`List<T>` (value + resource) — via a **bypass-constructor** construction model: `deserialize` zero-initializes
+the struct (compiler-internal `ZeroValueNode` → `(T){0}`, no user grammar) and populates fields **in place**
+(`result.child = Child::deserialize(r)` — no holder, no move-out-of-a-match, which the old all-args-ctor model
+couldn't express for a nested resource), returning `T` directly (`tryParse` does the `Result` wrap +
+`failed()` check). An opt-in **`onConstruction()`** lifecycle hook runs on *every* construction (compiler-
+injected at ctor-end AND after a deserialize field-set); a `@generate(Deserialize)` type must define it or opt
+out with `@generate(Deserialize, noOnConstruction)`. Smart-pointer `@field`s (`Owned`/`Shared`/`Weak`) are
+rejected — `@skip` them and serialize an id, reconnecting in `onConstruction`. Format is chosen by module
 (`json::…`); the generated `serialize`/`deserialize` are format-agnostic (drive the abstract contract), so a
 new backend is just a module — no compiler change. Two general emitter fixes fell out: interface vtables are
 cross-module-visible (extern + header-declared), and generic-function type args absolutize at the call site
 (cross-module `f::<UserType>()`). *(Land the shipped surface in SPEC as it stabilizes.)*
 
 **Remaining (Phase 4b+):**
-- **Deserialize breadth** — nested `@generate` types, `List`/`Array`, `Optional<T>` on the *read* side
-  (serialize already does all of these; deserialize is flat scalar/string only).
+- **Deserialize breadth (tail)** — nested/`Optional`/`List` ✓ done (bypass-ctor field-set). Still open:
+  `Array<E>` read, and a `const` field (write-once in the ctor, so the in-place field-set can't set it —
+  currently a `@field const` doesn't even parse; give it a clear diagnostic).
 - **General user `enum` serialize** — accept `@generate` on `enum` declarations + variant codegen.
-- **Scenegraph (composition)** — lifecycle hooks (`PreSerialize`/`PostSerialize`/`PostDeserialize`) + a
-  threaded `SerContext`/`DeContext` (id→object registry) so an object graph round-trips shared/back
-  references via **temporary IDs**, without cycles. Engine-facing.
+- **Scenegraph (composition) / pointer reconnection** — the graph-complete side of the pointer rule above: a
+  deserialize **reconnection hook** (the C#/Java `IDeserializationCallback` analog) + a threaded
+  `SerContext`/`DeContext` (id→object registry) so an object graph round-trips shared/back references via
+  **temporary IDs**, without cycles. `onConstruction` is the per-object birth hook; this is the graph-level
+  fixup that resolves the ids a `@skip`ped `Owned`/`Shared`/`Weak` was replaced with. Engine-facing.
 - **More back ends (modules, no compiler change)** — YAML; **binary** (packing options + `@bits(n)` bit-
   packing + little-endian canonical); **XML** + **HTML** (user-requested; XML → `<field>value</field>`,
   HTML a render/pretty view for the write side). Each is a `Serializer`/`Deserializer` impl + `toString`/
   `tryParse`-style entries.
 - **Rename `toString`** — too generic / clashes with other-language conventions; proposed `json::encode`
   (paired with `json::tryParse`), name to confirm.
-- **Docs** — SPEC (serialization + `@`-attributes) and `docs/grammar.bnf` (attribute grammar).
+- **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the existing `@`-attribute
+  infra like `@generate`/`@field`) that emits a use-site warning, optionally with a message/replacement hint.
+  Independent of serialization; queued as its own small task.
+- **Optional/default parameters (language, adjacent)** — enables the "options struct with optionals" ctor
+  pattern (kama has no default params today), an alternative to constructor overloading.
+- **Docs** — SPEC (serialization + `@`-attributes + `onConstruction`/`noOnConstruction` + bypass-ctor
+  construction) and `docs/grammar.bnf` (attribute grammar incl. the `noOnConstruction` flag).
 
 **String interpolation `"${x}"` rides on the same `std::fmt` to-string substrate**, so it sequences here.
 

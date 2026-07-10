@@ -2,7 +2,7 @@
 // these container shapes (natural defaults: Optional::None, empty List).
 import std::serialization::json::{toString, tryParse};
 import std::collections::{List};
-@generate(Serialize, Deserialize)
+@generate(Serialize, Deserialize, noOnConstruction)
 type resource Rec {
     @field int32 id;
     @field Optional<int32> parent;

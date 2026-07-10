@@ -1,0 +1,46 @@
+// Nested @generate(Deserialize) — the bypass-ctor payoff: a nested resource field, an Optional<nested>, and a
+// List<nested> all reconstruct via direct in-place field-set (`result.child = Child::deserialize(r)`), no ctor
+// and no move-out-of-holder — which the old all-args-ctor model couldn't express for a nested resource.
+import std::serialization::json::{toString, tryParse};
+import std::collections::{List};
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Child {
+    @field int32 v;
+    @field string tag;
+    public Child(int32 v, string tag) { this.v = v; this.tag = give tag; }
+    public fn int32 weight() { return this.v + cast<int32>(this.tag.length()); }
+}
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Parent {
+    @field int32 id;
+    @field Child main;                 // nested resource field (direct)
+    @field Optional<Child> maybe;      // Optional<nested>
+    @field List<Child> kids;           // List<nested>
+    public Parent(int32 id, Child main, Optional<Child> maybe, List<Child> kids) {
+        this.id = id; this.main = give main; this.maybe = give maybe; this.kids = give kids;
+    }
+    public fn int32 total() {
+        int32 s = this.id + this.main.weight();
+        int32 m = match (this.maybe) { case Some(c): c.weight(); case None: 0; };
+        s = s + m;
+        for (int32 i = 0; i < this.kids.length(); i = i + 1) { s = s + this.kids[i].weight(); }
+        return s;
+    }
+}
+
+fn int main() {
+    Child mainC = Child(v: 5, tag: "xyz");            // weight 8
+    Child kid1  = Child(v: 1, tag: "a");              // weight 2
+    Child kid2  = Child(v: 2, tag: "bb");             // weight 4
+    List<Child> ks = List();
+    ks.add(item: give kid1);
+    ks.add(item: give kid2);
+    Child mc = Child(v: 3, tag: "qq");                // weight 5
+    Optional<Child> mb = Optional::Some(value: give mc);
+    Parent p = Parent(id: 10, main: give mainC, maybe: give mb, kids: give ks);
+    string j = toString(v: p);
+    Result<Parent, DeError> res = tryParse::<Parent>(src: give j);
+    return match (res) { case Ok(q): q.total(); case Err(e): 0 - 1; };   // 10 + 8 + 5 + (2+4) = 29
+}

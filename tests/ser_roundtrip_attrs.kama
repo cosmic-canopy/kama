@@ -1,6 +1,6 @@
 // Round-trip a resource with a string field, a @field(name:) rename, and a @skip field (ctor-initialized).
 import std::serialization::json::{toString, tryParse};
-@generate(Serialize, Deserialize)
+@generate(Serialize, Deserialize, noOnConstruction)
 type resource User {
     @field(name: "user_name") string name;
     @field int32 id;

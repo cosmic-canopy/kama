@@ -863,6 +863,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return std::string(v->isAlign ? "_Alignof(" : "sizeof(") + cType(v->type) + ")";
     }
 
+    // Compiler-internal zero-init (`(T){0}`), spliced into a synthesized `deserialize` for bypass-ctor
+    // construction (no user grammar). `cType` resolves a generic `T` under substitution.
+    if (auto* v = dynamic_cast<ZeroValueNode*>(n)) {
+        return "(" + cType(v->type) + "){0}";
+    }
+
     unsupported("expression", n->line);
     return "0";
 }
@@ -2326,7 +2332,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         std::string which = (a && a->name && a->name->value && !a->expression) ? *a->name->value : "";
                         if      (which == "Serialize")   ci.genSerialize = true;
                         else if (which == "Deserialize") ci.genDeserialize = true;
-                        else unsupported("`@generate(...)` accepts only Serialize and/or Deserialize", cd->line);
+                        else if (which == "noOnConstruction") ci.serNoOnConstruction = true;   // opt out of the hook rule
+                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, noOnConstruction", cd->line);
                     }
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name + "` (expected `@generate`)").c_str(), cd->line);
@@ -2432,6 +2439,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         unsupported("field attributes (`@field`/`@skip`) require `@generate(...)` on the type", fd->line);
                     if (serGen && !fMarked)
                         unsupported("every field of a `@generate`d type must be marked `@field` or `@skip`", fd->line);
+                    // Smart pointers are NOT serializable: a raw heap link is meaningless on the wire, and its
+                    // target's identity/lifetime is the author's to manage. `@skip` the pointer and serialize an
+                    // id instead, then reconnect it in `onConstruction` (or the deserialize reconnection hook).
+                    if (serGen && !fSkip && fd->type && fd->type->value
+                        && (*fd->type->value == "Owned" || *fd->type->value == "Shared"
+                            || *fd->type->value == "Weak"  || *fd->type->value == "Bindable"))
+                        unsupported(("a `" + *fd->type->value + "<…>` smart-pointer field can't be serialized — `@skip` "
+                                     "it and serialize an id instead, reconnecting in `onConstruction`").c_str(), fd->line);
 
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
@@ -2611,6 +2626,15 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 unsupported(("`" + ci.name + "` implements `Copyable` but doesn't declare its bare-hand-off default "
                              "— write `implements Copyable(bare: give)` or `Copyable(bare: copy)`").c_str(), cd->line);
         }
+        // A `@generate(Deserialize)` type has its constructor BYPASSED during deserialization (the struct is
+        // zero-initialized and its fields populated in place). So any "runs on every construction" logic must
+        // live in an `onConstruction()` hook — the compiler calls it at the end of the constructor AND after a
+        // deserialize field-set. To keep that decision explicit, such a type MUST either define
+        // `fn void onConstruction()` or opt out with `@generate(Deserialize, noOnConstruction)`.
+        if (ci.genDeserialize && !ci.serNoOnConstruction && !ci.methods.count("onConstruction"))
+            unsupported(("`" + ci.name + "` is `@generate(Deserialize)`: define `fn void onConstruction()` (runs on "
+                         "every construction, incl. deserialize) or opt out with `@generate(Deserialize, noOnConstruction)`").c_str(),
+                        cd->line);
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
         // methods) is parked in _genericTypes; the specialized instances are the real classes.
@@ -6877,8 +6901,16 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     if (body && body->statements) {
         for (auto& st : *body->statements) { emitStatement(st, 1); last = st; }
     }
-    if (!(last && stmtIsJump(last)))
+    if (!(last && stmtIsJump(last))) {
+        // `onConstruction()` lifecycle hook: for a `@generate(Deserialize)` type that defines it, the compiler
+        // calls it at the END of every constructor (and the deserialize codegen calls it after field-set), so
+        // "runs on every construction" logic lives in one place despite deserialize bypassing the ctor.
+        if (isCtor && owner.genDeserialize && owner.methods.count("onConstruction")) {
+            indent(1);
+            *_out << owner.name << "__onConstruction(self);\n";
+        }
         emitScopeCleanup(_scopes.back(), 1);
+    }
     *_out << "}\n\n";
 
     _scopes.clear();

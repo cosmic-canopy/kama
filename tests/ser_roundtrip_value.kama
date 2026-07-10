@@ -1,6 +1,6 @@
 // Full JSON round-trip (serialize -> deserialize) for a value type of scalars, via the `tryParse` one-liner.
 import std::serialization::json::{toString, tryParse};
-@generate(Serialize, Deserialize)
+@generate(Serialize, Deserialize, noOnConstruction)
 type value Vec {
     @field int32 x;
     @field int32 y;

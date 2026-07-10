@@ -31,6 +31,7 @@ class MemberAccessNode;
 class ElementAccessNode;
 class ArrayLiteralNode;
 class SizeofNode;
+class ZeroValueNode;
 class ForEachNode;
 class ThisAccessNode;
 class ObjectCreationNode;

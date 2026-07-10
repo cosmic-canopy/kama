@@ -209,14 +209,15 @@ static std::string serializeWriteStmt(SharedIdentifier type, const std::string& 
         return "match (" + access + ") { case Some(__opt): " + inner
              + " case None: w.writeNull(); };";
     }
-    // Collections -> a JSON array. The element write recurses (primitive or nested Serialize type).
+    // Collections -> a JSON array. The element write recurses (primitive or nested Serialize type). Indexed
+    // (`[__i]`) rather than `foreach`, because `foreach` needs a `Copyable` element (its `iterator()` is gated
+    // `when [T: Copyable]`) — a `List<resource>` isn't Copyable; `operator[]` returns a `ref T` for any T.
     if (type->value && type->genericArg &&
         (*type->value == "List" || *type->value == "Array" || *type->value == "Fixed")) {
-        std::string elemTy   = typeToStr(type->genericArg);
-        std::string elemWrite = serializeWriteStmt(type->genericArg, "__e");
+        std::string elemWrite = serializeWriteStmt(type->genericArg, access + "[__i]");
         if (elemWrite.empty()) return "";
         return "w.beginArray(count: " + access + ".length());\n"
-               "        foreach (" + elemTy + " __e in " + access + ") { " + elemWrite + " }\n"
+               "        for (int32 __i = 0; __i < " + access + ".length(); __i = __i + 1) { " + elemWrite + " }\n"
                "        w.endArray();";
     }
     switch (type->builtInVal) {
@@ -292,33 +293,6 @@ static std::string buildSerializeBody(ClassDeclarationNode* cd)
     return body;
 }
 
-// The default value for a field local before deserialization (also the value for a field absent from the
-// JSON). "" => an unsupported field type (nested/collection/Optional deserialize is v1-deferred).
-// The initial value for a field local (also the value for a field absent from the JSON): a scalar default,
-// or the natural empty for a container (`Optional::None`, empty `List()`). "" => unsupported field type.
-static std::string deserializeDefault(SharedIdentifier type)
-{
-    if (!type) return "";
-    if (type->value && *type->value == "Optional" && type->genericArg) return "Optional::None";
-    if (type->value && type->genericArg && *type->value == "List")     return "List()";
-    switch (type->builtInVal) {
-        case IDENTIFIER_INT8_VAL:    return "0i8";
-        case IDENTIFIER_INT16_VAL:   return "0i16";
-        case IDENTIFIER_INT32_VAL:   return "0";
-        case IDENTIFIER_INT64_VAL:   return "0i64";
-        case IDENTIFIER_UINT8_VAL:   return "0ui8";
-        case IDENTIFIER_UINT16_VAL:  return "0ui16";
-        case IDENTIFIER_UINT32_VAL:  return "0ui32";
-        case IDENTIFIER_UINT64_VAL:  return "0ui64";
-        case IDENTIFIER_BOOL_VAL:    return "false";
-        case IDENTIFIER_FLOAT32_VAL: return "0.0f32";
-        case IDENTIFIER_FLOAT64_VAL: return "0.0";
-        case IDENTIFIER_CHAR_VAL:    return "cast<char>(0ui32)";
-        case IDENTIFIER_STRING_VAL:  return "\"\"";
-        default: return "";
-    }
-}
-
 // The scalar/string `r.readX()` expression for `type`, used for a field or a container element. "" if not
 // a scalar/string (a nested user type — its element-level deserialize is a v1-deferred follow-up).
 static std::string deserializeReadScalar(SharedIdentifier type)
@@ -342,49 +316,73 @@ static std::string deserializeReadScalar(SharedIdentifier type)
     }
 }
 
-// The statement(s) that read a value of `type` into local `dst`. Scalar => assign; `Optional<E>` => null→None
-// else Some(read E); `List<E>` => read a JSON array element-by-element. "" => unsupported (nested element).
-static std::string deserializeReadInto(SharedIdentifier type, const std::string& dst)
+// The read EXPRESSION for one element/field of `type`: a scalar/string `r.readX()`, OR a nested user
+// `@generate(Deserialize)` type's static factory `T::deserialize(r: r)` (returns the value/resource by
+// value; the reader is shared so nested reads advance the same stream). "" => unsupported (Array, smart
+// pointers, etc. — deferred). Used for a scalar/nested field, an `Optional<E>` payload, or a `List<E>` elem.
+static std::string deserializeReadElem(SharedIdentifier type)
+{
+    std::string rs = deserializeReadScalar(type);
+    if (!rs.empty()) return rs;
+    if (type && type->value && type->builtInVal == 0) {
+        const std::string& n = *type->value;
+        // exclude the compiler container/smart-pointer wrappers — only a plain nested user type here
+        if (n != "Optional" && n != "List" && n != "Array" && n != "Fixed"
+            && n != "Owned" && n != "Shared" && n != "Weak" && n != "Bindable")
+            return typeToStr(type) + "::deserialize(r: r)";
+    }
+    return "";
+}
+
+// The statement(s) that read a value of `type` directly into `dst` (a `result.<field>` place). Scalar/nested
+// => assign; `Optional<E>` => null→None else Some(read E); `List<E>` => read a JSON array element-by-element.
+// The RHS is always an rvalue (a `readX()`/`deserialize(...)` return), so owned values move in with no `give`
+// keyword, and the field was zero-initialized so no stale value is dropped. "" => an unsupported field type.
+static std::string deserializeFieldSet(SharedIdentifier type, const std::string& dst)
 {
     if (!type) return "";
     if (type->value && *type->value == "Optional" && type->genericArg) {
-        std::string re = deserializeReadScalar(type->genericArg);
-        if (re.empty()) return "";   // Optional<nested> — deferred
+        std::string re = deserializeReadElem(type->genericArg);
+        if (re.empty()) return "";
         return "if (r.readNull()) { " + dst + " = Optional::None; } "
                "else { " + dst + " = Optional::Some(value: " + re + "); }";
     }
     if (type->value && type->genericArg && *type->value == "List") {
-        std::string re = deserializeReadScalar(type->genericArg);
-        if (re.empty()) return "";   // List<nested> — deferred
+        std::string re = deserializeReadElem(type->genericArg);
+        if (re.empty()) return "";
         return "r.beginArray(); while (r.moreElems()) { " + dst + ".add(item: " + re + "); }";
     }
-    std::string rs = deserializeReadScalar(type);
-    if (rs.empty()) return "";
-    return dst + " = " + rs + ";";
+    std::string re = deserializeReadElem(type);
+    if (re.empty()) return "";
+    return dst + " = " + re + ";";
 }
 
-// True for a field type the ctor must receive with `give` (it owns heap): string, a collection, or an
-// Optional wrapping one.
-static bool isOwnedFieldType(SharedIdentifier type)
+// True iff the type declares a `fn void onConstruction()` lifecycle hook (called after a deserialize
+// field-set, mirroring the compiler's ctor-end injection). See kama.cemit.cpp emitMethodOrCtorBody.
+static bool hasOnConstruction(ClassDeclarationNode* cd)
 {
-    if (!type) return false;
-    if (type->builtInVal == IDENTIFIER_STRING_VAL) return true;
-    if (type->value && (*type->value == "List" || *type->value == "Array" || *type->value == "Fixed")) return true;
-    if (type->value && *type->value == "Optional" && type->genericArg) return isOwnedFieldType(type->genericArg);
+    if (!cd || !cd->members) return false;
+    for (auto& m : *cd->members) {
+        auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+        if (md && md->name && md->name->value && *md->name->value == "onConstruction") return true;
+    }
     return false;
 }
 
-// The body of the synthesized static `deserialize`: a field local per @field (with a default), a read loop
-// that dispatches each JSON key to the matching local, then construction via the type's ctor (named args =
-// the @field field names). Returns "" if any @field has an unsupported (non-scalar) type — v1 deserialize
-// covers flat scalar/string structs; the caller then skips the Deserialize merge for that type.
+// The body of the synthesized static `deserialize` (returns `T`): BYPASS-CTOR construction — zero-initialize
+// a `result` (the `<T> result;` local's initializer is replaced with a `ZeroValueNode` post-parse, see
+// injectZeroInitForDeserialize), then a read loop populates each `@field` in place via `result.<field> = …`
+// (no holder, no ctor, no move-out — so nested value/resource, `Optional<nested>`, `List<nested>` all work).
+// If the type defines `onConstruction()` its call is appended (the ctor-end injection's deserialize twin).
+// Failure is carried by the reader's sticky-error flag (checked by `tryParse`), not a `Result` here. Returns
+// "" if any `@field` has an unsupported type (Array/smart-ptr — deferred); the caller then skips the merge.
 static std::string buildDeserializeBody(ClassDeclarationNode* cd)
 {
     if (!cd || !cd->name || !cd->name->value || !cd->members) return "";
     if (cd->typeParams && !cd->typeParams->empty()) return "";
     std::string tn = *cd->name->value;
     bool resKind = cd->typeKind && *cd->typeKind == "resource";
-    std::string locals, chain, ctorArgs;
+    std::string chain, defaults;
     bool first = true; int idx = 0;
     for (auto& m : *cd->members) {
         auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(m.get());
@@ -403,28 +401,31 @@ static std::string buildDeserializeBody(ClassDeclarationNode* cd)
         for (auto& d : *fd->declarators) {
             if (!d->name || !d->name->value) continue;
             std::string fname = *d->name->value, wire = rename.empty() ? fname : rename;
-            std::string local = "__f_" + fname, tyStr = typeToStr(fd->type);
-            std::string def = deserializeDefault(fd->type), readInto = deserializeReadInto(fd->type, local);
-            if (def.empty() || readInto.empty()) return "";        // unsupported field type
-            locals += "        " + tyStr + " " + local + " = " + def + ";\n";
-            chain  += std::string("            ") + (first ? "if" : "else if")
-                    + " (__key == \"" + wire + "\") { " + readInto + " }\n";
-            first = false;
-            ctorArgs += (idx ? ", " : "") + fname + ": " + (isOwnedFieldType(fd->type) ? "give " : "") + local;
-            idx++;
+            std::string set = deserializeFieldSet(fd->type, "result." + fname);
+            if (set.empty()) return "";        // unsupported field type
+            // `enum Optional { Some(T), None }` has Some at tag 0, so a zero-init'd Optional is Some(zeroed),
+            // NOT None. Reset each Optional field to None up front, so a field ABSENT from the input reads back
+            // as None (present fields are then overwritten by the loop). The reset drops the zeroed Some payload
+            // — null-safe by the usual dtor convention. (List/scalar/string zero-init to their natural empty.)
+            if (fd->type && fd->type->value && *fd->type->value == "Optional")
+                defaults += "        result." + fname + " = Optional::None;\n";
+            chain += std::string("            ") + (first ? "if" : "else if")
+                   + " (__key == \"" + wire + "\") { " + set + " }\n";
+            first = false; idx++;
         }
     }
     if (idx == 0) return "";
-    return locals
-         + "        r.beginObject();\n"
+    std::string onCons = hasOnConstruction(cd) ? "        result.onConstruction();\n" : "";
+    return "        " + tn + " result;\n"          // initializer replaced with ZeroValueNode post-parse
+         + defaults +
+           "        r.beginObject();\n"
            "        while (r.moreFields()) {\n"
            "            string __key = r.fieldName();\n"
          + chain +
            "            else { r.skipValue(); }\n"
            "        }\n"
-           "        if (r.failed()) { return Result::Err(error: DeError::Malformed); }\n"
-           "        " + tn + " __result = " + tn + "(" + ctorArgs + ");\n"
-           "        return Result::Ok(value: " + std::string(resKind ? "give " : "") + "__result);\n";
+         + onCons +
+           "        return " + std::string(resKind ? "give " : "") + "result;\n";
 }
 
 // Parse a wrapper `type … implements C { … }` and merge its interface clause + members into `cd` — so the
@@ -449,6 +450,31 @@ static void mergeGeneratedInto(ClassDeclarationNode* cd, const std::string& wrap
     if (gcd->members) {
         if (!cd->members) cd->members = std::make_shared<ClassMemberDeclarationList>();
         for (auto& mm : *gcd->members) cd->members->push_back(mm);
+    }
+}
+
+// After the deserialize wrapper is merged, turn its `<T> result;` (uninitialized) local into a zero-init:
+// replace the `result` declarator's null initializer with a compiler-internal `ZeroValueNode`, so the emitter
+// lowers it to `(T){0}` (bypass-ctor construction). Kept internal here — `ZeroValueNode` has no grammar, so a
+// zeroed (possibly half-populated) resource is never expressible in user code.
+static void injectZeroInitForDeserialize(ClassDeclarationNode* cd)
+{
+    if (!cd || !cd->members) return;
+    static SharedCodeGenContext genCtx =
+        std::make_shared<CodeGenContext>(std::make_shared<std::string>("<gen-zeroinit>"));
+    for (auto& m : *cd->members) {
+        auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+        if (!md || !md->name || !md->name->value || *md->name->value != "deserialize") continue;
+        if (!md->body || !md->body->statements) return;
+        for (auto& st : *md->body->statements) {
+            auto* lvd = dynamic_cast<LocalVariableDeclaration*>(st.get());
+            if (!lvd || !lvd->variables) continue;
+            for (auto& v : *lvd->variables)
+                if (v && v->name && v->name->value && *v->name->value == "result" && !v->initializer) {
+                    v->initializer = std::make_shared<ZeroValueNode>(*genCtx, lvd->type);
+                    return;
+                }
+        }
     }
 }
 
@@ -484,13 +510,18 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
             // member keeps its `static` (a retro impl would drop it).
             if (de) {
                 std::string body = buildDeserializeBody(cd);
-                if (!body.empty())   // skip types with fields deserialize can't yet build (non-scalar)
+                if (!body.empty()) {   // skip types with fields deserialize can't yet build (Array/smart-ptr)
+                    // `deserialize` returns `T` (not `Result`): nested fields assign a child directly
+                    // (`result.child = Child::deserialize(r)`), and failure rides the reader's sticky-error
+                    // flag — `tryParse` does the `Result` wrap + `failed()` check.
                     mergeGeneratedInto(cd,
                         "type value __KamaGenDe implements Deserialize {\n"
-                        "    public static fn Result<" + *cd->name->value + ", DeError> deserialize(Deserializer r) {\n"
+                        "    public static fn " + *cd->name->value + " deserialize(Deserializer r) {\n"
                         + body +
                         "    }\n"
                         "}\n");
+                    injectZeroInitForDeserialize(cd);   // `<T> result;` -> zero-init via ZeroValueNode
+                }
             }
         }
         (void)generated;

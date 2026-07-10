@@ -332,9 +332,12 @@ type resource JsonReader implements Deserializer {
 }
 
 // Deserialize a JSON string into a `Deserialize` type — the one-liner entry. Name the target with turbofish:
-// `json::tryParse::<Point>(src)`. The generated `deserialize` checks the reader's sticky error and returns
-// `Err(Malformed)` itself, so this just wires up the reader.
+// `json::tryParse::<Point>(src)`. The generated `deserialize` returns the reconstructed `T` directly (bypass-
+// ctor: zero-init + field-set), carrying any parse failure in the reader's sticky error flag; this wraps that
+// into a `Result` after checking `failed()`.
 fn Result<T, DeError> tryParse<T: Deserialize>(string src) {
     JsonReader r = JsonReader(src: give src);
-    return T::deserialize(r: r);
+    T v = T::deserialize(r: r);
+    if (r.failed()) { return Result::Err(error: DeError::Malformed); }
+    return Result::Ok(value: give v);
 }

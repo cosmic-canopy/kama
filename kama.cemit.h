@@ -134,6 +134,9 @@ struct ClassInfo {
     // emission of the reflective `__serialize`/`__deserialize` helpers (see emitSerialize/DeserializeDefinition).
     bool                              genSerialize = false;
     bool                              genDeserialize = false;
+    // `@generate(Deserialize, noOnConstruction)` — the type explicitly declares it has no birth logic, so
+    // it is exempt from the "must define `onConstruction()`" rule (deserialize bypasses the constructor).
+    bool                              serNoOnConstruction = false;
     std::map<std::string, MethodInfo> methods;    // by kama method name
     bool                              hasCtor = false;
     bool                              synthCtor = false;  // default ctor synthesized (vtable init)
