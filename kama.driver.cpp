@@ -294,9 +294,13 @@ static std::string buildSerializeBody(ClassDeclarationNode* cd)
 
 // The default value for a field local before deserialization (also the value for a field absent from the
 // JSON). "" => an unsupported field type (nested/collection/Optional deserialize is v1-deferred).
+// The initial value for a field local (also the value for a field absent from the JSON): a scalar default,
+// or the natural empty for a container (`Optional::None`, empty `List()`). "" => unsupported field type.
 static std::string deserializeDefault(SharedIdentifier type)
 {
     if (!type) return "";
+    if (type->value && *type->value == "Optional" && type->genericArg) return "Optional::None";
+    if (type->value && type->genericArg && *type->value == "List")     return "List()";
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "0i8";
         case IDENTIFIER_INT16_VAL:   return "0i16";
@@ -315,8 +319,9 @@ static std::string deserializeDefault(SharedIdentifier type)
     }
 }
 
-// The `r.readX()` call that reads a field of `type`. "" => unsupported (deferred).
-static std::string deserializeRead(SharedIdentifier type)
+// The scalar/string `r.readX()` expression for `type`, used for a field or a container element. "" if not
+// a scalar/string (a nested user type — its element-level deserialize is a v1-deferred follow-up).
+static std::string deserializeReadScalar(SharedIdentifier type)
 {
     if (!type) return "";
     switch (type->builtInVal) {
@@ -335,6 +340,38 @@ static std::string deserializeRead(SharedIdentifier type)
         case IDENTIFIER_STRING_VAL:  return "r.readString()";
         default: return "";
     }
+}
+
+// The statement(s) that read a value of `type` into local `dst`. Scalar => assign; `Optional<E>` => null→None
+// else Some(read E); `List<E>` => read a JSON array element-by-element. "" => unsupported (nested element).
+static std::string deserializeReadInto(SharedIdentifier type, const std::string& dst)
+{
+    if (!type) return "";
+    if (type->value && *type->value == "Optional" && type->genericArg) {
+        std::string re = deserializeReadScalar(type->genericArg);
+        if (re.empty()) return "";   // Optional<nested> — deferred
+        return "if (r.readNull()) { " + dst + " = Optional::None; } "
+               "else { " + dst + " = Optional::Some(value: " + re + "); }";
+    }
+    if (type->value && type->genericArg && *type->value == "List") {
+        std::string re = deserializeReadScalar(type->genericArg);
+        if (re.empty()) return "";   // List<nested> — deferred
+        return "r.beginArray(); while (r.moreElems()) { " + dst + ".add(item: " + re + "); }";
+    }
+    std::string rs = deserializeReadScalar(type);
+    if (rs.empty()) return "";
+    return dst + " = " + rs + ";";
+}
+
+// True for a field type the ctor must receive with `give` (it owns heap): string, a collection, or an
+// Optional wrapping one.
+static bool isOwnedFieldType(SharedIdentifier type)
+{
+    if (!type) return false;
+    if (type->builtInVal == IDENTIFIER_STRING_VAL) return true;
+    if (type->value && (*type->value == "List" || *type->value == "Array" || *type->value == "Fixed")) return true;
+    if (type->value && *type->value == "Optional" && type->genericArg) return isOwnedFieldType(type->genericArg);
+    return false;
 }
 
 // The body of the synthesized static `deserialize`: a field local per @field (with a default), a read loop
@@ -367,14 +404,13 @@ static std::string buildDeserializeBody(ClassDeclarationNode* cd)
             if (!d->name || !d->name->value) continue;
             std::string fname = *d->name->value, wire = rename.empty() ? fname : rename;
             std::string local = "__f_" + fname, tyStr = typeToStr(fd->type);
-            std::string def = deserializeDefault(fd->type), readCall = deserializeRead(fd->type);
-            if (def.empty() || readCall.empty()) return "";        // unsupported field type
+            std::string def = deserializeDefault(fd->type), readInto = deserializeReadInto(fd->type, local);
+            if (def.empty() || readInto.empty()) return "";        // unsupported field type
             locals += "        " + tyStr + " " + local + " = " + def + ";\n";
             chain  += std::string("            ") + (first ? "if" : "else if")
-                    + " (__key == \"" + wire + "\") { " + local + " = " + readCall + "; }\n";
+                    + " (__key == \"" + wire + "\") { " + readInto + " }\n";
             first = false;
-            bool owned = (fd->type->builtInVal == IDENTIFIER_STRING_VAL);
-            ctorArgs += (idx ? ", " : "") + fname + ": " + (owned ? "give " : "") + local;
+            ctorArgs += (idx ? ", " : "") + fname + ": " + (isOwnedFieldType(fd->type) ? "give " : "") + local;
             idx++;
         }
     }

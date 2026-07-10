@@ -1,0 +1,30 @@
+// Round-trip Optional<T> (Some/None) and List<T> (array) fields — deserialize now matches serialize for
+// these container shapes (natural defaults: Optional::None, empty List).
+import std::serialization::json::{toString, tryParse};
+import std::collections::{List};
+@generate(Serialize, Deserialize)
+type resource Rec {
+    @field int32 id;
+    @field Optional<int32> parent;
+    @field Optional<int32> next;
+    @field List<int32> tags;
+    public Rec(int32 id, Optional<int32> parent, Optional<int32> next, List<int32> tags) {
+        this.id = id; this.parent = parent; this.next = next; this.tags = give tags;
+    }
+    public fn int32 score() {
+        int32 pv = match (this.parent) { case Some(p): p; case None: 0; };
+        int32 nv = match (this.next) { case Some(n): n * 100; case None: 7; };
+        int32 s = this.id + pv + nv;
+        foreach (int32 t in this.tags) { s = s + t; }
+        return s;
+    }
+}
+fn int main() {
+    List<int32> tg = List(); tg.add(item: 5); tg.add(item: 6);
+    Optional<int32> par = Optional::Some(value: 3);
+    Optional<int32> nx = Optional::None;
+    Rec r = Rec(id: 10, parent: par, next: nx, tags: give tg);
+    string j = toString(v: r);        // {"id":10,"parent":3,"next":null,"tags":[5,6]}
+    Result<Rec, DeError> res = tryParse::<Rec>(src: give j);
+    return match (res) { case Ok(q): q.score(); case Err(e): 0 - 1; };   // 10+3+7+5+6 = 31
+}
