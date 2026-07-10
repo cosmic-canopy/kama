@@ -579,6 +579,14 @@ private:
     // `whereClause` completes "it can't be ___" (e.g. "stored in a field").
     void rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line);
     std::string smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem = false);  // null the dtor's guard field
+    // Cross-element smart-ptr UPCAST: widen a CONCRETE-element owning handle into a
+    // CONTRACT-element (intrinsic fat) handle — the Liskov "is a" (`Shared<Shape> s = a;`
+    // where `a: Shared<Sq>`). The concrete side is a library `Shared`/`Owned` struct (thin
+    // `T*` + optional ctrl); the contract side is the intrinsic `{obj, vtbl, ctrl}`. `dst` is
+    // the intrinsic type, `src` the library-owner lvalue.
+    bool isSmartPtrUpcast(const std::string& dstTy, SharedExpression src);
+    void emitSmartPtrUpcast(const std::string& nm, const std::string& dstTy,
+                            SharedExpression src, int depth, int line);
     // A move-only VALUE — a destructible class value that isn't a smart-ptr/collection/
     // extern struct. It MOVES on hand-off (its dtor is suppressed) and is never silently copied.
     bool isMoveOnlyValue(const std::string& cls) const;

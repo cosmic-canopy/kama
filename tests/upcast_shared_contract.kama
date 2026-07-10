@@ -1,0 +1,34 @@
+import std::memory::{Shared, Owned};
+import std::collections::{List};
+// Cross-element smart-ptr UPCAST: hold a concrete-element handle in a contract-element
+// handle (Liskov "is a"). `Shared<Sq> a` widens to `Shared<Shape> s` (retain — one shared
+// control block, contract dispatch through the fat handle), and `Owned<Sq>` widens to
+// `Owned<Shape>` (move). Each concrete object is freed exactly once at scope end.
+type contract Shape for both { fn int32 area(); }
+
+type resource Sq implements Shape {
+    List<int32> side;                                  // owns heap -> destructible
+    public Sq(int32 s) { this.side.add(item: s); }
+    public fn int32 area() { return this.side[0] * this.side[0]; }
+}
+
+fn int32 shared_case() {
+    Shared<Sq> a = new Sq(s: 6);                       // library thin handle {p, c}
+    Shared<Shape> s = a;                               // UPCAST: retain into the intrinsic fat handle
+    int32 viaConcrete = a.area();                      // 36 (a still valid)
+    int32 viaContract = s.area();                      // 36 (dynamic dispatch through vtbl)
+    List<Shared<Shape>> shapes;                         // a heterogeneous-capable owned collection
+    shapes.add(item: s);                               // retain again into the list
+    int32 viaList = shapes[0].area();                  // 36
+    return viaConcrete + viaContract + viaList;        // 108
+}
+
+fn int32 owned_case() {
+    Owned<Sq> o = new Sq(s: 5);
+    Owned<Shape> w = o;                                // UPCAST: MOVE (o consumed; w owns the Sq)
+    return w.area();                                   // 25
+}
+
+fn int32 main() {
+    return shared_case() + owned_case();               // 108 + 25 = 133
+}

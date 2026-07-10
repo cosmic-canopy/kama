@@ -1287,6 +1287,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     else
                         *_out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
                     indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->weak++;\n";
+                } else if (isSmartPtrUpcast(ty, init)) {
+                    // Cross-element upcast: widen a concrete-element `Shared`/`Owned` into this
+                    // contract-element (intrinsic fat) handle. The pointee is shared/moved; `nm`
+                    // was already zero-declared above.
+                    line(n->line);
+                    emitSmartPtrUpcast(nm, ty, init, depth, n->line);
                 } else if (isBindableClass(ty)) {
                     // BindableFunctionPtr <- free function (promote) or another bindable (move).
                     line(n->line);
@@ -1720,6 +1726,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             SharedExpression rhs = as->expression;
             int handoff = 0;   // 0 none, 1 give, 2 copy
             if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
+            if (isSmartPtrUpcast(ty, rhs)) {
+                // Cross-element upcast reseat: release the handle's old pointee, then widen a
+                // concrete-element `Shared`/`Owned` into this contract-element intrinsic handle.
+                line(n->line);
+                indent(depth); *_out << ty << "__dtor(&" << b << ");\n";
+                emitSmartPtrUpcast(b, ty, rhs, depth, n->line);
+                return;
+            }
             bool rhsLval = isSmartPtrLValue(rhs);
             if (handoff && !rhsLval)
                 unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n->line);
@@ -4385,6 +4399,57 @@ bool CEmitter::isSmartPtrLValue(SharedExpression e)
 {
     auto* id = dynamic_cast<IdentifierNode*>(e.get());
     return id && id->value && isSmartPtrExpr(e);
+}
+
+// Is `src` a concrete-element owning handle being widened into the contract-element
+// intrinsic `dstTy`? True iff dst is an intrinsic smart-ptr over an INTERFACE, src is a
+// named library heap-owner (`Shared`/`Owned`) whose concrete pointee nominally implements
+// that interface, and the ownership KIND matches (library `Shared`(copyable)↔intrinsic
+// `Shared`; library `Owned`↔intrinsic `Owned`). A `Weak` or a contract→contract source
+// (not a library heap-owner) is not handled here.
+bool CEmitter::isSmartPtrUpcast(const std::string& dstTy, SharedExpression src)
+{
+    if (!isSmartPtrClass(dstTy) || !isInterface(_classes[dstTy].collElemClass)) return false;
+    if (!src || !isNamedValue(src.get())) return false;
+    std::string libT = heapOwnerTarget(exprClass(src));         // concrete pointee ("" if not a library owner)
+    if (libT.empty()) return false;
+    auto it = _classes.find(libT);
+    if (it == _classes.end()) return false;
+    const std::string& dstElem = _classes[dstTy].collElemClass; // interface C name
+    bool implementsIt = false;
+    for (auto& i : it->second.interfaces) if (i == dstElem) { implementsIt = true; break; }
+    if (!implementsIt) return false;
+    // kind must agree: a copyable library owner is a `Shared`, a move-only one an `Owned`.
+    CollKind dk = smartKind(dstTy);
+    return isCopyable(exprClass(src)) ? (dk == CollKind::Shared) : (dk == CollKind::Owned);
+}
+
+// Emit the upcast field-bridge into the already-declared intrinsic handle `nm`. Mirrors the
+// library→intrinsic bridge in emitBindableBind: the pointee via `deref()`, the concrete's
+// `__as_<Contract>` vtable, and (Shared/Weak) the shared `kama_ctrl` block. Retains a
+// `Shared` (strong++) or moves an `Owned` (suppress the library source's dtor). Precondition:
+// isSmartPtrUpcast(dstTy, src).
+void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstTy,
+                                  SharedExpression src, int depth, int line)
+{
+    std::string srcCls  = exprClass(src);
+    std::string libT    = heapOwnerTarget(srcCls);              // concrete pointee C name
+    const std::string& dstElem = _classes[dstTy].collElemClass; // interface C name
+    CollKind dk    = smartKind(dstTy);
+    bool     retain = isCopyable(srcCls);                       // library Shared retains; Owned moves
+    std::string srcE = emitExpression(src);
+    // pointee: a library owner exposes it via `deref()` (T*); the concrete's per-contract vtable
+    // fattens it. The refcount block is the library `.c` (kama_ctrl-compatible), shared with the source.
+    indent(depth); *_out << nm << ".obj = (void*)" << srcCls << "__deref(&(" << srcE << "));\n";
+    indent(depth); *_out << nm << ".vtbl = &" << libT << "__as_" << dstElem << ";\n";
+    if (dk != CollKind::Owned) {                                // intrinsic Owned<I> is {obj, vtbl} — no ctrl
+        indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << srcE << ").c;\n";
+        indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->"
+                             << (dk == CollKind::Weak ? "weak" : "strong") << "++;\n";
+    }
+    // move: consume the library `Owned` source at compile time so its dtor is skipped (the
+    // intrinsic handle now owns + frees the pointee via its vtable's __dtor).
+    if (!retain) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
 }
 
 // Invalidate a moved-from smart pointer: null the field its dtor guards on, so
