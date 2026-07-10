@@ -155,11 +155,19 @@ cross-module-visible (extern + header-declared), and generic-function type args 
   `Array<E>` read, and a `const` field (write-once in the ctor, so the in-place field-set can't set it —
   currently a `@field const` doesn't even parse; give it a clear diagnostic).
 - **General user `enum` serialize** — accept `@generate` on `enum` declarations + variant codegen.
-- **Scenegraph (composition) / pointer reconnection** — the graph-complete side of the pointer rule above: a
-  deserialize **reconnection hook** (the C#/Java `IDeserializationCallback` analog) + a threaded
-  `SerContext`/`DeContext` (id→object registry) so an object graph round-trips shared/back references via
-  **temporary IDs**, without cycles. `onConstruction` is the per-object birth hook; this is the graph-level
-  fixup that resolves the ids a `@skip`ped `Owned`/`Shared`/`Weak` was replaced with. Engine-facing.
+- **Graph serialization (scene graphs) — staged; plan in `~/.claude/plans/prancy-yawning-yeti.md`.** One
+  blessed `@generate` mode: by-value fields serialize inline (as today), **pointer fields (`Owned`/`Shared`/
+  `Weak`) serialize as ids** into a side table, with a two-pass id fixup on read and `onConstruction` deferred
+  to graph-complete (the `awakeFromNib` / `IDeserializationCallback` point); a dangling required id →
+  `DeError::UnresolvedReference` (the .NET `ObjectManager` fixup-completion analog).
+  - **Stage 1 ✓ DONE (never-null `Owned`/`Shared`).** The compiler now enforces the intended invariant: every
+    `Owned`/`Shared` field must be assigned by ctor-end and never read before it is (definite-assignment in the
+    ctor; `Weak` is the nullable/checked pointer, exempt). This is the foundation the graph fixup restores
+    dynamically (bypass-ctor lands pointers transiently null → the fixup-completion check re-establishes it
+    before `onConstruction`). A genuine language selling point — Rust-grade non-null + ownership without a GC
+    (unlike Kotlin/Swift/Dart/Eiffel, which are all GC'd).
+  - **Stage 2 (next):** `SerContext`/`DeContext` + `SerializedReference` registry (Shared→retain, Weak→
+    downgrade, Owned→transfer-once) extending the shipped serialize/deserialize codegen; JSON inline+id-table.
 - **More back ends (modules, no compiler change)** — YAML; **binary** (packing options + `@bits(n)` bit-
   packing + little-endian canonical); **XML** + **HTML** (user-requested; XML → `<field>value</field>`,
   HTML a render/pretty view for the write side). Each is a `Serializer`/`Deserializer` impl + `toString`/

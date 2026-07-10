@@ -5364,6 +5364,124 @@ bool CEmitter::isConstReceiver(SharedExpression receiver) const
     return receiver && rootIsConst(rootBinding(receiver));
 }
 
+// --- Never-null definite assignment for `Owned`/`Shared` fields (Stage 1) ------------------------------
+// `Owned<T>`/`Shared<T>` are never-null: every such field must be assigned before the constructor returns,
+// and must not be read before it is assigned. `Weak<T>` (nullable, `tryUpgrade`) is exempt. v1 tracks
+// unconditional (top-level) assignment — the common straight-line ctor; a field assigned only inside a
+// branch is conservatively treated as unassigned (path-sensitive analysis is a follow-up).
+
+// If `e` is `this.<field>` or a bare `<field>` (not shadowed by a local) naming a data member of `owner`,
+// return the field name; else "".
+std::string CEmitter::ctorFieldRef(SharedExpression e, ClassInfo& owner, const std::set<std::string>& locals)
+{
+    if (!e) return "";
+    ASTNode* n = e.get();
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        if (ma->expression && dynamic_cast<ThisAccessNode*>(ma->expression.get())
+            && ma->identifier && ma->identifier->value && owner.fieldNames.count(*ma->identifier->value))
+            return *ma->identifier->value;
+    } else if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (id->value && (!id->qualifier || id->qualifier->empty())
+            && !locals.count(*id->value) && owner.fieldNames.count(*id->value))
+            return *id->value;
+    }
+    return "";
+}
+
+// Recursively record (first hit wins, in `bad`/`badLine`) a READ of an owning field not yet in `assigned`.
+void CEmitter::scanOwningReads(SharedExpression e, ClassInfo& owner, const std::set<std::string>& owning,
+                               const std::set<std::string>& assigned, const std::set<std::string>& locals,
+                               std::string& bad, int& badLine)
+{
+    if (!e || !bad.empty()) return;
+    ASTNode* n = e.get();
+    std::string f = ctorFieldRef(e, owner, locals);
+    if (!f.empty()) { if (owning.count(f) && !assigned.count(f)) { bad = f; badLine = e->line; } return; }
+    auto rec = [&](SharedExpression x){ scanOwningReads(x, owner, owning, assigned, locals, bad, badLine); };
+    if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) {
+        if (oc->args) for (auto& a : *oc->args) if (a) rec(a->expression);
+    } else if (auto* c = dynamic_cast<CastNode*>(n)) { rec(c->unaryExpression);
+    } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) { rec(b->LHS); rec(b->RHS);
+    } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) { rec(l->LHS); rec(l->RHS);
+    } else if (auto* tn = dynamic_cast<TernaryExpressionNode*>(n)) { rec(tn->condition); rec(tn->LHS); rec(tn->RHS);
+    } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        // the LHS of a direct `this.f = …` is a WRITE, not a read — skip it; else scan (write-through reads f)
+        if (ctorFieldRef(as->unaryExpression, owner, locals).empty()) rec(as->unaryExpression);
+        rec(as->expression);
+    } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        rec(inv->expression);
+        if (inv->args) for (auto& a : *inv->args) if (a) rec(a->expression);
+    } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        rec(ea->expression);
+        if (ea->expressionlist) for (auto& x : *ea->expressionlist) rec(x);
+    } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) { rec(ma->expression);
+    } else if (auto* pe = dynamic_cast<PreIncrDecrNode*>(n)) { rec(pe->expression);
+    } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) { rec(po->expression);
+    } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) { rec(su->expression);
+    } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
+        if (al->elements) for (auto& x : *al->elements) rec(x);
+        rec(al->fillValue);
+    }
+}
+
+// Walk one ctor statement: check its reads against `assigned`, record a top-level `this.f = …`, track locals.
+void CEmitter::analyzeCtorStmt(SharedStatement st, ClassInfo& owner, const std::set<std::string>& owning,
+                               std::set<std::string>& assigned, std::set<std::string>& locals, bool topLevel)
+{
+    if (!st) return;
+    ASTNode* n = st.get();
+    auto checkE = [&](SharedExpression e){
+        std::string bad; int line = 0;
+        scanOwningReads(e, owner, owning, assigned, locals, bad, line);
+        if (!bad.empty())
+            unsupported(("'" + bad + "' is used before it is assigned in the constructor "
+                         "(`Owned`/`Shared` are never-null)").c_str(), line ? line : st->line);
+    };
+    if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        std::string tgt = ctorFieldRef(as->unaryExpression, owner, locals);
+        if (tgt.empty()) checkE(as->unaryExpression);   // a write-through LHS may itself read a field
+        checkE(as->expression);
+        if (!tgt.empty() && topLevel) assigned.insert(tgt);
+    } else if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
+        if (lv->variables) for (auto& v : *lv->variables) if (v) {
+            checkE(v->initializer);
+            if (v->name && v->name->value) locals.insert(*v->name->value);
+        }
+    } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
+        checkE(iff->booleanExpression);
+        analyzeCtorStmt(iff->ifStatement, owner, owning, assigned, locals, false);
+        analyzeCtorStmt(iff->elseStatement, owner, owning, assigned, locals, false);
+    } else if (auto* wh = dynamic_cast<WhileNode*>(n)) {
+        checkE(wh->booleanExpression);
+        analyzeCtorStmt(wh->whileStatement, owner, owning, assigned, locals, false);
+    } else if (auto* blk = dynamic_cast<BlockNode*>(n)) {
+        if (blk->statements) for (auto& s : *blk->statements)
+            analyzeCtorStmt(s, owner, owning, assigned, locals, topLevel);
+    } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
+        checkE(std::dynamic_pointer_cast<ExpressionNode>(st));   // Invocation / incr / etc. — scan its reads
+    }
+    // (for/foreach/match/early-return: not modeled in v1 — the ctor-end assignment check still holds)
+}
+
+// Enforce never-null on a constructor: every `Owned`/`Shared` field assigned by ctor-end, none read before.
+void CEmitter::checkCtorNeverNull(ClassInfo& owner, SharedBlock body)
+{
+    std::set<std::string> owning;
+    for (auto& f : owner.fields)
+        if (!heapOwnerTarget(cType(f.type)).empty()) owning.insert(f.name);   // Owned/Shared (not Weak)
+    if (owning.empty()) return;
+    std::set<std::string> assigned, locals;
+    for (auto& f : owner.fields) if (f.initializer) assigned.insert(f.name);   // a field-initializer pre-assigns
+    if (body && body->statements)
+        for (auto& st : *body->statements)
+            analyzeCtorStmt(st, owner, owning, assigned, locals, true);
+    for (auto& f : owner.fields)
+        if (owning.count(f.name) && !assigned.count(f.name))
+            unsupported(("'" + f.name + "' must be set before the constructor returns "
+                         "(`Owned`/`Shared` are never-null)").c_str(),
+                        owner.ctorNode ? owner.ctorNode->line : (owner.node ? owner.node->line : 0));
+}
+
 // access control --------------------------------------------------------
 bool CEmitter::modHas(SharedModifierList mods, const char* name)
 {
@@ -6897,6 +7015,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             }
         }
     }
+    // Stage 1: never-null — every `Owned`/`Shared` field must be assigned by ctor-end and not read before.
+    if (isCtor) checkCtorNeverNull(owner, body);
     SharedStatement last;
     if (body && body->statements) {
         for (auto& st : *body->statements) { emitStatement(st, 1); last = st; }

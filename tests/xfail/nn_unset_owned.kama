@@ -1,0 +1,8 @@
+// An `Owned` field left unset by the constructor — `Owned`/`Shared` are never-null.
+import std::memory::{Owned};
+type value Box { public Box() { } }
+type resource Bad {
+    Owned<Box> a;
+    public Bad() { }              // leaves `a` unset
+}
+fn int main() { Bad b = Bad(); return 0; }

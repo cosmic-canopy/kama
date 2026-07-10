@@ -1,0 +1,25 @@
+// Never-null: `Owned`/`Shared` fields set in the constructor; a later method REASSIGNS (releases the old,
+// installs the new — the field is never null). Enforcement is ctor-only, so the reassignment is fine.
+import std::memory::{Owned, Shared};
+type value Box {
+    int32 v;
+    public Box(int32 v) { this.v = v; }
+    public fn int32 get() { return this.v; }
+}
+type resource Holder {
+    Owned<Box>  a;
+    Shared<Box> b;
+    public Holder(Owned<Box> a, Shared<Box> b) { this.a = give a; this.b = give b; }
+    public fn void bump() {                        // reassign: release old, install new (never null)
+        Owned<Box> n = new Box(v: this.a.get() + 1);
+        this.a = give n;
+    }
+    public fn int32 total() { return this.a.get() + this.b.get(); }
+}
+fn int main() {
+    Owned<Box> a = new Box(v: 10);
+    Shared<Box> b = new Box(v: 20);
+    Holder h = Holder(a: give a, b: give b);
+    h.bump();                       // a: 10 -> 11
+    return h.total();               // 11 + 20 = 31
+}

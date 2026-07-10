@@ -738,6 +738,15 @@ private:
     void        resolveFriends();   // resolve each class's raw friend grants to keys
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
     bool        isConstReceiver(SharedExpression receiver) const;       // const-call restriction
+    // Never-null definite assignment for `Owned`/`Shared` fields (Stage 1): each must be set before the
+    // ctor returns and never read before it is set. `Weak` is exempt (nullable). v1 = straight-line.
+    std::string ctorFieldRef(SharedExpression e, ClassInfo& owner, const std::set<std::string>& locals);
+    void        scanOwningReads(SharedExpression e, ClassInfo& owner, const std::set<std::string>& owning,
+                                const std::set<std::string>& assigned, const std::set<std::string>& locals,
+                                std::string& bad, int& badLine);
+    void        analyzeCtorStmt(SharedStatement st, ClassInfo& owner, const std::set<std::string>& owning,
+                                std::set<std::string>& assigned, std::set<std::string>& locals, bool topLevel);
+    void        checkCtorNeverNull(ClassInfo& owner, SharedBlock body);
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
     // BindableFunctionPtr<Sig> — construct/promote/invoke a bindable callable.
