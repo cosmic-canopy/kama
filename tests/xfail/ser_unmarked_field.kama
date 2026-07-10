@@ -1,0 +1,7 @@
+// A field with no @field/@skip on a @generate type is a compile error (explicit-intent rule).
+@generate(Serialize)
+type value Bad {
+    @field int32 x;
+    int32 unmarked;
+}
+fn int main() { return 0; }

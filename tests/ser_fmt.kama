@@ -1,0 +1,21 @@
+// std::fmt number->string at the bounds (INT_MIN/MAX, UINT_MAX, negatives, zero) + float round-trip text.
+import std::fmt::{i64Str, u64Str, i32Str, u32Str, f64Str, f32Str, boolStr};
+fn int main() {
+    int r = 0;
+    if (i64Str(v: 0i64) == "0")                                          { r = r + 1; }
+    if (i64Str(v: 42i64) == "42")                                        { r = r + 1; }
+    if (i64Str(v: 0i64 - 42i64) == "-42")                                { r = r + 1; }
+    if (i64Str(v: 0i64 - 9223372036854775807i64 - 1i64) == "-9223372036854775808") { r = r + 1; }
+    if (i64Str(v: 9223372036854775807i64) == "9223372036854775807")      { r = r + 1; }
+    if (u64Str(v: 0ui64) == "0")                                         { r = r + 1; }
+    if (u64Str(v: 18446744073709551615ui64) == "18446744073709551615")   { r = r + 1; }
+    if (i32Str(v: 0i32 - 2147483647i32 - 1i32) == "-2147483648")         { r = r + 1; }
+    if (u32Str(v: 4294967295ui32) == "4294967295")                       { r = r + 1; }
+    if (boolStr(b: true) == "true")                                      { r = r + 1; }
+    if (boolStr(b: false) == "false")                                    { r = r + 1; }
+    if (f64Str(v: 1.5) == "1.5")                                         { r = r + 1; }
+    if (f64Str(v: 0.5) == "0.5")                                         { r = r + 1; }
+    if (f64Str(v: 2.0) == "2")                                           { r = r + 1; }
+    if (f32Str(v: 1.5f32) == "1.5")                                      { r = r + 1; }
+    return r;   // 15
+}

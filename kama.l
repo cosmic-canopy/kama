@@ -233,6 +233,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 
 "{"     { RETURN_TOKEN(LEFT_BRACE, 1); }
 "}"     { RETURN_TOKEN(RIGHT_BRACE, 1); }
+"@"     { RETURN_TOKEN(AT, 1); }
 "!"     { RETURN_TOKEN(EXCLAMATION, 1); }
 "%"     { RETURN_TOKEN(PERCENT, 1); }
 "&"     { RETURN_TOKEN(AMP, 1); }

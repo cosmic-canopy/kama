@@ -462,6 +462,20 @@ public:
         , expression(expression) { }
 };
 
+// `@name` / `@name(args)` — a declaration attribute (serialization metadata + codegen trigger), attached to
+// a type declaration or a field. `args` reuses ArgumentNode: a BARE entry (`@generate(Serialize)`) carries
+// its identifier in `name` with a null `expression`; a NAMED entry (`@field(name: "wire")`) carries the key
+// in `name` and the value in `expression`.
+class AttributeNode : public ExpressionNode {
+public:
+    SharedString name;
+    SharedArgumentList args;
+    AttributeNode(CodeGenContext& context, SharedString name, SharedArgumentList args)
+        : ASTNode(context),  ExpressionNode(context)
+        , name(name)
+        , args(args) { }
+};
+
 // `give x` (move; source consumed) / `copy x` (duplicate). The explicit hand-off
 // marker that rides a NAMED value; a fresh rvalue never needs one.
 class HandoffNode : public ExpressionNode {
@@ -649,6 +663,7 @@ public:
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
     SharedStringList forKinds;     // `type contract X for value|resource|both` — which kinds may implement it
+    SharedAttributeList attributes;  // `@generate(...)` etc. (null when none); serialization metadata
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
                         SharedIdentifier name,
                         SharedClassBaseDeclaration baseTypes,
@@ -722,6 +737,7 @@ public:
     SharedModifierList modifiers;
     SharedIdentifier type;
     SharedVariableDeclaratorList declarators;
+    SharedAttributeList attributes;  // `@field`/`@skip`/`@bits(...)` (null when none); serialization metadata
     ClassFieldDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
             SharedIdentifier type,
             SharedVariableDeclaratorList declarators)

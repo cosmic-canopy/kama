@@ -1,0 +1,3 @@
+// Field attributes require @generate on the type.
+type value Bad2 { @field int32 x; }
+fn int main() { return 0; }

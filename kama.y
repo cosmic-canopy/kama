@@ -14,6 +14,9 @@ extern int yylex(YYSTYPE * yylval_param, yyscan_t scanner);
 
 int yyerror(yyscan_t scanner, const char *msg);
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str);
+SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
+    SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedStringList forKinds,
+    SharedClassBaseDeclaration base, SharedClassMemberDeclarationList body);
 
 #define SCANNER_CODEGENCONTEXT *(yyget_extra(scanner)->codeGenContext)
 
@@ -63,6 +66,7 @@ struct kamayystype {
   SharedExpressionStatement expressionstatement;
   SharedMatchArm matcharm;
   SharedArgument argument;
+  SharedAttribute attribute;
   SharedEnumMemberDeclaration enummemberdecl;
   SharedFunctionDeclaration functiondecl;
   SharedClassBaseDeclaration classbasedecl;
@@ -83,6 +87,7 @@ struct kamayystype {
   SharedConstVariableDeclaratorList constvariabledeclaratorlist;
   SharedMatchArmList matcharmlist;
   SharedArgumentList argumentlist;
+  SharedAttributeList attributelist;
   SharedExpressionList expressionlist;
   SharedEnumMemberDeclarationList enummemberdecllist;
   SharedFunctionDeclarationList functiondecllist;
@@ -137,6 +142,7 @@ struct kamayystype {
 
 /* PUNCTUATION AND SINGLE CHARACTER OPERATORS */
 %token <token> COMMA ","
+%token <token> AT "@"
 %token <token> LEFT_BRACKET "["
 %token <token> RIGHT_BRACKET "]"
 
@@ -219,8 +225,10 @@ struct kamayystype {
 %type <expressionstatement> pre_increment_expression pre_decrement_expression
    /* %type <unaryexpression> unary_expression */
    /*%type <binaryexpression>*/
-%type <argument> argument
-%type <argumentlist> argument_list_opt argument_list
+%type <argument> argument attr_arg
+%type <argumentlist> argument_list_opt argument_list attr_arg_list
+%type <attribute> attribute
+%type <attributelist> attribute_list
 %type <enummemberdecl> enum_member_declaration
 %type <enummemberdecllist> enum_body enum_member_declarations_opt enum_member_declarations
 %type <classbasedecl> class_base_opt class_base
@@ -449,24 +457,9 @@ type_declaration
    kinds share the class body; the emitter routes `contract` to the fat-pointer vtable path. */
 marked_type_declaration
   : TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
-    { auto n = std::make_shared<ClassDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $6, $7); n->typeKind = $3;
-      n->forKinds = $5;   /* `for value|resource|both` — mandatory on a `type contract`, forbidden otherwise */
-      /* `type value Pair<A, B>` / `type value Map<K: Hashable, V>` — the head parsed the
-         params into genericArgs (each carrying its bounds). Capture names + bounds and strip them so
-         the class NAME stays bare `Pair`/`Map`. */
-      if ($4->genericArgs && !$4->genericArgs->empty()) {
-          n->typeParams = std::make_shared<StringList>();
-          n->typeBounds = std::make_shared<BoundsList>();
-          n->constParams = std::make_shared<StringList>();
-          for (auto& a : *$4->genericArgs) if (a && a->value) {
-              n->typeParams->push_back(a->value);
-              n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
-              if (a->isConstParam) n->constParams->push_back(a->value);
-          }
-          $4->genericArgs = SharedIdentifierList();
-          $4->genericArg  = SharedIdentifier();
-      }
-      $$ = n; }
+    { $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $3, $4, $5, $6, $7); }
+  | attribute_list TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
+    { $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $4, $5, $6, $7, $8); }   /* `@generate(...) type …` */
   ;
 
 /* `implements C for T { …methods… }` — RETROACTIVE contract conformance: an external top-level block that
@@ -883,6 +876,27 @@ argument
   | IDENTIFIER COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); }
   | IDENTIFIER COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); }
   ;
+/* `@name` / `@name(args)` — declaration attributes (serialization metadata + codegen trigger). A BARE arg
+   (`@generate(Serialize)`) is an identifier with no value (name set, expression null); a NAMED arg
+   (`@field(name: "x")`) is `key: expr`. A NON-EMPTY attribute_list is a distinct alternative on the type/
+   field decl (never an empty prefix), keeping it free of shift/reduce conflicts with the plain
+   modifiers_opt forms. */
+attribute_list
+  : attribute                  { $$ = std::make_shared<AttributeList>(); $$->push_back($1); }
+  | attribute_list attribute   { $1->push_back($2); $$ = $1; }
+  ;
+attribute
+  : AT IDENTIFIER                              { $$ = std::make_shared<AttributeNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<ArgumentList>()); }
+  | AT IDENTIFIER LPAREN attr_arg_list RPAREN  { $$ = std::make_shared<AttributeNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
+  ;
+attr_arg_list
+  : attr_arg                       { $$ = std::make_shared<ArgumentList>(); $$->push_back($1); }
+  | attr_arg_list COMMA attr_arg   { $1->push_back($3); $$ = $1; }
+  ;
+attr_arg
+  : IDENTIFIER                     { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), SharedExpression()); }
+  | IDENTIFIER COLON expression    { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); }
+  ;
 variable_reference
   : expression
   ;
@@ -1084,6 +1098,7 @@ constant_declaration
   ;
 field_declaration
   : modifiers_opt type variable_declarators SEMICOLON   { $$ = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
+  | attribute_list modifiers_opt type variable_declarators SEMICOLON   { auto f = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $3, $4); f->attributes = $1; $$ = f; }   /* `@field … type name;` */
   ;
 method_declaration
   : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
@@ -1233,6 +1248,32 @@ enum_member_declaration
 
 %%
 
+// Build a `ClassDeclarationNode` from the shared parts of a `type` declaration (with or without a leading
+// `@…` attribute list). Captures generic params/bounds off the head and strips them so the class NAME stays
+// bare (`Pair`/`Map`). Factored out so the attributed and un-attributed alternatives share one action.
+SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
+    SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedStringList forKinds,
+    SharedClassBaseDeclaration base, SharedClassMemberDeclarationList body)
+{
+    auto n = std::make_shared<ClassDeclarationNode>(context, modifiers, head, base, body);
+    n->typeKind   = typeKind;
+    n->forKinds   = forKinds;   // `for value|resource|both` — mandatory on a `type contract`, else empty
+    n->attributes = attributes; // `@generate(...)` etc. (null when the un-attributed alternative was used)
+    if (head->genericArgs && !head->genericArgs->empty()) {
+        n->typeParams  = std::make_shared<StringList>();
+        n->typeBounds  = std::make_shared<BoundsList>();
+        n->constParams = std::make_shared<StringList>();
+        for (auto& a : *head->genericArgs) if (a && a->value) {
+            n->typeParams->push_back(a->value);
+            n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+            if (a->isConstParam) n->constParams->push_back(a->value);
+        }
+        head->genericArgs = SharedIdentifierList();
+        head->genericArg  = SharedIdentifier();
+    }
+    return n;
+}
+
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str)
 {
   bool signedVal = true;
@@ -1271,20 +1312,30 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
   int suffixSize = (bits == 8) ? 2 : 3;
   suffixSize = (!signedVal) ? suffixSize + 1 : suffixSize;
   
-  long long val = 0;
-  SharedExpression rtn;
+  // Extract the numeric digit substring and its radix (base==0 => an `N_xxx` based literal). An unsigned
+  // literal is parsed with strtoull so the full 64-bit range (values above INT64_MAX like `…615ui64`) is
+  // preserved; a signed literal keeps strtoll. Using strtoll for BOTH previously saturated any unsigned
+  // literal past LLONG_MAX to 9223372036854775807 — a silent truncation.
+  std::string digits;
+  int realBase = base;
   if(base == 0)
   {
     // based type
     std::string::size_type underscoreIndex = str.find('_');
     std::string::size_type subStrLength = str.length() - underscoreIndex - suffixSize;
-    int base = strtol(str.substr(underscoreIndex + 1, subStrLength).c_str(), NULL, 10);
-    val = strtoll( str.substr(0, underscoreIndex - 1).c_str(), NULL, base);
+    realBase = strtol(str.substr(underscoreIndex + 1, subStrLength).c_str(), NULL, 10);
+    digits = str.substr(0, underscoreIndex - 1);
   }
   else
   {
-    val = strtoll( str.substr(0, str.length() - suffixSize).c_str(), NULL, base);
+    digits = str.substr(0, str.length() - suffixSize);
   }
+
+  long long val = 0;
+  unsigned long long uval = 0;
+  if(signedVal) val  = strtoll( digits.c_str(), NULL, realBase);
+  else          uval = strtoull(digits.c_str(), NULL, realBase);
+  SharedExpression rtn;
 
   if(signedVal)
   {
@@ -1310,17 +1361,17 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
     switch(bits)
     {
       case 8:
-        rtn = std::make_shared<UInt8Node>(context, (uint8_t)val);
+        rtn = std::make_shared<UInt8Node>(context, (uint8_t)uval);
       break;
       case 16:
-        rtn = std::make_shared<UInt16Node>(context, (uint16_t)val);
+        rtn = std::make_shared<UInt16Node>(context, (uint16_t)uval);
       break;
       case 64:
-        rtn = std::make_shared<UInt64Node>(context, (uint64_t)val);
+        rtn = std::make_shared<UInt64Node>(context, (uint64_t)uval);
       break;
       case 32:
       default:
-        rtn = std::make_shared<UInt32Node>(context, (uint32_t)val);
+        rtn = std::make_shared<UInt32Node>(context, (uint32_t)uval);
       break;
     }
   }

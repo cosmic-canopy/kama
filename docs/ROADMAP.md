@@ -124,23 +124,39 @@ remains here is genuinely later-track or opt-in.
 - **`Copyable` as a formal contract.** Today it's recognized nominally by name (`implements Copyable`);
   formalize as `type contract Copyable { This copy(); }` — bundle with the structural→nominal migration.
 
-## 4. Reflection + attributes (1.x — design brief)
+## 4. Reflection + attributes / serialization (1.x — Phase 4)
 
 Opt-in compile-time reflection driving polymorphic serialization — the final self-hosting-stdlib step. The
 only new *language* surface is the attribute mark; serializers land as modules.
 
-- **Opt-in / zero-cost when unused.** *Nobody pays a byte or a cycle if they don't reflect.* A type is
-  inert unless it opts in; no global registry, no per-type metadata emitted unless requested.
-- **Declarative marks on types** — an attribute syntax (`[Reflect]` / `@derive(...)` — spelling TBD) opts a
-  type in. This is the new language surface (grammar + AST + emit).
-- **Granular — per-field opt-in** (mark which fields reflect / serialize / skip), not all-or-nothing.
-- **Scenegraph-capable (composition)** — reflect object graphs, not just flat structs, which needs
-  **temporary IDs** so a serialized graph round-trips shared/back references without cycles.
-- **Polymorphic by serializer** — one reflection description, many back ends (text / binary / JSON / YAML;
-  little-endian canonical for binary). The serializer is a module; reflection is the substrate it reads.
+**Shipped (Phase 4a — JSON round-trip, ASan-clean).** `@`-attribute grammar; `@generate(Serialize,
+Deserialize)` (per-direction opt-in) with mandatory per-field `@field` / `@field(name:)` / `@skip`
+(unmarked = compile error); the `Serializer`/`Serialize`/`Deserializer`/`Deserialize`/`DeError` prelude
+contracts; codegen that synthesizes `serialize`/`deserialize` as kama and merges them into the type;
+`std::fmt` (number→string); the `std::serialization::json` backend (`JsonWriter`/`JsonReader`) with
+`json::toString(v)` + `json::tryParse::<T>(src)`. **Serialize** covers scalars/string/nested/`List`/`Array`/
+`Optional`; **deserialize** covers flat scalar/string structs (value + resource). Format is chosen by module
+(`json::…`); the generated `serialize`/`deserialize` are format-agnostic (drive the abstract contract), so a
+new backend is just a module — no compiler change. Two general emitter fixes fell out: interface vtables are
+cross-module-visible (extern + header-declared), and generic-function type args absolutize at the call site
+(cross-module `f::<UserType>()`). *(Land the shipped surface in SPEC as it stabilizes.)*
 
-Mostly codegen over `ClassInfo`. **String interpolation rides on the same to-string substrate**, so it
-sequences here.
+**Remaining (Phase 4b+):**
+- **Deserialize breadth** — nested `@generate` types, `List`/`Array`, `Optional<T>` on the *read* side
+  (serialize already does all of these; deserialize is flat scalar/string only).
+- **General user `enum` serialize** — accept `@generate` on `enum` declarations + variant codegen.
+- **Scenegraph (composition)** — lifecycle hooks (`PreSerialize`/`PostSerialize`/`PostDeserialize`) + a
+  threaded `SerContext`/`DeContext` (id→object registry) so an object graph round-trips shared/back
+  references via **temporary IDs**, without cycles. Engine-facing.
+- **More back ends (modules, no compiler change)** — YAML; **binary** (packing options + `@bits(n)` bit-
+  packing + little-endian canonical); **XML** + **HTML** (user-requested; XML → `<field>value</field>`,
+  HTML a render/pretty view for the write side). Each is a `Serializer`/`Deserializer` impl + `toString`/
+  `tryParse`-style entries.
+- **Rename `toString`** — too generic / clashes with other-language conventions; proposed `json::encode`
+  (paired with `json::tryParse`), name to confirm.
+- **Docs** — SPEC (serialization + `@`-attributes) and `docs/grammar.bnf` (attribute grammar).
+
+**String interpolation `"${x}"` rides on the same `std::fmt` to-string substrate**, so it sequences here.
 
 ## 5. 1.x — systems & runtime (post-1.0)
 

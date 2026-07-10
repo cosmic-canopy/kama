@@ -178,6 +178,288 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
 }
 
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
+SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
+
+// --- Serialization codegen (`@generate`) --------------------------------------------------------------
+// A `@generate(Serialize|Deserialize)` type gets its `implements` block SYNTHESIZED as kama source, parsed,
+// and injected into the declaring unit — so it rides the full pipeline (contract dispatch, RAII, ownership)
+// instead of hand-emitted C. This runs after all modules load (so the field types are present) and before
+// collection/emission.
+
+// Reconstruct a type's source spelling (name + one level of generic arg), for a `foreach` binding.
+static std::string typeToStr(SharedIdentifier t)
+{
+    if (!t || !t->value) return "";
+    std::string s = *t->value;
+    if (t->genericArg) s += "<" + typeToStr(t->genericArg) + ">";
+    return s;
+}
+
+// The Serializer call that writes a field of `type` read via `access` (e.g. "this.x"). Primitive/string map
+// to a per-width write; a List/Array/Fixed becomes a JSON array (foreach over the elements); any other
+// (user) type must itself be `Serialize` and is recursed into.
+static std::string serializeWriteStmt(SharedIdentifier type, const std::string& access)
+{
+    if (!type) return "";
+    // Optional<T> -> the inner value, or JSON null. The payload write must be a single statement (a
+    // collection-valued Optional is deferred — it can't fit a single-expression match arm).
+    if (type->value && *type->value == "Optional" && type->genericArg) {
+        std::string inner = serializeWriteStmt(type->genericArg, "__opt");
+        if (inner.empty() || inner.find('\n') != std::string::npos) return "";
+        return "match (" + access + ") { case Some(__opt): " + inner
+             + " case None: w.writeNull(); };";
+    }
+    // Collections -> a JSON array. The element write recurses (primitive or nested Serialize type).
+    if (type->value && type->genericArg &&
+        (*type->value == "List" || *type->value == "Array" || *type->value == "Fixed")) {
+        std::string elemTy   = typeToStr(type->genericArg);
+        std::string elemWrite = serializeWriteStmt(type->genericArg, "__e");
+        if (elemWrite.empty()) return "";
+        return "w.beginArray(count: " + access + ".length());\n"
+               "        foreach (" + elemTy + " __e in " + access + ") { " + elemWrite + " }\n"
+               "        w.endArray();";
+    }
+    switch (type->builtInVal) {
+        case IDENTIFIER_INT8_VAL:    return "w.writeI8(v: " + access + ");";
+        case IDENTIFIER_INT16_VAL:   return "w.writeI16(v: " + access + ");";
+        case IDENTIFIER_INT32_VAL:   return "w.writeI32(v: " + access + ");";
+        case IDENTIFIER_INT64_VAL:   return "w.writeI64(v: " + access + ");";
+        case IDENTIFIER_UINT8_VAL:   return "w.writeU8(v: " + access + ");";
+        case IDENTIFIER_UINT16_VAL:  return "w.writeU16(v: " + access + ");";
+        case IDENTIFIER_UINT32_VAL:  return "w.writeU32(v: " + access + ");";
+        case IDENTIFIER_UINT64_VAL:  return "w.writeU64(v: " + access + ");";
+        case IDENTIFIER_BOOL_VAL:    return "w.writeBool(v: " + access + ");";
+        case IDENTIFIER_FLOAT32_VAL: return "w.writeF32(v: " + access + ");";
+        case IDENTIFIER_FLOAT64_VAL: return "w.writeF64(v: " + access + ");";
+        case IDENTIFIER_CHAR_VAL:    return "w.writeChar(v: " + access + ");";
+        case IDENTIFIER_STRING_VAL:  return "w.writeString(v: ref " + access + ");";
+        default: break;
+    }
+    // platform-width integer aliases carry no builtInVal
+    if (type->value && *type->value == "usize") return "w.writeU64(v: cast<uint64>(" + access + "));";
+    if (type->value && *type->value == "isize") return "w.writeI64(v: cast<int64>(" + access + "));";
+    // a nested user type — it must itself implement Serialize (derived or hand-written)
+    return access + ".serialize(w: w);";
+}
+
+// Read `@generate(Serialize|Deserialize)` off a type; returns which directions were requested.
+static void generateDirections(ClassDeclarationNode* cd, bool& ser, bool& de)
+{
+    ser = false; de = false;
+    if (!cd->attributes) return;
+    for (auto& at : *cd->attributes) {
+        if (!at || !at->name || *at->name != "generate" || !at->args) continue;
+        for (auto& a : *at->args)
+            if (a && a->name && a->name->value && !a->expression) {
+                if (*a->name->value == "Serialize")   ser = true;
+                if (*a->name->value == "Deserialize") de  = true;
+            }
+    }
+}
+
+// The body statements of the synthesized `serialize` (the per-field write calls), for a non-generic
+// `@generate(Serialize)` type. Returns "" for a generic type (v1-deferred).
+static std::string buildSerializeBody(ClassDeclarationNode* cd)
+{
+    if (!cd || !cd->members) return "";
+    if (cd->typeParams && !cd->typeParams->empty()) return "";   // generic @generate: deferred
+    std::string body;
+    for (auto& m : *cd->members) {
+        auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(m.get());
+        if (!fd || !fd->declarators) continue;
+        bool skip = false; std::string rename;
+        if (fd->attributes)
+            for (auto& at : *fd->attributes) {
+                if (!at || !at->name) continue;
+                if (*at->name == "skip") skip = true;
+                else if (*at->name == "field" && at->args)
+                    for (auto& a : *at->args)
+                        if (a && a->name && a->name->value && *a->name->value == "name" && a->expression)
+                            if (auto* sn = dynamic_cast<StringNode*>(a->expression.get()))
+                                rename = sn->value ? *sn->value : "";
+            }
+        if (skip) continue;
+        for (auto& d : *fd->declarators) {
+            if (!d->name || !d->name->value) continue;
+            std::string fname = *d->name->value;
+            std::string wire  = rename.empty() ? fname : rename;
+            std::string ws    = serializeWriteStmt(fd->type, "this." + fname);
+            if (ws.empty()) continue;
+            body += "        w.fieldName(name: \"" + wire + "\");\n";
+            body += "        " + ws + "\n";
+        }
+    }
+    return body;
+}
+
+// The default value for a field local before deserialization (also the value for a field absent from the
+// JSON). "" => an unsupported field type (nested/collection/Optional deserialize is v1-deferred).
+static std::string deserializeDefault(SharedIdentifier type)
+{
+    if (!type) return "";
+    switch (type->builtInVal) {
+        case IDENTIFIER_INT8_VAL:    return "0i8";
+        case IDENTIFIER_INT16_VAL:   return "0i16";
+        case IDENTIFIER_INT32_VAL:   return "0";
+        case IDENTIFIER_INT64_VAL:   return "0i64";
+        case IDENTIFIER_UINT8_VAL:   return "0ui8";
+        case IDENTIFIER_UINT16_VAL:  return "0ui16";
+        case IDENTIFIER_UINT32_VAL:  return "0ui32";
+        case IDENTIFIER_UINT64_VAL:  return "0ui64";
+        case IDENTIFIER_BOOL_VAL:    return "false";
+        case IDENTIFIER_FLOAT32_VAL: return "0.0f32";
+        case IDENTIFIER_FLOAT64_VAL: return "0.0";
+        case IDENTIFIER_CHAR_VAL:    return "cast<char>(0ui32)";
+        case IDENTIFIER_STRING_VAL:  return "\"\"";
+        default: return "";
+    }
+}
+
+// The `r.readX()` call that reads a field of `type`. "" => unsupported (deferred).
+static std::string deserializeRead(SharedIdentifier type)
+{
+    if (!type) return "";
+    switch (type->builtInVal) {
+        case IDENTIFIER_INT8_VAL:    return "r.readI8()";
+        case IDENTIFIER_INT16_VAL:   return "r.readI16()";
+        case IDENTIFIER_INT32_VAL:   return "r.readI32()";
+        case IDENTIFIER_INT64_VAL:   return "r.readI64()";
+        case IDENTIFIER_UINT8_VAL:   return "r.readU8()";
+        case IDENTIFIER_UINT16_VAL:  return "r.readU16()";
+        case IDENTIFIER_UINT32_VAL:  return "r.readU32()";
+        case IDENTIFIER_UINT64_VAL:  return "r.readU64()";
+        case IDENTIFIER_BOOL_VAL:    return "r.readBool()";
+        case IDENTIFIER_FLOAT32_VAL: return "r.readF32()";
+        case IDENTIFIER_FLOAT64_VAL: return "r.readF64()";
+        case IDENTIFIER_CHAR_VAL:    return "r.readChar()";
+        case IDENTIFIER_STRING_VAL:  return "r.readString()";
+        default: return "";
+    }
+}
+
+// The body of the synthesized static `deserialize`: a field local per @field (with a default), a read loop
+// that dispatches each JSON key to the matching local, then construction via the type's ctor (named args =
+// the @field field names). Returns "" if any @field has an unsupported (non-scalar) type — v1 deserialize
+// covers flat scalar/string structs; the caller then skips the Deserialize merge for that type.
+static std::string buildDeserializeBody(ClassDeclarationNode* cd)
+{
+    if (!cd || !cd->name || !cd->name->value || !cd->members) return "";
+    if (cd->typeParams && !cd->typeParams->empty()) return "";
+    std::string tn = *cd->name->value;
+    bool resKind = cd->typeKind && *cd->typeKind == "resource";
+    std::string locals, chain, ctorArgs;
+    bool first = true; int idx = 0;
+    for (auto& m : *cd->members) {
+        auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(m.get());
+        if (!fd || !fd->declarators) continue;
+        bool skip = false; std::string rename;
+        if (fd->attributes)
+            for (auto& at : *fd->attributes) {
+                if (!at || !at->name) continue;
+                if (*at->name == "skip") skip = true;
+                else if (*at->name == "field" && at->args)
+                    for (auto& a : *at->args)
+                        if (a && a->name && a->name->value && *a->name->value == "name" && a->expression)
+                            if (auto* sn = dynamic_cast<StringNode*>(a->expression.get())) rename = sn->value ? *sn->value : "";
+            }
+        if (skip) continue;
+        for (auto& d : *fd->declarators) {
+            if (!d->name || !d->name->value) continue;
+            std::string fname = *d->name->value, wire = rename.empty() ? fname : rename;
+            std::string local = "__f_" + fname, tyStr = typeToStr(fd->type);
+            std::string def = deserializeDefault(fd->type), readCall = deserializeRead(fd->type);
+            if (def.empty() || readCall.empty()) return "";        // unsupported field type
+            locals += "        " + tyStr + " " + local + " = " + def + ";\n";
+            chain  += std::string("            ") + (first ? "if" : "else if")
+                    + " (__key == \"" + wire + "\") { " + local + " = " + readCall + "; }\n";
+            first = false;
+            bool owned = (fd->type->builtInVal == IDENTIFIER_STRING_VAL);
+            ctorArgs += (idx ? ", " : "") + fname + ": " + (owned ? "give " : "") + local;
+            idx++;
+        }
+    }
+    if (idx == 0) return "";
+    return locals
+         + "        r.beginObject();\n"
+           "        while (r.moreFields()) {\n"
+           "            string __key = r.fieldName();\n"
+         + chain +
+           "            else { r.skipValue(); }\n"
+           "        }\n"
+           "        if (r.failed()) { return Result::Err(error: DeError::Malformed); }\n"
+           "        " + tn + " __result = " + tn + "(" + ctorArgs + ");\n"
+           "        return Result::Ok(value: " + std::string(resKind ? "give " : "") + "__result);\n";
+}
+
+// Parse a wrapper `type … implements C { … }` and merge its interface clause + members into `cd` — so the
+// generated method(s) live on the type as a NORMAL conformance (fat-pointer vtable), not a retroactive block.
+// Parsed wrapper units whose AST nodes get spliced into user types — kept alive for the whole compile so
+// the CodeGenContext they reference outlives emission (they'd otherwise free on return -> use-after-free).
+static std::vector<SharedCompilationUnit> g_generatedUnits;
+
+static void mergeGeneratedInto(ClassDeclarationNode* cd, const std::string& wrapSrc)
+{
+    SharedCompilationUnit pu = parseString(wrapSrc.c_str(), "<generated-serde>");
+    if (!pu || !pu->codeDeclarationList || pu->codeDeclarationList->empty()) return;
+    g_generatedUnits.push_back(pu);   // keep the spliced-from AST + its context alive
+    auto* gcd = dynamic_cast<ClassDeclarationNode*>((*pu->codeDeclarationList)[0].get());
+    if (!gcd) return;
+    if (gcd->baseTypes && gcd->baseTypes->interfaces) {
+        if (!cd->baseTypes) cd->baseTypes = gcd->baseTypes;
+        else if (cd->baseTypes->interfaces)
+            for (auto& itf : *gcd->baseTypes->interfaces) cd->baseTypes->interfaces->push_back(itf);
+        else cd->baseTypes->interfaces = gcd->baseTypes->interfaces;
+    }
+    if (gcd->members) {
+        if (!cd->members) cd->members = std::make_shared<ClassMemberDeclarationList>();
+        for (auto& mm : *gcd->members) cd->members->push_back(mm);
+    }
+}
+
+// Scan every unit for `@generate` types and give each the generated `serialize`/`deserialize` method +
+// `implements Serialize`/`Deserialize` clause, MERGED INTO THE TYPE ITSELF (a normal conformance with a
+// fat-pointer vtable — a retroactive block is static-dispatch-only and couldn't be a contract value).
+void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
+{
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        std::vector<SharedStatement> generated;   // top-level retro-impls to append (deserialize)
+        for (auto& decl : *u->codeDeclarationList) {
+            auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
+            if (!cd || !cd->name || !cd->name->value) continue;
+            bool ser = false, de = false;
+            generateDirections(cd, ser, de);
+            // Serialize is used dynamically (behind the `Serialize` interface, in `toString`), so it's MERGED
+            // into the type as a normal conformance (fat-pointer vtable).
+            if (ser) {
+                std::string body = buildSerializeBody(cd);
+                if (!(body.empty() && cd->typeParams && !cd->typeParams->empty()))
+                    mergeGeneratedInto(cd,
+                        "type value __KamaGenSer implements Serialize {\n"
+                        "    public fn void serialize(ref Serializer w) {\n"
+                        "        w.beginObject();\n" + body +
+                        "        w.endObject();\n"
+                        "    }\n"
+                        "}\n");
+            }
+            // Deserialize is a marker (method-less) contract, used only statically (`T::deserialize` via the
+            // bound in `tryParse`). Merge the static `deserialize` factory + the marker into the type: the
+            // empty marker means the vtable has no method slots (no `This` to resolve), and a merged static
+            // member keeps its `static` (a retro impl would drop it).
+            if (de) {
+                std::string body = buildDeserializeBody(cd);
+                if (!body.empty())   // skip types with fields deserialize can't yet build (non-scalar)
+                    mergeGeneratedInto(cd,
+                        "type value __KamaGenDe implements Deserialize {\n"
+                        "    public static fn Result<" + *cd->name->value + ", DeError> deserialize(Deserializer r) {\n"
+                        + body +
+                        "    }\n"
+                        "}\n");
+            }
+        }
+        (void)generated;
+    }
+}
 
 // Parse the CLI inputs, then transitively resolve + parse imported modules. Dedup by
 // absolute path so cycles load exactly once. `std`/`core` are reserved roots (stdlib only);
@@ -239,6 +521,9 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             }
         }
     }
+    // Inject synthesized `implements Serialize/Deserialize` blocks for every `@generate`d type before the
+    // program is handed to the emitter (they are collected + emitted like ordinary declarations).
+    synthesizeSerialization(units);
     return true;
 }
 
@@ -317,6 +602,39 @@ static const char* PRELUDE_SRC =
     // iterator (implements `Iterator<T>` and is iterated directly) needs no `Iterable`.
     "type contract Iterable<T> for both { fn Iterator<T> iterator(); }\n"
     "type contract IterableMut<T> for both { fn IteratorMut<T> iterMut(); }\n"
+    // Serialization capability contracts (the `@generate` protocol). Like the iteration contracts these are
+    // language-level bounds, so they live in the prelude: `Serializer` is the pluggable output sink a backend
+    // (std::json, …) implements; `Serialize` is what a `@generate(Serialize)` type gets (compiler-synthesized)
+    // or a custom serializer hand-writes. Per-width scalar methods let a binary backend pack tight while text
+    // backends widen. Declaration-only — zero cost unless a program actually serializes.
+    "type contract Serializer for resource {\n"
+    "    fn void beginObject(); fn void endObject(); fn void fieldName(string name);\n"
+    "    fn void beginArray(usize count); fn void endArray();\n"
+    "    fn void writeI8(int8 v); fn void writeI16(int16 v); fn void writeI32(int32 v); fn void writeI64(int64 v);\n"
+    "    fn void writeU8(uint8 v); fn void writeU16(uint16 v); fn void writeU32(uint32 v); fn void writeU64(uint64 v);\n"
+    "    fn void writeF32(float32 v); fn void writeF64(float64 v);\n"
+    "    fn void writeBool(bool v); fn void writeChar(char v); fn void writeString(ref string v); fn void writeNull();\n"
+    "}\n"
+    "type contract Serialize for both { fn void serialize(ref Serializer w); }\n"
+    // Deserialization: `Deserializer` is the pluggable input source (a backend's reader implements it, using
+    // a STICKY error flag — a read on malformed input sets `failed()` and returns a default, so the generated
+    // `deserialize` needs no per-read branching; `tryParse` checks `failed()` once at the end). `Deserialize`
+    // is the per-type capability the codegen synthesizes: a static factory `deserialize(ref Deserializer)`.
+    "enum DeError { Malformed, UnexpectedEnd, TypeMismatch, MissingField }\n"
+    "type contract Deserializer for resource {\n"
+    "    fn void beginObject(); fn bool moreFields(); fn string fieldName();\n"
+    "    fn void beginArray(); fn bool moreElems();\n"
+    "    fn int8 readI8(); fn int16 readI16(); fn int32 readI32(); fn int64 readI64();\n"
+    "    fn uint8 readU8(); fn uint16 readU16(); fn uint32 readU32(); fn uint64 readU64();\n"
+    "    fn float32 readF32(); fn float64 readF64();\n"
+    "    fn bool readBool(); fn char readChar(); fn string readString();\n"
+    "    fn bool readNull(); fn void skipValue(); fn bool failed();\n"
+    "}\n"
+    // A marker contract (like Movable): the `@generate(Deserialize)` codegen supplies the static factory
+    // `deserialize(ref Deserializer) -> Result<This, DeError>` via a retro impl, and `tryParse<T: Deserialize>`
+    // calls `T::deserialize(...)` statically. Kept method-less so its signature needn't name `This` in a
+    // return position (which the generic-instance machinery can't resolve outside a type).
+    "type contract Deserialize for both { }\n"
     // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
     // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
     // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is

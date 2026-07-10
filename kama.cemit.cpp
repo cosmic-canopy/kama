@@ -2311,6 +2311,28 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ci.isExternStruct = isExt;
         if (isExt) _externNames.insert(ci.name);
         ci.node = cd;
+
+        // `@generate(Serialize, Deserialize)` — opt this type into serialization codegen (pay-for-what-you-
+        // use: only a marked type gets the reflective helpers). Only the type-level `@generate` is valid
+        // here; per-field attributes are read in the member loop below.
+        if (cd->attributes)
+            for (auto& at : *cd->attributes) {
+                if (!at || !at->name) continue;
+                if (*at->name == "generate") {
+                    if (!at->args || at->args->empty())
+                        unsupported("`@generate(...)` needs at least one of Serialize, Deserialize", cd->line);
+                    else for (auto& a : *at->args) {
+                        // bare identifier args only (Serialize/Deserialize); a `key: value` form is invalid here
+                        std::string which = (a && a->name && a->name->value && !a->expression) ? *a->name->value : "";
+                        if      (which == "Serialize")   ci.genSerialize = true;
+                        else if (which == "Deserialize") ci.genDeserialize = true;
+                        else unsupported("`@generate(...)` accepts only Serialize and/or Deserialize", cd->line);
+                    }
+                } else {
+                    unsupported(("unknown type attribute `@" + *at->name + "` (expected `@generate`)").c_str(), cd->line);
+                }
+            }
+
         ScopedStr _ts(_thisType, ci.name);   // `This` -> this class in its collected method sigs
 
         // Single inheritance (extends). Base/interface names are RESOLVED in
@@ -2379,6 +2401,38 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // private (ownership encapsulated). An extern struct's fields are public — the
                     // FFI struct owns its layout.
                     Visibility fvis = fieldVisibility(ci, fd->modifiers, fd->line);
+
+                    // Serialization field metadata (`@field` / `@field(name: "…")` / `@skip` / `@bits(n)`).
+                    // On a `@generate`d type EVERY field must be marked `@field` or `@skip` — an unmarked
+                    // field is a compile error, so adding a field always forces an explicit in/out decision.
+                    bool serGen = ci.genSerialize || ci.genDeserialize;
+                    bool fMarked = false, fSkip = false; std::string fName;
+                    if (fd->attributes)
+                        for (auto& at : *fd->attributes) {
+                            if (!at || !at->name) continue;
+                            const std::string& an = *at->name;
+                            if (an == "skip") { fSkip = true; fMarked = true; }
+                            else if (an == "bits") { fMarked = true; /* binary-only packing hint; ignored by JSON/YAML */ }
+                            else if (an == "field") {
+                                fMarked = true;
+                                if (at->args)
+                                    for (auto& a : *at->args) {
+                                        if (a && a->name && a->name->value && *a->name->value == "name" && a->expression) {
+                                            if (auto* sn = dynamic_cast<StringNode*>(a->expression.get()))
+                                                fName = sn->value ? *sn->value : "";
+                                            else unsupported("`@field(name: …)` needs a string literal", fd->line);
+                                        } else {
+                                            unsupported("`@field(...)` accepts only `name: \"…\"`", fd->line);
+                                        }
+                                    }
+                            }
+                            else unsupported(("unknown field attribute `@" + an + "`").c_str(), fd->line);
+                        }
+                    if (!serGen && fd->attributes && !fd->attributes->empty())
+                        unsupported("field attributes (`@field`/`@skip`) require `@generate(...)` on the type", fd->line);
+                    if (serGen && !fMarked)
+                        unsupported("every field of a `@generate`d type must be marked `@field` or `@skip`", fd->line);
+
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
                             FieldInfo fi;
@@ -2386,6 +2440,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             fi.type        = fd->type;
                             fi.initializer = d->initializer;
                             fi.visibility  = fvis;
+                            fi.serSkip     = fSkip;
+                            fi.serName     = fName;
                             ci.fields.push_back(fi);
                             ci.fieldNames.insert(fi.name);
                         }
@@ -3071,6 +3127,24 @@ SharedIdentifier CEmitter::absolutizeType(SharedIdentifier t)
     return clone;
 }
 
+// True iff `a` (already run through deepSubstType/absolutizeType) still names an UNBOUND type-parameter:
+// a bare identifier that resolves to no known type and isn't a primitive / reserved name. Recurses into a
+// generic's args so `Result<List<V>, …>` is caught via its inner `List<V>`.
+bool CEmitter::argCarriesUnboundParam(const SharedIdentifier& a)
+{
+    if (!a || !a->value) return false;
+    if (a->genericArgs && !a->genericArgs->empty()) {          // a generic type — check its args
+        for (auto& sub : *a->genericArgs) if (argCarriesUnboundParam(sub)) return true;
+        return false;
+    }
+    if (a->builtInVal != 0) return false;                       // a primitive
+    const std::string& v = *a->value;
+    if (v == "This" || v == "Ptr" || v == "usize" || v == "isize") return false;
+    std::string r = resolveUserName(v, a->qualifier);
+    return !_classes.count(r) && !_enums.count(r) && !_genericTypes.count(r)
+        && !_interfaces.count(r) && !_genericContracts.count(r);
+}
+
 // Build one synthetic specialized ClassInfo per `Box<Arg>` (mirrors registerCollection): copy the
 // template shape, rewrite identity (struct name + method cNames), re-derive param signatures under
 // _typeSubst, register in _classes, and transitively scan its substituted member types so a
@@ -3092,6 +3166,15 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                     args->front() ? args->front()->line : 0);
         return;
     }
+
+    // Defer if a substituted arg still carries an unbound type-param — this only happens when scanning a
+    // generic FUNCTION's signature before instantiation (its `V` isn't in _typeSubst yet, so deepSubstType
+    // left it raw). The real instance registers at monomorphization (with concrete args). Registering now
+    // would emit a struct with a raw `V` field (invalid C), or self-loop mangleElem/cType if the param name
+    // clashes with the template's. (Inside a generic-TYPE instantiation the args are already substituted to
+    // concrete, so nothing is skipped there — `ListIter<int32>` etc. are unaffected. Mirrors `Fixed<T,N>`'s
+    // unbound-`N` skip.)
+    for (auto& c : concrete) if (argCarriesUnboundParam(c)) return;
 
     std::string mangled = tmpl;
     for (auto& c : concrete) mangled += "_" + mangleElem(c);
@@ -3620,7 +3703,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     out.typeArgs.clear();
     std::string mangled = key;
     for (auto& tp : *tmpl->typeParams) {
-        SharedIdentifier a = bind[*tp];
+        SharedIdentifier a = absolutizeType(bind[*tp]);   // use-site mangle — see explicitGenericInst
         out.typeArgs.push_back(a);
         mangled += "__" + mangleElem(a);
     }
@@ -3649,8 +3732,13 @@ bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::str
     out.typeArgs.clear();
     std::string mangled = key;
     for (size_t i = 0; i < np; ++i) {
-        out.typeArgs.push_back((*typeArgs)[i]);
-        mangled += "__" + mangleElem((*typeArgs)[i]);
+        // Absolutize the arg to its use-site (call-site) mangled name, so it resolves context-free when the
+        // instance is later emitted under the TEMPLATE's home namespace (a `tryParse::<Point>` in module A
+        // must carry `Point`'s home mangle, not resolve `Point` against json's scope). Mirrors
+        // registerGenericTypeInst's `absolutizeType`; `_callInst`+`_genericInsts` both key off this name.
+        SharedIdentifier a = absolutizeType((*typeArgs)[i]);
+        out.typeArgs.push_back(a);
+        mangled += "__" + mangleElem(a);
     }
     out.mangledName = mangled;
     return true;
@@ -6190,6 +6278,16 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // `Type::method(args)` — a static method (no implicit `self`). The qualifier head
         // resolves to a class; the named method must be `static`.
         std::string typeName = resolveUserName(*qual->back(), tq);
+        // Fallback: a bound type-parameter head (`T::make` in a generic `fn f<T: C>()`) substitutes to its
+        // monomorphized concrete type, so a static contract method on a type-param resolves (e.g.
+        // `json::tryParse<T: Deserialize>` calling `T::deserialize(...)`).
+        if (!_classes.count(typeName)) {
+            auto sit = _typeSubst.find(*qual->back());
+            if (sit != _typeSubst.end() && sit->second) {
+                std::string concrete = cType(sit->second);
+                if (_classes.count(concrete)) typeName = concrete;
+            }
+        }
         if (_classes.count(typeName)) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&_classes[typeName], name, &owner);
@@ -6521,7 +6619,10 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         // the slot casts must match the vtbl struct's erased signature -> `This` = the interface.
         ScopedStr _ts(_thisType, ii.name);
         ContractSubst _cs(*this, ii);   // bind T->int32 so a generic-contract slot's sig matches its vtbl
-        *_out << "static const " << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
+        // EXTERNAL linkage (not `static`) + a forward decl in the shared header, so a value can be bound to
+        // this contract across module boundaries (e.g. a generic `json::parse<T>`/`toString<T>` in one unit
+        // instantiated with a type whose vtable is defined in another). Defined once, in the owning unit.
+        *_out << "const " << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&ci, m.name, &owner);
@@ -7675,6 +7776,20 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         }
     }
     for (auto& kv : _interfaces) { scopeOf(kv.second.scope, kv.second.usings); emitInterfaceTypes(kv.second); }
+
+    // Forward-declare each class-interface vtable (`C__as_I`) — the definitions have external linkage (see
+    // emitClassInterfaceVtables) so binding a concrete to a contract works across module boundaries.
+    for (ClassInfo* ci : classes) {
+        if (ci->isCollection || ci->isExternStruct) continue;
+        for (auto& ifn : ci->interfaces) {
+            bool retro = false;
+            for (auto& r : ci->retroInterfaces) if (r == ifn) { retro = true; break; }
+            if (retro) continue;
+            auto it = _interfaces.find(ifn);
+            if (it == _interfaces.end()) continue;
+            *_out << "extern const " << it->second.name << "_vtbl " << ci->name << "__as_" << it->second.name << ";\n";
+        }
+    }
 
     // Element destructor prototypes the collection/smart-pointer macros call, then the
     // macros themselves, then class prototypes — so a method (or any class member)

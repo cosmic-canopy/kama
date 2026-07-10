@@ -1,0 +1,19 @@
+// Field-level attributes: `@field(name: "…")` renames the wire key; `@skip` omits a field entirely.
+import std::serialization::json::{toString};
+@generate(Serialize)
+type value Config {
+    @field(name: "max_retries") int32 maxRetries;
+    @skip int32 internalCounter;
+    @field bool enabled;
+    public Config(int32 maxRetries, int32 internalCounter, bool enabled) {
+        this.maxRetries = maxRetries; this.internalCounter = internalCounter; this.enabled = enabled;
+    }
+}
+fn int main() {
+    Config c = Config(maxRetries: 5, internalCounter: 999, enabled: true);
+    string j = toString(v: c);
+    if (j == "{\"max_retries\":5,\"enabled\":true}") { return 0; }   // internalCounter skipped
+    int32 n = cast<int32>(j.length());
+    if (n == 0) { return 255; }
+    return n;
+}

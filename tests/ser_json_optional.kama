@@ -1,0 +1,21 @@
+// Optional<T> fields serialize as the inner value (Some) or JSON null (None).
+import std::serialization::json::{toString};
+@generate(Serialize)
+type value Node {
+    @field int32 id;
+    @field Optional<int32> parent;
+    @field Optional<int32> next;
+    public Node(int32 id, Optional<int32> parent, Optional<int32> next) {
+        this.id = id; this.parent = parent; this.next = next;
+    }
+}
+fn int main() {
+    Optional<int32> par = Optional::Some(value: 3);
+    Optional<int32> nx = Optional::None;
+    Node n = Node(id: 7, parent: par, next: nx);
+    string j = toString(v: n);
+    if (j == "{\"id\":7,\"parent\":3,\"next\":null}") { return 0; }
+    int32 k = cast<int32>(j.length());
+    if (k == 0) { return 255; }
+    return k;
+}

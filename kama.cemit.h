@@ -46,6 +46,9 @@ struct FieldInfo {
     SharedIdentifier type;
     SharedExpression initializer;    // optional; applied in the constructor
     Visibility       visibility = Visibility::Private;
+    // Serialization metadata (from `@field`/`@skip` on a `@generate`d type; see collectClasses).
+    bool             serSkip = false;   // `@skip` — omit from serialization
+    std::string      serName;           // wire name (`@field(name: "…")`; empty => use `name`)
 };
 
 // One case of a discriminated-union `enum` (tagged union). `name` is the variant, `payload`
@@ -127,6 +130,10 @@ struct ClassInfo {
     std::vector<FieldInfo>            fields;      // declaration order
     std::set<std::string>            fieldNames;
     std::set<std::string>            constFields;   // `const` data members — write-once in the ctor
+    // `@generate(Serialize|Deserialize)` opt-in (pay-for-what-you-use): only set for a marked type; drives
+    // emission of the reflective `__serialize`/`__deserialize` helpers (see emitSerialize/DeserializeDefinition).
+    bool                              genSerialize = false;
+    bool                              genDeserialize = false;
     std::map<std::string, MethodInfo> methods;    // by kama method name
     bool                              hasCtor = false;
     bool                              synthCtor = false;  // default ctor synthesized (vtable init)
@@ -502,6 +509,10 @@ private:
     // Generic TYPES: discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
     void scanTypeForGenericTypes(SharedIdentifier t);
     void registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args);
+    // True iff a (post-substitution) type arg still carries an UNBOUND type-parameter — a bare name resolving
+    // to no known type (nor a primitive / This / Ptr / usize / isize), recursing into nested generic args.
+    // Guards registerGenericTypeInst against a generic FUNCTION's signature scanned before instantiation.
+    bool argCarriesUnboundParam(const SharedIdentifier& a);
     std::string genericTypeMangle(const std::string& tmpl, SharedIdentifierList args);  // "Pair" + "_int32" + "_string"
     void emitGenericTypeInst(const GenericTypeInst& gi, int phase);   // 0=struct typedef, 1=protos, 2=bodies
 
