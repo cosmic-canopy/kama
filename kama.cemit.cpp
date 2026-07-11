@@ -1692,11 +1692,17 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     }
                     // Evaluate the RHS into a temp FIRST (it may read the old `a[i]`, e.g. `a[i] = a[i].concat`),
                     // then take the place ONCE (a `__at`/`operator[]` call — bounds-checked), release the old
-                    // element, and move/copy the new one in.
-                    std::string src = emitExpression(rhs);
+                    // element, and move/copy the new one in. An inline ctor/`new` RHS (`a[i] = Tag(…)`)
+                    // materializes into a hoisted temp from the element type.
+                    bool ph = _hoistOK; _hoistOK = true;
+                    std::string src = tryHoistInlineCtor(rhs, et, n->line);
+                    if (src.empty()) src = tryHoistInlineNew(rhs, et, n->line);
+                    if (src.empty()) src = emitExpression(rhs);
+                    _hoistOK = ph;
                     std::string tv = "__elv" + std::to_string(_tempCounter++);
                     std::string sp = "__esl" + std::to_string(_tempCounter++);
                     line(n->line);
+                    flushHoisted(depth);
                     indent(depth); *_out << et << " " << tv << " = "
                                          << (doCopy ? (et + "__copy(&(" + src + "))") : src) << ";\n";
                     std::string place = emitPlace(as->unaryExpression);

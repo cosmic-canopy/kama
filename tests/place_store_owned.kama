@@ -22,5 +22,8 @@ fn int32 main() {
 
     Array<string> arr = Array(size: 2); arr[0] = "z"; arr[1] = "zz";   // fresh literals into Array places
     r = r + cast<int32>(arr[1].length()); // + 2 = 18
-    return r;                             // 18
+
+    lb[0] = Box(x: 4);                     // inline resource CTOR into the place (materialized, old freed)
+    r = r + lb[0].val();                   // + 4 = 22
+    return r;                             // 22
 }
