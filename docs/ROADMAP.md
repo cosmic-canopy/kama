@@ -31,26 +31,20 @@ remains to call the language **complete**:
    resources/collections and has a clean workaround, so a "language-complete" 1.0 closes them but they don't
    block the stdlib/engine work. (Reserved later-track keywords `expose`/`volatile` stay deferred — they
    hard-error, never miscompile.)
-   - **Owned-value hand-off into a place or `match`-arm-value position** *(one shared root)*. Assigning an
-     owned value (`string`/collection/resource) into a **place** returned by `operator[]` — `a[i] = give s`
-     / `a[i] = <owned>` (there's no assignment branch for an owned-element place-store, so it hits the
-     "hand-off not in a recognized position" path and won't build) — and naming an owned value *out of* a
-     `match` arm — `:= give x`, or a bare generic ctor `:= List()` (the arm-value site doesn't unwrap a
-     `HandoffNode` or resolve a bare generic ctor from the match-target type). Workarounds: mutate elements
-     via `foreach (ref …)`; build the value in a local before the `match`. Needs new assignment / arm-value
-     lowering branches.
    - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop still leak
      in the residual positions: non-string-intrinsic by-value args, and owned temps in `while`/`for`
      conditions (no per-iteration drop slot). The operator/receiver/`foreach`/string-`ref` slices are done;
      the durable fix is one general temporary-drop pass.
    - **Target-typed rvalue in a non-local-init position** *(ergonomic; surfaced building the containers)*. An
-     inline construction that needs its type from context works in a `Type x = …` initializer but not yet in
-     every position. Still open: a **bare generic ctor into a field** (`this.m = Map()` — infer the field's
-     type args; bind to a typed local first), an **inline ctor into an `operator[]` place-store** (`a[i] =
-     Tag(…)`), and **indexing a `string`/rvalue receiver** (`"abc"[0]` — a string *literal* method call already
-     materializes its receiver, but indexing it doesn't; bind to a local first). The fix is to propagate the
-     target type / materialize the receiver in these positions like the local-initializer + method-call paths
-     already do.
+     inline construction that needs its type from context works in a `Type x = …` initializer, a `return`, an
+     `operator[]` place-store, and a value-producing `match` arm, but not yet in every position. Still open: a
+     **bare generic ctor into a field** (`this.m = Map()` — infer the field's type args; bind to a typed local
+     first); an **inline variant construction or value-producing `match` in a call-argument position**
+     (`f(o: Optional::Some(…))` / `f(x: match(…))` — "scope-qualified call resolves to no known function"; bind
+     to a local first); and **indexing a `string`/rvalue receiver** (`"abc"[0]` — a string *literal* method
+     call already materializes its receiver, but indexing it doesn't; bind to a local first). The fix is to
+     propagate the target type / materialize the receiver in these positions like the initializer + return +
+     place-store + arm paths already do.
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
      (`buildVtables` doesn't merge a parent contract's slots into the child).
    - **Remaining primitive `Hashable`/`Equatable` widths.** `int32` and `string` conformances are now hosted
