@@ -63,7 +63,7 @@ struct VariantCase {
 // RAII-dropped); `Contract` is the interface path (handled via InterfaceInfo) — these three come
 // from a user `type <kind> Name` marker. `Intrinsic` is the neutral kind for compiler-built types
 // with no marker (collections, smart-ptrs, tagged-union enums); their ownership is driven by their
-// own machinery (isCollection/isSmartPtr/isVariant + destructibility), not the kind.
+// own machinery (isIntrinsicColl/isSmartPtr/isVariant + destructibility), not the kind.
 enum class TypeKind { Value, Resource, Contract, Intrinsic };
 
 struct MethodInfo {
@@ -189,7 +189,7 @@ struct ClassInfo {
 
     // Collections: a monomorphized Coll<T> is a synthetic ClassInfo whose
     // method bodies come from a C-template macro (not kama AST).
-    bool                              isCollection = false;
+    bool                              isIntrinsicColl = false;
     CollKind                          collKind = CollKind::Array;
     std::string                       collElemClass;         // element class name ("" if primitive)
     bool                              isGenericInst = false; // a specialized generic-type instance (Box_int32)

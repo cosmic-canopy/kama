@@ -380,7 +380,7 @@ static inline bool userOperandType(const std::string& cls, std::map<std::string,
 {
     if (cls.empty()) return false;
     auto it = classes.find(cls);
-    return it != classes.end() && !it->second.isCollection;
+    return it != classes.end() && !it->second.isIntrinsicColl;
 }
 
 // `&<operand>` for a method-form/unary operator's `self`. A simple lvalue (a local, a field/
@@ -402,7 +402,7 @@ std::string CEmitter::bareCtorClass(SharedExpression e)
     if (!iv || iv->expression || !iv->identifier || !iv->identifier->value) return "";
     if (iv->identifier->qualifier && !iv->identifier->qualifier->empty()) return "";   // Type::variant, not a ctor
     std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
-    return (isClass(rn) && _classes.count(rn) && !_classes[rn].isCollection) ? rn : "";
+    return (isClass(rn) && _classes.count(rn) && !_classes[rn].isIntrinsicColl) ? rn : "";
 }
 
 // an inline constructor operand, hoisted into a temp (needs a statement slot); "" otherwise.
@@ -618,7 +618,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // sub-expression is a position error. On a plain value it's harmless — `give`/`copy` of a value
         // is just that value (a copy), so yield it.
         bool owned = isSmartPtrClass(ic)
-                   || (!ic.empty() && _classes.count(ic) && (_classes[ic].isCollection || _classes[ic].destructible));
+                   || (!ic.empty() && _classes.count(ic) && (_classes[ic].isIntrinsicColl || _classes[ic].destructible));
         if (owned)
             unsupported("`give`/`copy` mark a value being handed off — an initializer, assignment, argument, "
                         "or return — not a bare sub-expression", h->line);
@@ -1136,7 +1136,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // Collections zero-init so an unconstructed one frees safely; extern
                 // structs zero-init so unset descriptor fields are well-defined.
                 line(n->line); indent(depth);
-                bool zeroInit = _classes[ty].isCollection || _classes[ty].isExternStruct;
+                bool zeroInit = _classes[ty].isIntrinsicColl || _classes[ty].isExternStruct;
                 *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // track empty resources for move analysis
@@ -1281,7 +1281,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 indent(depth); *_out << nm << " = " << adoptM->cName << "(" << adoptArg << ");\n";
                             }
                         }
-                    } else if (_classes.count(ty) && _classes[ty].isCollection) {
+                    } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl) {
                         // Array/List/String — a value type that manages its own heap buffer;
                         // `new` constructs it in place (the generic `Array<T>(...)` call form
                         // doesn't parse, so collections keep `new`).
@@ -1368,7 +1368,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         indent(depth);
                         if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k, isInterface(_classes[ty].collElemClass)) << "\n";
                         else        *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
-                    } else if (_classes.count(ty) && _classes[ty].isCollection && !isFixedColl(ty) && isNamedValue(init.get())) {
+                    } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl && !isFixedColl(ty) && isNamedValue(init.get())) {
                         // a collection move/deep-copy isn't a plain `=` — require a marker. (A
                         // `Fixed` is a value: the plain `=` above already copied it — no marker.)
                         if (handoff == 0)
@@ -1598,10 +1598,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         line(n->line); indent(depth);
         std::string itCls = exprClass(fe->expression);
         // A user type (not a built-in collection) iterates via the iterator protocol (structural).
-        if (!itCls.empty() && _classes.count(itCls) && !_classes[itCls].isCollection) {
+        if (!itCls.empty() && _classes.count(itCls) && !_classes[itCls].isIntrinsicColl) {
             emitForeachIterator(fe, itCls, depth); return;
         }
-        if (itCls.empty() || !_classes.count(itCls) || !_classes[itCls].isCollection) {
+        if (itCls.empty() || !_classes.count(itCls) || !_classes[itCls].isIntrinsicColl) {
             unsupported("foreach over a non-collection (a user type needs `iterator()`/`next()` or `iterMut()`)", n->line); *_out << "\n"; return;
         }
         const std::string& coll = _classes[itCls].name;
@@ -1737,7 +1737,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
                     checkConstWrite(as->unaryExpression, n->line);
                     bool named  = isNamedValue(rhs.get());
-                    bool isColl = _classes[et].isCollection && !isSmartPtrClass(et);   // List/Array/string element
+                    bool isColl = _classes[et].isIntrinsicColl && !isSmartPtrClass(et);   // List/Array/string element
                     bool copyable = isColl || isCopyable(et);
                     bool doCopy;
                     if (handoff == 2) {
@@ -1915,7 +1915,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // Without this branch a named RHS aliases (double-free) and a fresh-rvalue RHS leaks the old buffer.
         if (as->token == EQ) {
             std::string lty = lvalueCType(as->unaryExpression);
-            if (ownsByValue(lty) && _classes.count(lty) && _classes[lty].isCollection) {
+            if (ownsByValue(lty) && _classes.count(lty) && _classes[lty].isIntrinsicColl) {
                 SharedExpression rhs = as->expression;
                 int handoff = 0;
                 if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
@@ -2803,7 +2803,7 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
 bool CEmitter::isFixedColl(const std::string& cls) const
 {
     auto it = _classes.find(cls);
-    return it != _classes.end() && it->second.isCollection && it->second.collKind == CollKind::Fixed;
+    return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Fixed;
 }
 
 // The mangling suffix for an element type: primitives use a short stable
@@ -2923,7 +2923,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     // Synthetic ClassInfo: a struct with a dtor, and (collections only) intrinsic methods.
     ClassInfo ci;
     ci.name = cName;
-    ci.isCollection = true;
+    ci.isIntrinsicColl = true;
     ci.collKind = kind;
     ci.collElemClass = elemClass;
     ci.destructible = true;                    // owns heap -> RAII frees
@@ -3056,7 +3056,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // `length` is the one method resolved by name (`v.length()`).
     ClassInfo ci;
     ci.name = cName;
-    ci.isCollection = true;
+    ci.isIntrinsicColl = true;
     ci.collKind = CollKind::Fixed;
     ci.collElemClass = elemClass;
     ci.destructible = false;                   // a value — owns no heap
@@ -3105,7 +3105,7 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem, const std:
     _collectionOrder.push_back(cName);
 
     ClassInfo ci;
-    ci.name = cName; ci.isCollection = true; ci.collKind = kind;
+    ci.name = cName; ci.isIntrinsicColl = true; ci.collKind = kind;
     ci.collElemClass = elemClass; ci.destructible = true; ci.hasCtor = false;
     auto addM = [&](const std::string& m, std::vector<ParamSig> p) {
         MethodInfo mi; mi.cName = cName + "__" + m; mi.params = std::move(p);
@@ -3180,7 +3180,7 @@ void CEmitter::registerBindable(SharedIdentifier elem)
     _collectionOrder.push_back(cName);
 
     ClassInfo ci;
-    ci.name = cName; ci.isCollection = true; ci.collKind = CollKind::Bindable;
+    ci.name = cName; ci.isIntrinsicColl = true; ci.collKind = CollKind::Bindable;
     ci.collElemClass = sigCName;       // reused at invoke: the bound signature's cName
     ci.destructible = true;            // owns heap (when bound) -> RAII drop
     ci.hasCtor = false;                // constructed via the dedicated bind path, not a ctor
@@ -3190,7 +3190,7 @@ void CEmitter::registerBindable(SharedIdentifier elem)
 bool CEmitter::isBindableClass(const std::string& cls) const
 {
     auto it = _classes.find(cls);
-    return it != _classes.end() && it->second.isCollection && it->second.collKind == CollKind::Bindable;
+    return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Bindable;
 }
 
 void CEmitter::scanTypeForCollections(SharedIdentifier t)
@@ -4168,7 +4168,7 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
                                            : std::static_pointer_cast<ExpressionNode>(ea->identifier);
     if (!recv) return false;
     std::string cls = exprClass(recv);
-    if (cls.empty() || !_classes.count(cls) || !_classes[cls].isCollection) return false;
+    if (cls.empty() || !_classes.count(cls) || !_classes[cls].isIntrinsicColl) return false;
     coll     = _classes[cls].name;
     // A `Fixed<T,N>` knows its size at compile time, so a CONSTANT out-of-range index is a
     // compile-time error, not just a runtime trap (the safe-array payoff).
@@ -4427,7 +4427,7 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
 bool CEmitter::isSmartPtrClass(const std::string& cls) const
 {
     auto it = _classes.find(cls);
-    return it != _classes.end() && it->second.isCollection &&
+    return it != _classes.end() && it->second.isIntrinsicColl &&
            (it->second.collKind == CollKind::Owned || it->second.collKind == CollKind::Shared ||
             it->second.collKind == CollKind::Weak);
 }
@@ -4638,7 +4638,7 @@ std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind,
 bool CEmitter::isMoveOnlyValue(const std::string& cls) const
 {
     auto it = _classes.find(cls);
-    if (it == _classes.end() || it->second.isCollection || it->second.isExternStruct || isSmartPtrClass(cls))
+    if (it == _classes.end() || it->second.isIntrinsicColl || it->second.isExternStruct || isSmartPtrClass(cls))
         return false;
     const ClassInfo& ci = it->second;
     // Move-only-ness is the declared kind: a `resource` moves even if it owns nothing (an empty
@@ -4659,7 +4659,7 @@ bool CEmitter::ownsByValue(const std::string& cls) const
     if (cls.empty() || isSmartPtrClass(cls)) return false;
     if (isMoveOnlyValue(cls)) return true;
     auto it = _classes.find(cls);
-    return it != _classes.end() && it->second.isCollection && !isFixedColl(cls);
+    return it != _classes.end() && it->second.isIntrinsicColl && !isFixedColl(cls);
 }
 
 // has this type opted into the `Copyable` contract? (Detected structurally at collection
@@ -4786,7 +4786,7 @@ void CEmitter::linkBases()
     // class's own namespace context.
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
-        if (ci.isCollection) continue;
+        if (ci.isIntrinsicColl) continue;
         // a generic INSTANCE resolved its base/interfaces under its own subst in registerGenericTypeInst
         // (its `node` is the template's, whose refs still name the raw param `T`) — don't re-resolve here.
         if (ci.isGenericInst) continue;
@@ -4896,7 +4896,7 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
         auto dep = [&](SharedIdentifier ty) -> ClassInfo* {
             auto it = _classes.find(cType(ty));
             if (it == _classes.end() || it->second.isExternStruct) return nullptr;
-            if (it->second.isCollection && it->second.collKind != CollKind::Fixed) return nullptr;  // pointer storage
+            if (it->second.isIntrinsicColl && it->second.collKind != CollKind::Fixed) return nullptr;  // pointer storage
             return &it->second;
         };
         std::vector<ClassInfo*> deps;
@@ -4904,10 +4904,10 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
         for (auto& f : ci->fields) if (ClassInfo* d = dep(f.type)) deps.push_back(d);
         for (auto& v : ci->variants) for (auto& f : v.payload) if (ClassInfo* d = dep(f.type)) deps.push_back(d);
         // a `Fixed<T,N>` struct (`{ T v[N]; }`) embeds T by value -> its layout needs T's.
-        if (ci->isCollection && ci->collKind == CollKind::Fixed && !ci->collElemClass.empty()) {
+        if (ci->isIntrinsicColl && ci->collKind == CollKind::Fixed && !ci->collElemClass.empty()) {
             auto it = _classes.find(ci->collElemClass);
             if (it != _classes.end() && !it->second.isExternStruct &&
-                !(it->second.isCollection && it->second.collKind != CollKind::Fixed))
+                !(it->second.isIntrinsicColl && it->second.collKind != CollKind::Fixed))
                 deps.push_back(&it->second);
         }
 
@@ -4921,8 +4921,8 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
     };
 
     for (auto& kv : _classes)
-        if ((!kv.second.isCollection && !kv.second.isExternStruct) ||
-            (kv.second.isCollection && kv.second.collKind == CollKind::Fixed))   // Fixed lays out by value
+        if ((!kv.second.isIntrinsicColl && !kv.second.isExternStruct) ||
+            (kv.second.isIntrinsicColl && kv.second.collKind == CollKind::Fixed))   // Fixed lays out by value
             visit(&kv.second);
     _nsCtx = savedCtxOuter; _typeSubst = savedSubstOuter;
     return out;
@@ -4989,7 +4989,7 @@ void CEmitter::buildVtables()
         // get one synthesized, or `new` leaves __vptr uninitialized and the first
         // virtual call crashes. Topo order means the base is flagged first, so a
         // derived synth ctor sees base->hasCtor and chains it.
-        if (ci->hasVtable && !ci->hasCtor && !ci->isCollection && !ci->isExternStruct) {
+        if (ci->hasVtable && !ci->hasCtor && !ci->isIntrinsicColl && !ci->isExternStruct) {
             ci->synthCtor = true;
             ci->hasCtor   = true;   // `new` now calls the ctor; prototype gets emitted
         }
@@ -5014,7 +5014,7 @@ void CEmitter::computeDestructible()
     // destructible; its element is a `value`, so there is nothing to drop.
     for (auto& kv : _classes)
         kv.second.destructible = kv.second.hasDtor ||
-            (kv.second.isCollection && kv.second.collKind != CollKind::Fixed);
+            (kv.second.isIntrinsicColl && kv.second.collKind != CollKind::Fixed);
     bool changed = true;
     while (changed) {
         changed = false;
@@ -5104,7 +5104,7 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
 ClassInfo* CEmitter::retroTargetInfo(const std::string& tkey)
 {
     auto ti = _classes.find(tkey);
-    if (ti != _classes.end() && ti->second.isCollection) return &ti->second;
+    if (ti != _classes.end() && ti->second.isIntrinsicColl) return &ti->second;
     auto pi = _primConformances.find(tkey);
     if (pi != _primConformances.end()) return &pi->second;
     return nullptr;
@@ -5353,7 +5353,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         // An inline ctor is a temporary rvalue. To an INTERFACE `ref`/`out` param it can't be a fat pointer
         // inline — reject (bind first). To a concrete-class param (by value OR `ref`) it's materialized into
         // a hoisted temp below, so `f(Point(1, 2))` / `m.get(key: Point(1, 2))` work.
-        if (!ctorCls.empty() && !_classes[ctorCls].isCollection && p.byRef && isInterface(p.className))
+        if (!ctorCls.empty() && !_classes[ctorCls].isIntrinsicColl && p.byRef && isInterface(p.className))
             unsupported("cannot pass an inline constructor to a contract `ref`/`out` parameter — "
                         "bind it to a local first, then pass that", srcLine);
         // A marker on a FRESH inline ctor (`f(x: give Box(…))`) is meaningless — a fresh rvalue is consumed
@@ -5363,7 +5363,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs "
                         "no marker", srcLine);
         if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
-            && !isInterface(p.className) && !_classes[ctorCls].isCollection) {
+            && !isInterface(p.className) && !_classes[ctorCls].isIntrinsicColl) {
             std::string t = "__ctorarg" + std::to_string(_tempCounter++);
             std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
             _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
@@ -5494,7 +5494,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                                 "result needs no marker", srcLine);
                 s += val;
             } else if (ownsByValue(p.className) && _classes.count(p.className)
-                       && _classes[p.className].isCollection && isNamedValue(argExpr.get())) {
+                       && _classes[p.className].isIntrinsicColl && isNamedValue(argExpr.get())) {
                 // A collection/`string` passed BY VALUE to an OWNING param transfers ownership: the callee
                 // owns it and drops it at fn-end (param-drop registration). `give` MOVES it in (relocate
                 // struct + null source + markMoved); `copy` deep-copies (`__copy`); a BARE named arg is an
@@ -6101,7 +6101,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
         else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
     }
     // Named collection/`string` VALUE (exprClass is "" — key on dstCType): give/bare-dying moves, copy deep-copies.
-    else if (ownsByValue(dstCType) && _classes.count(dstCType) && _classes[dstCType].isCollection
+    else if (ownsByValue(dstCType) && _classes.count(dstCType) && _classes[dstCType].isIntrinsicColl
              && isNamedValue(v.get())) {
         if (handoff == 2) {
             auto ci = _collections.find(dstCType);
@@ -6447,7 +6447,7 @@ std::string CEmitter::tryHoistInlineCtor(SharedExpression e, const std::string& 
     if (isClass(rn) && _classes.count(rn)) ctorCls = rn;
     else { auto g = _genericTypeInstOf.find(targetCType);   // ctor names template `Box`; target is `Box_int32`
            if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = targetCType; }
-    if (ctorCls.empty() || ctorCls != targetCType || _classes[ctorCls].isCollection) return "";
+    if (ctorCls.empty() || ctorCls != targetCType || _classes[ctorCls].isIntrinsicColl) return "";
     std::string t = "__ctorarg" + std::to_string(_tempCounter++);
     std::string ctor = emitCtorCall(t, _classes[ctorCls], iv->args, srcLine);
     _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
@@ -6582,7 +6582,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 else doCopy = cpy && _classes[argCls].bareDefault == COPY;
                 if (doCopy) field = argCls + "__copy(&(" + val + "))";
                 else { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); field = val; }
-            } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection && handoff) {
+            } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl && handoff) {
                 // Hand a collection/`string` into the union: `copy` deep-copies (`__copy`; the union owns
                 // the clone, the source survives), `give` transfers the struct (buffer) and nulls the
                 // source so its scope-drop is a no-op (the union now owns it, dropped by the tag dtor).
@@ -6602,7 +6602,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                                        + val + ").data = NULL; (" + val + ").len = 0;");
                     field = t;
                 }
-            } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isCollection
+            } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl
                        && isNamedValue(argExpr.get())) {
                 // A bare NAMED collection/`string` into a variant would alias (the union owns it AND the
                 // source frees it → double-free / dangle). Ownership transfer must be explicit — `give`
@@ -7179,7 +7179,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
 
 void CEmitter::emitClassPrototypes(ClassInfo& ci)
 {
-    if (ci.isCollection || ci.isExternStruct) return;   // macro / header provides these
+    if (ci.isIntrinsicColl || ci.isExternStruct) return;   // macro / header provides these
     ScopedStr _ts(_thisType, ci.name);                  // `This` -> this class in method prototypes
     const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
@@ -7353,7 +7353,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
                 // that owns a buffer): zero it so the FIRST `this.f = give x` releases a valid empty value
                 // (cap=0 / NULL → its dtor is a no-op), not uninitialized garbage — a garbage free is UB
                 // that aborts only when the stack happens to be non-null.
-                if (_classes.count(fct) && (_classes[fct].isCollection
+                if (_classes.count(fct) && (_classes[fct].isIntrinsicColl
                         || _classes[fct].copyable || !heapOwnerTarget(fct).empty()
                         || (_classes[fct].destructible && _classes[fct].kind == TypeKind::Resource))) {
                     indent(1);
@@ -7389,7 +7389,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 
 void CEmitter::emitClassDefinitions(ClassInfo& ci)
 {
-    if (ci.isCollection || ci.isExternStruct) return;   // macro / header provides these
+    if (ci.isIntrinsicColl || ci.isExternStruct) return;   // macro / header provides these
     ScopedStr _ts(_thisType, ci.name);                  // `This` -> this class in method bodies/sigs
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator) {
         line(ci.ctorNode->line);
@@ -7563,7 +7563,7 @@ std::string CEmitter::exprClass(SharedExpression e)
         SharedExpression recv = ea->expression ? ea->expression
                                                : std::static_pointer_cast<ExpressionNode>(ea->identifier);
         std::string cls = exprClass(recv);
-        if (!cls.empty() && _classes.count(cls) && _classes[cls].isCollection)
+        if (!cls.empty() && _classes.count(cls) && _classes[cls].isIntrinsicColl)
             return _classes[cls].collElemClass;
         // a user place-`operator[]` element resolves to the operator's element type (its `ref T`), so
         // `m[i][j]` / `m[i].field` chain. Bind `This`/the instance's type args for the return type.
@@ -7663,7 +7663,7 @@ std::string CEmitter::exprClass(SharedExpression e)
         if (inv->identifier && inv->identifier->value && !inv->expression
             && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())) {
             std::string rn = resolveUserName(*inv->identifier->value, inv->identifier->qualifier);
-            if (isClass(rn) && _classes.count(rn) && !_classes[rn].isCollection) return rn;
+            if (isClass(rn) && _classes.count(rn) && !_classes[rn].isIntrinsicColl) return rn;
         }
         // Free / qualified function call — its C return type, if that names a class.
         if (inv->identifier && inv->identifier->value) {
@@ -7832,7 +7832,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // buffer and dangles the loop's element refs (a use-after-free for a `ref` binding). Reject it — a
     // local rule (the loop already names the collection), no lifetimes; collect + append after the loop.
     if (method == "add" && !_foreachColls.empty() && !cls.empty() && _classes.count(cls)
-        && _classes[cls].isCollection) {
+        && _classes[cls].isIntrinsicColl) {
         std::string r = rootBinding(receiver);
         bool iterated = false;
         if (!r.empty()) for (auto& c : _foreachColls) if (c == r) { iterated = true; break; }
@@ -7952,7 +7952,7 @@ std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, Share
     if (ci.isAbstractClass)   // instantiating one crashes on a NULL vtable slot
         unsupported(("cannot instantiate abstract class '" + ci.name
                      + "' (it has an unimplemented method)").c_str(), srcLine);
-    if (ci.hasCtor && !ci.isCollection)   // private ctor blocks external `new` (intrinsics exempt)
+    if (ci.hasCtor && !ci.isIntrinsicColl)   // private ctor blocks external `new` (intrinsics exempt)
         canAccess(&ci, ci.ctorVisibility, "constructor", srcLine);
     return emitReorderedCall(ci.name + "__ctor", "&" + cVar, ci.ctorParams, args, srcLine);
 }
@@ -8199,7 +8199,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // Forward typedefs so bodies can reference each other and any struct (incl. generic instances).
     for (ClassInfo* ci : ordered) {
         if (ci->isExternStruct) continue;
-        if (ci->isCollection) {
+        if (ci->isIntrinsicColl) {
             // A `Fixed<T,N>` gets its full `KAMA_FIXED_TYPE` later (by-value struct order); forward-
             // declare it HERE so a pointer-storing collection (`List<Fixed<...>>`, emitted in the early
             // types pass) can name it. The later full typedef is a legal C11 redeclaration. Other
@@ -8256,7 +8256,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // emitStruct. The emission ORDER places every by-value dependency before its holder.
     for (ClassInfo* ci : ordered) {
         if (ci->isExternStruct) continue;
-        if (ci->isCollection) {
+        if (ci->isIntrinsicColl) {
             // A `Fixed<T,N>` embeds its element BY VALUE, so — unlike the pointer-storing collections
             // (whose `_TYPE` went out above) — its struct typedef must land HERE, after the element's
             // struct body (this loop is the by-value-dependency order). Other collections are skipped.
@@ -8280,7 +8280,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // Forward-declare each class-interface vtable (`C__as_I`) — the definitions have external linkage (see
     // emitClassInterfaceVtables) so binding a concrete to a contract works across module boundaries.
     for (ClassInfo* ci : classes) {
-        if (ci->isCollection || ci->isExternStruct) continue;
+        if (ci->isIntrinsicColl || ci->isExternStruct) continue;
         for (auto& ifn : ci->interfaces) {
             bool retro = false;
             for (auto& r : ci->retroInterfaces) if (r == ifn) { retro = true; break; }
@@ -8297,13 +8297,13 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // type being complete by then. The dtor protos are re-declared (identically, harmless)
     // by emitClassPrototypes. Free-function prototypes follow (they may use a wrapper too).
     for (ClassInfo* ci : classes)
-        if (!ci->isCollection && !ci->isExternStruct && ci->destructible)
+        if (!ci->isIntrinsicColl && !ci->isExternStruct && ci->destructible)
             *_out << "void " << ci->name << "__dtor(" << ci->name << "* self);\n";
     // a collection of `Copyable` elements deep-copies via the element's `copy()`, so its
     // prototype must precede the `_FUNCS` macro that calls it (re-declared identically by
     // emitClassPrototypes). The C signature is `Elem Elem__copy(Elem* self)` (nullary; paramListC).
     for (ClassInfo* ci : classes)
-        if (!ci->isCollection && !ci->isExternStruct && ci->copyable)
+        if (!ci->isIntrinsicColl && !ci->isExternStruct && ci->copyable)
             *_out << ci->name << " " << ci->name << "__copy(" << ci->name << "* self);\n";
     emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
     for (ClassInfo* ci : classes) {
