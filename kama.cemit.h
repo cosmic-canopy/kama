@@ -586,14 +586,14 @@ private:
     // the intrinsic type, `src` the library-owner lvalue.
     bool isSmartPtrUpcast(const std::string& dstTy, SharedExpression src);
     void emitSmartPtrUpcast(const std::string& nm, const std::string& dstTy,
-                            SharedExpression src, int depth, int line);
+                            SharedExpression src, int handoff, int depth, int line);
     // Base-class upcast: widen a `Shared`/`Owned` over a DERIVED class into one over a BASE
     // class (both thin library handles). Adjusts the pointer to the base subobject; a `Shared`
     // retains, an `Owned` moves. Safe because a `virtual class` has a virtual destructor
     // (drop dispatches to the most-derived via the vtable's `__dtor`).
     bool isSmartPtrBaseUpcast(const std::string& dstTy, SharedExpression src);
     void emitSmartPtrBaseUpcast(const std::string& nm, const std::string& dstTy,
-                                SharedExpression src, int depth, int line);
+                                SharedExpression src, int handoff, int depth, int line);
     // A move-only VALUE — a destructible class value that isn't a smart-ptr/collection/
     // extern struct. It MOVES on hand-off (its dtor is suppressed) and is never silently copied.
     bool isMoveOnlyValue(const std::string& cls) const;

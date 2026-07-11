@@ -1292,11 +1292,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // contract-element (intrinsic fat) handle. The pointee is shared/moved; `nm`
                     // was already zero-declared above.
                     line(n->line);
-                    emitSmartPtrUpcast(nm, ty, init, depth, n->line);
+                    emitSmartPtrUpcast(nm, ty, init, handoff, depth, n->line);
                 } else if (isSmartPtrBaseUpcast(ty, init)) {
                     // Base-class upcast: widen a derived-class handle into this base-class handle.
                     line(n->line);
-                    emitSmartPtrBaseUpcast(nm, ty, init, depth, n->line);
+                    emitSmartPtrBaseUpcast(nm, ty, init, handoff, depth, n->line);
                 } else if (isBindableClass(ty)) {
                     // BindableFunctionPtr <- free function (promote) or another bindable (move).
                     line(n->line);
@@ -1695,14 +1695,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // smart-ptr path below). Release the handle's old pointee, then widen the derived handle in.
         if (as->token == EQ) {
             SharedExpression rhs0 = as->expression;
-            if (auto* h = dynamic_cast<HandoffNode*>(rhs0.get())) rhs0 = h->value;
+            int handoff0 = 0;   // 0 none, 1 give, 2 copy
+            if (auto* h = dynamic_cast<HandoffNode*>(rhs0.get())) { handoff0 = h->isGive ? 1 : 2; rhs0 = h->value; }
             std::string lty0 = exprClass(as->unaryExpression);
             if (isSmartPtrBaseUpcast(lty0, rhs0)) {
                 checkConstWrite(as->unaryExpression, n->line);
                 std::string b = emitExpression(as->unaryExpression);
                 line(n->line);
                 indent(depth); *_out << lty0 << "__dtor(&" << b << ");\n";
-                emitSmartPtrBaseUpcast(b, lty0, rhs0, depth, n->line);
+                emitSmartPtrBaseUpcast(b, lty0, rhs0, handoff0, depth, n->line);
                 return;
             }
         }
@@ -1751,7 +1752,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // concrete-element `Shared`/`Owned` into this contract-element intrinsic handle.
                 line(n->line);
                 indent(depth); *_out << ty << "__dtor(&" << b << ");\n";
-                emitSmartPtrUpcast(b, ty, rhs, depth, n->line);
+                emitSmartPtrUpcast(b, ty, rhs, handoff, depth, n->line);
                 return;
             }
             bool rhsLval = isSmartPtrLValue(rhs);
@@ -4450,13 +4451,19 @@ bool CEmitter::isSmartPtrUpcast(const std::string& dstTy, SharedExpression src)
 // `Shared` (strong++) or moves an `Owned` (suppress the library source's dtor). Precondition:
 // isSmartPtrUpcast(dstTy, src).
 void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstTy,
-                                  SharedExpression src, int depth, int line)
+                                  SharedExpression src, int handoff, int depth, int line)
 {
     std::string srcCls  = exprClass(src);
     std::string libT    = heapOwnerTarget(srcCls);              // concrete pointee C name
     const std::string& dstElem = _classes[dstTy].collElemClass; // interface C name
-    CollKind dk    = smartKind(dstTy);
-    bool     retain = isCopyable(srcCls);                       // library Shared retains; Owned moves
+    CollKind dk = smartKind(dstTy);
+    // give/copy on an upcast follows the same matrix as a same-type hand-off: `give` MOVES the
+    // handle (every kind is movable), `copy` RETAINS (an `Owned` can't be copied — it's unique),
+    // bare defaults to the source's nature (a `Shared`/`Weak` retains, an `Owned` moves).
+    bool copyable = isCopyable(srcCls);
+    bool retain = (handoff == 1) ? false : (handoff == 2 ? true : copyable);
+    if (handoff == 2 && !copyable)
+        unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
     std::string srcE = emitExpression(src);
     // pointee: a library owner exposes it via `deref()` (T*); the concrete's per-contract vtable
     // fattens it. The refcount block is the library `.c` (kama_ctrl-compatible), shared with the source.
@@ -4464,11 +4471,11 @@ void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstT
     indent(depth); *_out << nm << ".vtbl = &" << libT << "__as_" << dstElem << ";\n";
     if (dk != CollKind::Owned) {                                // intrinsic Owned<I> is {obj, vtbl} — no ctrl
         indent(depth); *_out << nm << ".ctrl = (kama_ctrl*)(" << srcE << ").c;\n";
-        indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->"
-                             << (dk == CollKind::Weak ? "weak" : "strong") << "++;\n";
+        if (retain) { indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->"
+                                            << (dk == CollKind::Weak ? "weak" : "strong") << "++;\n"; }
     }
-    // move: consume the library `Owned` source at compile time so its dtor is skipped (the
-    // intrinsic handle now owns + frees the pointee via its vtable's __dtor).
+    // move (bare `Owned`, or `give`): consume the source at compile time so its dtor is skipped —
+    // the destination handle now owns the ref (it shares the same ctrl without an increment).
     if (!retain) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
 }
 
@@ -4492,26 +4499,32 @@ bool CEmitter::isSmartPtrBaseUpcast(const std::string& dstTy, SharedExpression s
 // subobject via the `__base` chain (offset 0 in Kama's single-vptr model). A `Shared` retains
 // (shares the ctrl, strong++); an `Owned` moves (source consumed). Precondition: isSmartPtrBaseUpcast.
 void CEmitter::emitSmartPtrBaseUpcast(const std::string& nm, const std::string& dstTy,
-                                      SharedExpression src, int depth, int line)
+                                      SharedExpression src, int handoff, int depth, int line)
 {
     std::string srcCls   = exprClass(src);
     std::string baseT    = heapOwnerTarget(dstTy);
     std::string derivedT = heapOwnerTarget(srcCls);
-    bool retain = isCopyable(srcCls);                          // Shared retains; Owned moves
+    // Same give/copy matrix as a same-type hand-off: `give` MOVES, `copy` RETAINS (`Owned` can't
+    // be copied), bare defaults to the source's nature (`Shared`/`Weak` retain, `Owned` move).
+    bool copyable = isCopyable(srcCls);
+    bool retain = (handoff == 1) ? false : (handoff == 2 ? true : copyable);
+    if (handoff == 2 && !copyable)
+        unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
     std::string srcE = emitExpression(src);
     // base-subobject pointer: the derived pointee (via deref()) walked down the `__base` chain.
     std::string bp = basePathTo(&_classes[derivedT], &_classes[baseT]);
     if (!bp.empty()) bp.pop_back();                            // drop trailing '.'
     std::string basePtr = "&((" + srcCls + "__deref(&(" + srcE + ")))->" + bp + ")";
-    if (retain) {
-        // share the ctrl and retain: construct the base handle from (base ptr, the source's ctrl).
+    if (copyable) {
+        // Shared/Weak: build the base handle sharing the source's ctrl; retain bumps the count,
+        // a move transfers the ref (no bump — the source's dtor is suppressed below).
         indent(depth); *_out << dstTy << "__ctor(&" << nm << ", " << basePtr << ", (" << srcE << ").c);\n";
-        indent(depth); *_out << "(" << srcE << ").c->strong++;\n";
+        if (retain) { indent(depth); *_out << "(" << srcE << ").c->strong++;\n"; }
     } else {
-        // move: adopt the base subobject and consume the source (its dtor is suppressed).
+        // Owned: adopt the base subobject (no ctrl); always a move.
         indent(depth); *_out << nm << " = " << dstTy << "__adopt(" << basePtr << ");\n";
-        std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv);
     }
+    if (!retain) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
 }
 
 // Invalidate a moved-from smart pointer: null the field its dtor guards on, so
