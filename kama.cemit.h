@@ -726,6 +726,12 @@ private:
     // argument-position lowering to any value site (return, variant payload, …).
     std::string tryHoistInlineCtor(SharedExpression e, const std::string& targetCType, int srcLine);
     std::string tryHoistInlineNew(SharedExpression e, const std::string& targetCType, int srcLine);
+    // Materialize `value` (unwrapping a give/copy marker; resolving an inline ctor/`new`/bare-generic-ctor
+    // from `dstCType`) and assign it into the already-declared lvalue `dst` of type `dstCType`, applying the
+    // give/copy matrix for an OWNED value (smart-ptr / resource / collection / bindable — move consumes the
+    // source, copy duplicates). Shared by `return` and value-producing `match` arms (`:= give x` / `:= List()`).
+    void emitOwnedValueInto(const std::string& dst, const std::string& dstCType,
+                            SharedExpression value, int line, int depth);
     // The variant type named by a `::` qualifier — a non-generic union directly, or a generic
     // template resolved to its target instance (`Optional` + `_variantTargetType` Optional_int32). null if none.
     ClassInfo* resolveVariantType(const std::string& qualResolved);

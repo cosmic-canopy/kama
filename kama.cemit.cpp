@@ -1398,11 +1398,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
         line(n->line);
-        // unwrap a give/copy hand-off marker; the inner value is what we return.
+        // Unwrap a give/copy marker for the place-return check below; the value path passes the original
+        // `ret->expression` (marker and all) to emitOwnedValueInto, which re-unwraps + applies the matrix.
         SharedExpression retExpr = ret->expression;
-        int handoff = 0;   // 0 none, 1 give, 2 copy
         if (retExpr)
-            if (auto* h = dynamic_cast<HandoffNode*>(retExpr.get())) { handoff = h->isGive ? 1 : 2; retExpr = h->value; }
+            if (auto* h = dynamic_cast<HandoffNode*>(retExpr.get())) retExpr = h->value;
         // A `ref T operator[]` returns a PLACE: address the lvalue directly (`return &(place)`) — no
         // by-value return-temp (you can't copy a place). The place borrows `self`, which outlives the
         // call, so it's valid for the caller's enclosing statement (used transiently, never stored).
@@ -1425,85 +1425,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // Capture the return value BEFORE running any destructors (it may
         // reference locals about to be destroyed), then unwind, then return.
         if (retExpr && _currentReturnCType != "void") {
+            // Capture the return value into a temp BEFORE any destructors run (it may reference locals
+            // about to be destroyed), handling an owned hand-off (give/copy, an inline ctor/`new`, or a
+            // bare generic ctor) uniformly with a value-producing `match` arm, then unwind, then return.
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
-            bool ph = _hoistOK; _hoistOK = true;                       // inline-ctor hoisting
-            std::string pmt = _matchTargetCType; _matchTargetCType = _currentReturnCType;   // `return match(…)`
-            std::string pvt = _variantTargetType; _variantTargetType = _currentReturnCType; // `return Optional::Some(…)`
-            // `return Point(...)` / `return new T(...)` — materialize the construction into a temp.
-            std::string rv = tryHoistInlineCtor(retExpr, _currentReturnCType, n->line);
-            if (rv.empty()) rv = tryHoistInlineNew(retExpr, _currentReturnCType, n->line);
-            if (rv.empty()) rv = emitExpression(retExpr);
-            _matchTargetCType = pmt;
-            _variantTargetType = pvt;
-            _hoistOK = ph;
-            flushHoisted(depth);
-            indent(depth);
-            *_out << _currentReturnCType << " " << tmp << " = " << rv << ";\n";
-            // Smart-pointer hand-off to the caller: give (or a bare dying local/param) MOVES
-            // out — invalidate the source BEFORE the unwind so the scope's dtor doesn't free/
-            // decrement what the caller now owns (the factory landmine). `copy` RETAINS — the
-            // source survives (e.g. a field), so the caller's ref is a fresh one.
-            std::string rc = exprClass(retExpr);
-            if (isSmartPtrClass(rc) && isNamedValue(retExpr.get())) {
-                CollKind k = smartKind(rc);
-                bool doGive = true;
-                if (handoff == 1)      doGive = true;
-                else if (handoff == 2) { if (k == CollKind::Owned)
-                                             unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
-                                         doGive = false; }
-                else if (isSmartPtrLValue(retExpr)) doGive = true;   // bare local/param: it dies here, move it out
-                else unsupported("returning a smart-pointer field/element needs `give` (move it out) or "
-                                 "`copy` (retain — the source stays valid)", n->line);
-                indent(depth);
-                if (doGive) *_out << smartPtrInvalidate(emitExpression(retExpr), k, isInterface(_classes[rc].collElemClass)) << "\n";
-                else        *_out << "(" << emitExpression(retExpr) << ").ctrl->"
-                                  << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
-            }
-            // returning a destructible `resource` VALUE. `give` MOVES it out (the blit into `tmp`
-            // transferred the bytes; mark the source moved so the unwind skips its dtor). `copy`
-            // duplicates via copy() (overwrite `tmp`; the source survives the unwind and its dtor
-            // releases). A BARE return follows the type's `bare:` default. A non-Copyable resource
-            // has no copy() → move. (Must precede the bindable branch's catch-all `dynamic_cast`.)
-            else if (isMoveOnlyValue(rc) && isNamedValue(retExpr.get())) {
-                bool cpy = isCopyable(rc);
-                bool doCopy;
-                if (handoff == 2) {
-                    if (!cpy) unsupported(("`" + rc + "` has no `copy` method — add `implements "
-                                           "Copyable(bare: …)`, or use `give` to move it").c_str(), n->line);
-                    doCopy = cpy;
-                } else if (handoff == 1) doCopy = false;
-                else doCopy = cpy && _classes[rc].bareDefault == COPY;
-                if (doCopy) { indent(depth); *_out << tmp << " = " << rc << "__copy(&(" << emitExpression(retExpr) << "));\n"; }
-                else { std::string mv = moveOnlySource(retExpr, n->line); if (!mv.empty()) markMoved(mv); }
-            }
-            // returning a named collection/`string` VALUE. `exprClass(retExpr)` is "" for a collection/
-            // string, so key on the function's return type. `give` OR a BARE dying local moves out (mark
-            // the source moved so the scope-unwind skips its dtor — the blit into `tmp` already relocated
-            // the buffer); `copy` deep-copies (`__copy`; the source survives + its own dtor releases).
-            else if (ownsByValue(_currentReturnCType) && _classes.count(_currentReturnCType)
-                     && _classes[_currentReturnCType].isCollection && isNamedValue(retExpr.get())) {
-                if (handoff == 2) {                                  // copy = deep copy
-                    auto ci = _collections.find(_currentReturnCType);
-                    if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
-                        unsupported(("`copy` of a `" + _currentReturnCType + "` needs copyable elements — "
-                                     "use `give` to move it out").c_str(), n->line);
-                    else { indent(depth); *_out << tmp << " = " << _currentReturnCType << "__copy(&("
-                                                << emitExpression(retExpr) << "));\n"; }
-                } else {                                             // give OR bare dying local: move out
-                    std::string mv = moveOnlySource(retExpr, n->line);
-                    if (!mv.empty()) markMoved(mv);
-                }
-            }
-            // Same move-out for a returned BindableFunctionPtr: it may own its
-            // bound object, so the scope dtor must NOT drop what the caller now owns.
-            else if (auto* rid = dynamic_cast<IdentifierNode*>(retExpr.get())) {
-                if (rid->value && isBindableClass(exprClass(retExpr))) {
-                    std::string e = emitExpression(retExpr);
-                    indent(depth);
-                    *_out << "(" << e << ").obj = NULL; (" << e << ").ctrl = NULL; ("
-                          << e << ").fn = NULL; (" << e << ").elemdtor = NULL;\n";
-                }
-            }
+            indent(depth); *_out << _currentReturnCType << " " << tmp << ";\n";
+            emitOwnedValueInto(tmp, _currentReturnCType, ret->expression, n->line, depth);
             emitUnwindAll(depth);
             indent(depth); *_out << "return " << tmp << ";\n";
         } else {
@@ -6022,6 +5949,74 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
 // copy — a move-only union must not be shallow-copied), checks exhaustiveness, binds each arm's
 // payload into a fresh scope, and either assigns the arm value to `resultTemp` (expression position)
 // or emits it as a side-effect statement (statement position). Writes to the current `_out`.
+// Materialize `value` into the already-declared lvalue `dst` (of type `dstCType`), honoring an owned
+// hand-off: unwrap a give/copy marker, resolve an inline ctor/`new`/bare-generic-ctor from `dstCType`, then
+// apply the give/copy matrix (smart-ptr / resource / collection / bindable — move consumes the source, copy
+// duplicates). Mirrors the `return`-value hand-off, shared with value-producing `match` arms.
+void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dstCType,
+                                  SharedExpression value, int line, int depth)
+{
+    int handoff = 0;   // 0 none, 1 give, 2 copy
+    SharedExpression v = value;
+    if (v) if (auto* h = dynamic_cast<HandoffNode*>(v.get())) { handoff = h->isGive ? 1 : 2; v = h->value; }
+    bool ph = _hoistOK; _hoistOK = true;                       // inline-ctor hoisting
+    std::string pmt = _matchTargetCType; _matchTargetCType = dstCType;   // `:= match(…)` / bare generic ctor
+    std::string pvt = _variantTargetType; _variantTargetType = dstCType; // `:= Optional::Some(…)`
+    std::string rv = tryHoistInlineCtor(v, dstCType, line);    // `:= Point(…)` / `:= List()`
+    if (rv.empty()) rv = tryHoistInlineNew(v, dstCType, line); // `:= new T(…)`
+    if (rv.empty()) rv = emitExpression(v);
+    _matchTargetCType = pmt; _variantTargetType = pvt; _hoistOK = ph;
+    flushHoisted(depth);
+    indent(depth); *_out << dst << " = " << rv << ";\n";
+    std::string rc = exprClass(v);
+    // Smart pointer: give (or a bare dying local) MOVES out (invalidate the source); copy RETAINS.
+    if (isSmartPtrClass(rc) && isNamedValue(v.get())) {
+        CollKind k = smartKind(rc);
+        bool doGive;
+        if (handoff == 1)      doGive = true;
+        else if (handoff == 2) { if (k == CollKind::Owned)
+                                     unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
+                                 doGive = false; }
+        else if (isSmartPtrLValue(v)) doGive = true;           // bare local/param dies here: move it out
+        else { unsupported("handing out a smart-pointer field/element needs `give` (move it out) or "
+                           "`copy` (retain — the source stays valid)", line); doGive = true; }
+        indent(depth);
+        if (doGive) *_out << smartPtrInvalidate(emitExpression(v), k, isInterface(_classes[rc].collElemClass)) << "\n";
+        else        *_out << "(" << emitExpression(v) << ").ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
+    }
+    // Destructible `resource` VALUE: give MOVES (mark source moved), copy duplicates via copy().
+    else if (isMoveOnlyValue(rc) && isNamedValue(v.get())) {
+        bool cpy = isCopyable(rc);
+        bool doCopy;
+        if (handoff == 2) { if (!cpy) unsupported(("`" + rc + "` has no `copy` method — add `implements "
+                                                   "Copyable(bare: …)`, or use `give` to move it").c_str(), line);
+                            doCopy = cpy; }
+        else if (handoff == 1) doCopy = false;
+        else doCopy = cpy && _classes[rc].bareDefault == COPY;
+        if (doCopy) { indent(depth); *_out << dst << " = " << rc << "__copy(&(" << emitExpression(v) << "));\n"; }
+        else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
+    }
+    // Named collection/`string` VALUE (exprClass is "" — key on dstCType): give/bare-dying moves, copy deep-copies.
+    else if (ownsByValue(dstCType) && _classes.count(dstCType) && _classes[dstCType].isCollection
+             && isNamedValue(v.get())) {
+        if (handoff == 2) {
+            auto ci = _collections.find(dstCType);
+            if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
+                unsupported(("`copy` of a `" + dstCType + "` needs copyable elements — use `give` to move it").c_str(), line);
+            else { indent(depth); *_out << dst << " = " << dstCType << "__copy(&(" << emitExpression(v) << "));\n"; }
+        } else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
+    }
+    // A named BindableFunctionPtr may own its bound object: null the source so its scope-drop no-ops.
+    else if (auto* rid = dynamic_cast<IdentifierNode*>(v.get())) {
+        if (rid->value && isBindableClass(exprClass(v))) {
+            std::string e = emitExpression(v);
+            indent(depth);
+            *_out << "(" << e << ").obj = NULL; (" << e << ").ctrl = NULL; ("
+                  << e << ").fn = NULL; (" << e << ").elemdtor = NULL;\n";
+        }
+    }
+}
+
 void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int depth)
 {
     std::string subjCls = exprClass(m->subject);
@@ -6135,28 +6130,22 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 }
                 if (resultTemp && i + 1 == nstmt) {
                     // A value-producing arm's block states its value with `:= expr;` as the final statement.
-                    if (armv) {
-                        bool ph = _hoistOK; _hoistOK = true;
-                        std::string av = emitExpression(armv->value);
-                        _hoistOK = ph;
-                        flushHoisted(depth + 2);
-                        indent(depth + 2); *_out << *resultTemp << " = " << av << ";\n";
-                    } else {
-                        unsupported("a value-producing `match` arm block must end in `:= <expr>;`", a->line);
-                    }
+                    // The value may be an owned hand-off (`:= give x`) or a bare generic ctor (`:= List()`).
+                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2);
+                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;`", a->line);
                 } else {
                     emitStatement(st, depth + 2);
                 }
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
+        } else if (resultTemp) {
+            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2);   // `case X: give x;`
         } else {
             bool ph = _hoistOK; _hoistOK = true;
             std::string av = emitExpression(a->body);
             _hoistOK = ph;
             flushHoisted(depth + 2);
-            indent(depth + 2);
-            if (resultTemp) *_out << *resultTemp << " = " << av << ";\n";
-            else            *_out << av << ";\n";
+            indent(depth + 2); *_out << av << ";\n";
         }
         indent(depth + 2); *_out << "break;\n";
 
@@ -6312,28 +6301,22 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                 }
                 if (resultTemp && i + 1 == nstmt) {
                     // A value-producing arm's block states its value with `:= expr;` as the final statement.
-                    if (armv) {
-                        bool ph = _hoistOK; _hoistOK = true;
-                        std::string av = emitExpression(armv->value);
-                        _hoistOK = ph;
-                        flushHoisted(depth + 2);
-                        indent(depth + 2); *_out << *resultTemp << " = " << av << ";\n";
-                    } else {
-                        unsupported("a value-producing `match` arm block must end in `:= <expr>;`", a->line);
-                    }
+                    // The value may be an owned hand-off (`:= give x`) or a bare generic ctor (`:= List()`).
+                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2);
+                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;`", a->line);
                 } else {
                     emitStatement(st, depth + 2);
                 }
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
+        } else if (resultTemp) {
+            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2);   // `case X: give x;`
         } else {
             bool ph = _hoistOK; _hoistOK = true;
             std::string av = emitExpression(a->body);
             _hoistOK = ph;
             flushHoisted(depth + 2);
-            indent(depth + 2);
-            if (resultTemp) *_out << *resultTemp << " = " << av << ";\n";
-            else            *_out << av << ";\n";
+            indent(depth + 2); *_out << av << ";\n";
         }
         indent(depth + 2); *_out << "break;\n";
         armEnds.push_back(_moveState);

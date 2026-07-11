@@ -1,0 +1,32 @@
+import std::collections::{List};
+// Owned value out of a value-producing `match` arm: `:= give <local>` moves an owned value out, and a bare
+// generic ctor `:= List()` resolves from the match-target type. Both arm forms (block `:= …;` and simple
+// `case X: …;`), producing collection + resource results.
+type resource Box {
+    List<int32> v;
+    public Box(int32 x) { this.v.add(item: x); }
+    public fn int32 val() { return this.v[0]; }
+}
+fn int32 listCase(Optional<int32> o) {
+    List<int32> r = match (o) {
+        case Some(v): { List<int32> a = List(); a.add(item: v); := give a; }   // build + give a local out
+        case None: { := List(); }                                             // bare generic ctor
+    };
+    r.add(item: 1);
+    int32 n = 0; foreach (int32 x in r) { n = n + x; }
+    return n;
+}
+fn Box boxCase(Optional<int32> o) {
+    return match (o) {                                                        // simple `case X: <expr>;` form
+        case Some(v): Box(x: v);                                              // fresh inline ctor, no marker
+        case None: Box(x: 0);
+    };
+}
+fn int32 main() {
+    Optional<int32> some9 = Optional::Some(value: 9);
+    Optional<int32> none  = Optional::None;
+    Optional<int32> some7 = Optional::Some(value: 7);
+    int32 r = listCase(o: some9) + listCase(o: none);   // (9+1) + (0+1) = 11
+    Box b = boxCase(o: some7);                           // 7
+    return r + b.val();                                  // 11 + 7 = 18
+}
