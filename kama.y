@@ -561,6 +561,24 @@ function_declaration
       }
       $$ = fn;
   }
+  | function_modifier_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
+      /* `fn ref T f(ref …)` — a place-returning FREE function (mirrors the `fn ref T` method form).
+         The returned place must borrow a `ref`/`out` param (a free fn has no `this`); the escape
+         check at the ReturnNode place path enforces it. */
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
+      fn->isRef = true;
+      if ($6 && !$6->empty()) {
+          fn->typeParams = std::make_shared<StringList>();
+          fn->typeBounds = std::make_shared<BoundsList>();
+          fn->constParams = std::make_shared<StringList>();
+          for (auto& p : *$6) if (p && p->value) {
+              fn->typeParams->push_back(p->value);
+              fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
+              if (p->isConstParam) fn->constParams->push_back(p->value);
+          }
+      }
+      $$ = fn;
+  }
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
       /* `fnptr ret Name(params);` — an explicit function-pointer TYPE.
          A null body marks it as a signature type (collectSignatures -> _sigs). */

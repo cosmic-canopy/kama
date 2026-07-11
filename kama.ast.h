@@ -274,6 +274,7 @@ public:
     SharedStringList typeParams;   // <T, ...> — generic fn; empty for non-generic
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    bool isRef = false;            // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller (mirrors the method form)
     FunctionDeclarationNode(CodeGenContext& context,  SharedModifier modifier, SharedIdentifier returnType, SharedIdentifier name,
                             SharedParameterList parameters, SharedBlock block, SharedStringList typeParams = SharedStringList() )
         : ASTNode(context),  StatementNode(context)

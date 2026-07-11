@@ -2191,6 +2191,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.cName   = isExtern(fn) ? *fn->name->value : qualify(*fn->name->value);
         sig.retCType = cType(fn->returnType);
         sig.params  = paramSigsOf(fn->parameters);
+        sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
         _funcs[sig.cName] = sig;
 
         // a generic template (`fn max<T>(…)`) is registered for monomorphization and is
@@ -6676,6 +6677,14 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
     return s + " }";
 }
 
+// a place-returning free/static call lowers to `T*`; deref it so the call is an lvalue EVERYWHERE
+// (read copies out; `f(…) = x` writes through; `ref f(…)` / `f(…).field` / nesting all compose) —
+// the same treatment a place-returning method call gets. `&(*…)` folds, so chains stay clean ISO C.
+static inline std::string placeWrap(const std::string& c, bool isPlace)
+{
+    return isPlace ? ("(*" + c + ")") : c;
+}
+
 std::string CEmitter::emitInvocation(InvocationNode* call)
 {
     // Expression-form callee (this.method(...), base.method(...), parenthesized).
@@ -6708,7 +6717,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         auto ci = _callInst.find(call);
         if (ci != _callInst.end()) {
             const GenericInst& gi = _genericInsts[ci->second];
-            return emitReorderedCall(gi.mangledName, "", _funcs[gi.templateKey].params, call->args, call->line);
+            const FuncSig& tmpl = _funcs[gi.templateKey];
+            return placeWrap(emitReorderedCall(gi.mangledName, "", tmpl.params, call->args, call->line),
+                             tmpl.isPlaceReturn);
         }
     }
 
@@ -6812,14 +6823,17 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             MethodInfo* mi = findMethod(&_classes[typeName], name, &owner);
             if (mi && mi->isStatic) {
                 canAccess(owner, mi->visibility, name, call->line);
-                return emitReorderedCall(mi->cName, "", mi->params, call->args, call->line);   // no leading self
+                // a place-returning `static fn ref T` returns a `T*` — deref like a free fn (no self)
+                return placeWrap(emitReorderedCall(mi->cName, "", mi->params, call->args, call->line),
+                                 mi->isPlaceReturn);
             }
             if (mi && !mi->isStatic)
                 unsupported(("`" + typeName + "::" + name + "` names a non-static method — call it on an instance (`obj." + name + "(...)`)").c_str(), call->line);
         }
         auto fit = _funcs.find(resolveFunc(name, qual));
         if (fit != _funcs.end())
-            return emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line);
+            return placeWrap(emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line),
+                             fit->second.isPlaceReturn);
         unsupported("scope-qualified call resolves to no known function", call->line);
         return "0";
     }
@@ -6837,7 +6851,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
         return s + ")";
     }
-    return emitReorderedCall(it->second.cName, "", it->second.params, call->args, call->line);
+    return placeWrap(emitReorderedCall(it->second.cName, "", it->second.params, call->args, call->line),
+                     it->second.isPlaceReturn);
 }
 
 bool CEmitter::paramByRef(FunctionParameterNode* p)
@@ -6889,7 +6904,8 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::str
     bool isEntry = false;
     std::string name = nameOverride ? *nameOverride : mangledFunctionName(fn, isEntry);
     rejectStoredInterface(fn->returnType, "returned from a function", fn->line);
-    *_out << (nameOverride ? "static " : "") << cType(fn->returnType) << " " << name
+    // a place-returning `fn ref T f(…)` emits `T* f(…)` (the place); its `return e` addresses it.
+    *_out << (nameOverride ? "static " : "") << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ");\n";
 }
 
@@ -6930,14 +6946,20 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _scopes.clear();
 
     line(fn->line);
-    *_out << (nameOverride ? "static " : "") << cType(fn->returnType) << " " << name
+    // a place-returning `fn ref T f(…)` emits `T* f(…)`; its `return e` addresses the place (the
+    // ReturnNode path, gated on `_returnIsPlace`) — same as a `fn ref T` method. The escape check
+    // there requires the place to borrow a `ref`/`out` param (a free fn has no `this`), so it can't
+    // dangle. `_currentReturnCType` stays the base `T` (the place path never consults it).
+    *_out << (nameOverride ? "static " : "") << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ")\n";
 
+    _returnIsPlace = fn->isRef;
     if (fn->block) {
         emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
     } else {
         *_out << "{\n}";
     }
+    _returnIsPlace = false;
     *_out << "\n\n";
 
     _refParams.clear();

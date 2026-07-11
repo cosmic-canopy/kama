@@ -1,0 +1,17 @@
+// A FREE `fn ref T at(ref Buf b, i)` returns a PLACE (mirrors the `fn ref T` method form). The place
+// borrows a `ref` param — a free fn has no `this`, so this is the only sound root; the escape check
+// enforces it. Used as read / write / compound / a `ref` argument, like the method version.
+type value Buf {
+    public Fixed<int32, 4> d;
+    public Buf() { this.d = [0; 4]; }
+}
+fn ref int32 at(ref Buf b, usize i) { return b.d[i]; }
+fn void bump(ref int32 v) { v = v + 100; }
+fn int32 main() {
+    Buf b = Buf();
+    at(b: ref b, i: 0) = 5;
+    at(b: ref b, i: 1) = 10;
+    at(b: ref b, i: 0) += 1;                 // 6
+    bump(v: ref at(b: ref b, i: 1));         // 110
+    return at(b: ref b, i: 0) + at(b: ref b, i: 1);   // 6 + 110 = 116
+}

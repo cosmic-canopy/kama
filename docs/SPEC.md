@@ -881,8 +881,14 @@ language (so a `Vec`/matrix can be written *in* kama). The place is a **second-c
 `self`: it is used transiently and cannot be stored (there is no `ref`-local/`ref`-field to hold it),
 and a `const` receiver makes it read-only. Bounds safety is the operator's responsibility — a
 `Fixed`/collection-backed body is auto-checked; a raw `Ptr<T>` body is `unsafe`. The same place-return
-works for a **named method** — `public fn ref T at(usize i) { … }` — so `v.at(i) = x` too. (A `ref T`
-return is supported on methods/operators; free-function `ref T` returns are not yet.)
+works for a **named method** — `public fn ref T at(usize i) { … }` — so `v.at(i) = x` too. It also
+works on a **free function** and a **`static` method** — `fn ref int32 at(ref Buf b, usize i) { return
+b.d[i]; }`, called as `at(b: ref b, i: 0) = 5`. Because a free/static function has no `this`, the
+returned place must borrow a **`ref`/`out` parameter** (the caller-held borrow that outlives the call);
+a place into a local or a by-value param is rejected (*"would dangle"*), the same escape rule as a
+method borrowing `this`. Generic free functions work too (monomorphized per `T`). A **`ref` of a
+`contract`** is *not* returnable — a contract value already borrows its object, so own it
+(`Shared<Contract>`) to hand polymorphism back.
 
 Used in a `contract`, an operator becomes a **bound** for generic math (see below).
 
@@ -1165,8 +1171,6 @@ clean workaround:
 - **Inline `new` in a non-local position** — `f(a: new Sq(…))` (a call argument) or a `Shared/Owned<I>`
   **return** (`fn Shared<Shape> g() { return new Sq(…) }`). Boxing works in a `Type x = new …` initializer;
   elsewhere bind it to a local first. (Being addressed.)
-- **`ref T` return from a free function** — supported on methods/operators; a free `fn ref T f(ref …)` is
-  not yet. Return an owned value, or use a method. (Being addressed.)
 - **A value-producing construct as a `match` SUBJECT** — `match (Optional::Some(…)) { … }` (a bare variant
   ctor / value-producing match / variant-producing ternary as the subject) needs generic-instance inference
   the subject position doesn't provide; bind the subject to a typed local first.

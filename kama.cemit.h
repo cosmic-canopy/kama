@@ -26,6 +26,7 @@ struct FuncSig {
     std::string            cName;    // mangled C name (e.g. main -> kama_main)
     std::string            retCType; // resolved C return type (signature check)
     std::vector<ParamSig>  params;
+    bool                   isPlaceReturn = false;  // `fn ref T …` — returns a place (T*), deref'd at the call site
 };
 
 // A function-pointer signature type: a bodiless `fn ret Name(params);`.
