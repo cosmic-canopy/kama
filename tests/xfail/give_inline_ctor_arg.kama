@@ -1,0 +1,9 @@
+import std::collections::{List};
+// A give/copy marker on a FRESH inline ctor argument is meaningless (a fresh rvalue is consumed in place) —
+// clean "needs no marker" error, matching init/assignment positions (not a confusing "unknown function").
+type resource Box { List<int32> v; public Box(int32 x) { this.v.add(item: x); } }
+fn int32 main() {
+    List<Box> lb = List();
+    lb.add(item: give Box(x: 1));           // give on a fresh ctor -> clean error (drop the marker)
+    return 0;
+}

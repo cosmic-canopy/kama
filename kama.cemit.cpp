@@ -5325,6 +5325,12 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         if (!ctorCls.empty() && !_classes[ctorCls].isCollection && p.byRef && isInterface(p.className))
             unsupported("cannot pass an inline constructor to a contract `ref`/`out` parameter — "
                         "bind it to a local first, then pass that", srcLine);
+        // A marker on a FRESH inline ctor (`f(x: give Box(…))`) is meaningless — a fresh rvalue is consumed
+        // in place. Reject cleanly, matching the init/assignment positions (without this it skips the
+        // materialization below and falls to a confusing "unknown function" reject).
+        if (handoff != 0 && !ctorCls.empty())
+            unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs "
+                        "no marker", srcLine);
         if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
             && !isInterface(p.className) && !_classes[ctorCls].isCollection) {
             std::string t = "__ctorarg" + std::to_string(_tempCounter++);
