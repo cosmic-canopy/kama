@@ -1,0 +1,8 @@
+import std::collections::{List};
+// A bare NAMED owned source into a place-store must require a give/copy marker (like any owning hand-off).
+fn int32 main() {
+    List<string> a = List(); a.add(item: give "x");
+    string s = "y";
+    a[0] = s;                              // bare named owned -> clean error (say give/copy)
+    return 0;
+}

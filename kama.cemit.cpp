@@ -1729,6 +1729,61 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 return;
             }
         }
+        // Owned value into an `operator[]` PLACE: `a[i] = [give/copy] <owned>` where the element OWNS
+        // something (string/collection/resource/smart-ptr). Release the old element, then move/copy the new
+        // one THROUGH the place — an `ElementAccessNode` LHS isn't a named lvalue, so the branches below miss
+        // it, and the RHS `give`/`copy` marker would otherwise hit the "bare sub-expression" reject. A
+        // primitive element keeps the plain store path; a raw `Ptr<T>` slot is handled just below.
+        if (as->token == EQ && !_inUnsafe) {
+            if (auto* ea = dynamic_cast<ElementAccessNode*>(as->unaryExpression.get())) {
+                std::string dcoll, drecv, didx, et;
+                if (collectionElemAccess(ea, dcoll, drecv, didx) && _collections.count(dcoll))
+                    et = _collections[dcoll].elemClass;            // "" for a primitive element
+                else if (indexesUserOp(ea))
+                    et = exprClass(as->unaryExpression);            // user `ref T operator[]` element
+                if (!et.empty() && _classes.count(et) && _classes[et].destructible) {
+                    SharedExpression rhs = as->expression;
+                    int handoff = 0;
+                    if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
+                    checkConstWrite(as->unaryExpression, n->line);
+                    bool named  = isNamedValue(rhs.get());
+                    bool isColl = _classes[et].isCollection && !isSmartPtrClass(et);   // List/Array/string element
+                    bool copyable = isColl || isCopyable(et);
+                    bool doCopy;
+                    if (handoff == 2) {
+                        if (!copyable) unsupported(("`copy` of a `" + et + "` element needs a `Copyable` element "
+                                                    "— use `give` to move it").c_str(), n->line);
+                        doCopy = true;
+                    } else if (handoff == 1) {
+                        doCopy = false;                                                 // give = move
+                    } else {
+                        // bare: a NAMED owning source needs a marker; a FRESH owned rvalue (`"…"`, `List()`,
+                        // a call result) moves in with no marker.
+                        if (named) unsupported("an owned element hand-off must say `give` (move) or `copy` "
+                                               "(deep) — write `a[i] = give …` or `a[i] = copy …`", n->line);
+                        doCopy = false;
+                    }
+                    // Evaluate the RHS into a temp FIRST (it may read the old `a[i]`, e.g. `a[i] = a[i].concat`),
+                    // then take the place ONCE (a `__at`/`operator[]` call — bounds-checked), release the old
+                    // element, and move/copy the new one in.
+                    std::string src = emitExpression(rhs);
+                    std::string tv = "__elv" + std::to_string(_tempCounter++);
+                    std::string sp = "__esl" + std::to_string(_tempCounter++);
+                    line(n->line);
+                    indent(depth); *_out << et << " " << tv << " = "
+                                         << (doCopy ? (et + "__copy(&(" + src + "))") : src) << ";\n";
+                    std::string place = emitPlace(as->unaryExpression);
+                    indent(depth); *_out << et << "* " << sp << " = &(" << place << ");\n";
+                    indent(depth); *_out << et << "__dtor(" << sp << ");\n";           // release the old element
+                    indent(depth); *_out << "*" << sp << " = " << tv << ";\n";         // move/copy the new one in
+                    if (!doCopy && named) {   // consume the moved source (a copy leaves it valid; a fresh rvalue has none)
+                        if (isColl) { indent(depth); *_out << "(" << src << ").data = NULL; (" << src << ").len = 0;\n"; }
+                        else { std::string mv = moveOnlySource(rhs, n->line); if (!mv.empty()) markMoved(mv); }
+                    }
+                    return;
+                }
+            }
+        }
         // A RAW pointer-slot store `ptr[i] = give x` / `ptr[i] = x` in unsafe manual-memory code: the
         // exprClass of a `Ptr<T>` index is unknown (not a collection / user `operator[]`), so it's a raw
         // C store. Blit the value in, DON'T release the (uninitialized) old slot, and consume a moved

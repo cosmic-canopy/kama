@@ -1,0 +1,26 @@
+import std::collections::{List, Array};
+// Owned value into an `operator[]` place-store: `a[i] = give/copy <owned>`. Release the old element, then
+// move/copy the new one through the place. Covers string + resource elements, List + Array, and a fresh
+// rvalue that reads the old element (`a[i] = a[i].concat(…)`).
+type resource Box {
+    List<int32> v;
+    public Box(int32 x) { this.v.add(item: x); }
+    public fn int32 val() { return this.v[0]; }
+}
+fn int32 main() {
+    List<string> ls = List(); ls.add(item: give "aa"); ls.add(item: give "bb");
+    string s = "ccc";
+    ls[0] = give s;                        // move a string into the place (old released, s consumed)
+    ls[1] = copy ls[0];                    // deep-copy into the place (ls[1] = "ccc")
+    ls[0] = ls[0].concat(other: "!");      // fresh rvalue reading the old element (ls[0] = "ccc!")
+    int32 r = cast<int32>(ls[0].length()) + cast<int32>(ls[1].length());   // 4 + 3 = 7
+
+    List<Box> lb = List(); Box b0 = Box(x: 1); lb.add(item: give b0);
+    Box b = Box(x: 9);
+    lb[0] = give b;                        // move a RESOURCE into the place (old Box freed)
+    r = r + lb[0].val();                   // + 9 = 16
+
+    Array<string> arr = Array(size: 2); arr[0] = "z"; arr[1] = "zz";   // fresh literals into Array places
+    r = r + cast<int32>(arr[1].length()); // + 2 = 18
+    return r;                             // 18
+}
