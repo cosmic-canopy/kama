@@ -1,0 +1,37 @@
+import std::memory::{Shared, Owned};
+import std::collections::{List};
+// Base-class UPCAST: hold a Derived in a Shared<Base>/Owned<Base> handle. Polymorphism flows
+// through the Template-Method shape (public `area` calls protected virtual `compute`), and the
+// virtual destructor makes destruction through the base handle reach the derived dtor (no leak).
+type virtual resource Shape {
+    List<int32> tag;                                   // owns heap -> destructible; proves no slicing
+    public Shape() { this.tag.add(item: 0); }
+    ~Shape() { }
+    public fn int32 area() { return this.compute(); }  // public, non-virtual
+    protected virtual fn int32 compute() { return 1; }
+}
+type final resource Square extends Shape {
+    int32 s;
+    List<int32> parts;                                 // DERIVED owns heap — a sliced Base__dtor would leak it
+    public Square(int32 s) { this.s = s; this.parts.add(item: s); }
+    ~Square() { }
+    protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }
+}
+
+fn int32 shared_case() {
+    Shared<Square> sq = new Square(s: 6);
+    Shared<Shape> shp = sq;                            // UPCAST: retain into a base handle
+    int32 viaShp = shp.area();                          // 36 — dispatches to Square::compute
+    int32 viaDerived = sq.area();                        // 36 — sq still valid
+    return viaShp + viaDerived;                          // 72
+}
+
+fn int32 owned_case() {
+    Owned<Square> sq = new Square(s: 5);
+    Owned<Shape> shp = sq;                             // UPCAST: MOVE (sq consumed)
+    return shp.area();                                   // 25 — destroyed through base handle (virtual dtor)
+}
+
+fn int32 main() {
+    return shared_case() + owned_case();                // 72 + 25 = 97
+}

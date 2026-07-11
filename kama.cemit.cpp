@@ -1293,6 +1293,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // was already zero-declared above.
                     line(n->line);
                     emitSmartPtrUpcast(nm, ty, init, depth, n->line);
+                } else if (isSmartPtrBaseUpcast(ty, init)) {
+                    // Base-class upcast: widen a derived-class handle into this base-class handle.
+                    line(n->line);
+                    emitSmartPtrBaseUpcast(nm, ty, init, depth, n->line);
                 } else if (isBindableClass(ty)) {
                     // BindableFunctionPtr <- free function (promote) or another bindable (move).
                     line(n->line);
@@ -1686,6 +1690,22 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // an expression. a give/copy marker on the RHS overrides the default,
     // uniformly with init / argument / return.
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        // Base-class upcast reseat: `b = [give] d` where `b: Shared<Base>` and `d: Shared<Derived>`
+        // (both thin library handles — the LHS isn't an intrinsic smart ptr, so this precedes the
+        // smart-ptr path below). Release the handle's old pointee, then widen the derived handle in.
+        if (as->token == EQ) {
+            SharedExpression rhs0 = as->expression;
+            if (auto* h = dynamic_cast<HandoffNode*>(rhs0.get())) rhs0 = h->value;
+            std::string lty0 = exprClass(as->unaryExpression);
+            if (isSmartPtrBaseUpcast(lty0, rhs0)) {
+                checkConstWrite(as->unaryExpression, n->line);
+                std::string b = emitExpression(as->unaryExpression);
+                line(n->line);
+                indent(depth); *_out << lty0 << "__dtor(&" << b << ");\n";
+                emitSmartPtrBaseUpcast(b, lty0, rhs0, depth, n->line);
+                return;
+            }
+        }
         // A RAW pointer-slot store `ptr[i] = give x` / `ptr[i] = x` in unsafe manual-memory code: the
         // exprClass of a `Ptr<T>` index is unknown (not a collection / user `operator[]`), so it's a raw
         // C store. Blit the value in, DON'T release the (uninitialized) old slot, and consume a moved
@@ -4452,6 +4472,48 @@ void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstT
     if (!retain) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
 }
 
+// Is `src` a derived-class handle being widened into the base-class handle `dstTy`? Both are
+// thin library `Shared`/`Owned` structs; the pointee is a `virtual class` (so it has a virtual
+// destructor). True iff both are library owners of the same kind and dst's pointee is a base of
+// src's pointee.
+bool CEmitter::isSmartPtrBaseUpcast(const std::string& dstTy, SharedExpression src)
+{
+    if (!src || !isNamedValue(src.get())) return false;
+    std::string baseT = heapOwnerTarget(dstTy);                // dst pointee ("" if not a library owner)
+    if (baseT.empty()) return false;
+    std::string derivedT = heapOwnerTarget(exprClass(src));    // src pointee
+    if (derivedT.empty() || baseT == derivedT) return false;
+    if (!isBaseOf(baseT, derivedT)) return false;
+    return isCopyable(dstTy) == isCopyable(exprClass(src));     // both Shared, or both Owned
+}
+
+// Emit the base upcast into the already-declared handle `nm`. Builds it through the library's own
+// ctor/`adopt` (so the dest fields aren't poked directly), with the pointer adjusted to the base
+// subobject via the `__base` chain (offset 0 in Kama's single-vptr model). A `Shared` retains
+// (shares the ctrl, strong++); an `Owned` moves (source consumed). Precondition: isSmartPtrBaseUpcast.
+void CEmitter::emitSmartPtrBaseUpcast(const std::string& nm, const std::string& dstTy,
+                                      SharedExpression src, int depth, int line)
+{
+    std::string srcCls   = exprClass(src);
+    std::string baseT    = heapOwnerTarget(dstTy);
+    std::string derivedT = heapOwnerTarget(srcCls);
+    bool retain = isCopyable(srcCls);                          // Shared retains; Owned moves
+    std::string srcE = emitExpression(src);
+    // base-subobject pointer: the derived pointee (via deref()) walked down the `__base` chain.
+    std::string bp = basePathTo(&_classes[derivedT], &_classes[baseT]);
+    if (!bp.empty()) bp.pop_back();                            // drop trailing '.'
+    std::string basePtr = "&((" + srcCls + "__deref(&(" + srcE + ")))->" + bp + ")";
+    if (retain) {
+        // share the ctrl and retain: construct the base handle from (base ptr, the source's ctrl).
+        indent(depth); *_out << dstTy << "__ctor(&" << nm << ", " << basePtr << ", (" << srcE << ").c);\n";
+        indent(depth); *_out << "(" << srcE << ").c->strong++;\n";
+    } else {
+        // move: adopt the base subobject and consume the source (its dtor is suppressed).
+        indent(depth); *_out << nm << " = " << dstTy << "__adopt(" << basePtr << ");\n";
+        std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv);
+    }
+}
+
 // Invalidate a moved-from smart pointer: null the field its dtor guards on, so
 // the source's drop becomes a no-op (the ref/ownership transfers to the dest).
 std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem)
@@ -6451,8 +6513,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if (name == "drop" && bareCall && call->args && call->args->size() == 1) {
         SharedExpression a = (*call->args)[0]->expression;
         std::string cls = exprClass(a);
-        if (!cls.empty() && _classes.count(cls) && _classes[cls].destructible)
-            return cls + "__dtor(&(" + emitExpression(a) + "))";
+        if (!cls.empty() && _classes.count(cls)) {
+            // A polymorphic type drops through its vtable (`__vdrop`): a base handle owning a
+            // derived must run the derived's dtor, and a derived can own resources even when the
+            // base doesn't — so the runtime vtable, not the static type, decides.
+            if (_classes[cls].hasVtable) return cls + "__vdrop(&(" + emitExpression(a) + "))";
+            if (_classes[cls].destructible) return cls + "__dtor(&(" + emitExpression(a) + "))";
+        }
         return "(void)0";   // nothing to drop (a value / non-destructible type)
     }
     // `addr(of: place)` — the address of a PLACE (a field/local/element) as a `Ptr<T>`. Taking an
@@ -6735,6 +6802,10 @@ void CEmitter::emitVtableType(ClassInfo& ci)
         indent(1);
         *_out << cType(s.node->returnType) << " (*" << s.name << ")" << vtableSlotSig(s) << ";\n";
     }
+    // Virtual-destructor slot: destroying a derived through a base handle (`Shared<Base>`
+    // owning a `Derived`) dispatches here, so the MOST-DERIVED dtor runs (no slicing). NULL
+    // for a non-destructible impl — a base whose derived owns nothing.
+    indent(1); *_out << "void (*__dtor)(void*);\n";
     *_out << "};\n\n";
 }
 
@@ -6754,7 +6825,17 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
         *_out << "." << s.name << " = (" << cType(s.node->returnType) << "(*)"
              << vtableSlotSig(s) << ")&" << impl->second << ",\n";
     }
+    // this class's own destructor drives polymorphic drop (`__vdrop`); NULL if it frees nothing.
+    if (ci.destructible)
+        *_out << "    .__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
     *_out << "};\n\n";
+    // Virtual drop: read the runtime vtable off the object's vptr and call its `__dtor`. A base
+    // handle (`Shared<Base>`) drops through this so a Derived's full chain runs even though the
+    // static type is Base. The vptr already names the most-derived vtable (set at construction).
+    *_out << "static inline void " << ci.name << "__vdrop(" << ci.name << "* self) {\n";
+    indent(1); *_out << "const " << ci.vtableRoot << "_vtable* __vt = self->" << vptrPrefix(&ci) << "__vptr;\n";
+    indent(1); *_out << "if (__vt && __vt->__dtor) __vt->__dtor(self);\n";
+    *_out << "}\n\n";
 }
 
 // ---- Interfaces -----------------------------------------------------
@@ -6909,6 +6990,8 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         *_out << stat << "void " << ci.name << "__ctor(" << paramListC(nullptr, ci.name.c_str()) << ");\n";
     if (ci.destructible)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
+    if (ci.hasVtable)   // polymorphic drop dispatcher (defined with the vtable instance)
+        *_out << "static inline void " << ci.name << "__vdrop(" << ci.name << "* self);\n";
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
