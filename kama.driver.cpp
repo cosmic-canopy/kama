@@ -1172,8 +1172,13 @@ int main(int argc, char** argv)
                 cmd << "-s ";
             }
         } else {
-            // Debug: faithful stepping + breakpoints in .kama via #line.
-            cmd << (wasm ? "-g -gsource-map -O0 " : "-g -O0 ");
+            // Debug: faithful stepping + breakpoints in .kama via #line (DWARF `-g`). We intentionally do
+            // NOT pass `-gsource-map` on wasm: it makes the generated JS load a `.wasm.map` at startup via a
+            // chain of runtime symbols (`addRunDependency`, `UTF8ArrayToString`, …) that newer emcc (≥6) does
+            // not include by default when the `.js` is run under node — only a browser provides them — which
+            // crashes bare-node execution (the test harness + CI). The DWARF info still supports in-browser
+            // debugging; browser-devtools .kama source-mapping is a deferred nicety if it's ever wanted back.
+            cmd << "-g -O0 ";
         }
         // Numeric safety — no arithmetic UB (Rust's model). Divide-by-zero, shift-past-width, and
         // out-of-range float->int all TRAP in EVERY build (they're always bugs). Signed overflow TRAPS in

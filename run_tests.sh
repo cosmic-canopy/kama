@@ -34,6 +34,31 @@ if [ "${KAMA_SAN:-0}" != "0" ]; then
     echo "(sanitizer mode: ASan + UBSan on native positive fixtures)"
 fi
 
+# Opt-in wasm pass: KAMA_WASM=1 builds every positive (and multi-file) fixture to wasm via emcc and runs
+# it under node, comparing the SAME .expect exit code — so a codegen/runtime divergence on the wasm target
+# (or an emcc-integration regression like the source-map load break) fails the suite, not just the single
+# CI smoke fixture. Mutually exclusive with KAMA_SAN. xfail fixtures never build, so they're unaffected.
+WASM=0
+if [ "${KAMA_WASM:-0}" != "0" ]; then
+    WASM=1
+    echo "(wasm mode: build every positive fixture to wasm + run under node)"
+fi
+
+# Build one fixture: $1 = output base path, $2… = source .kama file(s). Honors the active mode.
+build_one() {
+    local out="$1"; shift
+    if [ "$WASM" = 1 ]; then
+        "$KAMA" build "$@" --target wasm --cc "${EMCC:-emcc}" -o "$out.js"
+    else
+        "$KAMA" build "$@" ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} -o "$out"
+    fi
+}
+# Run one built fixture: $1 = output base path, $2 = stderr capture file. Sets global `actual`.
+run_one() {
+    if [ "$WASM" = 1 ]; then node "$1.js" 2>"$2"; else "$1" 2>"$2"; fi
+    actual=$?
+}
+
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
     name="$(basename "$src" .kama)"
@@ -44,11 +69,19 @@ for src in "$TESTS_DIR"/*.kama; do
     fi
     expected="$(cat "$expect_file")"
 
+    # Networking is not on wasm YET: the browser/emscripten sandbox has no raw sockets, and the planned
+    # transport — WebRTC DataChannels / WebSockets via a host FFI shim (ROADMAP §5, 1.x) — isn't built. Until
+    # it lands, a `std::net` fixture can't run under node, so skip it in wasm mode rather than fail on a
+    # not-yet-implemented transport. (Remove this skip once the wasm net transport ships.)
+    if [ "$WASM" = 1 ] && grep -q 'std::net' "$src"; then
+        echo "SKIP $name (net: wasm transport not built yet — WebRTC/WebSocket pending)"; continue
+    fi
+
     exe="$TMP/$name"
-    if ! "$KAMA" build "$src" ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
+    if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
         echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue
     fi
-    "$exe" 2>"$TMP/$name.san"; actual=$?
+    run_one "$exe" "$TMP/$name.san"
     if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
         echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; fail=$((fail+1)); continue
     fi
@@ -72,10 +105,10 @@ for dir in "$TESTS_DIR"/*.d; do
     expected="$(cat "$expect_file")"
 
     exe="$TMP/$name"
-    if ! "$KAMA" build "$dir"/*.kama ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} -o "$exe" >/dev/null 2>"$TMP/$name.err"; then
+    if ! build_one "$exe" "$dir"/*.kama >/dev/null 2>"$TMP/$name.err"; then
         echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue
     fi
-    "$exe" 2>"$TMP/$name.san"; actual=$?
+    run_one "$exe" "$TMP/$name.san"
     if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
         echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; fail=$((fail+1)); continue
     fi

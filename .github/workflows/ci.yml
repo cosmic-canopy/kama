@@ -70,15 +70,17 @@ jobs:
       - name: Test suite   # full suite incl. fs_* / net_* over the Windows kama_os.h branch
         run: ./run_tests.sh
 
-  wasm-smoke:
-    name: wasm smoke (emit + run under node)
+  wasm:
+    name: wasm (build + run every fixture under node)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
       - run: make
       - uses: mymindstorm/setup-emsdk@v14
-      - name: Build a fixture to wasm and run it
+      - name: Quick smoke (arith -> wasm -> node == 42)
         run: |
           ./kama build tests/arith.kama -o out.js --target wasm --cc emcc
           test "$(node out.js; echo $?)" = "42"
+      - name: Full wasm suite (every positive fixture built to wasm + run under node; net skipped)
+        run: KAMA_WASM=1 ./run_tests.sh
