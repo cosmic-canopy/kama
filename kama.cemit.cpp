@@ -1297,6 +1297,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // Base-class upcast: widen a derived-class handle into this base-class handle.
                     line(n->line);
                     emitSmartPtrBaseUpcast(nm, ty, init, handoff, depth, n->line);
+                } else if (isSmartPtrHandoffMismatch(ty, init)) {
+                    // Both sides own, but the widening isn't valid — a clear diagnostic instead of
+                    // the misleading "collection hand-off" message below.
+                    std::string k = declType->value ? *declType->value : "handle";
+                    std::string e = (declType->genericArg && declType->genericArg->value)
+                                        ? *declType->genericArg->value : "T";
+                    unsupported(("cannot widen this handle into `" + k + "<" + e + ">` — an owning-handle "
+                                 "upcast needs the same ownership kind and an `is a` element (a concrete that "
+                                 "implements the contract `" + e + "`, or a derived of the base `" + e + "`)").c_str(),
+                                n->line);
                 } else if (isBindableClass(ty)) {
                     // BindableFunctionPtr <- free function (promote) or another bindable (move).
                     line(n->line);
@@ -4525,6 +4535,22 @@ void CEmitter::emitSmartPtrBaseUpcast(const std::string& nm, const std::string& 
         indent(depth); *_out << nm << " = " << dstTy << "__adopt(" << basePtr << ");\n";
     }
     if (!retain) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
+}
+
+std::string CEmitter::ownerElem(const std::string& cls)
+{
+    std::string t = heapOwnerTarget(cls);                      // library Shared/Owned
+    if (!t.empty()) return t;
+    if (isSmartPtrClass(cls)) return _classes[cls].collElemClass;   // intrinsic (contract handle, Weak)
+    return "";
+}
+
+bool CEmitter::isSmartPtrHandoffMismatch(const std::string& dstTy, SharedExpression src)
+{
+    if (!src || !isNamedValue(src.get())) return false;
+    std::string de = ownerElem(dstTy), se = ownerElem(exprClass(src));
+    if (de.empty() || se.empty() || de == se) return false;    // both must own; a same-element conv is handled elsewhere
+    return !isSmartPtrUpcast(dstTy, src) && !isSmartPtrBaseUpcast(dstTy, src);
 }
 
 // Invalidate a moved-from smart pointer: null the field its dtor guards on, so

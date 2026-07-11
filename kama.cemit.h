@@ -594,6 +594,13 @@ private:
     bool isSmartPtrBaseUpcast(const std::string& dstTy, SharedExpression src);
     void emitSmartPtrBaseUpcast(const std::string& nm, const std::string& dstTy,
                                 SharedExpression src, int handoff, int depth, int line);
+    // The pointee class of an owning handle — a library `Shared`/`Owned`/`Weak` or an intrinsic
+    // contract handle; "" if `cls` isn't an owning handle.
+    std::string ownerElem(const std::string& cls);
+    // Both sides are owning handles over DIFFERENT elements, but it isn't a valid upcast (the
+    // element isn't an `is a`, or the kinds differ) — used to give a clean diagnostic instead of
+    // the misleading collection-hand-off message.
+    bool isSmartPtrHandoffMismatch(const std::string& dstTy, SharedExpression src);
     // A move-only VALUE — a destructible class value that isn't a smart-ptr/collection/
     // extern struct. It MOVES on hand-off (its dtor is suppressed) and is never silently copied.
     bool isMoveOnlyValue(const std::string& cls) const;
