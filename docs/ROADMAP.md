@@ -47,10 +47,11 @@ remains to call the language **complete**:
      call already materializes its receiver, but indexing it doesn't; bind to a local first). The fix is to
      propagate the target type / materialize the receiver in these positions like the initializer + return +
      place-store + arm paths already do.
-   - **Remaining primitive `Hashable`/`Equatable` widths.** `int32` and `string` conformances are now hosted
-     in the **prelude** (universal — a `<T: Equatable>` bound / `List<int32>.contains` / int-keyed `Map`
-     resolve without importing `std::collections`; prelude retro-impl bodies now emit static-inline). The
-     other widths (`int64`/`uint*`/`float*`) are one-line `implements` blocks added to the prelude on demand.
+   - ~~**Remaining primitive `Hashable`/`Equatable` widths.**~~ DONE. All integer widths
+     (`int8/16/32/64`, `uint8/16/32/64`) now have prelude `Hashable` (splitmix64) + `Equatable` (scalar),
+     so every integer is a universal `Map`/`Set` key; floats (`float32/64`) get `Equatable` (exact `==`) but
+     intentionally NOT `Hashable` (float hash keys are a footgun — NaN/±0.0 — and there is no bit-reinterpret
+     cast). Conformances are `static inline`, so unused widths cost nothing in generated C.
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
