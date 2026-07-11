@@ -5350,6 +5350,23 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             else { auto g = _genericTypeInstOf.find(p.className);
                    if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = p.className; }
         }
+        // A value-producing RHS in argument position that needs its type from context: an inline variant
+        // construction (`f(o: Optional::Some(…))` / `…::None`) or a value-producing `match` (`f(x: match(…))`).
+        // Thread the PARAM's C type as the target so the union instance / match result resolves, exactly as
+        // the initializer / assignment / return / arm positions do. (An ordinary arg leaves these unset.)
+        bool argIsVariant = false;
+        {
+            SharedStringList vq;
+            if (ctorIv) { if (ctorIv->identifier) vq = ctorIv->identifier->qualifier; }
+            else if (auto* id = dynamic_cast<IdentifierNode*>(argExpr.get())) vq = id->qualifier;
+            if (vq && !vq->empty()) {
+                auto q = std::make_shared<StringList>();
+                for (size_t i = 0; i + 1 < vq->size(); ++i) q->push_back((*vq)[i]);
+                std::string en = resolveUserName(*vq->back(), q);
+                argIsVariant = (_classes.count(en) && _classes[en].isVariant) || _genericTypeParams.count(en);
+            }
+        }
+        bool argIsMatch = dynamic_cast<MatchNode*>(argExpr.get()) != nullptr;
         // An inline ctor is a temporary rvalue. To an INTERFACE `ref`/`out` param it can't be a fat pointer
         // inline — reject (bind first). To a concrete-class param (by value OR `ref`) it's materialized into
         // a hoisted temp below, so `f(Point(1, 2))` / `m.get(key: Point(1, 2))` work.
@@ -5406,7 +5423,15 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     _hoisted.push_back(lct + " " + st + " = " + emitExpression(argExpr) + ";");
                 }
             }
-            val = st.empty() ? emitExpression(argExpr) : st;
+            if (st.empty() && (argIsVariant || argIsMatch) && !p.className.empty()) {
+                // target-type the union instance / match result to the param's type, then emit
+                std::string pmt = _matchTargetCType, pvt = _variantTargetType;
+                _matchTargetCType = _variantTargetType = p.className;
+                val = emitExpression(argExpr);
+                _matchTargetCType = pmt; _variantTargetType = pvt;
+            } else {
+                val = st.empty() ? emitExpression(argExpr) : st;
+            }
         }
         if (handoff && (p.byRef || isInterface(p.className)))
             unsupported("`give`/`copy` transfer ownership by value — they don't apply to a `ref`/`out` "

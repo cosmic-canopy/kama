@@ -38,15 +38,15 @@ remains to call the language **complete**:
      today masked (by-value is a shallow struct copy the owning callee frees once), so latent rather than a
      live leak; fold into a general end-of-full-expression drop pass if it ever surfaces.
    - **Target-typed rvalue in a non-local-init position** *(ergonomic; surfaced building the containers)*. An
-     inline construction that needs its type from context works in a `Type x = …` initializer, a `return`, an
-     `operator[]` place-store, and a value-producing `match` arm, but not yet in every position. Still open: a
-     **bare generic ctor into a field** (`this.m = Map()` — infer the field's type args; bind to a typed local
-     first); an **inline variant construction or value-producing `match` in a call-argument position**
-     (`f(o: Optional::Some(…))` / `f(x: match(…))` — "scope-qualified call resolves to no known function"; bind
-     to a local first); and **indexing a `string`/rvalue receiver** (`"abc"[0]` — a string *literal* method
-     call already materializes its receiver, but indexing it doesn't; bind to a local first). The fix is to
-     propagate the target type / materialize the receiver in these positions like the initializer + return +
-     place-store + arm paths already do.
+     inline construction that needs its type from context now works in a `Type x = …` initializer, a `return`,
+     an `operator[]` place-store, a value-producing `match` arm, a **class-typed lvalue store** (`this.m =
+     Map()`, done), and a **call-argument** (`f(o: Optional::Some(…))` / `f(x: match(…))`, done — the call path
+     threads the param type). Still open: an **inline variant construction / value-producing `match` (or a
+     variant-producing ternary) used as a `match` SUBJECT** (`match (Optional::Some(…)) { … }` — "match requires
+     an enum subject"; bind the subject to a typed local first); and **indexing a `string`/rvalue receiver**
+     (`"abc"[0]` — a string *literal* method call already materializes its receiver, but indexing it doesn't;
+     bind to a local first). The fix is to propagate the target type / materialize the receiver in these
+     remaining positions like the initializer + return + place-store + arm + arg paths already do.
    - ~~**Remaining primitive `Hashable`/`Equatable` widths.**~~ DONE. All integer widths
      (`int8/16/32/64`, `uint8/16/32/64`) now have prelude `Hashable` (splitmix64) + `Equatable` (scalar),
      so every integer is a universal `Map`/`Set` key; floats (`float32/64`) get `Equatable` (exact `==`) but
