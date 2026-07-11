@@ -1,0 +1,4 @@
+type contract Shape for both { fn int32 area(); }
+type value Square implements Shape { int32 s; public Square(int32 s){ this.s=s; } public fn int32 area(){ return this.s*this.s; } }
+fn int32 take(Shape s){ return s.area(); }
+fn int32 main(){ return take(s: new Square(s: 3)); }   // ERROR: inline `new` to a contract borrow — bind first

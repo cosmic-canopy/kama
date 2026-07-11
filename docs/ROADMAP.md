@@ -45,15 +45,20 @@ remains to call the language **complete**:
      an `operator[]` place-store, a value-producing `match` arm, a **class-typed lvalue store** (`this.m =
      Map()`, done), and a **call-argument** (`f(o: Optional::Some(…))` / `f(x: match(…))`, done — the call path
      threads the param type), and **indexing a string rvalue receiver** (`"abc"[0]` / `s.concat(x)[0]`, done —
-     the receiver is materialized). Still open, each with a clean "bind to a local first" workaround: (a) an
-     inline variant construction / value-producing `match` (or a variant-producing ternary) used as a `match`
-     **SUBJECT** (`match (Optional::Some(…)) { … }` — needs payload-based generic-instance inference, not just
-     target-type threading); and (b) an inline **`new` in a non-local position** — a call-argument
-     (`f(a: new Sq(…))`) or a `Shared/Owned<Interface>` **return** (`fn Shared<Shape> f() { return new Sq(…) }`).
-     (b) is the deepest: the arg case needs the param's element type, which `ParamSig.className` drops (it keeps
-     only the bare `Owned`/`Shared` template), and interface-element boxing in a return is entangled with
-     under-developed smart-pointer-over-contract dispatch (`a.area()` on a `Shared<Shape>` from a call result
-     doesn't resolve yet). Deferred as its own effort; the local-init boxing + bind-to-local cover it today.
+     the receiver is materialized), and an inline **`new` in a non-local by-value position** — a call-argument
+     (`f(a: new Sq(…))`), a `Shared/Owned<T>` **return** (`fn Shared<Shape> f() { return new Sq(…) }`, over a
+     concrete OR contract element), and a **variant payload** (`Optional::Some(value: new Sq(…))`), all DONE.
+     `tryHoistInlineNew` now mirrors the (ASan-clean) local-init boxing — the library-`adopt` path for a
+     concrete element and the fat-box `{obj,vtbl[,ctrl]}` path for a contract element — into a hoisted temp
+     whose ownership transfers to the consumer (callee param / `__ret`), so no new lifetime analysis. (The
+     memory's earlier "`ParamSig.className` drops the element type" / "under-developed contract dispatch"
+     blockers were mis-diagnoses: the real `Owned`/`Shared` are library-monomorphized, so the param carries the
+     full instance type and named-local contract dispatch already works.) Still open, with a clean "bind to a
+     local first" workaround: (a) an inline variant construction / value-producing `match` (or a
+     variant-producing ternary) used as a `match` **SUBJECT** (`match (Optional::Some(…)) { … }` — needs
+     payload-based generic-instance inference, not just target-type threading). An inline `new` **borrowed** by
+     a `ref`/`out` or contract parameter stays a documented RULE (bind first — an rvalue box has no stable
+     address to reseat), consistent with the inline-ctor-to-contract-`ref` rule.
    - ~~**Remaining primitive `Hashable`/`Equatable` widths.**~~ DONE. All integer widths
      (`int8/16/32/64`, `uint8/16/32/64`) now have prelude `Hashable` (splitmix64) + `Equatable` (scalar),
      so every integer is a universal `Map`/`Set` key; floats (`float32/64`) get `Equatable` (exact `==`) but

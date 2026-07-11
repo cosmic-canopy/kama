@@ -1,0 +1,19 @@
+import std::memory::{Owned};
+import std::collections::{List};
+// B4 — inline `new Derived` returned as an Owned<Base>: adopt the offset-0 base subobject; drop stays
+// virtual (no slicing). Derived owns a heap List, so a slice would leak — ASan proves the virtual dtor ran.
+type virtual resource Shape {
+    List<int32> tag;
+    public Shape() { this.tag.add(item: 0); }
+    ~Shape() { }
+    public fn int32 area() { return this.compute(); }
+    protected virtual fn int32 compute() { return 1; }
+}
+type final resource Square extends Shape {
+    List<int32> parts;
+    public Square(int32 s) { this.parts.add(item: s); }
+    ~Square() { }
+    protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }
+}
+fn Owned<Shape> make(int32 s) { return new Square(s: s); }
+fn int32 main() { Owned<Shape> o = make(s: 8); return o.area(); }

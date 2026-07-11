@@ -1,0 +1,16 @@
+// B4 ASan gate — a DESTRUCTIBLE resource boxed via inline `new` in a call-arg, consumed by value: the
+// callee owns it and its param-drop frees the heap buffer. LeakSanitizer/ASan-clean == exactly one free
+// (the box was moved into the callee, not also dropped by the caller).
+import std::memory::{Owned};
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+
+type resource Cell {
+    Ptr<int32> buf;
+    public Cell(int32 v) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = v; } }
+    public fn int32 get() { unsafe { return this.buf[0]; } }
+    ~Cell() { unsafe { free(p: cast<Ptr>(this.buf)); } }
+}
+fn int32 sink(Owned<Cell> c) { return c.get(); }   // c drops at fn-end -> Cell ~dtor frees buf
+fn int32 main() { return sink(c: new Cell(v: 36)); }

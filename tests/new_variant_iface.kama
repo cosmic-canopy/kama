@@ -1,0 +1,9 @@
+import std::memory::{Shared};
+// B4 — inline `new Concrete` as a variant PAYLOAD (`Optional::Some(value: new Sq(…))`): the same hoisted
+// fat-box path as return/arg positions. Previously an xfail ("bind it to a local first"); now supported.
+type contract Shape for both { fn int32 area(); }
+type value Sq implements Shape { int32 s; public Sq(int32 s){ this.s = s; } public fn int32 area(){ return this.s*this.s; } }
+fn int32 main() {
+    Optional<Shared<Shape>> o = Optional::Some(value: new Sq(s: 5));
+    return match (o) { case Some(x): x.area(); case None: 0; };
+}

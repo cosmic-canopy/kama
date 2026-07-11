@@ -1199,6 +1199,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // pointer (Owned/Shared/Weak), naming the element type directly:
                     // `Owned<Box> p = new Box(...)`. (BindableFunctionPtr keeps `new` for
                     // its bind.) `new` into a plain value type is an error — drop `new`.
+                    // NOTE: the intrinsic-iface + library-adopt boxing below is mirrored (as a
+                    // hoisted-temp string) in tryHoistInlineNew for return/arg/payload positions —
+                    // keep the two in sync (esp. the Shared ctrl asymmetry: iface path emits
+                    // kama_ctrl_new(), the library-adopt path lets `adopt` allocate it).
                     std::string octy = cType(oc->type);
                     if (isBindableClass(ty)) {
                         emitBindableNew(nm, ty, oc, depth);   // bind obj + method
@@ -5409,6 +5413,22 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // A `ref` borrow keeps the temp alive through the call; if it owns anything, drop it at scope end.
             if (p.byRef && _classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
             val = t;
+        } else if (dynamic_cast<ObjectCreationNode*>(argExpr.get())) {
+            // an inline `new T(...)` argument — box it into a hoisted temp (malloc + ctor + adopt/vtbl),
+            // passed BY VALUE so the callee owns and drops it (a fresh unaliased box, consumed once — not
+            // registered destructible here). `give`/`copy` are meaningless on a fresh rvalue; a `ref`/`out`
+            // or contract borrow has no stable address to reseat — bind to a local first (the language rule).
+            if (handoff != 0)
+                unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result "
+                            "needs no marker", srcLine);
+            if (p.byRef || isInterface(p.className)) {
+                unsupported("cannot pass an inline `new` to a `ref`/`out` or contract-borrow parameter — "
+                            "bind it to a local first, then pass that", srcLine);
+                val = "0";   // rejected — throwaway (compilation already failed); don't re-diagnose via the gate
+            } else {
+                std::string t = tryHoistInlineNew(argExpr, p.className, srcLine);
+                val = t.empty() ? emitExpression(argExpr) : t;   // "" => not an owning target; emitExpression diagnoses
+            }
         } else if (p.byRef && dynamic_cast<ElementAccessNode*>(argExpr.get())) {
             // `ref a[i]` borrows the ELEMENT: emit it as a place (`*NAME__at(...)`) so the `&(...)`
             // below is the bounds-checked `T*` (index evaluated once), not the address of a by-value
@@ -6501,26 +6521,93 @@ std::string CEmitter::tryHoistInlineCtor(SharedExpression e, const std::string& 
     return t;
 }
 
-// an inline `new T(...)` as a general rvalue whose target is a smart-pointer type — box it into
-// a HOISTED temp (malloc + ctor + optional ctrl, the emitDeclarator sequence) and return its name.
-// "" if not applicable / no slot. Interface-element boxes are deferred — rejected with guidance.
+// an inline `new T(...)` as a general rvalue whose target is an owning-pointer type (Owned/Shared, or a
+// library HeapOwner) — box it into a HOISTED temp (declared before the leaf statement, pure ISO C, no
+// `({…})`) and return its name. Ownership transfers to the CONSUMER (a callee param, or a return `__ret`
+// temp), which is the sole party registered to drop it — the box is NOT recordDestructibleLocal'd here.
+// The emitted C mirrors the (ASan-clean) local-init boxing at emitLocalVariableDeclaration; keep in sync.
+//   returns "" when not applicable (not a `new`, or the target isn't an owning pointer / the element
+//   plainly mismatches) so the CALLER diagnoses; on a specific semantic error (Weak/abstract/non-impl/no
+//   `adopt`) it emits ONE precise diagnostic and returns a declared degenerate temp (compilation already
+//   failed, so the throwaway C is never built) — this suppresses the caller's generic fallback gate.
 std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& targetCType, int srcLine)
 {
     if (!_hoistOK || targetCType.empty()) return "";
     auto* oc = dynamic_cast<ObjectCreationNode*>(e.get());
     if (!oc) return "";
     auto cit = _classes.find(targetCType);
-    if (cit == _classes.end() || !isSmartPtrClass(targetCType)) return "";
-    std::string T = cit->second.collElemClass;
+    if (cit == _classes.end()) return "";
     std::string octy = cType(oc->type);
-    if (isInterface(T)) {   // a `new Concrete` into a Shared/Owned<Interface> — fat-pointer box deferred
-        unsupported("boxing `new` into a smart-pointer-over-contract inline isn't supported here — "
-                    "bind it to a local first", srcLine);
-        return "";
+    // one precise diagnostic + a declared degenerate temp (see header) — suppresses the caller's gate.
+    auto reject = [&](const std::string& msg) -> std::string {
+        unsupported(msg.c_str(), srcLine);
+        std::string t = "__newarg" + std::to_string(_tempCounter++);
+        _hoisted.push_back(targetCType + " " + t + " = {0};");
+        return t;
+    };
+
+    // ---- LIBRARY HeapOwner, concrete element: `T* hp = malloc; C__ctor(hp,…); box = Owner__adopt(hp)` ----
+    // (mirror emitLocalVariableDeclaration ~1265-1300, incl. the derived→base upcast; `adopt` itself
+    // allocates the Shared ctrl, so — unlike the intrinsic paths below — we do NOT emit kama_ctrl_new().)
+    if (!isSmartPtrClass(targetCType)) {
+        std::string T = heapOwnerTarget(targetCType);
+        if (T.empty()) return "";                              // not an owning pointer — caller diagnoses
+        bool upcastNew = (octy != T) && isClass(octy) && isBaseOf(T, octy);
+        std::string C = upcastNew ? octy : T;                  // the concrete actually built
+        if (octy != T && !upcastNew)
+            return reject("`" + targetCType + "` owns `" + T + "`, but got `new " + octy
+                          + "(...)` — name the element type or a derived of it, not the owner");
+        if (isClass(C) && _classes[C].isAbstractClass)
+            return reject("cannot instantiate abstract class '" + C + "'");
+        ClassInfo* ao = nullptr;
+        MethodInfo* adoptM = findMethod(&_classes[targetCType], "adopt", &ao);
+        if (!adoptM) return reject("`" + targetCType + "` implements HeapOwner but has no `adopt` method");
+        std::string hp = "__heap"   + std::to_string(_tempCounter++);
+        std::string t  = "__newarg" + std::to_string(_tempCounter++);
+        std::string box = C + "* " + hp + " = (" + C + "*)malloc(sizeof(" + C + "));";
+        if (isClass(C) && _classes[C].hasCtor)
+            box += " " + emitReorderedCall(C + "__ctor", hp, _classes[C].ctorParams, oc->args, srcLine) + ";";
+        std::string adoptArg = hp;                             // adopt the base subobject when widening (offset-0)
+        if (upcastNew) {
+            std::string bp = basePathTo(&_classes[C], &_classes[T]);
+            if (!bp.empty()) bp.pop_back();
+            adoptArg = "(" + T + "*)&(" + hp + "->" + bp + ")";
+        }
+        box += " " + targetCType + " " + t + " = " + adoptM->cName + "(" + adoptArg + ");";
+        _hoisted.push_back(box);
+        return t;
     }
-    if (octy != T) return "";                                   // element mismatch — let the caller diagnose
+
+    // ---- INTRINSIC owning pointer (registered fat/thin box) ----
+    std::string T = cit->second.collElemClass;
+    if (smartKind(targetCType) == CollKind::Weak)              // a Weak is non-owning — it can't own a `new`
+        return reject("`new` allocates on the heap — a `Weak` can't own it; wrap it in an `Owned<" + T
+                      + ">`/`Shared<" + T + ">` (a `Weak` is a non-owning observer)");
+
+    if (isInterface(T)) {   // `new Concrete` into a Shared/Owned<Interface> — fat box {obj, vtbl[, ctrl]}
+        auto oit = _classes.find(octy);                       // (mirror emitLocalVariableDeclaration ~1213-1237)
+        bool implementsT = false;
+        if (oit != _classes.end())
+            for (auto& i : oit->second.interfaces) if (i == T) { implementsT = true; break; }
+        if (!implementsT)
+            return reject("`new " + octy + "` does not implement `" + T + "` — `" + targetCType
+                          + "` owns a class that satisfies the contract");
+        if (_classes[octy].isAbstractClass)
+            return reject("cannot instantiate abstract class '" + octy + "'");
+        std::string t = "__newarg" + std::to_string(_tempCounter++);
+        std::string box = targetCType + " " + t + " = {0}; " + t + ".obj = malloc(sizeof(" + octy + "));";
+        if (_classes[octy].hasCtor)
+            box += " " + emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + t + ".obj",
+                                           _classes[octy].ctorParams, oc->args, srcLine) + ";";
+        box += " " + t + ".vtbl = &" + octy + "__as_" + T + ";";
+        if (smartKind(targetCType) == CollKind::Shared) box += " " + t + ".ctrl = kama_ctrl_new();";
+        _hoisted.push_back(box);
+        return t;
+    }
+
+    if (octy != T) return "";                                  // element mismatch — let the caller diagnose
     if (isClass(T) && _classes[T].isAbstractClass)
-        unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), srcLine);
+        return reject("cannot instantiate abstract class '" + T + "'");
     std::string t = "__newarg" + std::to_string(_tempCounter++);
     std::string box = targetCType + " " + t + " = {0}; " + t + ".ptr = (" + T + "*)malloc(sizeof(" + T + "));";
     if (isClass(T) && _classes[T].hasCtor)

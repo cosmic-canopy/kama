@@ -1,0 +1,6 @@
+import std::memory::{Owned};
+// B4 — inline `new` in RETURN position (library HeapOwner, concrete element): the box is malloc+ctor+adopt'd
+// into a hoisted temp and moved out to the caller (single owner; no bind-to-local needed).
+type value Counter { int32 n; public Counter(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
+fn Owned<Counter> make(int32 n) { return new Counter(n: n); }
+fn int32 main() { Owned<Counter> a = make(n: 42); return a.get(); }

@@ -1,0 +1,6 @@
+import std::memory::{Shared};
+// B4 — inline `new` returned as a Shared: `adopt` allocates the ctrl (strong=1); the caller's single drop
+// balances it. No double kama_ctrl_new (the library-adopt path must not also allocate a ctrl).
+type value C { int32 n; public C(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
+fn Shared<C> mk(int32 n) { return new C(n: n); }
+fn int32 main() { Shared<C> s = mk(n: 5); Shared<C> t = copy s; return s.get() + t.get(); }

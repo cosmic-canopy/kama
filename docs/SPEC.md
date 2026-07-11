@@ -197,7 +197,7 @@ Use it for heap objects, recursive data structures, and polymorphic ownership.
 Owned<Counter> c = new Counter(start: 40);          // `new` heap-boxes the ELEMENT type
 c.bump();  int n = c.get();                          // auto-deref: . reaches the pointee
 Owned<Counter> d = c;                                // MOVE: c is now empty (moved-from)
-fn Owned<Node> make(int v) { Owned<Node> n = new Node(id: v); return n; }  // factory: moves out
+fn Owned<Node> make(int v) { return new Node(id: v); }   // inline `new` in return/arg position — factory, moves out
 ```
 
 Move-only: copying/initializing/returning an `Owned` transfers ownership and invalidates the source, so the
@@ -1168,15 +1168,18 @@ silent no-op), pending its future scope:
 A few ownership-lowering edge cases are open at 1.0. Each **hard-errors** (never miscompiles) and has a
 clean workaround:
 
-- **Inline `new` in a non-local position** — `f(a: new Sq(…))` (a call argument) or a `Shared/Owned<I>`
-  **return** (`fn Shared<Shape> g() { return new Sq(…) }`). Boxing works in a `Type x = new …` initializer;
-  elsewhere bind it to a local first. (Being addressed.)
+- **Inline `new` borrowed by a `ref`/`out` or contract parameter** — an inline `new` is consumed **by
+  value** (the callee/caller becomes the owner). To borrow it (`ref`/`out`) or pass it to a contract
+  borrow, bind it to a local first — an rvalue box has no stable address to reseat. (A by-value
+  `Owned`/`Shared` argument, return, or variant payload boxes inline; see below.)
 - **A value-producing construct as a `match` SUBJECT** — `match (Optional::Some(…)) { … }` (a bare variant
   ctor / value-producing match / variant-producing ternary as the subject) needs generic-instance inference
   the subject position doesn't provide; bind the subject to a typed local first.
 
 (Target-typed inline construction now works in initializers, `return`, `operator[]` place-stores,
-value-producing `match` arms, class-typed lvalue stores, call arguments, and string-rvalue indexing.)
+value-producing `match` arms, class-typed lvalue stores, call arguments, and string-rvalue indexing.
+Inline `new` heap-boxes into an owning pointer — `Owned`/`Shared`, over a concrete OR a contract element —
+in every by-value position: initializer, `return`, call argument, and variant payload.)
 
 ## Reserved/runtime
 
