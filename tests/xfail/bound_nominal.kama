@@ -1,0 +1,16 @@
+// Milestone G — generic bounds are NOMINAL: `<T: Weighable>` requires the type argument to DECLARE
+// `implements Weighable`, exactly as `foreach`/`when` already require the keyword. `Rock` has a public
+// `weight()` method but never says `implements Weighable`, so a coincidental method-name match is no
+// longer enough — it is rejected at instantiation (explicit over implicit). Add `implements Weighable`
+// to the type to fix. (Before this, the bound was checked structurally and this compiled.)
+type contract Weighable for both { fn int32 weight(); }
+type value Rock {
+    public int32 g;
+    public Rock(int32 g) { this.g = g; }
+    public fn int32 weight() { return this.g; }   // has the method, but no `implements Weighable`
+}
+fn int32 heavier<T: Weighable>(T x) { return x.weight(); }
+fn int32 main() {
+    Rock r = Rock(g: 5);
+    return heavier(x: r);   // ERROR: Rock does not satisfy bound Weighable (no `implements`)
+}

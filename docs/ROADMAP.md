@@ -107,13 +107,15 @@ remains here is genuinely later-track or opt-in.
   pruning suffices, or explicit per-module opt-in / dead-function elimination is warranted before a large
   stdlib grows. (`std::math` / `std::io` already ship as directory modules under this mechanism — the open
   question is whether pruning scales, not whether the packaging shape works.)
-- **Structural → nominal contracts for bounds.** `foreach` is now nominal (an iterator must `implements
-  Iterator`/`IteratorMut`, a container `Iterable`/`IterableMut`), but a generic bound `<T: Weighable>`
-  still accepts a type **structurally**. Decision (user): go fully nominal — require `implements` for
-  bounds too, so the keyword is load-bearing everywhere and errors pin to the declaration. A migration
-  pass over the bound fixtures.
-- **`Copyable` as a formal contract.** Today it's recognized nominally by name (`implements Copyable`);
-  formalize as `type contract Copyable { This copy(); }` — bundle with the structural→nominal migration.
+- ~~**Structural → nominal contracts for bounds.**~~ DONE. A generic bound `<T: Weighable>` is now
+  **nominal** — the type must declare `implements Weighable` (`classSatisfiesBound` matches the interfaces
+  list / generic-contract template, not coincidental method names), so the keyword is load-bearing
+  everywhere (`foreach`/`when`/bounds) and errors pin to the declaration. Migration was zero — every bound
+  fixture already declared `implements`; xfail `bound_nominal` guards the new requirement.
+- ~~**`Copyable` as a formal contract.**~~ DONE (was already most of the way there). `Copyable` is the
+  prelude `type contract Copyable for resource { fn This copy(); }`; a type is Copyable only by declaring
+  `implements Copyable` (the `copyable` flag, set nominally) — a `value` stays bitwise-copyable. The
+  nominal bound check routes `<T: Copyable>` through that same value/resource rule.
 
 ## 4. Reflection + attributes / serialization (1.x — Phase 4)
 

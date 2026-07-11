@@ -5147,16 +5147,18 @@ bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
 
 bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
 {
-    // matched by method NAME (type-parameter-independent), so a generic-contract bound checks against
-    // its TEMPLATE — no `Iterator<int32>` instance is needed just to constrain a type parameter.
-    const std::vector<InterfaceMethod>* methods = contractMethods(contract);
-    if (!methods) return false;                           // unknown contract — caller diagnoses
-    for (auto& m : *methods) {
-        ClassInfo* owner = nullptr;
-        MethodInfo* mi = findMethod(ci, m.name, &owner);
-        if (!mi || mi->visibility != Visibility::Public) return false;
+    if (!ci) return false;
+    // NOMINAL: the type must DECLARE `implements <contract>` — the keyword is load-bearing for bounds
+    // exactly as it is for `foreach`/`when`; a coincidental set of matching public method names is not
+    // enough (explicit over implicit). `implementsContractTemplate` matches a plain contract by name AND a
+    // generic-contract bound against its TEMPLATE (`Iterator<T>` — no instance needed to constrain a param).
+    // `Copyable` keeps its one structural rule: a `value` is bitwise-copyable; a `resource` only by declaring
+    // it. (A primitive / retroactive `implements` target is handled by the caller before we're reached.)
+    if (contract == "Copyable") {
+        if (ci->kind == TypeKind::Value) return true;
+        return ci->copyable;
     }
-    return true;
+    return implementsContractTemplate(ci, contract);
 }
 
 bool CEmitter::implementsContractTemplate(ClassInfo* ci, const std::string& tmpl)
