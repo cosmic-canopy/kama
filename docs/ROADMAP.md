@@ -31,10 +31,12 @@ remains to call the language **complete**:
    resources/collections and has a clean workaround, so a "language-complete" 1.0 closes them but they don't
    block the stdlib/engine work. (Reserved later-track keywords `expose`/`volatile` stay deferred — they
    hard-error, never miscompile.)
-   - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop still leak
-     in the residual positions: non-string-intrinsic by-value args, and owned temps in `while`/`for`
-     conditions (no per-iteration drop slot). The operator/receiver/`foreach`/string-`ref` slices are done;
-     the durable fix is one general temporary-drop pass.
+   - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop.
+     Operator/receiver/`if`-cond/`foreach`/string-`ref` **and now `while`/`for` condition temps** all drop
+     (the loop-and-a-half gained a per-iteration drop slot — `dropCondTemps`; the `_loopCond` gate is gone).
+     Only residual: a non-string-intrinsic **by-value arg** whose owned rvalue the callee doesn't consume —
+     today masked (by-value is a shallow struct copy the owning callee frees once), so latent rather than a
+     live leak; fold into a general end-of-full-expression drop pass if it ever surfaces.
    - **Target-typed rvalue in a non-local-init position** *(ergonomic; surfaced building the containers)*. An
      inline construction that needs its type from context works in a `Type x = …` initializer, a `return`, an
      `operator[]` place-store, and a value-producing `match` arm, but not yet in every position. Still open: a

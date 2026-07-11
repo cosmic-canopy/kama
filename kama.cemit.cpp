@@ -915,6 +915,28 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
     }
 }
 
+// Drop the destructible temps a condition hoisted into the current scope since `preLoc`, then
+// unregister them. Used by `if`/`while`/`for` after a value-producing condition: the temps were
+// declared in the condition's wrapper block (or the loop's `while(1){…}` body), so their dtor must
+// name them there, not at the outer scope where recordDestructibleLocal parked them. Mirrors
+// emitScopeCleanup's guards (skip Moved / a temp of a non-destructible class) — a condition temp is
+// only ever borrowed, so this is a no-op filter for strings, but the guards keep it sound now that
+// arbitrary `ref`-arg class temps can hoist here. The full [preLoc,end) range is ALWAYS erased, even
+// when a dtor was skipped, so a skipped temp isn't double-visited at real scope exit.
+void CEmitter::dropCondTemps(size_t preLoc, int depth)
+{
+    if (_scopes.empty()) return;
+    auto& locs = _scopes.back().locals;
+    for (size_t i = locs.size(); i-- > preLoc; ) {
+        auto ms = _moveState.find(locs[i].cVar);
+        if (ms != _moveState.end() && ms->second != MoveState::NotMoved) continue;   // moved / maybe-moved: no drop
+        auto ci = _classes.find(locs[i].className);
+        if (ci != _classes.end() && !ci->second.destructible) continue;              // owns nothing
+        indent(depth); *_out << locs[i].className << "__dtor(&" << locs[i].cVar << ");\n";
+    }
+    if (locs.size() > preLoc) locs.erase(locs.begin() + preLoc, locs.end());
+}
+
 // Destroy scopes from innermost up to & including the nearest loop boundary.
 void CEmitter::emitUnwindToLoop(int depth)
 {
@@ -1485,12 +1507,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // dtor + unregister the destructible temps hoisted for the condition (declared in this wrapper
             // block). A diverging arm already dropped them via emitUnwindAll, so on that path this line is
             // simply not reached — each temp is dropped exactly once.
-            if (!_scopes.empty()) {
-                auto& locs = _scopes.back().locals;
-                for (size_t i = locs.size(); i-- > preLoc; )
-                    { indent(bd); *_out << locs[i].className << "__dtor(&" << locs[i].cVar << ");\n"; }
-                if (locs.size() > preLoc) locs.erase(locs.begin() + preLoc, locs.end());
-            }
+            dropCondTemps(preLoc, bd);
             indent(depth); *_out << "}\n";
         }
         return;
@@ -1498,18 +1515,25 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* w = dynamic_cast<WhileNode*>(n)) {
         line(n->line);
-        _loopCond = true;
+        size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
         std::string cond = emitCondition(w->booleanExpression);
-        _loopCond = false;
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
             *_out << "while (" << cond << ") ";
             emitBody(w->whileStatement, depth, /*loopBoundary=*/true);
             *_out << "\n";
         } else {                                                  // loop-and-a-half: recompute cond each pass
+            bool drop = !_scopes.empty() && _scopes.back().locals.size() > preLoc;
             indent(depth); *_out << "while (1) {\n";
             flushHoisted(depth + 1);                              // condition temps — re-run each iteration
-            indent(depth + 1); *_out << "if (!(" << cond << ")) break;\n";
+            if (drop) {                                           // owned condition temp: eval, drop, then break
+                std::string lc = "__loopcond" + std::to_string(_tempCounter++);
+                indent(depth + 1); *_out << "bool " << lc << " = (" << cond << ");\n";
+                dropCondTemps(preLoc, depth + 1);                // drop before the body — cond doesn't bind into it
+                indent(depth + 1); *_out << "if (!" << lc << ") break;\n";
+            } else {
+                indent(depth + 1); *_out << "if (!(" << cond << ")) break;\n";
+            }
             emitBody(w->whileStatement, depth + 1, /*loopBoundary=*/true);
             *_out << "\n";
             indent(depth); *_out << "}\n";
@@ -1530,9 +1554,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* f = dynamic_cast<ForNode*>(n)) {
         line(n->line);
         std::string init = emitForClause(f->initializerStatements);
-        _loopCond = true;
+        size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
         std::string cond = emitCondition(f->booleanExpression);
-        _loopCond = false;
         std::string iter = emitForClause(f->iteratorStatements);
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
@@ -1540,9 +1563,17 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             emitBody(f->body, depth, /*loopBoundary=*/true);
             *_out << "\n";
         } else {                                                  // loop-and-a-half; iter stays in the C header
+            bool drop = !_scopes.empty() && _scopes.back().locals.size() > preLoc;
             indent(depth); *_out << "for (" << init << "; ; " << iter << ") {\n";
             flushHoisted(depth + 1);                              // condition temps — re-run each iteration
-            indent(depth + 1); *_out << "if (!(" << cond << ")) break;\n";
+            if (drop) {                                           // owned condition temp: eval, drop, then break
+                std::string lc = "__loopcond" + std::to_string(_tempCounter++);
+                indent(depth + 1); *_out << "bool " << lc << " = (" << cond << ");\n";
+                dropCondTemps(preLoc, depth + 1);                // drop before the body — cond doesn't bind into it
+                indent(depth + 1); *_out << "if (!" << lc << ") break;\n";
+            } else {
+                indent(depth + 1); *_out << "if (!(" << cond << ")) break;\n";
+            }
             emitBody(f->body, depth + 1, /*loopBoundary=*/true);
             *_out << "\n";
             indent(depth); *_out << "}\n";
@@ -5325,7 +5356,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // The borrow is read-only and the temp frees at scope end; an addressable lvalue (a named
             // var / field / `this`) keeps its direct `&`. hoistStringTemp handles concat/call rvalues but
             // keeps a bare LITERAL on its normal path, so materialize the literal here too.
-            if (st.empty() && p.byRef && _hoistOK && !_loopCond && exprIsString(argExpr)) {
+            if (st.empty() && p.byRef && _hoistOK && exprIsString(argExpr)) {
                 st = hoistStringTemp(argExpr);
                 if (st.empty() && dynamic_cast<StringNode*>(argExpr.get())) {
                     st = "__strtmp" + std::to_string(_tempCounter++);
@@ -5336,7 +5367,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // A bare primitive LITERAL to a `ref`-primitive param (`m.get(key: 5)`) has no address —
             // materialize it into a temp of the literal's C type so the `&temp` below is legal. No drop
             // (a primitive owns nothing).
-            if (st.empty() && p.byRef && _hoistOK && !_loopCond) {
+            if (st.empty() && p.byRef && _hoistOK) {
                 std::string lct = litRvalueCType(argExpr.get());
                 if (!lct.empty()) {
                     st = "__primtmp" + std::to_string(_tempCounter++);
@@ -7411,7 +7442,7 @@ bool CEmitter::exprIsString(SharedExpression e)
 // A borrowed result (an empty piece, cap==0) is harmless: kama_string__dtor is a no-op on it.
 std::string CEmitter::hoistStringTemp(SharedExpression e)
 {
-    if (!e || !_hoistOK || _loopCond) return "";   // loop conditions have no per-iteration drop slot (see header)
+    if (!e || !_hoistOK) return "";                // no statement slot to hoist into (raw operand)
     ASTNode* n = e.get();
     if (dynamic_cast<StringNode*>(n) || dynamic_cast<IdentifierNode*>(n)
         || dynamic_cast<MemberAccessNode*>(n) || dynamic_cast<ThisAccessNode*>(n)) return "";

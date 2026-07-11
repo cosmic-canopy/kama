@@ -424,12 +424,6 @@ private:
     // inline ctor cleanly falls back to the existing rejection rather than emit a dangling temp.
     std::vector<std::string> _hoisted;
     bool                     _hoistOK = false;
-    // A `while`/`for` condition re-evaluates each iteration and its hoisted temps are declared INSIDE the
-    // loop-and-a-half `while(1){…}` rewrite, which has no matching per-iteration RAII-drop slot. So an
-    // owned-string temp (which needs a drop) must NOT hoist there — `hoistStringTemp` returns "" and the
-    // operand falls back to the leak-but-valid compound-literal path (an uncommon corner). `if` conditions
-    // (single-shot, wrapper-block drop wired) are unaffected.
-    bool                     _loopCond = false;
     void flushHoisted(int depth);
     // Emit an if/while/for condition with value-producing constructs allowed (they hoist a temp);
     // any hoisted temps are left in `_hoisted` for the caller to flush (empty => the fast path).
@@ -715,6 +709,7 @@ private:
 
     // RAII cleanup
     void emitScopeCleanup(const Scope& s, int depth);          // reverse-order dtors for one scope
+    void dropCondTemps(size_t preLoc, int depth);              // drop+unregister a condition's hoisted temps
     void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
     void emitUnwindAll(int depth);                             // return: innermost..function root
     void recordDestructibleLocal(const std::string& cVar, const std::string& className);
