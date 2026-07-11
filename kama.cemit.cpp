@@ -1073,7 +1073,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         else if (!c.empty() && isInterface(c))
                             *_out << " = " << emitExpression(d->initializer);  // already an interface value
                         else
-                            unsupported("interface initializer must be a concrete object lvalue", n->line);
+                            unsupported("contract initializer must be a concrete object lvalue", n->line);
                     }
                     *_out << ";\n";
                     return;
@@ -1176,7 +1176,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 for (auto& i : cit->second.interfaces) if (i == T) { implementsT = true; break; }
                             if (!implementsT)
                                 unsupported(("`new " + octy + "` does not implement `" + T + "` — `" + ty
-                                             + "` owns a class that satisfies the interface").c_str(), n->line);
+                                             + "` owns a class that satisfies the contract").c_str(), n->line);
                             else if (_classes[octy].isAbstractClass)
                                 unsupported(("cannot instantiate abstract class '" + octy + "'").c_str(), n->line);
                             else {
@@ -2560,7 +2560,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             //     a private virtual can't be overridden, a public one is the interface's job.
                             if (mi.visibility != Visibility::Protected)
                                 unsupported(("overridable method '" + mname + "' must be declared `protected` (write `protected "
-                                    + kw + "`); public polymorphism belongs on an interface").c_str(), md->line);
+                                    + kw + "`); public polymorphism belongs on a contract").c_str(), md->line);
                             // (4a) the class kind must opt in to the method's polymorphism.
                             if (mi.isAbstract && !ci.isAbstractClass)
                                 unsupported(("class '" + ci.name + "' declares an abstract method; declare it `abstract class`").c_str(), md->line);
@@ -2834,7 +2834,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     // `Owned<I>`/`Shared<I>` (a `List<Shared<I>>`) instead — the smart-ptr-over-interface.
     if (isInterface(elemCType)) {
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
-        unsupported(("an interface (`" + nm + "`) borrows its object, so it can't be a collection "
+        unsupported(("a contract (`" + nm + "`) borrows its object, so it can't be a collection "
                      "element — it would dangle; store an owning `Shared<" + nm + ">` instead").c_str(),
                     collType->line);
         return;
@@ -4420,7 +4420,7 @@ void CEmitter::rejectStoredInterface(SharedIdentifier ty, const char* whereClaus
 {
     if (!ty || !isInterface(cType(ty))) return;
     std::string nm = (ty->value && !ty->value->empty()) ? *ty->value : cType(ty);
-    unsupported(("an interface (`" + nm + "`) borrows its object, so it can't be " + whereClause
+    unsupported(("a contract (`" + nm + "`) borrows its object, so it can't be " + whereClause
                  + " — it would dangle; own the object instead (e.g. `Shared<" + nm + ">`)").c_str(), line);
 }
 
@@ -5256,7 +5256,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         // inline — reject (bind first). To a concrete-class param (by value OR `ref`) it's materialized into
         // a hoisted temp below, so `f(Point(1, 2))` / `m.get(key: Point(1, 2))` work.
         if (!ctorCls.empty() && !_classes[ctorCls].isCollection && p.byRef && isInterface(p.className))
-            unsupported("cannot pass an inline constructor to an interface `ref`/`out` parameter — "
+            unsupported("cannot pass an inline constructor to a contract `ref`/`out` parameter — "
                         "bind it to a local first, then pass that", srcLine);
         if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
             && !isInterface(p.className) && !_classes[ctorCls].isCollection) {
@@ -5306,7 +5306,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         }
         if (handoff && (p.byRef || isInterface(p.className)))
             unsupported("`give`/`copy` transfer ownership by value — they don't apply to a `ref`/`out` "
-                        "or interface borrow", srcLine);
+                        "or contract borrow", srcLine);
         if (isInterface(p.className)) {
             std::string c = exprClass(argExpr);
             if (p.byRef) {
@@ -5314,7 +5314,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 // argument must be an actual interface variable (pass its address). A
                 // concrete class would need a throwaway temp — reject it; bind first.
                 if (!c.empty() && isClass(c))
-                    unsupported(("cannot pass '" + c + "' by `ref`/`out` to interface parameter '" + p.name
+                    unsupported(("cannot pass '" + c + "' by `ref`/`out` to contract parameter '" + p.name
                                  + "'; bind it to an `" + p.className + "` first "
                                  "(`" + p.className + " s = …; … ref s`)").c_str(), srcLine);
                 if (!p.isConst) checkConstWrite(argExpr, srcLine);
@@ -6307,7 +6307,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
     std::string T = cit->second.collElemClass;
     std::string octy = cType(oc->type);
     if (isInterface(T)) {   // a `new Concrete` into a Shared/Owned<Interface> — fat-pointer box deferred
-        unsupported("boxing `new` into a smart-pointer-over-interface inline isn't supported here — "
+        unsupported("boxing `new` into a smart-pointer-over-contract inline isn't supported here — "
                     "bind it to a local first", srcLine);
         return "";
     }
@@ -6941,7 +6941,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         for (auto& r : ci.retroInterfaces) if (r == ifn) { retro = true; break; }
         if (retro) continue;
         auto it = _interfaces.find(ifn);
-        if (it == _interfaces.end()) { unsupported("unknown interface in implements", ci.node->line); continue; }
+        if (it == _interfaces.end()) { unsupported("unknown contract in implements", ci.node->line); continue; }
         InterfaceInfo& ii = it->second;
         // the slot casts must match the vtbl struct's erased signature -> `This` = the interface.
         ScopedStr _ts(_thisType, ii.name);
@@ -6953,11 +6953,11 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&ci, m.name, &owner);
-            if (!mi) { unsupported(("class missing interface method '" + m.name + "'").c_str(), ci.node->line); continue; }
+            if (!mi) { unsupported(("class missing contract method '" + m.name + "'").c_str(), ci.node->line); continue; }
             // an interface is a PUBLIC contract — a method that satisfies it must be
             // public too (else it's reachable through the interface but not by name: a leak).
             if (mi->visibility != Visibility::Public)
-                unsupported(("method '" + m.name + "' implements interface '" + ii.name
+                unsupported(("method '" + m.name + "' implements contract '" + ii.name
                              + "' and must be declared `public`").c_str(),
                             mi->node ? mi->node->line : ci.node->line);
             indent(1);
@@ -6997,7 +6997,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
                                             const std::string& recvCType)
 {
     auto it = _interfaces.find(iface);
-    if (it == _interfaces.end()) { unsupported("dispatch on unknown interface", srcLine); return "0"; }
+    if (it == _interfaces.end()) { unsupported("dispatch on unknown contract", srcLine); return "0"; }
     std::string recv = fatExpr;
     if (_hoistOK && !isSimpleIdent(fatExpr)) {
         // The receiver's own C type — the plain interface `iface`, or a smart-ptr-of-interface
@@ -7013,7 +7013,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
         return emitReorderedCall("(" + recv + ").vtbl->" + method, "(" + recv + ").obj",
                                  params, args, srcLine);
     }
-    unsupported("unknown interface method", srcLine);
+    unsupported("unknown contract method", srcLine);
     return "0";
 }
 
