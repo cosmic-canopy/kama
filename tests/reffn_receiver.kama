@@ -1,0 +1,7 @@
+import std::collections::{List};
+// A2 (C×E soundness) — a place-returning FREE fn used as a method receiver. `pick()` returns `ref Widget`
+// (a borrow of `x`); its result must go through addrOfOperand and NOT be materialized+dropped, else the
+// borrowed Widget's buffer would be freed twice (double-free with `x`'s own drop). ASan-clean == no dup free.
+type resource Widget { List<int32> parts; public Widget(int32 s){ this.parts.add(item: s); } public fn int32 area(){ return this.parts[0]*this.parts[0]; } }
+fn ref Widget pick(ref Widget w) { return w; }
+fn int32 main() { Widget x = Widget(s: 6); return pick(w: ref x).area(); }

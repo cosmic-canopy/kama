@@ -693,6 +693,10 @@ private:
                               bool isStatic = false);
     std::string emitMemberAccess(MemberAccessNode* ma);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
+    // Does an invocation (a free-fn / method call) return a PLACE (`fn ref T` — a borrow), not a fresh
+    // owned value? Used to gate materialize-and-drop of an owned rvalue receiver: a place must NOT be
+    // dropped (dropping a copy of a borrow would double-free). isPlaceReturn is the discriminator.
+    bool invocationReturnsPlace(InvocationNode* iv);
     // Dispatch a call on a receiver of static class `clsName`, given the C pointer
     // expression `recvPtr` (e.g. "self" or "&(c)"): virtual -> via __vptr; else direct.
     std::string emitDispatch(const std::string& clsName, const std::string& recvPtr,

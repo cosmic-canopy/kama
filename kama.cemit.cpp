@@ -7974,6 +7974,29 @@ static bool isStableStringRef(ASTNode* n)
     return false;
 }
 
+// Does an invocation used AS A RECEIVER return a place (a `fn ref T` borrow) rather than a fresh owned
+// value? A place receiver must NOT be materialized + dropped (it borrows — dropping a copy would
+// double-free); a value receiver (ctor / value-returning method or free fn) must be, else its heap leaks.
+// `isPlaceReturn` (on MethodInfo + FuncSig, set for `fn ref T`) is the fresh-value-vs-borrow discriminator.
+bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
+{
+    if (!iv) return false;
+    if (iv->identifier && iv->identifier->value) {           // bare call: a free fn (or an inline ctor)
+        auto fit = _funcs.find(resolveFunc(*iv->identifier->value, iv->identifier->qualifier));
+        return fit != _funcs.end() && fit->second.isPlaceReturn;   // a ctor isn't in _funcs -> false (a value)
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) {   // method call `recv.m()`
+        std::string rcls = exprClass(ma->expression);
+        if (isSmartPtrClass(rcls)) rcls = _classes[rcls].collElemClass;       // a method lives on the pointee
+        std::string m = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+        if (rcls.empty() || !_classes.count(rcls) || m.empty()) return false;
+        ClassInfo* owner = nullptr;
+        MethodInfo* mi = findMethod(&_classes[rcls], m, &owner);
+        return mi && mi->isPlaceReturn;
+    }
+    return false;
+}
+
 std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* recv)
 {
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
@@ -8048,15 +8071,18 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         recvPtr = t.empty() ? addrOfOperand(receiver, "kama_string", call->line) : ("&" + t);
     } else {
         // An OWNED rvalue receiver — an operator result (`(a - b).m()`) or a by-value call/ctor result
-        // (`make().m()`, `R().m()`) — owns a heap buffer that addrOfOperand's throwaway compound-literal
-        // receiver would LEAK. Materialize it into a scope-dtor'd temp so RAII frees it (the general-class
-        // analogue of the string-receiver hoist above). Restricted to fresh BY-VALUE rvalues: an operator
-        // result, or a bare InvocationNode (an inline ctor or a free-function call — neither can return a
-        // place). An lvalue / `a[i]` / a `ref T` method result (a borrow) is left to addrOfOperand and never
-        // dropped, so this can't double-free. Pure RAII scope-drop; no lifetime analysis.
+        // (`make().m()`, `R().m()`, a method chain `builder.make().use()`) — owns a heap buffer that
+        // addrOfOperand's throwaway compound-literal receiver would LEAK. Materialize it into a scope-dtor'd
+        // temp so RAII frees it (the general-class analogue of the string-receiver hoist above). Gated to a
+        // fresh BY-VALUE rvalue: an operator result, or ANY call (free fn OR method) that returns a fresh
+        // owned value. A `fn ref T` place return (a borrow — a `ref` method result, `a[i]`, or a place-
+        // returning free fn) is left to addrOfOperand and NEVER dropped, so this can't double-free.
+        // `invocationReturnsPlace` (via isPlaceReturn) is the discriminator — it covers method chains
+        // (previously excluded → leak) and correctly excludes a `fn ref T` free fn (previously included →
+        // would double-free). Pure RAII scope-drop; no lifetime analysis.
         InvocationNode* riv = dynamic_cast<InvocationNode*>(receiver.get());
         bool byValueRvalue = dynamic_cast<BinaryExpressionNode*>(receiver.get())
-                             || (riv && !riv->expression);
+                             || (riv && !invocationReturnsPlace(riv));
         if (_hoistOK && byValueRvalue && _classes.count(cls) && _classes[cls].destructible) {
             std::string t = "__recv" + std::to_string(_tempCounter++);
             std::string ct = hoistCtorIfInline(receiver);                 // inline ctor -> its own temp init
