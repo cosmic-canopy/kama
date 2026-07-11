@@ -66,7 +66,8 @@ uint8 first = s[0];                     // 65 ('A'), a byte
 **`char`** is a distinct primitive — a Unicode scalar value backed by `uint32` (not a numeric type, so it
 can't silently mix with ints). Literals: `'a'`, `'\n'`, `'\u{1F600}'`. Equality + ordering compare
 codepoints; `cast<int32>(c)` / `cast<char>(i)` convert (arithmetic on codepoints is explicit, the Rust
-model). (A multibyte *source* char literal like `'é'` isn't lexed yet — write `'\u{E9}'`.)
+model). A multibyte *source* char literal is decoded to its scalar value: `'é'` == `'\u{E9}'` == 233,
+`'😀'` == `'\u{1F600}'` == 128512.
 
 **Operators & methods.** `string` carries the small, always-available ergonomic surface every language
 ships — all compiler intrinsics on the primitive (no import), byte-oriented like `s[i]`:
