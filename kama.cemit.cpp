@@ -1223,11 +1223,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // placement-constructs T on the heap and adopts the raw ptr — ZERO copies, same
                         // as the intrinsic. `new` stays valid ONLY into an RAII owner, so it can't leak.
                         std::string T = heapOwnerTarget(ty);
-                        if (octy != T)
+                        // `new Derived` into a `Shared`/`Owned<Base>` widens (upcast): build the DERIVED,
+                        // then adopt its base subobject (offset-0 `__base` chain) — destruction stays
+                        // virtual (Base__vdrop), so no slicing. `octy == T` is the plain same-element case.
+                        bool upcastNew = (octy != T) && isClass(octy) && isBaseOf(T, octy);
+                        std::string C = upcastNew ? octy : T;              // the concrete actually built
+                        if (octy != T && !upcastNew)
                             unsupported(("`" + ty + "` owns `" + T + "`, but got `new " + octy
-                                         + "(...)` — name the element type (`new " + T + "(...)`), not the owner").c_str(), n->line);
-                        else if (isClass(T) && _classes[T].isAbstractClass)
-                            unsupported(("cannot instantiate abstract class '" + T + "'").c_str(), n->line);
+                                         + "(...)` — name the element type or a derived of it, not the owner").c_str(), n->line);
+                        else if (isClass(C) && _classes[C].isAbstractClass)
+                            unsupported(("cannot instantiate abstract class '" + C + "'").c_str(), n->line);
                         else {
                             ClassInfo* ao = nullptr;
                             MethodInfo* adoptM = findMethod(&_classes[ty], "adopt", &ao);
@@ -1235,16 +1240,23 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             else {
                                 std::string hp = "__heap" + std::to_string(_tempCounter++);
                                 line(n->line); indent(depth);
-                                *_out << T << "* " << hp << " = (" << T << "*)malloc(sizeof(" << T << "));\n";
+                                *_out << C << "* " << hp << " = (" << C << "*)malloc(sizeof(" << C << "));\n";
                                 indent(depth); *_out << "if (!" << hp << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                                if (isClass(T) && _classes[T].hasCtor) {
+                                if (isClass(C) && _classes[C].hasCtor) {
                                     line(n->line);
                                     bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
-                                    std::string cc = emitReorderedCall(T + "__ctor", hp, _classes[T].ctorParams, oc->args, n->line);
+                                    std::string cc = emitReorderedCall(C + "__ctor", hp, _classes[C].ctorParams, oc->args, n->line);
                                     _hoistOK = ph; flushHoisted(depth);
                                     indent(depth); *_out << cc << ";\n";
                                 }
-                                indent(depth); *_out << nm << " = " << adoptM->cName << "(" << hp << ");\n";
+                                // adopt the T* — the base subobject when widening (offset-0), else the ptr itself.
+                                std::string adoptArg = hp;
+                                if (upcastNew) {
+                                    std::string bp = basePathTo(&_classes[C], &_classes[T]);
+                                    if (!bp.empty()) bp.pop_back();
+                                    adoptArg = "(" + T + "*)&(" + hp + "->" + bp + ")";
+                                }
+                                indent(depth); *_out << nm << " = " << adoptM->cName << "(" << adoptArg << ");\n";
                             }
                         }
                     } else if (_classes.count(ty) && _classes[ty].isCollection) {

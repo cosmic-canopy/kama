@@ -1,0 +1,22 @@
+import std::memory::{Shared, Owned};
+import std::collections::{List};
+// Inline `new Derived` into a Shared<Base>/Owned<Base>: build the derived, adopt its base
+// subobject; polymorphism via Template Method, destroyed through the base handle (virtual dtor).
+type virtual resource Shape {
+    List<int32> tag;
+    public Shape() { this.tag.add(item: 0); }
+    ~Shape() { }
+    public fn int32 area() { return this.compute(); }
+    protected virtual fn int32 compute() { return 1; }
+}
+type final resource Square extends Shape {
+    List<int32> parts;                                 // derived owns heap -> slice would leak
+    public Square(int32 s) { this.parts.add(item: s); }
+    ~Square() { }
+    protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }
+}
+fn int32 main() {
+    Shared<Shape> s = new Square(s: 6);                // inline new Derived -> Shared<Base>
+    Owned<Shape> o = new Square(s: 5);                 // inline new Derived -> Owned<Base>
+    return s.area() + o.area();                         // 36 + 25 = 61
+}

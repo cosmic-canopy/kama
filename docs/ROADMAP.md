@@ -54,13 +54,12 @@ remains to call the language **complete**:
      materialize the receiver in these positions like the local-initializer + method-call paths already do.
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
      (`buildVtables` doesn't merge a parent contract's slots into the child).
-   - **Inline `new Derived` into a `Shared`/`Owned<Base>`** — widening a **base class** owner. Between
-     *existing* handles the upcast now works both ways: concrete→contract (`Shared<Shape> s = circleShared`)
-     and derived→base (`Owned<Base> = give derivedOwned`), retain/move, with virtual destructors so no
-     slicing (see SPEC "Inheritance"). Inline `new Concrete` into a `Shared<Contract>` also works. Still open:
-     inline `new Derived(...)` into a `Shared<Base>`/`Owned<Base>` (base **class** element) — the
-     concrete-element `new` path requires an exact element match. Workaround: bind the `new` to a same-typed
-     local, then upcast. Clean error today.
+   - ~~**Smart-pointer upcast** (concrete→contract, derived→base; between handles and inline `new`)~~
+     **DONE.** Widening an owning handle to a base class or a satisfied contract works both between existing
+     handles (`Shared<Shape> s = circleShared` / `Owned<Base> = give derivedOwned`, retain/move) and inline
+     (`Shared<Shape> s = new Circle(...)`, `Shared<Base> b = new Derived(...)` — build the concrete, adopt its
+     offset-0 base subobject). Destruction is virtual (a `virtual class` and every owning contract handle carry
+     a vtable `__dtor`), so no slicing. See SPEC "Inheritance & virtual dispatch".
    - ~~Retroactive `implements C for T` for a non-`string` primitive target~~ **DONE.** A primitive target
      (`int32`) now conforms via a scalar-receiver synthetic conformance (`this` is the value; methods emit
      `T self` by value). `Map<int32, V>` / `Set<int32>` ship, and `satisfiesBound` consults the retro
