@@ -251,6 +251,9 @@ struct InterfaceInfo {
     // Kind-gate (`for value|resource|both`): which kinds may `implements` this contract. Both true = `both`.
     bool                         allowsValue = false;
     bool                         allowsResource = false;
+    // Refined parent contracts (`type contract Animated implements Drawable`) — resolved names. Their methods
+    // are merged into `methods` by linkContracts() so vtable/conformance/dispatch see the full slot set.
+    std::vector<std::string>     refines;
     // A specialized generic-contract instance (`Iterator_int32`) — emitted under a bound _typeSubst so
     // its `T`-typed method sigs resolve; the template itself lives in _genericContracts, not here.
     bool                         isGenericInst = false;
@@ -621,6 +624,9 @@ private:
                                  const std::string& method, SharedArgumentList args, int srcLine);
 
     void linkBases();
+    // Merge each contract's refined-parent methods (`type contract A implements B`) into its own `methods`
+    // (transitive, cycle-safe), so a refining contract's vtable/conformance/dispatch include the parent slots.
+    void linkContracts();
     void buildVtables();
     void computeDestructible();
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);

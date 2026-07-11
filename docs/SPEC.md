@@ -623,8 +623,9 @@ every function, so declarations are greppable and self-describing:
   identity/token. Extensible variants add a qualifier after `type`: `type virtual resource`, `type abstract
   resource`, `type final resource`.
 - **`type contract Name { … }`** — a public-only guarantee (an interface); methods only, no bodies, no
-  fields, no ctor/dtor. Types satisfy it via `implements`; it may refine another (`type contract Animated :
-  Drawable { … }`).
+  fields, no ctor/dtor. Types satisfy it via `implements`; it may refine another with `implements` too
+  (`type contract Animated for both implements Drawable { … }` — a conformer must supply Drawable's methods
+  as well, and dispatch through `Animated` reaches them).
 
 The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words `value` / `resource` /
 `contract` are **contextual, not reserved** — because they appear only right after `type`, they remain

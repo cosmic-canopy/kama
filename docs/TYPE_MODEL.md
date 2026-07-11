@@ -94,8 +94,8 @@ is the abstract thing: a public-only guarantee a type promises to satisfy. A typ
 are just "its API."
 
 ```kama
-type contract Drawable { fn void draw(); }
-type contract Animated : Drawable { fn void step(float dt); }   // refinement: requires Drawable + more
+type contract Drawable for both { fn void draw(); }
+type contract Animated for both implements Drawable { fn void step(float dt); }   // refines: requires Drawable + more
 ```
 
 - All methods are **public** (a contract *is* public) — no visibility modifiers, no fields, no bodies

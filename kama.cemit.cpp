@@ -2191,6 +2191,11 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         // `Copyable` (duplicable). Recognized by source name so the give/copy discipline can consult them.
         if (cd->name && cd->name->value && *cd->name->value == "Movable")  _movableContract  = ii.name;
         if (cd->name && cd->name->value && *cd->name->value == "Copyable") _copyableContract = ii.name;
+        // Refinement: `type contract Animated implements Drawable` — record the parent contract names
+        // (resolved in this contract's scope); linkContracts() merges their methods in transitively.
+        if (cd->baseTypes && cd->baseTypes->interfaces)
+            for (auto& p : *cd->baseTypes->interfaces)
+                if (p && p->value) ii.refines.push_back(resolveUserName(*p->value, p->qualifier));
         if (cd->typeParams && !cd->typeParams->empty()) {
             std::vector<std::string> ps;
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);
@@ -4681,6 +4686,36 @@ std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string
 }
 
 // Resolve `extends` names to ClassInfo pointers; error on unknown/cycle.
+// Merge each contract's refined-parent methods into its own `methods`, transitively (a refined parent may
+// itself refine), so a refining contract's vtable struct, conformance table, and dispatch all see the full
+// slot set — parent slots first, then own (a same-named own method wins). Cycle-safe via a visited set.
+void CEmitter::linkContracts()
+{
+    std::set<std::string> done;
+    std::function<void(const std::string&)> merge = [&](const std::string& name) {
+        if (!done.insert(name).second) return;                 // already merged
+        auto it = _interfaces.find(name);
+        if (it == _interfaces.end() || it->second.refines.empty()) return;
+        InterfaceInfo& ii = it->second;
+        std::vector<InterfaceMethod> merged;
+        std::set<std::string> seen;
+        for (auto& own : ii.methods) seen.insert(own.name);    // own methods take precedence over inherited
+        for (auto& parent : ii.refines) {
+            merge(parent);                                     // fully merge the parent first (transitive)
+            auto pit = _interfaces.find(parent);
+            if (pit == _interfaces.end()) {
+                unsupported(("contract `" + name + "` refines unknown contract `" + parent + "`").c_str(), 0);
+                continue;
+            }
+            for (auto& pm : pit->second.methods)
+                if (seen.insert(pm.name).second) merged.push_back(pm);   // inherited (dedup)
+        }
+        for (auto& own : ii.methods) merged.push_back(own);    // then own, after the inherited slots
+        ii.methods = std::move(merged);
+    };
+    for (auto& kv : _interfaces) merge(kv.first);
+}
+
 void CEmitter::linkBases()
 {
     // Now every file's declarations are registered: resolve each class's base +
@@ -7944,6 +7979,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         collectClasses(u);
     }
     linkBases();
+    linkContracts();    // merge refined-parent methods into each contract before vtables are built
     buildVtables();
     resolveFriends();   // after all classes/functions are registered
     // Pre-scan retroactive `implements C for T` blocks into _retroConformances (target cType -> contracts)

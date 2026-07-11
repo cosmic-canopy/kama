@@ -45,8 +45,6 @@ remains to call the language **complete**:
      call already materializes its receiver, but indexing it doesn't; bind to a local first). The fix is to
      propagate the target type / materialize the receiver in these positions like the initializer + return +
      place-store + arm paths already do.
-   - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
-     (`buildVtables` doesn't merge a parent contract's slots into the child).
    - **Remaining primitive `Hashable`/`Equatable` widths.** `int32` and `string` conformances are now hosted
      in the **prelude** (universal — a `<T: Equatable>` bound / `List<int32>.contains` / int-keyed `Map`
      resolve without importing `std::collections`; prelude retro-impl bodies now emit static-inline). The
