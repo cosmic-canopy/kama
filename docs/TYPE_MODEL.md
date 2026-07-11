@@ -203,24 +203,27 @@ type abstract resource Polygon : Shape {
 Callers use the public/contract face; subclasses override the protected virtual. Rare in practice —
 most polymorphism is contracts + monomorphized generics; virtual inheritance is only for shared-impl.
 
-## Hand-off marker rule — "silent default, scream when ambiguous"
+## Hand-off marker rule — every kind is movable; the default is declared, a marker overrides
 
-A `give`/`copy` marker is required **exactly when both move and copy are plausible**:
+There is no `!Movable` and no "ambiguous → must annotate": **every owning kind is movable**, each kind
+has a natural *bare* hand-off, and a `give`/`copy` marker overrides it. A hand-off is a *named* value
+handed off in an initializer, assignment, argument, or return; a fresh `new`/ctor/call result never
+takes a marker.
 
-- **`value`** → **copy** silently (one natural op; `give` is an error).
-- **`resource` without a copy contract** → **move** silently on a bare hand-off (one natural op;
-  `give` is allowed as optional emphasis; `copy` is an error — nothing to copy with).
-- **`resource` with a copy contract** (`implements Copyable` + a public nullary `copy()` — nominal,
-  not a lone `copy()`) → **ambiguous → scream**: a bare hand-off is a compile error; write `give`
-  (move) or `copy` (duplicate).
-- **copy-only `resource`** (`implements Copyable, !Movable` — e.g. `Shared`/`Weak`, shared ownership) →
-  **retain** silently on a bare hand-off (one natural op — the `copy()`); **`give` is an error** (there
-  is no move to make, so no footgun). `!Movable` subtracts the one implicit capability a `resource`
-  carries; capability markers (`Copyable`/`Movable`) are compiler-owned, so a user contract can never
-  change how a type is handed off.
+- **`value`** → **copy** (a value's "move" *is* a copy; the source stays valid).
+- **`resource` without a copy contract** (move-only) → **move** on a bare hand-off (the source is
+  consumed); `give` is optional emphasis; `copy` is an error — nothing to copy with — until it opts in.
+- **`resource` with a copy contract** → it **must declare its bare default** at opt-in:
+  `implements Copyable(bare: give)` (bare **moves**) or `Copyable(bare: copy)` (bare **deep-copies** via
+  its public nullary `copy()`). A bare `implements Copyable` *without* `(bare: …)` is a compile error.
+  `give x` moves, `copy x` deep-copies — a marker always overrides the declared default.
+- **`Shared`/`Weak`** (shared ownership, `implements Copyable(bare: copy)`) → a bare hand-off **retains**
+  (refcount++); `copy` is the explicit retain; **`give` moves the handle** — the ref transfers and the
+  source is consumed (how a `Shared` returns from a factory without a spurious retain/drop).
 
-A bare hand-off is **never a silent copy of a resource**, so the double-drop hole is closed in every
-case. This is compile-time move tracking with **zero runtime overhead by construction** — a value
-moved on some-but-not-all paths that is still live at scope exit is *rejected*, not tracked with a
-runtime drop-flag (`Optional<T>` is the explicit escape hatch for genuinely-conditional ownership).
-The full give/copy behavior matrix (every cell backed by a fixture) is in [SPEC.md](SPEC.md).
+A bare hand-off is **never a silent copy of a resource** (the double-drop hole is closed in every case)
+and **never a silent move of a `Shared`** you meant to share (a `Shared`'s bare default is retain). This
+is compile-time move tracking with **zero runtime overhead by construction** — a value moved on
+some-but-not-all paths that is still live at scope exit is *rejected*, not tracked with a runtime
+drop-flag (`Optional<T>` is the explicit escape hatch for genuinely-conditional ownership). The full
+give/copy behavior matrix (every cell backed by a fixture) is in [SPEC.md](SPEC.md).

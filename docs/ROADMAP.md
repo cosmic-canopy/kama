@@ -10,7 +10,7 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
   language-completeness residuals + the docs-reconcile/naming pass, after which the language surface is
   stable: you build *with* it, not *on* it.
 - **1.x — systems & runtime.** Capabilities built ON the finished language: reflection + serialization, a
-  shared-lib/`export` build, an embedded/MCU target, and deeper stdlib reach (extending the shipped I/O +
+  shared-lib/`expose` build, an embedded/MCU target, and deeper stdlib reach (extending the shipped I/O +
   math). Mostly library + codegen, little new syntax.
 - **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted, via a shared
   IR feeding C, direct-wasm, and a bytecode VM — the `kama` binary self-contained.
@@ -45,34 +45,21 @@ remains to call the language **complete**:
      the durable fix is one general temporary-drop pass.
    - **Target-typed rvalue in a non-local-init position** *(ergonomic; surfaced building the containers)*. An
      inline construction that needs its type from context works in a `Type x = …` initializer but not yet in
-     every position. **DONE:** a primitive/`string` **literal or inline ctor into a `ref` param** now
-     materializes into a temp (`map.get(key: 5)` / `map.get(key: Point(…))` work). Still open: a **bare
-     generic ctor into a field** (`this.m = Map()` — infer the field's type args; bind to a typed local
-     first), an **inline ctor into an `operator[]` place-store** (`a[i] = Tag(…)`), and **indexing a
-     `string`/rvalue receiver** (`"abc"[0]` — a string *literal* method call already materializes its
-     receiver, but indexing it doesn't; bind to a local first). The fix is to propagate the target type /
-     materialize the receiver in these positions like the local-initializer + method-call paths already do.
+     every position. Still open: a **bare generic ctor into a field** (`this.m = Map()` — infer the field's
+     type args; bind to a typed local first), an **inline ctor into an `operator[]` place-store** (`a[i] =
+     Tag(…)`), and **indexing a `string`/rvalue receiver** (`"abc"[0]` — a string *literal* method call already
+     materializes its receiver, but indexing it doesn't; bind to a local first). The fix is to propagate the
+     target type / materialize the receiver in these positions like the local-initializer + method-call paths
+     already do.
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
      (`buildVtables` doesn't merge a parent contract's slots into the child).
-   - ~~**Smart-pointer upcast** (concrete→contract, derived→base; between handles and inline `new`)~~
-     **DONE.** Widening an owning handle to a base class or a satisfied contract works both between existing
-     handles (`Shared<Shape> s = circleShared` / `Owned<Base> = give derivedOwned`, retain/move) and inline
-     (`Shared<Shape> s = new Circle(...)`, `Shared<Base> b = new Derived(...)` — build the concrete, adopt its
-     offset-0 base subobject). Destruction is virtual (a `virtual class` and every owning contract handle carry
-     a vtable `__dtor`), so no slicing. See SPEC "Inheritance & virtual dispatch".
-   - ~~Retroactive `implements C for T` for a non-`string` primitive target~~ **DONE.** A primitive target
-     (`int32`) now conforms via a scalar-receiver synthetic conformance (`this` is the value; methods emit
-     `T self` by value). `Map<int32, V>` / `Set<int32>` ship, and `satisfiesBound` consults the retro
-     conformances so a `when [T: Equatable]` gate (e.g. `List<int32>.contains`) sees them. Remaining
-     primitive widths (`int64`/`uint*`/`float*`) are one-line std `implements` blocks each — added on demand.
-     - **DX wart — primitive conformances aren't universal.** `int32`'s `Hashable`/`Equatable` live in
-       `lib/std/collections/map.kama`, so `List<int32>.contains` (and int-keyed maps) only resolve when
-       `Map` is imported — importing just `List` leaves them out (a silently-missing method). The fix is to
-       host the primitive conformances where every collection sees them (a shared collections file always
-       compiled, or the prelude once retro-impl bodies emit from it — see the deferred prelude-retro note).
-     - **String/rvalue receiver indexing** — `"abc"[0]` (a literal) or an rvalue receiver can't be indexed
-       (its address isn't takeable); a literal *method call* already materializes its receiver, so indexing
-       should too. Bind to a local meanwhile.
+   - **Primitive contract conformances aren't universal** *(DX wart)*. Retroactive `implements C for T` on a
+     primitive works (see SPEC "Retroactive conformance"), but `int32`'s `Hashable`/`Equatable` live in
+     `lib/std/collections/map.kama`, so `List<int32>.contains` (and int-keyed maps) only resolve when `Map` is
+     imported — importing just `List` leaves them out (a silently-missing method). The fix is to host the
+     primitive conformances where every collection sees them (a shared always-compiled collections file, or the
+     prelude once retro-impl bodies emit from it). Remaining primitive widths (`int64`/`uint*`/`float*`) are
+     one-line std `implements` blocks, added on demand.
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
@@ -97,9 +84,10 @@ remains here is genuinely later-track or opt-in.
   `List<string>` collect for `split` (the lazy `Split` iterator ships today).
 - **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
   (also covers `string + <number>`); sequences with reflection (its to-string substrate).
-- **`export` keyword** — reserved, hard-errors today. **Split by scope:** a **minimal `export`** (C-ABI
+- **`expose` keyword** — reserved, hard-errors today (the kama→host boundary; distinct from `export`, the
+  module public-surface manifest, which ships). **Split by scope:** a **minimal `expose`** (C-ABI
   linkage for `--shared` reload entry points) is **pulled forward to 1.x** (§5, engine dev-loop); the
-  **full `export`** (wasm module exports + the scripting host interface) stays **2.0** (§7). The keyword
+  **full `expose`** (wasm module exports + the scripting host interface) stays **2.0** (§7). The keyword
   slot is reserved at 1.0 either way, so activating it in 1.x follows the same reserved-then-lit pattern
   as `volatile`.
 - **`volatile` keyword** — reserved → **1.x embedded** (emit C `volatile` for ISR↔loop flags / MMIO).
@@ -131,60 +119,31 @@ remains here is genuinely later-track or opt-in.
 ## 4. Reflection + attributes / serialization (1.x — Phase 4)
 
 Opt-in compile-time reflection driving polymorphic serialization — the final self-hosting-stdlib step. The
-only new *language* surface is the attribute mark; serializers land as modules.
+only new *language* surface is the attribute mark; serializers land as modules. **The shipped Phase 4a surface
+— `@generate`/`@field`/`@skip`, the `Serialize`/`Deserialize`/`DeError` prelude contracts, bypass-ctor
+deserialize, `onConstruction`, and the `std::serialization::json` backend (JSON round-trip) — is documented in
+[SPEC.md](SPEC.md) "Serialization".** What remains:
 
-**Shipped (Phase 4a — JSON round-trip, ASan-clean).** `@`-attribute grammar; `@generate(Serialize,
-Deserialize)` (per-direction opt-in) with mandatory per-field `@field` / `@field(name:)` / `@skip`
-(unmarked = compile error); the `Serializer`/`Serialize`/`Deserializer`/`Deserialize`/`DeError` prelude
-contracts; codegen that synthesizes `serialize`/`deserialize` as kama and merges them into the type;
-`std::fmt` (number→string); the `std::serialization::json` backend (`JsonWriter`/`JsonReader`) with
-`json::toString(v)` + `json::tryParse::<T>(src)`. **Serialize** covers scalars/string/nested/`List`/`Array`/
-`Optional` (containers indexed via `operator[]`, so `List<resource>` works — no `Copyable` `foreach`
-requirement). **Deserialize** now matches it — scalars/string/**nested `@generate` types**/`Optional<T>`/
-`List<T>` (value + resource) — via a **bypass-constructor** construction model: `deserialize` zero-initializes
-the struct (compiler-internal `ZeroValueNode` → `(T){0}`, no user grammar) and populates fields **in place**
-(`result.child = Child::deserialize(r)` — no holder, no move-out-of-a-match, which the old all-args-ctor model
-couldn't express for a nested resource), returning `T` directly (`tryParse` does the `Result` wrap +
-`failed()` check). An opt-in **`onConstruction()`** lifecycle hook runs on *every* construction (compiler-
-injected at ctor-end AND after a deserialize field-set); a `@generate(Deserialize)` type must define it or opt
-out with `@generate(Deserialize, noOnConstruction)`. Smart-pointer `@field`s (`Owned`/`Shared`/`Weak`) are
-rejected — `@skip` them and serialize an id, reconnecting in `onConstruction`. Format is chosen by module
-(`json::…`); the generated `serialize`/`deserialize` are format-agnostic (drive the abstract contract), so a
-new backend is just a module — no compiler change. Two general emitter fixes fell out: interface vtables are
-cross-module-visible (extern + header-declared), and generic-function type args absolutize at the call site
-(cross-module `f::<UserType>()`). *(Land the shipped surface in SPEC as it stabilizes.)*
-
-**Remaining (Phase 4b+):**
-- **Deserialize breadth (tail)** — nested/`Optional`/`List` ✓ done (bypass-ctor field-set). Still open:
-  `Array<E>` read, and a `const` field (write-once in the ctor, so the in-place field-set can't set it —
-  currently a `@field const` doesn't even parse; give it a clear diagnostic).
+- **Deserialize breadth (tail)** — `Array<E>` read, and a `const` field (write-once in the ctor, so the
+  in-place field-set can't set it — a `@field const` doesn't yet parse; give it a clear diagnostic).
 - **General user `enum` serialize** — accept `@generate` on `enum` declarations + variant codegen.
-- **Graph serialization (scene graphs) — staged; plan in `~/.claude/plans/prancy-yawning-yeti.md`.** One
-  blessed `@generate` mode: by-value fields serialize inline (as today), **pointer fields (`Owned`/`Shared`/
-  `Weak`) serialize as ids** into a side table, with a two-pass id fixup on read and `onConstruction` deferred
-  to graph-complete (the `awakeFromNib` / `IDeserializationCallback` point); a dangling required id →
-  `DeError::UnresolvedReference` (the .NET `ObjectManager` fixup-completion analog).
-  - **Stage 1 ✓ DONE (never-null `Owned`/`Shared`).** The compiler now enforces the intended invariant: every
-    `Owned`/`Shared` field must be assigned by ctor-end and never read before it is (definite-assignment in the
-    ctor; `Weak` is the nullable/checked pointer, exempt). This is the foundation the graph fixup restores
-    dynamically (bypass-ctor lands pointers transiently null → the fixup-completion check re-establishes it
-    before `onConstruction`). A genuine language selling point — Rust-grade non-null + ownership without a GC
-    (unlike Kotlin/Swift/Dart/Eiffel, which are all GC'd).
-  - **Stage 2 (next):** `SerContext`/`DeContext` + `SerializedReference` registry (Shared→retain, Weak→
-    downgrade, Owned→transfer-once) extending the shipped serialize/deserialize codegen; JSON inline+id-table.
-- **More back ends (modules, no compiler change)** — YAML; **binary** (packing options + `@bits(n)` bit-
-  packing + little-endian canonical); **XML** + **HTML** (user-requested; XML → `<field>value</field>`,
-  HTML a render/pretty view for the write side). Each is a `Serializer`/`Deserializer` impl + `toString`/
-  `tryParse`-style entries.
+- **Graph serialization (scene graphs).** One blessed `@generate` mode: by-value fields serialize inline (as
+  today), **pointer fields (`Owned`/`Shared`/`Weak`) serialize as ids** into a side table, with a two-pass id
+  fixup on read and `onConstruction` deferred to graph-complete (the `awakeFromNib` / `IDeserializationCallback`
+  point); a dangling required id → `DeError::UnresolvedReference` (the .NET `ObjectManager` analog). Builds on
+  the shipped never-null `Owned`/`Shared` invariant (definite-assignment in ctors — the fixup lands pointers
+  transiently null, then re-establishes non-null before `onConstruction`). **Next:** `SerContext`/`DeContext` +
+  a `SerializedReference` registry (Shared→retain, Weak→downgrade, Owned→transfer-once); JSON inline + id-table.
+- **More back ends (modules, no compiler change)** — YAML; **binary** (packing options + `@bits(n)` bit-packing
+  + little-endian canonical); **XML** + **HTML** (XML → `<field>value</field>`, HTML a render/pretty write
+  view). Each is a `Serializer`/`Deserializer` impl + `toString`/`tryParse`-style entries.
 - **Rename `toString`** — too generic / clashes with other-language conventions; proposed `json::encode`
   (paired with `json::tryParse`), name to confirm.
 - **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the existing `@`-attribute
-  infra like `@generate`/`@field`) that emits a use-site warning, optionally with a message/replacement hint.
-  Independent of serialization; queued as its own small task.
+  infra) that emits a use-site warning, optionally with a message/replacement hint. Its own small task.
 - **Optional/default parameters (language, adjacent)** — enables the "options struct with optionals" ctor
-  pattern (kama has no default params today), an alternative to constructor overloading.
-- **Docs** — SPEC (serialization + `@`-attributes + `onConstruction`/`noOnConstruction` + bypass-ctor
-  construction) and `docs/grammar.bnf` (attribute grammar incl. the `noOnConstruction` flag).
+  pattern (no default params today), an alternative to constructor overloading.
+- **Docs** — `docs/grammar.bnf` (attribute grammar incl. the `noOnConstruction` flag).
 
 **String interpolation `"${x}"` rides on the same `std::fmt` to-string substrate**, so it sequences here.
 
@@ -193,12 +152,12 @@ cross-module-visible (extern + header-declared), and generic-function type args 
 Capabilities built on the finished language — the substrate the engine needs (asset I/O, scene
 serialization, networking).
 
-- **Shared-lib build + minimal `export` (pulled forward from 2.0 — engine-unblocking).** `kama build
-  --shared` → `.so`/`.dylib`/`.dll` and a **minimal `export`** (C-ABI linkage for entry points) — the two
+- **Shared-lib build + minimal `expose` (pulled forward from 2.0 — engine-unblocking).** `kama build
+  --shared` → `.so`/`.dylib`/`.dll` and a **minimal `expose`** (C-ABI linkage for entry points) — the two
   small compiler primitives under the engine's desktop **dev-loop hot-reload** (§8). Both are independent
   of the 2.0 IR refactor, so they land here to make engine iteration fast *early* rather than waiting on
   the VM. The reload loop itself is a library (`dlopen`/watch/rebind over `unsafe`/`Ptr`), not roadmap
-  work. Deliberately excludes the full 2.0 `export` (wasm module exports + scripting host, §7).
+  work. Deliberately excludes the full 2.0 `expose` (wasm module exports + scripting host, §7).
 - **Reflection + declarative serialization** — see the brief above; back ends follow as modules. Rides on
   the shipped `std::fs`/`std::io` for asset + scene load.
 - **Container / data-structure reach.** Now **shipped**: `List`/`Array`/`string`/`Fixed`, plus **`Map<K,V>`**
@@ -374,7 +333,7 @@ serialization for scenes). See [ENGINE_READINESS.md](ENGINE_READINESS.md).
   compiler's job* — which answers "language or engine feature?": mostly library, on a thin compiler base.
   - **Compiler (small — scheduled 1.x, §5):** a `kama build --shared` mode emitting a
     `.so`/`.dylib`/`.dll` (`-fPIC -shared`; on Windows the `dllexport` decoration + copy-before-load), and
-    reuse of the reserved **`export`** keyword (§2) to give reload entry points **C-ABI linkage**. That is
+    reuse of the reserved **`expose`** keyword (§2) to give reload entry points **C-ABI linkage**. That is
     the *same* kama→host boundary the **wasm exports** and the **scripting host** (§7) already need — so
     hot-reload adds **no new language surface**, it consumes planned surface. One boundary, three consumers.
   - **Library:** the `dlopen`/`dlsym`/`dlclose` + file-watch + function-pointer rebind loop — pure FFI over

@@ -1092,6 +1092,45 @@ shared header (`<out>.gen.h`) + one `.c` per unit — imports just add the resol
 there's no namespace-vs-object precedence rule — a `::` head is always a type/namespace, a `.` head always a
 value. `main` is the global entry point (unmangled).
 
+## Serialization — `@`-attributes + `@generate` ✅
+
+Opt-in, compile-time-reflected serialization: the only new *language* surface is the attribute mark; the
+serializers ship as library modules. **`@generate(Serialize, Deserialize)`** on a type (per-direction opt-in)
+synthesizes the two methods **as kama** and merges them into the type — **format-agnostic**, driving the
+abstract prelude contracts (`Serializer` / `Serialize` / `Deserializer` / `Deserialize` / `DeError`), so a new
+backend is a module with no compiler change.
+
+- **Per-field marks are mandatory** on a `@generate`d type: each field is `@field`, `@field(name: "wire")`
+  (rename), or `@skip` — an unmarked field is a **compile error** (no silent omission).
+- **Coverage:** scalars, `string`, nested `@generate` types, `Optional<T>`, and `List<T>`/`Array<E>` (containers
+  are indexed via `operator[]`, so a `List<resource>` works — no `Copyable`/by-value-`foreach` requirement).
+- **Deserialize** uses a **bypass-constructor** model: the compiler zero-initializes the struct (an internal
+  `ZeroValueNode` → `(T){0}`, no user grammar) and populates fields **in place**, returning `T` directly — this
+  expresses a nested resource the all-args-constructor model couldn't.
+- **`onConstruction()`** — an opt-in lifecycle hook run on *every* construction (compiler-injected at ctor-end
+  **and** by the deserialize codegen after field-set, since deserialize bypasses the ctor; it may be private). A
+  `@generate(Deserialize)` type must define it or opt out with **`@generate(Deserialize, noOnConstruction)`**.
+- **Smart-pointer fields** (`Owned`/`Shared`/`Weak`) are **rejected** as `@field` — `@skip` them and serialize
+  an id, reconnecting in `onConstruction` (the object-graph story is a forward item; see ROADMAP §4).
+- **Backend:** `std::fmt` (number→string) + `std::serialization::json` (`JsonWriter`/`JsonReader`); entry points
+  `json::toString(v:)` and `json::tryParse::<T>(src:)` (the latter wraps `Result<T, DeError>`).
+
+```kama
+import std::serialization::json::{toString, tryParse};
+
+@generate(Serialize, Deserialize)
+type value Widget {
+    @field int32 x;
+    @skip  int32 born;                        // not serialized; set by the hook
+    public Widget(int32 x) { this.x = x; }
+    fn void onConstruction() { this.born = 7; }   // runs at ctor-end AND after deserialize field-set
+}
+
+Widget a = Widget(x: 5);                        // born = 7 (ctor-end injection)
+string j  = toString(v: a);                     // {"x":5}   (born is @skip)
+Result<Widget, DeError> r = tryParse::<Widget>(src: give j);   // born = 7 again on the deserialized value
+```
+
 ## Building & debugging ✅
 
 ```sh
@@ -1109,8 +1148,9 @@ silent no-op), pending its future scope:
 
 - **`volatile`** 🚧 — reserved for the embedded/MMIO scope (ISR↔loop shared flags, peripheral registers);
   implemented when kama targets embedded.
-- **`export`** 🚧 — reserved for the kama→host boundary (WASM module exports, scripting host interface),
-  distinct from in-language `public`/`private`.
+- **`expose`** 🚧 — reserved for the kama→host boundary (WASM module exports, scripting host interface),
+  distinct from in-language `public`/`private` (member access) and `export` (the module public-surface
+  manifest — `export { … };`, which ships today).
 
 ## Known limitations (tracked → [ROADMAP.md](ROADMAP.md) §1)
 
@@ -1122,8 +1162,6 @@ clean workaround:
   `foreach (ref T e in a) { … }` — or work in a local. (Non-owning elements like `Array<int32>` are fine.)
 - **Owned value out of a `match` arm** — `:= give x`, and a bare generic constructor `:= List()`, in an
   arm-value position aren't lowered. Build the value in a local before the `match`.
-- **Inline `new Concrete` into a smart-pointer-over-interface** — `Shared<Iface> s = new Concrete(…)` inline
-  isn't boxed; bind the `new` to a local first.
 
 ## Reserved/runtime
 
