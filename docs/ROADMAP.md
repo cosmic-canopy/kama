@@ -54,8 +54,13 @@ remains to call the language **complete**:
      materialize the receiver in these positions like the local-initializer + method-call paths already do.
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
      (`buildVtables` doesn't merge a parent contract's slots into the child).
-   - **Inline `new Concrete` into a smart-ptr-over-interface** — the fat-pointer box isn't constructed
-     inline (bind the `new` to a local first; a clean error, documented in SPEC).
+   - **Inline `new Derived` into a `Shared`/`Owned<Base>`** — widening a **base class** owner. Between
+     *existing* handles the upcast now works both ways: concrete→contract (`Shared<Shape> s = circleShared`)
+     and derived→base (`Owned<Base> = give derivedOwned`), retain/move, with virtual destructors so no
+     slicing (see SPEC "Inheritance"). Inline `new Concrete` into a `Shared<Contract>` also works. Still open:
+     inline `new Derived(...)` into a `Shared<Base>`/`Owned<Base>` (base **class** element) — the
+     concrete-element `new` path requires an exact element match. Workaround: bind the `new` to a same-typed
+     local, then upcast. Clean error today.
    - ~~Retroactive `implements C for T` for a non-`string` primitive target~~ **DONE.** A primitive target
      (`int32`) now conforms via a scalar-receiver synthetic conformance (`this` is the value; methods emit
      `T self` by value). `Map<int32, V>` / `Set<int32>` ship, and `satisfiesBound` consults the retro

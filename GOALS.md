@@ -59,9 +59,10 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    an interface. Polymorphism's goal is **substitutability, not reuse**: inheritance bundles the two,
    so kama unbundles them — **generics** give reuse (zero-cost monomorphization), **contracts** give
    substitutability, and `type virtual`/`abstract resource` is only for sharing *implementation* up an
-   owned hierarchy. Hand-offs follow **"silent default, scream when ambiguous"**: a `give`/`copy`
-   marker is required exactly when *both* move and copy are plausible (a `resource` that has opted into
-   a copy contract), and silent otherwise. The kind words `value`/`resource`/`contract` are
+   owned hierarchy. Hand-offs follow **"every kind is movable; the default is declared, a marker
+   overrides"**: each kind has a natural bare hand-off (move for `Owned`/`resource`, retain for
+   `Shared`/`Weak`), a `Copyable` resource declares its bare default at opt-in (`Copyable(bare: give|copy)`),
+   and `give`/`copy` override it. The kind words `value`/`resource`/`contract` are
    **contextual** (they name a kind only right after `type`), so they stay ordinary identifiers
    everywhere else. *(Full model in `docs/TYPE_MODEL.md`.)*
 
@@ -76,6 +77,16 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    A type with a *meaningful* inert state may instead start valid-but-inert and expose a
    `bring_up(): Result<…>`. (This composes static methods + `Result` + `Owned` + RAII;
    see `tests/fallible_factory`.)
+
+3e. **No lifetime tracking — no borrow checker.** kama does not track lifetimes or prove at compile time
+   that a borrow outlives its referent (the machinery Rust pays for `&`-safety). Safety comes from
+   *ownership* instead: what you keep is owned (`Owned`/`Shared`/`Weak`, RAII), and a **borrow is
+   scope-local** — a `ref`/`out` or a bare `contract` value may be a parameter or a local but may **never
+   escape** (no storing it in a field, returning it, or putting it in a collection; the escape check rejects
+   those, so it can't dangle). To persist or share, **own it**: widen a concrete/derived into an owning
+   `Shared<Contract>` / `Shared<Base>` handle — the upcast (destruction stays virtual, so no slicing). The
+   deliberate trade: Rust-grade non-null + ownership discipline **without a GC and without a borrow checker**
+   (unlike the GC/ARC of Kotlin/Swift/Dart, or Rust's lifetime annotations).
 
 4. **One way to do a thing. Favor simplicity.** Unlike C++'s many syntaxes for one concept, kama
    prefers a single, obvious construct. Resist redundant syntax. (Already: named args only — no

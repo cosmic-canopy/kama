@@ -201,11 +201,12 @@ pointee is freed exactly once (RAII, with the pointee's destructor).
 
 **Ownership hand-off — `give` / `copy`.** When a *named* owned value is handed off — in an initializer,
 assignment, argument, or return — an explicit marker states the intent, uniformly in all four positions:
-**`give`** moves (invalidates the source), **`copy`** retains (`Shared`/`Weak`) or duplicates. The natural op
-is the default, so a marker is only required where a silent copy would be surprising: `Owned` defaults to
-`give` (and `copy Owned` is an error — it's unique); `Shared`/`Weak` are **copy-only** (shared ownership —
-`implements Copyable, !Movable`), so a bare hand-off **retains** and **`give` is an error** (there is no move
-to make — no footgun); a `value`/primitive just copies (and `give` on one is an error). A fresh
+**`give`** moves (invalidates the source), **`copy`** retains (`Shared`/`Weak`) or duplicates. **Every owning
+kind is movable**; what varies is whether it is *also* `Copyable` and what a *bare* hand-off defaults to.
+`Owned` is move-only — a bare hand-off moves, and `copy Owned` is an error (it's unique). `Shared`/`Weak`
+are `Copyable` and declare `bare: copy`, so a bare hand-off **retains** (refcount++); `copy` is the explicit
+retain, and **`give` still moves the handle** — the ref transfers and the source is consumed (this is how a
+`Shared` returns from a factory without a spurious retain/drop). A `value`/primitive just copies. A fresh
 `new`/constructor/call result needs no marker. Smart pointers also **pass by value**: the callee *owns* the
 argument and drops it at function end — `fn int use(Owned<T> p)` consumes it (`use(p: give x)`), `fn int
 peek(Shared<T> s)` retains it (`peek(s: x)`, `x` stays valid).
@@ -213,7 +214,7 @@ peek(Shared<T> s)` retains it (`peek(s: x)`, `x` stays valid).
 ```kama
 Owned<Counter> b = give a;   // explicit move (a consumed)
 Shared<Counter> t = s;       // copy/retain (default) — both valid
-Shared<Counter> u = copy s;  // explicit retain (same as bare); `give s` is an error (copy-only)
+Shared<Counter> u = copy s;  // explicit retain (same as bare); `give s` moves the handle (s consumed)
 ```
 
 *(`copy` of a collection is a deep copy — a fresh buffer, element-wise: a bitwise-copyable element is copied
@@ -224,22 +225,23 @@ memberwise, a `Copyable`-resource element is deep-copied via its own `copy()`. A
 has identity) is **move-only**: a bare named hand-off *moves* (the source is consumed, its destructor
 suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would double-free).
 `give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts into copy**
-**nominally** — `implements Copyable` (the prelude contract `Copyable { fn This copy(); }`) plus a **public
-nullary `copy()`** method (a lone `copy()` method without the `implements` does *not* make a type copyable).
-Once copyable, the marker is **mandatory** — both move and copy are plausible, so a *bare* hand-off is a
-compile error and you must write **`give x`** (move) or **`copy x`** (deep-copy via `copy()`; the source
-stays valid). Because `copy`/`give` are markers only in expression position, they're **contextual keywords** —
-usable as method names, so the opt-in method is literally named `copy`.
+**nominally** — `implements Copyable(bare: …)` (the prelude contract `Copyable { fn This copy(); }`) plus a
+**public nullary `copy()`** method (a lone `copy()` method without the `implements` does *not* make a type
+copyable). Opting in **requires declaring the bare-hand-off default**: `Copyable(bare: give)` (a bare hand-off
+moves) or `Copyable(bare: copy)` (a bare hand-off deep-copies via `copy()`). A marker (**`give x`** / **`copy
+x`**) always overrides the default; there is no "ambiguous — must annotate" error. Because `copy`/`give` are
+markers only in expression position, they're **contextual keywords** — usable as method names, so the opt-in
+method is literally named `copy`.
 
 ```kama
-type resource Res implements Copyable {
+type resource Res implements Copyable(bare: copy) {   // a bare hand-off deep-copies
     List<int32> items;
     ~Res() { }
     public fn Res copy() { Res r = Res(v: this.items[0]); return give r; }   // the Copyable method
 }
 Res b = copy a;   // deep copy — a stays valid, b has its own buffer
 Res c = give b;   // move — b consumed
-Res d = a;        // ERROR: a is copyable — say `give` or `copy`
+Res d = a;        // bare — follows the declared default (here: deep-copy)
 ```
 
 **Auto-deref — the `Deref<T>` contract.** The standard smart pointers forward member access to their
@@ -264,20 +266,20 @@ int32 s = b.sum();   // auto-deref -> Point__sum(BoxP__deref(&b))  (42)
 int32 x = b.x;       // auto-deref -> BoxP__deref(&b)->x           (30)
 ```
 
-**The give/copy behavior matrix.** A marker is required exactly when *both* move and copy are plausible
-("silent default, scream when ambiguous"); otherwise the one natural op is silent. The rule is uniform across
-all four hand-off positions — **initializer, assignment, argument, return** — and a *fresh* rvalue
-(`new`/constructor/call result) never takes a marker.
+**The give/copy behavior matrix.** **Every owning kind is movable**; a bare hand-off follows the kind's
+default (a `Copyable` type must declare it with `bare:`), and an explicit marker overrides. The rule is
+uniform across all four hand-off positions — **initializer, assignment, argument, return** — and a *fresh*
+rvalue (`new`/constructor/call result) never takes a marker.
 
 | kind | bare hand-off | `give` | `copy` |
 |---|---|---|---|
-| primitive / `value` | **copy** (cheap) | ⛔ "applies to an owned value" | copy (redundant, allowed) |
+| primitive / `value` | **copy** (cheap) | copy (a value's move is a copy) | copy (redundant, allowed) |
 | `Owned<T>` (unique) | **move** | move (emphasis) | ⛔ "is unique" |
-| `Shared<T>` (ref-counted, copy-only) | **retain** (strong++) | ⛔ "copy-only" | retain (explicit) |
-| `Weak<T>` (copy-only) | **retain** (weak++) | ⛔ "copy-only" | retain (explicit) |
+| `Shared<T>` (ref-counted) | **retain** (strong++) | **move** (transfer the handle) | retain (explicit) |
+| `Weak<T>` (weak ref) | **retain** (weak++) | **move** (transfer the handle) | retain (explicit) |
 | collection (`Array`/`List`/`string`) | ⛔ marker required | **move** (buffer) | **deep copy** (fresh buffer) |
 | plain `resource` (move-only value) | **move** | move (emphasis) | ⛔ "opt into `Copyable`" |
-| `Copyable` resource (has `copy()`) | ⛔ ambiguous | move | **deep copy** via `copy()` |
+| `Copyable` resource (has `copy()`) | its declared `bare:` default | move | **deep copy** via `copy()` |
 | collection of `Copyable` elements | ⛔ marker required | move | **deep copy** (element-wise `copy()`) |
 
 A marker on a fresh rvalue is an error. Move tracking is compile-time: reading a moved value, moving out of a
@@ -713,6 +715,24 @@ a plain `resource`, and a `type final resource` are sealed); an overridable meth
 a leaf/slot. `virtual`/`abstract`/`final` and `protected` are meaningless outside an extensible `resource` —
 they are errors on a `value`, a plain `resource`, or a `contract`. See `docs/KEYWORDS.md` for the full kind
 table.
+
+**Owning a derived through a base handle (upcast).** A `Shared`/`Owned` over a derived class widens to one
+over a base class (or a contract it satisfies) — the IS-A relationship, Liskov-style:
+
+```kama
+Shared<Circle> c = new Circle();
+Shared<Shape>  s = c;          // upcast — retain (both handles share one Circle)
+Owned<Circle>  u = new Circle();
+Owned<Shape>   o = give u;     // upcast — move (u consumed)
+int a = s.describe();          // polymorphic: describe() calls the protected virtual area() -> Circle's
+```
+
+Polymorphism flows through the base's **public surface**, which invokes the `protected virtual` hooks
+(Template Method) — you never call an overridable method through the handle directly. Destruction is
+**virtual**: a `virtual`/`abstract resource` (and every owning contract handle) carries a vtable `__dtor`
+slot, so dropping through a base/contract handle runs the **most-derived** destructor's full chain — the
+derived's owned resources are freed, never sliced, exactly once. (An upcast only ever yields an *owning*
+handle or a scope-local borrow; an un-owned contract value can't be stored — see Contracts.)
 
 ## Contracts ✅
 
