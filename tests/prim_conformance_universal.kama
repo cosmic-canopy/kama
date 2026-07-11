@@ -1,0 +1,13 @@
+// Primitive contract conformances (`Hashable`/`Equatable` for `int32`/`string`) are hosted in the PRELUDE,
+// so a generic bound resolves them WITHOUT importing `std::collections`. (Before, they lived in map.kama and
+// a `<T: Equatable>` bound over int32 failed unless Map was imported.)
+fn bool eq<T: Equatable>(T a, T b) { return a.equals(other: b); }
+fn uint64 h<K: Hashable>(K k) { return k.hash(); }
+fn int32 main() {
+    int32 r = 0;
+    if (eq(a: 5, b: 5))                    { r = r + 10; }   // int32 Equatable
+    if (!eq(a: 5, b: 6))                   { r = r + 11; }
+    if (h(k: "ab") == h(k: "ab"))          { r = r + 10; }   // string Hashable (content-based)
+    if (h(k: 7) != h(k: 8))                { r = r + 11; }   // int32 Hashable
+    return r;                                                 // 42
+}

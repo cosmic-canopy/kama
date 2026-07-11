@@ -53,13 +53,10 @@ remains to call the language **complete**:
      already do.
    - **`contract` refining a `contract`** (multi-level contract inheritance) — parses, not lowered
      (`buildVtables` doesn't merge a parent contract's slots into the child).
-   - **Primitive contract conformances aren't universal** *(DX wart)*. Retroactive `implements C for T` on a
-     primitive works (see SPEC "Retroactive conformance"), but `int32`'s `Hashable`/`Equatable` live in
-     `lib/std/collections/map.kama`, so `List<int32>.contains` (and int-keyed maps) only resolve when `Map` is
-     imported — importing just `List` leaves them out (a silently-missing method). The fix is to host the
-     primitive conformances where every collection sees them (a shared always-compiled collections file, or the
-     prelude once retro-impl bodies emit from it). Remaining primitive widths (`int64`/`uint*`/`float*`) are
-     one-line std `implements` blocks, added on demand.
+   - **Remaining primitive `Hashable`/`Equatable` widths.** `int32` and `string` conformances are now hosted
+     in the **prelude** (universal — a `<T: Equatable>` bound / `List<int32>.contains` / int-keyed `Map`
+     resolve without importing `std::collections`; prelude retro-impl bodies now emit static-inline). The
+     other widths (`int64`/`uint*`/`float*`) are one-line `implements` blocks added to the prelude on demand.
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.

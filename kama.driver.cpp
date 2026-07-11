@@ -655,6 +655,32 @@ static const char* PRELUDE_SRC =
     // from the pure-kama `implements` below. Both live in the prelude because they are language-level bounds.
     "type contract Hashable for both { fn uint64 hash(); }\n"
     "type contract Equatable for both { fn bool equals(This other); }\n"
+    // Primitive conformances (pure-kama retro-impls, NO compiler blessing) — hosted here so `string`/`int32`
+    // satisfy the standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `List<int32>.contains`, an int-keyed
+    // `Map`) without importing `std::collections`. `string` Hashable = FNV-1a over its UTF-8 bytes (its
+    // `Equatable` comes free from the built-in `equals`); `int32` = a splitmix64 hash finalizer + scalar equals.
+    "implements Hashable for string {\n"
+    "    public fn uint64 hash() {\n"
+    "        uint64 h = 2166136261ui64;\n"
+    "        int32 i = 0;\n"
+    "        while (i < cast<int32>(this.length())) {\n"
+    "            h = (h ^ cast<uint64>(this[i])) * 16777619ui64;\n"
+    "            i = i + 1;\n"
+    "        }\n"
+    "        return h;\n"
+    "    }\n"
+    "}\n"
+    "implements Hashable for int32 {\n"
+    "    public fn uint64 hash() {\n"
+    "        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;\n"
+    "        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;\n"
+    "        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;\n"
+    "        return x ^ (x >> 31ui64);\n"
+    "    }\n"
+    "}\n"
+    "implements Equatable for int32 {\n"
+    "    public fn bool equals(int32 other) { return this == other; }\n"
+    "}\n"
     // Iteration opt-in (the `foreach` protocol, nominal). An iterator declares which it provides;
     // `foreach` verifies the declaration and emits DIRECT (monomorphized) calls — no vtable, zero-cost.
     // `Iterator<T>` yields each element BY VALUE (a copy); `IteratorMut<T>` yields a mutable place

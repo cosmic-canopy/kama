@@ -6,38 +6,9 @@ extern fn Ptr malloc(usize n);
 extern fn Ptr calloc(usize count, usize size);
 extern fn void free(Ptr p);
 
-// `string`'s `Hashable` conformance, written in pure kama (retroactive `implements` — NO compiler
-// blessing; the prelude declares the `Hashable`/`Equatable` contracts). This is std's mechanism for
-// primitive keys, co-located with its one consumer. FNV-1a over the UTF-8 bytes: content-based, so a
-// concat key and a literal of the same text hash equal and `Map<string, V>` lookups hit. (`Equatable`
-// for `string` is satisfied structurally by its built-in `equals`, so it needs no impl block.)
-implements Hashable for string {
-    public fn uint64 hash() {
-        uint64 h = 2166136261ui64;                          // FNV-1a offset basis
-        int32 i = 0;
-        while (i < cast<int32>(this.length())) {
-            h = (h ^ cast<uint64>(this[i])) * 16777619ui64;   // xor the byte, mul the FNV prime
-            i = i + 1;
-        }
-        return h;
-    }
-}
-
-// `int32` keys, also pure kama (a retroactive impl on a PRIMITIVE — `this` is the scalar itself). A
-// splitmix64-style finalizer so patterned keys (sequential IDs, multiples) still spread across the table
-// instead of clustering. `Equatable` for a primitive needs a real `equals` (unlike `string`, an `int32`
-// has no built-in method), so it ships too — scalar `this == other`.
-implements Hashable for int32 {
-    public fn uint64 hash() {
-        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;
-        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
-        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
-        return x ^ (x >> 31ui64);
-    }
-}
-implements Equatable for int32 {
-    public fn bool equals(int32 other) { return this == other; }
-}
+// The primitive `Hashable`/`Equatable` conformances (`string`, `int32`) now live in the PRELUDE
+// (kama.driver.cpp `PRELUDE_SRC`) so they're universal — a `<T: Equatable>` bound or `List<int32>.contains`
+// resolves without importing `std::collections`. They stay pure-kama retro-impls (no compiler blessing).
 
 // A by-value iterator over a map's KEYS (the `foreach (K k in map)` protocol; `Set` hands out the same).
 // It borrows the map's key + state buffers, walks only FULL slots, and yields each key BY VALUE (a copy),

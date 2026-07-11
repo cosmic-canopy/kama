@@ -8166,26 +8166,30 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // the generic-function instances below, which may call it (e.g. a `<K: Hashable>` body calling
     // `k.hash()` monomorphized for `string`). The body lands once in the impl's module `.c`
     // (emitModuleContent). A USER-type target emits through the normal machinery (skipped here).
-    for (auto& u : units) {
-        if (!u || !u->codeDeclarationList) continue;
-        _nsCtx = _unitCtx[u.get()];
-        for (auto& decl : *u->codeDeclarationList) {
-            auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
-            if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
-            std::string tkey = cType(ri->target);
-            ClassInfo* tcip = retroTargetInfo(tkey);   // a collection ClassInfo OR a primitive conformance
-            if (!tcip) continue;
-            ClassInfo& tci = *tcip;
-            ScopedStr _ts(_thisType, tci.name);
-            for (auto& m : *ri->members) {
-                auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
-                if (!md || !md->name || !md->name->value) continue;
-                std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
-                *_out << ret << " " << tci.name << "__" << *md->name->value << "("
-                      << paramListC(md->params, tci.name.c_str()) << ");\n";
+    // User-unit retro-impls: non-static prototype here; body lands in that unit's `.c` (below). The PRELUDE's
+    // retro-impls (collect-only, no home module) are emitted `static inline` in a dedicated pass just after.
+    auto emitRetroProtos = [&](const std::vector<SharedCompilationUnit>& us, const char* stat) {
+        for (auto& u : us) {
+            if (!u || !u->codeDeclarationList) continue;
+            _nsCtx = _unitCtx[u.get()];
+            for (auto& decl : *u->codeDeclarationList) {
+                auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
+                if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
+                ClassInfo* tcip = retroTargetInfo(cType(ri->target));   // collection ClassInfo OR primitive conformance
+                if (!tcip) continue;
+                ScopedStr _ts(_thisType, tcip->name);
+                for (auto& m : *ri->members) {
+                    auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+                    if (!md || !md->name || !md->name->value) continue;
+                    std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+                    *_out << stat << ret << " " << tcip->name << "__" << *md->name->value << "("
+                          << paramListC(md->params, tcip->name.c_str()) << ");\n";
+                }
             }
         }
-    }
+    };
+    emitRetroProtos(units, "");                                     // user units (`units` excludes the prelude)
+    if (_preludeUnit) emitRetroProtos({_preludeUnit}, "static inline ");
     // specialized generic-type instance prototypes (ctor/dtor/method), `static`.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/1);
@@ -8233,6 +8237,32 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _emitStaticClass = false;
     }
 
+    // Prelude retro-impl BODIES (e.g. `implements Hashable/Equatable for int32`): the prelude is collect-only,
+    // so — like the prelude types above — emit their method bodies `static inline` in the header (prototype
+    // already emitted above). This makes the primitive conformances UNIVERSAL: a `<T: Equatable>` bound,
+    // `List<int32>.contains`, or an int-keyed `Map` resolves without importing `std::collections`.
+    if (_preludeUnit && _preludeUnit->codeDeclarationList) {
+        _nsCtx = _unitCtx[_preludeUnit.get()];
+        _emitStaticClass = true;
+        for (auto& decl : *_preludeUnit->codeDeclarationList) {
+            auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
+            if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
+            ClassInfo* tcip = retroTargetInfo(cType(ri->target));
+            if (!tcip) continue;
+            ScopedStr _ts(_thisType, tcip->name);
+            for (auto& m : *ri->members) {
+                auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+                if (!md || !md->name || !md->name->value) continue;
+                std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+                line(md->line);
+                _returnIsPlace = md->isRef;
+                emitMethodOrCtorBody(tcip->name + "__" + *md->name->value, ret.c_str(),
+                                     md->params, md->body, *tcip, false, md->isConst, false);
+                _returnIsPlace = false;
+            }
+        }
+        _emitStaticClass = false;
+    }
 }
 
 // This file's DEFINITIONS: its classes' vtable instances + interface vtables +
