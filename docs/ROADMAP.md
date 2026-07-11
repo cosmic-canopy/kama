@@ -41,12 +41,16 @@ remains to call the language **complete**:
      inline construction that needs its type from context now works in a `Type x = …` initializer, a `return`,
      an `operator[]` place-store, a value-producing `match` arm, a **class-typed lvalue store** (`this.m =
      Map()`, done), and a **call-argument** (`f(o: Optional::Some(…))` / `f(x: match(…))`, done — the call path
-     threads the param type). Still open: an **inline variant construction / value-producing `match` (or a
-     variant-producing ternary) used as a `match` SUBJECT** (`match (Optional::Some(…)) { … }` — "match requires
-     an enum subject"; bind the subject to a typed local first); and **indexing a `string`/rvalue receiver**
-     (`"abc"[0]` — a string *literal* method call already materializes its receiver, but indexing it doesn't;
-     bind to a local first). The fix is to propagate the target type / materialize the receiver in these
-     remaining positions like the initializer + return + place-store + arm + arg paths already do.
+     threads the param type), and **indexing a string rvalue receiver** (`"abc"[0]` / `s.concat(x)[0]`, done —
+     the receiver is materialized). Still open, each with a clean "bind to a local first" workaround: (a) an
+     inline variant construction / value-producing `match` (or a variant-producing ternary) used as a `match`
+     **SUBJECT** (`match (Optional::Some(…)) { … }` — needs payload-based generic-instance inference, not just
+     target-type threading); and (b) an inline **`new` in a non-local position** — a call-argument
+     (`f(a: new Sq(…))`) or a `Shared/Owned<Interface>` **return** (`fn Shared<Shape> f() { return new Sq(…) }`).
+     (b) is the deepest: the arg case needs the param's element type, which `ParamSig.className` drops (it keeps
+     only the bare `Owned`/`Shared` template), and interface-element boxing in a return is entangled with
+     under-developed smart-pointer-over-contract dispatch (`a.area()` on a `Shared<Shape>` from a call result
+     doesn't resolve yet). Deferred as its own effort; the local-init boxing + bind-to-local cover it today.
    - ~~**Remaining primitive `Hashable`/`Equatable` widths.**~~ DONE. All integer widths
      (`int8/16/32/64`, `uint8/16/32/64`) now have prelude `Hashable` (splitmix64) + `Equatable` (scalar),
      so every integer is a universal `Map`/`Set` key; floats (`float32/64`) get `Equatable` (exact `==`) but
