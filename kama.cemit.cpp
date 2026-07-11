@@ -12,6 +12,8 @@
 // Construction
 // ---------------------------------------------------------------------------
 
+static bool isStableStringRef(ASTNode* n);   // defined below; used by string-index materialization
+
 CEmitter::CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives)
     : _out(&out)
     , _sourcePath(sourcePath)
@@ -806,8 +808,24 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
         std::string coll, recvExpr, idx;
-        if (collectionElemAccess(ea, coll, recvExpr, idx))
+        if (collectionElemAccess(ea, coll, recvExpr, idx)) {
+            // `__get` borrows its receiver by address (`&recv`). A string RVALUE receiver — a literal
+            // (`"abc"[0]`, emitted as a `kama_string_lit(…)` call) or a computed piece (`s.concat(x)[0]`) —
+            // has no address, so materialize it into a temp first (single-eval: reuse the already-emitted
+            // `recvExpr`, don't re-emit). A named var / field / `this` stays a direct borrow. A computed
+            // temp that owns a heap buffer is RAII-dropped at scope end.
+            // The receiver is `ea->expression`, or `ea->identifier` for a bare-name receiver (`s[i]`).
+            ASTNode* recvNode = ea->expression ? ea->expression.get()
+                              : (ea->identifier ? (ASTNode*)ea->identifier.get() : nullptr);
+            bool addressable = isStableStringRef(recvNode) && !dynamic_cast<StringNode*>(recvNode);
+            if (coll == "kama_string" && _hoistOK && !addressable) {
+                std::string t = "__stridx" + std::to_string(_tempCounter++);
+                _hoisted.push_back("kama_string " + t + " = " + recvExpr + ";");
+                recordDestructibleLocal(t, "kama_string");
+                return coll + "__get(&" + t + ", " + idx + ")";
+            }
             return coll + "__get(&(" + recvExpr + "), " + idx + ")";
+        }
         // A user place-returning `operator[]`: read the value out of the place.
         if (indexesUserOp(ea)) return emitPlace(expr);
         // Raw pointer read `p[i]` — only inside `unsafe { }`.

@@ -1,0 +1,13 @@
+// Milestone B5 — indexing a string RVALUE receiver. `s[i]` borrows its receiver by address; a literal
+// (`"abc"[0]`, emitted as a `kama_string_lit(…)` call) or a computed piece (`s.concat(x)[0]`) is an rvalue
+// with no address, so it's materialized into a temp first (single-eval; a heap-owning piece is RAII-dropped
+// at scope end — ASan-checked). A named var / field / `this` stays a direct borrow. Previously each was a
+// hard C error ("cannot take the address of an rvalue") — the workaround was "bind to a local first".
+fn int32 main() {
+    int32 r = 0;
+    if ("abc"[1] == 98ui8) { r = r + 1; }                     // literal index: 'b'
+    string s = "hello"; string w = "world";
+    if (s.concat(other: w)[5] == 119ui8) { r = r + 2; }       // computed rvalue index: "helloworld"[5] = 'w'
+    if (s[0] == 104ui8) { r = r + 4; }                        // named var (control): 'h'
+    return r;   // 1 + 2 + 4 = 7
+}
