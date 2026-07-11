@@ -1687,6 +1687,38 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 return;
             }
         }
+        // Bare in-place ctor assigned to a class-typed lvalue (`this.m = Map()`, `x = Point(v: 1)`): a bare
+        // stack ctor has no rvalue form — it constructs into a place — so build it DIRECTLY into the lvalue,
+        // exactly like the local-init `stackCtor` path, after releasing the old value. Fires only for a fresh
+        // ctor whose callee names the lvalue's (possibly generic) class; a `give`/`copy`-marked or named RHS
+        // never matches (not an InvocationNode), so the ownership paths below are untouched.
+        if (as->token == EQ) {
+            std::string lty = exprClass(as->unaryExpression);
+            if (auto* iv = dynamic_cast<InvocationNode*>(as->expression.get()))
+                if (iv->identifier && iv->identifier->value && isClass(lty) && _classes[lty].hasCtor
+                    && !isSmartPtrClass(lty)) {
+                    std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
+                    auto g = _genericTypeInstOf.find(lty);
+                    if (rn == lty || (g != _genericTypeInstOf.end() && g->second == rn)) {
+                        checkConstWrite(as->unaryExpression, n->line);
+                        std::string lname;
+                        if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
+                            if (lid->value && (!lid->qualifier || lid->qualifier->empty())) lname = *lid->value;
+                        bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
+                        std::string b = emitExpression(as->unaryExpression);
+                        line(n->line);
+                        if (!bMoved && _classes[lty].destructible)                 // release the old value first
+                            { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
+                        if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // target is live again
+                        bool ph = _hoistOK; _hoistOK = true;                       // hoist any arg hand-offs
+                        std::string cc = emitCtorCall(b, _classes[lty], iv->args, n->line);
+                        _hoistOK = ph;
+                        flushHoisted(depth);
+                        indent(depth); *_out << cc << ";\n";
+                        return;
+                    }
+                }
+        }
         // Owned value into an `operator[]` PLACE: `a[i] = [give/copy] <owned>` where the element OWNS
         // something (string/collection/resource/smart-ptr). Release the old element, then move/copy the new
         // one THROUGH the place — an `ElementAccessNode` LHS isn't a named lvalue, so the branches below miss
@@ -1924,7 +1956,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (!mv.empty()) markMoved(mv);
                     return;
                 }
-                // Fresh owned rvalue (concat/substring/`List()`/literal): the RHS may READ the old LHS
+                // Fresh owned rvalue (concat/substring/literal): the RHS may READ the old LHS
                 // (`s = s.concat(…)`), so hoist it into a temp BEFORE releasing the old buffer, then assign.
                 std::string b = emitExpression(as->unaryExpression);
                 std::string rv = emitExpression(as->expression);
