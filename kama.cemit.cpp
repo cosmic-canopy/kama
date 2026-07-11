@@ -2964,7 +2964,8 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.returnType = ret;
         mi.isIntrinsic = true;
         mi.visibility = Visibility::Public;   // an intrinsic (string/List/Array op) IS that type's public API —
-                                              // so a structural bound like `<K: Equatable>` sees string's `equals`
+                                              // string's `equals` is real, so its nominal Equatable (recorded
+                                              // in `interfaces`) resolves to it for a `<K: Equatable>` bound
         ci.methods[mname] = mi;
     };
     if (kind == CollKind::String) {

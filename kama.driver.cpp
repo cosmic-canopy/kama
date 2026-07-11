@@ -650,9 +650,10 @@ static const char* PRELUDE_SRC =
     "type contract Movable for resource { }\n"
     "type contract Copyable for resource { fn This copy(); }\n"
     // Hashing + equality opt-in (the `Map`/`Set` key protocol, nominal). A generic bound `<K: Hashable +
-    // Equatable>` is checked STRUCTURALLY (the type must expose a public `hash()` / `equals(This)`), so
-    // `string` satisfies `Equatable` through its built-in `equals` with no impl block; `Hashable` it gets
-    // from the pure-kama `implements` below. Both live in the prelude because they are language-level bounds.
+    // Equatable>` is NOMINAL — the type must DECLARE `implements` (a coincidental method set isn't enough).
+    // `string` gets a nominal `Equatable` recorded from its built-in `equals` (registerCollection pushes it
+    // onto kama_string's interfaces) + `Hashable` from the pure-kama `implements` below. Both contracts live
+    // in the prelude because they are language-level bounds.
     "type contract Hashable for both { fn uint64 hash(); }\n"
     "type contract Equatable for both { fn bool equals(This other); }\n"
     // Primitive conformances (pure-kama retro-impls, NO compiler blessing) — hosted here so `string`/`int32`

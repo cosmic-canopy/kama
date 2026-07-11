@@ -141,11 +141,14 @@ type contract Equatable for both { fn bool equals(This other); }
 ```
 
 Keys are hashed and compared **by content**, so a lookup key built any way (a concat, a fresh
-construction) finds the stored entry. `string` and **`int32`** satisfy both out of the box, via
-**pure-kama** `implements` blocks that ship in `std::collections` (the retroactive-conformance mechanism,
-*no* compiler blessing): `string` gets FNV-1a `Hashable` + structural `Equatable`; `int32` gets a
-splitmix64 `Hashable` + scalar `equals` (a conformance on a **primitive** — `this` is the scalar itself).
-A **user key** just declares `implements Hashable, Equatable` and provides the two methods.
+construction) finds the stored entry. `string` and every **integer width** satisfy both out of the box, via
+**pure-kama** `implements` blocks that ship in the **prelude** (universal — no `std::collections` import;
+the retroactive-conformance mechanism, *no* compiler blessing): `string` gets FNV-1a `Hashable` + a
+`Equatable` recorded nominally from its built-in `equals`; every integer gets a splitmix64 `Hashable` +
+scalar `equals` (a conformance on a **primitive** — `this` is the scalar itself). Floats get `Equatable`
+only (exact `==`) — intentionally not hash-keyable. A **user key** declares `implements Hashable, Equatable`
+and provides the two methods. Bounds are **nominal**: the `implements` is required (a coincidental `equals`
+is not enough), the same rule as `foreach`.
 
 ```kama
 import std::collections::{Map, Set};
@@ -921,8 +924,8 @@ List<Shared<Shape>> scene;                              // nested generics, no s
   type contract Arithmetic { This operator+(This rhs); }
   fn T sum<T: Arithmetic>(T a, T b) { return a + b; }   // `a + b` -> static Concrete__op_add(&a, b)
   ```
-  The concrete type's `operator+` satisfies the bound structurally, and `a + b` in the monomorphized body
-  lowers to a direct call — no vtable, no boxing.
+  The concrete type declares `implements Arithmetic` (bounds are nominal), and `a + b` in the monomorphized
+  body lowers to a direct call — no vtable, no boxing.
 - **Generic contracts** — a `contract` may itself be parameterized (`type contract Iterator<T>`), and is
   **monomorphized per use** just like a generic type (`Iterator<int32>` → a specialized `Iterator_int32`).
   It has **full value + bound parity** with a plain contract: usable as a static bound
@@ -1159,11 +1162,17 @@ silent no-op), pending its future scope:
 A few ownership-lowering edge cases are open at 1.0. Each **hard-errors** (never miscompiles) and has a
 clean workaround:
 
-- **Owned value into an indexed place** — `a[i] = give s` / `a[i] = "…"` (assigning an owning
-  `string`/collection/resource into an `operator[]` slot) isn't lowered. Mutate through a borrow —
-  `foreach (ref T e in a) { … }` — or work in a local. (Non-owning elements like `Array<int32>` are fine.)
-- **Owned value out of a `match` arm** — `:= give x`, and a bare generic constructor `:= List()`, in an
-  arm-value position aren't lowered. Build the value in a local before the `match`.
+- **Inline `new` in a non-local position** — `f(a: new Sq(…))` (a call argument) or a `Shared/Owned<I>`
+  **return** (`fn Shared<Shape> g() { return new Sq(…) }`). Boxing works in a `Type x = new …` initializer;
+  elsewhere bind it to a local first. (Being addressed.)
+- **`ref T` return from a free function** — supported on methods/operators; a free `fn ref T f(ref …)` is
+  not yet. Return an owned value, or use a method. (Being addressed.)
+- **A value-producing construct as a `match` SUBJECT** — `match (Optional::Some(…)) { … }` (a bare variant
+  ctor / value-producing match / variant-producing ternary as the subject) needs generic-instance inference
+  the subject position doesn't provide; bind the subject to a typed local first.
+
+(Target-typed inline construction now works in initializers, `return`, `operator[]` place-stores,
+value-producing `match` arms, class-typed lvalue stores, call arguments, and string-rvalue indexing.)
 
 ## Reserved/runtime
 
