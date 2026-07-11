@@ -7935,10 +7935,28 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         std::string t = hoistStringTemp(receiver);
         recvPtr = t.empty() ? addrOfOperand(receiver, "kama_string", call->line) : ("&" + t);
     } else {
-        // `this` -> `self` (a pointer); a named var / field -> `&x`; a value-type RVALUE (a chained call
-        // `m.transpose().inverse()`, an inline ctor `Vec2(x, y).length()`, an operator result
-        // `(a - b).length()`) -> a hoisted / compound-literal temp so `&` is legal. addrOfOperand covers all.
-        recvPtr = addrOfOperand(receiver, cls, call->line);
+        // An OWNED rvalue receiver — an operator result (`(a - b).m()`) or a by-value call/ctor result
+        // (`make().m()`, `R().m()`) — owns a heap buffer that addrOfOperand's throwaway compound-literal
+        // receiver would LEAK. Materialize it into a scope-dtor'd temp so RAII frees it (the general-class
+        // analogue of the string-receiver hoist above). Restricted to fresh BY-VALUE rvalues: an operator
+        // result, or a bare InvocationNode (an inline ctor or a free-function call — neither can return a
+        // place). An lvalue / `a[i]` / a `ref T` method result (a borrow) is left to addrOfOperand and never
+        // dropped, so this can't double-free. Pure RAII scope-drop; no lifetime analysis.
+        InvocationNode* riv = dynamic_cast<InvocationNode*>(receiver.get());
+        bool byValueRvalue = dynamic_cast<BinaryExpressionNode*>(receiver.get())
+                             || (riv && !riv->expression);
+        if (_hoistOK && byValueRvalue && _classes.count(cls) && _classes[cls].destructible) {
+            std::string t = "__recv" + std::to_string(_tempCounter++);
+            std::string ct = hoistCtorIfInline(receiver);                 // inline ctor -> its own temp init
+            if (!ct.empty()) { recordDestructibleLocal(ct, cls); recvPtr = "&" + ct; }
+            else {
+                _hoisted.push_back(cls + " " + t + " = " + emitExpression(receiver) + ";");
+                recordDestructibleLocal(t, cls);
+                recvPtr = "&" + t;
+            }
+        } else {
+            recvPtr = addrOfOperand(receiver, cls, call->line);
+        }
     }
     // `s.chars()` — a UTF-8 codepoint iterator borrowing the string's bytes, built as a value (compound
     // literal) so it works in expression position (a foreach subject). Fields (data, len, pos) by order.

@@ -31,12 +31,15 @@ remains to call the language **complete**:
    resources/collections and has a clean workaround, so a "language-complete" 1.0 closes them but they don't
    block the stdlib/engine work. (Reserved later-track keywords `expose`/`volatile` stay deferred — they
    hard-error, never miscompile.)
-   - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop.
-     Operator/receiver/`if`-cond/`foreach`/string-`ref` **and now `while`/`for` condition temps** all drop
-     (the loop-and-a-half gained a per-iteration drop slot — `dropCondTemps`; the `_loopCond` gate is gone).
-     Only residual: a non-string-intrinsic **by-value arg** whose owned rvalue the callee doesn't consume —
-     today masked (by-value is a shallow struct copy the owning callee frees once), so latent rather than a
-     live leak; fold into a general end-of-full-expression drop pass if it ever surfaces.
+   - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop. Now covered:
+     operator / string-receiver / `if`-cond / `foreach` / string-`ref`, `while`/`for` **condition** temps
+     (per-iteration `dropCondTemps`; `_loopCond` gone), string-**index** rvalue receivers, and an **owned
+     rvalue method-call RECEIVER** (`make().m()` / `R().n()` — was an ASan-confirmed leak; materialized into a
+     scope-dtor'd temp, gated to fresh by-value rvalues so it can't double-free). The by-value **owned arg**
+     is sound as-is (a move into the callee's owning slot — freed once; verified leak-clean, not masked-latent).
+     Remaining tail (rarer, no live leak in the suite): an owned rvalue receiver reached through a *method
+     chain* (`builder.make().use()`) is conservatively not dropped yet (needs the callee's place-vs-value
+     return resolved); fold into the durable end-of-full-expression pass.
    - **Target-typed rvalue in a non-local-init position** *(ergonomic; surfaced building the containers)*. An
      inline construction that needs its type from context now works in a `Type x = …` initializer, a `return`,
      an `operator[]` place-store, a value-producing `match` arm, a **class-typed lvalue store** (`this.m =
