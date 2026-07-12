@@ -1,0 +1,64 @@
+namespace std::net::web;
+
+import std::io::{IoError};
+import std::collections::{List, Array};
+import std::net::{ReliableStream};
+
+export { WsConnection, WsState };
+
+// WebSocket bindings — bodies in kama_net_web.js (emcc --js-library). Handles are int32 (< 0 = error);
+// recv returns >=0 bytes, -1 empty-but-open (WouldBlock), -2 closed (EOF). See kama_net_web.h.
+extern "kama_net_web.h";
+extern fn int32 kama_ws_connect(Ptr<int8> url);
+extern fn int32 kama_ws_state(int32 h);
+extern fn int32 kama_ws_send(int32 h, Ptr<uint8> buf, usize n);
+extern fn int32 kama_ws_recv(int32 h, Ptr<uint8> buf, usize n);
+extern fn void  kama_ws_close(int32 h);
+
+// WebSocket connection state (poll after connect until Open, or to detect Closed).
+enum WsState { Connecting, Open, Closing, Closed }
+
+// A reliable, ordered WebSocket connection — the web fallback for ReliableStream (Safari/iOS, Node, older
+// browsers) where WebTransport isn't available. Message-framed: writeAll sends ONE binary message; read
+// returns the next message's bytes (a long message arrives in into.length() chunks). Non-blocking only (the
+// browser is event-driven): read is Err(WouldBlock) when nothing has arrived, Ok(0) when the peer closed
+// (EOF, matching TcpStream). Closes on drop (RAII).
+type resource WsConnection implements ReliableStream {
+    int32 handle;
+    private WsConnection(int32 handle) { this.handle = handle; }
+
+    // Open a ws:// or wss:// connection. Returns immediately; the handshake completes asynchronously —
+    // poll state() until Open before sending.
+    public static fn Result<WsConnection, IoError> connect(ref string url) {
+        int32 h = kama_ws_connect(url: url.cstr());
+        if (h < 0) { return Result::Err(error: IoError::Other(code: 0 - 1)); }
+        return Result::Ok(value: WsConnection(handle: h));
+    }
+
+    public fn WsState state() {
+        int32 s = kama_ws_state(h: this.handle);
+        if (s == 0) { return WsState::Connecting; }
+        if (s == 1) { return WsState::Open; }
+        if (s == 2) { return WsState::Closing; }
+        return WsState::Closed;
+    }
+
+    public fn Result<usize, IoError> read(ref Array<uint8> into) {
+        int32 n = kama_ws_recv(h: this.handle, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+        if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+        if (n == (0 - 1)) { return Result::Err(error: IoError::WouldBlock); }
+        return Result::Ok(value: cast<usize>(0));   // -2 = closed -> EOF
+    }
+
+    public fn Result<usize, IoError> writeAll(ref List<uint8> bytes) {
+        if (kama_ws_send(h: this.handle, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length())) != 0) {
+            return Result::Err(error: IoError::Other(code: 0 - 1));
+        }
+        return Result::Ok(value: cast<usize>(bytes.length()));
+    }
+
+    // No-op: web sockets are always non-blocking (kept for ReliableStream parity with native TcpStream).
+    public fn Result<Unit, IoError> setNonBlocking(bool on) { return Result::Ok(value: Unit::Unit); }
+
+    ~WsConnection() { kama_ws_close(h: this.handle); }
+}

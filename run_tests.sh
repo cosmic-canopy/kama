@@ -69,12 +69,19 @@ for src in "$TESTS_DIR"/*.kama; do
     fi
     expected="$(cat "$expect_file")"
 
-    # Networking is not on wasm YET: the browser/emscripten sandbox has no raw sockets, and the planned
-    # transport — WebRTC DataChannels / WebSockets via a host FFI shim (ROADMAP §5, 1.x) — isn't built. Until
-    # it lands, a `std::net` fixture can't run under node, so skip it in wasm mode rather than fail on a
-    # not-yet-implemented transport. (Remove this skip once the wasm net transport ships.)
-    if [ "$WASM" = 1 ] && grep -q 'std::net' "$src"; then
-        echo "SKIP $name (net: wasm transport not built yet — WebRTC/WebSocket pending)"; continue
+    # Net transports split by target. Native (TCP/UDP/Poller via raw sockets) can't run under the
+    # browser/emscripten sandbox; the web transports (std::net::web — WebSocket/WebTransport over the JS
+    # glue) can't run natively. Skip the half that doesn't apply to the active target.
+    uses_net_web=0; grep -q 'std::net::web' "$src" && uses_net_web=1
+    uses_net=0;     grep -q 'std::net'      "$src" && uses_net=1
+    if [ "$WASM" = 1 ]; then
+        if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then
+            echo "SKIP $name (native net: no raw sockets on wasm)"; continue
+        fi
+    else
+        if [ "$uses_net_web" = 1 ]; then
+            echo "SKIP $name (web net: browser-only transport)"; continue
+        fi
     fi
 
     exe="$TMP/$name"

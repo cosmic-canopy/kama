@@ -19,6 +19,8 @@ out/
 *.wasm
 *.html
 *.js
+# hand-written stdlib JS glue (emcc --js-library) — source, not build output
+!lib/std/net/web/*.js
 # generated C from `kama transpile`/`build` (keep generated .c out of the tree)
 tests/**/*.c
 !tests/webgpu/smoke.c
