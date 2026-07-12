@@ -47,10 +47,14 @@ fi
 # Servers for the wasm net::web E2E fixtures, started once for the wasm leg and torn down on exit.
 # net_ws_loopback -> a Node WebSocket echo server (Node built-ins only). net_wt_loopback -> an aioquic
 # HTTP/3 WebTransport echo server; capture the self-signed cert's hash so the browser harness can trust it.
-WS_ECHO_PID=""; WT_ECHO_PID=""; WT_CERT_HASH=""
+WS_ECHO_PID=""; WT_ECHO_PID=""; SIG_RELAY_PID=""; WT_CERT_HASH=""
 if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/ws_echo.js" ]; then
     node "$TESTS_DIR/support/ws_echo.js" 47670 >/dev/null 2>&1 &
     WS_ECHO_PID=$!
+fi
+if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/sig_relay.js" ]; then
+    node "$TESTS_DIR/support/sig_relay.js" 47690 >/dev/null 2>&1 &   # WebRTC signaling relay (net_rtc_signaling)
+    SIG_RELAY_PID=$!
 fi
 if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/wt_echo.py" ]; then
     python3 "$TESTS_DIR/support/wt_echo.py" 47680 >"$TMP/wt_echo.out" 2>/dev/null &
@@ -62,7 +66,7 @@ if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/wt_echo.py" ]; then
     done
 fi
 [ "$WASM" = 1 ] && sleep 0.3
-trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
+trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; [ -n "$SIG_RELAY_PID" ] && kill "$SIG_RELAY_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 # Build one fixture: $1 = output base path, $2… = source .kama file(s). Honors the active mode.
 build_one() {

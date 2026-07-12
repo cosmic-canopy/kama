@@ -1,0 +1,108 @@
+// std::net::web WebRTC signaling E2E (browser) — the "batteries-included" flow: two peers find each other
+// through a signaling server (tests/support/sig_relay.js, a WebSocket relay) instead of exchanging SDP by
+// hand. Both peers run in one page: each opens a WsConnection to the relay + an RtcConnection, shuttles its
+// SDP (as bytes) through the relay, forms an unreliable DataChannel, then A sends a datagram to B -> verify,
+// exit 55. Proves the signaling-over-WebSocket path that a reusable connectPeer() helper is built from.
+import std::app::{run, TickFn, quit};
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern "kama_net_web.h";
+extern fn int32 kama_ws_connect(Ptr<int8> url);
+extern fn int32 kama_ws_state(int32 h);
+extern fn int32 kama_ws_send(int32 h, Ptr<uint8> buf, usize n);
+extern fn int32 kama_ws_recv(int32 h, Ptr<uint8> buf, usize n);
+extern fn void  kama_ws_close(int32 h);
+extern fn int32 kama_rtc_create();
+extern fn int32 kama_rtc_datachannel(int32 h, int32 unreliable);
+extern fn int32 kama_rtc_offer(int32 h);
+extern fn int32 kama_rtc_answer(int32 h);
+extern fn int32 kama_rtc_local_sdp(int32 h, Ptr<uint8> buf, usize n);
+extern fn int32 kama_rtc_set_remote(int32 h, Ptr<uint8> buf, usize n);
+extern fn int32 kama_rtc_dc_state(int32 h);
+extern fn int32 kama_rtc_send(int32 h, Ptr<uint8> buf, usize n);
+extern fn int32 kama_rtc_recv(int32 h, Ptr<uint8> buf, usize n);
+extern fn void  kama_rtc_close(int32 h);
+
+fn void finishAll(Ptr<int32> hdr, int32 code) {
+    unsafe {
+        kama_rtc_close(h: hdr[2]); kama_rtc_close(h: hdr[3]);
+        kama_ws_close(h: hdr[0]);  kama_ws_close(h: hdr[1]);
+    }
+    quit(code: code);
+}
+
+// state: hdr[0]=wsA [1]=wsB [2]=rtcA [3]=rtcB [4]=phaseA [5]=phaseB [6]=ticks; bufA@64, bufB@4160, dgram@8256.
+fn int32 tick(Ptr state) {
+    unsafe {
+        Ptr<int32> hdr = cast<Ptr<int32>>(state);
+        Ptr<uint8> b = cast<Ptr<uint8>>(state);
+        hdr[6] = hdr[6] + 1;
+        if (hdr[6] > 8000000) { finishAll(hdr: hdr, code: 70); }
+
+        // A (offerer): send offer over the relay, receive the answer, then send a datagram once connected.
+        int32 pa = hdr[4];
+        if (pa == 0) {
+            if (kama_ws_state(h: hdr[0]) == 1) {
+                int32 len = kama_rtc_local_sdp(h: hdr[2], buf: addr(of: b[64]), n: cast<usize>(4096));
+                if (len > 0) { kama_ws_send(h: hdr[0], buf: addr(of: b[64]), n: cast<usize>(len)); hdr[4] = 1; }
+            }
+        } else {
+            if (pa == 1) {
+                int32 n = kama_ws_recv(h: hdr[0], buf: addr(of: b[64]), n: cast<usize>(4096));
+                if (n > 0) { kama_rtc_set_remote(h: hdr[2], buf: addr(of: b[64]), n: cast<usize>(n)); hdr[4] = 2; }
+            } else {
+                if (pa == 2) {
+                    if (kama_rtc_dc_state(h: hdr[2]) == 1) {
+                        b[8256] = cast<uint8>(10); b[8257] = cast<uint8>(20);
+                        b[8258] = cast<uint8>(30); b[8259] = cast<uint8>(40);
+                        kama_rtc_send(h: hdr[2], buf: addr(of: b[8256]), n: cast<usize>(4));
+                        hdr[4] = 3;
+                    }
+                }
+            }
+        }
+
+        // B (answerer): receive the offer over the relay, answer, then receive the datagram and verify.
+        int32 pb = hdr[5];
+        if (pb == 0) {
+            int32 n = kama_ws_recv(h: hdr[1], buf: addr(of: b[4160]), n: cast<usize>(4096));
+            if (n > 0) {
+                kama_rtc_set_remote(h: hdr[3], buf: addr(of: b[4160]), n: cast<usize>(n));
+                kama_rtc_answer(h: hdr[3]);
+                hdr[5] = 1;
+            }
+        } else {
+            if (pb == 1) {
+                int32 len = kama_rtc_local_sdp(h: hdr[3], buf: addr(of: b[4160]), n: cast<usize>(4096));
+                if (len > 0) { kama_ws_send(h: hdr[1], buf: addr(of: b[4160]), n: cast<usize>(len)); hdr[5] = 2; }
+            } else {
+                int32 n = kama_rtc_recv(h: hdr[3], buf: addr(of: b[8256]), n: cast<usize>(64));
+                if (n == 4) {
+                    bool ok = (cast<int32>(b[8256]) == 10) && (cast<int32>(b[8257]) == 20)
+                           && (cast<int32>(b[8258]) == 30) && (cast<int32>(b[8259]) == 40);
+                    if (ok) { finishAll(hdr: hdr, code: 55); } else { finishAll(hdr: hdr, code: 73); }
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+fn int main() {
+    unsafe {
+        Ptr<uint8> block = cast<Ptr<uint8>>(malloc(n: cast<usize>(8448)));
+        Ptr<int32> hdr = cast<Ptr<int32>>(cast<Ptr>(block));
+        string url = "ws://127.0.0.1:47690";
+        int32 wsA = kama_ws_connect(url: url.cstr());
+        int32 wsB = kama_ws_connect(url: url.cstr());
+        int32 rtcA = kama_rtc_create();
+        int32 rtcB = kama_rtc_create();
+        if ((wsA < 0) || (wsB < 0) || (rtcA < 0) || (rtcB < 0)) { quit(code: 60); }
+        kama_rtc_datachannel(h: rtcA, unreliable: 1);
+        kama_rtc_offer(h: rtcA);
+        hdr[0] = wsA; hdr[1] = wsB; hdr[2] = rtcA; hdr[3] = rtcB; hdr[4] = 0; hdr[5] = 0; hdr[6] = 0;
+        TickFn t = tick;
+        run(tick: t, state: cast<Ptr>(block));
+    }
+    return 1;
+}
