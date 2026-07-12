@@ -1,0 +1,49 @@
+// std::net non-blocking accept — a non-blocking listener with nothing pending returns Err(WouldBlock); after
+// a client connects (loopback handshake completes into the backlog), accept() returns the connection.
+// Single process, deadlock-free. Returns 55.
+import std::net::{TcpListener, TcpStream};
+import std::io::{IoError};
+
+fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }
+
+// The queued connection appears once the handshake lands; tolerate a brief WouldBlock window (no sleep prim).
+fn int32 acceptQueued(ref TcpListener l) {
+    int32 tries = 0;
+    int32 result = 63;
+    bool done = false;
+    while (!done && tries < 2000000) {
+        Result<TcpStream, IoError> ra = l.accept();
+        match (ra) {
+            case Ok(s):  { result = 55; done = true; }
+            case Err(e): { if (!isWouldBlock(e: e)) { result = 64; done = true; } }
+        };
+        tries = tries + 1;
+    }
+    return result;
+}
+
+fn int32 run(ref TcpListener l, uint16 port) {
+    Result<Unit, IoError> rs = l.setNonBlocking(on: true);
+    bool setok = match (rs) { case Ok(u): true; case Err(e): false; };
+    if (!setok) { return 60; }
+
+    // accept with nothing pending -> WouldBlock
+    Result<TcpStream, IoError> r1 = l.accept();
+    bool wb = match (r1) { case Ok(s): false; case Err(e): isWouldBlock(e: e); };
+    if (!wb) { return 61; }
+
+    // client connects; keep it alive through the accept (dropped at the arm end, after acceptQueued)
+    string host = "127.0.0.1";
+    Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
+    return match (rc) {
+        case Ok(c):  acceptQueued(l: l);
+        case Err(e): 62;
+    };
+}
+
+fn int main() {
+    string host = "127.0.0.1";
+    uint16 port = cast<uint16>(47661);
+    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    return match (rl) { case Ok(l): run(l: l, port: port); case Err(e): 80; };
+}

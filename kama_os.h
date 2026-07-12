@@ -233,6 +233,29 @@ static inline int32_t kama_set_broadcast(ptrdiff_t fd, int32_t on) {
     if (setsockopt((SOCKET)fd, SOL_SOCKET, SO_BROADCAST, (const char*)&v, (int)sizeof v) != 0) { kama__capture_wsa(); return -1; }
     return 0;
 }
+static inline int32_t kama_set_nodelay(ptrdiff_t fd, int32_t on) {
+    BOOL v = on ? 1 : 0;
+    if (setsockopt((SOCKET)fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&v, (int)sizeof v) != 0) { kama__capture_wsa(); return -1; }
+    return 0;
+}
+// Resolve a non-blocking connect: 0 = connected; -1 with errno set to the pending/failed cause. SO_ERROR on
+// Winsock is a WSA code, so translate it (mirror kama__capture_wsa) into the uniform errno set.
+static inline int32_t kama_socket_error(ptrdiff_t fd) {
+    int soerr = 0; int l = (int)sizeof soerr;
+    if (getsockopt((SOCKET)fd, SOL_SOCKET, SO_ERROR, (char*)&soerr, &l) != 0) { kama__capture_wsa(); return -1; }
+    if (soerr != 0) {
+        switch (soerr) {
+            case WSAECONNREFUSED: errno = ECONNREFUSED;  break;
+            case WSAECONNRESET:   errno = ECONNRESET;    break;
+            case WSAETIMEDOUT:    errno = ETIMEDOUT;     break;
+            case WSAEHOSTUNREACH: errno = EHOSTUNREACH;  break;
+            case WSAENETUNREACH:  errno = ENETUNREACH;   break;
+            default:              errno = soerr;         break;
+        }
+        return -1;
+    }
+    return 0;
+}
 
 #else
 
@@ -243,6 +266,7 @@ static inline int32_t kama_set_broadcast(ptrdiff_t fd, int32_t on) {
 #include <dirent.h>       // opendir, readdir, closedir
 #include <sys/socket.h>   // socket, bind, listen, accept, connect, setsockopt, send, recv
 #include <netinet/in.h>   // sockaddr_in, htons, htonl, INADDR_ANY
+#include <netinet/tcp.h>  // TCP_NODELAY
 #include <arpa/inet.h>    // inet_addr
 
 // NOT <unistd.h>: on macOS its `write`/`read` carry a `__DARWIN_ALIAS_C` asm label, and because
@@ -371,6 +395,17 @@ static inline int32_t kama_set_ttl(ptrdiff_t fd, uint32_t ttl) {
 }
 static inline int32_t kama_set_broadcast(ptrdiff_t fd, int32_t on) {
     int v = on ? 1 : 0; return (int32_t)setsockopt((int)fd, SOL_SOCKET, SO_BROADCAST, &v, (socklen_t)sizeof v);
+}
+static inline int32_t kama_set_nodelay(ptrdiff_t fd, int32_t on) {
+    int v = on ? 1 : 0; return (int32_t)setsockopt((int)fd, IPPROTO_TCP, TCP_NODELAY, &v, (socklen_t)sizeof v);
+}
+// Resolve a non-blocking connect after the socket reports writable: 0 = connected; -1 with errno set to the
+// pending/failed cause (SO_ERROR). Used by TcpStream.checkConnected().
+static inline int32_t kama_socket_error(ptrdiff_t fd) {
+    int soerr = 0; socklen_t l = (socklen_t)sizeof soerr;
+    if (getsockopt((int)fd, SOL_SOCKET, SO_ERROR, &soerr, &l) != 0) return -1;   // errno already set
+    if (soerr != 0) { errno = soerr; return -1; }
+    return 0;
 }
 
 #endif  // !_WIN32

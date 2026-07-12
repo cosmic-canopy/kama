@@ -1,0 +1,17 @@
+namespace std::net;
+
+import std::io::{IoError};
+import std::collections::{List, Array};
+
+export { ReliableStream };
+
+// A reliable, ordered byte stream. Native TCP (`TcpStream`) satisfies it today; a WebTransport bidirectional
+// stream and a WebSocket message channel satisfy the SAME contract on the web — so protocol code written over
+// a stream is transport-agnostic (`fn serve<S: ReliableStream>(ref S s)` runs everywhere). `setNonBlocking`
+// toggles the drain model; on web it is a no-op (the browser is always non-blocking) and reads that would
+// stall return `Err(WouldBlock)`.
+type contract ReliableStream for resource {
+    fn Result<usize, IoError> read(ref Array<uint8> into);
+    fn Result<usize, IoError> writeAll(ref List<uint8> bytes);
+    fn Result<Unit, IoError> setNonBlocking(bool on);
+}

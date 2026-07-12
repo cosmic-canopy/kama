@@ -1,0 +1,48 @@
+// std::net non-blocking connect — connectNonBlocking to a listening port yields a stream that (on loopback)
+// is connected instantly, so checkConnected() is Ok; to a dead port it fails synchronously with
+// ConnectionRefused (either from connectNonBlocking directly or checkConnected). Returns 55.
+import std::net::{TcpListener, TcpStream};
+import std::io::{IoError};
+
+fn bool okUnit(Result<Unit, IoError> r) { return match (r) { case Ok(u): true; case Err(e): false; }; }
+fn bool isRefused(IoError e) { return match (e) { case ConnectionRefused: true; case _: false; }; }
+
+// Connect (non-blocking) to a listening port and resolve it. Returns 0 on success.
+fn int32 connectListening(uint16 port) {
+    string host = "127.0.0.1";
+    Result<TcpStream, IoError> r = TcpStream::connectNonBlocking(host: host, port: port);
+    return match (r) {
+        case Ok(s):  (okUnit(r: s.checkConnected()) ? 0 : 1);
+        case Err(e): 2;
+    };
+}
+
+// Connect (non-blocking) to a port with nothing listening; expect ConnectionRefused. Returns 0 when refused.
+fn int32 connectDead(uint16 port) {
+    string host = "127.0.0.1";
+    Result<TcpStream, IoError> r = TcpStream::connectNonBlocking(host: host, port: port);
+    int32 rc = -1;
+    match (r) {
+        case Ok(s): {                                  // rare on loopback: resolve via checkConnected
+            Result<Unit, IoError> cc = s.checkConnected();
+            match (cc) { case Ok(u): { rc = 3; } case Err(e): { rc = isRefused(e: e) ? 0 : 4; } };
+        }
+        case Err(e): { rc = isRefused(e: e) ? 0 : 5; }
+    };
+    return rc;
+}
+
+fn int main() {
+    string host = "127.0.0.1";
+    uint16 live = cast<uint16>(47662);
+    uint16 dead = cast<uint16>(47669);                 // nothing bound here
+    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: live);
+    return match (rl) {
+        case Ok(l): {
+            int32 a = connectListening(port: live);
+            int32 b = connectDead(port: dead);
+            := ((a == 0) && (b == 0)) ? 55 : (90 + a * 4 + b);
+        }
+        case Err(e): 80;
+    };
+}

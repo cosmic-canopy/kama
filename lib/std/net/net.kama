@@ -2,6 +2,7 @@ namespace std::net;
 
 import std::io::{IoError, lastError};
 import std::collections::{List, Array};
+import std::net::{ReliableStream};
 
 export { TcpListener, TcpStream };
 
@@ -20,11 +21,18 @@ extern fn isize kama_accept(isize fd);
 extern fn isize kama_recv(isize fd, Ptr<uint8> buf, usize n);
 extern fn isize kama_send(isize fd, Ptr<uint8> buf, usize n);
 extern fn int32 kama_close_socket(isize fd);
+extern fn int32 kama_set_nonblocking(isize fd, int32 on);
+extern fn int32 kama_set_nodelay(isize fd, int32 on);
+extern fn int32 kama_socket_error(isize fd);
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
+extern fn int32 kama_EINPROGRESS();
+extern fn int32 kama_EAGAIN();
 
-// A connected TCP stream. Closes its socket on drop (RAII). Move-only.
-type resource TcpStream {
+// A connected TCP stream. Closes its socket on drop (RAII). Move-only. Implements the `ReliableStream`
+// contract (shared with the coming WebTransport-stream / WebSocket backends). Blocking by default;
+// `setNonBlocking(true)` makes read/writeAll return `Err(WouldBlock)` instead of stalling.
+type resource TcpStream implements ReliableStream {
     isize fd;
     // Adopt an already-connected socket fd. This is the escape hatch used by TcpListener.accept();
     // prefer `connect` for client sockets.
@@ -69,6 +77,59 @@ type resource TcpStream {
         return Result::Ok(value: cast<usize>(total));
     }
 
+    // Toggle non-blocking mode. In non-blocking mode, read/write that would stall return WouldBlock.
+    public fn Result<Unit, IoError> setNonBlocking(bool on) {
+        int32 v = on ? 1 : 0;
+        if (kama_set_nonblocking(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Disable Nagle's algorithm (TCP_NODELAY) — send small packets immediately. Latency-critical for games.
+    public fn Result<Unit, IoError> setNoDelay(bool on) {
+        int32 v = on ? 1 : 0;
+        if (kama_set_nodelay(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Single-syscall send — may write fewer than all bytes (or Err(WouldBlock) when the socket buffer is
+    // full). For a non-blocking sender managing its own outbound buffer; blocking senders use writeAll.
+    public fn Result<usize, IoError> write(ref List<uint8> bytes) {
+        isize n = kama_send(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
+        if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+        return Result::Err(error: lastError());
+    }
+
+    // Begin a non-blocking connect. The returned stream's connection may still be in flight: poll it for
+    // writability (see std::net::Poller), then call checkConnected() to learn the outcome. host "" = loopback.
+    public static fn Result<TcpStream, IoError> connectNonBlocking(ref string host, uint16 port) {
+        int32 ir = kama_net_init();
+        if (ir != 0) { return Result::Err(error: lastError()); }
+        isize fd = kama_socket_tcp();
+        if (fd < 0) { return Result::Err(error: lastError()); }
+        if (kama_set_nonblocking(fd: fd, on: 1) != 0) {
+            IoError e = lastError();
+            int32 rc = kama_close_socket(fd: fd);
+            return Result::Err(error: e);
+        }
+        if (kama_connect_inet(fd: fd, host: host.cstr(), port: port) != 0) {
+            int32 e = kama_last_error();
+            // EINPROGRESS (POSIX) / EAGAIN (Winsock WSAEWOULDBLOCK) = handshake in flight — NOT an error.
+            if (e != kama_EINPROGRESS() && e != kama_EAGAIN()) {
+                IoError err = lastError();
+                int32 rc = kama_close_socket(fd: fd);
+                return Result::Err(error: err);
+            }
+        }
+        return Result::Ok(value: TcpStream(fd: fd));   // connected instantly (loopback) or in flight
+    }
+
+    // Resolve a non-blocking connect once the socket reports writable: Ok if connected, else the cause
+    // (ConnectionRefused / TimedOut / …). Reads SO_ERROR — meaningful only after writability.
+    public fn Result<Unit, IoError> checkConnected() {
+        if (kama_socket_error(fd: this.fd) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
     ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
 }
 
@@ -104,6 +165,13 @@ type resource TcpListener {
             if (cfd >= 0) { return Result::Ok(value: TcpStream(fd: cfd)); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
+    }
+
+    // Toggle non-blocking mode. In non-blocking mode, accept() returns Err(WouldBlock) when the queue is empty.
+    public fn Result<Unit, IoError> setNonBlocking(bool on) {
+        int32 v = on ? 1 : 0;
+        if (kama_set_nonblocking(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
     }
 
     ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }

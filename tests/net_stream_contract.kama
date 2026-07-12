@@ -1,0 +1,57 @@
+// std::net — exercise the `ReliableStream` CONTRACT with dynamic dispatch (fat-pointer + vtbl), not the
+// concrete TcpStream. A client sends 4 bytes through writeAll-via-contract; the server reads to EOF through
+// read-via-contract and checks count + sum. Single process, client-first (buffered + FIN). Returns 55.
+import std::net::{TcpListener, TcpStream, ReliableStream};
+import std::io::{IoError};
+import std::collections::{List, Array};
+
+fn int32 writeVia(ReliableStream s, ref List<uint8> bytes) {
+    Result<usize, IoError> r = s.writeAll(bytes: bytes);
+    return match (r) { case Ok(w): cast<int32>(w); case Err(e): -1; };
+}
+fn int32 readVia(ReliableStream s, ref Array<uint8> into) {
+    Result<usize, IoError> r = s.read(into: into);
+    return match (r) { case Ok(n): cast<int32>(n); case Err(e): -1; };
+}
+
+fn int32 clientSend(uint16 port) {
+    string host = "127.0.0.1";
+    Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
+    return match (rc) {
+        case Ok(c): {
+            List<uint8> data = List();
+            data.add(item: cast<uint8>(10)); data.add(item: cast<uint8>(20));
+            data.add(item: cast<uint8>(30)); data.add(item: cast<uint8>(40));
+            := writeVia(s: c, bytes: data);            // dynamic dispatch through ReliableStream
+        }
+        case Err(e): -1;
+    };
+}
+
+fn int32 serverRecv(ref TcpStream srv) {
+    Array<uint8> buf = Array(size: 256);
+    int32 total = 0;
+    int32 sum = 0;
+    bool done = false;
+    while (!done) {
+        int32 n = readVia(s: srv, into: buf);          // dynamic dispatch through ReliableStream
+        if (n < 0) { return 43; }
+        if (n == 0) { done = true; }
+        else { int32 k = 0; while (k < n) { sum = sum + cast<int32>(buf[k]); total = total + 1; k = k + 1; } }
+    }
+    return ((total == 4) && (sum == 100)) ? 55 : 40;
+}
+
+fn int32 run(ref TcpListener l, uint16 port) {
+    int32 sent = clientSend(port: port);               // completes first (buffered send + FIN), then accept
+    if (sent != 4) { return 41; }
+    Result<TcpStream, IoError> ra = l.accept();
+    return match (ra) { case Ok(srv): serverRecv(srv: srv); case Err(e): 42; };
+}
+
+fn int main() {
+    string host = "127.0.0.1";
+    uint16 port = cast<uint16>(47663);
+    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    return match (rl) { case Ok(l): run(l: l, port: port); case Err(e): 80; };
+}
