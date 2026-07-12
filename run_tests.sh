@@ -47,16 +47,20 @@ fi
 # Servers for the wasm net::web E2E fixtures, started once for the wasm leg and torn down on exit.
 # net_ws_loopback -> a Node WebSocket echo server (Node built-ins only). net_wt_loopback -> an aioquic
 # HTTP/3 WebTransport echo server; capture the self-signed cert's hash so the browser harness can trust it.
+# Browser E2E tests (WebTransport / WebRTC) launch headless Chromium per fixture — slow. They (and their
+# aioquic / signaling-relay servers) run only when opted in with KAMA_BROWSER=1. The Node-based web tests
+# (WebSocket) are cheap and stay in the default wasm leg.
+BROWSER_TESTS="${KAMA_BROWSER:-0}"
 WS_ECHO_PID=""; WT_ECHO_PID=""; SIG_RELAY_PID=""; WT_CERT_HASH=""
 if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/ws_echo.js" ]; then
     node "$TESTS_DIR/support/ws_echo.js" 47670 >/dev/null 2>&1 &
     WS_ECHO_PID=$!
 fi
-if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/sig_relay.js" ]; then
+if [ "$WASM" = 1 ] && [ "$BROWSER_TESTS" != 0 ] && [ -f "$TESTS_DIR/support/sig_relay.js" ]; then
     node "$TESTS_DIR/support/sig_relay.js" 47690 >/dev/null 2>&1 &   # WebRTC signaling relay (net_rtc_signaling)
     SIG_RELAY_PID=$!
 fi
-if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/wt_echo.py" ]; then
+if [ "$WASM" = 1 ] && [ "$BROWSER_TESTS" != 0 ] && [ -f "$TESTS_DIR/support/wt_echo.py" ]; then
     python3 "$TESTS_DIR/support/wt_echo.py" 47680 >"$TMP/wt_echo.out" 2>/dev/null &
     WT_ECHO_PID=$!
     for _ in $(seq 1 50); do
@@ -119,7 +123,11 @@ for src in "$TESTS_DIR"/*.kama; do
     fi
 
     # WebTransport + WebRTC are browser-only (no node) — run their wasm in headless Chromium via Playwright.
+    # Opt-in (slow): skipped unless KAMA_BROWSER=1.
     BROWSER=0; grep -qE 'kama_wt_|kama_rtc_' "$src" && BROWSER=1
+    if [ "$BROWSER" = 1 ] && [ "$BROWSER_TESTS" = 0 ]; then
+        echo "SKIP $name (browser E2E — set KAMA_BROWSER=1 to run)"; continue
+    fi
 
     exe="$TMP/$name"
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
