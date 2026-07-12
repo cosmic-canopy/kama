@@ -21,6 +21,8 @@ out/
 *.js
 # hand-written stdlib JS glue (emcc --js-library) — source, not build output
 !lib/std/net/web/*.js
+# hand-written test support scripts (e.g. the WebSocket echo server), not build output
+!tests/support/*.js
 # generated C from `kama transpile`/`build` (keep generated .c out of the tree)
 tests/**/*.c
 !tests/webgpu/smoke.c

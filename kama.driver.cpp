@@ -884,7 +884,7 @@ SharedCompilationUnit preludeUnit() { return parseString(PRELUDE_SRC, "<prelude>
 // Emit an already-parsed unit to a single `.c` (`srcPath` drives #line). Returns 0 on success.
 int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
                         const std::string& outPath, bool emitLines, bool* externsMathH = nullptr,
-                        bool* externsNetWeb = nullptr)
+                        bool* externsNetWeb = nullptr, bool* externsApp = nullptr)
 {
     std::ofstream out(outPath);
     if (!out) {
@@ -896,6 +896,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     int unsupported = emitter.emit(unit);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
+    if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     out.close();
     if (unsupported > 0) {
         fprintf(stderr, "kama: %d unlowered construct(s) — see the warnings above.\n", unsupported);
@@ -920,7 +921,8 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      const std::string& headerPath, const std::string& headerName,
                      const std::vector<std::string>& cPaths, bool emitLines,
                      bool* externsMathH = nullptr,   // link hint: did the program `extern "<math.h>";`?
-                     bool* externsNetWeb = nullptr)  // link hint: did it `extern "kama_net_web.h";`?
+                     bool* externsNetWeb = nullptr,  // link hint: did it `extern "kama_net_web.h";`?
+                     bool* externsApp = nullptr)     // link hint: did it `extern "kama_app.h";`? (std::app)
 {
     std::ofstream header(headerPath);
     if (!header) { fprintf(stderr, "kama: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
@@ -939,6 +941,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
+    if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     header.close();
     for (auto& f : moduleFiles) f->close();
 
@@ -1139,9 +1142,10 @@ int main(int argc, char** argv)
 
         bool needsLibm = false;   // set if the program `extern "<math.h>";`'s (std::math / libm) -> link -lm
         bool needsNetWeb = false; // set if the program `extern "kama_net_web.h";`'s (std::net::web) -> --js-library
+        bool needsApp = false;    // set if the program `extern "kama_app.h";`'s (std::app) -> wasm -sEXIT_RUNTIME=1
         if (units.size() == 1) {
             std::string cPath = stripExtension(input) + ".c";
-            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb) != 0) return 1;
+            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp) != 0) return 1;
             cFiles.push_back(cPath);
             genFiles.push_back(cPath);
         } else {
@@ -1151,7 +1155,7 @@ int main(int argc, char** argv)
             std::vector<std::string> cPaths;   // one per unit; index-suffixed so distinct dirs never collide
             for (size_t i = 0; i < units.size(); ++i)
                 cPaths.push_back(genDir + "/" + stripExtension(baseName(unitPaths[i])) + "_" + std::to_string(i) + ".c");
-            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb) != 0) return 1;
+            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp) != 0) return 1;
             cFiles   = cPaths;
             genFiles = cPaths;
             genFiles.push_back(headerPath);
@@ -1213,6 +1217,9 @@ int main(int argc, char** argv)
                 cmd << "--js-library \"" << webdir << "/kama_net_web.js\" "
                     << "-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8 ";
         }
+        // std::app's run loop keeps the wasm runtime alive (emscripten_set_main_loop); EXIT_RUNTIME lets
+        // its quit() (emscripten_force_exit) shut down cleanly with a real exit code.
+        if (wasm && needsApp) cmd << "-sEXIT_RUNTIME=1 ";
         for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
         for (auto& lib : links) cmd << "-l" << lib << " ";       // FFI link flags
         // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm

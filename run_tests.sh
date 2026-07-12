@@ -44,6 +44,16 @@ if [ "${KAMA_WASM:-0}" != "0" ]; then
     echo "(wasm mode: build every positive fixture to wasm + run under node)"
 fi
 
+# The wasm net::web E2E fixture (net_ws_loopback) connects to a WebSocket echo server; start one (Node
+# built-ins only, no deps) for the wasm leg and tear it down on exit. Harmless for fixtures that don't use it.
+WS_ECHO_PID=""
+if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/ws_echo.js" ]; then
+    node "$TESTS_DIR/support/ws_echo.js" 47670 >/dev/null 2>&1 &
+    WS_ECHO_PID=$!
+    sleep 0.4
+fi
+trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
+
 # Build one fixture: $1 = output base path, $2… = source .kama file(s). Honors the active mode.
 build_one() {
     local out="$1"; shift
@@ -72,7 +82,7 @@ for src in "$TESTS_DIR"/*.kama; do
     # Net transports split by target. Native (TCP/UDP/Poller via raw sockets) can't run under the
     # browser/emscripten sandbox; the web transports (std::net::web — WebSocket/WebTransport over the JS
     # glue) can't run natively. Skip the half that doesn't apply to the active target.
-    uses_net_web=0; grep -q 'std::net::web' "$src" && uses_net_web=1
+    uses_net_web=0; { grep -q 'std::net::web' "$src" || grep -q 'kama_net_web.h' "$src"; } && uses_net_web=1
     uses_net=0;     grep -q 'std::net'      "$src" && uses_net=1
     if [ "$WASM" = 1 ]; then
         if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then

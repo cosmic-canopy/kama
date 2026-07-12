@@ -1,0 +1,24 @@
+// std::app run loop — target-agnostic. tick() increments a counter through the state pointer; at 5 it
+// quit()s with 55. Native: a plain while loop. Web (wasm/node): emscripten's main loop. Both exit 55.
+import std::app::{run, TickFn, quit};
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+
+fn int32 tick(Ptr state) {
+    unsafe {
+        Ptr<int32> c = cast<Ptr<int32>>(state);
+        c[0] = c[0] + 1;
+        if (c[0] >= 5) { quit(code: 55); }
+    }
+    return 1;
+}
+
+fn int main() {
+    unsafe {
+        Ptr<int32> c = cast<Ptr<int32>>(malloc(n: sizeof(int32)));
+        c[0] = 0;
+        TickFn t = tick;
+        run(tick: t, state: cast<Ptr>(c));
+    }
+    return 1;
+}
