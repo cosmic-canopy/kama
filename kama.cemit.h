@@ -249,6 +249,11 @@ struct InterfaceInfo {
     std::vector<InterfaceMethod> methods;
     std::string                  scope;
     std::vector<std::string>     usings;
+    // Per-symbol imports (`import a::b::{X,Y as Z}`) of the declaring unit — needed so a contract method
+    // signature that names an imported/library-generic type (`List<uint8>`, `Result<usize, IoError>`)
+    // resolves to its fully-qualified, monomorphized C name in the vtbl slot + the `C__as_I` cast.
+    // (Generic contracts stash the whole NsCtx via _genericContractCtx; non-generic ones carry it here.)
+    std::map<std::string, std::string> symbolAliases;
     // Kind-gate (`for value|resource|both`): which kinds may `implements` this contract. Both true = `both`.
     bool                         allowsValue = false;
     bool                         allowsResource = false;

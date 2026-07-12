@@ -2219,6 +2219,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (!cd || !cd->typeKind || *cd->typeKind != "contract" || !cd->name || !cd->name->value) continue;
         InterfaceInfo ii;
         ii.name = qualify(*cd->name->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
+        ii.symbolAliases = _nsCtx.symbolAliases;   // so contract sigs can name imported/library-generic types
         // Kind-gate: `for value|resource|both` is MANDATORY on a contract — the designer must state which
         // kinds may implement it (`both` / listing both = either).
         if (cd->forKinds) for (auto& k : *cd->forKinds) {
@@ -6354,12 +6355,14 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             emitScopeCleanup(_scopes.back(), depth + 2);
         } else if (resultTemp) {
             emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2);   // `case X: give x;`
+            emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
         } else {
             bool ph = _hoistOK; _hoistOK = true;
             std::string av = emitExpression(a->body);
             _hoistOK = ph;
             flushHoisted(depth + 2);
             indent(depth + 2); *_out << av << ";\n";
+            emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps of a statement-position arm
         }
         indent(depth + 2); *_out << "break;\n";
 
@@ -6525,12 +6528,14 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
             emitScopeCleanup(_scopes.back(), depth + 2);
         } else if (resultTemp) {
             emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2);   // `case X: give x;`
+            emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
         } else {
             bool ph = _hoistOK; _hoistOK = true;
             std::string av = emitExpression(a->body);
             _hoistOK = ph;
             flushHoisted(depth + 2);
             indent(depth + 2); *_out << av << ";\n";
+            emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps of a statement-position arm
         }
         indent(depth + 2); *_out << "break;\n";
         armEnds.push_back(_moveState);
@@ -7301,6 +7306,12 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end()) { unsupported("unknown contract in implements", ci.node->line); continue; }
         InterfaceInfo& ii = it->second;
+        // the slot casts must MATCH the vtbl struct's slot types EXACTLY, so render the contract's method
+        // sigs under the CONTRACT's own name-resolution scope (its imports) — not the implementing unit's.
+        // A non-generic contract carries that scope in `ii`; a generic-contract instance gets it (with T
+        // bound) from ContractSubst below, so only reseat here for the non-generic case.
+        NsCtx _savedNs = _nsCtx;
+        if (!ii.isGenericInst) { _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases; }
         // the slot casts must match the vtbl struct's erased signature -> `This` = the interface.
         ScopedStr _ts(_thisType, ii.name);
         ContractSubst _cs(*this, ii);   // bind T->int32 so a generic-contract slot's sig matches its vtbl
@@ -7328,6 +7339,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         if (ci.destructible) *_out << ".__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
         else                 *_out << ".__dtor = (void(*)(void*))0,\n";
         *_out << "};\n\n";
+        _nsCtx = _savedNs;   // restore (the non-generic reseat above; ContractSubst restores its own)
     }
 }
 
@@ -8513,7 +8525,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             emitStruct(*ci);   // dispatches to emitVariantStruct for a union
         }
     }
-    for (auto& kv : _interfaces) { scopeOf(kv.second.scope, kv.second.usings); emitInterfaceTypes(kv.second); }
+    for (auto& kv : _interfaces) { scopeOf(kv.second.scope, kv.second.usings, kv.second.symbolAliases); emitInterfaceTypes(kv.second); }
 
     // Forward-declare each class-interface vtable (`C__as_I`) — the definitions have external linkage (see
     // emitClassInterfaceVtables) so binding a concrete to a contract works across module boundaries.
