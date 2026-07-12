@@ -1,0 +1,15 @@
+// A3 ASan gate — a DESTRUCTIBLE concrete passed by inline ctor to a by-value contract param. The param is a
+// borrow (fat pointer), so the CALLER owns the materialized temp and drops it at scope end — exactly once.
+// ASan/LeakSanitizer-clean == the temp's heap buffer is freed once (not leaked, not double-freed).
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+type contract Shape for both { fn int32 area(); }
+type resource Cell implements Shape {
+    Ptr<int32> buf;
+    public Cell(int32 v) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = v; } }
+    public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
+    ~Cell() { unsafe { free(p: cast<Ptr>(this.buf)); } }
+}
+fn int32 useShape(Shape a) { return a.area(); }
+fn int32 main() { return useShape(a: Cell(v: 6)); }

@@ -5430,6 +5430,11 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         if (handoff != 0 && !ctorCls.empty())
             unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs "
                         "no marker", srcLine);
+        // Does the inline ctor's concrete class implement the (by-value) contract param? (A3 — pass it as a
+        // fat-pointer borrow of a materialized temp.)
+        bool ctorImplementsParam = false;
+        if (!ctorCls.empty() && isInterface(p.className))
+            for (auto& i : _classes[ctorCls].interfaces) if (i == p.className) { ctorImplementsParam = true; break; }
         if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
             && !isInterface(p.className) && !_classes[ctorCls].isIntrinsicColl) {
             std::string t = "__ctorarg" + std::to_string(_tempCounter++);
@@ -5437,6 +5442,19 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
             // A `ref` borrow keeps the temp alive through the call; if it owns anything, drop it at scope end.
             if (p.byRef && _classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
+            val = t;
+        } else if (_hoistOK && handoff == 0 && ctorImplementsParam && !p.byRef
+                   && !_classes[ctorCls].isIntrinsicColl) {
+            // A3 — an inline STACK ctor of a concrete that implements a BY-VALUE contract parameter
+            // (`useShape(a: Square(3))` where `useShape(Shape a)`). Materialize it into a temp; the by-value
+            // contract param is a BORROW (fat pointer {obj, vtbl}), so the CALLER owns the temp and drops it
+            // at scope end — a single drop, sound for value and resource concretes alike. The `isInterface`
+            // path below wraps `val` as the fat pointer. (`new` into a contract borrow stays a rule — it
+            // would leak; `ref`/`out` needs a real interface lvalue to reseat — both handled elsewhere.)
+            std::string t = "__ctorarg" + std::to_string(_tempCounter++);
+            std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
+            _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
+            if (_classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
             val = t;
         } else if (dynamic_cast<ObjectCreationNode*>(argExpr.get())) {
             // an inline `new T(...)` argument — box it into a hoisted temp (malloc + ctor + adopt/vtbl),
