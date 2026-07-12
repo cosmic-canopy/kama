@@ -44,15 +44,25 @@ if [ "${KAMA_WASM:-0}" != "0" ]; then
     echo "(wasm mode: build every positive fixture to wasm + run under node)"
 fi
 
-# The wasm net::web E2E fixture (net_ws_loopback) connects to a WebSocket echo server; start one (Node
-# built-ins only, no deps) for the wasm leg and tear it down on exit. Harmless for fixtures that don't use it.
-WS_ECHO_PID=""
+# Servers for the wasm net::web E2E fixtures, started once for the wasm leg and torn down on exit.
+# net_ws_loopback -> a Node WebSocket echo server (Node built-ins only). net_wt_loopback -> an aioquic
+# HTTP/3 WebTransport echo server; capture the self-signed cert's hash so the browser harness can trust it.
+WS_ECHO_PID=""; WT_ECHO_PID=""; WT_CERT_HASH=""
 if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/ws_echo.js" ]; then
     node "$TESTS_DIR/support/ws_echo.js" 47670 >/dev/null 2>&1 &
     WS_ECHO_PID=$!
-    sleep 0.4
 fi
-trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
+if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/wt_echo.py" ]; then
+    python3 "$TESTS_DIR/support/wt_echo.py" 47680 >"$TMP/wt_echo.out" 2>/dev/null &
+    WT_ECHO_PID=$!
+    for _ in $(seq 1 50); do
+        WT_CERT_HASH="$(awk '/CERTHASH/{print $2; exit}' "$TMP/wt_echo.out" 2>/dev/null)"
+        [ -n "$WT_CERT_HASH" ] && break
+        sleep 0.1
+    done
+fi
+[ "$WASM" = 1 ] && sleep 0.3
+trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 # Build one fixture: $1 = output base path, $2… = source .kama file(s). Honors the active mode.
 build_one() {
@@ -63,9 +73,19 @@ build_one() {
         "$KAMA" build "$@" ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} -o "$out"
     fi
 }
-# Run one built fixture: $1 = output base path, $2 = stderr capture file. Sets global `actual`.
+# Run one built fixture: $1 = output base path, $2 = stderr capture file. Sets global `actual`. A browser
+# transport (BROWSER=1, e.g. WebTransport) runs the wasm in headless Chromium via Playwright; other wasm
+# fixtures run under node; native runs the binary directly.
 run_one() {
-    if [ "$WASM" = 1 ]; then node "$1.js" 2>"$2"; else "$1" 2>"$2"; fi
+    if [ "$WASM" = 1 ]; then
+        if [ "${BROWSER:-0}" = 1 ]; then
+            KAMA_WT_CERT_HASH="$WT_CERT_HASH" node "$TESTS_DIR/support/browser_run.js" "$1.js" 2>"$2"
+        else
+            node "$1.js" 2>"$2"
+        fi
+    else
+        "$1" 2>"$2"
+    fi
     actual=$?
 }
 
@@ -94,6 +114,9 @@ for src in "$TESTS_DIR"/*.kama; do
         fi
     fi
 
+    # WebTransport is browser-only (no node) — run its wasm in headless Chromium via the Playwright harness.
+    BROWSER=0; grep -q 'kama_wt_' "$src" && BROWSER=1
+
     exe="$TMP/$name"
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
         echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue
@@ -121,6 +144,7 @@ for dir in "$TESTS_DIR"/*.d; do
     fi
     expected="$(cat "$expect_file")"
 
+    BROWSER=0   # multi-file fixtures never use a browser transport
     exe="$TMP/$name"
     if ! build_one "$exe" "$dir"/*.kama >/dev/null 2>"$TMP/$name.err"; then
         echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue

@@ -1,0 +1,76 @@
+namespace std::net::web;
+
+import std::io::{IoError};
+import std::collections::{List, Array};
+import std::net::{DatagramSocket, SocketAddr, RecvFrom};
+
+export { WtConnection, WtState };
+
+// WebTransport bindings — bodies in kama_net_web.js (emcc --js-library). Handles are int32 (< 0 = error);
+// recv returns >=0 bytes, -1 empty-but-open (WouldBlock), -2 closed. See kama_net_web.h.
+extern "kama_net_web.h";
+extern fn int32 kama_wt_connect(Ptr<int8> url);
+extern fn int32 kama_wt_state(int32 h);
+extern fn int32 kama_wt_send(int32 h, Ptr<uint8> buf, usize n);
+extern fn int32 kama_wt_recv(int32 h, Ptr<uint8> buf, usize n);
+extern fn void  kama_wt_close(int32 h);
+
+enum WtState { Connecting, Connected, Closed }
+
+// A WebTransport session's DATAGRAM channel — unreliable, unordered: the UDP-equivalent on the web, and the
+// primary web transport (WebSocket is the reliable fallback). It is a CONNECTED datagram endpoint (one peer,
+// the server), so it satisfies `DatagramSocket`: send/recv are the natural path; sendTo ignores its address
+// (there is one peer) and recvFrom reports a nil sender (WebTransport datagrams carry no per-packet address).
+// Non-blocking only. Closes the session on drop (RAII).
+type resource WtConnection implements DatagramSocket {
+    int32 handle;
+    private WtConnection(int32 handle) { this.handle = handle; }
+
+    // Open a session to an https:// URL (HTTP/3). Returns immediately; poll state() until Connected.
+    public static fn Result<WtConnection, IoError> connect(ref string url) {
+        int32 h = kama_wt_connect(url: url.cstr());
+        if (h < 0) { return Result::Err(error: IoError::Other(code: 0 - 1)); }
+        return Result::Ok(value: WtConnection(handle: h));
+    }
+
+    public fn WtState state() {
+        int32 s = kama_wt_state(h: this.handle);
+        if (s == 0) { return WtState::Connecting; }
+        if (s == 1) { return WtState::Connected; }
+        return WtState::Closed;
+    }
+
+    // Send one datagram to the connected peer.
+    public fn Result<usize, IoError> send(ref List<uint8> bytes) {
+        if (kama_wt_send(h: this.handle, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length())) != 0) {
+            return Result::Err(error: IoError::Other(code: 0 - 1));
+        }
+        return Result::Ok(value: cast<usize>(bytes.length()));
+    }
+
+    // Receive one datagram. Err(WouldBlock) if none has arrived; Err(ConnectionReset) if the session closed.
+    public fn Result<usize, IoError> recv(ref Array<uint8> into) {
+        int32 n = kama_wt_recv(h: this.handle, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+        if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+        if (n == (0 - 1)) { return Result::Err(error: IoError::WouldBlock); }
+        return Result::Err(error: IoError::ConnectionReset);
+    }
+
+    // DatagramSocket conformance: WebTransport has a single peer, so sendTo ignores `to` (delegates to send)
+    // and recvFrom reports a nil sender (0.0.0.0:0) — datagrams carry no per-packet address here.
+    public fn Result<usize, IoError> sendTo(ref List<uint8> bytes, ref SocketAddr to) {
+        return this.send(bytes: bytes);
+    }
+    public fn Result<RecvFrom, IoError> recvFrom(ref Array<uint8> into) {
+        Result<usize, IoError> r = this.recv(into: into);
+        return match (r) {
+            case Ok(n):  Result::Ok(value: RecvFrom(count: n, from: SocketAddr::fromHostIp(ip: 0ui32, port: 0ui16)));
+            case Err(e): Result::Err(error: e);
+        };
+    }
+
+    // No-op: web transports are always non-blocking (kept for DatagramSocket parity with native UdpSocket).
+    public fn Result<Unit, IoError> setNonBlocking(bool on) { return Result::Ok(value: Unit::Unit); }
+
+    ~WtConnection() { kama_wt_close(h: this.handle); }
+}

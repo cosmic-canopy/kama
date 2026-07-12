@@ -19,4 +19,12 @@ extern int32_t kama_ws_send(int32_t h, const uint8_t* buf, size_t n);   // one b
 extern int32_t kama_ws_recv(int32_t h, uint8_t* buf, size_t n);         // >=0 bytes, -1 empty, -2 closed
 extern void    kama_ws_close(int32_t h);
 
+// WebTransport datagrams (unreliable, unordered — the UDP-equivalent on the web). Same handle/state/return
+// conventions as the WebSocket calls above; send/recv move one datagram.
+extern int32_t kama_wt_connect(const char* url);              // https:// URL -> handle, or -1
+extern int32_t kama_wt_state(int32_t h);                      // 0 Connecting, 1 Connected, 3 Closed
+extern int32_t kama_wt_send(int32_t h, const uint8_t* buf, size_t n);   // one datagram; 0 ok, -1 err
+extern int32_t kama_wt_recv(int32_t h, uint8_t* buf, size_t n);         // >=0 bytes, -1 empty, -2 closed
+extern void    kama_wt_close(int32_t h);
+
 #endif  // KAMA_NET_WEB_H

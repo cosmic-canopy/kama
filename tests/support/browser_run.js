@@ -13,8 +13,17 @@ if (!appJs) { console.error('usage: browser_run.js <app.js>'); process.exit(2); 
 const dir = path.dirname(path.resolve(appJs));
 const base = path.basename(appJs);
 
+// For a WebTransport fixture against a self-signed local server, inject the cert's SHA-256 (hex, from
+// wt_echo.py via KAMA_WT_CERT_HASH) as window.__wtCertHash so the glue can pass serverCertificateHashes.
+const certHex = process.env.KAMA_WT_CERT_HASH || '';
+const certInject = certHex
+  ? 'window.__wtCertHash = new Uint8Array([' +
+      (certHex.match(/.{2}/g) || []).map((b) => parseInt(b, 16)).join(',') + ']);'
+  : '';
+
 // Predefine Module so the emscripten glue adopts our hooks (it does `Module = typeof Module ... : {}`).
 const HTML = '<!doctype html><meta charset=utf-8><body><script>' +
+  certInject +
   'window.__kamaExit = undefined;' +
   'var Module = {' +
   '  onExit:  function(c){ if (window.__kamaExit === undefined) window.__kamaExit = c|0; },' +

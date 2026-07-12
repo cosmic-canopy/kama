@@ -1,0 +1,11 @@
+// std::net::web WebTransport build/link smoke — WtConnection::connect is callable and the DatagramSocket
+// conformance compiles + links. Under Node (no WebTransport) connect returns Err cleanly; in a browser it
+// returns Ok. Either way the API is sound -> exit 55. Real datagram E2E is net_wt_loopback (browser).
+import std::net::web::{WtConnection, WtState};
+import std::io::{IoError};
+
+fn int main() {
+    string url = "https://127.0.0.1:47681/nope";
+    Result<WtConnection, IoError> r = WtConnection::connect(url: url);
+    return match (r) { case Ok(c): 55; case Err(e): 55; };
+}
