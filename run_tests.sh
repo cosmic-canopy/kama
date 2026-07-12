@@ -114,8 +114,8 @@ for src in "$TESTS_DIR"/*.kama; do
         fi
     fi
 
-    # WebTransport is browser-only (no node) — run its wasm in headless Chromium via the Playwright harness.
-    BROWSER=0; grep -q 'kama_wt_' "$src" && BROWSER=1
+    # WebTransport + WebRTC are browser-only (no node) — run their wasm in headless Chromium via Playwright.
+    BROWSER=0; grep -qE 'kama_wt_|kama_rtc_' "$src" && BROWSER=1
 
     exe="$TMP/$name"
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then

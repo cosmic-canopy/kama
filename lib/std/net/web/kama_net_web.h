@@ -27,4 +27,18 @@ extern int32_t kama_wt_send(int32_t h, const uint8_t* buf, size_t n);   // one d
 extern int32_t kama_wt_recv(int32_t h, uint8_t* buf, size_t n);         // >=0 bytes, -1 empty, -2 closed
 extern void    kama_wt_close(int32_t h);
 
+// WebRTC DataChannel (P2P). The app drives signaling: ship local_sdp to the peer, apply its SDP via
+// set_remote. Non-trickle — local_sdp is ready only after ICE gathering (0 until then) and carries all
+// candidates, so it's one string each way. dc_state: 0 Connecting, 1 Open, 3 Closed.
+extern int32_t kama_rtc_create(void);                                   // -> handle, or -1
+extern int32_t kama_rtc_datachannel(int32_t h, int32_t unreliable);     // offerer creates it; 1=UDP-like
+extern int32_t kama_rtc_offer(int32_t h);                               // begin an offer (poll local_sdp)
+extern int32_t kama_rtc_answer(int32_t h);                              // begin an answer (after set_remote)
+extern int32_t kama_rtc_local_sdp(int32_t h, uint8_t* buf, size_t n);   // >0 len, 0 not ready, -2 too small
+extern int32_t kama_rtc_set_remote(int32_t h, const uint8_t* buf, size_t n);  // apply peer SDP; 0 ok
+extern int32_t kama_rtc_dc_state(int32_t h);                            // 0 Connecting, 1 Open, 3 Closed
+extern int32_t kama_rtc_send(int32_t h, const uint8_t* buf, size_t n);  // one datagram; 0 ok, -1 err
+extern int32_t kama_rtc_recv(int32_t h, uint8_t* buf, size_t n);        // >=0 bytes, -1 empty, -2 closed
+extern void    kama_rtc_close(int32_t h);
+
 #endif  // KAMA_NET_WEB_H
