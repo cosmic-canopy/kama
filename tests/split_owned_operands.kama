@@ -1,0 +1,10 @@
+// A4 — `.split()` on an OWNED rvalue receiver AND an OWNED separator (`a + b`). Both are materialized into
+// loop-scoped temps and dropped after the loop; the Split iterator borrows their stable bytes. ASan-clean
+// == both materialized buffers freed exactly once (and each yielded piece dropped per iteration).
+fn int32 main() {
+    string a = "-";
+    string b = "-";
+    int32 n = 0;
+    foreach (string piece in ("p--q--r").split(separator: a + b)) { n = n + cast<int32>(piece.length()); }
+    return n;   // "p","q","r" -> 1+1+1 = 3
+}

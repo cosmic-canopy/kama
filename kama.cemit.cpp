@@ -4293,6 +4293,18 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     int id = _tempCounter++;
     std::string it = "__it" + std::to_string(id);
     std::string ot = "__o"  + std::to_string(id);
+    // Emit the iterable expression WITH a hoist slot: an owned rvalue operand of a compiler iterator (the
+    // receiver of `s.trim().chars()`, the separator of `x.split(a + b)`) materializes into a scope-dtor'd
+    // temp that must live for the whole loop. `outerPre` marks the enclosing scope's locals before that
+    // materialization so we can relocate those temps into the loop wrapper (declared before the iterator,
+    // dropped after the loop) below — the A4 receiver-materialize pattern.
+    size_t outerPre = _scopes.empty() ? 0 : _scopes.back().locals.size();
+    auto emitIterable = [&]() -> std::string {
+        bool ph = _hoistOK; _hoistOK = true;
+        std::string r = emitExpression(fe->expression);
+        _hoistOK = ph;
+        return r;
+    };
 
     // Resolve the iterator + method C-names (structural). `iterCall`/`nextCall`/`hasNextCall` are the
     // full direct calls; `iterCType`/`optC` the concrete types.
@@ -4319,7 +4331,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             unsupported(("the mutable iterator `" + iterCType + "` must `implements IteratorMut<T>` "
                          "to be used in a `foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
         }
-        iterInit    = iterMi->cName + "(&(" + emitExpression(fe->expression) + "))";
+        iterInit    = iterMi->cName + "(&(" + emitIterable() + "))";
         hasNextCall = hasNextMi->cName + "(&" + it + ")";
         nextCall    = nextMi->cName + "(&" + it + ")";
     } else {
@@ -4328,13 +4340,13 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         ClassInfo* ic = nullptr;
         if (iterMi) { iterCType = cTypeInInstance(container, iterMi->returnType);
                       ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
-                      iterInit = iterMi->cName + "(&(" + emitExpression(fe->expression) + "))";
+                      iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
                       if (!implementsContractTemplate(cc, "Iterable")) {   // nominal: the container declares it
                           unsupported(("`" + container + "` must `implements Iterable<T>` to be used in a "
                                        "`foreach`").c_str(), fe->line); *_out << "\n"; return;
                       } }
         else        { iterCType = container; ic = cc;                       // the container IS the iterator
-                      iterInit = emitExpression(fe->expression); }          // (needs only Iterator<T>, below)
+                      iterInit = emitIterable(); }                          // (needs only Iterator<T>, below)
         MethodInfo* nextMi = ic ? findMethod(ic, "next", nullptr) : nullptr;
         if (!nextMi || !nextMi->params.empty()) {
             unsupported(("`foreach` over `" + container + "` needs a nullary `iterator()`, or a nullary "
@@ -4350,6 +4362,17 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
 
     // Outer wrapper: the iterator, then the loop. All calls are direct (monomorphized), no vtable.
     *_out << "{\n";
+    // Relocate any owned-iterable operand temps materialized by emitIterable (e.g. `s.trim()` for
+    // `.chars()`) into a WRAPPER scope: declared before the iterator (they back its borrowed bytes) and
+    // dropped AFTER the loop (the iterator borrows them for every iteration). Recorded in the enclosing
+    // scope by hoistStringTemp; move the delta here so declaration + drop share the wrapper block.
+    Scope wrap;
+    if (!_scopes.empty() && _scopes.back().locals.size() > outerPre) {
+        wrap.locals.assign(_scopes.back().locals.begin() + outerPre, _scopes.back().locals.end());
+        _scopes.back().locals.resize(outerPre);
+    }
+    _scopes.push_back(wrap);
+    flushHoisted(depth + 1);   // declare the relocated iterable temps before the iterator line
     indent(depth + 1); *_out << iterCType << " " << it << " = " << iterInit << ";\n";
     indent(depth + 1); *_out << "while (" << (fe->isRef ? hasNextCall : std::string("1")) << ") {\n";
 
@@ -4395,6 +4418,8 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     _scopes.pop_back();
 
     indent(depth + 1); *_out << "}\n";   // close while
+    emitScopeCleanup(_scopes.back(), depth + 1);   // drop relocated iterable temps (e.g. `s.trim()`) after the loop
+    _scopes.pop_back();                            // wrapper scope
     indent(depth);     *_out << "}\n";   // close wrapper
 }
 
@@ -8054,6 +8079,43 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         unsupported("method call on unresolved receiver", call->line);
         return "0";
     }
+    // `.chars()`/`.split()` build a BORROWING iterator (Chars/Split) as a compound literal that reads each
+    // operand TWICE (.data/.len) and borrows its bytes for the WHOLE loop. An owned/side-effecting rvalue
+    // operand (`s.trim()`, `a + b`) is materialized ONCE into a scope-dtor'd temp (stable + read-once,
+    // dropped after the loop — the A2 receiver-drop pattern), so it neither desyncs the two reads nor
+    // dangles; a stable var/literal/field/`this` keeps the zero-copy path. Handled BEFORE `recvPtr` so an
+    // owned receiver isn't ALSO hoisted by the general string path below (which would double-evaluate it).
+    if (cls == "kama_string" && (method == "chars" || method == "split")) {
+        auto stableBorrow = [&](SharedExpression e, const char* what) -> std::string {
+            std::string t = hoistStringTemp(e);      // owned rvalue -> scope-dtor'd temp; "" if stable OR no slot
+            if (!t.empty()) return t;
+            if (!isStableStringRef(e.get())) {
+                unsupported((std::string("`.") + method + "()` borrows and re-reads its " + what + " across "
+                             "the whole loop, so it must be a stable reference (a variable, literal, field, "
+                             "or `this`) — bind an expression like `s.trim()` or `a + b` to a local first").c_str(),
+                            call->line);
+                return "";                            // failure sentinel (a valid ref never emits "")
+            }
+            return emitExpression(e);                 // stable ref -> direct (zero-copy, unchanged)
+        };
+        if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
+        if (method == "chars") {
+            std::string sv = stableBorrow(receiver, "receiver");
+            if (sv.empty()) return "0";
+            std::string charsC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Chars")));
+            return "((" + charsC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, 0 })";
+        }
+        // split — borrows the receiver AND the separator; materialize each independently.
+        SharedExpression sepExpr = (call->args && call->args->size() == 1) ? (*call->args)[0]->expression
+                                                                          : SharedExpression();
+        std::string sv = stableBorrow(receiver, "receiver");
+        if (sv.empty()) return "0";
+        std::string sep = sepExpr ? stableBorrow(sepExpr, "separator") : std::string("kama_string_lit(\"\", 0)");
+        if (sep.empty()) return "0";
+        std::string splitC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Split")));
+        return "((" + splitC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, (uint8_t*)("
+             + sep + ").data, (int32_t)(" + sep + ").len, 0, false })";
+    }
     std::string recvPtr;
     if (auto* ea = dynamic_cast<ElementAccessNode*>(receiver.get())) {
         // `list[i].m()` — borrow the element IN PLACE via the bounds-checked `__at`
@@ -8095,47 +8157,6 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         } else {
             recvPtr = addrOfOperand(receiver, cls, call->line);
         }
-    }
-    // `s.chars()` — a UTF-8 codepoint iterator borrowing the string's bytes, built as a value (compound
-    // literal) so it works in expression position (a foreach subject). Fields (data, len, pos) by order.
-    // Reads the receiver TWICE and borrows its bytes for the whole loop, so require a stable reference —
-    // an owned/side-effecting rvalue (`s.trim().chars()`) would desync the two reads and leak/dangle.
-    if (cls == "kama_string" && method == "chars") {
-        if (!isStableStringRef(receiver.get())) {
-            unsupported("`.chars()` borrows and re-reads its receiver across the whole loop, so it must be "
-                        "a stable reference (a variable, literal, or field) — bind an expression like "
-                        "`s.trim()` to a local first", call->line);
-            return "0";
-        }
-        if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
-        std::string charsC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Chars")));
-        std::string sv = emitExpression(receiver);
-        return "((" + charsC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, 0 })";
-    }
-    // `s.split(separator:)` — a lazy `Split` iterator (like `.chars()`): borrows the receiver's bytes AND
-    // the separator's bytes (both raw `Ptr<uint8>`, so `Split` stays a POD value type) and yields OWNED
-    // pieces. Valid while the source string is (the `.chars()` borrow contract). Fields by declaration
-    // order: data, len, sep, seplen, pos, done.
-    if (cls == "kama_string" && method == "split") {
-        if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
-        std::string splitC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Split")));
-        // The Split BORROWS the receiver's and separator's bytes for the whole loop, and this compound
-        // literal reads each TWICE (for `.data` and `.len`). A non-stable operand (a call/operator result
-        // — an owned or side-effecting rvalue) would (a) desync the two reads if it yields different bytes
-        // each eval (OOB read), and (b) leak/dangle its owned buffer (nothing keeps it alive for the loop).
-        // Require a stable reference (a variable/literal/field); bind an expression to a local first.
-        SharedExpression sepExpr = (call->args && call->args->size() == 1) ? (*call->args)[0]->expression
-                                                                          : SharedExpression();
-        if (!isStableStringRef(receiver.get()) || (sepExpr && !isStableStringRef(sepExpr.get()))) {
-            unsupported("`.split()` borrows and re-reads its receiver and separator across the whole loop, "
-                        "so each must be a stable reference (a variable, literal, or field) — bind an "
-                        "expression like `s.trim()` or `a + b` to a local first", call->line);
-            return "0";
-        }
-        std::string sv  = emitExpression(receiver);
-        std::string sep = sepExpr ? emitExpression(sepExpr) : std::string("kama_string_lit(\"\", 0)");
-        return "((" + splitC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, (uint8_t*)("
-             + sep + ").data, (int32_t)(" + sep + ").len, 0, false })";
     }
     std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line);
     // a place-returning `fn ref T m(…)` returns a `T*`; deref it so the call is an lvalue EVERYWHERE

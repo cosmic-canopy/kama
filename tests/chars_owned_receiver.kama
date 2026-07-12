@@ -1,0 +1,9 @@
+// A4 — `.chars()` on an OWNED rvalue receiver (`s.trim()`). The Chars iterator borrows the receiver's bytes
+// for the whole loop; the owned rvalue is materialized ONCE into a loop-scoped temp (read-once, stable) and
+// dropped after the loop. ASan/LeakSanitizer-clean == the materialized `s.trim()` buffer is freed exactly once.
+fn int32 main() {
+    string s = "  abc  ";
+    int32 n = 0;
+    foreach (char c in s.trim().chars()) { n = n + 1; }
+    return n;   // "abc" -> 3 codepoints
+}
