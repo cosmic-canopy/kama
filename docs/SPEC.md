@@ -1111,23 +1111,37 @@ synthesizes the two methods **as kama** and merges them into the type — **form
 abstract prelude contracts (`Serializer` / `Serialize` / `Deserializer` / `Deserialize` / `DeError`), so a new
 backend is a module with no compiler change.
 
-- **Per-field marks are mandatory** on a `@generate`d type: each field is `@field`, `@field(name: "wire")`
+- **One uniform contract — everything implements `Serialize`/`Deserialize`.** The three wire primitives are
+  *intrinsic / object / array*; every value composes from them by chaining `.serialize()`. The **intrinsics**
+  (`int8..uint64`, `float32/64`, `bool`, `string`) carry prelude retro-impl conformances (like the primitive
+  `Hashable`/`Equatable` impls); the **stdlib collections** (`List`/`Array`/`Set`/`Map`) carry conditional
+  conformances (`when [T: Serialize]`). So a collection is a first-class serializable value (`encode(v: myList)`
+  works), and the compiler has **no container special-casing** — a collection field just delegates to
+  `.serialize()` / `Type::deserialize()`. Zero-cost (static/monomorphic dispatch) and opt-in (a collection of a
+  non-serializable element simply isn't `Serialize`). `char` rides `uint32`'s numeric conformance in a
+  collection (shared C type); `Array`/`Fixed` deserialize is a forward item.
+- **Per-field marks are mandatory** on a `@generate`d product type: each field is `@field`, `@field(name: "wire")`
   (rename), or `@skip` — an unmarked field is a **compile error** (no silent omission).
-- **Coverage:** scalars, `string`, nested `@generate` types, `Optional<T>`, and `List<T>`/`Array<E>` (containers
-  are indexed via `operator[]`, so a `List<resource>` works — no `Copyable`/by-value-`foreach` requirement).
-- **Deserialize** uses a **bypass-constructor** model: the compiler zero-initializes the struct (an internal
-  `ZeroValueNode` → `(T){0}`, no user grammar) and populates fields **in place**, returning `T` directly — this
-  expresses a nested resource the all-args-constructor model couldn't.
+- **`Map<K,V>`** serializes as an array of `{"key":…,"value":…}` pairs — a *generic* `Map` can't emit a JSON
+  object because `fieldName` needs a `string` and `K` is generic (the string-key object form is a specialization).
+- **Enums** — `@generate` on an `enum` serializes a variant externally-tagged: `{"tag":"V"}` for a no-payload
+  variant, `{"tag":"V","value":{fields…}}` for one with a payload. Deserialize reads the `tag`, dispatches, and
+  constructs the variant; an unknown tag fails the read (`DeError`). Enums can't carry methods, so their
+  conformance is a **retroactive impl** (static-dispatch — reached as an enum field or a `List<Enum>` element).
+- **Product deserialize** uses a **bypass-constructor** model: the compiler zero-initializes the struct (an
+  internal `ZeroValueNode` → `(T){0}`, no user grammar) and populates fields **in place**, returning `T`
+  directly — this expresses a nested resource the all-args-constructor model couldn't.
 - **`onConstruction()`** — an opt-in lifecycle hook run on *every* construction (compiler-injected at ctor-end
   **and** by the deserialize codegen after field-set, since deserialize bypasses the ctor; it may be private). A
-  `@generate(Deserialize)` type must define it or opt out with **`@generate(Deserialize, noOnConstruction)`**.
+  `@generate(Deserialize)` product type must define it or opt out with **`@generate(Deserialize, noOnConstruction)`**.
 - **Smart-pointer fields** (`Owned`/`Shared`/`Weak`) are **rejected** as `@field` — `@skip` them and serialize
   an id, reconnecting in `onConstruction` (the object-graph story is a forward item; see ROADMAP §4).
 - **Backend:** `std::fmt` (number→string) + `std::serialization::json` (`JsonWriter`/`JsonReader`); entry points
-  `json::toString(v:)` and `json::tryParse::<T>(src:)` (the latter wraps `Result<T, DeError>`).
+  `json::encode(v:)` and `json::decode::<T>(src:)` (the latter wraps `Result<T, DeError>`). The name is
+  backend-neutral — a future `binary::encode` returns bytes.
 
 ```kama
-import std::serialization::json::{toString, tryParse};
+import std::serialization::json::{encode, decode};
 
 @generate(Serialize, Deserialize)
 type value Widget {
@@ -1138,8 +1152,8 @@ type value Widget {
 }
 
 Widget a = Widget(x: 5);                        // born = 7 (ctor-end injection)
-string j  = toString(v: a);                     // {"x":5}   (born is @skip)
-Result<Widget, DeError> r = tryParse::<Widget>(src: give j);   // born = 7 again on the deserialized value
+string j  = encode(v: a);                       // {"x":5}   (born is @skip)
+Result<Widget, DeError> r = decode::<Widget>(src: give j);   // born = 7 again on the deserialized value
 ```
 
 ## Building & debugging ✅

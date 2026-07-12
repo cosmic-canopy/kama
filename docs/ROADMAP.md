@@ -127,26 +127,28 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
 ## 4. Reflection + attributes / serialization (1.x — Phase 4)
 
 Opt-in compile-time reflection driving polymorphic serialization — the final self-hosting-stdlib step. The
-only new *language* surface is the attribute mark; serializers land as modules. **The shipped Phase 4a surface
-— `@generate`/`@field`/`@skip`, the `Serialize`/`Deserialize`/`DeError` prelude contracts, bypass-ctor
-deserialize, `onConstruction`, and the `std::serialization::json` backend (JSON round-trip) — is documented in
-[SPEC.md](SPEC.md) "Serialization".** What remains:
+only new *language* surface is the attribute mark; serializers land as modules. **Shipped and documented in
+[SPEC.md](SPEC.md) "Serialization":** `@generate`/`@field`/`@skip`, the `Serialize`/`Deserialize`/`DeError`
+prelude contracts, the uniform contract (scalar/string intrinsics + `List`/`Array`/`Set`/`Map` collections are
+`Serialize`/`Deserialize` participants, no compiler container special-casing), `@generate` enums (tagged wire
+shape), bypass-ctor deserialize, `onConstruction`, and the `std::serialization::json` backend
+(`encode`/`decode`). What remains:
 
-- **Deserialize breadth (tail)** — `Array<E>` read, and a `const` field (write-once in the ctor, so the
-  in-place field-set can't set it — a `@field const` doesn't yet parse; give it a clear diagnostic).
-- **General user `enum` serialize** — accept `@generate` on `enum` declarations + variant codegen.
+- **Deserialize breadth (tail)** — `Array<E>`/`Fixed<T,N>` read (fixed-size construction from an
+  unknown-length array); a bare `encode` of an intrinsic/enum value (needs a fat-pointer vtable — a field or
+  collection element works today); generic enums. (A `const` field is a separate general language gap — `const`
+  fields don't parse at all today.)
 - **Graph serialization (scene graphs).** One blessed `@generate` mode: by-value fields serialize inline (as
-  today), **pointer fields (`Owned`/`Shared`/`Weak`) serialize as ids** into a side table, with a two-pass id
-  fixup on read and `onConstruction` deferred to graph-complete (the `awakeFromNib` / `IDeserializationCallback`
-  point); a dangling required id → `DeError::UnresolvedReference` (the .NET `ObjectManager` analog). Builds on
-  the shipped never-null `Owned`/`Shared` invariant (definite-assignment in ctors — the fixup lands pointers
-  transiently null, then re-establishes non-null before `onConstruction`). **Next:** `SerContext`/`DeContext` +
-  a `SerializedReference` registry (Shared→retain, Weak→downgrade, Owned→transfer-once); JSON inline + id-table.
+  today), **pointer fields (`Owned`/`Shared`/`Weak`) serialize as ids** into a side table, with a register-
+  callback id fixup on read and `onConstruction` deferred to graph-complete (the `awakeFromNib` /
+  `IDeserializationCallback` point); a dangling required id → `DeError::UnresolvedReference` (the .NET
+  `ObjectManager` analog). Builds on the shipped never-null `Owned`/`Shared` invariant. **Next:**
+  `SerContext`/`DeContext` + a `SerializedReference` registry (Shared→retain, Weak→downgrade,
+  Owned→transfer-once); JSON inline + id-table. Open unknown: narrowing a type-erased `Shared<Serialize>` back
+  to a concrete handle on resolve.
 - **More back ends (modules, no compiler change)** — YAML; **binary** (packing options + `@bits(n)` bit-packing
-  + little-endian canonical); **XML** + **HTML** (XML → `<field>value</field>`, HTML a render/pretty write
-  view). Each is a `Serializer`/`Deserializer` impl + `toString`/`tryParse`-style entries.
-- **Rename `toString`** — too generic / clashes with other-language conventions; proposed `json::encode`
-  (paired with `json::tryParse`), name to confirm.
+  + little-endian canonical); **XML** + **HTML**. Each is a `Serializer`/`Deserializer` impl + `encode`/`decode`
+  entries. A bytes↔text util (`std::encoding::base64`) is a separate small module.
 - **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the existing `@`-attribute
   infra) that emits a use-site warning, optionally with a message/replacement hint. Its own small task.
 - **Optional/default parameters (language, adjacent)** — enables the "options struct with optionals" ctor

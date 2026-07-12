@@ -870,10 +870,12 @@ destructor_declaration
 
 /* `enum Name<T> : IntType `. The head reuses `type_decl_head` (so
    generic enums parse exactly like generic types); an optional `: IntType` pins the underlying
-   integer / tag width; members may carry a named payload (below) making the enum a tagged union. */
+   integer / tag width; members may carry a named payload (below) making the enum a tagged union.
+   A leading `attribute_list` (`@generate(Serialize, Deserialize)`) opts the enum into serialization
+   codegen, mirroring the attributed `type` declaration. */
 enum_declaration
   : modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
-
+  | attribute_list modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
   ;
 enum_underlying_opt
   : /* Nothing */
