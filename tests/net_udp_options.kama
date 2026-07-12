@@ -1,0 +1,32 @@
+// std::net UDP options + non-blocking — on a bound ephemeral socket: setTtl/setBroadcast/setNonBlocking all
+// succeed, localAddr() reports the OS-assigned ephemeral port (nonzero), and a non-blocking recvFrom on an
+// idle socket returns Err(WouldBlock) instead of stalling. Returns 55.
+import std::net::{UdpSocket, SocketAddr, RecvFrom};
+import std::io::{IoError};
+import std::collections::{Array};
+
+fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(u): true; case Err(e): false; }; }
+fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }
+
+fn int32 check(ref UdpSocket s) {
+    if (!isOk(r: s.setTtl(ttl: cast<uint32>(64)))) { return 71; }
+    if (!isOk(r: s.setBroadcast(on: true)))        { return 72; }
+    if (!isOk(r: s.setNonBlocking(on: true)))      { return 73; }
+
+    Result<SocketAddr, IoError> ra = s.localAddr();
+    int32 port = match (ra) { case Ok(a): cast<int32>(a.port); case Err(e): -1; };
+    if (port <= 0) { return 74; }
+
+    // Non-blocking recvFrom on an idle socket must not stall — it returns WouldBlock.
+    Array<uint8> buf = Array(size: 64);
+    Result<RecvFrom, IoError> rr = s.recvFrom(into: buf);
+    bool wb = match (rr) { case Ok(rf): false; case Err(e): isWouldBlock(e: e); };
+    if (!wb) { return 75; }
+    return 55;
+}
+
+fn int main() {
+    string host = "127.0.0.1";
+    Result<UdpSocket, IoError> r = UdpSocket::bind(host: host, port: cast<uint16>(0));
+    return match (r) { case Ok(s): check(s: s); case Err(e): 70; };
+}

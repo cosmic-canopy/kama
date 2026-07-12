@@ -1,0 +1,55 @@
+// std::net — exercise the `DatagramSocket` CONTRACT with dynamic dispatch (fat-pointer + vtbl), not the
+// concrete UdpSocket type. Proves the transport-unification abstraction works end-to-end: sendTo/recvFrom
+// are called through the contract vtbl. Two ephemeral UDP sockets, one datagram a->b. Returns 55.
+import std::net::{UdpSocket, DatagramSocket, SocketAddr, IpAddr, RecvFrom};
+import std::io::{IoError};
+import std::collections::{List, Array};
+
+// These take the CONTRACT by value (a fat-pointer borrow of the concrete) — dispatch is dynamic.
+fn int32 sendVia(DatagramSocket d, ref List<uint8> msg, ref SocketAddr to) {
+    Result<usize, IoError> r = d.sendTo(bytes: msg, to: to);
+    return match (r) { case Ok(w): cast<int32>(w); case Err(e): -1; };
+}
+fn int32 recvVia(DatagramSocket d, ref Array<uint8> into) {
+    Result<RecvFrom, IoError> r = d.recvFrom(into: into);
+    return match (r) { case Ok(rf): cast<int32>(rf.count); case Err(e): -1; };
+}
+
+fn int32 portOf(ref UdpSocket s) {
+    Result<SocketAddr, IoError> r = s.localAddr();
+    return match (r) { case Ok(a): cast<int32>(a.port); case Err(e): -1; };
+}
+
+fn int32 run(ref UdpSocket a, ref UdpSocket b) {
+    int32 bp = portOf(s: b);
+    if (bp <= 0) { return 71; }
+    SocketAddr bAddr = SocketAddr(ip: IpAddr::V4(a: cast<uint8>(127), b: cast<uint8>(0),
+                                                 c: cast<uint8>(0), d: cast<uint8>(1)), port: cast<uint16>(bp));
+    List<uint8> msg = List();
+    msg.add(item: cast<uint8>(42)); msg.add(item: cast<uint8>(99));
+    int32 sent = sendVia(d: a, msg: msg, to: bAddr);   // dynamic dispatch through DatagramSocket
+    if (sent != 2) { return 72; }
+
+    Array<uint8> buf = Array(size: 64);
+    int32 got = recvVia(d: b, into: buf);              // dynamic dispatch through DatagramSocket
+    if (got != 2) { return 73; }
+    if (cast<int32>(buf[0]) != 42) { return 74; }
+    if (cast<int32>(buf[1]) != 99) { return 75; }
+    return 55;
+}
+
+fn int main() {
+    string host = "127.0.0.1";
+    uint16 zero = cast<uint16>(0);
+    Result<UdpSocket, IoError> ra = UdpSocket::bind(host: host, port: zero);
+    return match (ra) {
+        case Ok(a): {
+            Result<UdpSocket, IoError> rb = UdpSocket::bind(host: host, port: zero);
+            := match (rb) {
+                case Ok(b): run(a: a, b: b);
+                case Err(e): 70;
+            };
+        }
+        case Err(e): 69;
+    };
+}

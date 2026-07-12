@@ -1,0 +1,77 @@
+// std::net UDP loopback — two ephemeral sockets exchange a patterned datagram on 127.0.0.1; verify byte
+// count, checksum, AND that recvFrom reports the correct sender port (proving the address round-trip).
+// Single process, blocking, deadlock-free (the datagram is kernel-buffered before the matching recv).
+// Returns 55.
+import std::net::{UdpSocket, SocketAddr, IpAddr, RecvFrom};
+import std::io::{IoError};
+import std::collections::{List, Array};
+
+fn List<uint8> pattern(int32 n) {
+    List<uint8> data = List();
+    int32 i = 0;
+    while (i < n) { data.add(item: cast<uint8>((i * 37 + 11) % 251)); i = i + 1; }
+    return give data;
+}
+
+fn int32 checksum(ref Array<uint8> buf, int32 n) {
+    int32 sum = 0;
+    int32 i = 0;
+    while (i < n) { sum = (sum + cast<int32>(buf[i])) % 1000; i = i + 1; }
+    return sum;
+}
+
+fn int32 expectSum(int32 n) {
+    int32 sum = 0;
+    int32 i = 0;
+    while (i < n) { sum = (sum + ((i * 37 + 11) % 251)) % 1000; i = i + 1; }
+    return sum;
+}
+
+fn int32 portOf(ref UdpSocket s) {
+    return match (s.localAddr()) { case Ok(a): cast<int32>(a.port); case Err(e): -1; };
+}
+
+// Send a->b, receive at b, check length + checksum + sender port == a's bound port.
+fn int32 exchange(ref UdpSocket a, ref UdpSocket b, int32 n) {
+    int32 bp = portOf(s: b);
+    int32 ap = portOf(s: a);
+    if (bp <= 0) { return 81; }
+    if (ap <= 0) { return 82; }
+    SocketAddr bAddr = SocketAddr(ip: IpAddr::V4(a: cast<uint8>(127), b: cast<uint8>(0),
+                                                 c: cast<uint8>(0), d: cast<uint8>(1)), port: cast<uint16>(bp));
+
+    List<uint8> msg = pattern(n: n);
+    int32 sent = match (a.sendTo(bytes: msg, to: bAddr)) { case Ok(w): cast<int32>(w); case Err(e): -1; };
+    if (sent != n) { return 83; }
+
+    Array<uint8> buf = Array(size: 2048);
+    int32 got = -1;
+    int32 fromPort = -1;
+    Result<RecvFrom, IoError> rr = b.recvFrom(into: buf);
+    match (rr) {
+        case Ok(rf): { got = cast<int32>(rf.count); fromPort = cast<int32>(rf.from.port); }
+        case Err(e): { got = -2; }
+    };
+    if (got == -2) { return 84; }
+    if (got != n) { return 85; }
+    if (fromPort != ap) { return 86; }
+    if (checksum(buf: buf, n: got) != expectSum(n: n)) { return 87; }
+    return 55;
+}
+
+fn int main() {
+    string host = "127.0.0.1";
+    uint16 zero = cast<uint16>(0);
+    int32 n = 1200;
+    Result<UdpSocket, IoError> ra = UdpSocket::bind(host: host, port: zero);
+    return match (ra) {
+        case Ok(a): {
+            Result<UdpSocket, IoError> rb = UdpSocket::bind(host: host, port: zero);
+            := match (rb) {
+                case Ok(b): exchange(a: a, b: b, n: n);
+                case Err(e): 80;
+            };
+        }
+        case Err(e): 79;
+    };
+}
