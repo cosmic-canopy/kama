@@ -83,6 +83,25 @@ type resource JsonWriter implements Serializer {
     public fn void writeBool(bool v) { this.sep(); this.ascii(s: boolStr(b: v)); this.needComma = true; }
     public fn void writeString(ref string v) { this.sep(); this.quoted(s: ref v); this.needComma = true; }
     public fn void writeNull() { this.sep(); this.ascii(s: "null"); this.needComma = true; }
+    // --- graph/pointer framing ---
+    // A pointer field is written as a bare integer id (0 = null/expired). The {"root":id,"objects":{...}}
+    // envelope frames the flat id table; table-entry keys are the ids, each carrying a "__type" tag.
+    public fn void writeRef(uint64 id) { this.sep(); this.ascii(s: u64Str(v: id)); this.needComma = true; }
+    public fn void beginGraph(uint64 rootId) {
+        this.sep(); this.byte(b: 123ui8);                          // {
+        this.ascii(s: "\"root\":"); this.ascii(s: u64Str(v: rootId));
+        this.ascii(s: ",\"objects\":"); this.byte(b: 123ui8);      // {
+        this.needComma = false;
+    }
+    public fn void beginTableEntry(uint64 id, string ty) {
+        this.sep();
+        this.byte(b: 34ui8); this.ascii(s: u64Str(v: id)); this.byte(b: 34ui8);   // "<id>"
+        this.byte(b: 58ui8); this.byte(b: 123ui8);                 // :{
+        this.ascii(s: "\"__type\":"); this.quoted(s: ref ty);
+        this.needComma = true;
+    }
+    public fn void endTableEntry() { this.byte(b: 125ui8); this.needComma = true; }                  // }
+    public fn void endGraph() { this.byte(b: 125ui8); this.byte(b: 125ui8); this.needComma = true; }  // }}
     public fn void writeChar(char v) {
         this.sep();
         this.byte(b: 34ui8);                        // "

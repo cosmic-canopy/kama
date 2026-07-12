@@ -308,6 +308,97 @@ static std::string buildSerializeBody(ClassDeclarationNode* cd)
     return body;
 }
 
+// A pointer field the graph machinery writes as an interned id: a direct `Shared`/`Weak`, or a *nullable*
+// edge `Optional<Shared>`/`Optional<Weak>` (essential — a never-null `Shared` can't express a list tail or
+// bootstrap a cycle). The object-graph trigger (see std::serialization::graph).
+static bool typeIsGraphRef(SharedIdentifier t)
+{
+    if (!t || !t->value) return false;
+    if (*t->value == "Shared" || *t->value == "Weak") return true;
+    if (*t->value == "Optional" && t->genericArg && t->genericArg->value
+        && (*t->genericArg->value == "Shared" || *t->genericArg->value == "Weak")) return true;
+    return false;
+}
+
+// True iff `cd` is a graph type: a `@generate` product with a (non-`@skip`) `Shared`/`Weak` field.
+static bool cdHasGraphRef(ClassDeclarationNode* cd)
+{
+    if (!cd || !cd->members) return false;
+    for (auto& m : *cd->members) {
+        auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(m.get());
+        if (!fd || !fd->type) continue;
+        bool skip = false;
+        if (fd->attributes) for (auto& at : *fd->attributes) if (at && at->name && *at->name == "skip") skip = true;
+        if (!skip && typeIsGraphRef(fd->type)) return true;
+    }
+    return false;
+}
+
+// The body of a graph type's `__serializeInto`: writes each `@field`. Non-pointer fields reuse the ordinary
+// per-field write; a `Shared`/`Weak` field is written as `w.writeRef(id: ctx.intern(...))` — interning the
+// pointee (deduped by address, enqueued for the id table). An expired `Weak` writes id `0`. "" if a
+// non-pointer field is unsupported (same rule as buildSerializeBody).
+static std::string buildGraphSerializeInto(ClassDeclarationNode* cd)
+{
+    if (!cd || !cd->members) return "";
+    std::string body;
+    for (auto& m : *cd->members) {
+        auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(m.get());
+        if (!fd || !fd->declarators) continue;
+        bool skip = false; std::string rename;
+        if (fd->attributes)
+            for (auto& at : *fd->attributes) {
+                if (!at || !at->name) continue;
+                if (*at->name == "skip") skip = true;
+                else if (*at->name == "field" && at->args)
+                    for (auto& a : *at->args)
+                        if (a && a->name && a->name->value && *a->name->value == "name" && a->expression)
+                            if (auto* sn = dynamic_cast<StringNode*>(a->expression.get()))
+                                rename = sn->value ? *sn->value : "";
+            }
+        if (skip) continue;
+        for (auto& d : *fd->declarators) {
+            if (!d->name || !d->name->value) continue;
+            std::string f = *d->name->value, wire = rename.empty() ? f : rename;
+            body += "        w.fieldName(name: \"" + wire + "\");\n";
+            if (typeIsGraphRef(fd->type)) {
+                // Intern a `Shared`-valued expression `sx` (dedup + enqueue) and write its id.
+                auto internShared = [](const std::string& sx, const std::string& k) {
+                    return "Shared<GraphNode> __gref_" + k + " = " + sx + "; "
+                           "w.writeRef(id: ctx.intern(pid: cast<uint64>(" + sx + ".__ptrId()), node: __gref_"
+                           + k + "));";
+                };
+                // Upgrade a `Weak`-valued expression `wx` to reach its pointee; an expired weak is id 0.
+                auto internWeak = [&](const std::string& wx, const std::string& k) {
+                    return "match (" + wx + ".tryUpgrade()) {\n"
+                           "            case Some(__u_" + k + "): { " + internShared("__u_" + k, k) + " }\n"
+                           "            case None: { w.writeRef(id: 0ui64); }\n"
+                           "        };";
+                };
+                const std::string& tv = *fd->type->value;
+                if (tv == "Shared") {
+                    body += "        " + internShared("this." + f, f) + "\n";
+                } else if (tv == "Weak") {
+                    body += "        " + internWeak("this." + f, f) + "\n";
+                } else {   // Optional<Shared|Weak> — a nullable edge; absent -> id 0
+                    bool optWeak = fd->type->genericArg && fd->type->genericArg->value
+                                   && *fd->type->genericArg->value == "Weak";
+                    std::string inner = optWeak ? internWeak("__o_" + f, f) : internShared("__o_" + f, f);
+                    body += "        match (this." + f + ") {\n";
+                    body += "            case Some(__o_" + f + "): { " + inner + " }\n";
+                    body += "            case None: { w.writeRef(id: 0ui64); }\n";
+                    body += "        };\n";
+                }
+            } else {
+                std::string ws = serializeWriteStmt(fd->type, "this." + f);
+                if (ws.empty()) return "";
+                body += "        " + ws + "\n";
+            }
+        }
+    }
+    return body;
+}
+
 // The scalar/string `r.readX()` expression for `type`, used for a field or a container element. "" if not
 // a scalar/string (a nested user type — its element-level deserialize is a v1-deferred follow-up).
 static std::string deserializeReadScalar(SharedIdentifier type)
@@ -614,6 +705,16 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
 {
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
+        // A graph unit: any `@generate` type has a `Shared`/`Weak` field. In such a unit EVERY
+        // `@generate(Serialize)` type implements `GraphNode` (so it can be a graph pointee — a `Shared<Leaf>`
+        // field needs `Leaf` to be a GraphNode to enqueue it), and graph-ref types additionally drive graphWrite.
+        bool unitIsGraph = false;
+        for (auto& decl : *u->codeDeclarationList) {
+            auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
+            if (!cd) continue;
+            bool s = false, d = false; generateDirections(cd, s, d);
+            if ((s || d) && cdHasGraphRef(cd)) { unitIsGraph = true; break; }
+        }
         std::vector<std::string> genEnumSrc;   // generated enum retro-impl sources, appended after the loop
         for (auto& decl : *u->codeDeclarationList) {
             if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
@@ -629,7 +730,41 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
             generateDirections(cd, ser, de);
             // Serialize is used dynamically (behind the `Serialize` interface, in `toString`), so it's MERGED
             // into the type as a normal conformance (fat-pointer vtable).
-            if (ser) {
+            if (ser && unitIsGraph) {
+                // In a graph unit every `@generate(Serialize)` type is a GraphNode (a potential pointee).
+                // `__serializeInto` writes its fields (pointers as interned ids); `__typeName` tags its entry.
+                // A graph-ref type's `serialize` drives graphWrite (root inline + drained id table); a plain
+                // pointee keeps the ordinary object `serialize` for standalone `encode`. Resolves via the
+                // injected std::serialization::graph import.
+                std::string into = buildGraphSerializeInto(cd);
+                bool generic = cd->typeParams && !cd->typeParams->empty();
+                if (!into.empty() && !generic) {
+                    std::string serMethod;
+                    if (cdHasGraphRef(cd)) {
+                        // `cast<usize>(this)` is the object's own base address (== a `Shared`/`Weak` handle's
+                        // `__ptrId` to it), so a back-edge to the root dedups to the root id. (`addr(of: this.f)`
+                        // can't be used — a `Shared` field auto-derefs to its pointee's address.)
+                        serMethod =
+                            "    public fn void serialize(ref Serializer w) {\n"
+                            "        uint64 __rp = 0ui64;\n"
+                            "        unsafe { __rp = cast<uint64>(cast<usize>(this)); }\n"
+                            "        graphWrite(w: ref w, root: this, rootPid: __rp);\n"
+                            "    }\n";
+                    } else {
+                        serMethod =
+                            "    public fn void serialize(ref Serializer w) {\n"
+                            "        w.beginObject();\n" + buildSerializeBody(cd) +
+                            "        w.endObject();\n"
+                            "    }\n";
+                    }
+                    mergeGeneratedInto(cd,
+                        "type value __KamaGenSer implements Serialize, GraphNode {\n" + serMethod +
+                        "    public fn void __serializeInto(ref Serializer w, ref SerContext ctx) {\n" + into +
+                        "    }\n"
+                        "    public fn string __typeName() { return \"" + *cd->name->value + "\"; }\n"
+                        "}\n");
+                }
+            } else if (ser) {
                 std::string body = buildSerializeBody(cd);
                 if (!(body.empty() && cd->typeParams && !cd->typeParams->empty()))
                     mergeGeneratedInto(cd,
@@ -676,6 +811,45 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
 // absolute path so cycles load exactly once. `std`/`core` are reserved roots (stdlib only);
 // other modules search the importing file's dir, then $KAMA_PATH, then the stdlib. Returns
 // false on any parse/resolution failure. `units`/`paths` come back parallel, in load order.
+// True iff a unit declares a `@generate` type with a (non-`@skip`) `Shared`/`Weak` field — i.e. an object
+// graph. Such a unit needs the `std::serialization::graph` runtime, whose import the loader injects below.
+static bool unitHasGraphType(SharedCompilationUnit u)
+{
+    if (!u || !u->codeDeclarationList) return false;
+    for (auto& decl : *u->codeDeclarationList) {
+        auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
+        if (!cd || !cd->members) continue;
+        bool ser = false, de = false; generateDirections(cd, ser, de);
+        if (!ser && !de) continue;
+        for (auto& m : *cd->members) {
+            auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(m.get());
+            if (!fd || !fd->type) continue;
+            bool skip = false;
+            if (fd->attributes) for (auto& at : *fd->attributes) if (at && at->name && *at->name == "skip") skip = true;
+            if (!skip && typeIsGraphRef(fd->type)) return true;
+        }
+    }
+    return false;
+}
+
+// Splice `import std::serialization::graph::{…}` into a graph-using unit (unless already present) so the graph
+// runtime module loads via the normal import BFS and its symbols resolve in the unit's generated `serialize`.
+static void injectGraphImport(SharedCompilationUnit u)
+{
+    if (!u) return;
+    if (!u->importDeclarationList) u->importDeclarationList = std::make_shared<ImportDeclarationList>();
+    for (auto& imp : *u->importDeclarationList)
+        if (imp && imp->modulePath && imp->modulePath->size() == 3
+            && *(*imp->modulePath)[0] == "std" && *(*imp->modulePath)[1] == "serialization"
+            && *(*imp->modulePath)[2] == "graph")
+            return;   // already imported (user-written or previously injected)
+    SharedCompilationUnit iu = parseString(
+        "import std::serialization::graph::{GraphNode, SerContext, graphWrite};\nfn int32 __gimp() { return 0; }\n",
+        "<graph-import>");
+    if (iu && iu->importDeclarationList && !iu->importDeclarationList->empty())
+        u->importDeclarationList->push_back((*iu->importDeclarationList)[0]);
+}
+
 bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* argv0,
                       std::vector<SharedCompilationUnit>& units,
                       std::vector<std::string>& paths)
@@ -701,6 +875,9 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
         std::string k = nsKey(u); if (!k.empty()) provided.insert(k);
     }
     for (size_t i = 0; i < units.size(); ++i) {          // grows as imports are discovered (BFS)
+        // A graph-using unit needs the graph runtime; inject its import here so this same BFS pass loads
+        // std::serialization::graph (and its transitive std::collections/std::memory deps).
+        if (unitHasGraphType(units[i])) injectGraphImport(units[i]);
         if (!units[i]->importDeclarationList) continue;
         std::string here = dirName(paths[i]);
         for (auto& imp : *units[i]->importDeclarationList) {
@@ -924,6 +1101,12 @@ static const char* PRELUDE_SRC =
     "    fn void writeU8(uint8 v); fn void writeU16(uint16 v); fn void writeU32(uint32 v); fn void writeU64(uint64 v);\n"
     "    fn void writeF32(float32 v); fn void writeF64(float64 v);\n"
     "    fn void writeBool(bool v); fn void writeChar(char v); fn void writeString(ref string v); fn void writeNull();\n"
+    // Graph/pointer serialization framing (used only by a graph `@generate` type — see std::serialization::graph).
+    // `writeRef` writes a pointer field as an integer id; `beginGraph`/`beginTableEntry`/`endTableEntry`/`endGraph`
+    // frame the `{"root":id,"objects":{id:{"__type":..,..}}}` id table. Text backends widen; a binary backend packs.
+    "    fn void writeRef(uint64 id);\n"
+    "    fn void beginGraph(uint64 rootId); fn void beginTableEntry(uint64 id, string ty);\n"
+    "    fn void endTableEntry(); fn void endGraph();\n"
     "}\n"
     "type contract Serialize for both { fn void serialize(ref Serializer w); }\n"
     // Deserialization: `Deserializer` is the pluggable input source (a backend's reader implements it, using

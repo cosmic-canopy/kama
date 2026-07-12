@@ -24,6 +24,9 @@ type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) 
         return Shared(p: raw, c: ctrl);                               // fresh ctor -> no marker
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
+    // Stable identity of the pointee (its heap address), for graph serialization's dedup: two `Shared`
+    // handles to the same object return the same id. Read-only; never dereferenced.
+    public fn usize __ptrId() { unsafe { return cast<usize>(this.p); } }
     public fn Shared<T> copy() {                                      // Copyable -> retain
         unsafe { this.c[0].strong = this.c[0].strong + 1; }
         return Shared(p: this.p, c: this.c);

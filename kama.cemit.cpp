@@ -2576,14 +2576,21 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         unsupported("field attributes (`@field`/`@skip`) require `@generate(...)` on the type", fd->line);
                     if (serGen && !fMarked)
                         unsupported("every field of a `@generate`d type must be marked `@field` or `@skip`", fd->line);
-                    // Smart pointers are NOT serializable: a raw heap link is meaningless on the wire, and its
-                    // target's identity/lifetime is the author's to manage. `@skip` the pointer and serialize an
-                    // id instead, then reconnect it in `onConstruction` (or the deserialize reconnection hook).
-                    if (serGen && !fSkip && fd->type && fd->type->value
-                        && (*fd->type->value == "Owned" || *fd->type->value == "Shared"
-                            || *fd->type->value == "Weak"  || *fd->type->value == "Bindable"))
-                        unsupported(("a `" + *fd->type->value + "<…>` smart-pointer field can't be serialized — `@skip` "
-                                     "it and serialize an id instead, reconnecting in `onConstruction`").c_str(), fd->line);
+                    // Smart-pointer fields = object-graph mode. `Shared`/`Weak` serialize as integer ids into a
+                    // side table (std::serialization::graph). `Owned` (tree-shaped one-owner) is a later slice;
+                    // `Bindable` (a bound callback) is never serializable. Graph *deserialize* is not built yet.
+                    if (serGen && !fSkip && fd->type && fd->type->value) {
+                        const std::string& tn = *fd->type->value;
+                        if (tn == "Owned")
+                            unsupported("`Owned<…>` graph fields aren't supported yet — use `Shared`/`Weak`, or "
+                                        "`@skip` the field and reconnect it in `onConstruction`", fd->line);
+                        else if (tn == "Bindable")
+                            unsupported("a `Bindable<…>` field can't be serialized — `@skip` it and rebind in "
+                                        "`onConstruction`", fd->line);
+                        else if ((tn == "Shared" || tn == "Weak") && ci.genDeserialize)
+                            unsupported("graph deserialize (a `Shared`/`Weak` field with `@generate(Deserialize)`) "
+                                        "isn't implemented yet — this slice supports `@generate(Serialize)` graphs", fd->line);
+                    }
 
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
@@ -5542,7 +5549,26 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             } else {
                 // by value: wrap a concrete object as an interface fat pointer (the borrow);
                 // pass an existing interface value straight through.
-                s += (!c.empty() && isClass(c)) ? fatPointer(p.className, c, val) : val;
+                std::string dt = derefTarget(c);   // Owned/Shared<T> pointee via Deref ("" if not, incl. Weak)
+                bool dtImpl = false;
+                if (!dt.empty()) {
+                    auto eit = _classes.find(dt);
+                    if (eit != _classes.end())
+                        for (auto& i : eit->second.interfaces) if (i == p.className) { dtImpl = true; break; }
+                }
+                if (dtImpl) {
+                    // `encode(v: sharedRoot)`: a `Shared`/`Owned<T>` whose pointee `T` implements the contract
+                    // — deref to the pointee (`T*`) and wrap THAT as the fat pointer, not the handle struct.
+                    s += "(" + p.className + "){ (void*)" + c + "__deref(&(" + val + ")), &"
+                       + dt + "__as_" + p.className + " }";
+                } else if (!c.empty() && isClass(c)) {
+                    // `this` already IS the object pointer (`self`), so wrap it without taking its
+                    // address — `&self` would be a `C**` (same reason a by-ref `this` passes `self`).
+                    if (dynamic_cast<ThisAccessNode*>(argExpr.get()))
+                        s += "(" + p.className + "){ (void*)(" + val + "), &" + c + "__as_" + p.className + " }";
+                    else
+                        s += fatPointer(p.className, c, val);
+                } else s += val;
             }
         } else if (p.byRef) {
             // Soundness: a non-const `ref`/`out` param can MUTATE its argument, so a

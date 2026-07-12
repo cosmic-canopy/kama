@@ -1,0 +1,27 @@
+// Object-graph serialize with a cycle: node 1 owns node 2 (Shared forward edge), node 2 holds a Weak
+// back-edge to node 1. Serialization terminates (the parent is already interned, so the back-edge just
+// writes its id) and the cycle is leak-free (the Weak breaks the ownership cycle — proven by ASan). A
+// never-null Shared can't express a tail/bootstrap a cycle, so the edges are nullable (Optional).
+import std::serialization::json::{encode};
+import std::memory::{Shared, Weak};
+
+@generate(Serialize)
+type resource Node {
+    @field int32 id;
+    @field Optional<Shared<Node>> next;   // owns (forward edge)
+    @field Optional<Weak<Node>> back;     // weak (back edge), wired after construction
+    public Node(int32 id) { this.id = id; this.next = Optional::None; this.back = Optional::None; }
+    public fn void setNext(Shared<Node> n) { this.next = Optional::Some(value: give n); }
+    public fn void setBack(Weak<Node> w) { this.back = Optional::Some(value: give w); }
+}
+
+fn int main() {
+    Shared<Node> a = new Node(id: 1);
+    Shared<Node> b = new Node(id: 2);
+    b.setBack(w: a.downgrade());          // b -> a (weak)
+    a.setNext(n: give b);                 // a -> b (owns); a is the root
+    string j = encode(v: a);
+    // root a = id 1 (next -> 2, no back); b = id 2 (no next, back -> 1). 0 = absent/expired.
+    if (j == "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Node\",\"id\":1,\"next\":2,\"back\":0},\"2\":{\"__type\":\"Node\",\"id\":2,\"next\":0,\"back\":1}}}") { return 0; }
+    return cast<int32>(j.length());
+}
