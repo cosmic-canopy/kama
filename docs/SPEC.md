@@ -1165,21 +1165,30 @@ silent no-op), pending its future scope:
 
 ## Known limitations (tracked → [ROADMAP.md](ROADMAP.md) §1)
 
-A few ownership-lowering edge cases are open at 1.0. Each **hard-errors** (never miscompiles) and has a
-clean workaround:
+Everything below **hard-errors** (never miscompiles) and has a clean workaround. Two kinds:
 
-- **Inline `new` borrowed by a `ref`/`out` or contract parameter** — an inline `new` is consumed **by
-  value** (the callee/caller becomes the owner). To borrow it (`ref`/`out`) or pass it to a contract
-  borrow, bind it to a local first — an rvalue box has no stable address to reseat. (A by-value
-  `Owned`/`Shared` argument, return, or variant payload boxes inline; see below.)
-- **A value-producing construct as a `match` SUBJECT** — `match (Optional::Some(…)) { … }` (a bare variant
-  ctor / value-producing match / variant-producing ternary as the subject) needs generic-instance inference
-  the subject position doesn't provide; bind the subject to a typed local first.
+**By-design rules** — an rvalue can't be borrowed/reseated soundly, so these stay errors, not "unbuilt":
+- **An inline `new` (or owned value) borrowed by a `ref`/`out` or contract parameter** — an inline `new` is
+  consumed **by value** (the callee/caller becomes the owner). To borrow it (`ref`/`out`) or reseat a
+  contract handle, bind it to a local first — an rvalue has no stable lvalue to write back to. (An inline
+  *stack* ctor into a **by-value** contract param does work — `f(a: Square(3))` — since the callee only
+  borrows the caller-owned temp.)
+- **An inline construct in a `do/while` condition** — the temp is needed at the bottom condition, which
+  `continue` must reach; a portable (statement-expression-free) ISO-C lowering can't express it. Bind to a
+  local.
 
-(Target-typed inline construction now works in initializers, `return`, `operator[]` place-stores,
-value-producing `match` arms, class-typed lvalue stores, call arguments, and string-rvalue indexing.
-Inline `new` heap-boxes into an owning pointer — `Owned`/`Shared`, over a concrete OR a contract element —
-in every by-value position: initializer, `return`, call argument, and variant payload.)
+**Open (deferred inference)** — one residual; bind the subject to a typed local:
+- **A value-producing construct as a `match` SUBJECT** — `match (Optional::Some(x)) { … }` (a bare variant
+  ctor / value-producing match / variant-producing ternary as the subject). The instance (`Optional<T>`)
+  must be inferred from the payload during the *discovery* pass (so its struct is emitted), but that pass
+  has no local-variable types — so only a literal payload could infer, which isn't worth a partial feature.
+  Bind to a typed local (`Optional<int32> o = Optional::Some(x); match (o) …`).
+
+(Target-typed inline construction works in initializers, `return`, `operator[]` place-stores,
+value-producing `match` arms, class-typed lvalue stores, call arguments, variant payloads, and string-rvalue
+indexing. Inline `new` heap-boxes into an owning pointer — `Owned`/`Shared`, concrete OR contract element —
+in every by-value position. An owned rvalue receiver is RAII-dropped through method chains
+(`b.make().use()`) and for `.chars()`/`.split()` over an owned rvalue.)
 
 ## Reserved/runtime
 

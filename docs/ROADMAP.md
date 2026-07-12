@@ -31,15 +31,14 @@ remains to call the language **complete**:
    resources/collections and has a clean workaround, so a "language-complete" 1.0 closes them but they don't
    block the stdlib/engine work. (Reserved later-track keywords `expose`/`volatile` stay deferred — they
    hard-error, never miscompile.)
-   - **General destroy-temporaries pass.** Owned rvalues the compiler doesn't specifically drop. Now covered:
-     operator / string-receiver / `if`-cond / `foreach` / string-`ref`, `while`/`for` **condition** temps
-     (per-iteration `dropCondTemps`; `_loopCond` gone), string-**index** rvalue receivers, and an **owned
-     rvalue method-call RECEIVER** (`make().m()` / `R().n()` — was an ASan-confirmed leak; materialized into a
-     scope-dtor'd temp, gated to fresh by-value rvalues so it can't double-free). The by-value **owned arg**
-     is sound as-is (a move into the callee's owning slot — freed once; verified leak-clean, not masked-latent).
-     Remaining tail (rarer, no live leak in the suite): an owned rvalue receiver reached through a *method
-     chain* (`builder.make().use()`) is conservatively not dropped yet (needs the callee's place-vs-value
-     return resolved); fold into the durable end-of-full-expression pass.
+   - ~~**General destroy-temporaries pass.**~~ DONE. Owned rvalues the compiler drops: operator /
+     string-receiver / `if`-cond / `foreach` / string-`ref`, `while`/`for` **condition** temps (per-iteration
+     `dropCondTemps`), string-**index** rvalue receivers, an owned rvalue method-call **receiver** — including
+     through a **method chain** (`builder.make().use()`), unified on `isPlaceReturn` so a `fn ref T` place
+     return (a borrow) is never dropped (this also closed a latent double-free introduced when free functions
+     gained `ref T` returns) — and an owned rvalue receiver of **`.chars()`/`.split()`** (materialized once
+     into a loop-scoped temp, dropped after the loop). The by-value **owned arg** is a move into the callee's
+     owning slot (freed once). ASan/UBSan-clean across the suite.
    - **Target-typed rvalue in a non-local-init position** *(ergonomic; surfaced building the containers)*. An
      inline construction that needs its type from context now works in a `Type x = …` initializer, a `return`,
      an `operator[]` place-store, a value-producing `match` arm, a **class-typed lvalue store** (`this.m =
@@ -53,12 +52,15 @@ remains to call the language **complete**:
      whose ownership transfers to the consumer (callee param / `__ret`), so no new lifetime analysis. (The
      memory's earlier "`ParamSig.className` drops the element type" / "under-developed contract dispatch"
      blockers were mis-diagnoses: the real `Owned`/`Shared` are library-monomorphized, so the param carries the
-     full instance type and named-local contract dispatch already works.) Still open, with a clean "bind to a
-     local first" workaround: (a) an inline variant construction / value-producing `match` (or a
-     variant-producing ternary) used as a `match` **SUBJECT** (`match (Optional::Some(…)) { … }` — needs
-     payload-based generic-instance inference, not just target-type threading). An inline `new` **borrowed** by
-     a `ref`/`out` or contract parameter stays a documented RULE (bind first — an rvalue box has no stable
-     address to reseat), consistent with the inline-ctor-to-contract-`ref` rule.
+     full instance type and named-local contract dispatch already works.) Also DONE: an inline **stack ctor
+     into a by-value contract parameter** (`useShape(a: Square(3))` — materialized + fat-pointer borrow,
+     caller-dropped). **Still open** (one residual, clean "bind to a local first" workaround): a
+     value-producing construct as a `match` **SUBJECT** (`match (Optional::Some(x)) { … }`). The instance must
+     be inferred from the payload during the *discovery* pass (so its struct is emitted), but that pass has no
+     local-variable types — only a literal payload could infer, which isn't worth a partial feature; the full
+     fix needs discovery-time local typing or lazy generic-struct emission. Documented RULES (not gaps): an
+     inline `new`/value **borrowed** by a `ref`/`out` or contract parameter (an rvalue has no lvalue to
+     reseat), and an inline construct in a `do/while` condition (ISO-C + `continue` semantics).
    - ~~**Remaining primitive `Hashable`/`Equatable` widths.**~~ DONE. All integer widths
      (`int8/16/32/64`, `uint8/16/32/64`) now have prelude `Hashable` (splitmix64) + `Equatable` (scalar),
      so every integer is a universal `Map`/`Set` key; floats (`float32/64`) get `Equatable` (exact `==`) but
@@ -79,9 +81,9 @@ remains to call the language **complete**:
 ## 2. Deferred language bits (tracked)
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
-**fundamental** gaps that a "language complete" 1.0 must close (the general temp-drop pass, remaining owning
-collection-element cases, `contract`-refining-`contract`, multibyte char literals) are §1's residuals. What
-remains here is genuinely later-track or opt-in.
+**fundamental** ownership/completeness gaps are closed (the general temp-drop pass — §1; `contract`-refining-
+`contract` and multibyte char literals — both shipped); the one remaining §1 residual is the value-producing
+`match` **subject** inference. What remains here is genuinely later-track or opt-in.
 
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager

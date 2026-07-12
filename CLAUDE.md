@@ -25,5 +25,5 @@ Notes:
   hand-written sources. Run `make clean` when switching between host and container builds.
 - The grammar needs bison ≥ 2.7 (the container has 3.8; macOS host needs `brew install bison`).
 - The compiler is a tree-walking C emitter (`kama.cemit.*`) over the Flex/Bison/AST front end
-  (`kama.l`, `kama.y`, `kama.ast.h`). The old LLVM backend is parked in `legacy-llvm/` (not built).
+  (`kama.l`, `kama.y`, `kama.ast.h`). (An early LLVM backend was removed; C emission is the only backend.)
 - Each language feature lands as a milestone with `tests/` fixtures verifying exit codes on native + wasm.
