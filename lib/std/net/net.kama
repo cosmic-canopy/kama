@@ -130,6 +130,9 @@ type resource TcpStream implements ReliableStream {
         return Result::Ok(value: Unit::Unit);
     }
 
+    // The raw socket handle — the intended bridge for handing this stream to a std::net::Poller.
+    public fn isize rawHandle() { return this.fd; }
+
     ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
 }
 
@@ -173,6 +176,9 @@ type resource TcpListener {
         if (kama_set_nonblocking(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
+
+    // The raw socket handle — the intended bridge for handing this listener to a std::net::Poller.
+    public fn isize rawHandle() { return this.fd; }
 
     ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
 }

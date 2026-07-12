@@ -257,10 +257,58 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
     return 0;
 }
 
+// ---- readiness poller (WSAPoll) --------------------------------------------
+// Same shape + bit convention as the POSIX branch; a heap WSAPOLLFD[] behind a Ptr. WSAPoll needs
+// _WIN32_WINNT >= 0x0600 (Vista+), satisfied by the UCRT toolchain.
+typedef struct kama__poller { WSAPOLLFD* fds; int len; int cap; } kama__poller;
+static inline void* kama_poller_create(void) {
+    kama__poller* p = (kama__poller*)malloc(sizeof *p);
+    if (!p) { errno = ENOMEM; return NULL; }
+    p->fds = NULL; p->len = 0; p->cap = 0; return p;
+}
+static inline void kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest) {
+    kama__poller* p = (kama__poller*)ph;
+    SHORT ev = 0;
+    if (interest & 1) ev = (SHORT)(ev | POLLRDNORM);
+    if (interest & 2) ev = (SHORT)(ev | POLLWRNORM);
+    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (SOCKET)fd) { p->fds[i].events = ev; p->fds[i].revents = 0; return; }
+    if (p->len == p->cap) {
+        int nc = p->cap ? p->cap * 2 : 8;
+        WSAPOLLFD* nf = (WSAPOLLFD*)realloc(p->fds, (size_t)nc * sizeof(WSAPOLLFD));
+        if (!nf) return; p->fds = nf; p->cap = nc;
+    }
+    p->fds[p->len].fd = (SOCKET)fd; p->fds[p->len].events = ev; p->fds[p->len].revents = 0; p->len++;
+}
+static inline void kama_poller_remove(void* ph, ptrdiff_t fd) {
+    kama__poller* p = (kama__poller*)ph;
+    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (SOCKET)fd) { p->fds[i] = p->fds[p->len - 1]; p->len--; return; }
+}
+static inline int32_t kama_poller_wait(void* ph, int32_t timeoutMs) {
+    kama__poller* p = (kama__poller*)ph;
+    int r = WSAPoll(p->fds, (ULONG)p->len, (int)timeoutMs);
+    if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
+    return (int32_t)r;
+}
+static inline int32_t kama_poller_ready(void* ph, ptrdiff_t fd) {
+    kama__poller* p = (kama__poller*)ph;
+    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (SOCKET)fd) {
+        int bits = 0;
+        if (p->fds[i].revents & (POLLRDNORM | POLLHUP | POLLERR)) bits |= 1;
+        if (p->fds[i].revents & POLLWRNORM) bits |= 2;
+        return (int32_t)bits;
+    }
+    return 0;
+}
+static inline void kama_poller_free(void* ph) {
+    kama__poller* p = (kama__poller*)ph;
+    if (p) { free(p->fds); free(p); }
+}
+
 #else
 
 #include <errno.h>
 #include <string.h>       // memset, strlen
+#include <stdlib.h>       // malloc, realloc, free (poller cursor)
 #include <fcntl.h>        // open, O_*
 #include <sys/stat.h>     // fstat, stat, S_ISDIR
 #include <dirent.h>       // opendir, readdir, closedir
@@ -268,6 +316,7 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 #include <netinet/in.h>   // sockaddr_in, htons, htonl, INADDR_ANY
 #include <netinet/tcp.h>  // TCP_NODELAY
 #include <arpa/inet.h>    // inet_addr
+#include <poll.h>         // poll, struct pollfd, POLLIN/POLLOUT
 
 // NOT <unistd.h>: on macOS its `write`/`read` carry a `__DARWIN_ALIAS_C` asm label, and because
 // kama_runtime.h already declared+used `write` (its bounds-trap, block scope) BEFORE this header is
@@ -353,6 +402,51 @@ static inline ptrdiff_t kama_accept(ptrdiff_t fd)                  { return (ptr
 static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)recv((int)fd, buf, n, 0); }
 static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n)  { return (ptrdiff_t)send((int)fd, buf, n, 0); }
 static inline int32_t   kama_close_socket(ptrdiff_t fd) { return (int32_t)close((int)fd); }
+
+// ---- readiness poller (poll(2)) --------------------------------------------
+// A heap `struct pollfd[]` cursor stays OPAQUE to kama (behind a `Ptr`). interest bits: 1=read, 2=write.
+// ready bits: 1=readable (incl. hangup/error so the caller reads EOF/err), 2=writable (a connect resolved).
+typedef struct kama__poller { struct pollfd* fds; int len; int cap; } kama__poller;
+static inline void* kama_poller_create(void) {
+    kama__poller* p = (kama__poller*)malloc(sizeof *p);
+    if (!p) { errno = ENOMEM; return NULL; }
+    p->fds = NULL; p->len = 0; p->cap = 0; return p;
+}
+static inline void kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest) {
+    kama__poller* p = (kama__poller*)ph;
+    short ev = 0;
+    if (interest & 1) ev = (short)(ev | POLLIN);
+    if (interest & 2) ev = (short)(ev | POLLOUT);
+    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (int)fd) { p->fds[i].events = ev; p->fds[i].revents = 0; return; }
+    if (p->len == p->cap) {
+        int nc = p->cap ? p->cap * 2 : 8;
+        struct pollfd* nf = (struct pollfd*)realloc(p->fds, (size_t)nc * sizeof(struct pollfd));
+        if (!nf) return; p->fds = nf; p->cap = nc;
+    }
+    p->fds[p->len].fd = (int)fd; p->fds[p->len].events = ev; p->fds[p->len].revents = 0; p->len++;
+}
+static inline void kama_poller_remove(void* ph, ptrdiff_t fd) {
+    kama__poller* p = (kama__poller*)ph;
+    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (int)fd) { p->fds[i] = p->fds[p->len - 1]; p->len--; return; }
+}
+static inline int32_t kama_poller_wait(void* ph, int32_t timeoutMs) {
+    kama__poller* p = (kama__poller*)ph;
+    return (int32_t)poll(p->fds, (nfds_t)p->len, (int)timeoutMs);   // -1 errno; 0 timeout; >0 count
+}
+static inline int32_t kama_poller_ready(void* ph, ptrdiff_t fd) {
+    kama__poller* p = (kama__poller*)ph;
+    for (int i = 0; i < p->len; i++) if (p->fds[i].fd == (int)fd) {
+        int bits = 0;
+        if (p->fds[i].revents & (POLLIN | POLLHUP | POLLERR)) bits |= 1;
+        if (p->fds[i].revents & POLLOUT) bits |= 2;
+        return (int32_t)bits;
+    }
+    return 0;
+}
+static inline void kama_poller_free(void* ph) {
+    kama__poller* p = (kama__poller*)ph;
+    if (p) { free(p->fds); free(p); }
+}
 
 // ---- UDP datagrams ---------------------------------------------------------
 // Same conventions as TCP: `sockaddr_in` fill stays in C, kama passes fd:isize + host:cstr + port:uint16.

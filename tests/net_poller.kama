@@ -1,0 +1,52 @@
+// std::net Poller — watch a non-blocking listener for readability: wait() times out to 0 with nothing
+// pending, then reports the listener readable once a client connects, and accept() succeeds. Returns 55.
+import std::net::{TcpListener, TcpStream, Poller, Interest, Ready};
+import std::io::{IoError};
+
+fn bool okUnit(Result<Unit, IoError> r) { return match (r) { case Ok(u): true; case Err(e): false; }; }
+
+fn int32 acceptOne(ref TcpListener l) {
+    Result<TcpStream, IoError> ra = l.accept();
+    return match (ra) { case Ok(s): 55; case Err(e): 65; };
+}
+
+fn int32 run(ref TcpListener l, ref Poller p, uint16 port) {
+    if (!okUnit(r: l.setNonBlocking(on: true))) { return 60; }
+    isize lfd = l.rawHandle();
+    p.add(fd: lfd, interest: Interest::Read);
+
+    // nothing pending -> wait times out to 0
+    Result<int32, IoError> w0 = p.wait(timeoutMs: 50);
+    int32 t0 = match (w0) { case Ok(n): n; case Err(e): -1; };
+    if (t0 != 0) { return 61; }
+
+    // client connects; keep it alive through the wait+accept (dropped at the arm end)
+    string host = "127.0.0.1";
+    Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
+    return match (rc) {
+        case Ok(c): {
+            int32 res = 62;
+            Result<int32, IoError> w1 = p.wait(timeoutMs: 1000);
+            int32 n = match (w1) { case Ok(k): k; case Err(e): -1; };
+            if (n >= 1) {
+                Ready rd = p.readyFor(fd: lfd);
+                if (rd.readable) { res = acceptOne(l: l); } else { res = 63; }
+            }
+            := res;
+        }
+        case Err(e): 64;
+    };
+}
+
+fn int main() {
+    string host = "127.0.0.1";
+    uint16 port = cast<uint16>(47664);
+    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    return match (rl) {
+        case Ok(l): {
+            Result<Poller, IoError> rp = Poller::create();
+            := match (rp) { case Ok(p): run(l: l, p: p, port: port); case Err(e): 81; };
+        }
+        case Err(e): 82;
+    };
+}
