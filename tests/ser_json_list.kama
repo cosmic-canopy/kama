@@ -1,5 +1,5 @@
 // A List field serializes to a JSON array — both a primitive element list and a nested-object element list.
-import std::serialization::json::{toString};
+import std::serialization::json::{encode};
 import std::collections::{List};
 @generate(Serialize)
 type value Pt { @field int32 x; @field int32 y; public Pt(int32 x, int32 y) { this.x = x; this.y = y; } }
@@ -16,7 +16,7 @@ fn int main() {
     List<int32> ids = List(); ids.add(item: 7); ids.add(item: 8);
     List<Pt> pts = List(); pts.add(item: Pt(x: 1, y: 2)); pts.add(item: Pt(x: 3, y: 4));
     Scene s = Scene(name: "lvl1", ids: give ids, pts: give pts);
-    string j = toString(v: s);
+    string j = encode(v: s);
     if (j == "{\"name\":\"lvl1\",\"ids\":[7,8],\"pts\":[{\"x\":1,\"y\":2},{\"x\":3,\"y\":4}]}") { return 0; }
     int32 n = cast<int32>(j.length());
     if (n == 0) { return 255; }

@@ -1237,6 +1237,23 @@ enum_declaration
           $3->genericArg  = SharedIdentifier();
       }
       $$ = n; }
+  | attribute_list modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
+    { auto n = std::make_shared<EnumDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $6);
+      n->underlyingType = $5;
+      n->attributes = $1;   /* `@generate(Serialize, Deserialize) enum …` */
+      if ($4->genericArgs && !$4->genericArgs->empty()) {
+          n->typeParams = std::make_shared<StringList>();
+          n->typeBounds = std::make_shared<BoundsList>();
+          n->constParams = std::make_shared<StringList>();
+          for (auto& a : *$4->genericArgs) if (a && a->value) {
+              n->typeParams->push_back(a->value);
+              n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+              if (a->isConstParam) n->constParams->push_back(a->value);
+          }
+          $4->genericArgs = SharedIdentifierList();
+          $4->genericArg  = SharedIdentifier();
+      }
+      $$ = n; }
   ;
 enum_underlying_opt
   : /* Nothing */        { $$ = SharedIdentifier(); }

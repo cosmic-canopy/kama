@@ -5154,7 +5154,12 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
 ClassInfo* CEmitter::retroTargetInfo(const std::string& tkey)
 {
     auto ti = _classes.find(tkey);
-    if (ti != _classes.end() && ti->second.isIntrinsicColl) return &ti->second;
+    // An intrinsic collection (`string`→`kama_string`) OR a tagged-union enum: both emit their retro-impl
+    // method bodies through the dedicated retro path (emitModuleContent / the prelude pass), NOT the normal
+    // per-class machinery — a `ClassDeclarationNode` class emits via emitClassDefinitions and returns nullptr
+    // here, but an `EnumDeclarationNode` never reaches that path, so an `implements Serialize for MyEnum`
+    // body would otherwise be declared-but-undefined.
+    if (ti != _classes.end() && (ti->second.isIntrinsicColl || ti->second.isVariant)) return &ti->second;
     auto pi = _primConformances.find(tkey);
     if (pi != _primConformances.end()) return &pi->second;
     return nullptr;
@@ -5558,6 +5563,12 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 // a library heap-owner (Owned/Shared) borrows its pointee via the Deref contract's
                 // `deref()` (-> T*), uniformly with `ref stackValue` — no `.ptr` field is assumed.
                 s += argCls + "__deref(&(" + val + "))";
+            } else if (dynamic_cast<ThisAccessNode*>(argExpr.get())) {
+                // `this` lowers to `self`, which is ALREADY a `T*` (the receiver pointer). Pass it straight
+                // to a `ref T` param — `&(self)` would hand over the address of the param slot (a `T**`), so
+                // a whole-`this` borrow (`w.writeString(v: this)` in a retro-impl on `string`) would read the
+                // pointer's own bytes, not the value. (Cast for a `ref Base` upcast.)
+                s += (isClass(p.className) && argCls != p.className) ? ("(" + p.className + "*)" + val) : val;
             } else {
                 // A `ref T` arg must BE a T, a subclass of T (upcast to `ref Base`), or a
                 // smart-ptr / Deref<T> owner of T (both handled above). An unrelated class — most
@@ -6798,7 +6809,12 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 // always copied — so only a stray marker on a fell-through resource rvalue is an error.
                 bool plainValue = argCls.empty()
                     || (_classes.count(argCls) && _classes[argCls].kind == TypeKind::Value);
-                if (handoff && !plainValue && !isSmartPtrClass(argCls))
+                // A tagged-union (enum) value accepts `give` into the outer variant — the tag+payload copies
+                // bitwise (a no-op move for a non-owning enum like `Result::Ok(value: give myEnum)` in
+                // `decode<T>`). An owning-payload enum move is a deferred follow-up (it would need the source
+                // dtor suppressed here). A plain value's `give` is likewise a no-op copy.
+                bool variantVal = !argCls.empty() && _classes.count(argCls) && _classes[argCls].isVariant;
+                if (handoff && !plainValue && !variantVal && !isSmartPtrClass(argCls))
                     unsupported("`give`/`copy` apply to a named smart pointer / resource value", srcLine);
                 field = val;
             }
@@ -6945,17 +6961,22 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         std::string typeName = resolveUserName(*qual->back(), tq);
         // Fallback: a bound type-parameter head (`T::make` in a generic `fn f<T: C>()`) substitutes to its
         // monomorphized concrete type, so a static contract method on a type-param resolves (e.g.
-        // `json::tryParse<T: Deserialize>` calling `T::deserialize(...)`).
-        if (!_classes.count(typeName)) {
+        // `json::decode<T: Deserialize>` calling `T::deserialize(...)`, or a collection's `T::deserialize`).
+        // The concrete type may be a PRIMITIVE whose static conformance lives in `_primConformances`
+        // (`int32::deserialize` -> `r.readI32()`), so consider both tables.
+        if (!_classes.count(typeName) && !_primConformances.count(typeName)) {
             auto sit = _typeSubst.find(*qual->back());
             if (sit != _typeSubst.end() && sit->second) {
                 std::string concrete = cType(sit->second);
-                if (_classes.count(concrete)) typeName = concrete;
+                if (_classes.count(concrete) || _primConformances.count(concrete)) typeName = concrete;
             }
         }
-        if (_classes.count(typeName)) {
+        // A user type resolves in `_classes`; a primitive/intrinsic-collection static (a retro-impl
+        // conformance) resolves via `retroTargetInfo` (`_primConformances`).
+        ClassInfo* stci = _classes.count(typeName) ? &_classes[typeName] : retroTargetInfo(typeName);
+        if (stci) {
             ClassInfo* owner = nullptr;
-            MethodInfo* mi = findMethod(&_classes[typeName], name, &owner);
+            MethodInfo* mi = findMethod(stci, name, &owner);
             if (mi && mi->isStatic) {
                 canAccess(owner, mi->visibility, name, call->line);
                 // a place-returning `static fn ref T` returns a `T*` — deref like a free fn (no self)
@@ -7318,7 +7339,10 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         // EXTERNAL linkage (not `static`) + a forward decl in the shared header, so a value can be bound to
         // this contract across module boundaries (e.g. a generic `json::parse<T>`/`toString<T>` in one unit
         // instantiated with a type whose vtable is defined in another). Defined once, in the owning unit.
-        *_out << "const " << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
+        // A generic-type INSTANCE (`List<int32>`) is header-inline (`_emitStaticClass`), so ITS vtable is
+        // `static` — defined in every TU that includes the header, no extern decl (see the skip above).
+        *_out << (_emitStaticClass ? "static const " : "const ")
+              << ii.name << "_vtbl " << ci.name << "__as_" << ii.name << " = {\n";
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&ci, m.name, &owner);
@@ -7655,7 +7679,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     _emitStaticClass = true;
     if      (phase == 0) { emitStruct(ci); }   // forward typedef now emitted in the phase-(a) loop
     else if (phase == 1) emitClassPrototypes(ci);
-    else                 emitClassDefinitions(ci);
+    else { emitClassDefinitions(ci); emitClassInterfaceVtables(ci); }   // + `static` C__as_I vtables (e.g. List<int32> as Serialize)
     _emitStaticClass = false;
     _typeSubst.clear();
     _nsCtx = savedCtx;
@@ -8368,6 +8392,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     mi.node         = md;
                     mi.isConst      = md->isConst;
                     mi.isPlaceReturn = md->isRef;
+                    mi.isStatic     = modHas(md->modifiers, "static");  // a static factory (no `self`) — e.g. `deserialize`
                     mi.visibility   = Visibility::Public;   // a contract's methods are public
                     mi.isRetro      = true;                 // emitted static-inline in the header (below)
                     tci.methods[mname] = mi;
@@ -8531,6 +8556,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // emitClassInterfaceVtables) so binding a concrete to a contract works across module boundaries.
     for (ClassInfo* ci : classes) {
         if (ci->isIntrinsicColl || ci->isExternStruct) continue;
+        if (ci->isGenericInst) continue;   // a generic instance's vtables are emitted `static` inline (below), no extern decl
         for (auto& ifn : ci->interfaces) {
             bool retro = false;
             for (auto& r : ci->retroInterfaces) if (r == ifn) { retro = true; break; }
@@ -8581,8 +8607,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                     auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                     if (!md || !md->name || !md->name->value) continue;
                     std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+                    // a `static` retro method has no implicit `self` receiver param
+                    const char* recv = modHas(md->modifiers, "static") ? nullptr : tcip->name.c_str();
                     *_out << stat << ret << " " << tcip->name << "__" << *md->name->value << "("
-                          << paramListC(md->params, tcip->name.c_str()) << ");\n";
+                          << paramListC(md->params, recv) << ");\n";
                 }
             }
         }
@@ -8656,7 +8684,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 line(md->line);
                 _returnIsPlace = md->isRef;
                 emitMethodOrCtorBody(tcip->name + "__" + *md->name->value, ret.c_str(),
-                                     md->params, md->body, *tcip, false, md->isConst, false);
+                                     md->params, md->body, *tcip, false, md->isConst,
+                                     modHas(md->modifiers, "static"));
                 _returnIsPlace = false;
             }
         }
@@ -8704,7 +8733,8 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             line(md->line);
             _returnIsPlace = md->isRef;
             emitMethodOrCtorBody(tci.name + "__" + *md->name->value, ret.c_str(),
-                                 md->params, md->body, tci, false, md->isConst, false);
+                                 md->params, md->body, tci, false, md->isConst,
+                                 modHas(md->modifiers, "static"));
             _returnIsPlace = false;
         }
     }

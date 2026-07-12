@@ -195,6 +195,22 @@ static std::string typeToStr(SharedIdentifier t)
     return s;
 }
 
+// A type's FULL source spelling incl. every generic arg (`Map<string, int32>`, `List<Point>`) — unlike
+// typeToStr, which drops all but the first arg. Used as a turbofish type arg (`decode::<Map<K,V>>`).
+static std::string typeSpell(SharedIdentifier t)
+{
+    if (!t || !t->value) return "";
+    std::string s = *t->value;
+    if (t->genericArgs && !t->genericArgs->empty()) {
+        s += "<";
+        for (size_t i = 0; i < t->genericArgs->size(); i++) { if (i) s += ", "; s += typeSpell((*t->genericArgs)[i]); }
+        s += ">";
+    } else if (t->genericArg) {
+        s += "<" + typeSpell(t->genericArg) + ">";
+    }
+    return s;
+}
+
 // The Serializer call that writes a field of `type` read via `access` (e.g. "this.x"). Primitive/string map
 // to a per-width write; a List/Array/Fixed becomes a JSON array (foreach over the elements); any other
 // (user) type must itself be `Serialize` and is recursed into.
@@ -209,11 +225,10 @@ static std::string serializeWriteStmt(SharedIdentifier type, const std::string& 
         return "match (" + access + ") { case Some(__opt): " + inner
              + " case None: w.writeNull(); };";
     }
-    // Collections -> a JSON array. The element write recurses (primitive or nested Serialize type). Indexed
-    // (`[__i]`) rather than `foreach`, because `foreach` needs a `Copyable` element (its `iterator()` is gated
-    // `when [T: Copyable]`) — a `List<resource>` isn't Copyable; `operator[]` returns a `ref T` for any T.
-    if (type->value && type->genericArg &&
-        (*type->value == "List" || *type->value == "Array" || *type->value == "Fixed")) {
+    // `Fixed<T,N>` is a compiler-intrinsic (macro) type and can't carry a hand-written conformance, so it
+    // keeps this inline JSON-array emission. `List`/`Array`/`Map`/`Set` (and user types) implement `Serialize`
+    // themselves, so they fall through to the `access.serialize(w: w)` delegation below (uniform contract).
+    if (type->value && type->genericArg && *type->value == "Fixed") {
         std::string elemWrite = serializeWriteStmt(type->genericArg, access + "[__i]");
         if (elemWrite.empty()) return "";
         return "w.beginArray(count: " + access + ".length());\n"
@@ -326,10 +341,15 @@ static std::string deserializeReadElem(SharedIdentifier type)
     if (!rs.empty()) return rs;
     if (type && type->value && type->builtInVal == 0) {
         const std::string& n = *type->value;
-        // exclude the compiler container/smart-pointer wrappers — only a plain nested user type here
-        if (n != "Optional" && n != "List" && n != "Array" && n != "Fixed"
+        // Delegate to the type's static `deserialize` factory — a nested user type OR a collection that
+        // implements `Deserialize` (`List`/`Map`/`Set`). `Array`/`Fixed` deserialize is a follow-up (fixed-size
+        // construction from an unknown-length array); `Optional` is handled below; smart pointers are rejected.
+        // Route through the prelude `__kamaDeserialize<T>` helper: there is no surface syntax to call a static
+        // on a generic instance (`List<int32>::deserialize` / `List::<int32>::deserialize` both fail to parse),
+        // but a turbofish on a free fn works (`__kamaDeserialize::<List<int32>>(r)`), and it calls `T::deserialize`.
+        if (n != "Optional" && n != "Array" && n != "Fixed"
             && n != "Owned" && n != "Shared" && n != "Weak" && n != "Bindable")
-            return typeToStr(type) + "::deserialize(r: r)";
+            return "__kamaDeserialize::<" + typeSpell(type) + ">(r: r)";
     }
     return "";
 }
@@ -347,11 +367,8 @@ static std::string deserializeFieldSet(SharedIdentifier type, const std::string&
         return "if (r.readNull()) { " + dst + " = Optional::None; } "
                "else { " + dst + " = Optional::Some(value: " + re + "); }";
     }
-    if (type->value && type->genericArg && *type->value == "List") {
-        std::string re = deserializeReadElem(type->genericArg);
-        if (re.empty()) return "";
-        return "r.beginArray(); while (r.moreElems()) { " + dst + ".add(item: " + re + "); }";
-    }
+    // `List`/`Map`/`Set` fields delegate to the collection's own static `deserialize` (via `deserializeReadElem`
+    // below) — `dst = List<T>::deserialize(r)` — no inline append loop. `Optional` stays special (null mapping).
     std::string re = deserializeReadElem(type);
     if (re.empty()) return "";
     return dst + " = " + re + ";";
@@ -478,15 +495,134 @@ static void injectZeroInitForDeserialize(ClassDeclarationNode* cd)
     }
 }
 
+// Read `@generate(Serialize|Deserialize)` off an enum declaration.
+static void enumDirections(EnumDeclarationNode* ed, bool& ser, bool& de)
+{
+    ser = false; de = false;
+    if (!ed->attributes) return;
+    for (auto& at : *ed->attributes) {
+        if (!at || !at->name || *at->name != "generate" || !at->args) continue;
+        for (auto& a : *at->args)
+            if (a && a->name && a->name->value && !a->expression) {
+                if (*a->name->value == "Serialize")   ser = true;
+                if (*a->name->value == "Deserialize") de  = true;
+            }
+    }
+}
+
+// Enum serialize: a free `ref Enum` helper that `match`es the value (so a primitive receiver resolves — see
+// the string retro-impl) writing `{"tag":"Variant"[,"value":{fields}]}`, plus the retro `implements Serialize`
+// that delegates to it. Enums can't carry methods (grammar), so the conformance is RETROACTIVE — static
+// dispatch, which is exactly how an enum field (`this.e.serialize(w)`) / a `List<Enum>` element is reached.
+static std::string buildEnumSerialize(EnumDeclarationNode* ed)
+{
+    if (!ed || !ed->identifier || !ed->identifier->value || !ed->body) return "";
+    if (ed->typeParams && !ed->typeParams->empty()) return "";   // generic enum: deferred
+    std::string en = *ed->identifier->value, arms;
+    for (auto& m : *ed->body) {
+        auto* mm = dynamic_cast<EnumMemberDeclarationNode*>(m.get());
+        if (!mm || !mm->identifier || !mm->identifier->value) continue;
+        std::string vn = *mm->identifier->value;
+        if (mm->payload && !mm->payload->empty()) {
+            std::string binds, writes;
+            for (size_t i = 0; i < mm->payload->size(); i++) {
+                auto* p = dynamic_cast<FunctionParameterNode*>((*mm->payload)[i].get());
+                if (!p || !p->identifier || !p->identifier->value) return "";
+                // Bind the payload to a PREFIXED name (`__p_<field>`), not the field name itself — a field
+                // named `w` or `__e` would otherwise shadow the Serializer param / match subject and
+                // `w.fieldName(...)` would dispatch on the payload. The field name is only the wire key.
+                std::string fn = *p->identifier->value, bind = "__p_" + fn;
+                std::string ws = serializeWriteStmt(p->type, bind);
+                if (ws.empty()) return "";
+                if (i) binds += ", ";
+                binds  += bind;
+                writes += "            w.fieldName(name: \"" + fn + "\"); " + ws + "\n";
+            }
+            arms += "        case " + vn + "(" + binds + "): {\n"
+                    "            w.fieldName(name: \"tag\"); string __t = \"" + vn + "\"; w.writeString(v: ref __t);\n"
+                    "            w.fieldName(name: \"value\"); w.beginObject();\n" + writes +
+                    "            w.endObject();\n        }\n";
+        } else {
+            arms += "        case " + vn + ": { w.fieldName(name: \"tag\"); string __t = \"" + vn
+                  + "\"; w.writeString(v: ref __t); }\n";
+        }
+    }
+    if (arms.empty()) return "";
+    return "fn void __kamaSer_" + en + "(ref " + en + " __e, ref Serializer w) {\n"
+           "    w.beginObject();\n    match (__e) {\n" + arms + "    };\n    w.endObject();\n}\n"
+           "implements Serialize for " + en + " {\n"
+           "    public fn void serialize(ref Serializer w) { __kamaSer_" + en + "(__e: this, w: w); }\n}\n";
+}
+
+// Enum deserialize: a retro static factory (rides the retro-static-method support). Reads the `tag` first,
+// then dispatches — a no-payload variant is `Enum::V`, a payload variant reads its `value` object positionally
+// (`moreFields` consumes the structure) and constructs `Enum::V(field: [give] read)`. An unknown tag flags the
+// reader (`r.fail()`) and returns a no-payload variant as a benign discarded default.
+static std::string buildEnumDeserialize(EnumDeclarationNode* ed)
+{
+    if (!ed || !ed->identifier || !ed->identifier->value || !ed->body) return "";
+    if (ed->typeParams && !ed->typeParams->empty()) return "";
+    std::string en = *ed->identifier->value, chain, dflt;
+    bool first = true;
+    for (auto& m : *ed->body) {
+        auto* mm = dynamic_cast<EnumMemberDeclarationNode*>(m.get());
+        if (!mm || !mm->identifier || !mm->identifier->value) continue;
+        std::string vn = *mm->identifier->value, body;
+        bool hasPayload = mm->payload && !mm->payload->empty();
+        if (!hasPayload && dflt.empty()) dflt = vn;   // a no-payload variant is the unknown-tag fallback
+        if (hasPayload) {
+            std::string reads, args;
+            for (size_t i = 0; i < mm->payload->size(); i++) {
+                auto* p = dynamic_cast<FunctionParameterNode*>((*mm->payload)[i].get());
+                if (!p || !p->identifier || !p->identifier->value) return "";
+                std::string fn = *p->identifier->value, re = deserializeReadElem(p->type);
+                if (re.empty()) return "";
+                std::string idx = std::to_string(i);
+                reads += "            bool __pf" + idx + " = r.moreFields(); string __pk" + idx
+                       + " = r.fieldName(); " + typeSpell(p->type) + " __p_" + fn + " = " + re + ";\n";
+                // Always `give` the read-into-local payload: a no-op for a true scalar (int/float/bool),
+                // a move for a `string`/collection/resource — so a `string` payload isn't rejected as a bare
+                // named collection into a variant (`string` carries a `builtInVal` but still owns a buffer).
+                if (i) args += ", ";
+                args += fn + ": give __p_" + fn;
+            }
+            body = "            bool __fv = r.moreFields(); string __kv = r.fieldName();\n"
+                   "            r.beginObject();\n" + reads +
+                   "            bool __pe = r.moreFields();\n            bool __oe = r.moreFields();\n"
+                   "            return " + en + "::" + vn + "(" + args + ");\n";
+        } else {
+            body = "            bool __oe = r.moreFields();\n            return " + en + "::" + vn + ";\n";
+        }
+        chain += std::string("        ") + (first ? "if" : "else if")
+               + " (__tag.equals(other: \"" + vn + "\")) {\n" + body + "        }\n";
+        first = false;
+    }
+    if (dflt.empty()) return "";   // no no-payload variant to default to on failure (deferred)
+    return "implements Deserialize for " + en + " {\n"
+           "    public static fn " + en + " deserialize(Deserializer r) {\n"
+           "        r.beginObject();\n"
+           "        bool __f = r.moreFields(); string __k = r.fieldName(); string __tag = r.readString();\n"
+         + chain +
+           "        r.fail();\n        return " + en + "::" + dflt + ";\n    }\n}\n";
+}
+
 // Scan every unit for `@generate` types and give each the generated `serialize`/`deserialize` method +
 // `implements Serialize`/`Deserialize` clause, MERGED INTO THE TYPE ITSELF (a normal conformance with a
-// fat-pointer vtable — a retroactive block is static-dispatch-only and couldn't be a contract value).
+// fat-pointer vtable — a retroactive block is static-dispatch-only and couldn't be a contract value). An
+// `@generate` ENUM instead gets RETROACTIVE impls (enums can't carry methods) appended to the unit.
 void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
 {
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
-        std::vector<SharedStatement> generated;   // top-level retro-impls to append (deserialize)
+        std::vector<std::string> genEnumSrc;   // generated enum retro-impl sources, appended after the loop
         for (auto& decl : *u->codeDeclarationList) {
+            if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+                bool eser = false, ede = false;
+                enumDirections(ed, eser, ede);
+                if (eser) { std::string s = buildEnumSerialize(ed);   if (!s.empty()) genEnumSrc.push_back(s); }
+                if (ede)  { std::string s = buildEnumDeserialize(ed); if (!s.empty()) genEnumSrc.push_back(s); }
+                continue;
+            }
             auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
             if (!cd || !cd->name || !cd->name->value) continue;
             bool ser = false, de = false;
@@ -524,7 +660,15 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
                 }
             }
         }
-        (void)generated;
+        // Append the generated enum retro-impls (`implements Serialize/Deserialize for E` + the `__kamaSer_E`
+        // helper) to the unit AFTER iterating (mutating the list mid-loop would invalidate the iterator). The
+        // parsed unit is kept alive in g_generatedUnits so its CodeGenContext outlives emission.
+        for (auto& src : genEnumSrc) {
+            SharedCompilationUnit pu = parseString(src.c_str(), "<generated-enum-serde>");
+            if (!pu || !pu->codeDeclarationList) continue;
+            g_generatedUnits.push_back(pu);
+            for (auto& d : *pu->codeDeclarationList) u->codeDeclarationList->push_back(d);
+        }
     }
 }
 
@@ -794,13 +938,49 @@ static const char* PRELUDE_SRC =
     "    fn uint8 readU8(); fn uint16 readU16(); fn uint32 readU32(); fn uint64 readU64();\n"
     "    fn float32 readF32(); fn float64 readF64();\n"
     "    fn bool readBool(); fn char readChar(); fn string readString();\n"
-    "    fn bool readNull(); fn void skipValue(); fn bool failed();\n"
+    "    fn bool readNull(); fn void skipValue(); fn bool failed(); fn void fail();\n"
     "}\n"
     // A marker contract (like Movable): the `@generate(Deserialize)` codegen supplies the static factory
     // `deserialize(ref Deserializer) -> Result<This, DeError>` via a retro impl, and `tryParse<T: Deserialize>`
     // calls `T::deserialize(...)` statically. Kept method-less so its signature needn't name `This` in a
     // return position (which the generic-instance machinery can't resolve outside a type).
     "type contract Deserialize for both { }\n"
+    // Primitive Serialize/Deserialize conformances (pure-kama retro-impls, like the Hashable/Equatable ones
+    // above) — so EVERY type is a uniform serialization participant and a collection's generic element write
+    // (`this[i].serialize(w)`) / read (`T::deserialize(r)`) composes for a scalar element with no compiler
+    // special-casing. `serialize` writes the width-appropriate scalar; the static `deserialize` factory reads
+    // it back (the retro-impl static path — see the `_primConformances` branch in the `Type::method` resolver).
+    "implements Serialize for int8    { public fn void serialize(ref Serializer w) { w.writeI8(v: this); } }\n"
+    "implements Serialize for int16   { public fn void serialize(ref Serializer w) { w.writeI16(v: this); } }\n"
+    "implements Serialize for int32   { public fn void serialize(ref Serializer w) { w.writeI32(v: this); } }\n"
+    "implements Serialize for int64   { public fn void serialize(ref Serializer w) { w.writeI64(v: this); } }\n"
+    "implements Serialize for uint8   { public fn void serialize(ref Serializer w) { w.writeU8(v: this); } }\n"
+    "implements Serialize for uint16  { public fn void serialize(ref Serializer w) { w.writeU16(v: this); } }\n"
+    "implements Serialize for uint32  { public fn void serialize(ref Serializer w) { w.writeU32(v: this); } }\n"
+    "implements Serialize for uint64  { public fn void serialize(ref Serializer w) { w.writeU64(v: this); } }\n"
+    "implements Serialize for float32 { public fn void serialize(ref Serializer w) { w.writeF32(v: this); } }\n"
+    "implements Serialize for float64 { public fn void serialize(ref Serializer w) { w.writeF64(v: this); } }\n"
+    "implements Serialize for bool    { public fn void serialize(ref Serializer w) { w.writeBool(v: this); } }\n"
+    // NOTE: no `char` conformance — `char` and `uint32` share the C type `uint32_t`, so the cType-keyed
+    // primitive-conformance registry can't hold both. A `char` FIELD still serializes via the compiler's
+    // `writeChar`/`readChar` fast path; a `char` in a collection rides `uint32`'s numeric conformance.
+    "implements Serialize for string  { public fn void serialize(ref Serializer w) { w.writeString(v: this); } }\n"
+    "implements Deserialize for int8    { public static fn int8    deserialize(Deserializer r) { return r.readI8(); } }\n"
+    "implements Deserialize for int16   { public static fn int16   deserialize(Deserializer r) { return r.readI16(); } }\n"
+    "implements Deserialize for int32   { public static fn int32   deserialize(Deserializer r) { return r.readI32(); } }\n"
+    "implements Deserialize for int64   { public static fn int64   deserialize(Deserializer r) { return r.readI64(); } }\n"
+    "implements Deserialize for uint8   { public static fn uint8   deserialize(Deserializer r) { return r.readU8(); } }\n"
+    "implements Deserialize for uint16  { public static fn uint16  deserialize(Deserializer r) { return r.readU16(); } }\n"
+    "implements Deserialize for uint32  { public static fn uint32  deserialize(Deserializer r) { return r.readU32(); } }\n"
+    "implements Deserialize for uint64  { public static fn uint64  deserialize(Deserializer r) { return r.readU64(); } }\n"
+    "implements Deserialize for float32 { public static fn float32 deserialize(Deserializer r) { return r.readF32(); } }\n"
+    "implements Deserialize for float64 { public static fn float64 deserialize(Deserializer r) { return r.readF64(); } }\n"
+    "implements Deserialize for bool    { public static fn bool    deserialize(Deserializer r) { return r.readBool(); } }\n"
+    "implements Deserialize for string  { public static fn string  deserialize(Deserializer r) { return r.readString(); } }\n"
+    // Generic deserialize trampoline: the `@generate` codegen can't spell `List<int32>::deserialize(r)` (a
+    // static on a generic instance has no surface syntax), but a turbofish on THIS free fn does
+    // (`__kamaDeserialize::<List<int32>>(r)`), and inside it `T::deserialize` resolves per instantiation.
+    "fn T __kamaDeserialize<T: Deserialize>(Deserializer r) { return T::deserialize(r: r); }\n"
     // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
     // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
     // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is

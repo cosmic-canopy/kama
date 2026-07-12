@@ -46,7 +46,8 @@ type value MapKeyIter<K> implements Iterator<K> {
 // are `Copyable` (multi-`when`). Entry-wise iteration is a tracked follow-up (a generic `Entry<K,V>` value
 // yielded through `Optional` doesn't monomorphize yet).
 type resource Map<K: Hashable + Equatable, V>
-        implements Copyable(bare: give) when [K: Copyable, V: Copyable], Iterable<K> when [K: Copyable] {
+        implements Copyable(bare: give) when [K: Copyable, V: Copyable], Iterable<K> when [K: Copyable],
+                   Serialize when [K: Serialize, V: Serialize], Deserialize when [K: Deserialize, V: Deserialize] {
     Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 len; int32 cap; int32 tombs; int32 mods;
 
     public Map() {
@@ -194,6 +195,42 @@ type resource Map<K: Hashable + Equatable, V>
         }
         unsafe { free(p: cast<Ptr>(this.keys)); free(p: cast<Ptr>(this.vals)); free(p: cast<Ptr>(this.state)); }
         this.keys = nk; this.vals = nv; this.state = ns; this.cap = nc; this.tombs = 0;
+    }
+
+    // --- Serialization (present only when BOTH key and value are Serialize/Deserialize) ---
+    // A generic `Map<K,V>` can't emit a JSON object (`fieldName` needs a `string`, `K` is generic), so it
+    // serializes as an ARRAY of `{"key":k,"value":v}` objects. Key/value go through a `ref K`/`ref V` helper
+    // (like `cloneKey`/`cloneVal`) so a primitive element's retro-impl `serialize` resolves.
+    fn void serKey(ref K k, ref Serializer w) when [K: Serialize] { k.serialize(w: w); }
+    fn void serVal(ref V v, ref Serializer w) when [V: Serialize] { v.serialize(w: w); }
+    public fn void serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
+        w.beginArray(count: cast<usize>(this.len));
+        int32 i = 0;
+        while (i < this.cap) {
+            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+            if (s == 1ui8) {
+                w.beginObject();
+                w.fieldName(name: "key");   unsafe { this.serKey(k: this.keys[i], w: w); }
+                w.fieldName(name: "value"); unsafe { this.serVal(v: this.vals[i], w: w); }
+                w.endObject();
+            }
+            i = i + 1;
+        }
+        w.endArray();
+    }
+    // Reconstruct from the pair array: each entry is `{"key":k,"value":v}` (key before value on the wire),
+    // read positionally — `moreFields()` consumes the object structure (commas + closing brace).
+    public static fn Map<K,V> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
+        Map<K,V> result = Map();
+        r.beginArray();
+        while (r.moreElems()) {
+            r.beginObject();
+            bool __f1 = r.moreFields(); string __n1 = r.fieldName(); K k = K::deserialize(r: r);
+            bool __f2 = r.moreFields(); string __n2 = r.fieldName(); V v = V::deserialize(r: r);
+            bool __f3 = r.moreFields();   // consumes the closing `}`
+            result.put(key: give k, value: give v);
+        }
+        return give result;
     }
 
     ~Map() {   // drop each live key + value, then free the three buffers

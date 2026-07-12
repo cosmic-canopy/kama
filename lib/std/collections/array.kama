@@ -27,7 +27,8 @@ type value ArrayIterMut<T> implements IteratorMut<T> {
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
 // `size` elements is live from construction (zero-initialized) to drop — unlike `List`, which tracks a
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
-type resource Array<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable] {
+type resource Array<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
+                                  Serialize when [T: Serialize] {
     Ptr<T> data; int32 size;
 
     public Array(int32 size) {
@@ -67,6 +68,17 @@ type resource Array<T> implements Copyable(bare: give) when [T: Copyable], Itera
         int32 i = 0;
         while (i < this.size) { result[i] = copy this[i]; i = i + 1; }
         return result;
+    }
+
+    // Serialize as a JSON array (element method via a nameable `ref T`, like `indexOf`). Deserialize is a
+    // follow-up: an `Array` is fixed-size but a JSON array's length is unknown until read, and transferring a
+    // temp `List`'s buffer into an `Array` without double-dropping resource elements needs a buffer-steal ctor.
+    fn void serElem(ref T e, ref Serializer w) when [T: Serialize] { e.serialize(w: w); }
+    public fn void serialize(ref Serializer w) when [T: Serialize] {
+        w.beginArray(count: cast<usize>(this.size));
+        int32 i = 0;
+        while (i < this.size) { this.serElem(e: this[i], w: w); i = i + 1; }
+        w.endArray();
     }
 
     ~Array() {   // drop each element (a no-op for a value), then free the buffer

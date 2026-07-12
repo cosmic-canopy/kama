@@ -1,7 +1,7 @@
 // Nested @generate(Deserialize) — the bypass-ctor payoff: a nested resource field, an Optional<nested>, and a
 // List<nested> all reconstruct via direct in-place field-set (`result.child = Child::deserialize(r)`), no ctor
 // and no move-out-of-holder — which the old all-args-ctor model couldn't express for a nested resource.
-import std::serialization::json::{toString, tryParse};
+import std::serialization::json::{encode, decode};
 import std::collections::{List};
 
 @generate(Serialize, Deserialize, noOnConstruction)
@@ -40,7 +40,7 @@ fn int main() {
     Child mc = Child(v: 3, tag: "qq");                // weight 5
     Optional<Child> mb = Optional::Some(value: give mc);
     Parent p = Parent(id: 10, main: give mainC, maybe: give mb, kids: give ks);
-    string j = toString(v: p);
-    Result<Parent, DeError> res = tryParse::<Parent>(src: give j);
+    string j = encode(v: p);
+    Result<Parent, DeError> res = decode::<Parent>(src: give j);
     return match (res) { case Ok(q): q.total(); case Err(e): 0 - 1; };   // 10 + 8 + 5 + (2+4) = 29
 }

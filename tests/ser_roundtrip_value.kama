@@ -1,5 +1,5 @@
-// Full JSON round-trip (serialize -> deserialize) for a value type of scalars, via the `tryParse` one-liner.
-import std::serialization::json::{toString, tryParse};
+// Full JSON round-trip (serialize -> deserialize) for a value type of scalars, via the `decode` one-liner.
+import std::serialization::json::{encode, decode};
 @generate(Serialize, Deserialize, noOnConstruction)
 type value Vec {
     @field int32 x;
@@ -10,7 +10,7 @@ type value Vec {
 }
 fn int main() {
     Vec v = Vec(x: 10, y: 20, z: 12);
-    string j = toString(v: v);
-    Result<Vec, DeError> res = tryParse::<Vec>(src: give j);
+    string j = encode(v: v);
+    Result<Vec, DeError> res = decode::<Vec>(src: give j);
     return match (res) { case Ok(q): q.dot(); case Err(e): 0 - 1; };   // 42
 }

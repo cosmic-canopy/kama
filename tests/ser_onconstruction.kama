@@ -2,7 +2,7 @@
 // END of the constructor AND the deserialize codegen calls it after field-set (deserialize bypasses the ctor).
 // A @skip `born` field is written only by the hook (stays 0 otherwise), proving it fired on BOTH the
 // hand-built instance and the deserialized one. onConstruction may be private.
-import std::serialization::json::{toString, tryParse};
+import std::serialization::json::{encode, decode};
 @generate(Serialize, Deserialize)
 type value Widget {
     @field int32 x;
@@ -14,8 +14,8 @@ type value Widget {
 fn int main() {
     Widget a = Widget(x: 5);                          // ctor-end injection -> born = 7
     int32 h = a.check();                              // 7
-    string j = toString(v: a);                        // {"x":5}  (born is @skip, omitted)
-    Result<Widget, DeError> res = tryParse::<Widget>(src: give j);
+    string j = encode(v: a);                        // {"x":5}  (born is @skip, omitted)
+    Result<Widget, DeError> res = decode::<Widget>(src: give j);
     int32 d = match (res) { case Ok(q): q.check(); case Err(e): 0; };   // deserialize path -> born = 7
     return h + d;                                     // 7 + 7 = 14
 }

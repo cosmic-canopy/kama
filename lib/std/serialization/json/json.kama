@@ -1,7 +1,7 @@
 namespace std::serialization::json;
 
 // JSON backend for the serialization framework. `JsonWriter` implements `Serializer` by accumulating UTF-8
-// text in a byte buffer; `toString` is the entry point that runs a value's generated `serialize` against a
+// text in a byte buffer; `encode` is the entry point that runs a value's generated `serialize` against a
 // fresh writer. A single `needComma` flag tracks whether the next value/field needs a leading comma — correct
 // for arbitrary nesting because endObject/endArray leave a complete value (a following sibling gets its
 // comma) while a value right after fieldName does not.
@@ -9,7 +9,7 @@ namespace std::serialization::json;
 import std::collections::{List};
 import std::fmt::{i8Str, i16Str, i32Str, i64Str, u8Str, u16Str, u32Str, u64Str, f32Str, f64Str, boolStr};
 
-export { JsonWriter, JsonReader, toString, tryParse };
+export { JsonWriter, JsonReader, encode, decode };
 
 type resource JsonWriter implements Serializer {
     List<uint8> buf;
@@ -115,10 +115,10 @@ type resource JsonWriter implements Serializer {
 }
 
 // Serialize any `Serialize` value to a JSON string. Takes the value behind the `Serialize` interface
-// (dynamic dispatch), so a concrete value auto-wraps at the call site (`json::toString(v: point)`); the
+// (dynamic dispatch), so a concrete value auto-wraps at the call site (`json::encode(v: point)`); the
 // value's vtable travels in the fat pointer, sidestepping cross-module static-vtable visibility. A `value`
 // copies cheaply; pass `copy`/`give` for a `resource` you want to keep or move.
-fn string toString(Serialize v) {
+fn string encode(Serialize v) {
     JsonWriter w = JsonWriter();
     Serializer s = w;              // borrow the writer behind the Serializer interface
     v.serialize(w: ref s);
@@ -329,13 +329,14 @@ type resource JsonReader implements Deserializer {
         else { string t = this.numToken(); }
     }
     public fn bool failed() { return this.err; }
+    public fn void fail() { this.err = true; }   // the generated enum deserialize flags an unknown tag
 }
 
 // Deserialize a JSON string into a `Deserialize` type — the one-liner entry. Name the target with turbofish:
-// `json::tryParse::<Point>(src)`. The generated `deserialize` returns the reconstructed `T` directly (bypass-
+// `json::decode::<Point>(src)`. The generated `deserialize` returns the reconstructed `T` directly (bypass-
 // ctor: zero-init + field-set), carrying any parse failure in the reader's sticky error flag; this wraps that
 // into a `Result` after checking `failed()`.
-fn Result<T, DeError> tryParse<T: Deserialize>(string src) {
+fn Result<T, DeError> decode<T: Deserialize>(string src) {
     JsonReader r = JsonReader(src: give src);
     T v = T::deserialize(r: r);
     if (r.failed()) { return Result::Err(error: DeError::Malformed); }

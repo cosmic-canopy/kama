@@ -1,0 +1,10 @@
+// The intrinsic Serialize/Deserialize retro-impls compose inside a collection for every scalar width.
+import std::serialization::json::{encode, decode};
+import std::collections::{List};
+fn int main() {
+    List<bool> bs = List(); bs.add(item: true); bs.add(item: false); bs.add(item: true);
+    if (!encode(v: bs).equals(other: "[true,false,true]")) { return 1; }
+    List<float64> fs = List(); fs.add(item: 1.5); fs.add(item: 2.5);
+    Result<List<float64>, DeError> res = decode::<List<float64>>(src: give encode(v: fs));
+    return match (res) { case Ok(b): cast<int32>(b[0] + b[1]); case Err(e): 0 - 1; };  // 4
+}

@@ -1,6 +1,6 @@
 // Round-trip Optional<T> (Some/None) and List<T> (array) fields — deserialize now matches serialize for
 // these container shapes (natural defaults: Optional::None, empty List).
-import std::serialization::json::{toString, tryParse};
+import std::serialization::json::{encode, decode};
 import std::collections::{List};
 @generate(Serialize, Deserialize, noOnConstruction)
 type resource Rec {
@@ -24,7 +24,7 @@ fn int main() {
     Optional<int32> par = Optional::Some(value: 3);
     Optional<int32> nx = Optional::None;
     Rec r = Rec(id: 10, parent: par, next: nx, tags: give tg);
-    string j = toString(v: r);        // {"id":10,"parent":3,"next":null,"tags":[5,6]}
-    Result<Rec, DeError> res = tryParse::<Rec>(src: give j);
+    string j = encode(v: r);        // {"id":10,"parent":3,"next":null,"tags":[5,6]}
+    Result<Rec, DeError> res = decode::<Rec>(src: give j);
     return match (res) { case Ok(q): q.score(); case Err(e): 0 - 1; };   // 10+3+7+5+6 = 31
 }

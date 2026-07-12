@@ -40,7 +40,8 @@ type value ListIterMut<T> implements IteratorMut<T> {
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
-type resource List<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable] {
+type resource List<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
+                                  Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
     Ptr<T> data; int32 len; int32 cap; int32 mods;
 
     public List() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; this.mods = 0; }
@@ -122,6 +123,26 @@ type resource List<T> implements Copyable(bare: give) when [T: Copyable], Iterab
         // buffer element `this[i]` isn't a nameable receiver. `equals` is symmetric.
         while (i < this.len) { if (item.equals(other: this[i])) { return i; } i = i + 1; }
         return 0 - 1;
+    }
+
+    // --- Serialization (present only when the element is Serialize/Deserialize) ---
+    // The element method must be called through a NAMEABLE `ref T` (like `indexOf`'s `equals`), so a
+    // primitive element's retro-impl `serialize`/`deserialize` resolves — a raw buffer element `this[i]`
+    // isn't a nameable receiver. Hence the `serElem` helper.
+    fn void serElem(ref T e, ref Serializer w) when [T: Serialize] { e.serialize(w: w); }
+    // A JSON array: each element serialized in order.
+    public fn void serialize(ref Serializer w) when [T: Serialize] {
+        w.beginArray(count: cast<usize>(this.len));
+        int32 i = 0;
+        while (i < this.len) { this.serElem(e: this[i], w: w); i = i + 1; }
+        w.endArray();
+    }
+    // Reconstruct from a JSON array — a fresh list, each element read via its own `deserialize` and moved in.
+    public static fn List<T> deserialize(Deserializer r) when [T: Deserialize] {
+        List<T> result = List();
+        r.beginArray();
+        while (r.moreElems()) { result.add(item: T::deserialize(r: r)); }
+        return give result;
     }
 
     ~List() {   // drop each element (a no-op for a value), then free the buffer

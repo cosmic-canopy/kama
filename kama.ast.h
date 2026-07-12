@@ -885,6 +885,7 @@ public:
     SharedStringList typeParams;
     SharedBoundsList typeBounds;
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedAttributeList attributes;  // `@generate(Serialize, Deserialize)` on the enum (null when un-attributed)
     EnumDeclarationNode(CodeGenContext& context, SharedModifierList modifiers, SharedIdentifier identifier, SharedEnumMemberDeclarationList body)
         : ASTNode(context),  StatementNode(context)
         , modifiers(modifiers)
