@@ -25,4 +25,16 @@ RUN apt-get update \
 # `clang` metapackage omits on arm64 — without it `-fsanitize=address,undefined` fails to LINK.
 # It tracks the clang version above (18 here); bump the suffix if the base image's clang moves.
 
+# Browser test harness for the wasm web transports (WebTransport / WebRTC / WebSocket-in-browser E2E, which
+# node can't run). Chromium + Playwright live in the IMAGE, not the repo, so the tree stays small. NODE_PATH
+# lets a repo script `require('playwright')`; PLAYWRIGHT_BROWSERS_PATH pins the browser to a stable location.
+# aioquic provides a dependency-free HTTP/3 server for the WebTransport echo test.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+ENV NODE_PATH=/opt/pw/node_modules
+RUN mkdir -p /opt/pw && cd /opt/pw && npm init -y >/dev/null 2>&1 \
+ && npm install --no-fund --no-audit playwright@latest \
+ && npx --yes playwright install --with-deps chromium \
+ && pip3 install --no-cache-dir --break-system-packages aioquic \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /work
