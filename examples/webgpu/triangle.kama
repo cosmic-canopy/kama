@@ -91,7 +91,6 @@ extern fn Ptr  wgpuCommandEncoderBeginRenderPass(Ptr encoder, Ptr descriptor);
 extern fn void wgpuRenderPassEncoderEnd(Ptr renderPassEncoder);
 extern fn Ptr  wgpuCommandEncoderFinish(Ptr encoder, Ptr descriptor);
 extern fn void wgpuQueueSubmit(Ptr queue, usize commandCount, Ptr commands);
-extern fn void wgpuSurfacePresent(Ptr surface);
 extern fn void wgpuRenderPassEncoderRelease(Ptr renderPassEncoder);
 extern fn void wgpuCommandBufferRelease(Ptr commandBuffer);
 extern fn void wgpuCommandEncoderRelease(Ptr encoder);
@@ -258,7 +257,9 @@ fn int32 frameTick(Ptr state) {
         wgpuRenderPassEncoderEnd(renderPassEncoder: pass);
         Ptr cmd = wgpuCommandEncoderFinish(encoder: enc, descriptor: null);
         wgpuQueueSubmit(queue: st[0].queue, commandCount: 1, commands: cast<Ptr>(addr(of: cmd)));
-        wgpuSurfacePresent(surface: surface);
+        // NB: no wgpuSurfacePresent on the web — emdawnwebgpu aborts on it; the browser
+        // auto-presents the canvas at the end of each requestAnimationFrame tick. (A native
+        // backend DOES call present — a web-vs-native difference the platform seam will handle.)
 
         // NB: do NOT release `tex` — the surface owns its current texture; releasing it
         // breaks the swapchain so the next GetCurrentTexture returns null (freezes frame 0).
