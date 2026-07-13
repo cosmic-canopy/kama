@@ -1,18 +1,37 @@
-// std::net non-blocking connect — connectNonBlocking to a listening port yields a stream that (on loopback)
-// is connected instantly, so checkConnected() is Ok; to a dead port it fails synchronously with
-// ConnectionRefused (either from connectNonBlocking directly or checkConnected). Returns 55.
-import std::net::{TcpListener, TcpStream};
+// std::net non-blocking connect — connectNonBlocking returns a stream whose connect may still be IN FLIGHT.
+// The outcome is read by checkConnected() (SO_ERROR), which is only meaningful once the socket reports
+// WRITABLE — so we poll for writability first (the correct protocol). On loopback: connecting to a listening
+// port resolves writable+connected (Ok); connecting to a dead port resolves with ConnectionRefused (either
+// synchronously from connectNonBlocking on Linux, or after the poll on macOS/Windows where the connect is
+// async). Returns 55.
+import std::net::{TcpListener, TcpStream, Poller, Interest, Ready};
 import std::io::{IoError};
 
 fn bool okUnit(Result<Unit, IoError> r) { return match (r) { case Ok(u): true; case Err(e): false; }; }
 fn bool isRefused(IoError e) { return match (e) { case ConnectionRefused: true; case _: false; }; }
+
+// Block until a non-blocking connect RESOLVES (socket writable), then read its outcome. `checkConnected()`'s
+// SO_ERROR is 0 while the handshake is still in flight (macOS/Windows), so reading it immediately would
+// mis-report an in-flight connect as connected — poll for writability first (Linux loopback is already
+// resolved, so the wait returns at once).
+fn Result<Unit, IoError> resolve(ref TcpStream s) {
+    match (Poller::create()) {
+        case Ok(p): {
+            p.add(fd: s.rawHandle(), interest: Interest::Write);
+            Result<int32, IoError> w = p.wait(timeoutMs: 1000);   // writable = connect resolved (ok OR refused)
+            int32 n = match (w) { case Ok(k): k; case Err(e): 0 - 1; };
+        }
+        case Err(e): { }
+    };
+    return s.checkConnected();
+}
 
 // Connect (non-blocking) to a listening port and resolve it. Returns 0 on success.
 fn int32 connectListening(uint16 port) {
     string host = "127.0.0.1";
     Result<TcpStream, IoError> r = TcpStream::connectNonBlocking(host: host, port: port);
     return match (r) {
-        case Ok(s):  (okUnit(r: s.checkConnected()) ? 0 : 1);
+        case Ok(s):  (okUnit(r: resolve(s: s)) ? 0 : 1);
         case Err(e): 2;
     };
 }
@@ -23,11 +42,11 @@ fn int32 connectDead(uint16 port) {
     Result<TcpStream, IoError> r = TcpStream::connectNonBlocking(host: host, port: port);
     int32 rc = -1;
     match (r) {
-        case Ok(s): {                                  // rare on loopback: resolve via checkConnected
-            Result<Unit, IoError> cc = s.checkConnected();
+        case Ok(s): {                                  // in flight — resolve via the poll, then SO_ERROR
+            Result<Unit, IoError> cc = resolve(s: s);
             match (cc) { case Ok(u): { rc = 3; } case Err(e): { rc = isRefused(e: e) ? 0 : 4; } };
         }
-        case Err(e): { rc = isRefused(e: e) ? 0 : 5; }
+        case Err(e): { rc = isRefused(e: e) ? 0 : 5; }   // synchronous refusal (Linux loopback)
     };
     return rc;
 }
