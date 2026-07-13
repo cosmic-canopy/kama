@@ -892,22 +892,6 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return "(" + cType(v->type) + "){0}";
     }
 
-    // Compiler-internal graph-deserialize heap shell: `Shared<T>__adopt((T*)kama_calloc(1, sizeof(T)))` — a
-    // zeroed heap T wrapped in a fresh Shared (ctrl strong=1). Reuses the self-hosted `Shared<T>::adopt`
-    // (resolved to its mangled cName) so refcounting/ownership stay in library code; the calloc gives the
-    // {0,0} never-null-Shared fields the pointee's dtor guards. (No user grammar — see HeapShellNode.)
-    if (auto* v = dynamic_cast<HeapShellNode*>(n)) {
-        std::string sharedC = cType(v->type);                      // e.g. Shared_Leaf (mangled instance)
-        std::string elemC   = cType(v->type->genericArg);          // e.g. Leaf
-        std::string adoptName = sharedC + "__adopt";
-        ClassInfo* ao = nullptr;
-        if (_classes.count(sharedC)) {
-            MethodInfo* adoptM = findMethod(&_classes[sharedC], "adopt", &ao);
-            if (adoptM && !adoptM->cName.empty()) adoptName = adoptM->cName;
-        }
-        return adoptName + "((" + elemC + "*)kama_calloc(1, sizeof(" + elemC + ")))";
-    }
-
     unsupported("expression", n->line);
     return "0";
 }
@@ -2633,16 +2617,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         unsupported("field attributes (`@field`/`@skip`) require `@generate(...)` on the type", fd->line);
                     if (serGen && !fMarked)
                         unsupported("every field of a `@generate`d type must be marked `@field` or `@skip`", fd->line);
-                    // Smart-pointer fields = object-graph mode. `Shared`/`Weak` serialize as integer ids into a
-                    // side table and deserialize via the two-pass graph driver (std::serialization::graph +
-                    // the generated `__gShell`/`__gWire`/`deserialize`). `Owned` (tree-shaped one-owner) is a
-                    // later slice; `Bindable` (a bound callback) is never serializable.
+                    // Smart-pointer fields = object-graph mode: `Shared`/`Weak`/`Owned` serialize as integer ids
+                    // into the `{root,objects}` id table and deserialize via the two-pass graph intrinsic (Phase
+                    // D). `Bindable` (a bound callback) is never serializable.
                     if (serGen && !fSkip && fd->type && fd->type->value) {
                         const std::string& tn = *fd->type->value;
-                        if (tn == "Owned")
-                            unsupported("`Owned<…>` graph fields aren't supported yet — use `Shared`/`Weak`, or "
-                                        "`@skip` the field and reconnect it in `onConstruction`", fd->line);
-                        else if (tn == "Bindable")
+                        if (tn == "Bindable")
                             unsupported("a `Bindable<…>` field can't be serialized — `@skip` it and rebind in "
                                         "`onConstruction`", fd->line);
                     }
@@ -2866,6 +2846,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             _genericTypeBounds[ci.name] = cd->typeBounds;   // per-param contract bounds
             _genericTypeCtx[ci.name]    = _nsCtx;
             _genericTypes[ci.name]      = ci;
+            if (cd->name && cd->name->value) {              // capture the prelude triad's template keys (Phase D)
+                const std::string& sn = *cd->name->value;
+                if      (sn == "Shared") _sharedTmpl = ci.name;
+                else if (sn == "Owned")  _ownedTmpl  = ci.name;
+                else if (sn == "Weak")   _weakTmpl   = ci.name;
+            }
         } else {
             _classes[ci.name] = ci;
         }
@@ -5222,10 +5208,18 @@ void CEmitter::computeReachesPointer()
 {
     // Seed: only the smart pointers ARE pointers. Everything else (scalars, strings, enums, other
     // collections, user types) starts false and earns `true` only by transitively holding one.
-    for (auto& kv : _classes)
-        kv.second.reachesPointer = kv.second.isIntrinsicColl &&
+    for (auto& kv : _classes) {
+        bool intrinsicPtr = kv.second.isIntrinsicColl &&
             (kv.second.collKind == CollKind::Owned || kv.second.collKind == CollKind::Shared ||
              kv.second.collKind == CollKind::Weak);
+        // A concrete-element triad instance (`Shared<Leaf>`) is a library generic instance, not intrinsic —
+        // recognize it by its template key.
+        bool triadPtr = false;
+        auto g = _genericTypeInstOf.find(kv.first);
+        if (g != _genericTypeInstOf.end())
+            triadPtr = (g->second == _sharedTmpl || g->second == _ownedTmpl || g->second == _weakTmpl);
+        kv.second.reachesPointer = intrinsicPtr || triadPtr;
+    }
     bool changed = true;
     while (changed) {
         changed = false;
@@ -7595,7 +7589,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
         if (mi.isSynthSer) { *_out << stat << "void " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }
-        if (mi.isSynthDe)  { *_out << stat << ci.name << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }
+        if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
@@ -7606,6 +7600,8 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         *_out << stat << retC << " " << mi.cName << "("
              << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str()) << ");\n";   // static/free: no self
     }
+    if (ci.isGraphNode)
+        emitGraphNodeHelperProtos(ci);   // graph node-helper prototypes (Phase D)
 }
 
 // void Name__dtor(Name* self): user body first, then destructible fields in
@@ -7804,8 +7800,8 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no body to emit
-        if (mi.isSynthSer) { emitSerializeDefinition(ci); continue; }
-        if (mi.isSynthDe)  { emitDeserializeDefinition(ci); continue; }
+        if (mi.isSynthSer) { ci.reachesPointer   ? emitGraphSerializeDefinition(ci)   : emitSerializeDefinition(ci); continue; }
+        if (mi.isSynthDe)  { ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci); continue; }
         // an operator has no `node`; emit its body from `opDecl` (free form: no self).
         if (mi.isOperator) {
             auto* d = mi.opDecl->operatorDeclarator.get();
@@ -7828,6 +7824,8 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     }
     if (ci.destructible)
         emitDtorDefinition(ci);
+    if (ci.isGraphNode)
+        emitGraphNodeHelpers(ci);   // T__serializeNode / T__allocShell / T__wireShell bodies (Phase D)
 }
 
 // ---- By-value (tree) serialization intrinsic (Phase C) --------------------
@@ -8041,6 +8039,369 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << "else { r.vtbl->fail(r.obj); __result = (" << ci.name << "){ .tag = " << ci.name << "_" << dflt << " }; }\n";
     indent(1); *_out << "kama_string__dtor(&__tag);\n";
     indent(1); *_out << "return __result;\n";
+    *_out << "}\n\n";
+}
+
+// ---- Graph (object-graph / pointer) serialization intrinsic (Phase D) ------
+// A `@generate` type that transitively reaches a Shared/Weak/Owned pointer serializes as an object graph:
+// every distinct object gets a stable id, pointer fields become ids, and objects are written into a flat
+// `{"root":id,"objects":{id:{"__type":T,…}}}` id table. This replaces the generated-kama
+// `std::serialization::graph` module + driver synthesis, lowering the id table / two-pass rebuild / ownership
+// transfer straight to C over `kama_ser_graph` / `kama_de_graph` (kama_runtime.h). Reproduces the exact wire.
+
+// One field's graph-pointer classification. kind is "" for a non-pointer field (scalar/string/nested/
+// collection — those flow through the by-value helpers), else "Shared"/"Weak"/"Owned" with elemC the pointee's
+// C type. `optional` = the edge is wrapped in `Optional<…>` (nullable, e.g. a list tail / cycle bootstrap).
+CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
+{
+    GraphEdge e;
+    if (!ty || !ty->value) return e;
+    bool opt = (*ty->value == "Optional" && ty->genericArg);
+    SharedIdentifier inner = opt ? ty->genericArg : ty;
+    std::string ic = cType(inner);
+    // Concrete-element triad instance (`Shared<Leaf>` etc.) — a library generic instance keyed by template.
+    auto g = _genericTypeInstOf.find(ic);
+    if (g != _genericTypeInstOf.end()) {
+        if      (g->second == _sharedTmpl) e.kind = "Shared";
+        else if (g->second == _ownedTmpl)  e.kind = "Owned";
+        else if (g->second == _weakTmpl)   e.kind = "Weak";
+        if (!e.kind.empty()) { e.elemC = inner->genericArg ? cType(inner->genericArg) : ""; e.optional = opt; return e; }
+    }
+    // Interface-erased intrinsic smart pointer (`Owned<Contract>` / `Shared<Contract>` / Box<dyn>).
+    if (isSmartPtrClass(ic)) {
+        CollKind k = smartKind(ic);
+        e.kind  = (k == CollKind::Shared) ? "Shared" : (k == CollKind::Weak) ? "Weak" : "Owned";
+        e.elemC = _classes.count(ic) ? _classes[ic].collElemClass : "";
+        e.optional = opt;
+    }
+    return e;
+}
+
+// The wire `__type` tag for a graph node: the SOURCE type name (`Node`), not the mangled C name (`_F4__Node`).
+// Both the writer (beginTableEntry) and the reader (dispatch) must agree, so they share this.
+std::string CEmitter::graphWireName(const ClassInfo& ci)
+{
+    return (ci.node && ci.node->name && ci.node->name->value) ? *ci.node->name->value : ci.name;
+}
+
+// Synthesize a `Shared<elem>` type node (the graph deserialize return type: `decode::<Shared<T>>` hands back
+// the owning root handle). Resolves like the user-written `Shared<Leaf>` field types (empty qualifier + the
+// implicit `using std::memory`), so cType mangles it to `Shared_<elem>`.
+SharedIdentifier CEmitter::sharedTypeNode(SharedIdentifier elem)
+{
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto node = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Shared"),
+                                                 std::make_shared<StringList>(), elem);
+    node->genericArgs = std::make_shared<IdentifierList>();
+    node->genericArgs->push_back(elem);
+    return node;
+}
+
+// Closure (post-computeReachesPointer): a graph node is a `@generate` root (`reachesPointer`) OR a pointee
+// reached via some node's Shared/Weak/Owned field (a tree type like `Leaf` that is only ever a `Shared<Leaf>`
+// target). Each node emits the node helpers + a `deserialize` returning `Shared<T>` (so `Shared<T>::deserialize`
+// → `T::deserialize` type-checks). Also records the node set in a stable order for the driver dispatch chains.
+void CEmitter::computeGraphNodeTypes()
+{
+    NsCtx saved = _nsCtx;
+    std::vector<std::string> work;
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.reachesPointer && (ci.genSerialize || ci.genDeserialize)) { ci.isGraphNode = true; work.push_back(kv.first); }
+    }
+    while (!work.empty()) {
+        std::string cur = work.back(); work.pop_back();
+        ClassInfo& ci = _classes[cur];
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+        _typeSubst.clear();
+        for (auto& f : ci.fields) {
+            GraphEdge e = graphEdgeOf(f.type);
+            if (e.kind.empty() || e.elemC.empty()) continue;
+            auto it = _classes.find(e.elemC);
+            if (it != _classes.end() && !it->second.isGraphNode) { it->second.isGraphNode = true; work.push_back(e.elemC); }
+        }
+    }
+    _nsCtx = saved; _typeSubst.clear();
+    _graphNodeOrder.clear();
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (!ci.isGraphNode) continue;
+        _graphNodeOrder.push_back(kv.first);
+        auto it = ci.methods.find("deserialize");     // graph deserialize returns Shared<T> — but only when the
+        if (it != ci.methods.end() && it->second.isSynthDe) {   // Shared<T> instance exists (root / Shared/Weak
+            SharedIdentifier sh = sharedTypeNode(it->second.returnType);   // pointee). A pure Owned pointee has no
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+            if (_classes.count(cType(sh))) { it->second.returnType = sh; ci.graphDeserialize = true; }   // Shared<T> — stays by-value
+            _nsCtx = saved;
+        }
+    }
+}
+
+// Prototypes for the graph node helpers (in the shared header, so cross-referencing node writers link).
+void CEmitter::emitGraphNodeHelperProtos(ClassInfo& ci)
+{
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    *_out << stat << "void " << ci.name << "__serializeNode(void* __obj, void* __wv, struct kama_ser_graph* __g, uint64_t __id);\n";
+    *_out << stat << "kama_de_box* " << ci.name << "__allocShell(Deserializer r, struct kama_de_arena* __arena);\n";
+    *_out << stat << "void " << ci.name << "__wireShell(kama_de_box* __b, Deserializer r, struct kama_de_graph* __g);\n";
+}
+
+// The three per-node-type helpers: write one table entry (serializeNode), pass-1 alloc+scalar-read
+// (allocShell), pass-2 pointer wiring (wireShell). Emitted for every graph node (root or pointee).
+void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
+{
+    const char* stat = _emitStaticClass ? "static inline " : "";
+
+    // -- serializeNode: `beginTableEntry(id,"T")` + each field (scalars via the by-value helper; pointer edges
+    //    intern the pointee and write its id) + `endTableEntry`.
+    // The prelude triad's C struct fields are `p` (pointee) and `c` (control block); Owned has only `p`.
+    auto refWrite = [&](const std::string& kind, const std::string& val, const std::string& writer, int d) {
+        std::string ptr = "(" + val + ").p";
+        std::string intern = "kama_ser_graph_intern(__g, (uint64_t)(uintptr_t)" + ptr + ", " + ptr + ", " + writer + ")";
+        if (kind == "Weak") {   // a Weak writes its id only while a strong handle still exists, else 0 (expired)
+            indent(d); *_out << "if ((" << val << ").c && (" << val << ").c->strong > 0) "
+                             << "w->vtbl->writeRef(w->obj, " << intern << ");\n";
+            indent(d); *_out << "else w->vtbl->writeRef(w->obj, 0);\n";
+        } else {   // Shared / Owned — always present
+            indent(d); *_out << "w->vtbl->writeRef(w->obj, " << intern << ");\n";
+        }
+    };
+    *_out << stat << "void " << ci.name << "__serializeNode(void* __obj, void* __wv, struct kama_ser_graph* __g, uint64_t __id)\n{\n";
+    indent(1); *_out << ci.name << "* self = (" << ci.name << "*)__obj;\n";
+    indent(1); *_out << "Serializer* w = (Serializer*)__wv;\n";
+    indent(1); *_out << "w->vtbl->beginTableEntry(w->obj, __id, " << kamaStrLit(graphWireName(ci)) << ");\n";
+    for (auto& f : ci.fields) {
+        if (f.serSkip) continue;
+        const std::string& wire = f.serName.empty() ? f.name : f.serName;
+        GraphEdge e = graphEdgeOf(f.type);
+        indent(1); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(wire) << ");\n";
+        if (e.kind.empty()) { emitSerFieldWrite(f.type, "self->" + f.name, 1); continue; }
+        std::string writer = e.elemC + "__serializeNode";
+        std::string acc = "self->" + f.name;
+        if (e.optional) {
+            std::string oc = cType(f.type);
+            indent(1); *_out << "switch ((" << acc << ").tag) {\n";
+            indent(1); *_out << "case " << oc << "_Some: {\n";
+            refWrite(e.kind, "(" + acc + ").u.Some.value", writer, 2);
+            indent(2); *_out << "break;\n";
+            indent(1); *_out << "}\n";
+            indent(1); *_out << "case " << oc << "_None: { w->vtbl->writeRef(w->obj, 0); break; }\n";
+            indent(1); *_out << "default: break;\n";
+            indent(1); *_out << "}\n";
+        } else {
+            refWrite(e.kind, acc, writer, 1);
+        }
+    }
+    indent(1); *_out << "w->vtbl->endTableEntry(w->obj);\n";
+    *_out << "}\n\n";
+
+    // -- allocShell (pass 1): a zeroed heap pointee in a fresh box (ctrl strong=1), scalar fields read, pointer
+    //    fields skipped (wired in pass 2). Registered by the driver.
+    *_out << stat << "kama_de_box* " << ci.name << "__allocShell(Deserializer r, struct kama_de_arena* __arena)\n{\n";
+    indent(1); *_out << "kama_de_box* __b = kama_de_arena_new(__arena);\n";
+    indent(1); *_out << "__b->ptr = kama_calloc(1, sizeof(" << ci.name << "));\n";
+    indent(1); *_out << ci.name << "* self = (" << ci.name << "*)__b->ptr;\n";
+    for (auto& f : ci.fields) {   // reset Optional-of-scalar fields (zero-init = Some(0))
+        if (f.serSkip) continue;
+        if (!graphEdgeOf(f.type).kind.empty()) continue;
+        if (f.type && f.type->value && *f.type->value == "Optional") {
+            std::string oc = cType(f.type);
+            indent(1); *_out << "self->" << f.name << " = (" << oc << "){ .tag = " << oc << "_None };\n";
+        }
+    }
+    indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
+    indent(2); *_out << "kama_string __key = r.vtbl->fieldName(r.obj);\n";
+    bool firstS = true;
+    for (auto& f : ci.fields) {
+        if (f.serSkip) continue;
+        if (!graphEdgeOf(f.type).kind.empty()) continue;   // pointer edge — pass 2
+        const std::string& wire = f.serName.empty() ? f.name : f.serName;
+        indent(2); *_out << (firstS ? "if" : "else if") << " (kama_string__equals(&__key, " << kamaStrLit(wire) << ")) {\n";
+        emitDeFieldRead(f.type, "self->" + f.name, 3);
+        indent(2); *_out << "}\n";
+        firstS = false;
+    }
+    indent(2); *_out << (firstS ? "" : "else ") << "{ r.vtbl->skipValue(r.obj); }\n";
+    indent(2); *_out << "kama_string__dtor(&__key);\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return __b;\n";
+    *_out << "}\n\n";
+
+    // -- wireShell (pass 2): re-read the entry, resolving each pointer field's id to the registered box and
+    //    constructing the Shared/Weak/Owned value over (ptr, ctrl). Scalar fields are skipped (already read).
+    *_out << stat << "void " << ci.name << "__wireShell(kama_de_box* __b, Deserializer r, struct kama_de_graph* __g)\n{\n";
+    indent(1); *_out << ci.name << "* self = (" << ci.name << "*)__b->ptr;\n";
+    indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
+    indent(2); *_out << "kama_string __key = r.vtbl->fieldName(r.obj);\n";
+    bool firstW = true;
+    for (auto& f : ci.fields) {
+        if (f.serSkip) continue;
+        GraphEdge e = graphEdgeOf(f.type);
+        if (e.kind.empty()) continue;   // scalar — pass 1
+        const std::string& wire = f.serName.empty() ? f.name : f.serName;
+        indent(2); *_out << (firstW ? "if" : "else if") << " (kama_string__equals(&__key, " << kamaStrLit(wire) << ")) {\n";
+        emitGraphRefRead(f.type, e, "self->" + f.name, 3);
+        indent(2); *_out << "}\n";
+        firstW = false;
+    }
+    indent(2); *_out << (firstW ? "" : "else ") << "{ r.vtbl->skipValue(r.obj); }\n";
+    indent(2); *_out << "kama_string__dtor(&__key);\n";
+    indent(1); *_out << "}\n";
+    *_out << "}\n\n";
+}
+
+// Emit the pass-2 wiring of ONE pointer field (`dst`) from its wire id. `e` is its classification; `ty` its
+// full type (for the Optional mangling). A `kama_de_box*` for the pointee id is looked up in `__g`.
+void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const std::string& dst, int d)
+{
+    std::string X = e.elemC;
+    std::string innerC = e.optional ? cType(ty->genericArg) : cType(ty);   // Shared_X / Weak_X / Owned_X
+    // the wiring of a resolved box `__t` into a smart-ptr value expression `place` of kind e.kind. The triad's
+    // C fields are `p` (pointee) and `c` (control block, a `Ctrl*`); the box's `ctrl` is a layout-compatible
+    // kama_ctrl* cast through void* into `.c`. Shared retains (strong++), Weak downgrades (weak++).
+    auto wireInto = [&](const std::string& place, int dd) {
+        if (e.kind == "Shared") {
+            indent(dd); *_out << place << ".p = (" << X << "*)__t->ptr; " << place << ".c = (void*)__t->ctrl; __t->ctrl->strong++;\n";
+        } else if (e.kind == "Weak") {
+            indent(dd); *_out << place << ".p = (" << X << "*)__t->ptr; " << place << ".c = (void*)__t->ctrl; __t->ctrl->weak++;\n";
+        }
+        // Owned is handled separately (give-once move), never through wireInto.
+    };
+    indent(d); *_out << "uint64_t __rid = r.vtbl->readRef(r.obj);\n";
+
+    if (e.kind == "Owned") {   // give-once: exclusive transfer, claim-checked, no refcount
+        std::string ownedNull = e.optional ? ("(" + cType(ty) + "){ .tag = " + cType(ty) + "_None }") : "";
+        if (e.optional) { indent(d); *_out << "if (__rid == 0) { " << dst << " = " << ownedNull << "; }\n"; indent(d); *_out << "else "; }
+        else            { indent(d); *_out << "if (__rid == 0) { r.vtbl->failWith(r.obj, DeError_Malformed); }\n"; indent(d); *_out << "else "; }
+        *_out << "if (kama_de_graph_claim(__g, __rid)) { r.vtbl->failWith(r.obj, DeError_DuplicateId); }\n";
+        indent(d); *_out << "else {\n";
+        indent(d + 1); *_out << "kama_de_box* __t = (kama_de_box*)kama_de_graph_lookup(__g, __rid);\n";
+        indent(d + 1); *_out << "if (__t) {\n";
+        if (e.optional) {
+            indent(d + 2); *_out << innerC << " __v; __v.p = (" << X << "*)__t->ptr;\n";
+            indent(d + 2); *_out << dst << " = (" << cType(ty) << "){ .tag = " << cType(ty) << "_Some, .u.Some = { .value = __v } };\n";
+        } else {
+            indent(d + 2); *_out << dst << ".p = (" << X << "*)__t->ptr;\n";
+        }
+        indent(d + 2); *_out << "__t->ptr = NULL;\n";
+        indent(d + 2); *_out << "if (__t->ctrl) { if (__t->ctrl->weak == 0) kama_free(__t->ctrl); __t->ctrl = NULL; }\n";
+        indent(d + 1); *_out << "}\n";
+        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, DeError_UnresolvedReference);\n";
+        indent(d); *_out << "}\n";
+        return;
+    }
+
+    // Shared / Weak. A miss is a dangling reference (UnresolvedReference); id 0 = null (None / expired).
+    if (e.optional) {
+        std::string oc = cType(ty);
+        indent(d); *_out << "if (__rid == 0) { " << dst << " = (" << oc << "){ .tag = " << oc << "_None }; }\n";
+        indent(d); *_out << "else {\n";
+        indent(d + 1); *_out << "kama_de_box* __t = (kama_de_box*)kama_de_graph_lookup(__g, __rid);\n";
+        indent(d + 1); *_out << "if (__t) {\n";
+        indent(d + 2); *_out << innerC << " __v;\n";
+        wireInto("__v", d + 2);
+        indent(d + 2); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = __v } };\n";
+        indent(d + 1); *_out << "}\n";
+        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, DeError_UnresolvedReference);\n";
+        indent(d); *_out << "}\n";
+    } else {
+        // A bare Shared is never null; a bare Weak may be expired (id 0 → leave the zeroed handle).
+        if (e.kind == "Weak") { indent(d); *_out << "if (__rid != 0) {\n"; }
+        else                  { indent(d); *_out << "{\n"; }
+        indent(d + 1); *_out << "kama_de_box* __t = (kama_de_box*)kama_de_graph_lookup(__g, __rid);\n";
+        indent(d + 1); *_out << "if (__t) {\n";
+        wireInto(dst, d + 2);
+        indent(d + 1); *_out << "}\n";
+        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, DeError_UnresolvedReference);\n";
+        indent(d); *_out << "}\n";
+    }
+}
+
+// Public graph serialize: reserve the root id from `self`'s address, write the root entry inline, drain the
+// worklist (each node via its writer, in discovery == id order), close. `encode(v: x)` dispatches here (x a
+// by-value root or a `Shared<T>` auto-deref'd to the pointee).
+void CEmitter::emitGraphSerializeDefinition(ClassInfo& ci)
+{
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    *_out << stat << "void " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+    indent(1); *_out << "struct kama_ser_graph __g; kama_ser_graph_init(&__g);\n";
+    indent(1); *_out << "uint64_t __root = kama_ser_graph_reserve(&__g, (uint64_t)(uintptr_t)self);\n";
+    indent(1); *_out << "w->vtbl->beginGraph(w->obj, __root);\n";
+    indent(1); *_out << ci.name << "__serializeNode((void*)self, (void*)w, &__g, __root);\n";
+    indent(1); *_out << "for (size_t __i = 0; __i < kama_ser_graph_count(&__g); __i++)\n";
+    indent(2); *_out << "kama_ser_graph_writer(&__g, __i)(kama_ser_graph_node(&__g, __i), (void*)w, &__g, kama_ser_graph_node_id(&__g, __i));\n";
+    indent(1); *_out << "w->vtbl->endGraph(w->obj);\n";
+    indent(1); *_out << "kama_ser_graph_free(&__g);\n";
+    *_out << "}\n\n";
+}
+
+// Public graph deserialize (two-pass): pass 1 allocates + registers every shell by id (scalars read); pass 2
+// wires pointer fields; then the root is retained + returned and the per-shell construction strong is dropped
+// (an unreferenced node frees, the live graph survives via its real edges + the returned root). Returns
+// Shared<T>; a dangling root → UnresolvedReference.
+void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
+{
+    std::string T = ci.name;
+    std::string sharedT = cType(ci.methods["deserialize"].returnType);   // Shared_T
+    const char* stat = _emitStaticClass ? "static inline " : "";
+    *_out << stat << sharedT << " " << T << "__deserialize(Deserializer r)\n{\n";
+    indent(1); *_out << "struct kama_de_graph __g; kama_de_graph_init(&__g);\n";
+    for (auto& K : _graphNodeOrder) { indent(1); *_out << "struct kama_de_arena __arena_" << K << "; kama_de_arena_init(&__arena_" << K << ");\n"; }
+    indent(1); *_out << "uint64_t __root = r.vtbl->beginGraph(r.obj);\n";
+    // PASS 1 — alloc + register
+    indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
+    indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
+    indent(2); *_out << "uint64_t __eid = r.vtbl->entryKey(r.obj);\n";
+    indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
+    indent(2); *_out << "kama_string __tk = r.vtbl->fieldName(r.obj); kama_string__dtor(&__tk);\n";
+    indent(2); *_out << "kama_string __ty = r.vtbl->readString(r.obj);\n";
+    bool f1 = true;
+    for (auto& K : _graphNodeOrder) {
+        indent(2); *_out << (f1 ? "if" : "else if") << " (kama_string__equals(&__ty, " << kamaStrLit(graphWireName(_classes[K])) << ")) { "
+                         << "kama_de_box* __b = " << K << "__allocShell(r, &__arena_" << K << "); kama_de_graph_register(&__g, __eid, __b); }\n";
+        f1 = false;
+    }
+    indent(2); *_out << "else { while (r.vtbl->moreFields(r.obj)) r.vtbl->skipValue(r.obj); }\n";
+    indent(2); *_out << "kama_string__dtor(&__ty);\n";
+    indent(1); *_out << "}\n";
+    // PASS 2 — wire
+    indent(1); *_out << "r.vtbl->rewindGraph(r.obj);\n";
+    indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
+    indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
+    indent(2); *_out << "uint64_t __eid = r.vtbl->entryKey(r.obj);\n";
+    indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
+    indent(2); *_out << "kama_string __tk = r.vtbl->fieldName(r.obj); kama_string__dtor(&__tk);\n";
+    indent(2); *_out << "kama_string __ty = r.vtbl->readString(r.obj);\n";
+    bool f2 = true;
+    for (auto& K : _graphNodeOrder) {
+        indent(2); *_out << (f2 ? "if" : "else if") << " (kama_string__equals(&__ty, " << kamaStrLit(graphWireName(_classes[K])) << ")) { "
+                         << "kama_de_box* __b = (kama_de_box*)kama_de_graph_lookup(&__g, __eid); " << K << "__wireShell(__b, r, &__g); }\n";
+        f2 = false;
+    }
+    indent(2); *_out << "else { while (r.vtbl->moreFields(r.obj)) r.vtbl->skipValue(r.obj); }\n";
+    indent(2); *_out << "kama_string__dtor(&__ty);\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "r.vtbl->endGraph(r.obj);\n";
+    // ROOT — retain the looked-up shell; a dangling root id surfaces UnresolvedReference.
+    indent(1); *_out << "kama_de_box* __rb = (kama_de_box*)kama_de_graph_lookup(&__g, __root);\n";
+    indent(1); *_out << sharedT << " __ret = {0};\n";
+    indent(1); *_out << "if (__rb) { __ret.p = (" << T << "*)__rb->ptr; __ret.c = (void*)__rb->ctrl; __rb->ctrl->strong++; }\n";
+    indent(1); *_out << "else { r.vtbl->failWith(r.obj, DeError_UnresolvedReference); }\n";   // dangling root -> empty Shared
+    // CLEANUP — drop each shell's construction strong; free the boxes + arenas.
+    for (auto& K : _graphNodeOrder) {
+        bool kd = _classes.count(K) && _classes[K].destructible;
+        indent(1); *_out << "for (size_t __i = 0; __i < __arena_" << K << ".len; __i++) {\n";
+        indent(2); *_out << "kama_de_box* __b = __arena_" << K << ".items[__i];\n";
+        indent(2); *_out << "if (__b->ctrl) { __b->ctrl->strong--; if (__b->ctrl->strong == 0) {\n";
+        indent(3); *_out << "if (__b->ptr) { " << (kd ? (K + "__dtor((" + K + "*)__b->ptr); ") : "") << "kama_free(__b->ptr); }\n";
+        indent(3); *_out << "if (__b->ctrl->weak == 0) kama_free(__b->ctrl);\n";
+        indent(2); *_out << "} }\n";
+        indent(2); *_out << "kama_free(__b);\n";
+        indent(1); *_out << "}\n";
+        indent(1); *_out << "kama_de_arena_free(&__arena_" << K << ");\n";
+    }
+    indent(1); *_out << "kama_de_graph_free(&__g);\n";
+    indent(1); *_out << "return __ret;\n";
     *_out << "}\n\n";
 }
 
@@ -8801,7 +9162,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
     computeDestructible();
-    computeReachesPointer();   // serialization mode gate (inert until the lowering consumes it, Phase C+)
+    computeReachesPointer();   // serialization mode gate (by-value vs. graph)
+    computeGraphNodeTypes();   // graph node closure + Shared<T> deserialize return types (Phase D)
 
     // Contract kind-gate enforcement: a class may `implements` a contract only if its kind (value/resource)
     // is permitted by the contract's `for` clause.

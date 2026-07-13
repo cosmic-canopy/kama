@@ -168,7 +168,7 @@ type contract Serialize for both { fn void serialize(ref Serializer w); }
 // a STICKY error flag — a read on malformed input sets `failed()` and returns a default, so the generated
 // `deserialize` needs no per-read branching; `tryParse` checks `failed()` once at the end). `Deserialize`
 // is the per-type capability the codegen synthesizes: a static factory `deserialize(ref Deserializer)`.
-enum DeError { Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference }
+enum DeError { Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId }
 type contract Deserializer for resource {
     fn void beginObject(); fn bool moreFields(); fn string fieldName();
     fn void beginArray(); fn bool moreElems();

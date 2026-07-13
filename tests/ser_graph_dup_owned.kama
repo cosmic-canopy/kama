@@ -1,0 +1,36 @@
+// Graph deserialize enforces GIVE-ONCE for `Owned` edges: a hand-crafted wire aliases one uniquely-owned
+// object (id 2) from TWO `Owned` fields. The first claim transfers it; the second finds the id already
+// claimed and `decode` returns `DeError::DuplicateId` (an owned object can have exactly one owner).
+import std::serialization::json::{decode};
+import std::memory::{Shared, Owned};
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Child { @field int32 v; public Child(int32 v) { this.v = v; } }
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Twin {
+    @field Owned<Child> a;
+    @field Owned<Child> b;
+    public Twin(Owned<Child> a, Owned<Child> b) { this.a = give a; this.b = give b; }
+}
+
+fn int main() {
+    // Both `a` and `b` reference id 2 — a single owned Child claimed twice.
+    string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Twin\",\"a\":2,\"b\":2},\"2\":{\"__type\":\"Child\",\"v\":5}}}";
+    Result<Shared<Twin>, DeError> res = decode::<Shared<Twin>>(src: give j);
+    match (res) {
+        case Ok(sh): { return 1; }                          // must NOT succeed
+        case Err(e): {
+            DeError ec = e;
+            match (ec) {
+                case DuplicateId: { return 0; }             // expected
+                case UnresolvedReference: { return 2; }
+                case Malformed: { return 3; }
+                case UnexpectedEnd: { return 4; }
+                case TypeMismatch: { return 5; }
+                case MissingField: { return 6; }
+            };
+        }
+    };
+    return 7;
+}

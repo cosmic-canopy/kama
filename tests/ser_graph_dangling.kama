@@ -28,6 +28,7 @@ fn int main() {
                 case UnexpectedEnd: { return 3; }
                 case TypeMismatch: { return 4; }
                 case MissingField: { return 5; }
+                case DuplicateId: { return 7; }
             };
         }
     };

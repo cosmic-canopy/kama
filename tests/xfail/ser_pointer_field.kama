@@ -1,5 +1,0 @@
-// Smart pointers can't be serialized — @skip them and serialize an id, reconnecting in onConstruction.
-import std::memory::{Owned};
-@generate(Serialize, Deserialize, noOnConstruction)
-type resource Node { @field Owned<Node> next; }
-fn int main() { return 0; }

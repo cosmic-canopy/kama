@@ -171,9 +171,23 @@ pointer ⇒ heap graph (`Shared<T>`).
   **only the graph path**; dead `buildDeserializeBody`/`injectZeroInitForDeserialize`/`hasOnConstruction`/
   `buildEnumSerialize`/`buildEnumDeserialize`/`enumDirections` removed. (`Fixed<T,N>` `@generate` fields are
   unused today — deferred.)
-- **D — Graph lowering (intrinsic).** Replace the graph write/read with C emission; `Shared`/`Weak` dedup +
-  cycles + dangling (`UnresolvedReference`), `Owned` give-once (`DuplicateId`) with child-before-parent
-  assembly. `ser_graph_*` stay green + `ser_graph_owned`/`_dup_owned`.
+- ~~**D — Graph lowering (intrinsic).**~~ **DONE.** The whole object-graph write/read is now emitted directly
+  in C over the pure-C `kama_ser_graph`/`kama_de_graph` context (`kama_runtime.h`), replacing the generated-kama
+  `std::serialization::graph` module + the driver's `synthesizeSerialization` (both deleted). A graph node
+  (root, via `reachesPointer`, OR a Shared/Weak/Owned pointee, via `computeGraphNodeTypes`' closure) emits three
+  helpers — `T__serializeNode` (one id-table entry; pointer fields intern the pointee via a per-node writer
+  fn-ptr, in discovery == id order so the wire is byte-identical), `T__allocShell` (pass 1: zeroed heap shell +
+  scalar read), `T__wireShell` (pass 2: resolve ids → construct `Shared`/`Weak`/`Owned` over `(ptr, ctrl)`).
+  The public `serialize` is the `{root,objects}` envelope (gated on `reachesPointer`); the public `deserialize`
+  is the two-pass driver returning `Shared<T>` (gated on `graphDeserialize` — a node whose `Shared<T>` exists).
+  `Shared`/`Weak` dedup by pointee address; cycles ride the `Weak` back-edge; a dangling id → `UnresolvedReference`;
+  `Owned` is give-once via a claim gmap (2nd claim → new `DuplicateId`). Refcounts balance under ASan (each
+  shell's construction-strong is dropped at driver end). The triad's `__ptrId` seam + the `HeapShellNode` AST
+  node are deleted; the shells hand-construct over the prelude `Shared/Weak/Owned` C fields (`p`/`c`), needing no
+  `Shared<T>` instantiation for an `Owned`-only pointee. Notably `reachesPointer`'s seed was dead since the
+  Phase-A prelude pivot (concrete-element triad instances are library generics, not `isIntrinsicColl`) — now
+  fixed to detect them by template key. `ser_graph_shared`/`_cycle`/`_dangling` stay byte-identical +
+  `ser_graph_owned`/`_dup_owned` added; all green on test/ASan/wasm.
 - **E — Polymorphic `Shared<Contract>`.** `__type`→vtbl table + guarded rebuild (`TypeMismatch`). `ser_graph_poly`.
 - **F — Cleanup + docs.** Remove dead machinery; finalize SPEC/this section; `docs/grammar.bnf` (attribute
   grammar incl. `noOnConstruction`). Record that the generic-instance-static-call gap no longer blocks (the

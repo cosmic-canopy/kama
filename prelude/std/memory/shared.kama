@@ -21,12 +21,12 @@ type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy),
     public Shared(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }   // shares an existing ctrl
     // Deserialize INTO a Shared: a graph root is heap + shared-owned, so `decode::<Shared<N>>` reconstructs the
     // whole object graph and hands back the owning root handle. Delegates to `T::deserialize` — for a graph type
-    // `N` the `@generate(Deserialize)` codegen synthesizes `N::deserialize` returning `Shared<N>` (the two-pass
-    // graph driver), so this simply forwards it (the `T: Deserialize` bound is what makes `T::deserialize`
-    // resolve, exactly like the `__kamaDeserialize` trampoline). Only type-checks when `N::deserialize` yields
-    // a `Shared<N>` — i.e. `N` is a graph type (in a graph unit every `@generate(Deserialize)` type's
-    // `deserialize` is the graph driver). Instantiating `Shared<X>::deserialize` for a non-graph `X` (whose
-    // `X::deserialize` returns `X`) is a type error — decode a plain value as `decode::<X>` instead.
+    // `N` the `@generate(Deserialize)` intrinsic emits `N::deserialize` returning `Shared<N>` (the two-pass graph
+    // driver, emitted directly in C), so this simply forwards it (the `T: Deserialize` bound is what makes
+    // `T::deserialize` resolve, exactly like the `__kamaDeserialize` trampoline). Only type-checks when
+    // `N::deserialize` yields a `Shared<N>` — i.e. `N` is a graph type. Instantiating `Shared<X>::deserialize`
+    // for a non-graph `X` (whose `X::deserialize` returns `X`) is a type error — decode a plain value as
+    // `decode::<X>` instead.
     public static fn Shared<T> deserialize(Deserializer r) when [T: Deserialize] {
         return T::deserialize(r: r);
     }
@@ -36,9 +36,6 @@ type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy),
         return Shared(p: raw, c: ctrl);                               // fresh ctor -> no marker
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    // Stable identity of the pointee (its heap address), for graph serialization's dedup: two `Shared`
-    // handles to the same object return the same id. Read-only; never dereferenced.
-    public fn usize __ptrId() { unsafe { return cast<usize>(this.p); } }
     public fn Shared<T> copy() {                                      // Copyable -> retain
         unsafe { this.c[0].strong = this.c[0].strong + 1; }
         return Shared(p: this.p, c: this.c);

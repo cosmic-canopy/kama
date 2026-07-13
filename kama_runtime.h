@@ -594,23 +594,32 @@ static inline int kama_gmap_get(const kama_gmap* m, uint64_t k, uint64_t* out) {
 // Write-side graph context (ports SerContext). Dedups objects by pointee address -> stable id, and holds a
 // worklist of pending objects (BORROWED — the live graph is kept alive by the caller's root handle during the
 // read-only serialize traversal, so the context owns nothing). The lowering emits the drain loop: walk
-// count() (re-checked, it grows as each entry interns more), writing each node by its concrete type.
+// count() (re-checked, it grows as each entry interns more), invoking each node's writer.
+//
+// The worklist is heterogeneous (a graph mixes concrete types) and must be written in discovery (== id) order
+// so the wire stays byte-identical. So each enqueued node carries a `kama_node_writer` — the compiler-emitted
+// `T__serializeNode` for its concrete type. This is an internal jump table between compiler-emitted C, not a
+// public ABI; `w` is typed `void*` because this pure-C header can't name the kama-lowered `Serializer` struct.
+struct kama_ser_graph;
+typedef void (*kama_node_writer)(void* obj, void* w, struct kama_ser_graph* g, uint64_t id);
+
 typedef struct kama_ser_graph {
-    kama_gmap ids;        // pointee address -> id
-    void**    nodes;      // worklist objects (borrowed)
-    uint64_t* node_ids;   // parallel ids
-    size_t    node_len;
-    size_t    node_cap;
-    uint64_t  next_id;
+    kama_gmap         ids;        // pointee address -> id
+    void**            nodes;      // worklist objects (borrowed)
+    uint64_t*         node_ids;   // parallel ids
+    kama_node_writer* writers;    // parallel per-node writer (T__serializeNode)
+    size_t            node_len;
+    size_t            node_cap;
+    uint64_t          next_id;
 } kama_ser_graph;
 
 static inline void kama_ser_graph_init(kama_ser_graph* g) {
     kama_gmap_init(&g->ids);
-    g->nodes = NULL; g->node_ids = NULL; g->node_len = 0; g->node_cap = 0; g->next_id = 1;
+    g->nodes = NULL; g->node_ids = NULL; g->writers = NULL; g->node_len = 0; g->node_cap = 0; g->next_id = 1;
 }
 static inline void kama_ser_graph_free(kama_ser_graph* g) {
-    kama_gmap_free(&g->ids); kama_free(g->nodes); kama_free(g->node_ids);
-    g->nodes = NULL; g->node_ids = NULL; g->node_len = 0; g->node_cap = 0;
+    kama_gmap_free(&g->ids); kama_free(g->nodes); kama_free(g->node_ids); kama_free(g->writers);
+    g->nodes = NULL; g->node_ids = NULL; g->writers = NULL; g->node_len = 0; g->node_cap = 0;
 }
 
 // Reserve an id for the root (written inline by the driver): record for dedup, do NOT enqueue.
@@ -620,8 +629,9 @@ static inline uint64_t kama_ser_graph_reserve(kama_ser_graph* g, uint64_t addr) 
     return id;
 }
 
-// Intern a child reached via a handle: dedup by address; on first sight assign an id and enqueue. Returns id.
-static inline uint64_t kama_ser_graph_intern(kama_ser_graph* g, uint64_t addr, void* obj) {
+// Intern a child reached via a handle: dedup by address; on first sight assign an id and enqueue (with its
+// concrete-type writer). Returns id.
+static inline uint64_t kama_ser_graph_intern(kama_ser_graph* g, uint64_t addr, void* obj, kama_node_writer wr) {
     uint64_t id;
     if (kama_gmap_get(&g->ids, addr, &id)) return id;   // already seen -> same id, no new entry (cycles ok)
     id = g->next_id++;
@@ -630,33 +640,70 @@ static inline uint64_t kama_ser_graph_intern(kama_ser_graph* g, uint64_t addr, v
         size_t nc = g->node_cap ? g->node_cap * 2 : 8;
         g->nodes    = (void**)kama_realloc(g->nodes, nc * sizeof(void*));
         g->node_ids = (uint64_t*)kama_realloc(g->node_ids, nc * sizeof(uint64_t));
+        g->writers  = (kama_node_writer*)kama_realloc(g->writers, nc * sizeof(kama_node_writer));
         g->node_cap = nc;
     }
     g->nodes[g->node_len] = obj;
     g->node_ids[g->node_len] = id;
+    g->writers[g->node_len] = wr;
     g->node_len++;
     return id;
 }
 
-static inline size_t   kama_ser_graph_count(const kama_ser_graph* g)              { return g->node_len; }
-static inline void*    kama_ser_graph_node(const kama_ser_graph* g, size_t i)     { return g->nodes[i]; }
-static inline uint64_t kama_ser_graph_node_id(const kama_ser_graph* g, size_t i)  { return g->node_ids[i]; }
+static inline size_t           kama_ser_graph_count(const kama_ser_graph* g)             { return g->node_len; }
+static inline void*            kama_ser_graph_node(const kama_ser_graph* g, size_t i)    { return g->nodes[i]; }
+static inline uint64_t         kama_ser_graph_node_id(const kama_ser_graph* g, size_t i) { return g->node_ids[i]; }
+static inline kama_node_writer kama_ser_graph_writer(const kama_ser_graph* g, size_t i)  { return g->writers[i]; }
 
-// Read-side graph context: id -> reconstructed object pointer. Pass 1 registers every heap shell by id;
+// Read-side graph context: id -> the boxed `Shared<T>` shell handle. Pass 1 registers every heap shell by id;
 // pass 2 resolves pointer fields by id (a miss => a dangling reference => the lowering raises
-// UnresolvedReference). Stores the pointer as a uint64 (fits on wasm32 and 64-bit alike).
+// UnresolvedReference), retaining/downgrading the boxed handle to wire `Shared`/`Weak` edges. Stores the
+// pointer as a uint64 (fits on wasm32 and 64-bit alike). `claimed` is the give-once ledger: an `Owned` field
+// records its target id here so a second `Owned` claim of the same id raises DuplicateId.
 typedef struct kama_de_graph {
-    kama_gmap objs;   // id -> (uintptr_t)obj
+    kama_gmap objs;      // id -> (uintptr_t) boxed Shared<T>*
+    kama_gmap claimed;   // id -> 1 once an Owned field has taken it (absent = unclaimed)
 } kama_de_graph;
 
-static inline void  kama_de_graph_init(kama_de_graph* g) { kama_gmap_init(&g->objs); }
-static inline void  kama_de_graph_free(kama_de_graph* g) { kama_gmap_free(&g->objs); }
+static inline void  kama_de_graph_init(kama_de_graph* g) { kama_gmap_init(&g->objs); kama_gmap_init(&g->claimed); }
+static inline void  kama_de_graph_free(kama_de_graph* g) { kama_gmap_free(&g->objs); kama_gmap_free(&g->claimed); }
 static inline void  kama_de_graph_register(kama_de_graph* g, uint64_t id, void* obj) {
     kama_gmap_put(&g->objs, id, (uint64_t)(uintptr_t)obj);
 }
 static inline void* kama_de_graph_lookup(const kama_de_graph* g, uint64_t id) {
     uint64_t v;
     return kama_gmap_get(&g->objs, id, &v) ? (void*)(uintptr_t)v : NULL;
+}
+// Give-once claim: returns 1 if `id` was already claimed (=> DuplicateId), else marks it and returns 0.
+static inline int kama_de_graph_claim(kama_de_graph* g, uint64_t id) {
+    uint64_t seen;
+    if (kama_gmap_get(&g->claimed, id, &seen)) return 1;
+    kama_gmap_put(&g->claimed, id, 1);
+    return 0;
+}
+
+// A reconstructed graph node during the two-pass read: the zeroed heap pointee (`ptr`, cast to the concrete
+// `T*` by the emitted code) plus its own control block (strong=1 "construction owner"). Pointer fields are
+// wired by constructing `Shared<X>`/`Weak<X>`/`Owned<X>` values directly over (ptr, ctrl) and bumping the
+// counts — no dependency on a `Shared<T>` kama instantiation existing for every node type (an `Owned`-only
+// pointee never names one). Boxes are grouped per concrete type in a `kama_de_arena` so the driver can drop
+// each with the right `T__dtor` after transferring ownership to the returned root.
+typedef struct kama_de_box { void* ptr; kama_ctrl* ctrl; } kama_de_box;
+
+typedef struct kama_de_arena { kama_de_box** items; size_t len; size_t cap; } kama_de_arena;
+static inline void kama_de_arena_init(kama_de_arena* a) { a->items = NULL; a->len = 0; a->cap = 0; }
+static inline void kama_de_arena_free(kama_de_arena* a) { kama_free(a->items); a->items = NULL; a->len = 0; a->cap = 0; }
+// Allocate a fresh shell box (ptr=NULL until the caller callocs the pointee; ctrl strong=1) and record it.
+static inline kama_de_box* kama_de_arena_new(kama_de_arena* a) {
+    if (a->len == a->cap) {
+        size_t nc = a->cap ? a->cap * 2 : 8;
+        a->items = (kama_de_box**)kama_realloc(a->items, nc * sizeof(kama_de_box*));
+        a->cap = nc;
+    }
+    kama_de_box* b = (kama_de_box*)kama_alloc(sizeof(kama_de_box));
+    b->ptr = NULL; b->ctrl = kama_ctrl_new();
+    a->items[a->len++] = b;
+    return b;
 }
 
 #endif // KAMA_RUNTIME_H

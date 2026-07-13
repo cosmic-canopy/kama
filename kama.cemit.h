@@ -161,6 +161,16 @@ struct ClassInfo {
     // Recurses through collection elements + owned fields, but STOPS at a pointer (doesn't recurse
     // through it). Populated by computeReachesPointer(). Consumed by the serialization lowering (Phase C+).
     bool                              reachesPointer = false;
+    // A node in a serializable object graph: either a graph root (`reachesPointer`) OR a pointee reached via
+    // some graph type's Shared/Weak/Owned field (a tree type like `Leaf` that is only ever a `Shared<Leaf>`
+    // target). Populated by computeGraphNodeTypes() (a closure over the smart-ptr fields, seeded by
+    // reachesPointer). Such a type emits the graph node helpers (serializeNode/allocShell/wireShell) and its
+    // synthesized `deserialize` returns `Shared<T>` (the two-pass graph driver), not `T`.
+    bool                              isGraphNode = false;
+    // A graph node whose public `deserialize` is the two-pass driver returning `Shared<T>` — set iff the
+    // `Shared<T>` instance actually exists (a root, or a Shared/Weak pointee). A pure `Owned`-only pointee
+    // (reconstructed via the node helpers, never named as `Shared<T>`) keeps a by-value `deserialize` instead.
+    bool                              graphDeserialize = false;
     // Opted into the `Copyable` contract — declares a public nullary `copy` returning
     // `implements Copyable(bare: give|copy)`: this resource opts into copy (a public nullary `copy()`),
     // and its `bareDefault` says what a BARE hand-off means (give=move, copy=`copy()`/retain). Movable +
@@ -653,6 +663,23 @@ private:
     void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth);
     void emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth);
     std::string deReadExpr(SharedIdentifier ty);   // the `Deserializer` read expression for a field type
+    // Graph (object-graph / pointer) serialization intrinsic — direct C emission (Phase D).
+    void computeGraphNodeTypes();                   // closure over smart-ptr fields; sets isGraphNode + Shared<T> return
+    void emitGraphNodeHelperProtos(ClassInfo& ci);  // T__serializeNode / T__allocShell / T__wireShell prototypes
+    void emitGraphNodeHelpers(ClassInfo& ci);       // …their bodies
+    void emitGraphSerializeDefinition(ClassInfo& ci);   // public serialize: {root,objects} envelope + drain
+    void emitGraphDeserializeDefinition(ClassInfo& ci); // public deserialize: two-pass, returns Shared<T>
+    // One field's graph-pointer classification (empty kind => not a smart-ptr edge).
+    struct GraphEdge { std::string kind; std::string elemC; bool optional = false; };  // kind: Shared/Weak/Owned
+    GraphEdge graphEdgeOf(SharedIdentifier ty);
+    std::string graphWireName(const ClassInfo& ci);   // source type name for the wire `__type` tag
+    void emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const std::string& dst, int d);  // pass-2 wire one field
+    SharedIdentifier sharedTypeNode(SharedIdentifier elem);   // synth a `Shared<elem>` type node (for return types)
+    std::vector<std::string> _graphNodeOrder;       // graphNodeTypes in a stable order (for driver dispatch chains)
+    // The prelude triad's generic-TEMPLATE keys (`std::memory::{Shared,Owned,Weak}`), captured at collection.
+    // A concrete-element triad instance (`Shared<Leaf>`) is an ordinary library generic instance (NOT
+    // isIntrinsicColl), so pointer detection goes by template identity via `_genericTypeInstOf`.
+    std::string _sharedTmpl, _ownedTmpl, _weakTmpl;
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
     static bool isExtern(FunctionDeclarationNode* fn);
 
