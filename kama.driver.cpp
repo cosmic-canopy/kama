@@ -458,7 +458,7 @@ void usage()
     fprintf(stderr,
         "usage:\n"
         "  kama transpile <in.kama> [-o out.c] [--no-line]\n"
-        "  kama build     <in.kama>... [-o out] [--target native|wasm] [--release|--debug]\n"
+        "  kama build     <in.kama>... [-o out] [--target native|wasm] [--release|--debug] [--shared]\n"
         "                             [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
         "                  (pass multiple .kama files to build a multi-file program)\n"
         "  kama update    [--version vX.Y.Z]   self-update via the installer\n"
@@ -496,6 +496,7 @@ int main(int argc, char** argv)
     bool        keepC      = false;
     bool        webgpu     = false;
     bool        release    = false;        // debug by default
+    bool        shared     = false;        // --shared: build a native .so/.dylib/.dll (expose entry points)
 
     // Options may appear in any order, before or after the input file.
     for (int i = 2; i < argc; ++i) {
@@ -507,6 +508,7 @@ int main(int argc, char** argv)
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
         else if (a == "--webgpu")                 webgpu = true;
+        else if (a == "--shared")                 shared = true;
         else if (a == "--release")                release = true;
         else if (a == "--debug")                  release = false;
         else if (!a.empty() && a[0] == '-') {
@@ -523,6 +525,15 @@ int main(int argc, char** argv)
         return 2;
     }
     const bool wasm = (target == "wasm");
+
+    // `--shared` is a native shared-library packaging step (desktop dev-loop hot-reload). On wasm
+    // the host re-instantiates the module instead of `dlopen`ing it, so `expose` alone (KAMA_EXPORT
+    // -> EMSCRIPTEN_KEEPALIVE) covers the web boundary — `--shared` is meaningless there.
+    if (shared && wasm) {
+        fprintf(stderr, "kama: --shared is native-only; a wasm build exports `expose`d functions "
+                        "directly (no --shared needed)\n");
+        return 2;
+    }
 
     // Release builds strip debug info and #line, optimize, and define NDEBUG.
     if (release) emitLines = false;
@@ -559,9 +570,18 @@ int main(int argc, char** argv)
             }
         }
 
-        // Default output: native -> bare exe name; wasm -> an HTML harness
-        // (emcc also emits the .js + .wasm alongside it).
-        std::string defaultOut = wasm ? (stripExtension(input) + ".html") : stripExtension(input);
+        // Default output: native -> bare exe name (or lib<name>.<so|dylib|dll> for --shared);
+        // wasm -> an HTML harness (emcc also emits the .js + .wasm alongside it).
+#if defined(_WIN32)
+        const char* sharedExt = ".dll";
+#elif defined(__APPLE__)
+        const char* sharedExt = ".dylib";
+#else
+        const char* sharedExt = ".so";
+#endif
+        std::string defaultOut = wasm    ? (stripExtension(input) + ".html")
+                               : shared  ? (stripExtension(input) + sharedExt)
+                                         : stripExtension(input);
         std::string outPath    = output.empty() ? defaultOut : output;
 
         // Transpile to one or more .c (multi-file emits a shared header too).
@@ -605,6 +625,11 @@ int main(int argc, char** argv)
         // and a read of an uninitialized local. The #line directives map these back to the
         // .kama source. (Audit Step 2 — "no silent surprises".)
         cmd << compiler << " -std=c11 -Werror=return-type -Werror=uninitialized ";
+        // --shared: emit a position-independent shared library. -fvisibility=hidden hides everything
+        // by default; only `expose`d functions (KAMA_EXPORT -> visibility("default"),used) reach the
+        // dynamic symbol table, so a host `dlopen`+`dlsym`s exactly the declared entry points. `used`
+        // also keeps them past -dead_strip/--gc-sections. (native-only — rejected with --target wasm.)
+        if (shared) cmd << "-fPIC -shared -fvisibility=hidden ";
         if (release) {
             // Optimized, no debug info, asserts off. Native uses -O3 (max speed — matches Rust's release
             // default); wasm uses -Oz (size — download cost dominates). -ffunction/data-sections +

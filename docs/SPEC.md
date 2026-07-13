@@ -610,6 +610,40 @@ Comparator c = cmp;
 qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // cast to the header's fn-ptr type
 ```
 
+## Exposing to a host — `expose` ✅
+
+`extern` is the *host→kama* direction (kama calls C); **`expose` is the reverse** — it gives a **free
+function** a stable, host-callable entry point. `expose fn …` emits the function under its **bare,
+unmangled** C name (no `Namespace__` prefix — mirroring how `extern` keeps a literal name) decorated with
+`KAMA_EXPORT` for external linkage that survives dead-code elimination:
+
+```kama
+// gameplay.kama — a hot-reload module (note: no `main`)
+expose fn void update(Ptr<World> w, float32 dt) { /* … */ }
+expose fn int   version() { return 3; }
+```
+
+- **Native shared library:** `kama build --shared gameplay.kama -o libgameplay.so` (→ `.dylib`/`.dll` per
+  platform) builds a `-fPIC -shared -fvisibility=hidden` library where **only** the `expose`d symbols are
+  visible. A host `dlopen`s it and `dlsym`s `"update"` / `"version"` — the reload loop
+  (`dlopen`/watch/rebind over `unsafe`/`Ptr`) is an ordinary library, not compiler magic. A `--shared`
+  module needs no `main`.
+- **WASM:** a normal `kama build --target wasm` run exports each `expose`d function
+  (`KAMA_EXPORT` → `EMSCRIPTEN_KEEPALIVE`), callable from JS as `Module._update` — no `--shared` (it is
+  native-only; the web host re-instantiates the module).
+
+**Rules** (checked at compile time — a clear error, never a silent no-op):
+- **Free functions only.** `expose` is not a member/type modifier; on a method/field/type it is rejected.
+- **C-ABI-safe signature.** A param or return may not be an owned-by-value type — a kama `string`, a
+  collection (`List`/`Array`/`Map`/`Set`/…), or an `Owned`/`Shared`/`Weak` smart pointer — since RAII /
+  refcount state cannot cross a raw C boundary; pass a `Ptr<T>` or an `extern` struct instead.
+- **No generics / no `fn ref T` place-return** (no single concrete C-ABI symbol); **bare names are unique**
+  across the program (they share the C namespace — clashes with libc are yours to avoid, as with `extern`).
+
+`expose` is distinct from `export` (module public-surface visibility) and `public`/`private` (member
+access): three boundaries, three keywords. *(The full 2.0 `expose` — richer wasm module exports and the
+scripting-host interface — is future work; the keyword is live today for the C-ABI boundary above.)*
+
 ## Control flow ✅
 
 `if/else`, `while`, `do/while`, `for`, `foreach`, `break`, `continue`, `return`; the full operator set

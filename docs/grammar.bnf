@@ -275,7 +275,7 @@ friend_member_list
 
 function_modifier_opt
   : /* Nothing */
-  | EXPOSE      /* kama→host boundary (reserved) */
+  | EXPOSE      /* kama→host C-ABI boundary: bare exported symbol */
   ;
 
 /*------------------------------------------------------------------------------

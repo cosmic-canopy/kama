@@ -10,6 +10,21 @@
 #include <stdbool.h>   // bool       (type only)
 #include <stddef.h>    // size_t, NULL (types only)
 
+// KAMA_EXPORT — the kama→host boundary decoration for an `expose fn`. It gives the
+// (unmangled, bare-named) function stable C-ABI linkage a host can resolve: `dlsym`
+// on a `--shared` native `.so`/`.dylib`/`.dll`, or `Module._name` on a wasm build.
+// emscripten: KEEPALIVE marks it `used` + exports it (survives -Oz DCE). Native ELF/
+// Mach-O: `visibility("default"), used` keeps it past --gc-sections/-dead_strip and
+// -fvisibility=hidden (so ONLY exposed symbols leak from a shared lib). Windows: dllexport.
+#if defined(__EMSCRIPTEN__)
+  #include <emscripten.h>
+  #define KAMA_EXPORT EMSCRIPTEN_KEEPALIVE
+#elif defined(_WIN32)
+  #define KAMA_EXPORT __declspec(dllexport)
+#else
+  #define KAMA_EXPORT __attribute__((visibility("default"), used))
+#endif
+
 // The runtime needs a few libc functions (malloc/free/memcpy/…) for collections,
 // strings, and the bounds trap. It declares them at BLOCK scope inside these
 // wrappers, NOT via <stdlib.h>/<string.h>/<stdio.h> — so those declarations stay

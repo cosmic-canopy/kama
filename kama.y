@@ -532,7 +532,7 @@ friend_member_list
 
 function_modifier_opt
   : /* Nothing */   { $$ = SharedModifier(); }
-  | EXPOSE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* kama→host boundary (reserved) */
+  | EXPOSE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* kama→host C-ABI boundary: bare exported symbol */
   ;
 
 /*------------------------------------------------------------------------------ 

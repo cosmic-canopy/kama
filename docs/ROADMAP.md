@@ -90,12 +90,13 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
   `List<string>` collect for `split` (the lazy `Split` iterator ships today).
 - **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
   (also covers `string + <number>`); sequences with reflection (its to-string substrate).
-- **`expose` keyword** — reserved, hard-errors today (the kama→host boundary; distinct from `export`, the
-  module public-surface manifest, which ships). **Split by scope:** a **minimal `expose`** (C-ABI
-  linkage for `--shared` reload entry points) is **pulled forward to 1.x** (§5, engine dev-loop); the
-  **full `expose`** (wasm module exports + the scripting host interface) stays **2.0** (§7). The keyword
-  slot is reserved at 1.0 either way, so activating it in 1.x follows the same reserved-then-lit pattern
-  as `volatile`.
+- ~~**`expose` keyword (minimal)**~~ DONE. `expose fn` marks a **free function** for the kama→host boundary:
+  it emits a **bare, unmangled, exported C-ABI symbol** (`KAMA_EXPORT` → `EMSCRIPTEN_KEEPALIVE` on wasm,
+  `visibility("default"),used` / `dllexport` natively) a host resolves by `dlsym`/`Module._name`. Signature
+  is gated to C-ABI-safe types (no owned-by-value `string`/collection/smart-pointer; `Ptr<T>`/`extern`
+  struct instead); free functions only; distinct from `export` (module visibility). Lands with
+  `kama build --shared` (§5). The **full `expose`** (richer wasm module exports + the scripting host
+  interface) stays **2.0** (§7); the keyword is live today. (Mirrors the reserved-then-lit `volatile` path.)
 - **`volatile` keyword** — reserved → **1.x embedded** (emit C `volatile` for ISR↔loop flags / MMIO).
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today).
@@ -228,12 +229,13 @@ pointer ⇒ heap graph (`Shared<T>`).
 Capabilities built on the finished language — the substrate the engine needs (asset I/O, scene
 serialization, networking).
 
-- **Shared-lib build + minimal `expose` (pulled forward from 2.0 — engine-unblocking).** `kama build
-  --shared` → `.so`/`.dylib`/`.dll` and a **minimal `expose`** (C-ABI linkage for entry points) — the two
-  small compiler primitives under the engine's desktop **dev-loop hot-reload** (§8). Both are independent
-  of the 2.0 IR refactor, so they land here to make engine iteration fast *early* rather than waiting on
-  the VM. The reload loop itself is a library (`dlopen`/watch/rebind over `unsafe`/`Ptr`), not roadmap
-  work. Deliberately excludes the full 2.0 `expose` (wasm module exports + scripting host, §7).
+- ~~**Shared-lib build + minimal `expose` (pulled forward from 2.0 — engine-unblocking).**~~ DONE.
+  `kama build --shared` emits a native `.so`/`.dylib`/`.dll` (`-fPIC -shared -fvisibility=hidden`, so only
+  exposed symbols leak; a module needs no `main`), and `expose fn` gives a free function a bare C-ABI symbol
+  (§2) — the two small compiler primitives under the engine's desktop **dev-loop hot-reload** (§8). Both are
+  independent of the 2.0 IR refactor, so they landed early to make engine iteration fast rather than waiting
+  on the VM. The reload loop itself is a library (`dlopen`/watch/rebind over `unsafe`/`Ptr`), not roadmap
+  work. Excludes the full 2.0 `expose` (richer wasm module exports + scripting host, §7).
 - **Reflection + declarative serialization** — see the brief above; back ends follow as modules. Rides on
   the shipped `std::fs`/`std::io` for asset + scene load.
 - **Container / data-structure reach.** Now **shipped**: `List`/`Array`/`string`/`Fixed`, plus **`Map<K,V>`**
@@ -420,11 +422,12 @@ serialization for scenes). See [ENGINE_READINESS.md](ENGINE_READINESS.md).
 - **Dev-loop hot-reload — a *library* on two small compiler primitives.** Live-reload of gameplay code
   (edit → rebuild → swap without restarting) splits cleanly by layer, and *most of it is not the
   compiler's job* — which answers "language or engine feature?": mostly library, on a thin compiler base.
-  - **Compiler (small — scheduled 1.x, §5):** a `kama build --shared` mode emitting a
-    `.so`/`.dylib`/`.dll` (`-fPIC -shared`; on Windows the `dllexport` decoration + copy-before-load), and
-    reuse of the reserved **`expose`** keyword (§2) to give reload entry points **C-ABI linkage**. That is
-    the *same* kama→host boundary the **wasm exports** and the **scripting host** (§7) already need — so
-    hot-reload adds **no new language surface**, it consumes planned surface. One boundary, three consumers.
+  - **Compiler (small — DONE, §5):** a `kama build --shared` mode emitting a `.so`/`.dylib`/`.dll`
+    (`-fPIC -shared -fvisibility=hidden`; `KAMA_EXPORT` decorates each `expose`d symbol — `dllexport` on
+    Windows), and the **`expose`** keyword (§2) giving reload entry points **C-ABI linkage**. That is the
+    *same* kama→host boundary the **wasm exports** and the **scripting host** (§7) also use — so hot-reload
+    added **no new language surface**, it consumed planned surface. One boundary, three consumers. *(A
+    Windows copy-before-load, so the on-disk `.dll` can be rebuilt while loaded, is a library concern.)*
   - **Library:** the `dlopen`/`dlsym`/`dlclose` + file-watch + function-pointer rebind loop — pure FFI over
     `unsafe`/`Ptr`, **zero compiler changes**. This is the bulk of the feature and it lives in a module.
   - **Engine:** the *data-in-host, code-in-module* architecture (world state lives in the platform-layer

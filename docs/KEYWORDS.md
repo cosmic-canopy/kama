@@ -41,19 +41,20 @@ Legend for the status column:
 | `const` | ✅ | a `const` binding is deeply immutable (no reassign, no write *through* it, no `++`/`--`); `const fn` is non-mutating and the only kind callable on a const receiver; params take `const T` / `const ref T` (read-only borrow); a `const` field is write-once (constructor only); `const Ptr<T>` lowers to `const T*` for const-correct FFI |
 | `fn` `fnptr` | ✅ | `fn` heads every function/method declaration. `fnptr` declares an explicit, named function-pointer **type** — zero-cost, non-null, signature-checked; a bare function name or `Type::method` binds it |
 | `volatile` | 🚧 | **reserved** for the embedded/MMIO scope (ISR↔loop shared flags, peripheral registers) — using it is a clear error, not a silent no-op; implemented when kama targets embedded |
-| `expose` | 🚧 | **reserved** for the kama→host boundary (WASM module exports, scripting host interface) — clear error on use, not a silent no-op. Formerly spelled `export`; that word is now the module-visibility keyword |
+| `expose` | ✅ | marks a **free function** for the kama→host boundary: it gets a **bare, unmangled, exported C-ABI symbol** (`KAMA_EXPORT`) a host can resolve — `dlsym` on a `kama build --shared` `.so`/`.dylib`/`.dll`, or `Module._name` on a wasm build. Signature must be C-ABI-safe (no owned-by-value `string`/collection/`Owned`/`Shared`/`Weak`; use `Ptr<T>` or an `extern` struct). Free functions only; not a member/type modifier. Distinct from `export` (module visibility) — three boundaries, three words. *Full 2.0 `expose` adds richer wasm module exports + the scripting host.* |
 
 ## Reserved-but-unimplemented keywords
 
-`volatile` and `expose` are the **only** two keywords not yet implemented. Both are genuine keywords today
-and using either is a **hard compile error** — never a silent no-op:
+`volatile` is the **only** keyword not yet implemented. It is a genuine keyword today and using it is a
+**hard compile error** — never a silent no-op:
 
 - **`volatile`** has a real future role in the **embedded/MCU** scope (ISR↔main-loop shared flags and
   memory-mapped peripheral registers, where `volatile` is the correct tool on a single-core MCU — not the
   multicore-atomics misconception). It will emit C `volatile` when kama targets embedded, alongside the
   bigger embedded needs (globals/statics, ISR attributes, no-heap mode, MCU toolchains).
-- **`expose`** has a real future role at the kama→host boundary (WASM module exports for the browser engine;
-  the scripting host interface), distinct from both in-language `public`/`private` (member access) and
-  `export` (module visibility) — three separate boundaries, three words.
+
+(`expose` was the other reserved keyword; the **minimal `expose`** — a free-function C-ABI symbol for the
+native `--shared` reload boundary and wasm exports — is now implemented. The **full 2.0 `expose`** — richer
+wasm module exports and the scripting host interface — remains future work, but the keyword is live today.)
 
 Every other keyword is implemented, enforced, and exercised by the fixtures in [`../tests/`](../tests/).

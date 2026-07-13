@@ -1,0 +1,3 @@
+// `expose` needs one concrete C-ABI symbol; a generic template has none (its `T` is unbound).
+expose fn T identity<T>(T x) { return x; }
+fn int main() { return 0; }

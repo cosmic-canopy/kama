@@ -2150,6 +2150,7 @@ std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isE
 {
     std::string name = (fn->name && fn->name->value) ? *fn->name->value : "anon";
     isEntryPoint = (name == "main");
+    if (isExposed(fn)) return name;   // kama→host boundary: bare, unmangled C-ABI symbol (mirrors extern)
     return qualify(name);   // scope-prefixed (main -> kama_main); _nsCtx set per file
 }
 
@@ -2180,8 +2181,21 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
         if (!fn || !fn->name || !fn->name->value) continue;
 
-        if (fn->modifier && fn->modifier->value && *fn->modifier->value == "expose")
-            unsupported("`expose` is reserved (WASM/host export boundary) but not yet implemented", fn->line);
+        if (isExposed(fn)) {
+            // The kama→host boundary needs ONE concrete, C-ABI-callable symbol. A generic
+            // template has none (its `T` is unbound), and a `fn ref T` place-return has no
+            // clean C ABI. The by-value signature (ownership-crossing) check needs `_classes`,
+            // so it lives in emitFunction (this pass runs before collectClasses).
+            if (fn->typeParams && !fn->typeParams->empty())
+                unsupported("`expose` cannot mark a generic function — a host needs a concrete "
+                            "C-ABI symbol; expose a concrete wrapper instead", fn->line);
+            if (fn->isRef)
+                unsupported("`expose` cannot mark a `fn ref T` place-returning function — its "
+                            "return has no C-ABI form; return a value or a `Ptr<T>`", fn->line);
+            if (!_exposedNames.insert(*fn->name->value).second)
+                unsupported(("`expose`d function name '" + *fn->name->value + "' is already exposed — "
+                             "the bare C-ABI symbol must be unique").c_str(), fn->line);
+        }
 
         // A bodiless top-level `fn ret Name(params);` (no body, not extern) is a
         // function-pointer SIGNATURE type, not a callable — register in _sigs.
@@ -2195,9 +2209,9 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         }
 
         FuncSig sig;
-        // extern functions are the FFI seam — keep their literal C name (never
-        // namespace-mangle). Others are scope-prefixed (main -> kama_main).
-        sig.cName   = isExtern(fn) ? *fn->name->value : qualify(*fn->name->value);
+        // extern (host->kama FFI) and expose (kama->host) both keep their literal, unmangled
+        // C name — the boundary symbol must be predictable. Others are scope-prefixed (main -> kama_main).
+        sig.cName   = (isExtern(fn) || isExposed(fn)) ? *fn->name->value : qualify(*fn->name->value);
         sig.retCType = cType(fn->returnType);
         sig.params  = paramSigsOf(fn->parameters);
         sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
@@ -2554,7 +2568,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (mv == "virtual")  ci.isVirtualClass = true;
                 else if (mv == "final")    ci.isFinalClass = true;
                 else if (mv == "expose")
-                    unsupported("`expose` is reserved (WASM/host export boundary) but not yet implemented", cd->line);
+                    unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", cd->line);
                 else if (mv == "volatile")
                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", cd->line);
             }
@@ -2579,7 +2593,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             if (*mod->value == "volatile")
                                 unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", fd->line);
                             if (*mod->value == "expose")
-                                unsupported("`expose` is reserved (WASM/host export boundary) but not yet implemented", fd->line);
+                                unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", fd->line);
                         }
                     // A `value` picks field visibility PER FIELD (default private, `public` allowed;
                     // `protected` belongs to an extensible `resource`). A `resource` field is always
@@ -2674,7 +2688,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (*mod->value == "abstract") { mi.isVirtual = true; mi.isAbstract = true; }
                                 if (*mod->value == "static")   mi.isStatic = true;   // no implicit `self`
                                 if (*mod->value == "expose")
-                                    unsupported("`expose` is reserved (WASM/host export boundary) but not yet implemented", md->line);
+                                    unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", md->line);
                                 if (*mod->value == "volatile")
                                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", md->line);
                             }
@@ -5473,6 +5487,13 @@ bool CEmitter::isExtern(FunctionDeclarationNode* fn)
     return fn && fn->modifier && fn->modifier->value && *fn->modifier->value == "extern";
 }
 
+// `expose fn` — the kama→host boundary. Like `extern`, an exposed function keeps its
+// bare (unmangled) C name; unlike `extern` it HAS a body and gets `KAMA_EXPORT` linkage.
+bool CEmitter::isExposed(FunctionDeclarationNode* fn)
+{
+    return fn && fn->modifier && fn->modifier->value && *fn->modifier->value == "expose";
+}
+
 // Emit `cName(leadArg, <args reordered to declared param order>)`.
 //
 // NOTE: arguments are emitted in declared (param) order, which can differ from
@@ -7221,7 +7242,8 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::str
     std::string name = nameOverride ? *nameOverride : mangledFunctionName(fn, isEntry);
     rejectStoredInterface(fn->returnType, "returned from a function", fn->line);
     // a place-returning `fn ref T f(…)` emits `T* f(…)` (the place); its `return e` addresses it.
-    *_out << (nameOverride ? "static " : "") << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
+    const char* linkage = isExposed(fn) ? "KAMA_EXPORT " : (nameOverride ? "static " : "");
+    *_out << linkage << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ");\n";
 }
 
@@ -7229,6 +7251,21 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 {
     bool isEntry = false;
     std::string name = nameOverride ? *nameOverride : mangledFunctionName(fn, isEntry);
+
+    // `expose fn` crosses to a host over a raw C ABI — an owned-by-value type (kama `string`,
+    // a collection, or an `Owned`/`Shared`/`Weak` smart pointer) carries RAII/refcount state that
+    // cannot cross that boundary safely. Gate it here (post-collectClasses, so `_classes` is filled).
+    if (isExposed(fn)) {
+        auto rejectOwned = [&](const std::string& cty, const char* where) {
+            if (isSmartPtrClass(cty) || ownsByValue(cty))
+                unsupported(("`expose`: `" + cty + "` cannot cross the C-ABI boundary by value (" + where
+                             + ") — pass a `Ptr<T>` or an `extern` struct").c_str(), fn->line);
+        };
+        rejectOwned(cType(fn->returnType), "return");
+        if (fn->parameters)
+            for (auto& p : *fn->parameters)
+                if (p->type && !paramByRef(p.get())) rejectOwned(cType(p->type), "parameter");
+    }
 
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
@@ -7266,7 +7303,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // ReturnNode path, gated on `_returnIsPlace`) — same as a `fn ref T` method. The escape check
     // there requires the place to borrow a `ref`/`out` param (a free fn has no `this`), so it can't
     // dangle. `_currentReturnCType` stays the base `T` (the place path never consults it).
-    *_out << (nameOverride ? "static " : "") << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
+    const char* linkage = isExposed(fn) ? "KAMA_EXPORT " : (nameOverride ? "static " : "");
+    *_out << linkage << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ")\n";
 
     _returnIsPlace = fn->isRef;

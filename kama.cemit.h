@@ -331,6 +331,7 @@ public:
 
 private:
     std::set<std::string> _externedHeaders;   // every `extern "<h>";` seen (populated by emitIncludes)
+    std::set<std::string> _exposedNames;       // bare C-ABI symbols of `expose fn`s — collision check
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only
     std::vector<SharedCompilationUnit> _preludeModuleUnits;  // namespaced built-ins (the triad), collect-only
@@ -691,6 +692,7 @@ private:
     std::string _sharedTmpl, _ownedTmpl, _weakTmpl;
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
     static bool isExtern(FunctionDeclarationNode* fn);
+    static bool isExposed(FunctionDeclarationNode* fn);   // `expose fn` — kama→host C-ABI boundary
 
     // Inheritance/vtable resolution
     std::vector<ClassInfo*> topoOrderClasses();
