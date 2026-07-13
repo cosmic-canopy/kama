@@ -260,11 +260,12 @@ fn int32 frameTick(Ptr state) {
         wgpuQueueSubmit(queue: st[0].queue, commandCount: 1, commands: cast<Ptr>(addr(of: cmd)));
         wgpuSurfacePresent(surface: surface);
 
+        // NB: do NOT release `tex` — the surface owns its current texture; releasing it
+        // breaks the swapchain so the next GetCurrentTexture returns null (freezes frame 0).
         wgpuRenderPassEncoderRelease(renderPassEncoder: pass);
         wgpuCommandBufferRelease(commandBuffer: cmd);
         wgpuCommandEncoderRelease(encoder: enc);
         wgpuTextureViewRelease(textureView: view);
-        wgpuTextureRelease(texture: tex);
     }
     return 1;
 }
