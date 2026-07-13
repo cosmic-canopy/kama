@@ -727,121 +727,10 @@ static void injectHeapShell(ClassDeclarationNode* cd, const std::string& methodN
     }
 }
 
-// Read `@generate(Serialize|Deserialize)` off an enum declaration.
-static void enumDirections(EnumDeclarationNode* ed, bool& ser, bool& de)
-{
-    ser = false; de = false;
-    if (!ed->attributes) return;
-    for (auto& at : *ed->attributes) {
-        if (!at || !at->name || *at->name != "generate" || !at->args) continue;
-        for (auto& a : *at->args)
-            if (a && a->name && a->name->value && !a->expression) {
-                if (*a->name->value == "Serialize")   ser = true;
-                if (*a->name->value == "Deserialize") de  = true;
-            }
-    }
-}
-
-// Enum serialize: a free `ref Enum` helper that `match`es the value (so a primitive receiver resolves — see
-// the string retro-impl) writing `{"tag":"Variant"[,"value":{fields}]}`, plus the retro `implements Serialize`
-// that delegates to it. Enums can't carry methods (grammar), so the conformance is RETROACTIVE — static
-// dispatch, which is exactly how an enum field (`this.e.serialize(w)`) / a `List<Enum>` element is reached.
-static std::string buildEnumSerialize(EnumDeclarationNode* ed)
-{
-    if (!ed || !ed->identifier || !ed->identifier->value || !ed->body) return "";
-    if (ed->typeParams && !ed->typeParams->empty()) return "";   // generic enum: deferred
-    std::string en = *ed->identifier->value, arms;
-    for (auto& m : *ed->body) {
-        auto* mm = dynamic_cast<EnumMemberDeclarationNode*>(m.get());
-        if (!mm || !mm->identifier || !mm->identifier->value) continue;
-        std::string vn = *mm->identifier->value;
-        if (mm->payload && !mm->payload->empty()) {
-            std::string binds, writes;
-            for (size_t i = 0; i < mm->payload->size(); i++) {
-                auto* p = dynamic_cast<FunctionParameterNode*>((*mm->payload)[i].get());
-                if (!p || !p->identifier || !p->identifier->value) return "";
-                // Bind the payload to a PREFIXED name (`__p_<field>`), not the field name itself — a field
-                // named `w` or `__e` would otherwise shadow the Serializer param / match subject and
-                // `w.fieldName(...)` would dispatch on the payload. The field name is only the wire key.
-                std::string fn = *p->identifier->value, bind = "__p_" + fn;
-                std::string ws = serializeWriteStmt(p->type, bind);
-                if (ws.empty()) return "";
-                if (i) binds += ", ";
-                binds  += bind;
-                writes += "            w.fieldName(name: \"" + fn + "\"); " + ws + "\n";
-            }
-            arms += "        case " + vn + "(" + binds + "): {\n"
-                    "            w.fieldName(name: \"tag\"); string __t = \"" + vn + "\"; w.writeString(v: ref __t);\n"
-                    "            w.fieldName(name: \"value\"); w.beginObject();\n" + writes +
-                    "            w.endObject();\n        }\n";
-        } else {
-            arms += "        case " + vn + ": { w.fieldName(name: \"tag\"); string __t = \"" + vn
-                  + "\"; w.writeString(v: ref __t); }\n";
-        }
-    }
-    if (arms.empty()) return "";
-    return "fn void __kamaSer_" + en + "(ref " + en + " __e, ref Serializer w) {\n"
-           "    w.beginObject();\n    match (__e) {\n" + arms + "    };\n    w.endObject();\n}\n"
-           "implements Serialize for " + en + " {\n"
-           "    public fn void serialize(ref Serializer w) { __kamaSer_" + en + "(__e: this, w: w); }\n}\n";
-}
-
-// Enum deserialize: a retro static factory (rides the retro-static-method support). Reads the `tag` first,
-// then dispatches — a no-payload variant is `Enum::V`, a payload variant reads its `value` object positionally
-// (`moreFields` consumes the structure) and constructs `Enum::V(field: [give] read)`. An unknown tag flags the
-// reader (`r.fail()`) and returns a no-payload variant as a benign discarded default.
-static std::string buildEnumDeserialize(EnumDeclarationNode* ed)
-{
-    if (!ed || !ed->identifier || !ed->identifier->value || !ed->body) return "";
-    if (ed->typeParams && !ed->typeParams->empty()) return "";
-    std::string en = *ed->identifier->value, chain, dflt;
-    bool first = true;
-    for (auto& m : *ed->body) {
-        auto* mm = dynamic_cast<EnumMemberDeclarationNode*>(m.get());
-        if (!mm || !mm->identifier || !mm->identifier->value) continue;
-        std::string vn = *mm->identifier->value, body;
-        bool hasPayload = mm->payload && !mm->payload->empty();
-        if (!hasPayload && dflt.empty()) dflt = vn;   // a no-payload variant is the unknown-tag fallback
-        if (hasPayload) {
-            std::string reads, args;
-            for (size_t i = 0; i < mm->payload->size(); i++) {
-                auto* p = dynamic_cast<FunctionParameterNode*>((*mm->payload)[i].get());
-                if (!p || !p->identifier || !p->identifier->value) return "";
-                std::string fn = *p->identifier->value, re = deserializeReadElem(p->type);
-                if (re.empty()) return "";
-                std::string idx = std::to_string(i);
-                reads += "            bool __pf" + idx + " = r.moreFields(); string __pk" + idx
-                       + " = r.fieldName(); " + typeSpell(p->type) + " __p_" + fn + " = " + re + ";\n";
-                // Always `give` the read-into-local payload: a no-op for a true scalar (int/float/bool),
-                // a move for a `string`/collection/resource — so a `string` payload isn't rejected as a bare
-                // named collection into a variant (`string` carries a `builtInVal` but still owns a buffer).
-                if (i) args += ", ";
-                args += fn + ": give __p_" + fn;
-            }
-            body = "            bool __fv = r.moreFields(); string __kv = r.fieldName();\n"
-                   "            r.beginObject();\n" + reads +
-                   "            bool __pe = r.moreFields();\n            bool __oe = r.moreFields();\n"
-                   "            return " + en + "::" + vn + "(" + args + ");\n";
-        } else {
-            body = "            bool __oe = r.moreFields();\n            return " + en + "::" + vn + ";\n";
-        }
-        chain += std::string("        ") + (first ? "if" : "else if")
-               + " (__tag.equals(other: \"" + vn + "\")) {\n" + body + "        }\n";
-        first = false;
-    }
-    if (dflt.empty()) return "";   // no no-payload variant to default to on failure (deferred)
-    return "implements Deserialize for " + en + " {\n"
-           "    public static fn " + en + " deserialize(Deserializer r) {\n"
-           "        r.beginObject();\n"
-           "        bool __f = r.moreFields(); string __k = r.fieldName(); string __tag = r.readString();\n"
-         + chain +
-           "        r.fail();\n        return " + en + "::" + dflt + ";\n    }\n}\n";
-}
-
-// Scan every unit for `@generate` types and give each the generated `serialize`/`deserialize` method +
-// `implements Serialize`/`Deserialize` clause, MERGED INTO THE TYPE ITSELF (a normal conformance with a
-// fat-pointer vtable — a retroactive block is static-dispatch-only and couldn't be a contract value). An
-// `@generate` ENUM instead gets RETROACTIVE impls (enums can't carry methods) appended to the unit.
+// Scan every unit for `@generate` types. As of Phases C + the enum follow-up, the by-value (tree)
+// serialize/deserialize for a struct AND an enum are emitted directly in C by the compiler intrinsic
+// (CEmitter). This driver pass now synthesizes ONLY the GRAPH path (a type reaching a `Shared`/`Weak`):
+// the `graphWrite`-driving `serialize` + `GraphNode` conformance, and the two-pass `deserialize` driver.
 void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
 {
     for (auto& u : units) {
@@ -856,15 +745,10 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
             bool s = false, d = false; generateDirections(cd, s, d);
             if ((s || d) && cdHasGraphRef(cd)) { unitIsGraph = true; break; }
         }
-        std::vector<std::string> genEnumSrc;   // generated enum retro-impl sources, appended after the loop
         for (auto& decl : *u->codeDeclarationList) {
-            if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
-                bool eser = false, ede = false;
-                enumDirections(ed, eser, ede);
-                if (eser) { std::string s = buildEnumSerialize(ed);   if (!s.empty()) genEnumSrc.push_back(s); }
-                if (ede)  { std::string s = buildEnumDeserialize(ed); if (!s.empty()) genEnumSrc.push_back(s); }
-                continue;
-            }
+            // A `@generate` enum's serialize/deserialize are now emitted directly in C by the compiler
+            // intrinsic (emitEnumSerializeDefinition/emitEnumDeserializeDefinition) — nothing to synthesize here.
+            if (dynamic_cast<EnumDeclarationNode*>(decl.get())) continue;
             auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
             if (!cd || !cd->name || !cd->name->value) continue;
             bool ser = false, de = false;
@@ -922,16 +806,6 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
             // directly in C (CEmitter::emitDeserializeDefinition), gated on the type having no `deserialize`
             // method. The driver keeps the GRAPH deserialize (the two-pass driver below) + enum retro-impls.
         }
-        // Append the generated enum retro-impls (`implements Serialize/Deserialize for E` + the `__kamaSer_E`
-        // helper) to the unit AFTER iterating (mutating the list mid-loop would invalidate the iterator). The
-        // parsed unit is kept alive in g_generatedUnits so its CodeGenContext outlives emission.
-        for (auto& src : genEnumSrc) {
-            SharedCompilationUnit pu = parseString(src.c_str(), "<generated-enum-serde>");
-            if (!pu || !pu->codeDeclarationList) continue;
-            g_generatedUnits.push_back(pu);
-            for (auto& d : *pu->codeDeclarationList) u->codeDeclarationList->push_back(d);
-        }
-
         // Graph DESERIALIZE: in a graph unit, every `@generate(Deserialize)` class that can be a graph node
         // (its scalars are shellable) gets `__gShell`; graph-ref types additionally get `__gWire` + the
         // `Root::deserialize` two-pass driver. A free `__glookup_P` is emitted per distinct pointee type. All

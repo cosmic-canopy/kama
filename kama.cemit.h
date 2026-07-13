@@ -648,6 +648,8 @@ private:
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);
     void emitDeserializeDefinition(ClassInfo& ci);
+    void emitEnumSerializeDefinition(ClassInfo& ci);     // externally-tagged {"tag":…[,"value":{…}]}
+    void emitEnumDeserializeDefinition(ClassInfo& ci);
     void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth);
     void emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth);
     std::string deReadExpr(SharedIdentifier ty);   // the `Deserializer` read expression for a field type

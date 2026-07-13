@@ -163,10 +163,13 @@ pointer ⇒ heap graph (`Shared<T>`).
   `isSynthSer`/`isSynthDe`) so `encode`'s dynamic dispatch + `decode`'s static `T::deserialize` resolve; the
   body walks fields (scalars/string → `Serializer`/`Deserializer` directly; nested struct / enum / collection →
   its own `<T>__serialize`/`__deserialize`; `Optional` inlined). Gated on the type having no `serialize`
-  method, so hand-written **and** driver-graph impls win; the driver now synthesizes only graph + enum serde
-  (dead `buildDeserializeBody`/`injectZeroInitForDeserialize`/`hasOnConstruction` removed). API- and
-  wire-preserving — all `ser_*` + xfails green on test/ASan/wasm. **Follow-up before D:** move `@generate`
-  ENUM serde (still driver-synthesized retro-impls) to C emission too. (`Fixed<T,N>` `@generate` fields are
+  method, so hand-written **and** driver-graph impls win. API- and wire-preserving — all `ser_*` + xfails
+  green on test/ASan/wasm. **ENUM follow-up DONE too:** `@generate` enum serde (externally-tagged
+  `{"tag":…[,"value":{…}]}`) now emits in C (`emitEnumSerializeDefinition`/`emitEnumDeserializeDefinition`),
+  registered in `collectEnums` (conformance is nominal/`retroInterfaces` — an enum can't carry a fat-pointer
+  method — bodies emitted alongside the variant dtor since `classOf` skips enums). The driver now synthesizes
+  **only the graph path**; dead `buildDeserializeBody`/`injectZeroInitForDeserialize`/`hasOnConstruction`/
+  `buildEnumSerialize`/`buildEnumDeserialize`/`enumDirections` removed. (`Fixed<T,N>` `@generate` fields are
   unused today — deferred.)
 - **D — Graph lowering (intrinsic).** Replace the graph write/read with C emission; `Shared`/`Weak` dedup +
   cycles + dangling (`UnresolvedReference`), `Owned` give-once (`DuplicateId`) with child-before-parent

@@ -2382,6 +2382,42 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 _genericTypeCtx[name]    = _nsCtx;
                 _genericTypes[name]      = ci;
             } else {
+                // `@generate` serialization for a concrete tagged enum: register the Serialize/Deserialize
+                // conformance + synthesized methods so the emitter emits `E__serialize`/`E__deserialize` in C
+                // (externally-tagged `{"tag":…[,"value":{…}]}`). An enum can't carry a fat-pointer method, so
+                // the conformance is nominal-only (retroInterfaces → static dispatch, satisfies a `<T: Serialize>`
+                // bound + resolves `e.serialize()`); the body is emitted separately (emitEnumSerializeDefinition).
+                bool eser = false, ede = false;
+                if (ed->attributes)
+                    for (auto& at : *ed->attributes) {
+                        if (!at || !at->name || *at->name != "generate" || !at->args) continue;
+                        for (auto& a : *at->args)
+                            if (a && a->name && a->name->value && !a->expression) {
+                                if      (*a->name->value == "Serialize")   eser = true;
+                                else if (*a->name->value == "Deserialize") ede = true;
+                                else if (*a->name->value == "noOnConstruction") { /* n/a to an enum; tolerated */ }
+                                else unsupported("`@generate(...)` on an enum accepts only Serialize, Deserialize", ed->line);
+                            }
+                    }
+                if (eser) {
+                    ci.genSerialize = true;
+                    ci.interfaces.push_back("Serialize"); ci.retroInterfaces.push_back("Serialize");
+                    MethodInfo mi; mi.cName = name + "__serialize"; mi.visibility = Visibility::Public;
+                    mi.isSynthSer = true; mi.returnType = primTypeNode(IDENTIFIER_VOID_VAL);
+                    ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
+                    ci.methods["serialize"] = mi;
+                }
+                // Deserialize needs a payload-less variant as the unknown-tag fallback (else defer, as before).
+                bool hasUnit = false;
+                for (auto& v : ci.variants) if (v.payload.empty()) { hasUnit = true; break; }
+                if (ede && hasUnit) {
+                    ci.genDeserialize = true;
+                    ci.interfaces.push_back("Deserialize"); ci.retroInterfaces.push_back("Deserialize");
+                    MethodInfo mi; mi.cName = name + "__deserialize"; mi.visibility = Visibility::Public;
+                    mi.isStatic = true; mi.isSynthDe = true; mi.returnType = ed->identifier;
+                    ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
+                    ci.methods["deserialize"] = mi;
+                }
                 _classes[name] = ci;
             }
             continue;
@@ -7936,6 +7972,78 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
+// Externally-tagged enum serialize: `{"tag":"V"}` (unit) / `{"tag":"V","value":{fields…}}` (payload).
+void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
+{
+    *_out << "void " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+    indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
+    indent(1); *_out << "switch (self->tag) {\n";
+    for (auto& v : ci.variants) {
+        indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
+        indent(2); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit("tag") << ");\n";
+        indent(2); *_out << "kama_string __tv = " << kamaStrLit(v.name) << "; w->vtbl->writeString(w->obj, &__tv);\n";
+        if (!v.payload.empty()) {
+            indent(2); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit("value") << ");\n";
+            indent(2); *_out << "w->vtbl->beginObject(w->obj);\n";
+            for (auto& f : v.payload) {
+                indent(2); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(f.name) << ");\n";
+                emitSerFieldWrite(f.type, "self->u." + v.name + "." + f.name, 2);
+            }
+            indent(2); *_out << "w->vtbl->endObject(w->obj);\n";
+        }
+        indent(2); *_out << "break;\n";
+        indent(1); *_out << "}\n";
+    }
+    indent(1); *_out << "default: break;\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    *_out << "}\n\n";
+}
+
+// Enum deserialize: read `tag`, dispatch, read the `value` object positionally, construct the variant. An
+// unknown tag flags the reader (`fail`) and returns a benign payload-less variant (the guaranteed fallback).
+void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
+{
+    std::string dflt;
+    for (auto& v : ci.variants) if (v.payload.empty()) { dflt = v.name; break; }
+    *_out << ci.name << " " << ci.name << "__deserialize(Deserializer r)\n{\n";
+    indent(1); *_out << ci.name << " __result = (" << ci.name << "){0};\n";
+    indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
+    indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
+    indent(1); *_out << "kama_string __k = r.vtbl->fieldName(r.obj); kama_string__dtor(&__k);\n";   // the "tag" key
+    indent(1); *_out << "kama_string __tag = r.vtbl->readString(r.obj);\n";
+    bool first = true;
+    for (auto& v : ci.variants) {
+        indent(1); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__tag, " << kamaStrLit(v.name) << ")) {\n";
+        if (!v.payload.empty()) {
+            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
+            indent(2); *_out << "kama_string __kv = r.vtbl->fieldName(r.obj); kama_string__dtor(&__kv);\n";   // the "value" key
+            indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
+            for (size_t i = 0; i < v.payload.size(); ++i) {
+                const FieldInfo& f = v.payload[i];
+                std::string idx = std::to_string(i);
+                indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
+                indent(2); *_out << "kama_string __pk" << idx << " = r.vtbl->fieldName(r.obj); kama_string__dtor(&__pk" << idx << ");\n";
+                indent(2); *_out << cType(f.type) << " __p_" << f.name << " = " << deReadExpr(f.type) << ";\n";
+            }
+            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";   // close the value object
+            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";   // close the outer object
+            indent(2); *_out << "__result = (" << ci.name << "){ .tag = " << ci.name << "_" << v.name << ", .u." << v.name << " = { ";
+            for (size_t i = 0; i < v.payload.size(); ++i) { if (i) *_out << ", "; *_out << "." << v.payload[i].name << " = __p_" << v.payload[i].name; }
+            *_out << " } };\n";
+        } else {
+            indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";   // close the outer object
+            indent(2); *_out << "__result = (" << ci.name << "){ .tag = " << ci.name << "_" << v.name << " };\n";
+        }
+        indent(1); *_out << "}\n";
+        first = false;
+    }
+    indent(1); *_out << "else { r.vtbl->fail(r.obj); __result = (" << ci.name << "){ .tag = " << ci.name << "_" << dflt << " }; }\n";
+    indent(1); *_out << "kama_string__dtor(&__tag);\n";
+    indent(1); *_out << "return __result;\n";
+    *_out << "}\n\n";
+}
+
 // emit one specialized generic-type instance under its binding. phase 0 = struct typedef+body,
 // 1 = ctor/dtor/method prototypes, 2 = bodies. Mirrors emitGenericInst: all specialized class
 // functions are header-`static` (every module includes the header), so `_emitStaticClass` is set here.
@@ -9031,8 +9139,15 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             // prototype are in the header). Generic-enum instances are emitted static-inline in the header.
             if (ed->identifier && ed->identifier->value) {
                 auto it = _classes.find(qualify(*ed->identifier->value));
-                if (it != _classes.end() && it->second.isVariant && it->second.destructible)
-                    emitDtorDefinition(it->second);
+                if (it != _classes.end() && it->second.isVariant) {
+                    ClassInfo& eci = it->second;
+                    if (eci.destructible) emitDtorDefinition(eci);
+                    // `@generate` enum serde — bodies land in the home module (protos are in the header via
+                    // emitClassPrototypes; classOf skips enums, so emit here alongside the dtor). The unit's
+                    // scope is already active (_nsCtx = _unitCtx above), so payload types resolve.
+                    if (eci.methods.count("serialize")   && eci.methods["serialize"].isSynthSer)   emitEnumSerializeDefinition(eci);
+                    if (eci.methods.count("deserialize") && eci.methods["deserialize"].isSynthDe)   emitEnumDeserializeDefinition(eci);
+                }
             }
         } else if (dynamic_cast<IncludeNode*>(decl.get())) {
             // FFI #include — emitted in the header by emitIncludes
