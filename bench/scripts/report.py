@@ -197,6 +197,15 @@ diverged:
   scrambled (bijective LCG) order (hash + probe cost). Each language uses its idiomatic map — kama
   `Map<int32, int64>`, C **hand-rolled open-addressing** (no stdlib hashmap), C++ `unordered_map`, Rust
   `HashMap`, Go `map`, C# `Dictionary`, Java `HashMap` (boxed), Lua table, Python `dict`, JS `Map`.
+  **⚠️ Unlike the compute kernels (identical algorithms), `map` compares each language's _idiomatic map
+  design_ — hash strength, structure, and preallocation all differ — so it is NOT a pure codegen number
+  and the languages do not cluster.** kama's `Map` is at codegen parity with C for equal work: the headline
+  gap is that kama's stdlib chooses a **stronger default hash** (splitmix64 — two dependent 64-bit multiplies
+  vs C's single multiply) and does **not yet preallocate** (grows from 8, rehashing on a bulk insert, while
+  the C map is sized up front). Measured (100 k×10, `-O3`): give C the same splitmix64 hash and it goes
+  2.9 → 5.7 ms; give kama a single-multiply hash and it goes 8.7 → 3.3 ms ≈ C. With an equal hash **and**
+  equal preallocation, kama ≈ C (the Map machinery — probe, `Optional`, value copy — is already at parity).
+  Both levers are stdlib design choices tracked in ROADMAP §5 (Map `reserve` + a pluggable hasher).
 
 ## NATIVE — execution time (median, ms)
 
