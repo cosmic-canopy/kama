@@ -26,46 +26,21 @@ Strings, the std I/O foundation (`std::io`/`fs`/`net` + the `examples/httpd` pro
 engine capability matrix in [ENGINE_READINESS.md](ENGINE_READINESS.md); the history in the git log. What
 remains to call the language **complete**:
 
-1. **Language-completeness residuals (1.0 blockers — deep emitter work).** The fundamental (non-library)
-   gaps still open, all in the move-tracking / ownership-lowering core; each reproduces with plain
-   resources/collections and has a clean workaround, so a "language-complete" 1.0 closes them but they don't
-   block the stdlib/engine work. (Reserved later-track keywords `expose`/`volatile` stay deferred — they
-   hard-error, never miscompile.)
-   - ~~**General destroy-temporaries pass.**~~ DONE. Owned rvalues the compiler drops: operator /
-     string-receiver / `if`-cond / `foreach` / string-`ref`, `while`/`for` **condition** temps (per-iteration
-     `dropCondTemps`), string-**index** rvalue receivers, an owned rvalue method-call **receiver** — including
-     through a **method chain** (`builder.make().use()`), unified on `isPlaceReturn` so a `fn ref T` place
-     return (a borrow) is never dropped (this also closed a latent double-free introduced when free functions
-     gained `ref T` returns) — and an owned rvalue receiver of **`.chars()`/`.split()`** (materialized once
-     into a loop-scoped temp, dropped after the loop). The by-value **owned arg** is a move into the callee's
-     owning slot (freed once). ASan/UBSan-clean across the suite.
-   - **Target-typed rvalue in a non-local-init position** *(ergonomic; surfaced building the containers)*. An
-     inline construction that needs its type from context now works in a `Type x = …` initializer, a `return`,
-     an `operator[]` place-store, a value-producing `match` arm, a **class-typed lvalue store** (`this.m =
-     Map()`, done), and a **call-argument** (`f(o: Optional::Some(…))` / `f(x: match(…))`, done — the call path
-     threads the param type), and **indexing a string rvalue receiver** (`"abc"[0]` / `s.concat(x)[0]`, done —
-     the receiver is materialized), and an inline **`new` in a non-local by-value position** — a call-argument
-     (`f(a: new Sq(…))`), a `Shared/Owned<T>` **return** (`fn Shared<Shape> f() { return new Sq(…) }`, over a
-     concrete OR contract element), and a **variant payload** (`Optional::Some(value: new Sq(…))`), all DONE.
-     `tryHoistInlineNew` now mirrors the (ASan-clean) local-init boxing — the library-`adopt` path for a
-     concrete element and the fat-box `{obj,vtbl[,ctrl]}` path for a contract element — into a hoisted temp
-     whose ownership transfers to the consumer (callee param / `__ret`), so no new lifetime analysis. (The
-     memory's earlier "`ParamSig.className` drops the element type" / "under-developed contract dispatch"
-     blockers were mis-diagnoses: the real `Owned`/`Shared` are library-monomorphized, so the param carries the
-     full instance type and named-local contract dispatch already works.) Also DONE: an inline **stack ctor
-     into a by-value contract parameter** (`useShape(a: Square(3))` — materialized + fat-pointer borrow,
-     caller-dropped). **Still open** (one residual, clean "bind to a local first" workaround): a
-     value-producing construct as a `match` **SUBJECT** (`match (Optional::Some(x)) { … }`). The instance must
-     be inferred from the payload during the *discovery* pass (so its struct is emitted), but that pass has no
-     local-variable types — only a literal payload could infer, which isn't worth a partial feature; the full
-     fix needs discovery-time local typing or lazy generic-struct emission. Documented RULES (not gaps): an
-     inline `new`/value **borrowed** by a `ref`/`out` or contract parameter (an rvalue has no lvalue to
-     reseat), and an inline construct in a `do/while` condition (ISO-C + `continue` semantics).
-   - ~~**Remaining primitive `Hashable`/`Equatable` widths.**~~ DONE. All integer widths
-     (`int8/16/32/64`, `uint8/16/32/64`) now have prelude `Hashable` (splitmix64) + `Equatable` (scalar),
-     so every integer is a universal `Map`/`Set` key; floats (`float32/64`) get `Equatable` (exact `==`) but
-     intentionally NOT `Hashable` (float hash keys are a footgun — NaN/±0.0 — and there is no bit-reinterpret
-     cast). Conformances are `static inline`, so unused widths cost nothing in generated C.
+1. **Language-completeness residual (1.0 blocker — deep emitter work).** One fundamental (non-library)
+   gap in the move-tracking / ownership-lowering core; it reproduces with plain resources/collections and
+   has a clean workaround, so a "language-complete" 1.0 closes it but it doesn't block the stdlib/engine
+   work. (Reserved later-track keyword `volatile`/`hardware` stays deferred — it hard-errors, never
+   miscompiles.)
+   - **Target-typed rvalue as a `match` subject** *(one residual, clean "bind to a local first" workaround)*.
+     Target-typed inline construction already works in every other by-value position (initializer, `return`,
+     `operator[]` store, value-producing `match` arm, class-typed lvalue store, call-argument, variant
+     payload, string-rvalue indexing, inline `new`) — see [SPEC.md](SPEC.md). **Still open:** a value-producing
+     construct as a `match` **SUBJECT** (`match (Optional::Some(x)) { … }`). The instance must be inferred from
+     the payload during the *discovery* pass (so its struct is emitted), but that pass has no local-variable
+     types — only a literal payload could infer, which isn't worth a partial feature; the full fix needs
+     discovery-time local typing or lazy generic-struct emission. Documented RULES (not gaps): an inline
+     `new`/value **borrowed** by a `ref`/`out` or contract parameter (an rvalue has no lvalue to reseat), and
+     an inline construct in a `do/while` condition (ISO-C + `continue` semantics).
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
@@ -80,23 +55,18 @@ remains to call the language **complete**:
 
 ## 2. Deferred language bits (tracked)
 
-Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
-**fundamental** ownership/completeness gaps are closed (the general temp-drop pass — §1; `contract`-refining-
-`contract` and multibyte char literals — both shipped); the one remaining §1 residual is the value-producing
-`match` **subject** inference. What remains here is genuinely later-track or opt-in.
+Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The one
+remaining §1 language-completeness residual is the value-producing `match` **subject** inference; what
+remains here is genuinely later-track or opt-in.
 
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `List<string>` collect for `split` (the lazy `Split` iterator ships today).
 - **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
   (also covers `string + <number>`); sequences with reflection (its to-string substrate).
-- ~~**`expose` keyword (minimal)**~~ DONE. `expose fn` marks a **free function** for the kama→host boundary:
-  it emits a **bare, unmangled, exported C-ABI symbol** (`KAMA_EXPORT` → `EMSCRIPTEN_KEEPALIVE` on wasm,
-  `visibility("default"),used` / `dllexport` natively) a host resolves by `dlsym`/`Module._name`. Signature
-  is gated to C-ABI-safe types (no owned-by-value `string`/collection/smart-pointer; `Ptr<T>`/`extern`
-  struct instead); free functions only; distinct from `export` (module visibility). Lands with
-  `kama build --shared` (§5). The **full `expose`** (richer wasm module exports + the scripting host
-  interface) stays **2.0** (§7); the keyword is live today. (Mirrors the reserved-then-lit `volatile` path.)
+- **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (see
+  [SPEC.md](SPEC.md) + §5); the **full `expose`** — richer wasm module exports + the scripting host
+  interface — stays **2.0** (§7).
 - **`hardware` keyword** (renamed from the reserved `volatile`, to shed the C threading-confusion legacy) —
   reserved → **1.x embedded** (§5 embedded milestone): emits C `volatile` for MMIO registers
   (`hardware Ptr<T>` → `volatile T*`, mirroring `const Ptr<T>`) and single-core ISR↔loop flags.
@@ -119,101 +89,16 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
   pruning suffices, or explicit per-module opt-in / dead-function elimination is warranted before a large
   stdlib grows. (`std::math` / `std::io` already ship as directory modules under this mechanism — the open
   question is whether pruning scales, not whether the packaging shape works.)
-- ~~**Structural → nominal contracts for bounds.**~~ DONE. A generic bound `<T: Weighable>` is now
-  **nominal** — the type must declare `implements Weighable` (`classSatisfiesBound` matches the interfaces
-  list / generic-contract template, not coincidental method names), so the keyword is load-bearing
-  everywhere (`foreach`/`when`/bounds) and errors pin to the declaration. Migration was zero — every bound
-  fixture already declared `implements`; xfail `bound_nominal` guards the new requirement.
-- ~~**`Copyable` as a formal contract.**~~ DONE (was already most of the way there). `Copyable` is the
-  prelude `type contract Copyable for resource { fn This copy(); }`; a type is Copyable only by declaring
-  `implements Copyable` (the `copyable` flag, set nominally) — a `value` stays bitwise-copyable. The
-  nominal bound check routes `<T: Copyable>` through that same value/resource rule.
 
-## 4. Reflection + serialization — intrinsic pivot (1.x — Phase 4)
+## 4. Reflection + serialization — remaining follow-ups (1.x)
 
-**Design of record: [SPEC.md](SPEC.md) "Serialization" (the guiding light).** The user-facing surface
-(`@generate`/`@field`/`@skip`, the `Serialize`/`Deserialize` contracts, `encode`/`decode`, hand-written
-override) is locked. The **implementation is being rebuilt as a compiler intrinsic** — a lowering to C — and
-this replaces the earlier "synthesize the field walk + graph driver **as kama**" approach.
+**Serialization is feature-complete and shipped** (by-value + object-graph + polymorphic contracts, json
+backend) — the compiler-intrinsic lowering, its user surface (`@generate`/`@field`/`@skip`, the
+`Serialize`/`Deserialize` contracts, `encode`/`decode`, hand-written override), the `reachesPointer` mode
+gate, and the `DeError` set all live in [SPEC.md](SPEC.md) "Serialization". What remains is additive
+library + hardening work:
 
-**Why the pivot.** Emitting the structural machinery as kama *source* forced it to obey surface-language safety
-it was never meant to (no borrowed contracts in a `List`, no contract-method dispatch on a raw `Ptr`, no
-generic-instance statics, no move-out-of-`Optional`, parent-first tables, nested-`Owned` ordering) — every fix
-was a hack poking `__`-holes in the smart pointers. Reflection + the ownership-graph rebuild are **core language
-guarantees**; the compiler already owns type layout, the RAII model, and the triad's internals, so it emits
-them directly (generalizing the `HeapShellNode` instinct to the whole layer) — correct-by-construction, and
-nothing leaks. Wire formats stay library (`Serializer`/`Deserializer` contracts, swappable). Mode is gated on a
-precomputed `reachesPointer(T)` flag (sibling of `destructible`): pointer-free ⇒ by-value/stack; reaches a
-pointer ⇒ heap graph (`Shared<T>`).
-
-**Phases** (each: build → `tools/cdev test` → `KAMA_SAN=1` → `KAMA_WASM=1`; own commit):
-
-- ~~**A — Foundations.**~~ **DONE.** `reachesPointer` (memoized, beside `destructible`; inert until the
-  Phase-C mode gate consumes it); prelude-ize the `Owned`/`Shared`/`Weak` triad — now **built-in kama**
-  embedded into the binary (new `prelude/` dir + `tools/embed_prelude.sh` → `KAMA_PRELUDE_SRC`/
-  `KAMA_PRELUDE_MODULES`), so it's always in scope with no `import std::memory` (a redundant import stays a
-  no-op via an implicit `using std::memory`) **and survives a `--no-std` install** (which strips `lib/kama`).
-  The whole prelude moved out of the `PRELUDE_SRC` C literal into `prelude/global.kama`. The WIP generated-kama
-  graph hacks were already reverted; the committed 3a `Shared`/`Weak` graph machinery + `__`-seams stay until D.
-- ~~**B — Runtime graph-context (C).**~~ **DONE.** Pure-C object-graph substrate in `kama_runtime.h`
-  (`kama_gmap` open-addressing `uint64→uint64`; `kama_ser_graph` write context = addr→id dedup + worklist +
-  `reserve`/`intern`; `kama_de_graph` read context = id→object `register`/`lookup`). No `std::collections`
-  dependency. Inert until the C/D lowering drives it; the `std::serialization::graph` kama module it supersedes
-  is deleted in D. It ports the generated-kama `SerContext`; a single id→object registry replaces the old
-  per-type parallel-`List` lookups.
-- ~~**C — By-value lowering (intrinsic).**~~ **DONE (structs).** A `@generate` product (value/tree) struct's
-  `serialize`/`deserialize` are now emitted directly in C (`CEmitter::emitSerializeDefinition`/
-  `emitDeserializeDefinition`), replacing the generated-kama `__KamaGenSer`/`__KamaGenDe`. The emitter
-  registers the `Serialize`/`Deserialize` conformance itself (interfaces + a synthesized `MethodInfo`,
-  `isSynthSer`/`isSynthDe`) so `encode`'s dynamic dispatch + `decode`'s static `T::deserialize` resolve; the
-  body walks fields (scalars/string → `Serializer`/`Deserializer` directly; nested struct / enum / collection →
-  its own `<T>__serialize`/`__deserialize`; `Optional` inlined). Gated on the type having no `serialize`
-  method, so hand-written **and** driver-graph impls win. API- and wire-preserving — all `ser_*` + xfails
-  green on test/ASan/wasm. **ENUM follow-up DONE too:** `@generate` enum serde (externally-tagged
-  `{"tag":…[,"value":{…}]}`) now emits in C (`emitEnumSerializeDefinition`/`emitEnumDeserializeDefinition`),
-  registered in `collectEnums` (conformance is nominal/`retroInterfaces` — an enum can't carry a fat-pointer
-  method — bodies emitted alongside the variant dtor since `classOf` skips enums). The driver now synthesizes
-  **only the graph path**; dead `buildDeserializeBody`/`injectZeroInitForDeserialize`/`hasOnConstruction`/
-  `buildEnumSerialize`/`buildEnumDeserialize`/`enumDirections` removed. (`Fixed<T,N>` `@generate` fields are
-  unused today — deferred.)
-- ~~**D — Graph lowering (intrinsic).**~~ **DONE.** The whole object-graph write/read is now emitted directly
-  in C over the pure-C `kama_ser_graph`/`kama_de_graph` context (`kama_runtime.h`), replacing the generated-kama
-  `std::serialization::graph` module + the driver's `synthesizeSerialization` (both deleted). A graph node
-  (root, via `reachesPointer`, OR a Shared/Weak/Owned pointee, via `computeGraphNodeTypes`' closure) emits three
-  helpers — `T__serializeNode` (one id-table entry; pointer fields intern the pointee via a per-node writer
-  fn-ptr, in discovery == id order so the wire is byte-identical), `T__allocShell` (pass 1: zeroed heap shell +
-  scalar read), `T__wireShell` (pass 2: resolve ids → construct `Shared`/`Weak`/`Owned` over `(ptr, ctrl)`).
-  The public `serialize` is the `{root,objects}` envelope (gated on `reachesPointer`); the public `deserialize`
-  is the two-pass driver returning `Shared<T>` (gated on `graphDeserialize` — a node whose `Shared<T>` exists).
-  `Shared`/`Weak` dedup by pointee address; cycles ride the `Weak` back-edge; a dangling id → `UnresolvedReference`;
-  `Owned` is give-once via a claim gmap (2nd claim → new `DuplicateId`). Refcounts balance under ASan (each
-  shell's construction-strong is dropped at driver end). The triad's `__ptrId` seam + the `HeapShellNode` AST
-  node are deleted; the shells hand-construct over the prelude `Shared/Weak/Owned` C fields (`p`/`c`), needing no
-  `Shared<T>` instantiation for an `Owned`-only pointee. Notably `reachesPointer`'s seed was dead since the
-  Phase-A prelude pivot (concrete-element triad instances are library generics, not `isIntrinsicColl`) — now
-  fixed to detect them by template key. `ser_graph_shared`/`_cycle`/`_dangling` stay byte-identical +
-  `ser_graph_owned`/`_dup_owned` added; all green on test/ASan/wasm.
-- ~~**E — Polymorphic `Shared<Contract>`.**~~ **DONE.** A graph edge whose element is a **contract**
-  (`Shared`/`Weak`/`Owned<Contract>`, the fat `{obj, vtbl, ctrl}` handle) now round-trips. Each node already
-  carried its concrete `__type` and the two-pass driver already dispatched per-node on it, so E was contained to
-  the two fat-handle endpoints: `graphEdgeOf` flags a contract edge (`GraphEdge.elemIsContract`);
-  `computeGraphNodeTypes` discovers every `@generate` implementor of a contract-edge element as a graph node and
-  assigns each node a stable `ClassInfo.graphTypeId`; `emitPolyContractResolvers` emits, once per contract,
-  `C__nodeWriterFor(vtbl)`→concrete `K__serializeNode` (serialize; pointer-compares `&K__as_C`) and
-  `C__implVtbl(tid)`→`&K__as_C` (deserialize; `NULL` ⇒ `TypeMismatch`). Serialize reads the fat `.obj`/`.vtbl`;
-  `kama_de_box` gained a `type_id` (stamped by the pass-1 ladder from the wire `__type`), and `emitGraphRefRead`
-  grew a fat-rebuild branch (guarded by `C__implVtbl`, leaving the calloc-zeroed handle on mismatch = safe drop)
-  for all three kinds. `ser_graph_poly` (round-trip + surviving `area()` dynamic dispatch) + `ser_graph_poly_mismatch`
-  (`TypeMismatch`); 470 green on test/ASan/wasm. **v1 rule:** a contract graph edge's implementors must be
-  `@generate(Serialize, Deserialize)` — a convention today, **not yet compile-enforced** (see the tail below).
-- ~~**F — Cleanup + docs.**~~ **DONE.** No dead machinery remained (the generated-kama layer was already deleted
-  in C/D). Finalized [SPEC.md](SPEC.md) "Serialization" (mode gate + the two lowerings + `DeError` + poly rule)
-  and this section; regenerated `docs/grammar.bnf` from `kama.y` (the `@`-attribute grammar — `attribute_list`/
-  `attr_arg_list` — incl. `noOnConstruction`). The generic-instance-static-call gap **no longer blocks
-  serialization** — the intrinsic routes around it natively (it remains a general-language limitation, unrelated
-  to serde now).
-
-- **Deserialize breadth (tail, folds into C/D)** — `Array<E>`/`Fixed<T,N>` read; a bare `encode`/`decode` of an
+- **Deserialize breadth** — `Array<E>`/`Fixed<T,N>` read; a bare `encode`/`decode` of an
   intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
 - **Enforce the poly-edge rule (hardening)** — a `Shared`/`Weak`/`Owned<Contract>` graph edge currently *assumes*
   every implementor is `@generate(Serialize, Deserialize)`; a non-`@generate` implementor is silently absent from
@@ -233,22 +118,11 @@ pointer ⇒ heap graph (`Shared<T>`).
 Capabilities built on the finished language — the substrate the engine needs (asset I/O, scene
 serialization, networking).
 
-- ~~**Shared-lib build + minimal `expose` (pulled forward from 2.0 — engine-unblocking).**~~ DONE.
-  `kama build --shared` emits a native `.so`/`.dylib`/`.dll` (`-fPIC -shared -fvisibility=hidden`, so only
-  exposed symbols leak; a module needs no `main`), and `expose fn` gives a free function a bare C-ABI symbol
-  (§2) — the two small compiler primitives under the engine's desktop **dev-loop hot-reload** (§8). Both are
-  independent of the 2.0 IR refactor, so they landed early to make engine iteration fast rather than waiting
-  on the VM. The reload loop itself is a library (`dlopen`/watch/rebind over `unsafe`/`Ptr`), not roadmap
-  work. Excludes the full 2.0 `expose` (richer wasm module exports + scripting host, §7).
-- **Reflection + declarative serialization** — see the brief above; back ends follow as modules. Rides on
-  the shipped `std::fs`/`std::io` for asset + scene load.
-- **Container / data-structure reach.** Now **shipped**: `List`/`Array`/`string`/`Fixed`, plus **`Map<K,V>`**
-  (open-addressing/tombstoned, `K: Hashable + Equatable`, owning keys+values, ASan-clean; deep `copy` +
-  key iteration) and **`Set<K>`** (= `Map<K, Unit>`); `List`/`Array` gained
-  `reserve`/`remove`/`clear`/`contains`/`indexOf`. The gating uses **multi-condition `when [K: Copyable,
-  V: Copyable]`** (`Map.copy` needs both). **Tracked:** entry-wise iteration `foreach (Entry e in
-  m.entries())` — a generic `Entry<K,V>` value yielded through `Optional` doesn't monomorphize yet. Still
-  ahead:
+- **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
+  `std::fs`/`std::io` for asset + scene load.
+- **Container / data-structure reach.** `List`/`Array`/`string`/`Fixed` + `Map<K,V>`/`Set<K>` are shipped
+  (see [SPEC.md](SPEC.md)). **Tracked:** entry-wise iteration `foreach (Entry e in m.entries())` — a generic
+  `Entry<K,V>` value yielded through `Optional` doesn't monomorphize yet. Still ahead:
   **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a system or
   a GPU upload with no copy and no ownership transfer), **priority queue / binary heap** (A* pathfinding,
   event/timer scheduling), **deque / ring buffer** (job & event queues, audio), **slot map / generational
@@ -453,9 +327,10 @@ serialization for scenes). See [ENGINE_READINESS.md](ENGINE_READINESS.md).
 - **Dev-loop hot-reload — a *library* on two small compiler primitives.** Live-reload of gameplay code
   (edit → rebuild → swap without restarting) splits cleanly by layer, and *most of it is not the
   compiler's job* — which answers "language or engine feature?": mostly library, on a thin compiler base.
-  - **Compiler (small — DONE, §5):** a `kama build --shared` mode emitting a `.so`/`.dylib`/`.dll`
-    (`-fPIC -shared -fvisibility=hidden`; `KAMA_EXPORT` decorates each `expose`d symbol — `dllexport` on
-    Windows), and the **`expose`** keyword (§2) giving reload entry points **C-ABI linkage**. That is the
+  - **Compiler (small — DONE; see [SPEC.md](SPEC.md)):** a `kama build --shared` mode emitting a
+    `.so`/`.dylib`/`.dll` (`-fPIC -shared -fvisibility=hidden`; `KAMA_EXPORT` decorates each `expose`d
+    symbol — `dllexport` on Windows), and the **`expose`** keyword giving reload entry points **C-ABI
+    linkage**. That is the
     *same* kama→host boundary the **wasm exports** and the **scripting host** (§7) also use — so hot-reload
     added **no new language surface**, it consumed planned surface. One boundary, three consumers. *(A
     Windows copy-before-load, so the on-disk `.dll` can be rebuilt while loaded, is a library concern.)*

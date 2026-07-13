@@ -37,10 +37,12 @@ The entire language feature set is complete. In place today:
 - **Native + WASM**, debug/release, `#line` source debugging. The *safe* surface stays pointer-free; heap is
   reached only through safe abstractions.
 
-That is a complete systems-language core. The math layer (`std::math`) and native file/socket I/O
-(`std::fs`/`std::io`/`std::net`) are **shipped**; the remaining engine work is further **library and
-platform reach**, not language features: WebGPU bindings, more C bindings, slices, allocators, and threading
-(already *designed* — the shared-nothing model in ROADMAP.md).
+That is a complete systems-language core. The math layer (`std::math`), native file/socket I/O
+(`std::fs`/`std::io`/`std::net`), the **`Map<K,V>`/`Set<K>`** hash containers, opt-in **serialization**
+(`@generate`, intrinsic + json backend), and the **`expose` + `kama build --shared`** kama→host C-ABI
+boundary are all **shipped**; the remaining engine work is further **library and platform reach**, not
+language features: WebGPU bindings, more C bindings, slices, allocators, and threading (already *designed* —
+the shared-nothing model in ROADMAP.md).
 
 ---
 
@@ -62,7 +64,7 @@ platform reach**, not language features: WebGPU bindings, more C bindings, slice
 | **General user generics** (`type value Foo<T>`, generic fns, nested `>>`, contract bounds `<K: A + B>`, `This`, turbofish) | ✅ — monomorphized, zero-cost, ASan-clean | Every future library type. | done |
 | **Error model**: `Result`/`Optional` | ✅ — `Optional<T>`/`Result<T,E>` prelude tagged unions, consumed by exhaustive `match` (no exceptions, no `null`) | File/asset/GPU/shader-compile failures need a first-class, non-exception path (fits no-GC/deterministic). | done |
 | **Tagged unions / sum types + pattern matching** | ✅ — `enum` payloads/generic enums + value-producing exhaustive `match` (plain enums too) | Events, messages, render commands, animation/state machines, asset variants. | done |
-| **`Map<K,V>` / hash maps** | 🟡 generics + bounds *machinery* ready, but the standard vocabulary is not: no prelude `Hashable`/`Comparable`/`Ordering` contracts, no hashing convention (only `Equatable`, and only in a test). Needs that small stdlib-contract + hashing foundation, then the container. | Entity/resource/asset registries, caches, string→handle lookup. | M (contracts + hashing + container) |
+| **`Map<K,V>` / hash maps** | ✅ — **`Map<K,V>`/`Set<K>` shipped** (open-addressing/tombstoned, owning keys+values, deep `copy` + key iteration, ASan-clean) over prelude **`Hashable`/`Equatable`** contracts (splitmix64 for every integer width, FNV-1a for `string`; floats `Equatable`-only). Remaining is the **ordered/sorted (tree) map** — needs `Comparable`/`Ordering` — and the collections-revisit knobs (reserve/pluggable-hasher/allocator), both in ROADMAP §5. | Entity/resource/asset registries, caches, string→handle lookup. | done (hash map) → sorted map later |
 | **Slices / spans** (non-owning views over `Array`/`List`/buffers) | ❌ | Iterate a subrange, pass a buffer to a system or a GPU upload without copying or transferring ownership. | M |
 | **Allocator control**: arenas / pools / frame & stack allocators | ❌ (GOALS #3 wants these as library types) | Deterministic per-frame perf, zero mid-frame `malloc`, bump-reset allocators. Needs a placement-construct hook + the runtime unsafe core. | M–L |
 
@@ -75,14 +77,15 @@ platform reach**, not language features: WebGPU bindings, more C bindings, slice
 | **File / network I/O** (files, sockets) | ✅ — **`std::fs`/`std::io`/`std::net` shipped** (RAII `File`, `readFile`/`writeFile`/`stat`/`readDir`; blocking TCP `TcpListener`/`TcpStream`; `Result<…,IoError>`), POSIX + Windows, over the bundled `kama_os.h` FFI boundary. `examples/httpd/` is a real static-file server on it. Follow-ups (UDP/DNS, buffered readers) tracked in ROADMAP §1. | Asset/scene loading, config, tooling, networking. | done |
 | **String formatting / interpolation** (`"${x}"`, number→string, logging) | 🟡 — the `string` type is rich (ops, `substring`/`find`/`trim`/`replace`/`split`, UTF-8 + `.chars()`), but there is no `Display`/to-string or interpolation yet (ROADMAP §2). | Logging, text assets, tooling. | M |
 | **comptime / const-eval** | 🟡 partial — `const` values, **const generics** (`Fixed<T,N>`, integer type params), and **`sizeof(T)`** (a monomorphizing compile-time builtin) are shipped; general compile-time *evaluation* (arithmetic on const params, lookup-table generation) is not. `alignof(T)` is the obvious missing sibling for allocators. | Lookup tables, shader/permutation specialization, asserts. | M |
-| **Reflection / metadata** | 🚧 opt-in **serialization** — `@generate(Serialize, Deserialize)` on a type/enum drives the compiler's `ClassInfo` (field name/type/order + variants). User surface = contracts + attributes (+ hand-written override); the field walk **and** the object-graph rebuild are a **compiler intrinsic** (lowering to C), with swappable library wire backends (`std::serialization::json` now). Two modes gated on `reachesPointer`: pointer-free ⇒ by-value (`decode::<T> -> T`); reaches a pointer ⇒ heap graph (`decode::<Shared<T>>`). Implementation mid-pivot — see [ROADMAP.md](ROADMAP.md) §4 / [SPEC.md](SPEC.md) "Serialization". | Auto-serialization, editor property panels, ECS introspection. | ✅ (design locked; intrinsic impl + back ends follow) |
+| **Reflection / metadata** | ✅ opt-in **serialization shipped** — `@generate(Serialize, Deserialize)` on a type/enum drives the compiler's `ClassInfo` (field name/type/order + variants). User surface = contracts + attributes (+ hand-written override); the field walk **and** the object-graph rebuild are a **compiler intrinsic** (lowering to C), with swappable library wire backends (`std::serialization::json` now). Two modes gated on `reachesPointer`: pointer-free ⇒ by-value (`decode::<T> -> T`); reaches a pointer ⇒ heap graph (`decode::<Shared<T>>`), incl. polymorphic `Shared/Weak/Owned<Contract>` + a `DeError` set. Remaining is additive library work (more wire back ends) — see [ROADMAP.md](ROADMAP.md) §4 / [SPEC.md](SPEC.md) "Serialization". | Auto-serialization, editor property panels, ECS introspection. | done (json; more back ends follow) |
 
 ## Tier 3 — Ecosystem & polish
 
 Package manager / multi-module build & deps (L); **LSP** + formatter + debugger polish (L); variadics (S);
 `defer`/scope-guards (S — RAII already covers most); enum methods / flags (S); inline **capturing closures**
 (M+); a **`foreach` iteration protocol** for user types (S–M — today `foreach` is built-in-collections only;
-matters once `Map` / custom containers land).
+now that `Map`/`Set` have landed, the open piece is entry-wise iteration — a generic `Entry<K,V>` yielded
+through `Optional` doesn't monomorphize yet, ROADMAP §5).
 
 ## The actual goal
 
