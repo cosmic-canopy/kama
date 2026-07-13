@@ -37,6 +37,12 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
 #endif
+// The readiness poller uses select() (see kama_poller_wait — WSAPoll mis-handles a connecting socket).
+// FD_SETSIZE caps how many sockets fit one fd_set; raise it from the default 64 for the server selector.
+// MUST be defined before <winsock2.h>.
+#ifndef FD_SETSIZE
+#  define FD_SETSIZE 1024
+#endif
 #include <winsock2.h>     // socket, bind, listen, accept, connect, send, recv, WSAStartup, SOCKET
 #include <ws2tcpip.h>     // (numeric-host helpers)
 #include <windows.h>      // FindFirstFileA / HANDLE / MAX_PATH
@@ -257,9 +263,15 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
     return 0;
 }
 
-// ---- readiness poller (WSAPoll) --------------------------------------------
-// Same shape + bit convention as the POSIX branch; a heap WSAPOLLFD[] behind a Ptr. WSAPoll needs
-// _WIN32_WINNT >= 0x0600 (Vista+), satisfied by the UCRT toolchain.
+// ---- readiness poller (select) ---------------------------------------------
+// Same shape + bit convention as the POSIX branch; a heap WSAPOLLFD[] behind a Ptr stores each fd +
+// requested events (WSAPOLLFD is just a convenient {SOCKET, events, revents} record here). The wait()
+// itself uses select(), NOT WSAPoll: WSAPoll mis-handles a *connecting* socket — it can return a socket
+// as ready with revents==0 (or never signal a refused connect), so a caller resolving a non-blocking
+// connect (poll for writable, then read SO_ERROR) reads SO_ERROR while the handshake is still in flight
+// and mis-reports it as connected. select() reports a connecting socket only on genuine resolution —
+// writefds on success, exceptfds on failure — which is exactly the "writable == connect resolved"
+// contract std::net::Poller advertises. (Bounded by FD_SETSIZE, raised above.)
 typedef struct kama__poller { WSAPOLLFD* fds; int len; int cap; } kama__poller;
 static inline void* kama_poller_create(void) {
     kama__poller* p = (kama__poller*)malloc(sizeof *p);
@@ -285,9 +297,31 @@ static inline void kama_poller_remove(void* ph, ptrdiff_t fd) {
 }
 static inline int32_t kama_poller_wait(void* ph, int32_t timeoutMs) {
     kama__poller* p = (kama__poller*)ph;
-    int r = WSAPoll(p->fds, (ULONG)p->len, (int)timeoutMs);
+    fd_set rd, wr, ex;
+    FD_ZERO(&rd); FD_ZERO(&wr); FD_ZERO(&ex);
+    for (int i = 0; i < p->len; i++) {
+        p->fds[i].revents = 0;
+        SOCKET s = p->fds[i].fd;
+        if (p->fds[i].events & POLLRDNORM) FD_SET(s, &rd);
+        if (p->fds[i].events & POLLWRNORM) FD_SET(s, &wr);
+        FD_SET(s, &ex);                       // always watch for connect failure / OOB
+    }
+    struct timeval tv; struct timeval* ptv = NULL;
+    if (timeoutMs >= 0) { tv.tv_sec = timeoutMs / 1000; tv.tv_usec = (timeoutMs % 1000) * 1000; ptv = &tv; }
+    int r = select(0, &rd, &wr, &ex, ptv);    // Winsock ignores nfds; blocks until ready / timeout
     if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
-    return (int32_t)r;
+    if (r == 0) return 0;                      // timed out — no socket resolved
+    int ready = 0;                             // recount per-fd (a failed connect sets both wr+ex)
+    for (int i = 0; i < p->len; i++) {
+        SOCKET s = p->fds[i].fd;
+        SHORT rev = 0;
+        if (FD_ISSET(s, &rd)) rev = (SHORT)(rev | POLLRDNORM);
+        if (FD_ISSET(s, &ex)) rev = (SHORT)(rev | POLLWRNORM | POLLERR);  // failed connect => resolved (writable) + error
+        if (FD_ISSET(s, &wr)) rev = (SHORT)(rev | POLLWRNORM);            // success => writable
+        p->fds[i].revents = rev;
+        if (rev) ready++;
+    }
+    return (int32_t)ready;
 }
 static inline int32_t kama_poller_ready(void* ph, ptrdiff_t fd) {
     kama__poller* p = (kama__poller*)ph;
