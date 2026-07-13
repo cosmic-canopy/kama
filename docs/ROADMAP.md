@@ -72,6 +72,12 @@ remains here is genuinely later-track or opt-in.
   (`hardware Ptr<T>` → `volatile T*`, mirroring `const Ptr<T>`) and single-core ISR↔loop flags.
   **Explicitly NOT a concurrency primitive** — cross-thread sharing is §6 atomics. Reserved-then-lit like
   before; the token stays a hard error until the embedded target ships.
+- **Aggregate initializer for `type extern value` (FFI ergonomics).** Surfaced writing the WebGPU bindings
+  ([`examples/webgpu/`](examples/webgpu/)): a field-wise call on a POD extern struct — `WGPUColor(r: 1.0,
+  g: 0.5)` — silently zero-inits (the field args are dropped) instead of setting the named fields, so C-API
+  descriptor code must fall back to `T x = T(); x.field = …;`. Give extern-value types a real by-name
+  aggregate initializer (`WGPUColor(r: 1.0, …)` → designated init). Verbose-but-correct today; a pure
+  ergonomic win for the many-field descriptor structs a C graphics/OS API is built from.
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today).
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way

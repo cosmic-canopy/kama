@@ -625,6 +625,13 @@ int main(int argc, char** argv)
         // and a read of an uninitialized local. The #line directives map these back to the
         // .kama source. (Audit Step 2 — "no silent surprises".)
         cmd << compiler << " -std=c11 -Werror=return-type -Werror=uninitialized ";
+        // Binding a callback-based C API (WebGPU/GLFW/SDL/…) means handing a kama `fnptr` to a C
+        // callback field. At the `extern` boundary the user asserts ABI compatibility the same way a
+        // C cast would — but a kama callback lowers enums to `int` and typed handles to `void*`, which
+        // clang (error-by-default since v16) flags as an incompatible function-pointer type. kama can't
+        // name those C types, so demote it to a warning (still visible) rather than a hard error — the
+        // FFI boundary is the sanctioned unsafe seam.
+        cmd << "-Wno-error=incompatible-function-pointer-types ";
         // --shared: emit a position-independent shared library. -fvisibility=hidden hides everything
         // by default; only `expose`d functions (KAMA_EXPORT -> visibility("default"),used) reach the
         // dynamic symbol table, so a host `dlopen`+`dlsym`s exactly the declared entry points. `used`

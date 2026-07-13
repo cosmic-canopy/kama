@@ -1,0 +1,31 @@
+// WebGPU toolchain smoke test — now written in Kama (was smoke.c).
+//
+// Proves Kama's own `extern` bindings compile and link against the WebGPU API
+// (Emscripten's emdawnwebgpu port) — the browser-independent CI gate for the
+// engine's WebGPU track. Kama can express the C API directly: opaque handles are
+// `Ptr` (WGPUInstance is an opaque pointer), `null` is the FFI null, and
+// `extern "<header>"` pulls in the real prototypes.
+//
+// Build: ./kama build smoke.kama --target wasm --webgpu -o out/webgpu_smoke.html
+// Linking successfully is the test. Actually creating a device needs a browser
+// with WebGPU, so we only exercise instance creation defensively (as smoke.c did).
+
+extern "<webgpu/webgpu.h>";
+extern "<stdio.h>";
+
+extern fn Ptr  wgpuCreateInstance(Ptr descriptor);   // WGPUInstance (opaque) <- descriptor* (null OK)
+extern fn void wgpuInstanceRelease(Ptr instance);
+extern fn int32 puts(Ptr<int8> s);
+
+fn int main() {
+    Ptr instance = wgpuCreateInstance(descriptor: null);
+    if (instance != null) {
+        string ok = "kama webgpu smoke: WGPUInstance created";
+        puts(s: ok.cstr());
+        wgpuInstanceRelease(instance: instance);
+    } else {
+        string no = "kama webgpu smoke: no instance (expected outside a browser)";
+        puts(s: no.cstr());
+    }
+    return 0;
+}

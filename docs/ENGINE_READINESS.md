@@ -91,7 +91,7 @@ through `Optional` doesn't monomorphize yet, ROADMAP §5).
 
 | Goal | Status | Notes |
 |---|---|---|
-| **kama-level WebGPU bindings** → first triangle → the engine spine | ❌ | The Tier-0 FFI keystone (extern structs + function pointers) is in place, **and a `--webgpu` build flag already links Emscripten's `emdawnwebgpu` port** (`kama.driver.cpp`, `README.md`) — so the toolchain path is wired; only the kama-side `extern` bindings against `webgpu.h` + a thin idiomatic wrapper remain. | L (binding layer) |
+| **kama-level WebGPU bindings** → first triangle → the engine spine | 🟡 — **first triangle done** (browser/WASM). [`examples/webgpu/`](../examples/webgpu/) is a **pure-Kama** WebGPU triangle (instance→adapter→device→queue→surface→render pass→draw), no C glue: opaque handles are `Ptr`, C descriptors are `type extern value` (header owns layout), the async adapter/device handshake rides `fnptr` callbacks + `userdata`, the frame loop is `std::app`. Builds under `--webgpu`; visually confirmed in a WebGPU browser. **Remaining:** a native path (Dawn/wgpu-native + GLFW/SDL surface), a safe idiomatic `std::gpu` wrapper, and the engine spine (buffers/bindings/pipelines beyond a hardcoded triangle). | idiomatic wrapper + native + engine |
 
 ---
 

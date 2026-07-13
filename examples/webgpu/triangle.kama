@@ -1,0 +1,259 @@
+// triangle.kama — a WebGPU example written in Kama, compiled to WASM.
+//
+// M1 (this file): brings the whole pipeline up and clears the canvas to an
+// animated colour every frame — the "hard 80%" (instance -> adapter -> device ->
+// queue -> surface -> per-frame render pass). M2 adds a shader + pipeline to draw
+// an actual triangle.
+//
+//   ./kama build triangle.kama --target wasm --webgpu -o out/triangle.html
+//   # open out/triangle.html in a WebGPU-capable browser (Chrome/Edge)
+//
+// It is pure Kama over the WebGPU C API (Emscripten's emdawnwebgpu port): opaque
+// handles are `Ptr`, C structs are `type extern value` (the header owns the real
+// layout — Kama assigns fields by name), and the async adapter/device handshake
+// rides Kama `fnptr` callbacks. App state lives on the heap (Kama has no mutable
+// globals yet) and is threaded through the WebGPU `userdata` pointer.
+
+import std::app::{run};
+
+extern "<webgpu/webgpu.h>";
+extern "<stdlib.h>";
+
+// ----- libc -----
+extern fn Ptr calloc(usize count, usize size);
+
+// ----- WebGPU C structs (only the fields we touch; the header owns the layout) -----
+type extern value WGPUStringView { Ptr<int8> data; usize length; }
+type extern value WGPUChainedStruct { Ptr next; int32 sType; }
+type extern value WGPUEmscriptenSurfaceSourceCanvasHTMLSelector { WGPUChainedStruct chain; WGPUStringView selector; }
+type extern value WGPUSurfaceDescriptor { Ptr nextInChain; }
+type extern value WGPUSurfaceConfiguration {
+    Ptr nextInChain; Ptr device; int32 format; uint64 usage;
+    uint32 width; uint32 height; int32 alphaMode; int32 presentMode;
+}
+type extern value WGPUSurfaceTexture { Ptr nextInChain; Ptr texture; int32 status; }
+type extern value WGPUColor { float64 r; float64 g; float64 b; float64 a; }
+type extern value WGPURenderPassColorAttachment {
+    Ptr nextInChain; Ptr view; uint32 depthSlice; Ptr resolveTarget;
+    int32 loadOp; int32 storeOp; WGPUColor clearValue;
+}
+type extern value WGPURenderPassDescriptor {
+    Ptr nextInChain; WGPUStringView label; usize colorAttachmentCount; Ptr colorAttachments;
+}
+
+// --- M2: shader module + render pipeline ---
+type extern value WGPUShaderSourceWGSL { WGPUChainedStruct chain; WGPUStringView code; }
+type extern value WGPUShaderModuleDescriptor { Ptr nextInChain; WGPUStringView label; }
+type extern value WGPUColorTargetState { Ptr nextInChain; int32 format; Ptr blend; uint64 writeMask; }
+type extern value WGPUVertexState {
+    Ptr nextInChain; Ptr module; WGPUStringView entryPoint;
+    usize constantCount; Ptr constants; usize bufferCount; Ptr buffers;
+}
+type extern value WGPUFragmentState {
+    Ptr nextInChain; Ptr module; WGPUStringView entryPoint;
+    usize constantCount; Ptr constants; usize targetCount; Ptr targets;
+}
+type extern value WGPUPrimitiveState {
+    Ptr nextInChain; int32 topology; int32 stripIndexFormat; int32 frontFace; int32 cullMode; uint32 unclippedDepth;
+}
+type extern value WGPUMultisampleState { Ptr nextInChain; uint32 count; uint32 mask; uint32 alphaToCoverageEnabled; }
+type extern value WGPURenderPipelineDescriptor {
+    Ptr nextInChain; WGPUStringView label; Ptr layout;
+    WGPUVertexState vertex; WGPUPrimitiveState primitive; Ptr depthStencil;
+    WGPUMultisampleState multisample; Ptr fragment;
+}
+
+// The async callback shapes (message is a WGPUStringView passed by value).
+fnptr void AdapterCb(int32 status, Ptr adapter, WGPUStringView message, Ptr userdata1, Ptr userdata2);
+fnptr void DeviceCb(int32 status, Ptr device, WGPUStringView message, Ptr userdata1, Ptr userdata2);
+
+type extern value WGPURequestAdapterCallbackInfo { Ptr nextInChain; int32 mode; AdapterCb callback; Ptr userdata1; Ptr userdata2; }
+type extern value WGPURequestDeviceCallbackInfo  { Ptr nextInChain; int32 mode; DeviceCb  callback; Ptr userdata1; Ptr userdata2; }
+
+// ----- WebGPU functions -----
+extern fn Ptr  wgpuCreateInstance(Ptr descriptor);
+extern fn Ptr  wgpuInstanceCreateSurface(Ptr instance, Ptr descriptor);
+extern fn void wgpuInstanceRequestAdapter(Ptr instance, Ptr options, WGPURequestAdapterCallbackInfo callbackInfo);
+extern fn void wgpuAdapterRequestDevice(Ptr adapter, Ptr descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
+extern fn Ptr  wgpuDeviceGetQueue(Ptr device);
+extern fn void wgpuSurfaceConfigure(Ptr surface, Ptr config);
+extern fn void wgpuSurfaceGetCurrentTexture(Ptr surface, Ptr surfaceTexture);
+extern fn Ptr  wgpuTextureCreateView(Ptr texture, Ptr descriptor);
+extern fn Ptr  wgpuDeviceCreateCommandEncoder(Ptr device, Ptr descriptor);
+extern fn Ptr  wgpuCommandEncoderBeginRenderPass(Ptr encoder, Ptr descriptor);
+extern fn void wgpuRenderPassEncoderEnd(Ptr renderPassEncoder);
+extern fn Ptr  wgpuCommandEncoderFinish(Ptr encoder, Ptr descriptor);
+extern fn void wgpuQueueSubmit(Ptr queue, usize commandCount, Ptr commands);
+extern fn void wgpuSurfacePresent(Ptr surface);
+extern fn void wgpuRenderPassEncoderRelease(Ptr renderPassEncoder);
+extern fn void wgpuCommandBufferRelease(Ptr commandBuffer);
+extern fn void wgpuCommandEncoderRelease(Ptr encoder);
+extern fn void wgpuTextureViewRelease(Ptr textureView);
+extern fn void wgpuTextureRelease(Ptr texture);
+extern fn Ptr  wgpuDeviceCreateShaderModule(Ptr device, Ptr descriptor);
+extern fn Ptr  wgpuDeviceCreateRenderPipeline(Ptr device, Ptr descriptor);
+extern fn void wgpuRenderPassEncoderSetPipeline(Ptr renderPassEncoder, Ptr pipeline);
+extern fn void wgpuRenderPassEncoderDraw(Ptr renderPassEncoder, uint32 vertexCount, uint32 instanceCount, uint32 firstVertex, uint32 firstInstance);
+
+// ----- app state (heap; threaded through WebGPU userdata) -----
+type value App {
+    public Ptr instance; public Ptr surface; public Ptr adapter;
+    public Ptr device;   public Ptr queue;   public Ptr pipeline;
+    public int32 ready;  public int32 frame;
+}
+
+// The whole triangle: two entry points in one WGSL module, positions baked in
+// (no vertex buffer). One logical line so it needs no multi-line string literal.
+fn string triangleWgsl() {
+    return "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f { var p = array<vec2f,3>(vec2f(0.0,0.5), vec2f(-0.5,-0.5), vec2f(0.5,-0.5)); return vec4f(p[i], 0.0, 1.0); } @fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.4, 0.1, 1.0); }";
+}
+
+// Build the render pipeline for the triangle (device is ready; format is the surface's).
+fn Ptr makePipeline(Ptr device, int32 format) {
+    string wgsl = triangleWgsl();
+    WGPUShaderSourceWGSL src = WGPUShaderSourceWGSL();
+    src.chain.sType = 2;                 // WGPUSType_ShaderSourceWGSL
+    src.code.data = wgsl.cstr();
+    src.code.length = cast<usize>(wgsl.length());
+    WGPUShaderModuleDescriptor smDesc = WGPUShaderModuleDescriptor();
+    smDesc.nextInChain = cast<Ptr>(addr(of: src));
+    Ptr shader = wgpuDeviceCreateShaderModule(device: device, descriptor: addr(of: smDesc));
+
+    WGPUColorTargetState colorTarget = WGPUColorTargetState();
+    colorTarget.format = format;
+    colorTarget.writeMask = 15;          // WGPUColorWriteMask_All (0xF)
+
+    string fsEntry = "fs";
+    WGPUFragmentState frag = WGPUFragmentState();
+    frag.module = shader;
+    frag.entryPoint.data = fsEntry.cstr();
+    frag.entryPoint.length = cast<usize>(fsEntry.length());
+    frag.targetCount = 1;
+    frag.targets = cast<Ptr>(addr(of: colorTarget));
+
+    string vsEntry = "vs";
+    WGPURenderPipelineDescriptor pd = WGPURenderPipelineDescriptor();
+    pd.vertex.module = shader;
+    pd.vertex.entryPoint.data = vsEntry.cstr();
+    pd.vertex.entryPoint.length = cast<usize>(vsEntry.length());
+    pd.primitive.topology = 4;           // WGPUPrimitiveTopology_TriangleList
+    pd.multisample.count = 1;
+    pd.multisample.mask = 4294967295;    // 0xFFFFFFFF
+    pd.fragment = cast<Ptr>(addr(of: frag));
+    return wgpuDeviceCreateRenderPipeline(device: device, descriptor: addr(of: pd));
+}
+
+// Device is ready: grab the queue, configure the surface for the canvas, go live.
+fn void onDevice(int32 status, Ptr device, WGPUStringView message, Ptr u1, Ptr u2) {
+    unsafe {
+        Ptr<App> st = cast<Ptr<App>>(u1);
+        st[0].device = device;
+        st[0].queue = wgpuDeviceGetQueue(device: device);
+
+        WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration();
+        cfg.device = device;
+        cfg.format = 27;          // WGPUTextureFormat_BGRA8Unorm
+        cfg.usage = 16;           // WGPUTextureUsage_RenderAttachment
+        cfg.width = 512;
+        cfg.height = 512;
+        cfg.alphaMode = 0;        // WGPUCompositeAlphaMode_Auto
+        cfg.presentMode = 1;      // WGPUPresentMode_Fifo
+        wgpuSurfaceConfigure(surface: st[0].surface, config: addr(of: cfg));
+
+        st[0].pipeline = makePipeline(device: device, format: 27);   // BGRA8Unorm
+        st[0].ready = 1;
+    }
+}
+
+// Adapter is ready: request a device.
+fn void onAdapter(int32 status, Ptr adapter, WGPUStringView message, Ptr u1, Ptr u2) {
+    unsafe {
+        Ptr<App> st = cast<Ptr<App>>(u1);
+        st[0].adapter = adapter;
+
+        WGPURequestDeviceCallbackInfo ci = WGPURequestDeviceCallbackInfo();
+        ci.mode = 3;              // WGPUCallbackMode_AllowSpontaneous
+        ci.callback = onDevice;
+        ci.userdata1 = u1;
+        wgpuAdapterRequestDevice(adapter: adapter, descriptor: null, callbackInfo: ci);
+    }
+}
+
+// One frame: acquire the swapchain texture, clear it to an animated colour, submit.
+fn int32 frameTick(Ptr state) {
+    unsafe {
+        Ptr<App> st = cast<Ptr<App>>(state);
+        if (st[0].ready == 0) { return 1; }         // still initialising
+
+        Ptr surface = st[0].surface;
+        int32 frame = st[0].frame;
+        st[0].frame = frame + 1;
+
+        WGPUSurfaceTexture surfTex = WGPUSurfaceTexture();
+        wgpuSurfaceGetCurrentTexture(surface: surface, surfaceTexture: addr(of: surfTex));
+        Ptr tex = surfTex.texture;
+        if (tex == null) { return 1; }
+
+        Ptr view = wgpuTextureCreateView(texture: tex, descriptor: null);
+        Ptr enc = wgpuDeviceCreateCommandEncoder(device: st[0].device, descriptor: null);
+
+        WGPURenderPassColorAttachment att = WGPURenderPassColorAttachment();
+        att.view = view;
+        att.depthSlice = 4294967295;   // WGPU_DEPTH_SLICE_UNDEFINED
+        att.loadOp = 2;                // WGPULoadOp_Clear
+        att.storeOp = 1;               // WGPUStoreOp_Store
+        att.clearValue.r = 0.1;
+        att.clearValue.g = 0.2;
+        att.clearValue.b = cast<float64>(frame % 120) / 120.0;   // animate blue
+        att.clearValue.a = 1.0;
+
+        WGPURenderPassDescriptor rp = WGPURenderPassDescriptor();
+        rp.colorAttachmentCount = 1;
+        rp.colorAttachments = cast<Ptr>(addr(of: att));
+
+        Ptr pass = wgpuCommandEncoderBeginRenderPass(encoder: enc, descriptor: addr(of: rp));
+        wgpuRenderPassEncoderSetPipeline(renderPassEncoder: pass, pipeline: st[0].pipeline);
+        wgpuRenderPassEncoderDraw(renderPassEncoder: pass, vertexCount: 3, instanceCount: 1, firstVertex: 0, firstInstance: 0);
+        wgpuRenderPassEncoderEnd(renderPassEncoder: pass);
+        Ptr cmd = wgpuCommandEncoderFinish(encoder: enc, descriptor: null);
+        wgpuQueueSubmit(queue: st[0].queue, commandCount: 1, commands: cast<Ptr>(addr(of: cmd)));
+        wgpuSurfacePresent(surface: surface);
+
+        wgpuRenderPassEncoderRelease(renderPassEncoder: pass);
+        wgpuCommandBufferRelease(commandBuffer: cmd);
+        wgpuCommandEncoderRelease(encoder: enc);
+        wgpuTextureViewRelease(textureView: view);
+        wgpuTextureRelease(texture: tex);
+    }
+    return 1;
+}
+
+fn int main() {
+    Ptr inst = wgpuCreateInstance(descriptor: null);
+
+    // Heap app-state (zeroed) so it outlives main() once the browser drives the loop.
+    Ptr<App> st = cast<Ptr<App>>(calloc(count: 1, size: sizeof(App)));
+    unsafe { st[0].instance = inst; }
+
+    // Surface from the page's <canvas id="canvas"> (chained selector struct).
+    string sel = "#canvas";
+    WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSrc = WGPUEmscriptenSurfaceSourceCanvasHTMLSelector();
+    canvasSrc.chain.sType = 262144;          // WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector
+    canvasSrc.selector.data = sel.cstr();
+    canvasSrc.selector.length = cast<usize>(sel.length());
+
+    WGPUSurfaceDescriptor sd = WGPUSurfaceDescriptor();
+    sd.nextInChain = cast<Ptr>(addr(of: canvasSrc));
+    Ptr surface = wgpuInstanceCreateSurface(instance: inst, descriptor: addr(of: sd));
+    unsafe { st[0].surface = surface; }
+
+    // Kick off the async adapter request; onAdapter -> onDevice -> ready.
+    WGPURequestAdapterCallbackInfo ci = WGPURequestAdapterCallbackInfo();
+    ci.mode = 3;                              // WGPUCallbackMode_AllowSpontaneous
+    ci.callback = onAdapter;
+    ci.userdata1 = cast<Ptr>(st);
+    wgpuInstanceRequestAdapter(instance: inst, options: null, callbackInfo: ci);
+
+    run(tick: frameTick, state: cast<Ptr>(st));   // browser-driven render loop
+    return 0;
+}
