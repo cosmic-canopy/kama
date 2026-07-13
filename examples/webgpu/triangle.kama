@@ -1,9 +1,8 @@
 // triangle.kama — a WebGPU example written in Kama, compiled to WASM.
 //
-// M1 (this file): brings the whole pipeline up and clears the canvas to an
-// animated colour every frame — the "hard 80%" (instance -> adapter -> device ->
-// queue -> surface -> per-frame render pass). M2 adds a shader + pipeline to draw
-// an actual triangle.
+// Brings the whole pipeline up and draws a spinning triangle over a colour-cycling
+// background: instance -> adapter -> device -> queue -> surface -> WGSL render
+// pipeline -> per-frame render pass (uniform-fed rotation) -> draw.
 //
 //   ./kama build triangle.kama --target wasm --webgpu -o out/triangle.html
 //   # open out/triangle.html in a WebGPU-capable browser (Chrome/Edge)
@@ -261,12 +260,14 @@ fn int32 frameTick(Ptr state) {
         // auto-presents the canvas at the end of each requestAnimationFrame tick. (A native
         // backend DOES call present — a web-vs-native difference the platform seam will handle.)
 
-        // NB: do NOT release `tex` — the surface owns its current texture; releasing it
-        // breaks the swapchain so the next GetCurrentTexture returns null (freezes frame 0).
+        // Release this frame's transient objects. GetCurrentTexture hands back a ref we own,
+        // so release `tex` too (matches Emscripten's reference; the surface keeps its own ref) —
+        // else it leaks a swapchain texture every frame.
         wgpuRenderPassEncoderRelease(renderPassEncoder: pass);
         wgpuCommandBufferRelease(commandBuffer: cmd);
         wgpuCommandEncoderRelease(encoder: enc);
         wgpuTextureViewRelease(textureView: view);
+        wgpuTextureRelease(texture: tex);
     }
     return 1;
 }
