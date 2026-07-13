@@ -567,6 +567,18 @@ public:
         : ASTNode(context),  ExpressionNode(context), type(type) { }
 };
 
+// COMPILER-INTERNAL heap shell for graph DESERIALIZE: given a `Shared<T>` type, lowers to
+// `Shared<T>__adopt((T*)kama_calloc(1, sizeof(T)))` — a zeroed heap `T` wrapped in a fresh `Shared`
+// (ctrl strong=1). The zeroed pointee's own never-null `Shared` fields become the `{0,0}` its dtor
+// guards, so a graph node can exist before its ref fields are wired (pass 2). Like ZeroValueNode it has
+// NO grammar — the graph deserialize codegen splices it into a synthesized `__gShell` (see kama.driver.cpp).
+class HeapShellNode : public ExpressionNode {
+public:
+    SharedIdentifier type;   // the `Shared<T>` instance type (element = type->genericArg)
+    HeapShellNode(CodeGenContext& context, SharedIdentifier type)
+        : ASTNode(context),  ExpressionNode(context), type(type) { }
+};
+
 class BinaryExpressionNode : public ExpressionNode {
 public:
     int token;

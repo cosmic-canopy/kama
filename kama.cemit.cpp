@@ -887,6 +887,22 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return "(" + cType(v->type) + "){0}";
     }
 
+    // Compiler-internal graph-deserialize heap shell: `Shared<T>__adopt((T*)kama_calloc(1, sizeof(T)))` — a
+    // zeroed heap T wrapped in a fresh Shared (ctrl strong=1). Reuses the self-hosted `Shared<T>::adopt`
+    // (resolved to its mangled cName) so refcounting/ownership stay in library code; the calloc gives the
+    // {0,0} never-null-Shared fields the pointee's dtor guards. (No user grammar — see HeapShellNode.)
+    if (auto* v = dynamic_cast<HeapShellNode*>(n)) {
+        std::string sharedC = cType(v->type);                      // e.g. Shared_Leaf (mangled instance)
+        std::string elemC   = cType(v->type->genericArg);          // e.g. Leaf
+        std::string adoptName = sharedC + "__adopt";
+        ClassInfo* ao = nullptr;
+        if (_classes.count(sharedC)) {
+            MethodInfo* adoptM = findMethod(&_classes[sharedC], "adopt", &ao);
+            if (adoptM && !adoptM->cName.empty()) adoptName = adoptM->cName;
+        }
+        return adoptName + "((" + elemC + "*)kama_calloc(1, sizeof(" + elemC + ")))";
+    }
+
     unsupported("expression", n->line);
     return "0";
 }
@@ -2577,8 +2593,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     if (serGen && !fMarked)
                         unsupported("every field of a `@generate`d type must be marked `@field` or `@skip`", fd->line);
                     // Smart-pointer fields = object-graph mode. `Shared`/`Weak` serialize as integer ids into a
-                    // side table (std::serialization::graph). `Owned` (tree-shaped one-owner) is a later slice;
-                    // `Bindable` (a bound callback) is never serializable. Graph *deserialize* is not built yet.
+                    // side table and deserialize via the two-pass graph driver (std::serialization::graph +
+                    // the generated `__gShell`/`__gWire`/`deserialize`). `Owned` (tree-shaped one-owner) is a
+                    // later slice; `Bindable` (a bound callback) is never serializable.
                     if (serGen && !fSkip && fd->type && fd->type->value) {
                         const std::string& tn = *fd->type->value;
                         if (tn == "Owned")
@@ -2587,9 +2604,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         else if (tn == "Bindable")
                             unsupported("a `Bindable<…>` field can't be serialized — `@skip` it and rebind in "
                                         "`onConstruction`", fd->line);
-                        else if ((tn == "Shared" || tn == "Weak") && ci.genDeserialize)
-                            unsupported("graph deserialize (a `Shared`/`Weak` field with `@generate(Deserialize)`) "
-                                        "isn't implemented yet — this slice supports `@generate(Serialize)` graphs", fd->line);
                     }
 
                     if (fd->declarators) {

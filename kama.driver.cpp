@@ -586,6 +586,238 @@ static void injectZeroInitForDeserialize(ClassDeclarationNode* cd)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Graph DESERIALIZE codegen (3a-read). A graph deserializes INTO a `Shared<Root>` via a two-pass build over
+// per-concrete-type id registries: pass 1 constructs every object as a zeroed heap SHELL (HeapShell) and
+// registers it by id; pass 2 wires the pointer fields by id lookup + copy/downgrade; the root is handed back.
+// Cycles/forward-refs work because all shells exist before any wiring — no closures, no deferral table.
+//
+// It's spread over several MERGED methods (each with private access to its own type's fields) + free helpers:
+//   K::__gShell(r) -> Shared<K>          build a shell, read own scalar fields, skip ref fields (pass 1)
+//   K::__gWire(r, <regs>)   (instance)   read own ref fields, resolve via the registries, store (pass 2)
+//   Root::deserialize(r) -> Shared<Root> the driver: registries + two passes + return root (roots only)
+//   __glookup_P(ids, objs, id) -> Optional<Shared<P>>   linear-scan id lookup (parallel Lists, because
+//                                        `Map<_, Shared<_>>` can't be used — its `cloneVal(ref V)` rejects a
+//                                        smart-pointer `ref`; so registries mirror SerContext's parallel Lists)
+// Registries are `List<uint64> __ids_K` + `List<Shared<K>> __objs_K`, one pair per graph type in the unit.
+
+// Classify a pointer `@field`: fills `kind` (Shared/Weak/OptShared/OptWeak) + the pointee type. False otherwise.
+struct GraphRefInfo { std::string kind; SharedIdentifier pointee; };
+static bool classifyGraphRef(SharedIdentifier t, GraphRefInfo& out)
+{
+    if (!t || !t->value) return false;
+    const std::string& v = *t->value;
+    if (v == "Shared" && t->genericArg) { out.kind = "Shared"; out.pointee = t->genericArg; return true; }
+    if (v == "Weak"   && t->genericArg) { out.kind = "Weak";   out.pointee = t->genericArg; return true; }
+    if (v == "Optional" && t->genericArg && t->genericArg->value && t->genericArg->genericArg) {
+        const std::string& iv = *t->genericArg->value;
+        if (iv == "Shared") { out.kind = "OptShared"; out.pointee = t->genericArg->genericArg; return true; }
+        if (iv == "Weak")   { out.kind = "OptWeak";   out.pointee = t->genericArg->genericArg; return true; }
+    }
+    return false;
+}
+
+// Walk a class's `@field` declarators, invoking `fn(fd, declName, wireName)` for each non-`@skip` field.
+template <typename F>
+static void forEachField(ClassDeclarationNode* cd, F fn)
+{
+    if (!cd || !cd->members) return;
+    for (auto& m : *cd->members) {
+        auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(m.get());
+        if (!fd || !fd->declarators) continue;
+        bool skip = false; std::string rename;
+        if (fd->attributes)
+            for (auto& at : *fd->attributes) {
+                if (!at || !at->name) continue;
+                if (*at->name == "skip") skip = true;
+                else if (*at->name == "field" && at->args)
+                    for (auto& a : *at->args)
+                        if (a && a->name && a->name->value && *a->name->value == "name" && a->expression)
+                            if (auto* sn = dynamic_cast<StringNode*>(a->expression.get())) rename = sn->value ? *sn->value : "";
+            }
+        if (skip) continue;
+        for (auto& d : *fd->declarators) {
+            if (!d->name || !d->name->value) continue;
+            std::string f = *d->name->value;
+            fn(fd, f, rename.empty() ? f : rename);
+        }
+    }
+}
+
+// The `K::__gShell` body: a HeapShell local `__sh`, then read each SCALAR `@field` into the pointee; the read
+// loop's `else { skipValue }` consumes ref-field values (wired in pass 2). Returns "" if a scalar field is
+// unsupported (mirrors buildDeserializeBody).
+static std::string buildGraphShell(ClassDeclarationNode* cd)
+{
+    std::string tn = *cd->name->value, chain, defaults; bool first = true; bool bad = false;
+    forEachField(cd, [&](ClassFieldDeclarationNode* fd, const std::string& f, const std::string& wire) {
+        if (typeIsGraphRef(fd->type)) return;   // ref field — wired in __gWire; skipped here
+        std::string set = deserializeFieldSet(fd->type, "__sh.deref()." + f);
+        if (set.empty()) { bad = true; return; }
+        if (fd->type && fd->type->value && *fd->type->value == "Optional")
+            defaults += "        __sh.deref()." + f + " = Optional::None;\n";
+        chain += std::string("            ") + (first ? "if" : "else if")
+               + " (__k == \"" + wire + "\") { " + set + " }\n";
+        first = false;
+    });
+    if (bad) return "";
+    // A type with no scalar fields (all ref fields, e.g. a pure-pointer node) skips every field here — no
+    // if-chain, so emit a bare `skipValue` (a lone `else` would be a parse error).
+    std::string loopBody = first
+        ? "            r.skipValue();\n"
+        : chain + "            else { r.skipValue(); }\n";
+    return "        Shared<" + tn + "> __sh;\n"           // initializer -> HeapShellNode post-parse
+         + defaults +
+           "        while (r.moreFields()) {\n"
+           "            string __k = r.fieldName();\n"
+         + loopBody +
+           "        }\n"
+           "        return __sh;\n";
+}
+
+// The `K::__gWire` param list + body: read each pointer `@field`'s id and store the resolved handle. Params are
+// `ref List<uint64> __ids_P, ref List<Shared<P>> __objs_P` for each distinct pointee type P; `pointees` returns
+// them in order (the driver passes the matching registries).
+static std::string buildGraphWire(ClassDeclarationNode* cd, std::vector<std::string>& pointees)
+{
+    std::string body; bool first = true;
+    std::vector<std::string> seen;
+    forEachField(cd, [&](ClassFieldDeclarationNode* fd, const std::string& f, const std::string& wire) {
+        GraphRefInfo gi;
+        if (!classifyGraphRef(fd->type, gi)) return;
+        std::string P = typeSpell(gi.pointee);
+        if (std::find(seen.begin(), seen.end(), P) == seen.end()) { seen.push_back(P); pointees.push_back(P); }
+        std::string look = "__glookup_" + P + "(ids: ref __ids_" + P + ", objs: ref __objs_" + P + ", id: __rid)";
+        std::string w;
+        if (gi.kind == "Shared")
+            w = "uint64 __rid = r.readRef(); Optional<Shared<" + P + ">> __e = " + look + ";\n"
+                "                match (__e) { case Some(__tv): { this." + f + " = __tv; } "
+                "case None: { r.failWith(e: DeError::UnresolvedReference); } };";
+        else if (gi.kind == "Weak")
+            w = "uint64 __rid = r.readRef(); Optional<Shared<" + P + ">> __e = " + look + ";\n"
+                "                match (__e) { case Some(__tv): { this." + f + " = __tv.downgrade(); } "
+                "case None: { if (__rid != 0ui64) { r.failWith(e: DeError::UnresolvedReference); } } };";
+        else if (gi.kind == "OptShared")
+            w = "uint64 __rid = r.readRef();\n"
+                "                if (__rid == 0ui64) { this." + f + " = Optional::None; }\n"
+                "                else { Optional<Shared<" + P + ">> __e = " + look + ";\n"
+                "                    match (__e) { case Some(__tv): { this." + f + " = Optional::Some(value: __tv); } "
+                "case None: { r.failWith(e: DeError::UnresolvedReference); } }; }";
+        else /* OptWeak */
+            w = "uint64 __rid = r.readRef();\n"
+                "                if (__rid == 0ui64) { this." + f + " = Optional::None; }\n"
+                "                else { Optional<Shared<" + P + ">> __e = " + look + ";\n"
+                "                    match (__e) { case Some(__tv): { this." + f + " = Optional::Some(value: __tv.downgrade()); } "
+                "case None: { r.failWith(e: DeError::UnresolvedReference); } }; }";
+        body += std::string("            ") + (first ? "if" : "else if")
+              + " (__k == \"" + wire + "\") { " + w + " }\n";
+        first = false;
+    });
+    std::string loopBody = first
+        ? "            r.skipValue();\n"
+        : body + "            else { r.skipValue(); }\n";
+    return "        while (r.moreFields()) {\n"
+           "            string __k = r.fieldName();\n"
+         + loopBody +
+           "        }\n";
+}
+
+// A per-pointee-type linear-scan lookup: id -> Optional<Shared<P>> (Some = a retained copy; None = absent/0).
+static std::string buildGraphLookup(const std::string& P)
+{
+    return "fn Optional<Shared<" + P + ">> __glookup_" + P
+         + "(ref List<uint64> ids, ref List<Shared<" + P + ">> objs, uint64 id) {\n"
+           "    if (id == 0ui64) { return Optional::None; }\n"
+           "    int32 i = 0; int32 n = cast<int32>(ids.length());\n"
+           "    while (i < n) {\n"
+           "        if (ids[i] == id) { return Optional::Some(value: copy objs[i]); }\n"   // `copy` op = retain
+           "        i = i + 1;\n"
+           "    }\n"
+           "    return Optional::None;\n"
+           "}\n";
+}
+
+// The `Root::deserialize` two-pass driver body: registries for every graph type, pass 1 builds+registers shells,
+// pass 2 wires ref fields, then the root is looked up and returned (a dangling root id -> UnresolvedReference).
+static std::string buildGraphDriver(ClassDeclarationNode* rootCd,
+                                    const std::vector<ClassDeclarationNode*>& graphTypes)
+{
+    std::string rn = *rootCd->name->value;
+    std::string regs, pass1, pass2;
+    bool f1 = true, f2 = true;
+    for (auto* K : graphTypes) {
+        std::string kn = *K->name->value;
+        regs += "        List<uint64> __ids_" + kn + " = List(); List<Shared<" + kn + ">> __objs_" + kn + " = List();\n";
+        pass1 += std::string("            ") + (f1 ? "if" : "else if") + " (__ty == \"" + kn + "\") { "
+               + "__ids_" + kn + ".add(item: __id); __objs_" + kn + ".add(item: " + kn + "::__gShell(r: r)); }\n";
+        f1 = false;
+        if (cdHasGraphRef(K)) {
+            std::vector<std::string> pts; buildGraphWire(K, pts);   // just to collect the pointee order for the call
+            std::string args;
+            for (auto& P : pts) args += ", __ids_" + P + ": ref __ids_" + P + ", __objs_" + P + ": ref __objs_" + P;
+            pass2 += std::string("            ") + (f2 ? "if" : "else if") + " (__ty == \"" + kn + "\") {\n"
+                   + "                Optional<Shared<" + kn + ">> __cur = __glookup_" + kn
+                   + "(ids: ref __ids_" + kn + ", objs: ref __objs_" + kn + ", id: __id);\n"
+                   + "                match (__cur) { case Some(__c): { __c.__gWire(r: r" + args + "); } "
+                     "case None: { while (r.moreFields()) { string __sk = r.fieldName(); r.skipValue(); } } };\n"
+                   + "            }\n";
+        } else {
+            pass2 += std::string("            ") + (f2 ? "if" : "else if") + " (__ty == \"" + kn + "\") { "
+                   + "while (r.moreFields()) { string __sk = r.fieldName(); r.skipValue(); } }\n";
+        }
+        f2 = false;
+    }
+    std::string skipEntry = "{ while (r.moreFields()) { string __sk = r.fieldName(); r.skipValue(); } }";
+    return "        uint64 __root = r.beginGraph();\n"
+         + regs +
+           "        r.beginObject();\n"
+           "        while (r.moreFields()) {\n"
+           "            uint64 __id = r.entryKey();\n"
+           "            r.beginObject();\n"
+           "            string __tk = r.fieldName(); string __ty = r.readString();\n"
+         + pass1 +
+           "            else " + skipEntry + "\n"
+           "        }\n"
+           "        r.rewindGraph();\n"
+           "        r.beginObject();\n"
+           "        while (r.moreFields()) {\n"
+           "            uint64 __id = r.entryKey();\n"
+           "            r.beginObject();\n"
+           "            string __tk = r.fieldName(); string __ty = r.readString();\n"
+         + pass2 +
+           "            else " + skipEntry + "\n"
+           "        }\n"
+           "        r.endGraph();\n"
+           "        Optional<Shared<" + rn + ">> __rr = __glookup_" + rn
+             + "(ids: ref __ids_" + rn + ", objs: ref __objs_" + rn + ", id: __root);\n"
+           "        Shared<" + rn + "> __fb;\n"          // fallback; initializer -> HeapShellNode post-parse
+           "        match (__rr) { case Some(__rv): { return __rv; } "
+             "case None: { r.failWith(e: DeError::UnresolvedReference); return __fb; } };\n";
+}
+
+// Replace the null initializer of `varName` in method `methodName` with a HeapShellNode of the decl's type
+// (mirrors injectZeroInitForDeserialize, but the internal node is a heap-adopt shell rather than `(T){0}`).
+static void injectHeapShell(ClassDeclarationNode* cd, const std::string& methodName, const std::string& varName)
+{
+    if (!cd || !cd->members) return;
+    static SharedCodeGenContext genCtx =
+        std::make_shared<CodeGenContext>(std::make_shared<std::string>("<gen-heapshell>"));
+    for (auto& m : *cd->members) {
+        auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+        if (!md || !md->name || !md->name->value || *md->name->value != methodName) continue;
+        if (!md->body || !md->body->statements) continue;
+        for (auto& st : *md->body->statements) {
+            auto* lvd = dynamic_cast<LocalVariableDeclaration*>(st.get());
+            if (!lvd || !lvd->variables) continue;
+            for (auto& v : *lvd->variables)
+                if (v && v->name && v->name->value && *v->name->value == varName && !v->initializer) {
+                    v->initializer = std::make_shared<HeapShellNode>(*genCtx, lvd->type);
+                    return;
+                }
+        }
+    }
+}
+
 // Read `@generate(Serialize|Deserialize)` off an enum declaration.
 static void enumDirections(EnumDeclarationNode* ed, bool& ser, bool& de)
 {
@@ -779,7 +1011,11 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
             // bound in `tryParse`). Merge the static `deserialize` factory + the marker into the type: the
             // empty marker means the vtable has no method slots (no `This` to resolve), and a merged static
             // member keeps its `static` (a retro impl would drop it).
-            if (de) {
+            // In a graph unit a `@generate(Deserialize)` type's `deserialize` IS the graph driver (returns
+            // `Shared<N>`, generated below), so suppress the ordinary object `deserialize` (returns `N`) here —
+            // otherwise `Shared<N>::deserialize` (shared.kama) would delegate to a `N::deserialize` of the wrong
+            // return type. A graph is decoded as `decode::<Shared<N>>`, never `decode::<N>`.
+            if (de && !unitIsGraph) {
                 std::string body = buildDeserializeBody(cd);
                 if (!body.empty()) {   // skip types with fields deserialize can't yet build (Array/smart-ptr)
                     // `deserialize` returns `T` (not `Result`): nested fields assign a child directly
@@ -803,6 +1039,69 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
             if (!pu || !pu->codeDeclarationList) continue;
             g_generatedUnits.push_back(pu);
             for (auto& d : *pu->codeDeclarationList) u->codeDeclarationList->push_back(d);
+        }
+
+        // Graph DESERIALIZE: in a graph unit, every `@generate(Deserialize)` class that can be a graph node
+        // (its scalars are shellable) gets `__gShell`; graph-ref types additionally get `__gWire` + the
+        // `Root::deserialize` two-pass driver. A free `__glookup_P` is emitted per distinct pointee type. All
+        // `Shared<K>` shells route through the inline conditional `Shared<T>: Deserialize` in shared.kama, so
+        // `decode::<Shared<Root>>` resolves. See the graph codegen helpers above.
+        if (unitIsGraph) {
+            std::vector<ClassDeclarationNode*> graphTypes;
+            for (auto& decl : *u->codeDeclarationList) {
+                auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
+                if (!cd || !cd->name || !cd->name->value) continue;
+                bool s = false, d = false; generateDirections(cd, s, d);
+                if (!d) continue;
+                if (cd->typeParams && !cd->typeParams->empty()) continue;   // generic graph type: deferred
+                if (buildGraphShell(cd).empty()) continue;                  // a field we can't shell yet
+                graphTypes.push_back(cd);
+            }
+            for (auto* cd : graphTypes) {
+                mergeGeneratedInto(cd,
+                    "type value __KamaGenGShell {\n"
+                    "    public static fn Shared<" + *cd->name->value + "> __gShell(Deserializer r) {\n"
+                    + buildGraphShell(cd) +
+                    "    }\n"
+                    "}\n");
+                injectHeapShell(cd, "__gShell", "__sh");
+                if (cdHasGraphRef(cd)) {
+                    std::vector<std::string> pts; std::string wbody = buildGraphWire(cd, pts);
+                    std::string params;
+                    for (auto& P : pts)
+                        params += ", ref List<uint64> __ids_" + P + ", ref List<Shared<" + P + ">> __objs_" + P;
+                    mergeGeneratedInto(cd,
+                        "type value __KamaGenGWire {\n"
+                        "    public fn void __gWire(Deserializer r" + params + ") {\n"
+                        + wbody +
+                        "    }\n"
+                        "}\n");
+                }
+            }
+            // Free lookups for EVERY graph type (a pointee is looked up in `__gWire`; a root type is looked up
+            // in pass 2 to fetch the shell to wire and to return the root), then the driver merged into each
+            // type (with `implements Deserialize` so `decode::<Shared<N>>` resolves).
+            std::string lookups;
+            for (auto* cd : graphTypes) lookups += buildGraphLookup(*cd->name->value);
+            if (!lookups.empty()) {
+                SharedCompilationUnit pu = parseString(lookups.c_str(), "<generated-graph-lookup>");
+                if (pu && pu->codeDeclarationList) {
+                    g_generatedUnits.push_back(pu);
+                    for (auto& d : *pu->codeDeclarationList) u->codeDeclarationList->push_back(d);
+                }
+            }
+            // Every graph type gets the driver as its `deserialize` (returning `Shared<N>`), so any can be a
+            // graph ROOT — `decode::<Shared<N>>` for a leaf node is a one-object graph. `implements Deserialize`
+            // (marker) is what lets `Shared<N>::deserialize` resolve `N::deserialize`.
+            for (auto* cd : graphTypes) {
+                mergeGeneratedInto(cd,
+                    "type value __KamaGenGDe implements Deserialize {\n"
+                    "    public static fn Shared<" + *cd->name->value + "> deserialize(Deserializer r) {\n"
+                    + buildGraphDriver(cd, graphTypes) +
+                    "    }\n"
+                    "}\n");
+                injectHeapShell(cd, "deserialize", "__fb");
+            }
         }
     }
 }
@@ -838,16 +1137,27 @@ static void injectGraphImport(SharedCompilationUnit u)
 {
     if (!u) return;
     if (!u->importDeclarationList) u->importDeclarationList = std::make_shared<ImportDeclarationList>();
-    for (auto& imp : *u->importDeclarationList)
-        if (imp && imp->modulePath && imp->modulePath->size() == 3
-            && *(*imp->modulePath)[0] == "std" && *(*imp->modulePath)[1] == "serialization"
-            && *(*imp->modulePath)[2] == "graph")
-            return;   // already imported (user-written or previously injected)
-    SharedCompilationUnit iu = parseString(
-        "import std::serialization::graph::{GraphNode, SerContext, graphWrite};\nfn int32 __gimp() { return 0; }\n",
-        "<graph-import>");
-    if (iu && iu->importDeclarationList && !iu->importDeclarationList->empty())
-        u->importDeclarationList->push_back((*iu->importDeclarationList)[0]);
+    // True iff the unit already imports the module `a::b[::c]` (so we don't inject a duplicate).
+    auto hasImport = [&](std::vector<std::string> path) {
+        for (auto& imp : *u->importDeclarationList)
+            if (imp && imp->modulePath && imp->modulePath->size() == path.size()) {
+                bool eq = true;
+                for (size_t i = 0; i < path.size(); i++) if (*(*imp->modulePath)[i] != path[i]) { eq = false; break; }
+                if (eq) return true;
+            }
+        return false;
+    };
+    auto inject = [&](const char* src) {
+        SharedCompilationUnit iu = parseString(src, "<graph-import>");
+        if (iu && iu->importDeclarationList && !iu->importDeclarationList->empty())
+            u->importDeclarationList->push_back((*iu->importDeclarationList)[0]);
+    };
+    // The write side needs the graph runtime; the (read-side) generated deserialize driver builds its id
+    // registries out of `List`, so a graph unit also needs `std::collections::List` nameable in its own scope.
+    if (!hasImport({"std", "serialization", "graph"}))
+        inject("import std::serialization::graph::{GraphNode, SerContext, graphWrite};\nfn int32 __gimp() { return 0; }\n");
+    if (!hasImport({"std", "collections"}))
+        inject("import std::collections::{List};\nfn int32 __gimp2() { return 0; }\n");
 }
 
 bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* argv0,
@@ -1113,7 +1423,7 @@ static const char* PRELUDE_SRC =
     // a STICKY error flag — a read on malformed input sets `failed()` and returns a default, so the generated
     // `deserialize` needs no per-read branching; `tryParse` checks `failed()` once at the end). `Deserialize`
     // is the per-type capability the codegen synthesizes: a static factory `deserialize(ref Deserializer)`.
-    "enum DeError { Malformed, UnexpectedEnd, TypeMismatch, MissingField }\n"
+    "enum DeError { Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference }\n"
     "type contract Deserializer for resource {\n"
     "    fn void beginObject(); fn bool moreFields(); fn string fieldName();\n"
     "    fn void beginArray(); fn bool moreElems();\n"
@@ -1122,6 +1432,13 @@ static const char* PRELUDE_SRC =
     "    fn float32 readF32(); fn float64 readF64();\n"
     "    fn bool readBool(); fn char readChar(); fn string readString();\n"
     "    fn bool readNull(); fn void skipValue(); fn bool failed(); fn void fail();\n"
+    // Graph (object-table) reads — the deserialize twin of the Serializer's writeRef/beginGraph/…: `beginGraph`
+    // consumes `{\"root\":id,\"objects\":` (bookmarking the objects `{` for the two-pass rewind) and returns the
+    // root id; `rewindGraph` re-enters that table for pass 2; `readRef` reads a bare id; `endGraph` closes the
+    // envelope; `failWith` records a specific DeError (so a dangling ref surfaces `UnresolvedReference`, not the
+    // generic `Malformed`). A non-graph backend can no-op these.
+    "    fn uint64 beginGraph(); fn void rewindGraph(); fn uint64 entryKey(); fn uint64 readRef();\n"
+    "    fn void endGraph(); fn void failWith(DeError e);\n"
     "}\n"
     // A marker contract (like Movable): the `@generate(Deserialize)` codegen supplies the static factory
     // `deserialize(ref Deserializer) -> Result<This, DeError>` via a retro impl, and `tryParse<T: Deserialize>`

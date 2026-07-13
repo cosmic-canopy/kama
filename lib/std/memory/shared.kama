@@ -14,10 +14,22 @@ type value Ctrl { public usize strong; public usize weak; }
 // a bare hand-off (`Shared b = a;`) RETAINS (strong++) via `copy()`; `give` is a compile error (there
 // is no move to make). The pointee is released exactly once, when the last strong handle drops.
 // `implements HeapOwner<T>` makes `new T(args)` a heap-placement + adopt; `Deref<T>` forwards access.
-type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
+type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy),
+                                    Deserialize when [T: Deserialize] {
     Ptr<T> p;
     Ptr<Ctrl> c;
     public Shared(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }   // shares an existing ctrl
+    // Deserialize INTO a Shared: a graph root is heap + shared-owned, so `decode::<Shared<N>>` reconstructs the
+    // whole object graph and hands back the owning root handle. Delegates to `T::deserialize` — for a graph type
+    // `N` the `@generate(Deserialize)` codegen synthesizes `N::deserialize` returning `Shared<N>` (the two-pass
+    // graph driver), so this simply forwards it (the `T: Deserialize` bound is what makes `T::deserialize`
+    // resolve, exactly like the `__kamaDeserialize` trampoline). Only type-checks when `N::deserialize` yields
+    // a `Shared<N>` — i.e. `N` is a graph type (in a graph unit every `@generate(Deserialize)` type's
+    // `deserialize` is the graph driver). Instantiating `Shared<X>::deserialize` for a non-graph `X` (whose
+    // `X::deserialize` returns `X`) is a type error — decode a plain value as `decode::<X>` instead.
+    public static fn Shared<T> deserialize(Deserializer r) when [T: Deserialize] {
+        return T::deserialize(r: r);
+    }
     public static fn Shared<T> adopt(Ptr<T> raw) {
         Ptr<Ctrl> ctrl;
         unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }

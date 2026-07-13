@@ -1,0 +1,35 @@
+// Graph deserialize surfaces a DANGLING reference: the objects table references id 2 (the shared leaf) but
+// never defines it, so the two-pass wire can't resolve it and `decode` returns `DeError::UnresolvedReference`
+// (not the generic `Malformed`) — the reader records the specific error via `failWith`.
+import std::serialization::json::{decode};
+import std::memory::{Shared};
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Leaf { @field int32 v; public Leaf(int32 v) { this.v = v; } }
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Pair {
+    @field Shared<Leaf> a;
+    @field Shared<Leaf> b;
+    public Pair(Shared<Leaf> a, Shared<Leaf> b) { this.a = give a; this.b = give b; }
+}
+
+fn int main() {
+    // id 2 (the Leaf that `a`/`b` reference) is MISSING from the objects table -> dangling.
+    string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Pair\",\"a\":2,\"b\":2}}}";
+    Result<Shared<Pair>, DeError> res = decode::<Shared<Pair>>(src: give j);
+    match (res) {
+        case Ok(sh): { return 1; }                          // must NOT succeed
+        case Err(e): {
+            DeError ec = e;
+            match (ec) {
+                case UnresolvedReference: { return 0; }     // expected
+                case Malformed: { return 2; }
+                case UnexpectedEnd: { return 3; }
+                case TypeMismatch: { return 4; }
+                case MissingField: { return 5; }
+            };
+        }
+    };
+    return 6;
+}

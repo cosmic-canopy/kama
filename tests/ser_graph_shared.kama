@@ -1,13 +1,14 @@
-// Object-graph serialize: two owners share one leaf. The shared leaf is written ONCE into the id table
-// (deduped by identity) and both pointer fields reference the same id. (Serialize side; the deserialize
-// round-trip lands with graph read support.)
-import std::serialization::json::{encode};
+// Object-graph round-trip: two owners share one leaf. Serialize writes the shared leaf ONCE into the id
+// table (deduped by identity), both pointer fields referencing the same id; deserialize rebuilds the graph
+// into a `Shared<Pair>` — the two-pass build re-shares the single leaf (`a` and `b` resolve to the same id),
+// proven by a re-encode that reproduces the exact wire (and ASan proves the refcounts balance).
+import std::serialization::json::{encode, decode};
 import std::memory::{Shared};
 
-@generate(Serialize)
+@generate(Serialize, Deserialize, noOnConstruction)
 type resource Leaf { @field int32 v; public Leaf(int32 v) { this.v = v; } }
 
-@generate(Serialize)
+@generate(Serialize, Deserialize, noOnConstruction)
 type resource Pair {
     @field Shared<Leaf> a;
     @field Shared<Leaf> b;
@@ -20,6 +21,14 @@ fn int main() {
     Pair p = Pair(a: give leaf, b: give l2);
     string j = encode(v: p);
     // root Pair = id 1; a and b share the leaf = id 2 (written once)
-    if (j == "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Pair\",\"a\":2,\"b\":2},\"2\":{\"__type\":\"Leaf\",\"v\":42}}}") { return 0; }
-    return cast<int32>(j.length());
+    if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Pair\",\"a\":2,\"b\":2},\"2\":{\"__type\":\"Leaf\",\"v\":42}}}") {
+        return cast<int32>(j.length());
+    }
+    // Round-trip: decode into a Shared<Pair>, re-encode, and require the exact same wire (id dedup survived).
+    Result<Shared<Pair>, DeError> res = decode::<Shared<Pair>>(src: copy j);
+    match (res) {
+        case Ok(sh): { string j2 = encode(v: sh); if (j2 == j) { return 0; } return 1; }
+        case Err(e): { return 2; }
+    };
+    return 3;
 }
