@@ -2798,6 +2798,28 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             unsupported(("`" + ci.name + "` is `@generate(Deserialize)`: define `fn void onConstruction()` (runs on "
                          "every construction, incl. deserialize) or opt out with `@generate(Deserialize, noOnConstruction)`").c_str(),
                         cd->line);
+        // By-value serialization intrinsic (Phase C): synthesize `serialize`/`deserialize` in C for a
+        // `@generate` tree struct that supplies NEITHER a hand-written impl NOR a driver-generated graph
+        // impl — both land a method in `ci.methods`, so the `!count` guard makes hand-written / graph win.
+        // Concrete product types only (a generic template specializes per instance; enums are driver-side).
+        // Registers the conformance exactly like `implements Serialize` (interfaces + method) so the normal
+        // vtable/dispatch machinery works; only the BODY is emitted specially (isSynthSer/isSynthDe).
+        if (!(cd->typeParams && !cd->typeParams->empty()) && !ci.isVariant) {
+            if (ci.genSerialize && !ci.methods.count("serialize")) {
+                ci.interfaces.push_back("Serialize");
+                MethodInfo mi; mi.cName = ci.name + "__serialize"; mi.visibility = Visibility::Public;
+                mi.isSynthSer = true; mi.returnType = primTypeNode(IDENTIFIER_VOID_VAL);
+                ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
+                ci.methods["serialize"] = mi;   // `fn void serialize(ref Serializer w)`
+            }
+            if (ci.genDeserialize && !ci.methods.count("deserialize")) {
+                ci.interfaces.push_back("Deserialize");
+                MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
+                mi.isStatic = true; mi.isSynthDe = true; mi.returnType = cd->name;   // returns the type itself
+                ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
+                ci.methods["deserialize"] = mi;   // `static fn This deserialize(Deserializer r)`
+            }
+        }
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
         // methods) is parked in _genericTypes; the specialized instances are the real classes.
@@ -7536,6 +7558,8 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
+        if (mi.isSynthSer) { *_out << stat << "void " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }
+        if (mi.isSynthDe)  { *_out << stat << ci.name << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
@@ -7744,6 +7768,8 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no body to emit
+        if (mi.isSynthSer) { emitSerializeDefinition(ci); continue; }
+        if (mi.isSynthDe)  { emitDeserializeDefinition(ci); continue; }
         // an operator has no `node`; emit its body from `opDecl` (free form: no self).
         if (mi.isOperator) {
             auto* d = mi.opDecl->operatorDeclarator.get();
@@ -7766,6 +7792,148 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
     }
     if (ci.destructible)
         emitDtorDefinition(ci);
+}
+
+// ---- By-value (tree) serialization intrinsic (Phase C) --------------------
+// Direct C emission of `serialize`/`deserialize` for a `@generate` product (value/tree) type, replacing
+// the generated-kama path. Reproduces the exact JSON wire the old synthesis produced. Delegation: a
+// scalar/string writes/reads via the Serializer/Deserializer contract directly; a nested struct / enum /
+// collection field calls its own `<CType>__serialize`/`__deserialize` (emitted per-instance elsewhere);
+// `Optional<E>` is inlined. (`Fixed<T,N>` is unused by any `@generate` type today — deferred.)
+
+// A `kama_string_lit("…", n)` for a wire name (same escaping the StringNode lowering uses).
+static std::string kamaStrLit(const std::string& s)
+{
+    std::ostringstream os;
+    os << "kama_string_lit(\"";
+    for (char c : s)
+        switch (c) {
+            case '\\': os << "\\\\"; break;  case '"': os << "\\\""; break;
+            case '\n': os << "\\n";  break;  case '\t': os << "\\t"; break;
+            case '\r': os << "\\r";  break;  default:  os << c;      break;
+        }
+    os << "\", " << s.size() << ")";
+    return os.str();
+}
+
+// The Serializer/Deserializer scalar method suffix for a builtin ("I32"/"U8"/"F64"/"Bool"/"Char"), "" otherwise.
+static const char* serScalarSuffix(int builtInVal)
+{
+    switch (builtInVal) {
+        case IDENTIFIER_INT8_VAL:    return "I8";
+        case IDENTIFIER_INT16_VAL:   return "I16";
+        case IDENTIFIER_INT32_VAL:   return "I32";
+        case IDENTIFIER_INT64_VAL:   return "I64";
+        case IDENTIFIER_UINT8_VAL:   return "U8";
+        case IDENTIFIER_UINT16_VAL:  return "U16";
+        case IDENTIFIER_UINT32_VAL:  return "U32";
+        case IDENTIFIER_UINT64_VAL:  return "U64";
+        case IDENTIFIER_FLOAT32_VAL: return "F32";
+        case IDENTIFIER_FLOAT64_VAL: return "F64";
+        case IDENTIFIER_BOOL_VAL:    return "Bool";
+        case IDENTIFIER_CHAR_VAL:    return "Char";
+        default:                     return "";
+    }
+}
+
+// Emit the write for one field value (`access`) into the Serializer `w` (a `Serializer*`).
+void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth)
+{
+    if (ty && ty->value && *ty->value == "Optional" && ty->genericArg) {   // Some -> inner value, None -> null
+        std::string oc = cType(ty);
+        indent(depth); *_out << "switch ((" << access << ").tag) {\n";
+        indent(depth); *_out << "case " << oc << "_Some: {\n";
+        emitSerFieldWrite(ty->genericArg, "(" + access + ").u.Some.value", depth + 1);
+        indent(depth + 1); *_out << "break;\n";
+        indent(depth); *_out << "}\n";
+        indent(depth); *_out << "case " << oc << "_None: { w->vtbl->writeNull(w->obj); break; }\n";
+        indent(depth); *_out << "default: break;\n";
+        indent(depth); *_out << "}\n";
+        return;
+    }
+    if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL) {
+        indent(depth); *_out << "w->vtbl->writeString(w->obj, &(" << access << "));\n";
+        return;
+    }
+    const char* suf = serScalarSuffix(ty ? ty->builtInVal : 0);
+    if (*suf) {
+        indent(depth); *_out << "w->vtbl->write" << suf << "(w->obj, " << access << ");\n";
+        return;
+    }
+    // enum / nested struct / collection -> its own serialize (self by pointer, Serializer* through).
+    indent(depth); *_out << cType(ty) << "__serialize(&(" << access << "), w);\n";
+}
+
+void CEmitter::emitSerializeDefinition(ClassInfo& ci)
+{
+    *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name
+          << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+    indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
+    for (auto& f : ci.fields) {
+        if (f.serSkip) continue;
+        const std::string& wire = f.serName.empty() ? f.name : f.serName;
+        indent(1); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(wire) << ");\n";
+        emitSerFieldWrite(f.type, "self->" + f.name, 1);
+    }
+    indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    *_out << "}\n\n";
+}
+
+// The `Deserializer r` read EXPRESSION for a field type (scalar/string direct, else `<CType>__deserialize`).
+std::string CEmitter::deReadExpr(SharedIdentifier ty)
+{
+    if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL) return "r.vtbl->readString(r.obj)";
+    const char* suf = serScalarSuffix(ty ? ty->builtInVal : 0);
+    if (*suf) return std::string("r.vtbl->read") + suf + "(r.obj)";
+    return cType(ty) + "__deserialize(r)";
+}
+
+// Emit the read of one field into `dst` from the Deserializer `r` (a `Deserializer` value).
+void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth)
+{
+    if (ty && ty->value && *ty->value == "Optional" && ty->genericArg) {
+        std::string oc = cType(ty);
+        indent(depth); *_out << "if (r.vtbl->readNull(r.obj)) { " << dst << " = (" << oc << "){ .tag = " << oc << "_None }; }\n";
+        indent(depth); *_out << "else { " << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = "
+                             << deReadExpr(ty->genericArg) << " } }; }\n";
+        return;
+    }
+    indent(depth); *_out << dst << " = " << deReadExpr(ty) << ";\n";
+}
+
+void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
+{
+    *_out << (_emitStaticClass ? "static inline " : "") << ci.name << " " << ci.name
+          << "__deserialize(Deserializer r)\n{\n";
+    indent(1); *_out << ci.name << " result = (" << ci.name << "){0};\n";   // bypass-ctor zero-init
+    // Zero-init makes an Optional field `Some(zeroed)` (tag 0) — reset every one to None first.
+    for (auto& f : ci.fields) {
+        if (f.serSkip) continue;
+        if (f.type && f.type->value && *f.type->value == "Optional") {
+            std::string oc = cType(f.type);
+            indent(1); *_out << "result." << f.name << " = (" << oc << "){ .tag = " << oc << "_None };\n";
+        }
+    }
+    indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
+    indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
+    indent(2); *_out << "kama_string __key = r.vtbl->fieldName(r.obj);\n";
+    bool first = true;
+    for (auto& f : ci.fields) {
+        if (f.serSkip) continue;
+        const std::string& wire = f.serName.empty() ? f.name : f.serName;
+        indent(2); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__key, " << kamaStrLit(wire) << ")) {\n";
+        emitDeFieldRead(f.type, "result." + f.name, 3);
+        indent(2); *_out << "}\n";
+        first = false;
+    }
+    indent(2); *_out << (first ? "" : "else ") << "{ r.vtbl->skipValue(r.obj); }\n";
+    indent(2); *_out << "kama_string__dtor(&__key);\n";   // the field-name string is owned — free each iteration
+    indent(1); *_out << "}\n";
+    if (!ci.serNoOnConstruction && ci.methods.count("onConstruction")) {
+        indent(1); *_out << ci.name << "__onConstruction(&result);\n";   // hook runs after a bypass-ctor field-set
+    }
+    indent(1); *_out << "return result;\n";   // by-value return moves a resource out (no dtor on `result`)
+    *_out << "}\n\n";
 }
 
 // emit one specialized generic-type instance under its binding. phase 0 = struct typedef+body,

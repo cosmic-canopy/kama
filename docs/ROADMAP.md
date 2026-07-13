@@ -156,9 +156,18 @@ pointer ⇒ heap graph (`Shared<T>`).
   dependency. Inert until the C/D lowering drives it; the `std::serialization::graph` kama module it supersedes
   is deleted in D. It ports the generated-kama `SerContext`; a single id→object registry replaces the old
   per-type parallel-`List` lookups.
-- **C — By-value lowering (intrinsic).** Replace the generated-kama `serialize`/`deserialize` for value/tree
-  types with C emission (delegating nested value payloads to the `Serialize` contract, bytes to `Serializer`).
-  **API- and wire-preserving** — existing `ser_*` tests stay green.
+- ~~**C — By-value lowering (intrinsic).**~~ **DONE (structs).** A `@generate` product (value/tree) struct's
+  `serialize`/`deserialize` are now emitted directly in C (`CEmitter::emitSerializeDefinition`/
+  `emitDeserializeDefinition`), replacing the generated-kama `__KamaGenSer`/`__KamaGenDe`. The emitter
+  registers the `Serialize`/`Deserialize` conformance itself (interfaces + a synthesized `MethodInfo`,
+  `isSynthSer`/`isSynthDe`) so `encode`'s dynamic dispatch + `decode`'s static `T::deserialize` resolve; the
+  body walks fields (scalars/string → `Serializer`/`Deserializer` directly; nested struct / enum / collection →
+  its own `<T>__serialize`/`__deserialize`; `Optional` inlined). Gated on the type having no `serialize`
+  method, so hand-written **and** driver-graph impls win; the driver now synthesizes only graph + enum serde
+  (dead `buildDeserializeBody`/`injectZeroInitForDeserialize`/`hasOnConstruction` removed). API- and
+  wire-preserving — all `ser_*` + xfails green on test/ASan/wasm. **Follow-up before D:** move `@generate`
+  ENUM serde (still driver-synthesized retro-impls) to C emission too. (`Fixed<T,N>` `@generate` fields are
+  unused today — deferred.)
 - **D — Graph lowering (intrinsic).** Replace the graph write/read with C emission; `Shared`/`Weak` dedup +
   cycles + dangling (`UnresolvedReference`), `Owned` give-once (`DuplicateId`) with child-before-parent
   assembly. `ser_graph_*` stay green + `ser_graph_owned`/`_dup_owned`.
@@ -402,6 +411,12 @@ near-parity on `alloc`/`dispatch`.
 
 ## 10. Tooling / distribution (deferred)
 
+- **Compiler build-warning cleanup (hygiene).** The host compiler build (`tools/cdev make`) emits a handful of
+  warnings; drive them to zero and consider a `-Werror` CI gate so new ones can't creep in. Current set:
+  hand-written **`transpileToFile`** + **`typeToStr`** (kama.driver.cpp) and **`isValidChar`** (kama.l) are
+  unused — delete or wire up; **`yynerrs`** is bison-generated (`build/kama.parser.cpp`), so suppress it on the
+  generated TU (a per-file `-Wno-unused-but-set-variable`, or a bison `%define` that consumes it) rather than
+  editing generated code. (Emitted-C `-Wparentheses` notes are in generated output, separate.)
 - **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
   deferred.
 - **FreeBSD CI** — a non-blocking `vmactions/freebsd-vm` job (Windows is now proven; FreeBSD is the next

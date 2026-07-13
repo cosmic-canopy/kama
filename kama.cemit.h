@@ -83,6 +83,10 @@ struct MethodInfo {
     bool                         isRetro = false;     // injected by a retroactive `implements C for T` block —
                                                       // emitted static-inline in the header, skipped by the
                                                       // per-class proto/body loops (avoids a dup for a user target)
+    // Compiler-synthesized by-value serialization (a `@generate` tree struct with no hand impl). `node` is
+    // null: the proto/body loops skip these and emit via emitSerializeDefinition/emitDeserializeDefinition.
+    bool                         isSynthSer = false;  // synthesized `serialize(ref Serializer)`
+    bool                         isSynthDe  = false;  // synthesized static `deserialize(Deserializer) -> This`
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
@@ -641,6 +645,12 @@ private:
     void buildVtables();
     void computeDestructible();
     void computeReachesPointer();   // serialization mode gate — sibling of computeDestructible
+    // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
+    void emitSerializeDefinition(ClassInfo& ci);
+    void emitDeserializeDefinition(ClassInfo& ci);
+    void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth);
+    void emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth);
+    std::string deReadExpr(SharedIdentifier ty);   // the `Deserializer` read expression for a field type
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
     static bool isExtern(FunctionDeclarationNode* fn);
 

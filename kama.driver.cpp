@@ -466,76 +466,9 @@ static std::string deserializeFieldSet(SharedIdentifier type, const std::string&
     return dst + " = " + re + ";";
 }
 
-// True iff the type declares a `fn void onConstruction()` lifecycle hook (called after a deserialize
-// field-set, mirroring the compiler's ctor-end injection). See kama.cemit.cpp emitMethodOrCtorBody.
-static bool hasOnConstruction(ClassDeclarationNode* cd)
-{
-    if (!cd || !cd->members) return false;
-    for (auto& m : *cd->members) {
-        auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
-        if (md && md->name && md->name->value && *md->name->value == "onConstruction") return true;
-    }
-    return false;
-}
-
-// The body of the synthesized static `deserialize` (returns `T`): BYPASS-CTOR construction — zero-initialize
-// a `result` (the `<T> result;` local's initializer is replaced with a `ZeroValueNode` post-parse, see
-// injectZeroInitForDeserialize), then a read loop populates each `@field` in place via `result.<field> = …`
-// (no holder, no ctor, no move-out — so nested value/resource, `Optional<nested>`, `List<nested>` all work).
-// If the type defines `onConstruction()` its call is appended (the ctor-end injection's deserialize twin).
-// Failure is carried by the reader's sticky-error flag (checked by `tryParse`), not a `Result` here. Returns
-// "" if any `@field` has an unsupported type (Array/smart-ptr — deferred); the caller then skips the merge.
-static std::string buildDeserializeBody(ClassDeclarationNode* cd)
-{
-    if (!cd || !cd->name || !cd->name->value || !cd->members) return "";
-    if (cd->typeParams && !cd->typeParams->empty()) return "";
-    std::string tn = *cd->name->value;
-    bool resKind = cd->typeKind && *cd->typeKind == "resource";
-    std::string chain, defaults;
-    bool first = true; int idx = 0;
-    for (auto& m : *cd->members) {
-        auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(m.get());
-        if (!fd || !fd->declarators) continue;
-        bool skip = false; std::string rename;
-        if (fd->attributes)
-            for (auto& at : *fd->attributes) {
-                if (!at || !at->name) continue;
-                if (*at->name == "skip") skip = true;
-                else if (*at->name == "field" && at->args)
-                    for (auto& a : *at->args)
-                        if (a && a->name && a->name->value && *a->name->value == "name" && a->expression)
-                            if (auto* sn = dynamic_cast<StringNode*>(a->expression.get())) rename = sn->value ? *sn->value : "";
-            }
-        if (skip) continue;
-        for (auto& d : *fd->declarators) {
-            if (!d->name || !d->name->value) continue;
-            std::string fname = *d->name->value, wire = rename.empty() ? fname : rename;
-            std::string set = deserializeFieldSet(fd->type, "result." + fname);
-            if (set.empty()) return "";        // unsupported field type
-            // `enum Optional { Some(T), None }` has Some at tag 0, so a zero-init'd Optional is Some(zeroed),
-            // NOT None. Reset each Optional field to None up front, so a field ABSENT from the input reads back
-            // as None (present fields are then overwritten by the loop). The reset drops the zeroed Some payload
-            // — null-safe by the usual dtor convention. (List/scalar/string zero-init to their natural empty.)
-            if (fd->type && fd->type->value && *fd->type->value == "Optional")
-                defaults += "        result." + fname + " = Optional::None;\n";
-            chain += std::string("            ") + (first ? "if" : "else if")
-                   + " (__key == \"" + wire + "\") { " + set + " }\n";
-            first = false; idx++;
-        }
-    }
-    if (idx == 0) return "";
-    std::string onCons = hasOnConstruction(cd) ? "        result.onConstruction();\n" : "";
-    return "        " + tn + " result;\n"          // initializer replaced with ZeroValueNode post-parse
-         + defaults +
-           "        r.beginObject();\n"
-           "        while (r.moreFields()) {\n"
-           "            string __key = r.fieldName();\n"
-         + chain +
-           "            else { r.skipValue(); }\n"
-           "        }\n"
-         + onCons +
-           "        return " + std::string(resKind ? "give " : "") + "result;\n";
-}
+// (The by-value `deserialize` factory for a non-graph `@generate` struct is now emitted directly in C by
+// the compiler intrinsic — CEmitter::emitDeserializeDefinition. The deserializeReadScalar/ReadElem/FieldSet
+// helpers below remain: the GRAPH read path — buildGraphShell/buildGraphWire — still uses them.)
 
 // Parse a wrapper `type … implements C { … }` and merge its interface clause + members into `cd` — so the
 // generated method(s) live on the type as a NORMAL conformance (fat-pointer vtable), not a retroactive block.
@@ -559,31 +492,6 @@ static void mergeGeneratedInto(ClassDeclarationNode* cd, const std::string& wrap
     if (gcd->members) {
         if (!cd->members) cd->members = std::make_shared<ClassMemberDeclarationList>();
         for (auto& mm : *gcd->members) cd->members->push_back(mm);
-    }
-}
-
-// After the deserialize wrapper is merged, turn its `<T> result;` (uninitialized) local into a zero-init:
-// replace the `result` declarator's null initializer with a compiler-internal `ZeroValueNode`, so the emitter
-// lowers it to `(T){0}` (bypass-ctor construction). Kept internal here — `ZeroValueNode` has no grammar, so a
-// zeroed (possibly half-populated) resource is never expressible in user code.
-static void injectZeroInitForDeserialize(ClassDeclarationNode* cd)
-{
-    if (!cd || !cd->members) return;
-    static SharedCodeGenContext genCtx =
-        std::make_shared<CodeGenContext>(std::make_shared<std::string>("<gen-zeroinit>"));
-    for (auto& m : *cd->members) {
-        auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
-        if (!md || !md->name || !md->name->value || *md->name->value != "deserialize") continue;
-        if (!md->body || !md->body->statements) return;
-        for (auto& st : *md->body->statements) {
-            auto* lvd = dynamic_cast<LocalVariableDeclaration*>(st.get());
-            if (!lvd || !lvd->variables) continue;
-            for (auto& v : *lvd->variables)
-                if (v && v->name && v->name->value && *v->name->value == "result" && !v->initializer) {
-                    v->initializer = std::make_shared<ZeroValueNode>(*genCtx, lvd->type);
-                    return;
-                }
-        }
     }
 }
 
@@ -997,17 +905,11 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
                         "    public fn string __typeName() { return \"" + *cd->name->value + "\"; }\n"
                         "}\n");
                 }
-            } else if (ser) {
-                std::string body = buildSerializeBody(cd);
-                if (!(body.empty() && cd->typeParams && !cd->typeParams->empty()))
-                    mergeGeneratedInto(cd,
-                        "type value __KamaGenSer implements Serialize {\n"
-                        "    public fn void serialize(ref Serializer w) {\n"
-                        "        w.beginObject();\n" + body +
-                        "        w.endObject();\n"
-                        "    }\n"
-                        "}\n");
             }
+            // A NON-graph `@generate(Serialize)` struct's `serialize` is now emitted directly in C by the
+            // compiler intrinsic (CEmitter::emitSerializeDefinition), which fires when the type has no
+            // `serialize` method — so the driver synthesizes ONLY the graph serialize (above). Enums keep
+            // their driver-side retro-impl synthesis; collections are hand-written. (Phase C.)
             // Deserialize is a marker (method-less) contract, used only statically (`T::deserialize` via the
             // bound in `tryParse`). Merge the static `deserialize` factory + the marker into the type: the
             // empty marker means the vtable has no method slots (no `This` to resolve), and a merged static
@@ -1016,21 +918,9 @@ void synthesizeSerialization(std::vector<SharedCompilationUnit>& units)
             // `Shared<N>`, generated below), so suppress the ordinary object `deserialize` (returns `N`) here —
             // otherwise `Shared<N>::deserialize` (shared.kama) would delegate to a `N::deserialize` of the wrong
             // return type. A graph is decoded as `decode::<Shared<N>>`, never `decode::<N>`.
-            if (de && !unitIsGraph) {
-                std::string body = buildDeserializeBody(cd);
-                if (!body.empty()) {   // skip types with fields deserialize can't yet build (Array/smart-ptr)
-                    // `deserialize` returns `T` (not `Result`): nested fields assign a child directly
-                    // (`result.child = Child::deserialize(r)`), and failure rides the reader's sticky-error
-                    // flag — `tryParse` does the `Result` wrap + `failed()` check.
-                    mergeGeneratedInto(cd,
-                        "type value __KamaGenDe implements Deserialize {\n"
-                        "    public static fn " + *cd->name->value + " deserialize(Deserializer r) {\n"
-                        + body +
-                        "    }\n"
-                        "}\n");
-                    injectZeroInitForDeserialize(cd);   // `<T> result;` -> zero-init via ZeroValueNode
-                }
-            }
+            // A NON-graph `@generate(Deserialize)` struct's static `deserialize` factory is likewise emitted
+            // directly in C (CEmitter::emitDeserializeDefinition), gated on the type having no `deserialize`
+            // method. The driver keeps the GRAPH deserialize (the two-pass driver below) + enum retro-impls.
         }
         // Append the generated enum retro-impls (`implements Serialize/Deserialize for E` + the `__kamaSer_E`
         // helper) to the unit AFTER iterating (mutating the list mid-loop would invalidate the iterator). The
