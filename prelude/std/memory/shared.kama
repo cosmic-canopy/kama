@@ -47,11 +47,17 @@ type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy),
     ~Shared() {
         unsafe {
             if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
-                this.c[0].strong = this.c[0].strong - 1;
-                if (this.c[0].strong == 0) {
+                if (this.c[0].strong == 1) {                          // the LAST strong handle
+                    // Keep `strong` at 1 while the pointee dtor runs: dropping the pointee can release a
+                    // `Weak` back-edge into THIS same Ctrl (a cycle), and that `Weak` drop frees the Ctrl
+                    // when `strong == 0 && weak == 0`. Releasing strong only AFTER the dtor keeps the Ctrl
+                    // alive across the drop, so the final `weak == 0` check below never touches freed memory.
                     drop(value: this.deref());                        // run the pointee's dtor once
                     free(p: cast<Ptr>(this.p));
+                    this.c[0].strong = 0;
                     if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); }
+                } else {
+                    this.c[0].strong = this.c[0].strong - 1;
                 }
             }
         }

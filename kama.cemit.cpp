@@ -7747,13 +7747,15 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
                 // value, which must be a null (no-op) handle — the library dtors guard a null pointer.
                 // (Plain class-value fields still need their own ctor — a separate, deferred gap.)
                 std::string fct = cType(f.type);
-                // Also a destructible `resource` field (e.g. a `Map`/`Set` member, or any user resource
-                // that owns a buffer): zero it so the FIRST `this.f = give x` releases a valid empty value
-                // (cap=0 / NULL → its dtor is a no-op), not uninitialized garbage — a garbage free is UB
-                // that aborts only when the stack happens to be non-null.
+                // Also ANY destructible field (a `Map`/`Set`, a user resource that owns a buffer, OR a
+                // destructible variant like `Optional<Shared<T>>`/`Optional<Weak<T>>`): zero it so the FIRST
+                // `this.f = give x` / `this.f = Optional::None` RELEASES a valid empty value (cap=0 / NULL
+                // handle / tag-0 with a null-guarded payload → its dtor is a no-op), not uninitialized garbage
+                // — a garbage free/refcount-decrement is UB that only aborts when the memory happens non-null
+                // (so it slips past -O0 but crashes at -O2 / a differently-laid-out target).
                 if (_classes.count(fct) && (_classes[fct].isIntrinsicColl
                         || _classes[fct].copyable || !heapOwnerTarget(fct).empty()
-                        || (_classes[fct].destructible && _classes[fct].kind == TypeKind::Resource))) {
+                        || _classes[fct].destructible)) {
                     indent(1);
                     *_out << "self->" << f.name << " = (" << fct << "){0};\n";
                 }

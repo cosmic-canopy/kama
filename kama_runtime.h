@@ -74,13 +74,17 @@ static inline kama_ctrl* kama_ctrl_new(void) {
     return c;
 }
 #define KAMA_SHARED_TYPE(T, NAME) typedef struct NAME { T* ptr; kama_ctrl* ctrl; } NAME;
+// The last strong drop keeps `strong` at 1 while the pointee dtor runs, then releases it: dropping the
+// pointee can free a `Weak` back-edge into THIS same ctrl (a cycle), which would free the ctrl early
+// (strong already 0) and leave the `weak == 0` check reading freed memory. See prelude shared.kama.
 #define KAMA_SHARED_FUNCS(T, NAME, ELEM_DTOR)                                  \
 static inline void NAME##__dtor(NAME* self) {                                  \
     if (self->ctrl) {                                                          \
-        if (--self->ctrl->strong == 0) {                                       \
+        if (self->ctrl->strong == 1) {                                         \
             ELEM_DTOR(self->ptr); kama_free(self->ptr);                            \
+            self->ctrl->strong = 0;                                            \
             if (self->ctrl->weak == 0) kama_free(self->ctrl);                       \
-        }                                                                      \
+        } else { self->ctrl->strong--; }                                      \
         self->ptr = NULL; self->ctrl = NULL;                                  \
     }                                                                          \
 }                                                                              \
@@ -93,11 +97,12 @@ static inline bool NAME##__valid(NAME* self) { return self->ptr != NULL; }
 #define KAMA_SHARED_IFACE_FUNCS(NAME)                                         \
 static inline void NAME##__dtor(NAME* self) {                                  \
     if (self->ctrl) {                                                          \
-        if (--self->ctrl->strong == 0) {                                       \
+        if (self->ctrl->strong == 1) {   /* last strong: release AFTER the drop (cycle-safe, see above) */ \
             if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj); \
             kama_free(self->obj);                                            \
+            self->ctrl->strong = 0;                                           \
             if (self->ctrl->weak == 0) kama_free(self->ctrl);                     \
-        }                                                                      \
+        } else { self->ctrl->strong--; }                                     \
         self->obj = NULL; self->ctrl = NULL;                                  \
     }                                                                          \
 }                                                                              \
