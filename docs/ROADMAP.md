@@ -188,13 +188,32 @@ pointer ⇒ heap graph (`Shared<T>`).
   Phase-A prelude pivot (concrete-element triad instances are library generics, not `isIntrinsicColl`) — now
   fixed to detect them by template key. `ser_graph_shared`/`_cycle`/`_dangling` stay byte-identical +
   `ser_graph_owned`/`_dup_owned` added; all green on test/ASan/wasm.
-- **E — Polymorphic `Shared<Contract>`.** `__type`→vtbl table + guarded rebuild (`TypeMismatch`). `ser_graph_poly`.
-- **F — Cleanup + docs.** Remove dead machinery; finalize SPEC/this section; `docs/grammar.bnf` (attribute
-  grammar incl. `noOnConstruction`). Record that the generic-instance-static-call gap no longer blocks (the
-  intrinsic routes around it natively).
+- ~~**E — Polymorphic `Shared<Contract>`.**~~ **DONE.** A graph edge whose element is a **contract**
+  (`Shared`/`Weak`/`Owned<Contract>`, the fat `{obj, vtbl, ctrl}` handle) now round-trips. Each node already
+  carried its concrete `__type` and the two-pass driver already dispatched per-node on it, so E was contained to
+  the two fat-handle endpoints: `graphEdgeOf` flags a contract edge (`GraphEdge.elemIsContract`);
+  `computeGraphNodeTypes` discovers every `@generate` implementor of a contract-edge element as a graph node and
+  assigns each node a stable `ClassInfo.graphTypeId`; `emitPolyContractResolvers` emits, once per contract,
+  `C__nodeWriterFor(vtbl)`→concrete `K__serializeNode` (serialize; pointer-compares `&K__as_C`) and
+  `C__implVtbl(tid)`→`&K__as_C` (deserialize; `NULL` ⇒ `TypeMismatch`). Serialize reads the fat `.obj`/`.vtbl`;
+  `kama_de_box` gained a `type_id` (stamped by the pass-1 ladder from the wire `__type`), and `emitGraphRefRead`
+  grew a fat-rebuild branch (guarded by `C__implVtbl`, leaving the calloc-zeroed handle on mismatch = safe drop)
+  for all three kinds. `ser_graph_poly` (round-trip + surviving `area()` dynamic dispatch) + `ser_graph_poly_mismatch`
+  (`TypeMismatch`); 470 green on test/ASan/wasm. **v1 rule:** a contract graph edge's implementors must be
+  `@generate(Serialize, Deserialize)` — a convention today, **not yet compile-enforced** (see the tail below).
+- ~~**F — Cleanup + docs.**~~ **DONE.** No dead machinery remained (the generated-kama layer was already deleted
+  in C/D). Finalized [SPEC.md](SPEC.md) "Serialization" (mode gate + the two lowerings + `DeError` + poly rule)
+  and this section; regenerated `docs/grammar.bnf` from `kama.y` (the `@`-attribute grammar — `attribute_list`/
+  `attr_arg_list` — incl. `noOnConstruction`). The generic-instance-static-call gap **no longer blocks
+  serialization** — the intrinsic routes around it natively (it remains a general-language limitation, unrelated
+  to serde now).
 
 - **Deserialize breadth (tail, folds into C/D)** — `Array<E>`/`Fixed<T,N>` read; a bare `encode`/`decode` of an
   intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
+- **Enforce the poly-edge rule (hardening)** — a `Shared`/`Weak`/`Owned<Contract>` graph edge currently *assumes*
+  every implementor is `@generate(Serialize, Deserialize)`; a non-`@generate` implementor is silently absent from
+  the dispatch tables (its `.vtbl` → no writer). Turn this into a **compile error** at the edge (or require the
+  element contract to refine `Serialize`/`Deserialize`). Small, additive; no wire/behavior change.
 - **More back ends (library, no compiler change)** — YAML; **binary** (packing + `@bits(n)` + little-endian
   canonical); **XML**/**HTML**. Each is a `Serializer`/`Deserializer` impl + `encode`/`decode`. `std::encoding::base64`
   is a separate small module.

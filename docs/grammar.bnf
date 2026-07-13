@@ -76,6 +76,7 @@ code_declarations
 code_declaration
   : function_declaration
   | type_declaration
+  | retroactive_impl_declaration
   ;
 
 /*------------------------------------------------------------------------------
@@ -94,6 +95,9 @@ literal
   | OCT_LITERAL
   | BASED_LITERAL
 
+  /* strtof/strtod (not std::stof/stod): a float literal at/above the type max (e.g. FLT_MAX) makes the
+     std:: versions THROW std::out_of_range, which was uncaught and terminated the compiler. strtof/strtod
+     saturate to ±inf on overflow (C-idiomatic) instead — no crash on a boundary literal. */
   | FLOAT_LITERAL_NO_SUFFIX
   | FLOAT_LITERAL_32
   | FLOAT_LITERAL_64
@@ -201,7 +205,20 @@ type_declaration
 marked_type_declaration
   : TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
 
+  | attribute_list TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
+       /* `@generate(...) type …` */
   ;
+
+/* `implements C for T ` — RETROACTIVE contract conformance: an external top-level block that
+   gives an existing type T (a primitive/stdlib/foreign type) the methods of contract C. Distinct from the
+   `implements` CLAUSE inside a type declaration (which lists contracts a type opts into on its own line).
+   Unambiguous at top level — nothing else here begins with IMPLEMENTS. Coherence (orphan rule) is enforced
+   by the emitter. */
+retroactive_impl_declaration
+  : IMPLEMENTS type_name FOR type class_body semicolon_opt   /* target is `type` so a primitive (string/int32) is accepted */
+
+  ;
+
 /* Kind-gate on a `type contract`: `for value | resource | both` (also `value, resource`). MANDATORY on a
    contract (enforced by the emitter), forbidden on value/resource. Kind words are contextual identifiers. */
 for_kinds_opt
@@ -271,6 +288,8 @@ function_declaration
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
   | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
+
+  | function_modifier_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
@@ -581,6 +600,27 @@ argument
   | IDENTIFIER COLON REF variable_reference
   | IDENTIFIER COLON OUT variable_reference
   ;
+/* `@name` / `@name(args)` — declaration attributes (serialization metadata + codegen trigger). A BARE arg
+   (`@generate(Serialize)`) is an identifier with no value (name set, expression null); a NAMED arg
+   (`@field(name: "x")`) is `key: expr`. A NON-EMPTY attribute_list is a distinct alternative on the type/
+   field decl (never an empty prefix), keeping it free of shift/reduce conflicts with the plain
+   modifiers_opt forms. */
+attribute_list
+  : attribute
+  | attribute_list attribute
+  ;
+attribute
+  : AT IDENTIFIER
+  | AT IDENTIFIER LPAREN attr_arg_list RPAREN
+  ;
+attr_arg_list
+  : attr_arg
+  | attr_arg_list COMMA attr_arg
+  ;
+attr_arg
+  : IDENTIFIER
+  | IDENTIFIER COLON expression
+  ;
 variable_reference
   : expression
   ;
@@ -732,7 +772,21 @@ implements_entry
   : type_name
   | type_name LPAREN IDENTIFIER COLON handoff_default RPAREN
   | type_name when_clause
+
   | type_name LPAREN IDENTIFIER COLON handoff_default RPAREN when_clause
+
+  ;
+/* `when [P1: B1, P2: B2, …]` — a conditional gate (on a method or an implements entry). Square brackets
+   are mandatory (one condition or many); the AND of all conditions must hold for the impl/method to exist.
+   Carried on a synthetic holder identifier as parallel whenParams/whenBounds lists. */
+when_clause
+  : WHEN LEFT_BRACKET when_cond_list RIGHT_BRACKET
+  ;
+when_cond_list
+  : IDENTIFIER COLON type_name
+
+  | when_cond_list COMMA IDENTIFIER COLON type_name
+
   ;
 handoff_default
   : GIVE
@@ -763,25 +817,19 @@ constant_declaration
   ;
 field_declaration
   : modifiers_opt type variable_declarators SEMICOLON
+  | attribute_list modifiers_opt type variable_declarators SEMICOLON      /* `@field … type name;` */
   ;
 method_declaration
   : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
   | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
   | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body      /* `fn ref T at(…)` — a place-returning method */
   ;
-/* `fn … when [P: B, …]` — a method (or implements entry) present only when EVERY gated type-param
-   satisfies its bound (AND). Square brackets are mandatory for one condition or many; multiple conditions
-   gate on distinct params (`Map.copy() when [K: Copyable, V: Copyable]`). Shared by method + implements. */
+/* `fn … when [T: Bound, …]` — a method present only when every gated type-param satisfies its bound (the
+   value `iterator()` needs a Copyable element; `Map.copy()` needs both K AND V Copyable). The holder
+   carries the parallel whenParams/whenBounds lists. */
 method_when_opt
   : /* Nothing */
   | when_clause
-  ;
-when_clause
-  : WHEN LEFT_BRACKET when_cond_list RIGHT_BRACKET
-  ;
-when_cond_list
-  : IDENTIFIER COLON type_name
-  | when_cond_list COMMA IDENTIFIER COLON type_name
   ;
 /* A method name is an identifier — but `copy`/`give` are hand-off markers only in expression
    position, so we let them name a member too (contextual keywords). This is what lets a `resource`
@@ -870,12 +918,12 @@ destructor_declaration
 
 /* `enum Name<T> : IntType `. The head reuses `type_decl_head` (so
    generic enums parse exactly like generic types); an optional `: IntType` pins the underlying
-   integer / tag width; members may carry a named payload (below) making the enum a tagged union.
-   A leading `attribute_list` (`@generate(Serialize, Deserialize)`) opts the enum into serialization
-   codegen, mirroring the attributed `type` declaration. */
+   integer / tag width; members may carry a named payload (below) making the enum a tagged union. */
 enum_declaration
   : modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
+
   | attribute_list modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
+
   ;
 enum_underlying_opt
   : /* Nothing */

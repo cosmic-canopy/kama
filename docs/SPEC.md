@@ -1106,7 +1106,7 @@ shared header (`<out>.gen.h`) + one `.c` per unit — imports just add the resol
 there's no namespace-vs-object precedence rule — a `::` head is always a type/namespace, a `.` head always a
 value. `main` is the global entry point (unmangled).
 
-## Serialization — `@`-attributes + `@generate` 🚧 (design locked; intrinsic implementation in progress — see [ROADMAP.md](ROADMAP.md) §4)
+## Serialization — `@`-attributes + `@generate` ✅ (intrinsic implementation complete — by-value + full object graph + polymorphic `Shared<Contract>`; see [ROADMAP.md](ROADMAP.md) §4)
 
 Opt-in, compile-time serialization. The **user-facing surface is just contracts + attributes**; the *wire
 format* is library; **everything structural (the field walk + the object-graph machinery) is a compiler
@@ -1159,8 +1159,10 @@ exactly what you name:
 **Graph specifics.** `Shared`/`Weak`/`Owned` fields serialize as integer ids into the side table (`0` = null /
 expired). `Shared`/`Weak` dedup by pointee identity; a `Weak` writes its id only while a strong handle exists.
 `Owned` is unique-owner (a tree of nodes), reconstructed **give-once** — a duplicate owned id on the wire is a
-`DeError::DuplicateId`. Cycles ride `Weak` back-edges; a dangling id → `DeError::UnresolvedReference`; a
-polymorphic `Shared<Contract>` node dispatches on its `__type` tag (mismatch → `DeError::TypeMismatch`).
+`DeError::DuplicateId`. Cycles ride `Weak` back-edges; a dangling id → `DeError::UnresolvedReference`. A
+polymorphic edge — `Shared`/`Weak`/`Owned<Contract>` — reconstructs the concrete type from each node's `__type`
+tag and re-forms the fat handle with that concrete's vtable; a tag naming a type that doesn't implement the
+contract → `DeError::TypeMismatch` (its implementors must be `@generate(Serialize, Deserialize)`).
 `DeError` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId}`.
 
 The `Owned`/`Shared`/`Weak` triad is **prelude / built-in** (always in scope, no `import`) — RAII-over-GC is the
