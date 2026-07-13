@@ -124,36 +124,49 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
   `implements Copyable` (the `copyable` flag, set nominally) — a `value` stays bitwise-copyable. The
   nominal bound check routes `<T: Copyable>` through that same value/resource rule.
 
-## 4. Reflection + attributes / serialization (1.x — Phase 4)
+## 4. Reflection + serialization — intrinsic pivot (1.x — Phase 4)
 
-Opt-in compile-time reflection driving polymorphic serialization — the final self-hosting-stdlib step. The
-only new *language* surface is the attribute mark; serializers land as modules. **Shipped and documented in
-[SPEC.md](SPEC.md) "Serialization":** `@generate`/`@field`/`@skip`, the `Serialize`/`Deserialize`/`DeError`
-prelude contracts, the uniform contract (scalar/string intrinsics + `List`/`Array`/`Set`/`Map` collections are
-`Serialize`/`Deserialize` participants, no compiler container special-casing), `@generate` enums (tagged wire
-shape), bypass-ctor deserialize, `onConstruction`, and the `std::serialization::json` backend
-(`encode`/`decode`). What remains:
+**Design of record: [SPEC.md](SPEC.md) "Serialization" (the guiding light).** The user-facing surface
+(`@generate`/`@field`/`@skip`, the `Serialize`/`Deserialize` contracts, `encode`/`decode`, hand-written
+override) is locked. The **implementation is being rebuilt as a compiler intrinsic** — a lowering to C — and
+this replaces the earlier "synthesize the field walk + graph driver **as kama**" approach.
 
-- **Deserialize breadth (tail)** — `Array<E>`/`Fixed<T,N>` read (fixed-size construction from an
-  unknown-length array); a bare `encode` of an intrinsic/enum value (needs a fat-pointer vtable — a field or
-  collection element works today); generic enums. (A `const` field is a separate general language gap — `const`
-  fields don't parse at all today.)
-- **Graph serialization (scene graphs).** One blessed `@generate` mode: by-value fields serialize inline (as
-  today), **pointer fields (`Owned`/`Shared`/`Weak`) serialize as ids** into a side table, with a register-
-  callback id fixup on read and `onConstruction` deferred to graph-complete (the `awakeFromNib` /
-  `IDeserializationCallback` point); a dangling required id → `DeError::UnresolvedReference` (the .NET
-  `ObjectManager` analog). Builds on the shipped never-null `Owned`/`Shared` invariant. **Next:**
-  `SerContext`/`DeContext` + a `SerializedReference` registry (Shared→retain, Weak→downgrade,
-  Owned→transfer-once); JSON inline + id-table. Open unknown: narrowing a type-erased `Shared<Serialize>` back
-  to a concrete handle on resolve.
-- **More back ends (modules, no compiler change)** — YAML; **binary** (packing options + `@bits(n)` bit-packing
-  + little-endian canonical); **XML** + **HTML**. Each is a `Serializer`/`Deserializer` impl + `encode`/`decode`
-  entries. A bytes↔text util (`std::encoding::base64`) is a separate small module.
-- **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the existing `@`-attribute
-  infra) that emits a use-site warning, optionally with a message/replacement hint. Its own small task.
-- **Optional/default parameters (language, adjacent)** — enables the "options struct with optionals" ctor
-  pattern (no default params today), an alternative to constructor overloading.
-- **Docs** — `docs/grammar.bnf` (attribute grammar incl. the `noOnConstruction` flag).
+**Why the pivot.** Emitting the structural machinery as kama *source* forced it to obey surface-language safety
+it was never meant to (no borrowed contracts in a `List`, no contract-method dispatch on a raw `Ptr`, no
+generic-instance statics, no move-out-of-`Optional`, parent-first tables, nested-`Owned` ordering) — every fix
+was a hack poking `__`-holes in the smart pointers. Reflection + the ownership-graph rebuild are **core language
+guarantees**; the compiler already owns type layout, the RAII model, and the triad's internals, so it emits
+them directly (generalizing the `HeapShellNode` instinct to the whole layer) — correct-by-construction, and
+nothing leaks. Wire formats stay library (`Serializer`/`Deserializer` contracts, swappable). Mode is gated on a
+precomputed `reachesPointer(T)` flag (sibling of `destructible`): pointer-free ⇒ by-value/stack; reaches a
+pointer ⇒ heap graph (`Shared<T>`).
+
+**Phases** (each: build → `tools/cdev test` → `KAMA_SAN=1` → `KAMA_WASM=1`; own commit):
+
+- **A — Foundations.** `reachesPointer` (memoized, beside `destructible`); prelude-ize the `Owned`/`Shared`/`Weak`
+  triad (always in scope, drop the `import std::memory` requirement — importing stays a harmless no-op); revert
+  the WIP generated-kama graph attempts + any `__`-seams. No behavior change.
+- **B — Runtime graph-context (C).** Id table / per-type registries / worklist in `kama_runtime.h` — pure C, no
+  `std::collections` dependency. Replaces the `std::serialization::graph` kama module (deleted).
+- **C — By-value lowering (intrinsic).** Replace the generated-kama `serialize`/`deserialize` for value/tree
+  types with C emission (delegating nested value payloads to the `Serialize` contract, bytes to `Serializer`).
+  **API- and wire-preserving** — existing `ser_*` tests stay green.
+- **D — Graph lowering (intrinsic).** Replace the graph write/read with C emission; `Shared`/`Weak` dedup +
+  cycles + dangling (`UnresolvedReference`), `Owned` give-once (`DuplicateId`) with child-before-parent
+  assembly. `ser_graph_*` stay green + `ser_graph_owned`/`_dup_owned`.
+- **E — Polymorphic `Shared<Contract>`.** `__type`→vtbl table + guarded rebuild (`TypeMismatch`). `ser_graph_poly`.
+- **F — Cleanup + docs.** Remove dead machinery; finalize SPEC/this section; `docs/grammar.bnf` (attribute
+  grammar incl. `noOnConstruction`). Record that the generic-instance-static-call gap no longer blocks (the
+  intrinsic routes around it natively).
+
+- **Deserialize breadth (tail, folds into C/D)** — `Array<E>`/`Fixed<T,N>` read; a bare `encode`/`decode` of an
+  intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
+- **More back ends (library, no compiler change)** — YAML; **binary** (packing + `@bits(n)` + little-endian
+  canonical); **XML**/**HTML**. Each is a `Serializer`/`Deserializer` impl + `encode`/`decode`. `std::encoding::base64`
+  is a separate small module.
+- **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the `@`-attribute infra)
+  emitting a use-site warning. Its own small task.
+- **Optional/default parameters (language, adjacent)** — the "options struct with optionals" ctor pattern.
 
 **String interpolation `"${x}"` rides on the same `std::fmt` to-string substrate**, so it sequences here.
 

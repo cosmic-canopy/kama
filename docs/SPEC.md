@@ -177,17 +177,20 @@ end of life — ASan/UBSan-clean for owning keys *and* values, e.g. `Map<string,
 inline rvalue — a `string`/number literal or a user-type ctor — is materialized into a temp automatically,
 so `m.get(key: 5)` / `m.get(key: Point(1, 2))` work without binding a local first.
 
-## Smart pointers ✅
+## Smart pointers ✅ (triad → prelude/built-in 🚧 — see [ROADMAP.md](ROADMAP.md) §4)
 
-The smart pointers are a **standard library**, not compiler intrinsics: `Owned`/`Shared`/`Weak` live in
-`std::memory`, written in ordinary kama (RAII `resource`s over `Deref`/`HeapOwner`, refcounting in kama),
-and are pulled in with `import std::memory::{…}`. The compiler adds only what a library can't express: the
-type-erasure (fat pointer + vtable) that makes `Owned<Shape>`/`Shared<Shape>` over a **contract** work, and
-`new T(args)` heap placement into any `HeapOwner<T>`.
+The smart-pointer triad `Owned`/`Shared`/`Weak` is **prelude / built-in — always in scope, no `import`**.
+RAII-over-GC *is* the language (every `new T(args)` already targets a `HeapOwner`, and the compiler
+special-cases the triad throughout: `HeapOwner`/`Deref`, never-null checks, drop insertion, ctrl-block layout),
+so the ownership triad is as fundamental as `int` or `Ptr` and shouldn't require an import. "Built-in" means
+**always-available, not rewritten in C**: they stay **kama-defined** (RAII `resource`s over `Deref`/`HeapOwner`,
+refcounting in kama), loaded as part of the prelude like the primitive `Hashable`/`Equatable` retro-impls.
 
-```kama
-import std::memory::{Owned, Shared, Weak};
-```
+The compiler adds only what a library can't express: the type-erasure (fat pointer + vtable) that makes
+`Owned<Shape>`/`Shared<Shape>` over a **contract** work, `new T(args)` heap placement into any `HeapOwner<T>`,
+and — because it *is* their emitter — direct manipulation of their internals (ctrl blocks, shell-adopt,
+ownership transfer) in the emitted C of the serialization graph lowering, so that machinery leaks **no** public
+`__`-methods onto the triad.
 
 `Owned<T>` — unique heap ownership (= Rust `Box` / C++ `unique_ptr`), zero overhead, **move-only**,
 **auto-deref**, RAII-freed. The kama surface stays pointer-free; the raw pointer is confined to the library.
@@ -1103,57 +1106,81 @@ shared header (`<out>.gen.h`) + one `.c` per unit — imports just add the resol
 there's no namespace-vs-object precedence rule — a `::` head is always a type/namespace, a `.` head always a
 value. `main` is the global entry point (unmangled).
 
-## Serialization — `@`-attributes + `@generate` ✅
+## Serialization — `@`-attributes + `@generate` 🚧 (design locked; intrinsic implementation in progress — see [ROADMAP.md](ROADMAP.md) §4)
 
-Opt-in, compile-time-reflected serialization: the only new *language* surface is the attribute mark; the
-serializers ship as library modules. **`@generate(Serialize, Deserialize)`** on a type (per-direction opt-in)
-synthesizes the two methods **as kama** and merges them into the type — **format-agnostic**, driving the
-abstract prelude contracts (`Serializer` / `Serialize` / `Deserializer` / `Deserialize` / `DeError`), so a new
-backend is a module with no compiler change.
+Opt-in, compile-time serialization. The **user-facing surface is just contracts + attributes**; the *wire
+format* is library; **everything structural (the field walk + the object-graph machinery) is a compiler
+intrinsic** — a lowering to C, not synthesized kama. This split is deliberate: reflection and the
+ownership-graph rebuild are core language guarantees (the compiler already owns type layout, the RAII model,
+and the smart-pointer internals), so it emits them directly and correctly rather than fighting surface-language
+restrictions — and nothing leaks into the public API.
 
-- **One uniform contract — everything implements `Serialize`/`Deserialize`.** The three wire primitives are
-  *intrinsic / object / array*; every value composes from them by chaining `.serialize()`. The **intrinsics**
-  (`int8..uint64`, `float32/64`, `bool`, `string`) carry prelude retro-impl conformances (like the primitive
-  `Hashable`/`Equatable` impls); the **stdlib collections** (`List`/`Array`/`Set`/`Map`) carry conditional
-  conformances (`when [T: Serialize]`). So a collection is a first-class serializable value (`encode(v: myList)`
-  works), and the compiler has **no container special-casing** — a collection field just delegates to
-  `.serialize()` / `Type::deserialize()`. Zero-cost (static/monomorphic dispatch) and opt-in (a collection of a
-  non-serializable element simply isn't `Serialize`). `char` rides `uint32`'s numeric conformance in a
-  collection (shared C type); `Array`/`Fixed` deserialize is a forward item.
-- **Per-field marks are mandatory** on a `@generate`d product type: each field is `@field`, `@field(name: "wire")`
-  (rename), or `@skip` — an unmarked field is a **compile error** (no silent omission).
-- **`Map<K,V>`** serializes as an array of `{"key":…,"value":…}` pairs — a *generic* `Map` can't emit a JSON
-  object because `fieldName` needs a `string` and `K` is generic (the string-key object form is a specialization).
-- **Enums** — `@generate` on an `enum` serializes a variant externally-tagged: `{"tag":"V"}` for a no-payload
-  variant, `{"tag":"V","value":{fields…}}` for one with a payload. Deserialize reads the `tag`, dispatches, and
-  constructs the variant; an unknown tag fails the read (`DeError`). Enums can't carry methods, so their
-  conformance is a **retroactive impl** (static-dispatch — reached as an enum field or a `List<Enum>` element).
-- **Product deserialize** uses a **bypass-constructor** model: the compiler zero-initializes the struct (an
-  internal `ZeroValueNode` → `(T){0}`, no user grammar) and populates fields **in place**, returning `T`
-  directly — this expresses a nested resource the all-args-constructor model couldn't.
-- **`onConstruction()`** — an opt-in lifecycle hook run on *every* construction (compiler-injected at ctor-end
-  **and** by the deserialize codegen after field-set, since deserialize bypasses the ctor; it may be private). A
-  `@generate(Deserialize)` product type must define it or opt out with **`@generate(Deserialize, noOnConstruction)`**.
-- **Smart-pointer fields** (`Owned`/`Shared`/`Weak`) are **rejected** as `@field` — `@skip` them and serialize
-  an id, reconnecting in `onConstruction` (the object-graph story is a forward item; see ROADMAP §4).
-- **Backend:** `std::fmt` (number→string) + `std::serialization::json` (`JsonWriter`/`JsonReader`); entry points
-  `json::encode(v:)` and `json::decode::<T>(src:)` (the latter wraps `Result<T, DeError>`). The name is
-  backend-neutral — a future `binary::encode` returns bytes.
+**Three layers.**
+- **User-facing (opt-in):** the marker contracts `Serialize` / `Deserialize`, the attributes
+  `@generate(Serialize, Deserialize)` (per-direction) + `@field` / `@field(name: "wire")` / `@skip`, and one
+  entry pair `encode(v:)` / `decode::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the intrinsic
+  only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
+- **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
+  `beginObject`/`fieldName`/…, and the graph framing `writeRef`/`beginGraph`/…) + `DeError`. `std::serialization::json`
+  is the reference backend; yaml/binary/user backends are just new implementors — no compiler change.
+- **Intrinsic (compiler):** the per-type field walk and the whole graph machinery (id table, heap shells,
+  two-pass wire, ownership transfer, ordering, cycles). Zero-cost — emitted **only** for `@generate` types.
+
+**Two modes, gated by `reachesPointer(T)`** — a precomputed per-type flag (the tighter sibling of the
+`destructible` transitive-ownership walk): true iff `T` transitively reaches a `Shared`/`Weak`/`Owned` field
+(recursing through owned fields and collection elements; strings/scalars/enums add nothing). You get back
+exactly what you name:
+
+| You name | `reachesPointer` | Result |
+|---|---|---|
+| `int32` / `MyEnum` / `MyValueType` | — / false | by value (stack) |
+| tree `resource` (`User { string name }`, `List<int32>`) | false | by value (stack) |
+| `Shared<T>` (value **or** resource) | any | heap graph (one node or many) |
+| bare graph type (`decode::<Node>` where `Node` reaches a pointer) | true | **compile error** → "reaches a pointer; decode as `Shared<Node>`" |
+
+- **By-value (tree):** a `value` type (owns nothing) or a pointer-free `resource` (strings, collections, nested
+  owned data — a tree, no aliasing) serializes to a bare object/array and `decode::<T>` returns it **by value**.
+- **Graph (heap):** anything reaching a `Shared`/`Weak`/`Owned` is a graph — it can alias, cycle, or hold a
+  `Weak` back-edge, none of which survive a by-value return — so it is **always heap**, even a single node.
+  `encode` writes the id-table envelope `{"root":id,"objects":{id:{"__type":…,…}}}`; `decode::<Shared<T>>`
+  rebuilds it and returns the owning root handle. A `value` type is welcome in a graph *via* `Shared` (a
+  one-node heap graph); a live pointer field in a `value` type is a compile error (pointers need a graph).
+
+**Common rules (both modes).**
+- **Per-field marks are mandatory** on a `@generate`d product: each field is `@field`, `@field(name: "wire")`,
+  or `@skip` — an unmarked field is a **compile error** (no silent omission).
+- **Enums** serialize externally-tagged: `{"tag":"V"}` (no payload) / `{"tag":"V","value":{fields…}}` (payload);
+  deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError`.
+- **`Map<K,V>`** serializes as an array of `{"key":…,"value":…}` pairs (a generic key can't be a JSON object key).
+- **`onConstruction()`** — an opt-in lifecycle hook run on *every* construction (at ctor-end **and** after a
+  deserialize field-set, since deserialize bypasses the ctor; may be private). A `@generate(Deserialize)` product
+  must define it or opt out with **`@generate(Deserialize, noOnConstruction)`**.
+
+**Graph specifics.** `Shared`/`Weak`/`Owned` fields serialize as integer ids into the side table (`0` = null /
+expired). `Shared`/`Weak` dedup by pointee identity; a `Weak` writes its id only while a strong handle exists.
+`Owned` is unique-owner (a tree of nodes), reconstructed **give-once** — a duplicate owned id on the wire is a
+`DeError::DuplicateId`. Cycles ride `Weak` back-edges; a dangling id → `DeError::UnresolvedReference`; a
+polymorphic `Shared<Contract>` node dispatches on its `__type` tag (mismatch → `DeError::TypeMismatch`).
+`DeError` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId}`.
+
+The `Owned`/`Shared`/`Weak` triad is **prelude / built-in** (always in scope, no `import`) — RAII-over-GC is the
+core model; see [TYPE_MODEL.md](TYPE_MODEL.md).
 
 ```kama
-import std::serialization::json::{encode, decode};
+import std::serialization::json::{encode, decode};   // wire backend (library); the triad needs no import
 
-@generate(Serialize, Deserialize)
-type value Widget {
-    @field int32 x;
-    @skip  int32 born;                        // not serialized; set by the hook
-    public Widget(int32 x) { this.x = x; }
-    fn void onConstruction() { this.born = 7; }   // runs at ctor-end AND after deserialize field-set
-}
+// by-value (tree): a pointer-free resource round-trips on the stack
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource User { @field(name: "user_name") string name; @field int32 age;
+    public User(string name, int32 age) { this.name = give name; this.age = age; } }
+string j = encode(v: User(name: "ada", age: 36));                 // {"user_name":"ada","age":36}
+Result<User, DeError> u = decode::<User>(src: give j);            // by value
 
-Widget a = Widget(x: 5);                        // born = 7 (ctor-end injection)
-string j  = encode(v: a);                       // {"x":5}   (born is @skip)
-Result<Widget, DeError> r = decode::<Widget>(src: give j);   // born = 7 again on the deserialized value
+// graph (heap): reaches a pointer -> only via Shared; cycles rebuilt through the Weak back-edge
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Node { @field int32 id; @field Optional<Shared<Node>> next; @field Optional<Weak<Node>> back; … }
+Result<Shared<Node>, DeError> g = decode::<Shared<Node>>(src: give wire);
+// decode::<Node>(...) would be a compile error: Node reaches a pointer -> decode as Shared<Node>
 ```
 
 ## Building & debugging ✅
