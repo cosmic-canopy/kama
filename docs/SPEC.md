@@ -177,7 +177,7 @@ end of life — ASan/UBSan-clean for owning keys *and* values, e.g. `Map<string,
 inline rvalue — a `string`/number literal or a user-type ctor — is materialized into a temp automatically,
 so `m.get(key: 5)` / `m.get(key: Point(1, 2))` work without binding a local first.
 
-## Smart pointers ✅ (triad → prelude/built-in 🚧 — see [ROADMAP.md](ROADMAP.md) §4)
+## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 
 The smart-pointer triad `Owned`/`Shared`/`Weak` is **prelude / built-in — always in scope, no `import`**.
 RAII-over-GC *is* the language (every `new T(args)` already targets a `HeapOwner`, and the compiler

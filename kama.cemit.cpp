@@ -105,6 +105,11 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
                 }
             }
         }
+    // The smart-pointer triad is a built-in module (std::memory), always in scope — add an implicit
+    // `using` so bare `Owned`/`Shared`/`Weak` resolve everywhere with no `import std::memory`. Consulted
+    // AFTER an explicit import's symbolAliases and the unit's own scope (see resolveUserName/resolveFunc),
+    // so it never shadows a user's own name and a redundant explicit import stays a harmless no-op.
+    ctx.usings.push_back("std__memory");
     return ctx;
 }
 
@@ -5148,6 +5153,69 @@ void CEmitter::computeDestructible()
     }
 }
 
+// Serialization mode gate: does T transitively REACH a Shared/Weak/Owned pointer? The tighter sibling of
+// computeDestructible — same cycle-safe fixpoint (base + fields + variant payloads, generic instances
+// resolved under their binding), with two differences: it STOPS at a pointer (a smart-ptr field makes the
+// owner graph-mode; it does NOT recurse through the pointee), and a plain heap collection (List/Array/
+// string) or a Fixed<T,N> contributes nothing unless its ELEMENT reaches a pointer (whereas every heap
+// collection is destructible). false => by-value/tree serialization; true => object-graph (Shared<T>).
+// Consumed by the serialization lowering (Phase C+); inert until then.
+void CEmitter::computeReachesPointer()
+{
+    // Seed: only the smart pointers ARE pointers. Everything else (scalars, strings, enums, other
+    // collections, user types) starts false and earns `true` only by transitively holding one.
+    for (auto& kv : _classes)
+        kv.second.reachesPointer = kv.second.isIntrinsicColl &&
+            (kv.second.collKind == CollKind::Owned || kv.second.collKind == CollKind::Shared ||
+             kv.second.collKind == CollKind::Weak);
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& kv : _classes) {
+            ClassInfo& ci = kv.second;
+            if (ci.reachesPointer || ci.isExternStruct) continue;
+            // a specialized instance's fields are typed in `T` — resolve them under its binding
+            // (and the template's scope), mirroring computeDestructible.
+            bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
+            if (inst) {
+                const GenericTypeInst& gi = _genericTypeInsts[ci.name];
+                _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name]   // use-site ctx
+                                                            : _genericTypeCtx[gi.templateKey];
+                _typeSubst.clear();
+                const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+                for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+            } else {
+                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+            }
+            bool r = (ci.base && ci.base->reachesPointer);
+            if (!r)
+                for (auto& f : ci.fields) {
+                    auto it = _classes.find(cType(f.type));
+                    if (it != _classes.end() && it->second.reachesPointer) { r = true; break; }
+                }
+            if (!r)
+                for (auto& v : ci.variants) {
+                    for (auto& f : v.payload) {
+                        auto it = _classes.find(cType(f.type));
+                        if (it != _classes.end() && it->second.reachesPointer) { r = true; break; }
+                    }
+                    if (r) break;
+                }
+            // An intrinsic collection (List/Array/string/Fixed) reaches a pointer iff its ELEMENT does —
+            // the element type isn't a walkable field, so consult the collection's elemClass directly.
+            if (!r && ci.isIntrinsicColl) {
+                auto cit = _collections.find(ci.name);
+                if (cit != _collections.end()) {
+                    auto e = _classes.find(cit->second.elemClass);
+                    if (e != _classes.end() && e->second.reachesPointer) r = true;
+                }
+            }
+            if (inst) _typeSubst.clear();
+            if (r) { ci.reachesPointer = true; changed = true; }
+        }
+    }
+}
+
 // The class in ci's ancestry that declares `field` (or nullptr).
 ClassInfo* CEmitter::findFieldOwner(ClassInfo* ci, const std::string& field)
 {
@@ -8283,6 +8351,11 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // so its generic templates register under bare names resolvable unqualified from every file.
     std::vector<SharedCompilationUnit> units;
     if (_preludeUnit) units.push_back(_preludeUnit);
+    // The namespaced built-in modules (the smart-ptr triad, std::memory) collect right after the prelude
+    // and before user code. Unlike _preludeUnit they are NOT global: ctxOf reads their `namespace`/`export`
+    // (below), so they register under `std__memory` and satisfy an explicit `import std::memory` — while an
+    // implicit `using std::memory` (added in ctxOf) also makes their names resolve unqualified everywhere.
+    for (auto& m : _preludeModuleUnits) if (m) units.push_back(m);
     for (auto& u : userUnits) units.push_back(u);
 
     // Assign each file its namespace context (public namespace or _F<idx> private)
@@ -8452,6 +8525,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
     computeDestructible();
+    computeReachesPointer();   // serialization mode gate (inert until the lowering consumes it, Phase C+)
 
     // Contract kind-gate enforcement: a class may `implements` a contract only if its kind (value/resource)
     // is permitted by the contract's `for` clause.

@@ -152,6 +152,11 @@ struct ClassInfo {
     bool                              hasDtor = false;   // declares its own ~dtor
     ClassDestructorDeclarationNode*   dtorNode = nullptr;
     bool                              destructible = false; // own dtor OR a destructible field (transitive)
+    // Serialization mode gate (the tighter sibling of `destructible`): transitively reaches a
+    // Shared/Weak/Owned pointer field. false => by-value/tree serialization; true => object-graph.
+    // Recurses through collection elements + owned fields, but STOPS at a pointer (doesn't recurse
+    // through it). Populated by computeReachesPointer(). Consumed by the serialization lowering (Phase C+).
+    bool                              reachesPointer = false;
     // Opted into the `Copyable` contract — declares a public nullary `copy` returning
     // `implements Copyable(bare: give|copy)`: this resource opts into copy (a public nullary `copy()`),
     // and its `bareDefault` says what a BARE hand-off means (give=move, copy=`copy()`/retain). Movable +
@@ -285,6 +290,11 @@ public:
     // with a global namespace, so its templates register but emit nothing unless instantiated.
     void setPrelude(SharedCompilationUnit u) { _preludeUnit = u; }
 
+    // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
+    // code under its own `namespace`/`export`, plus an implicit `using` so its names are always in
+    // scope. Like the prelude, its generic templates emit nothing unless instantiated.
+    void addPreludeModule(SharedCompilationUnit u) { if (u) _preludeModuleUnits.push_back(u); }
+
     // Emit a single self-contained translation unit (transpile / single-file
     // build). Returns the number of unsupported nodes (0 == fully lowered).
     int emit(SharedCompilationUnit unit);
@@ -305,6 +315,7 @@ private:
     std::set<std::string> _externedHeaders;   // every `extern "<h>";` seen (populated by emitIncludes)
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only
+    std::vector<SharedCompilationUnit> _preludeModuleUnits;  // namespaced built-ins (the triad), collect-only
     std::string   _sourcePath;       // absolute path, used in #line directives
     bool          _lines;            // whether to emit #line directives
     int           _unsupported;      // count of nodes we could not lower
@@ -629,6 +640,7 @@ private:
     void linkContracts();
     void buildVtables();
     void computeDestructible();
+    void computeReachesPointer();   // serialization mode gate — sibling of computeDestructible
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
     static bool isExtern(FunctionDeclarationNode* fn);
 

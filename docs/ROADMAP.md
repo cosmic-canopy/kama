@@ -143,9 +143,13 @@ pointer ⇒ heap graph (`Shared<T>`).
 
 **Phases** (each: build → `tools/cdev test` → `KAMA_SAN=1` → `KAMA_WASM=1`; own commit):
 
-- **A — Foundations.** `reachesPointer` (memoized, beside `destructible`); prelude-ize the `Owned`/`Shared`/`Weak`
-  triad (always in scope, drop the `import std::memory` requirement — importing stays a harmless no-op); revert
-  the WIP generated-kama graph attempts + any `__`-seams. No behavior change.
+- ~~**A — Foundations.**~~ **DONE.** `reachesPointer` (memoized, beside `destructible`; inert until the
+  Phase-C mode gate consumes it); prelude-ize the `Owned`/`Shared`/`Weak` triad — now **built-in kama**
+  embedded into the binary (new `prelude/` dir + `tools/embed_prelude.sh` → `KAMA_PRELUDE_SRC`/
+  `KAMA_PRELUDE_MODULES`), so it's always in scope with no `import std::memory` (a redundant import stays a
+  no-op via an implicit `using std::memory`) **and survives a `--no-std` install** (which strips `lib/kama`).
+  The whole prelude moved out of the `PRELUDE_SRC` C literal into `prelude/global.kama`. The WIP generated-kama
+  graph hacks were already reverted; the committed 3a `Shared`/`Weak` graph machinery + `__`-seams stay until D.
 - **B — Runtime graph-context (C).** Id table / per-type registries / worklist in `kama_runtime.h` — pure C, no
   `std::collections` dependency. Replaces the `std::serialization::graph` kama module (deleted).
 - **C — By-value lowering (intrinsic).** Replace the generated-kama `serialize`/`deserialize` for value/tree

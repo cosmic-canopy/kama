@@ -23,10 +23,19 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.parser.o \
             kama.ast.o    \
             kama.cemit.o  \
-            kama.driver.o)
+            kama.driver.o \
+            kama.prelude.gen.o)
+
+# The built-in kama sources embedded into the binary (prelude core + the always-in-scope smart-ptr
+# triad). tools/embed_prelude.sh wraps them in raw-string literals -> build/kama.prelude.gen.cpp.
+PRELUDE_GLOBAL  = prelude/global.kama
+PRELUDE_MODULES = prelude/std/memory/owned.kama prelude/std/memory/shared.kama prelude/std/memory/weak.kama
 
 $(BUILD):
 	mkdir -p $(BUILD)
+
+$(BUILD)/kama.prelude.gen.cpp: $(PRELUDE_GLOBAL) $(PRELUDE_MODULES) tools/embed_prelude.sh | $(BUILD)
+	sh tools/embed_prelude.sh $@ $(PRELUDE_GLOBAL) $(PRELUDE_MODULES)
 
 # Bison/flex: CLI -o/--defines/--header-file override the %output/%option names
 # baked into the source, redirecting generated files into build/.
@@ -39,7 +48,7 @@ $(BUILD)/kama.lexer.cpp $(BUILD)/kama.lexer.hpp: kama.l $(BUILD)/kama.parser.hpp
 # Header dependencies (the implicit rules can't see #includes). Listing all
 # project headers against every object is coarse but cheap, and prevents stale
 # object/ABI-skew bugs when a class layout in a header changes.
-HEADERS = kama.forward.h kama.context.h kama.ast.h kama.cemit.h
+HEADERS = kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h
 $(OBJECTS): $(HEADERS)
 
 # Generated-header dependencies.

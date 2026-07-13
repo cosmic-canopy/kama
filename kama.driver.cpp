@@ -41,6 +41,7 @@
 #include "kama.lexer.hpp"
 #include "kama.context.h"
 #include "kama.cemit.h"
+#include "kama.prelude.h"   // KAMA_PRELUDE_SRC + KAMA_PRELUDE_MODULES (embedded built-in kama)
 
 #ifndef KAMA_VERSION
 #define KAMA_VERSION "0.0.0-dev"
@@ -1176,6 +1177,10 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     };
     std::set<std::string> seen;      // resolved absolute paths already parsed
     std::set<std::string> provided;  // namespaces already in the compilation (satisfy an import w/o disk lookup)
+    // The smart-pointer triad is now a built-in module (embedded, always in scope — see preludeModuleUnits),
+    // so an explicit `import std::memory` is a satisfied no-op: skip the disk lookup rather than re-parse it
+    // (which would double-define the triad, and would fail outright in a `--no-std` install with no lib/).
+    provided.insert("std::memory");
     for (auto& in : cliInputs) {
         std::string abs = absolutePath(in);
         if (!seen.insert(abs).second) continue;
@@ -1256,289 +1261,10 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
     return extra.compilationUnit;
 }
 
-// The implicit prelude — library sum types available to every program without an import.
-// Parsed from source (dogfooding the parser), collected before user code, with an empty (global)
-// namespace so `Optional`/`Result` resolve unqualified everywhere (like the builtin collections).
-static const char* PRELUDE_SRC =
-    "enum Optional<T> { Some(T value), None }\n"
-    "enum Result<T, E> { Ok(T value), Err(E error) }\n"
-    // The empty value — the payload for a fallible op that succeeds with nothing to return
-    // (`Result<Unit, E>`, the analogue of Rust's `Result<(), E>`). Keeps ONE error convention
-    // (always Result) whether or not there is a value; no dead/placeholder payload. A single-variant
-    // enum (like `None`) so it lives in the prelude without needing value-type ctor emission.
-    "enum Unit { Unit }\n"
-    // Auto-deref opt-in: a type implementing Deref<T> forwards member access to its pointee `T`
-    // (`ptr.method()`/`ptr.field` -> the T). The contract is the gate (explicit, nominal); the smart
-    // pointers become ordinary kama types over this instead of compiler intrinsics.
-    "type contract Deref<T> for both { fn ref T deref(); }\n"
-    // Heap-owner opt-in: a type implementing HeapOwner<T> can be a `new T(args)` target. `new`
-    // placement-constructs T on the heap (0 copies) and hands the raw Ptr<T> to `adopt`, which wraps it.
-    // `new` stays valid ONLY into such an owner, so it can never leak a bare raw pointer.
-    "type contract HeapOwner<T> for resource { static fn This adopt(Ptr<T> raw); }\n"
-    // Ownership capability markers (compiler-recognized). `Movable` is implicit on every `resource`
-    // (`!Movable` subtracts it → copy-only). `Copyable` = a public `copy()` returning `This`; a resource
-    // that implements it is duplicable. Together, `Copyable, !Movable` = shared-ownership (retain on copy).
-    "type contract Movable for resource { }\n"
-    "type contract Copyable for resource { fn This copy(); }\n"
-    // Hashing + equality opt-in (the `Map`/`Set` key protocol, nominal). A generic bound `<K: Hashable +
-    // Equatable>` is NOMINAL — the type must DECLARE `implements` (a coincidental method set isn't enough).
-    // `string` gets a nominal `Equatable` recorded from its built-in `equals` (registerCollection pushes it
-    // onto kama_string's interfaces) + `Hashable` from the pure-kama `implements` below. Both contracts live
-    // in the prelude because they are language-level bounds.
-    "type contract Hashable for both { fn uint64 hash(); }\n"
-    "type contract Equatable for both { fn bool equals(This other); }\n"
-    // Primitive conformances (pure-kama retro-impls, NO compiler blessing) — hosted here so `string`/`int32`
-    // satisfy the standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `List<int32>.contains`, an int-keyed
-    // `Map`) without importing `std::collections`. `string` Hashable = FNV-1a over its UTF-8 bytes (its
-    // `Equatable` comes free from the built-in `equals`); `int32` = a splitmix64 hash finalizer + scalar equals.
-    "implements Hashable for string {\n"
-    "    public fn uint64 hash() {\n"
-    "        uint64 h = 2166136261ui64;\n"
-    "        int32 i = 0;\n"
-    "        while (i < cast<int32>(this.length())) {\n"
-    "            h = (h ^ cast<uint64>(this[i])) * 16777619ui64;\n"
-    "            i = i + 1;\n"
-    "        }\n"
-    "        return h;\n"
-    "    }\n"
-    "}\n"
-    "implements Hashable for int32 {\n"
-    "    public fn uint64 hash() {\n"
-    "        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;\n"
-    "        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;\n"
-    "        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;\n"
-    "        return x ^ (x >> 31ui64);\n"
-    "    }\n"
-    "}\n"
-    "implements Equatable for int32 {\n"
-    "    public fn bool equals(int32 other) { return this == other; }\n"
-    "}\n"
-    // The remaining integer widths get the SAME splitmix64 hash (over a `cast<uint64>(this)` — signed
-    // widths sign-extend, which is fine: equal values still hash equal) + scalar `equals`, so every integer
-    // type is a universal `Map`/`Set` key and satisfies `<T: Hashable + Equatable>` without an import.
-    "implements Hashable for int8 {\n"
-    "    public fn uint64 hash() {\n"
-    "        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;\n"
-    "        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;\n"
-    "        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;\n"
-    "        return x ^ (x >> 31ui64);\n"
-    "    }\n"
-    "}\n"
-    "implements Equatable for int8 { public fn bool equals(int8 other) { return this == other; } }\n"
-    "implements Hashable for int16 {\n"
-    "    public fn uint64 hash() {\n"
-    "        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;\n"
-    "        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;\n"
-    "        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;\n"
-    "        return x ^ (x >> 31ui64);\n"
-    "    }\n"
-    "}\n"
-    "implements Equatable for int16 { public fn bool equals(int16 other) { return this == other; } }\n"
-    "implements Hashable for int64 {\n"
-    "    public fn uint64 hash() {\n"
-    "        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;\n"
-    "        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;\n"
-    "        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;\n"
-    "        return x ^ (x >> 31ui64);\n"
-    "    }\n"
-    "}\n"
-    "implements Equatable for int64 { public fn bool equals(int64 other) { return this == other; } }\n"
-    "implements Hashable for uint8 {\n"
-    "    public fn uint64 hash() {\n"
-    "        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;\n"
-    "        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;\n"
-    "        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;\n"
-    "        return x ^ (x >> 31ui64);\n"
-    "    }\n"
-    "}\n"
-    "implements Equatable for uint8 { public fn bool equals(uint8 other) { return this == other; } }\n"
-    "implements Hashable for uint16 {\n"
-    "    public fn uint64 hash() {\n"
-    "        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;\n"
-    "        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;\n"
-    "        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;\n"
-    "        return x ^ (x >> 31ui64);\n"
-    "    }\n"
-    "}\n"
-    "implements Equatable for uint16 { public fn bool equals(uint16 other) { return this == other; } }\n"
-    "implements Hashable for uint32 {\n"
-    "    public fn uint64 hash() {\n"
-    "        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;\n"
-    "        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;\n"
-    "        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;\n"
-    "        return x ^ (x >> 31ui64);\n"
-    "    }\n"
-    "}\n"
-    "implements Equatable for uint32 { public fn bool equals(uint32 other) { return this == other; } }\n"
-    "implements Hashable for uint64 {\n"
-    "    public fn uint64 hash() {\n"
-    "        uint64 x = this + 11400714819323198485ui64;\n"
-    "        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;\n"
-    "        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;\n"
-    "        return x ^ (x >> 31ui64);\n"
-    "    }\n"
-    "}\n"
-    "implements Equatable for uint64 { public fn bool equals(uint64 other) { return this == other; } }\n"
-    // Floats get `Equatable` (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and
-    // `List<float*>.contains` work — but NOT `Hashable`: float hash keys are a footgun (NaN != NaN, ±0.0),
-    // and there is no bit-reinterpret cast, so a value-cast hash would collide badly. Add on demand if ever
-    // needed via a bit-cast helper.
-    "implements Equatable for float32 { public fn bool equals(float32 other) { return this == other; } }\n"
-    "implements Equatable for float64 { public fn bool equals(float64 other) { return this == other; } }\n"
-    // Iteration opt-in (the `foreach` protocol, nominal). An iterator declares which it provides;
-    // `foreach` verifies the declaration and emits DIRECT (monomorphized) calls — no vtable, zero-cost.
-    // `Iterator<T>` yields each element BY VALUE (a copy); `IteratorMut<T>` yields a mutable place
-    // (`ref T`) so `foreach (ref T x in c)` can write through it (Optional can't carry a place, so the
-    // two are parallel — Rust's iter()/iter_mut() split). A container hands one out via a nullary
-    // `iterator()` / `iterMut()` factory method.
-    "type contract Iterator<T> for both { fn Optional<T> next(); }\n"
-    "type contract IteratorMut<T> for both { fn bool hasNext(); fn ref T next(); }\n"
-    // Container-side opt-in: a type that `implements Iterable<T>` hands out a by-value iterator via a
-    // nullary `iterator()`; `IterableMut<T>` hands out a mutable iterator via `iterMut()`. `foreach`
-    // requires the container to declare the matching one (nominal on both sides). A type that is its OWN
-    // iterator (implements `Iterator<T>` and is iterated directly) needs no `Iterable`.
-    "type contract Iterable<T> for both { fn Iterator<T> iterator(); }\n"
-    "type contract IterableMut<T> for both { fn IteratorMut<T> iterMut(); }\n"
-    // Serialization capability contracts (the `@generate` protocol). Like the iteration contracts these are
-    // language-level bounds, so they live in the prelude: `Serializer` is the pluggable output sink a backend
-    // (std::json, …) implements; `Serialize` is what a `@generate(Serialize)` type gets (compiler-synthesized)
-    // or a custom serializer hand-writes. Per-width scalar methods let a binary backend pack tight while text
-    // backends widen. Declaration-only — zero cost unless a program actually serializes.
-    "type contract Serializer for resource {\n"
-    "    fn void beginObject(); fn void endObject(); fn void fieldName(string name);\n"
-    "    fn void beginArray(usize count); fn void endArray();\n"
-    "    fn void writeI8(int8 v); fn void writeI16(int16 v); fn void writeI32(int32 v); fn void writeI64(int64 v);\n"
-    "    fn void writeU8(uint8 v); fn void writeU16(uint16 v); fn void writeU32(uint32 v); fn void writeU64(uint64 v);\n"
-    "    fn void writeF32(float32 v); fn void writeF64(float64 v);\n"
-    "    fn void writeBool(bool v); fn void writeChar(char v); fn void writeString(ref string v); fn void writeNull();\n"
-    // Graph/pointer serialization framing (used only by a graph `@generate` type — see std::serialization::graph).
-    // `writeRef` writes a pointer field as an integer id; `beginGraph`/`beginTableEntry`/`endTableEntry`/`endGraph`
-    // frame the `{"root":id,"objects":{id:{"__type":..,..}}}` id table. Text backends widen; a binary backend packs.
-    "    fn void writeRef(uint64 id);\n"
-    "    fn void beginGraph(uint64 rootId); fn void beginTableEntry(uint64 id, string ty);\n"
-    "    fn void endTableEntry(); fn void endGraph();\n"
-    "}\n"
-    "type contract Serialize for both { fn void serialize(ref Serializer w); }\n"
-    // Deserialization: `Deserializer` is the pluggable input source (a backend's reader implements it, using
-    // a STICKY error flag — a read on malformed input sets `failed()` and returns a default, so the generated
-    // `deserialize` needs no per-read branching; `tryParse` checks `failed()` once at the end). `Deserialize`
-    // is the per-type capability the codegen synthesizes: a static factory `deserialize(ref Deserializer)`.
-    "enum DeError { Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference }\n"
-    "type contract Deserializer for resource {\n"
-    "    fn void beginObject(); fn bool moreFields(); fn string fieldName();\n"
-    "    fn void beginArray(); fn bool moreElems();\n"
-    "    fn int8 readI8(); fn int16 readI16(); fn int32 readI32(); fn int64 readI64();\n"
-    "    fn uint8 readU8(); fn uint16 readU16(); fn uint32 readU32(); fn uint64 readU64();\n"
-    "    fn float32 readF32(); fn float64 readF64();\n"
-    "    fn bool readBool(); fn char readChar(); fn string readString();\n"
-    "    fn bool readNull(); fn void skipValue(); fn bool failed(); fn void fail();\n"
-    // Graph (object-table) reads — the deserialize twin of the Serializer's writeRef/beginGraph/…: `beginGraph`
-    // consumes `{\"root\":id,\"objects\":` (bookmarking the objects `{` for the two-pass rewind) and returns the
-    // root id; `rewindGraph` re-enters that table for pass 2; `readRef` reads a bare id; `endGraph` closes the
-    // envelope; `failWith` records a specific DeError (so a dangling ref surfaces `UnresolvedReference`, not the
-    // generic `Malformed`). A non-graph backend can no-op these.
-    "    fn uint64 beginGraph(); fn void rewindGraph(); fn uint64 entryKey(); fn uint64 readRef();\n"
-    "    fn void endGraph(); fn void failWith(DeError e);\n"
-    "}\n"
-    // A marker contract (like Movable): the `@generate(Deserialize)` codegen supplies the static factory
-    // `deserialize(ref Deserializer) -> Result<This, DeError>` via a retro impl, and `tryParse<T: Deserialize>`
-    // calls `T::deserialize(...)` statically. Kept method-less so its signature needn't name `This` in a
-    // return position (which the generic-instance machinery can't resolve outside a type).
-    "type contract Deserialize for both { }\n"
-    // Primitive Serialize/Deserialize conformances (pure-kama retro-impls, like the Hashable/Equatable ones
-    // above) — so EVERY type is a uniform serialization participant and a collection's generic element write
-    // (`this[i].serialize(w)`) / read (`T::deserialize(r)`) composes for a scalar element with no compiler
-    // special-casing. `serialize` writes the width-appropriate scalar; the static `deserialize` factory reads
-    // it back (the retro-impl static path — see the `_primConformances` branch in the `Type::method` resolver).
-    "implements Serialize for int8    { public fn void serialize(ref Serializer w) { w.writeI8(v: this); } }\n"
-    "implements Serialize for int16   { public fn void serialize(ref Serializer w) { w.writeI16(v: this); } }\n"
-    "implements Serialize for int32   { public fn void serialize(ref Serializer w) { w.writeI32(v: this); } }\n"
-    "implements Serialize for int64   { public fn void serialize(ref Serializer w) { w.writeI64(v: this); } }\n"
-    "implements Serialize for uint8   { public fn void serialize(ref Serializer w) { w.writeU8(v: this); } }\n"
-    "implements Serialize for uint16  { public fn void serialize(ref Serializer w) { w.writeU16(v: this); } }\n"
-    "implements Serialize for uint32  { public fn void serialize(ref Serializer w) { w.writeU32(v: this); } }\n"
-    "implements Serialize for uint64  { public fn void serialize(ref Serializer w) { w.writeU64(v: this); } }\n"
-    "implements Serialize for float32 { public fn void serialize(ref Serializer w) { w.writeF32(v: this); } }\n"
-    "implements Serialize for float64 { public fn void serialize(ref Serializer w) { w.writeF64(v: this); } }\n"
-    "implements Serialize for bool    { public fn void serialize(ref Serializer w) { w.writeBool(v: this); } }\n"
-    // NOTE: no `char` conformance — `char` and `uint32` share the C type `uint32_t`, so the cType-keyed
-    // primitive-conformance registry can't hold both. A `char` FIELD still serializes via the compiler's
-    // `writeChar`/`readChar` fast path; a `char` in a collection rides `uint32`'s numeric conformance.
-    "implements Serialize for string  { public fn void serialize(ref Serializer w) { w.writeString(v: this); } }\n"
-    "implements Deserialize for int8    { public static fn int8    deserialize(Deserializer r) { return r.readI8(); } }\n"
-    "implements Deserialize for int16   { public static fn int16   deserialize(Deserializer r) { return r.readI16(); } }\n"
-    "implements Deserialize for int32   { public static fn int32   deserialize(Deserializer r) { return r.readI32(); } }\n"
-    "implements Deserialize for int64   { public static fn int64   deserialize(Deserializer r) { return r.readI64(); } }\n"
-    "implements Deserialize for uint8   { public static fn uint8   deserialize(Deserializer r) { return r.readU8(); } }\n"
-    "implements Deserialize for uint16  { public static fn uint16  deserialize(Deserializer r) { return r.readU16(); } }\n"
-    "implements Deserialize for uint32  { public static fn uint32  deserialize(Deserializer r) { return r.readU32(); } }\n"
-    "implements Deserialize for uint64  { public static fn uint64  deserialize(Deserializer r) { return r.readU64(); } }\n"
-    "implements Deserialize for float32 { public static fn float32 deserialize(Deserializer r) { return r.readF32(); } }\n"
-    "implements Deserialize for float64 { public static fn float64 deserialize(Deserializer r) { return r.readF64(); } }\n"
-    "implements Deserialize for bool    { public static fn bool    deserialize(Deserializer r) { return r.readBool(); } }\n"
-    "implements Deserialize for string  { public static fn string  deserialize(Deserializer r) { return r.readString(); } }\n"
-    // Generic deserialize trampoline: the `@generate` codegen can't spell `List<int32>::deserialize(r)` (a
-    // static on a generic instance has no surface syntax), but a turbofish on THIS free fn does
-    // (`__kamaDeserialize::<List<int32>>(r)`), and inside it `T::deserialize` resolves per instantiation.
-    "fn T __kamaDeserialize<T: Deserialize>(Deserializer r) { return T::deserialize(r: r); }\n"
-    // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
-    // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
-    // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is
-    // clamped to the available bytes rather than reading past the end.
-    "type value Chars implements Iterator<char> {\n"
-    "    Ptr<uint8> data; int32 len; int32 pos;\n"
-    "    public fn Optional<char> next() {\n"
-    "        if (this.pos >= this.len) { return Optional::None; }\n"
-    "        uint32 c0 = 0; unsafe { c0 = cast<uint32>(this.data[this.pos]); }\n"
-    "        uint32 cp = c0; int32 n = 1;\n"
-    "        if (c0 >= 240ui32) { cp = c0 & 7ui32; n = 4; }\n"
-    "        else if (c0 >= 224ui32) { cp = c0 & 15ui32; n = 3; }\n"
-    "        else if (c0 >= 192ui32) { cp = c0 & 31ui32; n = 2; }\n"
-    "        if (this.pos + n > this.len) { n = this.len - this.pos; }\n"
-    "        int32 i = 1;\n"
-    "        while (i < n) {\n"
-    "            uint32 cc = 0; unsafe { cc = cast<uint32>(this.data[this.pos + i]); }\n"
-    "            cp = (cp << 6ui32) | (cc & 63ui32); i = i + 1;\n"
-    "        }\n"
-    "        this.pos = this.pos + n;\n"
-    "        return Optional::Some(value: cast<char>(cp));\n"
-    "    }\n"
-    "}\n"
-    // The `.split(separator:)` iterator over a string's UTF-8 bytes. Like `Chars` it borrows the source
-    // bytes (a raw `Ptr<uint8>`, so `Split` stays a POD `value` type) — valid while the source string is —
-    // but here it ALSO borrows the separator's bytes, and yields each piece as an OWNED string. The
-    // byte-range copy is done by a tiny runtime helper (kama can't allocate a string from raw bytes on its
-    // own). Byte semantics (a literal separator), Go `strings.Split` behaviour: consecutive/trailing
-    // separators yield "" pieces; an empty separator yields the whole string once.
-    "extern fn string kama_string_from_raw(Ptr<uint8> src, int32 start, int32 len);\n"
-    "type value Split implements Iterator<string> {\n"
-    "    Ptr<uint8> data; int32 len; Ptr<uint8> sep; int32 seplen; int32 pos; bool done;\n"
-    "    public fn Optional<string> next() {\n"
-    "        if (this.done) { return Optional::None; }\n"
-    "        if (this.seplen == 0) {\n"
-    "            this.done = true;\n"
-    "            return Optional::Some(value: kama_string_from_raw(src: this.data, start: this.pos, len: this.len - this.pos));\n"
-    "        }\n"
-    "        int32 i = this.pos;\n"
-    "        while (i + this.seplen <= this.len) {\n"
-    "            bool m = true; int32 k = 0;\n"
-    "            while (k < this.seplen) {\n"
-    "                uint8 a = 0ui8; uint8 b = 0ui8;\n"
-    "                unsafe { a = this.data[i + k]; b = this.sep[k]; }\n"
-    "                if (a != b) { m = false; break; }\n"
-    "                k = k + 1;\n"
-    "            }\n"
-    "            if (m) {\n"
-    "                int32 st = this.pos;\n"
-    "                this.pos = i + this.seplen;\n"
-    "                return Optional::Some(value: kama_string_from_raw(src: this.data, start: st, len: i - st));\n"
-    "            }\n"
-    "            i = i + 1;\n"
-    "        }\n"
-    "        this.done = true;\n"
-    "        return Optional::Some(value: kama_string_from_raw(src: this.data, start: this.pos, len: this.len - this.pos));\n"
-    "    }\n"
-    "}\n";
+// The implicit prelude (Optional/Result, the language-level contracts, the primitive retro-impls,
+// Chars/Split) is embedded from prelude/global.kama into KAMA_PRELUDE_SRC (see kama.prelude.h and
+// tools/embed_prelude.sh), so it ships inside bin/kama even for a --no-std install. The namespaced
+// built-in triad (prelude/std/memory/*.kama) is embedded as KAMA_PRELUDE_MODULES.
 
 // Parse an in-memory kama source string into a CompilationUnit (flex string buffer). nullptr on error.
 SharedCompilationUnit parseString(const char* src, const std::string& name)
@@ -1559,7 +1285,21 @@ SharedCompilationUnit parseString(const char* src, const std::string& name)
     return extra.compilationUnit;
 }
 
-SharedCompilationUnit preludeUnit() { return parseString(PRELUDE_SRC, "<prelude>"); }
+SharedCompilationUnit preludeUnit() { return parseString(KAMA_PRELUDE_SRC, "<prelude>"); }
+
+// The namespaced built-in modules (the smart-pointer triad, std::memory) — embedded like the prelude
+// so they're always in scope with no `import std::memory`, in both the full and `--no-std` installs.
+// Each keeps its own `namespace`/`export`; the emitter collects them under that scope + an implicit
+// `using` (see CEmitter::collectProgram / ctxOf). nullptr units (a parse failure) are dropped.
+std::vector<SharedCompilationUnit> preludeModuleUnits()
+{
+    std::vector<SharedCompilationUnit> units;
+    for (int i = 0; i < KAMA_PRELUDE_MODULE_COUNT; ++i) {
+        SharedCompilationUnit u = parseString(KAMA_PRELUDE_MODULES[i].src, "<prelude-module>");
+        if (u) units.push_back(u);
+    }
+    return units;
+}
 
 // Emit an already-parsed unit to a single `.c` (`srcPath` drives #line). Returns 0 on success.
 int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
@@ -1573,6 +1313,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     }
     CEmitter emitter(out, srcPath, emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
+    for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
     int unsupported = emitter.emit(unit);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
@@ -1618,6 +1359,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
 
     CEmitter emitter(header, "", emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
+    for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library

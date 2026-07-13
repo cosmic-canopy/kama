@@ -1,0 +1,26 @@
+// The smart-pointer triad `Owned`/`Shared`/`Weak` is prelude/built-in — always in scope with NO
+// `import std::memory` (it's embedded into the compiler, so a --no-std install still has it). This
+// fixture uses all three plus `new` without any import, proving the always-in-scope resolution.
+type value Counter
+{
+    int32 value;
+    Counter(int32 start) { this.value = start; }
+    public fn void bump() { this.value = this.value + 1; }
+    public fn int32 get() { return this.value; }
+}
+
+fn int main()
+{
+    Owned<Counter> o = new Counter(start: 9);
+    o.bump();                                     // 10
+
+    Shared<Counter> s = new Counter(start: 20);
+    Weak<Counter> w = s.downgrade();              // weak ref (does not keep alive)
+    Optional<Shared<Counter>> up = w.tryUpgrade();
+    int32 fromWeak = match (up) {
+        case Some(s2): s2.get();                  // alive -> 20
+        case None: 0;
+    };
+
+    return o.get() + fromWeak + 12;               // 10 + 20 + 12 = 42
+}
