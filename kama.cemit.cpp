@@ -8065,13 +8065,14 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
         if      (g->second == _sharedTmpl) e.kind = "Shared";
         else if (g->second == _ownedTmpl)  e.kind = "Owned";
         else if (g->second == _weakTmpl)   e.kind = "Weak";
-        if (!e.kind.empty()) { e.elemC = inner->genericArg ? cType(inner->genericArg) : ""; e.optional = opt; return e; }
+        if (!e.kind.empty()) { e.elemC = inner->genericArg ? cType(inner->genericArg) : ""; e.elemIsContract = isInterface(e.elemC); e.optional = opt; return e; }
     }
     // Interface-erased intrinsic smart pointer (`Owned<Contract>` / `Shared<Contract>` / Box<dyn>).
     if (isSmartPtrClass(ic)) {
         CollKind k = smartKind(ic);
         e.kind  = (k == CollKind::Shared) ? "Shared" : (k == CollKind::Weak) ? "Weak" : "Owned";
         e.elemC = _classes.count(ic) ? _classes[ic].collElemClass : "";
+        e.elemIsContract = isInterface(e.elemC);
         e.optional = opt;
     }
     return e;
@@ -8117,6 +8118,16 @@ void CEmitter::computeGraphNodeTypes()
         for (auto& f : ci.fields) {
             GraphEdge e = graphEdgeOf(f.type);
             if (e.kind.empty() || e.elemC.empty()) continue;
+            if (e.elemIsContract) {   // a `Shared<Contract>` edge: every @generate implementor is a graph node
+                _polyContracts.insert(e.elemC);
+                for (auto& kv2 : _classes) {
+                    ClassInfo& c2 = kv2.second;
+                    if (c2.isGraphNode) continue;
+                    bool impl = std::find(c2.interfaces.begin(), c2.interfaces.end(), e.elemC) != c2.interfaces.end();
+                    if (impl && (c2.genSerialize || c2.genDeserialize)) { c2.isGraphNode = true; work.push_back(kv2.first); }
+                }
+                continue;
+            }
             auto it = _classes.find(e.elemC);
             if (it != _classes.end() && !it->second.isGraphNode) { it->second.isGraphNode = true; work.push_back(e.elemC); }
         }
@@ -8126,6 +8137,7 @@ void CEmitter::computeGraphNodeTypes()
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (!ci.isGraphNode) continue;
+        ci.graphTypeId = (int)_graphNodeOrder.size();
         _graphNodeOrder.push_back(kv.first);
         auto it = ci.methods.find("deserialize");     // graph deserialize returns Shared<T> — but only when the
         if (it != ci.methods.end() && it->second.isSynthDe) {   // Shared<T> instance exists (root / Shared/Weak
@@ -8146,6 +8158,32 @@ void CEmitter::emitGraphNodeHelperProtos(ClassInfo& ci)
     *_out << stat << "void " << ci.name << "__wireShell(kama_de_box* __b, Deserializer r, struct kama_de_graph* __g);\n";
 }
 
+// Phase E: for each contract used as a graph edge element, a closed-world dispatch pair over its
+// @generate implementors. `<C>__nodeWriterFor` maps a fat handle's runtime `.vtbl` to that concrete's
+// serializeNode (write side); `<C>__implVtbl` maps a pointee's concrete type-id (recovered from the box)
+// to its `&<K>__as_<C>` conformance vtable (read side; NULL for a non-implementor => TypeMismatch).
+// Emitted once into the shared header, after the class prototypes + `extern const <K>__as_<C>` decls.
+void CEmitter::emitPolyContractResolvers()
+{
+    for (auto& C : _polyContracts) {
+        std::vector<std::string> impls;   // implementors that are graph nodes, in stable _graphNodeOrder
+        for (auto& K : _graphNodeOrder) {
+            ClassInfo& ci = _classes[K];
+            bool impl  = std::find(ci.interfaces.begin(),      ci.interfaces.end(),      C) != ci.interfaces.end();
+            bool retro = std::find(ci.retroInterfaces.begin(), ci.retroInterfaces.end(), C) != ci.retroInterfaces.end();
+            if (impl && !retro) impls.push_back(K);
+        }
+        *_out << "static inline kama_node_writer " << C << "__nodeWriterFor(const struct " << C << "_vtbl* __vt)\n{\n";
+        for (auto& K : impls) { indent(1); *_out << "if (__vt == &" << K << "__as_" << C << ") return " << K << "__serializeNode;\n"; }
+        indent(1); *_out << "return 0;\n}\n";
+        *_out << "static inline const struct " << C << "_vtbl* " << C << "__implVtbl(uint32_t __tid)\n{\n";
+        indent(1); *_out << "switch (__tid) {\n";
+        for (auto& K : impls) { indent(1); *_out << "case " << _classes[K].graphTypeId << ": return &" << K << "__as_" << C << ";\n"; }
+        indent(1); *_out << "default: return 0;\n";
+        indent(1); *_out << "}\n}\n\n";
+    }
+}
+
 // The three per-node-type helpers: write one table entry (serializeNode), pass-1 alloc+scalar-read
 // (allocShell), pass-2 pointer wiring (wireShell). Emitted for every graph node (root or pointee).
 void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
@@ -8154,12 +8192,17 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
 
     // -- serializeNode: `beginTableEntry(id,"T")` + each field (scalars via the by-value helper; pointer edges
     //    intern the pointee and write its id) + `endTableEntry`.
-    // The prelude triad's C struct fields are `p` (pointee) and `c` (control block); Owned has only `p`.
-    auto refWrite = [&](const std::string& kind, const std::string& val, const std::string& writer, int d) {
-        std::string ptr = "(" + val + ").p";
+    // The prelude triad's concrete-element C struct fields are `p` (pointee) and `c` (control block); a
+    // CONTRACT-element edge is a fat handle {obj, vtbl, ctrl} — its writer is resolved from `.vtbl` at runtime.
+    auto refWrite = [&](const GraphEdge& e, const std::string& val, int d) {
+        std::string pf = e.elemIsContract ? ".obj" : ".p";
+        std::string cf = e.elemIsContract ? ".ctrl" : ".c";
+        std::string writer = e.elemIsContract ? (e.elemC + "__nodeWriterFor((" + val + ").vtbl)")
+                                              : (e.elemC + "__serializeNode");
+        std::string ptr = "(" + val + ")" + pf;
         std::string intern = "kama_ser_graph_intern(__g, (uint64_t)(uintptr_t)" + ptr + ", " + ptr + ", " + writer + ")";
-        if (kind == "Weak") {   // a Weak writes its id only while a strong handle still exists, else 0 (expired)
-            indent(d); *_out << "if ((" << val << ").c && (" << val << ").c->strong > 0) "
+        if (e.kind == "Weak") {   // a Weak writes its id only while a strong handle still exists, else 0 (expired)
+            indent(d); *_out << "if ((" << val << ")" << cf << " && (" << val << ")" << cf << "->strong > 0) "
                              << "w->vtbl->writeRef(w->obj, " << intern << ");\n";
             indent(d); *_out << "else w->vtbl->writeRef(w->obj, 0);\n";
         } else {   // Shared / Owned — always present
@@ -8176,20 +8219,19 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         GraphEdge e = graphEdgeOf(f.type);
         indent(1); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(wire) << ");\n";
         if (e.kind.empty()) { emitSerFieldWrite(f.type, "self->" + f.name, 1); continue; }
-        std::string writer = e.elemC + "__serializeNode";
         std::string acc = "self->" + f.name;
         if (e.optional) {
             std::string oc = cType(f.type);
             indent(1); *_out << "switch ((" << acc << ").tag) {\n";
             indent(1); *_out << "case " << oc << "_Some: {\n";
-            refWrite(e.kind, "(" + acc + ").u.Some.value", writer, 2);
+            refWrite(e, "(" + acc + ").u.Some.value", 2);
             indent(2); *_out << "break;\n";
             indent(1); *_out << "}\n";
             indent(1); *_out << "case " << oc << "_None: { w->vtbl->writeRef(w->obj, 0); break; }\n";
             indent(1); *_out << "default: break;\n";
             indent(1); *_out << "}\n";
         } else {
-            refWrite(e.kind, acc, writer, 1);
+            refWrite(e, acc, 1);
         }
     }
     indent(1); *_out << "w->vtbl->endTableEntry(w->obj);\n";
@@ -8256,11 +8298,18 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
 {
     std::string X = e.elemC;
     std::string innerC = e.optional ? cType(ty->genericArg) : cType(ty);   // Shared_X / Weak_X / Owned_X
-    // the wiring of a resolved box `__t` into a smart-ptr value expression `place` of kind e.kind. The triad's
-    // C fields are `p` (pointee) and `c` (control block, a `Ctrl*`); the box's `ctrl` is a layout-compatible
-    // kama_ctrl* cast through void* into `.c`. Shared retains (strong++), Weak downgrades (weak++).
+    // the wiring of a resolved box `__t` into a smart-ptr value expression `place` of kind e.kind. A
+    // concrete-element handle is the thin triad struct (`p` pointee, `c` control block); a CONTRACT-element
+    // handle is the fat `{obj, vtbl, ctrl}`, whose vtable is recovered from the box's concrete type-id (a
+    // non-implementor tag => TypeMismatch, leaving the calloc-zeroed handle untouched). Shared retains
+    // (strong++), Weak downgrades (weak++).
     auto wireInto = [&](const std::string& place, int dd) {
-        if (e.kind == "Shared") {
+        if (e.elemIsContract) {
+            indent(dd); *_out << "const struct " << X << "_vtbl* __vt = " << X << "__implVtbl(__t->type_id);\n";
+            indent(dd); *_out << "if (!__vt) { r.vtbl->failWith(r.obj, DeError_TypeMismatch); }\n";
+            indent(dd); *_out << "else { " << place << ".obj = __t->ptr; " << place << ".vtbl = __vt; " << place
+                              << ".ctrl = __t->ctrl; __t->ctrl->" << (e.kind == "Weak" ? "weak" : "strong") << "++; }\n";
+        } else if (e.kind == "Shared") {
             indent(dd); *_out << place << ".p = (" << X << "*)__t->ptr; " << place << ".c = (void*)__t->ctrl; __t->ctrl->strong++;\n";
         } else if (e.kind == "Weak") {
             indent(dd); *_out << place << ".p = (" << X << "*)__t->ptr; " << place << ".c = (void*)__t->ctrl; __t->ctrl->weak++;\n";
@@ -8277,14 +8326,29 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
         indent(d); *_out << "else {\n";
         indent(d + 1); *_out << "kama_de_box* __t = (kama_de_box*)kama_de_graph_lookup(__g, __rid);\n";
         indent(d + 1); *_out << "if (__t) {\n";
-        if (e.optional) {
-            indent(d + 2); *_out << innerC << " __v; __v.p = (" << X << "*)__t->ptr;\n";
-            indent(d + 2); *_out << dst << " = (" << cType(ty) << "){ .tag = " << cType(ty) << "_Some, .u.Some = { .value = __v } };\n";
+        if (e.elemIsContract) {   // fat move: recover the concrete vtable, then transfer the pointee (no refcount)
+            indent(d + 2); *_out << "const struct " << X << "_vtbl* __vt = " << X << "__implVtbl(__t->type_id);\n";
+            indent(d + 2); *_out << "if (!__vt) { r.vtbl->failWith(r.obj, DeError_TypeMismatch); }\n";
+            indent(d + 2); *_out << "else {\n";
+            if (e.optional) {
+                indent(d + 3); *_out << innerC << " __v = {0}; __v.obj = __t->ptr; __v.vtbl = __vt;\n";
+                indent(d + 3); *_out << dst << " = (" << cType(ty) << "){ .tag = " << cType(ty) << "_Some, .u.Some = { .value = __v } };\n";
+            } else {
+                indent(d + 3); *_out << dst << ".obj = __t->ptr; " << dst << ".vtbl = __vt;\n";
+            }
+            indent(d + 3); *_out << "__t->ptr = NULL;\n";
+            indent(d + 3); *_out << "if (__t->ctrl) { if (__t->ctrl->weak == 0) kama_free(__t->ctrl); __t->ctrl = NULL; }\n";
+            indent(d + 2); *_out << "}\n";
         } else {
-            indent(d + 2); *_out << dst << ".p = (" << X << "*)__t->ptr;\n";
+            if (e.optional) {
+                indent(d + 2); *_out << innerC << " __v; __v.p = (" << X << "*)__t->ptr;\n";
+                indent(d + 2); *_out << dst << " = (" << cType(ty) << "){ .tag = " << cType(ty) << "_Some, .u.Some = { .value = __v } };\n";
+            } else {
+                indent(d + 2); *_out << dst << ".p = (" << X << "*)__t->ptr;\n";
+            }
+            indent(d + 2); *_out << "__t->ptr = NULL;\n";
+            indent(d + 2); *_out << "if (__t->ctrl) { if (__t->ctrl->weak == 0) kama_free(__t->ctrl); __t->ctrl = NULL; }\n";
         }
-        indent(d + 2); *_out << "__t->ptr = NULL;\n";
-        indent(d + 2); *_out << "if (__t->ctrl) { if (__t->ctrl->weak == 0) kama_free(__t->ctrl); __t->ctrl = NULL; }\n";
         indent(d + 1); *_out << "}\n";
         indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, DeError_UnresolvedReference);\n";
         indent(d); *_out << "}\n";
@@ -8298,7 +8362,7 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
         indent(d); *_out << "else {\n";
         indent(d + 1); *_out << "kama_de_box* __t = (kama_de_box*)kama_de_graph_lookup(__g, __rid);\n";
         indent(d + 1); *_out << "if (__t) {\n";
-        indent(d + 2); *_out << innerC << " __v;\n";
+        indent(d + 2); *_out << innerC << " __v = {0};\n";   // zeroed: a contract TypeMismatch leaves it null (safe drop)
         wireInto("__v", d + 2);
         indent(d + 2); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = __v } };\n";
         indent(d + 1); *_out << "}\n";
@@ -8358,7 +8422,8 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
     bool f1 = true;
     for (auto& K : _graphNodeOrder) {
         indent(2); *_out << (f1 ? "if" : "else if") << " (kama_string__equals(&__ty, " << kamaStrLit(graphWireName(_classes[K])) << ")) { "
-                         << "kama_de_box* __b = " << K << "__allocShell(r, &__arena_" << K << "); kama_de_graph_register(&__g, __eid, __b); }\n";
+                         << "kama_de_box* __b = " << K << "__allocShell(r, &__arena_" << K << "); "
+                         << "__b->type_id = " << _classes[K].graphTypeId << "; kama_de_graph_register(&__g, __eid, __b); }\n";
         f1 = false;
     }
     indent(2); *_out << "else { while (r.vtbl->moreFields(r.obj)) r.vtbl->skipValue(r.obj); }\n";
@@ -9338,6 +9403,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (ci->preludeStatic) continue;   // emitted static-inline below (a non-generic prelude type)
         scopeOf(ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci);
     }
+    emitPolyContractResolvers();   // Phase E: per-contract graph-edge dispatch (after node-helper protos + extern vtbl decls)
     // Retroactive `implements C for T { … }` for a COLLECTION/primitive target (`string` → `kama_string`):
     // the normal per-class emitters early-out for a collection, so emit a non-static PROTOTYPE here — BEFORE
     // the generic-function instances below, which may call it (e.g. a `<K: Hashable>` body calling

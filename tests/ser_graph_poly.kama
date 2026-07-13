@@ -1,0 +1,59 @@
+// Polymorphic object-graph round-trip: a `Scene` holds two `Shared<Shape>` edges where `Shape` is a CONTRACT
+// with two concrete `@generate` implementors (`Sq`, `Circle`). Each node carries its concrete `__type` on the
+// wire; serialize resolves the per-node writer from the fat handle's vtable, deserialize rebuilds the correct
+// concrete behind each contract edge (recovered from the node's `__type`) and re-forms the fat `Shared<Shape>`
+// handle — proven by a re-encode reproducing the exact wire AND by dynamic dispatch (`area()`) surviving the
+// trip. ASan proves each concrete frees exactly once. (v1 rule: a contract graph edge's implementors are
+// `@generate(Serialize, Deserialize)`.)
+import std::serialization::json::{encode, decode};
+import std::memory::{Shared};
+
+type contract Shape for both { fn int32 area(); }
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Sq implements Shape {
+    @field int32 side;
+    public Sq(int32 side) { this.side = side; }
+    public fn int32 area() { return this.side * this.side; }
+}
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Circle implements Shape {
+    @field int32 r;
+    public Circle(int32 r) { this.r = r; }
+    public fn int32 area() { return 3 * this.r * this.r; }
+}
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Scene {
+    @field Shared<Shape> a;
+    @field Shared<Shape> b;
+    public Scene(Shared<Shape> a, Shared<Shape> b) { this.a = give a; this.b = give b; }
+    public fn int32 areaA() { return this.a.area(); }   // dynamic dispatch through the rebuilt fat edges
+    public fn int32 areaB() { return this.b.area(); }
+}
+
+fn int main() {
+    Shared<Sq> sq = new Sq(side: 4);
+    Shared<Shape> sa = sq;                 // retain-upcast into the fat contract handle
+    Shared<Circle> ci = new Circle(r: 2);
+    Shared<Shape> sb = ci;
+    Scene sc = Scene(a: give sa, b: give sb);
+    string j = encode(v: sc);
+    // root Scene=1; a -> Sq=2, b -> Circle=3; each concrete carries its own `__type`.
+    if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Scene\",\"a\":2,\"b\":3},\"2\":{\"__type\":\"Sq\",\"side\":4},\"3\":{\"__type\":\"Circle\",\"r\":2}}}") {
+        return cast<int32>(j.length());
+    }
+    Result<Shared<Scene>, DeError> res = decode::<Shared<Scene>>(src: copy j);
+    match (res) {
+        case Ok(sh): {
+            string j2 = encode(v: sh);
+            if (j2 != j) { return 1; }
+            if (sh.areaA() != 16) { return 2; }   // Sq: 4*4
+            if (sh.areaB() != 12) { return 3; }   // Circle: 3*2*2
+            return 0;
+        }
+        case Err(e): { return 4; }
+    };
+    return 5;
+}

@@ -688,7 +688,9 @@ static inline int kama_de_graph_claim(kama_de_graph* g, uint64_t id) {
 // counts — no dependency on a `Shared<T>` kama instantiation existing for every node type (an `Owned`-only
 // pointee never names one). Boxes are grouped per concrete type in a `kama_de_arena` so the driver can drop
 // each with the right `T__dtor` after transferring ownership to the returned root.
-typedef struct kama_de_box { void* ptr; kama_ctrl* ctrl; } kama_de_box;
+// `type_id` records the pointee's concrete graph-node id (set by the pass-1 driver from the wire `__type`),
+// so a polymorphic `Shared<Contract>` edge can recover the right conformance vtable in pass 2. 0 by default.
+typedef struct kama_de_box { void* ptr; kama_ctrl* ctrl; uint32_t type_id; } kama_de_box;
 
 typedef struct kama_de_arena { kama_de_box** items; size_t len; size_t cap; } kama_de_arena;
 static inline void kama_de_arena_init(kama_de_arena* a) { a->items = NULL; a->len = 0; a->cap = 0; }
@@ -701,7 +703,7 @@ static inline kama_de_box* kama_de_arena_new(kama_de_arena* a) {
         a->cap = nc;
     }
     kama_de_box* b = (kama_de_box*)kama_alloc(sizeof(kama_de_box));
-    b->ptr = NULL; b->ctrl = kama_ctrl_new();
+    b->ptr = NULL; b->ctrl = kama_ctrl_new(); b->type_id = 0;
     a->items[a->len++] = b;
     return b;
 }
