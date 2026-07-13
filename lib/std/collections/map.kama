@@ -34,7 +34,9 @@ type value MapKeyIter<K> implements Iterator<K> {
 }
 
 // A general open-addressing hash map over `K: Hashable + Equatable` -> `V`. Linear probing with
-// tombstones; grows (and sheds tombstones) at a 0.75 load factor. Move-only by default: it owns three
+// tombstones; grows (and sheds tombstones) at a 0.75 load factor. Capacity is always a power of two
+// (0, then 8·2^k — see `grow`), so the slot index is `hash & (cap-1)`, not `hash % cap` (no division).
+// Move-only by default: it owns three
 // parallel heap buffers (keys, values, per-slot state) and every live key/value, dropping them at end of
 // life.
 //
@@ -79,7 +81,7 @@ type resource Map<K: Hashable + Equatable, V>
     // FULL slot) or an EMPTY slot ends the run (returns -1). Tombstones are probed past, never stop it.
     fn int32 slotOf(ref K key) {
         if (this.cap == 0) { return 0 - 1; }
-        int32 i = cast<int32>(this.hashKey(k: key) % cast<uint64>(this.cap));
+        int32 i = cast<int32>(this.hashKey(k: key) & cast<uint64>(this.cap - 1));   // cap is a power of two -> mask == % cap
         while (true) {
             uint8 s = 0ui8; unsafe { s = this.state[i]; }
             if (s == 0ui8) { return 0 - 1; }                                  // EMPTY — not present
@@ -125,7 +127,7 @@ type resource Map<K: Hashable + Equatable, V>
     // re-move on a later iteration — here the loop can't, but the check is conservative).
     public fn void put(K key, V value) {
         if ((this.len + this.tombs + 1) * 4 >= this.cap * 3) { this.grow(); }
-        int32 i = cast<int32>(this.hashKey(k: key) % cast<uint64>(this.cap));
+        int32 i = cast<int32>(this.hashKey(k: key) & cast<uint64>(this.cap - 1));   // cap is a power of two -> mask == % cap
         int32 slot = 0 - 1;                                                   // chosen slot (set = loop done)
         int32 free = 0 - 1;                                                   // first tomb we may reuse
         bool overwrite = false;
@@ -186,7 +188,7 @@ type resource Map<K: Hashable + Equatable, V>
             if (s == 1ui8) {
                 int32 j = 0;
                 unsafe {
-                    j = cast<int32>(this.hashKey(k: this.keys[i]) % cast<uint64>(nc));
+                    j = cast<int32>(this.hashKey(k: this.keys[i]) & cast<uint64>(nc - 1));   // nc is a power of two
                     while (ns[j] == 1ui8) { j = j + 1; if (j >= nc) { j = 0; } }
                     nk[j] = this.keys[i]; nv[j] = this.vals[i]; ns[j] = 1ui8;   // bitwise relocate (no drop)
                 }
