@@ -97,7 +97,11 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
   struct instead); free functions only; distinct from `export` (module visibility). Lands with
   `kama build --shared` (§5). The **full `expose`** (richer wasm module exports + the scripting host
   interface) stays **2.0** (§7); the keyword is live today. (Mirrors the reserved-then-lit `volatile` path.)
-- **`volatile` keyword** — reserved → **1.x embedded** (emit C `volatile` for ISR↔loop flags / MMIO).
+- **`hardware` keyword** (renamed from the reserved `volatile`, to shed the C threading-confusion legacy) —
+  reserved → **1.x embedded** (§5 embedded milestone): emits C `volatile` for MMIO registers
+  (`hardware Ptr<T>` → `volatile T*`, mirroring `const Ptr<T>`) and single-core ISR↔loop flags.
+  **Explicitly NOT a concurrency primitive** — cross-thread sharing is §6 atomics. Reserved-then-lit like
+  before; the token stays a hard error until the embedded target ships.
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today).
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
@@ -291,6 +295,33 @@ serialization, networking).
     callee scope-cleanup / drop order / move-state with `emitScopeCleanup`/`emitUnwindAll`) then re-run
     Tier 1, or guarded/speculative inline caches. A separate, larger project — pursue only if a real hot
     path (engine ECS dispatch) proves Tier 1 insufficient.
+
+### Embedded / bare-metal MCU (Pi Pico · Arduino · ESP32) — design pinned, build with the milestone
+
+"Pi/Arduino support" is **two targets**, and the split is the whole story:
+- **Raspberry Pi (Linux — Pi 3/4/5, Zero):** a full ARM app processor running Linux — MMU, OS, heap,
+  filesystem. **Kama already targets this** (portable C11 → `zig cc`/clang cross-compile to
+  `aarch64-linux`). Unlocking it is ~a cross-compile triple + **GPIO/I²C/SPI bindings**, and those are
+  ordinary C FFI over `libgpiod` / `/dev/mem` — a *library*, not compiler work. Low effort.
+- **Bare-metal MCU (Arduino AVR, Cortex-M: Pi Pico/RP2040 · Arduino Zero/Nano 33, ESP32):** *freestanding*
+  — no OS, no filesystem, KB of RAM, often no heap, a startup file + linker script instead of hosted libc.
+  ⚠️ The **Pi Pico is an MCU, not a Linux Pi** — so "Pi" spans both buckets. This is the real milestone:
+
+  | Piece | What's needed |
+  |---|---|
+  | **Freestanding runtime** | `--target embedded` (`-ffreestanding -nostdlib`); `kama_runtime.h` stops assuming hosted libc; entry contract (`main()`+loop, or Arduino `setup()`/`loop()`) — no `argc/argv` shim, `main` never returns |
+  | **No-heap / pluggable allocator** | the big one — `Owned`/`Shared`/`List`/`string` are malloc-backed. Either a no-heap subset (`value` + `Fixed<T,N>` + `Ptr` + stack) **or** bring-your-own allocator so those ride a static arena/pool. **Ties directly to the planned "allocator passed to every collection" work** — the same seam serves embedded no-heap and engine arena pools |
+  | **Globals / statics** | MCU code lives on module-level state (peripheral handles, ISR flags, flash tables); new language surface with deterministic zero/const init. Also **`const` data in flash** (`.rodata`; on **AVR** the Harvard `PROGMEM` wart) |
+  | **`hardware` qualifier** | the renamed `volatile` — `hardware Ptr<T>` → `volatile T*` for MMIO registers, and `hardware` on an ISR↔loop global; mirrors the shipped `const Ptr<T>` → `const T*`. **MMIO + single-core ISR only — NOT a concurrency primitive** (that's §6 atomics) |
+  | **ISR declaration** | bind a function to an interrupt vector with the right calling convention (`__attribute__((interrupt))` / vendor `ISR()` macro) |
+  | **Toolchain / build** | target triples (`thumbv*-none-eabi`, `avr`, …), linker scripts (`-T`), startup objects, MCU flags, and linking the vendor HAL (pico-sdk / Arduino core / esp-idf) + flashing |
+  | **Panic/trap handler** | make a bounds/overflow trap configurable (halt / reset / blink). The trap lowering is **already runtime-free** (`__builtin_trap`) — works freestanding today ✓ |
+
+  **Why kama fits well:** no-GC + RAII → deterministic, no hidden pauses; allocation is explicit in the
+  emitted C (greppable no-heap audit); trap lowering already dependency-free; `Fixed<T,N>`, sized ints, and
+  `unsafe`/`Ptr` FFI already exist. **North star: blink an LED** (the embedded "first triangle") — forces
+  exactly the critical path and nothing else. **Start Cortex-M, not AVR** (`zig cc`/clang do `thumbv*-none-eabi`
+  cleanly; pico-sdk is tidy; AVR's Harvard/`PROGMEM`/`avr-gcc`-only pain comes later).
 
 ## 6. Concurrency — shared-nothing by construction (design direction)
 

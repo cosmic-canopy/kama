@@ -40,7 +40,7 @@ Legend for the status column:
 | `final` | ✅ | `type final resource` is a sealed leaf (cannot be `extends`-ed); `final` on a method seals its slot (no subclass `override`); only a `type virtual`/`abstract resource` may be extended at all (a `value` and a plain `resource` are already sealed) |
 | `const` | ✅ | a `const` binding is deeply immutable (no reassign, no write *through* it, no `++`/`--`); `const fn` is non-mutating and the only kind callable on a const receiver; params take `const T` / `const ref T` (read-only borrow); a `const` field is write-once (constructor only); `const Ptr<T>` lowers to `const T*` for const-correct FFI |
 | `fn` `fnptr` | ✅ | `fn` heads every function/method declaration. `fnptr` declares an explicit, named function-pointer **type** — zero-cost, non-null, signature-checked; a bare function name or `Type::method` binds it |
-| `volatile` | 🚧 | **reserved** for the embedded/MMIO scope (ISR↔loop shared flags, peripheral registers) — using it is a clear error, not a silent no-op; implemented when kama targets embedded |
+| `volatile` → `hardware` | 🚧 | **reserved** for the embedded/MMIO scope (peripheral registers, single-core ISR↔loop flags) — using it is a clear error, not a silent no-op; implemented when kama targets embedded. **Planned rename to `hardware`** to shed C's threading-confusion legacy: `hardware Ptr<T>` → `volatile T*` (mirrors `const Ptr<T>`). **Not a concurrency primitive** — cross-thread sharing is atomics, not this |
 | `expose` | ✅ | marks a **free function** for the kama→host boundary: it gets a **bare, unmangled, exported C-ABI symbol** (`KAMA_EXPORT`) a host can resolve — `dlsym` on a `kama build --shared` `.so`/`.dylib`/`.dll`, or `Module._name` on a wasm build. Signature must be C-ABI-safe (no owned-by-value `string`/collection/`Owned`/`Shared`/`Weak`; use `Ptr<T>` or an `extern` struct). Free functions only; not a member/type modifier. Distinct from `export` (module visibility) — three boundaries, three words. *Full 2.0 `expose` adds richer wasm module exports + the scripting host.* |
 
 ## Reserved-but-unimplemented keywords
@@ -48,10 +48,12 @@ Legend for the status column:
 `volatile` is the **only** keyword not yet implemented. It is a genuine keyword today and using it is a
 **hard compile error** — never a silent no-op:
 
-- **`volatile`** has a real future role in the **embedded/MCU** scope (ISR↔main-loop shared flags and
-  memory-mapped peripheral registers, where `volatile` is the correct tool on a single-core MCU — not the
-  multicore-atomics misconception). It will emit C `volatile` when kama targets embedded, alongside the
-  bigger embedded needs (globals/statics, ISR attributes, no-heap mode, MCU toolchains).
+- **`volatile`** (to be **renamed `hardware`**) has a real future role in the **embedded/MCU** scope
+  (single-core ISR↔main-loop shared flags and memory-mapped peripheral registers, where this is the correct
+  tool on a single-core MCU — *not* the multicore-atomics misconception; the rename sheds exactly that C
+  legacy). It will emit C `volatile` (`hardware Ptr<T>` → `volatile T*`) when kama targets embedded, alongside
+  the bigger embedded needs (globals/statics, ISR attributes, no-heap/allocator mode, MCU toolchains — see
+  ROADMAP §5). It stays **out of the threading model**: cross-thread sharing is atomics.
 
 (`expose` was the other reserved keyword; the **minimal `expose`** — a free-function C-ABI symbol for the
 native `--shared` reload boundary and wasm exports — is now implemented. The **full 2.0 `expose`** — richer
