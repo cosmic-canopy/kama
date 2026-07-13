@@ -150,8 +150,12 @@ pointer ⇒ heap graph (`Shared<T>`).
   no-op via an implicit `using std::memory`) **and survives a `--no-std` install** (which strips `lib/kama`).
   The whole prelude moved out of the `PRELUDE_SRC` C literal into `prelude/global.kama`. The WIP generated-kama
   graph hacks were already reverted; the committed 3a `Shared`/`Weak` graph machinery + `__`-seams stay until D.
-- **B — Runtime graph-context (C).** Id table / per-type registries / worklist in `kama_runtime.h` — pure C, no
-  `std::collections` dependency. Replaces the `std::serialization::graph` kama module (deleted).
+- ~~**B — Runtime graph-context (C).**~~ **DONE.** Pure-C object-graph substrate in `kama_runtime.h`
+  (`kama_gmap` open-addressing `uint64→uint64`; `kama_ser_graph` write context = addr→id dedup + worklist +
+  `reserve`/`intern`; `kama_de_graph` read context = id→object `register`/`lookup`). No `std::collections`
+  dependency. Inert until the C/D lowering drives it; the `std::serialization::graph` kama module it supersedes
+  is deleted in D. It ports the generated-kama `SerContext`; a single id→object registry replaces the old
+  per-type parallel-`List` lookups.
 - **C — By-value lowering (intrinsic).** Replace the generated-kama `serialize`/`deserialize` for value/tree
   types with C emission (delegating nested value payloads to the `Serialize` contract, bytes to `Serializer`).
   **API- and wire-preserving** — existing `ser_*` tests stay green.

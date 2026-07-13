@@ -523,4 +523,140 @@ static int kama_trace_acc = 0;
 static inline void kama_trace(int code) { kama_trace_acc = kama_trace_acc * 31 + code; }
 static inline int  kama_trace_get(void) { return kama_trace_acc; }
 
+// ---- Serialization graph context ------------------------------------------
+// Pure-C substrate for the compiler's object-graph serialization (a `@generate` type that transitively
+// reaches a Shared/Weak/Owned — see `reachesPointer`). No std::collections dependency: the compiler's own
+// graph machinery can't lean on kama library types (that circularity is why serialization became a compiler
+// intrinsic). This is the id-table / worklist / registry substrate; the reserve/intern/drain sequencing and
+// the two-pass read are emitted C driven onto it by the lowering. Inert until then. See docs/SPEC.md
+// "Serialization" and ROADMAP §4. (Replaces the generated-kama `std::serialization::graph` SerContext.)
+
+// An open-addressing uint64->uint64 map (linear probing, power-of-two capacity). Used two ways by the graph
+// lowering: write-side pointee-address -> id (dedup), and read-side id -> object pointer. Key 0 is the empty
+// sentinel — safe here because an interned address is never null and ids start at 1, so 0 is never a live key.
+typedef struct kama_gmap {
+    uint64_t* keys;   // 0 == empty slot
+    uint64_t* vals;
+    size_t    cap;    // power of two, or 0 when unallocated
+    size_t    len;    // live entries
+} kama_gmap;
+
+static inline void kama_gmap_init(kama_gmap* m) { m->keys = NULL; m->vals = NULL; m->cap = 0; m->len = 0; }
+static inline void kama_gmap_free(kama_gmap* m) { kama_free(m->keys); kama_free(m->vals); kama_gmap_init(m); }
+
+// splitmix64 finalizer — the same mix the prelude's integer hash() uses.
+static inline uint64_t kama_gmap_hash(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ull;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    return x ^ (x >> 31);
+}
+
+static inline void kama_gmap_put(kama_gmap* m, uint64_t k, uint64_t v);   // fwd — rehash reinserts via put
+
+// Grow to `newcap` (power of two) and reinsert every live entry.
+static inline void kama_gmap_grow(kama_gmap* m, size_t newcap) {
+    kama_gmap old = *m;
+    m->keys = (uint64_t*)kama_calloc(newcap, sizeof(uint64_t));
+    m->vals = (uint64_t*)kama_calloc(newcap, sizeof(uint64_t));
+    m->cap = newcap; m->len = 0;
+    for (size_t i = 0; i < old.cap; ++i)
+        if (old.keys[i] != 0) kama_gmap_put(m, old.keys[i], old.vals[i]);
+    kama_free(old.keys); kama_free(old.vals);
+}
+
+// Insert or overwrite. Grows at ~0.7 load. (A 0 key is the empty sentinel and must never be inserted; the
+// graph lowering only ever keys on nonzero addresses / ids, so no guard is needed.)
+static inline void kama_gmap_put(kama_gmap* m, uint64_t k, uint64_t v) {
+    if (m->cap == 0)                             kama_gmap_grow(m, 8);
+    else if ((m->len + 1) * 10 >= m->cap * 7)    kama_gmap_grow(m, m->cap * 2);
+    size_t mask = m->cap - 1;
+    size_t i = (size_t)kama_gmap_hash(k) & mask;
+    while (m->keys[i] != 0) {
+        if (m->keys[i] == k) { m->vals[i] = v; return; }   // overwrite existing
+        i = (i + 1) & mask;
+    }
+    m->keys[i] = k; m->vals[i] = v; m->len++;
+}
+
+// Look up `k`; on hit store its value in *out and return 1, else return 0.
+static inline int kama_gmap_get(const kama_gmap* m, uint64_t k, uint64_t* out) {
+    if (m->cap == 0) return 0;
+    size_t mask = m->cap - 1;
+    size_t i = (size_t)kama_gmap_hash(k) & mask;
+    while (m->keys[i] != 0) {
+        if (m->keys[i] == k) { *out = m->vals[i]; return 1; }
+        i = (i + 1) & mask;
+    }
+    return 0;
+}
+
+// Write-side graph context (ports SerContext). Dedups objects by pointee address -> stable id, and holds a
+// worklist of pending objects (BORROWED — the live graph is kept alive by the caller's root handle during the
+// read-only serialize traversal, so the context owns nothing). The lowering emits the drain loop: walk
+// count() (re-checked, it grows as each entry interns more), writing each node by its concrete type.
+typedef struct kama_ser_graph {
+    kama_gmap ids;        // pointee address -> id
+    void**    nodes;      // worklist objects (borrowed)
+    uint64_t* node_ids;   // parallel ids
+    size_t    node_len;
+    size_t    node_cap;
+    uint64_t  next_id;
+} kama_ser_graph;
+
+static inline void kama_ser_graph_init(kama_ser_graph* g) {
+    kama_gmap_init(&g->ids);
+    g->nodes = NULL; g->node_ids = NULL; g->node_len = 0; g->node_cap = 0; g->next_id = 1;
+}
+static inline void kama_ser_graph_free(kama_ser_graph* g) {
+    kama_gmap_free(&g->ids); kama_free(g->nodes); kama_free(g->node_ids);
+    g->nodes = NULL; g->node_ids = NULL; g->node_len = 0; g->node_cap = 0;
+}
+
+// Reserve an id for the root (written inline by the driver): record for dedup, do NOT enqueue.
+static inline uint64_t kama_ser_graph_reserve(kama_ser_graph* g, uint64_t addr) {
+    uint64_t id = g->next_id++;
+    kama_gmap_put(&g->ids, addr, id);
+    return id;
+}
+
+// Intern a child reached via a handle: dedup by address; on first sight assign an id and enqueue. Returns id.
+static inline uint64_t kama_ser_graph_intern(kama_ser_graph* g, uint64_t addr, void* obj) {
+    uint64_t id;
+    if (kama_gmap_get(&g->ids, addr, &id)) return id;   // already seen -> same id, no new entry (cycles ok)
+    id = g->next_id++;
+    kama_gmap_put(&g->ids, addr, id);
+    if (g->node_len == g->node_cap) {
+        size_t nc = g->node_cap ? g->node_cap * 2 : 8;
+        g->nodes    = (void**)kama_realloc(g->nodes, nc * sizeof(void*));
+        g->node_ids = (uint64_t*)kama_realloc(g->node_ids, nc * sizeof(uint64_t));
+        g->node_cap = nc;
+    }
+    g->nodes[g->node_len] = obj;
+    g->node_ids[g->node_len] = id;
+    g->node_len++;
+    return id;
+}
+
+static inline size_t   kama_ser_graph_count(const kama_ser_graph* g)              { return g->node_len; }
+static inline void*    kama_ser_graph_node(const kama_ser_graph* g, size_t i)     { return g->nodes[i]; }
+static inline uint64_t kama_ser_graph_node_id(const kama_ser_graph* g, size_t i)  { return g->node_ids[i]; }
+
+// Read-side graph context: id -> reconstructed object pointer. Pass 1 registers every heap shell by id;
+// pass 2 resolves pointer fields by id (a miss => a dangling reference => the lowering raises
+// UnresolvedReference). Stores the pointer as a uint64 (fits on wasm32 and 64-bit alike).
+typedef struct kama_de_graph {
+    kama_gmap objs;   // id -> (uintptr_t)obj
+} kama_de_graph;
+
+static inline void  kama_de_graph_init(kama_de_graph* g) { kama_gmap_init(&g->objs); }
+static inline void  kama_de_graph_free(kama_de_graph* g) { kama_gmap_free(&g->objs); }
+static inline void  kama_de_graph_register(kama_de_graph* g, uint64_t id, void* obj) {
+    kama_gmap_put(&g->objs, id, (uint64_t)(uintptr_t)obj);
+}
+static inline void* kama_de_graph_lookup(const kama_de_graph* g, uint64_t id) {
+    uint64_t v;
+    return kama_gmap_get(&g->objs, id, &v) ? (void*)(uintptr_t)v : NULL;
+}
+
 #endif // KAMA_RUNTIME_H
