@@ -444,6 +444,31 @@ near-parity on `alloc`/`dispatch`.
   (all LLVM at `-O3`) — the signal is in the *compile-time / binary-size / RSS* columns and cohort
   completeness, not the perf ranking. Low-value on the perf axis; worth it for "kama vs its actual peers"
   being visibly complete.
+- **Serialization benchmark track.** Serialization is a headline feature — add a round-trip workload, but
+  scoped honestly: it measures *library maturity + reflection-vs-compile-time strategy*, a different axis
+  than the compute kernels. Only **6 of 11** bench languages have **stdlib** JSON (kama, Go, C#, Python, JS,
+  TS); Rust/Java/C++/C/Lua need third-party libs (a Dockerfile rebuild + an "idiomatic per-language lib"
+  caveat, shifting it from a language compare to a library compare). **v1:** a by-value **tree round-trip**
+  (encode+decode a fixed nested struct + list, N iters, checksum→exit) across the stdlib-JSON six — a clean
+  contrast of *intrinsic (kama)* vs *runtime-reflection (Go/C#)* vs *interpreted (Python/JS)*. **Document,
+  don't race, the object graph:** kama's shared/`Weak`/`Owned` graph serde has no equivalent in other JSON
+  libs (they serialize trees, not ownership graphs), so it's a capability note in RESULTS.md, not a
+  head-to-head number. Defer the external-lib languages (Rust-serde, Jackson) to a later labelled section.
+- **`Map`/`Set` hash cost — the one workload off C parity, root-caused (2026-07-13).** Native `map` is
+  ~8.7 ms vs C's ~3.0 ms; the ENTIRE gap is the `int32.hash()` **splitmix64 finalizer** (two *dependent*
+  64-bit multiplies on the lookup critical path), NOT the Map machinery, call overhead (all inlined), or the
+  modulo. Measured decomposition (100k×10 lookups, `-O3`): splitmix `% cap` 8.72 ms · splitmix `& (cap-1)`
+  7.74 ms · **single-multiply hash 3.26 ms ≈ C 2.98 ms** · identity 2.58 ms. Two levers:
+  1. **Modulo → mask (free, ~11%).** `Map`/`Set` cap is always a power of two (grows 8→16→…), so
+     `hash % cap` in `slotOf`/`put`/`grow` (lib/std/collections/map.kama, set.kama) can be
+     `hash & (cap-1)` — drops the `udiv`. Do it in the stdlib (the compiler can't prove cap is pow2).
+  2. **Hash choice (the real lever) — a quality/speed decision.** splitmix64 is strong + DoS-resistant but
+     ~3× the cost of a single Fibonacci-multiply hash (`k*0x9E3779B1`, take high bits) or Java's
+     `h ^ (h>>>16)` xorshift. A cheaper int hash brings `Map` to C parity (~3.3 ms) at some avalanche cost;
+     benchmark distribution quality before switching. (Note: the apparent 3.4→8.7 ms "regression" vs the
+     2026-07-09 baseline was a **correctness fix**, not a slowdown — a wide-`uint64` literal-truncation bug
+     had silently clamped all three splitmix constants to `int64::MAX`, which the compiler lowered to a cheap
+     `(x<<63)-x` shift-subtract; fixing the literals restored the real, slower multiplies.)
 
 ## 10. Tooling / distribution (deferred)
 
