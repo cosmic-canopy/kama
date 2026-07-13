@@ -251,11 +251,24 @@ serialization, networking).
   `Comparable`/`Ordering`). Honest caveat: general **linked lists** are mostly a cache anti-pattern in
   data-oriented engines (the useful form is an intrusive free-list / LRU); raw **BSTs** are subsumed by the
   sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
-- **Custom allocators.** The collections hardcode `malloc`/`realloc`/`calloc`/`free`. Thread an **allocator**
-  parameter through the generic containers (arena/pool/stack/bump allocators for hot loops; a *fallible*
-  allocator for the no-heap embedded target). Bigger surface than it looks — the allocator has to reach
-  element construction/relocation and RAII drop — so it rides with the embedded target rather than 1.0.
-  `Map<K, V, A>` / `List<T, A>` with an allocator default is the likely shape (a default keeps today's API).
+- **Collections revisit — uniform preallocation, pluggable hasher, custom allocator.** The containers grew
+  piecemeal; give them a consistent set of parametric knobs (all with defaults, so today's API is unchanged):
+  1. **Preallocation everywhere.** `List`/`Array` have `reserve(n:)`, but **`Map`/`Set` do not** — they start
+     at cap 0 and grow from 8, rehashing every entry ~log2(N) times on a bulk insert. This is a *measured*
+     cost: on the `map` bench, at an EQUAL hash, kama (grow-from-8) is ~8.6 ms vs C (preallocated `cap`) ~5.7 ms
+     — the whole remaining delta after hash. Add `Map`/`Set` `reserve(n:)` + a capacity ctor `Map(capacity:)`
+     so a known-size build skips the rehash storm (and the bench can preallocate for a fair compare).
+  2. **Pluggable hasher (quality/speed as a user choice).** Today `Map`/`Set` bake in the strong splitmix64
+     `Hashable` finalizer (two dependent 64-bit muls — the entire `map`-vs-C gap once hash is equalized). Let
+     the user pick, à la Rust's `BuildHasher`: `Map<K, V, H>` with a default strong hasher, swappable to a
+     fast one (single Fibonacci multiply / `h ^ (h>>>16)` xorshift) for trusted-key hot loops — strong stays
+     the default (DoS-resistant), fast is opt-in. (Cheap independent win regardless: `Map`/`Set` cap is always
+     a power of two, so `hash % cap` in `slotOf`/`put`/`grow` → `hash & (cap-1)` drops the `udiv`, ~11%.)
+  3. **Custom allocator.** The containers hardcode `malloc`/`realloc`/`calloc`/`free`. Thread an **allocator**
+     parameter (arena/pool/stack/bump for hot loops; a *fallible* allocator for the no-heap embedded target).
+     Bigger surface than it looks — it has to reach element construction/relocation and RAII drop — so it
+     rides with the embedded target rather than 1.0. `Map<K, V, H, A>` / `List<T, A>` with defaults is the
+     likely shape.
 - **Browser networking transports** — native TCP ships (`std::net`); the browser has no raw sockets, so the
   wasm path needs **WebRTC DataChannels** (unreliable) / **WebSockets** (reliable) via a host FFI shim (a
   real wasm nuance). Native UDP/DNS and the rest of the stdlib reach are the §1 follow-ups.
@@ -454,21 +467,27 @@ near-parity on `alloc`/`dispatch`.
   don't race, the object graph:** kama's shared/`Weak`/`Owned` graph serde has no equivalent in other JSON
   libs (they serialize trees, not ownership graphs), so it's a capability note in RESULTS.md, not a
   head-to-head number. Defer the external-lib languages (Rust-serde, Jackson) to a later labelled section.
-- **`Map`/`Set` hash cost — the one workload off C parity, root-caused (2026-07-13).** Native `map` is
-  ~8.7 ms vs C's ~3.0 ms; the ENTIRE gap is the `int32.hash()` **splitmix64 finalizer** (two *dependent*
-  64-bit multiplies on the lookup critical path), NOT the Map machinery, call overhead (all inlined), or the
-  modulo. Measured decomposition (100k×10 lookups, `-O3`): splitmix `% cap` 8.72 ms · splitmix `& (cap-1)`
-  7.74 ms · **single-multiply hash 3.26 ms ≈ C 2.98 ms** · identity 2.58 ms. Two levers:
-  1. **Modulo → mask (free, ~11%).** `Map`/`Set` cap is always a power of two (grows 8→16→…), so
-     `hash % cap` in `slotOf`/`put`/`grow` (lib/std/collections/map.kama, set.kama) can be
-     `hash & (cap-1)` — drops the `udiv`. Do it in the stdlib (the compiler can't prove cap is pow2).
-  2. **Hash choice (the real lever) — a quality/speed decision.** splitmix64 is strong + DoS-resistant but
-     ~3× the cost of a single Fibonacci-multiply hash (`k*0x9E3779B1`, take high bits) or Java's
-     `h ^ (h>>>16)` xorshift. A cheaper int hash brings `Map` to C parity (~3.3 ms) at some avalanche cost;
-     benchmark distribution quality before switching. (Note: the apparent 3.4→8.7 ms "regression" vs the
-     2026-07-09 baseline was a **correctness fix**, not a slowdown — a wide-`uint64` literal-truncation bug
-     had silently clamped all three splitmix constants to `int64::MAX`, which the compiler lowered to a cheap
-     `(x<<63)-x` shift-subtract; fixing the literals restored the real, slower multiplies.)
+- **`map` is not apples-to-apples — root-caused (2026-07-13), fix = equalize the workload.** Native `map`
+  (~8.7 ms) is the one workload off C parity (~3.0 ms), because unlike the compute kernels (identical
+  algorithms) each language's `map` uses its **idiomatic native map**: kama's stdlib `Map` (grow-from-8,
+  splitmix64), C hand-rolled open-addressing (preallocated, single-mul hash), Go/C# preallocated stdlib maps,
+  Rust `HashMap` (SipHash), C++ `unordered_map` (chaining). So it measures *map design*, not codegen. Two
+  confounds, both measured (100k×10, `-O3`):
+  1. **Hash strength.** kama's splitmix64 (two dependent 64-bit muls) vs C's single Fibonacci multiply. At
+     an EQUAL hash both do the same work: give C splitmix64 and it goes 2.9 → **5.7 ms**; kama with a single
+     multiply goes 8.6 → **3.3 ms ≈ C's 2.9 ms**.
+  2. **Preallocation.** At equal (splitmix) hash, C-preallocated 5.7 ms vs kama-grow-from-8 8.6 ms — the rest
+     is kama rehashing ~15× during the insert because `Map` can't preallocate (see §5 collections revisit).
+     With equal hash **and** equal prealloc, kama ≈ C (the Map machinery — probe, `Optional`, `cloneVal` — is
+     already at parity; identity-hash kama 2.58 ms is *faster* than C).
+  **Fix for the bench (all languages near parity):** make `map` an equal-workload kernel like fib/pi — the
+  same hand-rolled open-addressing int→int map with one shared hash + fixed preallocation in every language —
+  OR, once `Map` gains `reserve`/a pluggable hasher (§5), pin those in the kama version and match the hash in
+  the hand-rolled references. Either way the goal is: same algorithm, same hash, same prealloc → the delta is
+  pure codegen. (Aside: the apparent 3.4→8.7 ms "regression" vs the 2026-07-09 baseline was a **correctness
+  fix**, not a slowdown — a wide-`uint64` literal-truncation bug had clamped all three splitmix constants to
+  `int64::MAX`, which the compiler lowered to a cheap `(x<<63)-x` shift-subtract; fixing the literals restored
+  the real multiplies.)
 
 ## 10. Tooling / distribution (deferred)
 
