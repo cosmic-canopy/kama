@@ -1,0 +1,25 @@
+// Map entry iteration: `foreach (Entry<K,V> e in map.entries())` yields each key-value pair by value (a deep
+// copy of both), present only for a Copyable key AND value. Exercises (a) a plain int32->int32 map and (b) an
+// OWNING value (int32->string) so the Entry's deep-copy + drop path is ASan-exercised. Completes pair-parity
+// with the key (`iterator()`) and value (`values()`) iterators.
+import std::collections::{Map, Entry};
+
+fn int main() {
+    // (a) int32 -> int32: sum key+value across every entry.
+    Map<int32, int32> m = Map();
+    m.put(key: 1, value: 10);
+    m.put(key: 2, value: 20);
+    m.put(key: 3, value: 30);
+    int32 a = 0;
+    foreach (Entry<int32, int32> e in m.entries()) { a = a + e.key() + e.value(); }   // 11 + 22 + 33 = 66
+
+    // (b) int32 -> string: the value is OWNING, so each Entry deep-copies the string and drops it cleanly.
+    Map<int32, string> sm = Map();
+    sm.put(key: 1, value: "ab");
+    sm.put(key: 2, value: "cde");
+    int32 b = 0;
+    foreach (Entry<int32, string> e in sm.entries()) { b = b + e.key() + cast<int32>(e.value().length()); }
+    // (1+2) + (2+3) = 3 + 5 = 8
+
+    return a + b;   // 66 + 8 = 74 (kept < 256 — exit codes are 8-bit)
+}

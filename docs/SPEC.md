@@ -177,8 +177,11 @@ seen.add(key: "x");   bool member = seen.contains(key: "x");
 `foreach (ref V v in m.valuesMut())` **borrows every value in place** to mutate it — the value analogue of
 `iterMut()`, and the way to walk a map whose key isn't `Copyable`. `copy m` deep-copies a whole map
 (independent clone) — present only when **both** key and value are `Copyable`, gated by a **multi-condition
-`when [K: Copyable, V: Copyable]`**. Entry-wise iteration (`foreach (Entry e in m.entries())`) is a tracked
-follow-up (a generic `Entry<K,V>` value yielded through `Optional` doesn't monomorphize yet).
+`when [K: Copyable, V: Copyable]`**. `foreach (Entry<K,V> e in m.entries())` iterates the **key-value pairs**
+by copy (`e.key()` / `e.value()`), present only when **both** key and value are `Copyable` — the pair analogue
+of `iterator()` (keys) and `values()`. `Entry<K,V>` is a named pair (the language has no tuple); a key is never
+mutated in place (that would corrupt the table), so there is no `entriesMut()` — mutate values via
+`valuesMut()` / `getRef`.
 
 `Map` is **move-only**: it owns its keys and values (dropping the key + handing the value back on `remove`,
 dropping both on overwrite/`clear`/end of life — ASan/UBSan-clean for owning keys *and* values, e.g.

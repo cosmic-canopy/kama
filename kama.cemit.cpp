@@ -3610,15 +3610,16 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl, SharedIdenti
     if (!args || args->empty()) return;
     const std::vector<std::string>& params = _genericContractParams[tmpl];
 
+    // Substitute each arg through the active _typeSubst, then absolutize (both under the caller's ctx, BEFORE
+    // the switch to the contract's own ctx below). `deepSubstType` handles a bare type-param (`T` -> binding)
+    // AND a nested generic arg (`Iterator<Entry<K,V>>` -> `Iterator<Entry<int32,int32>>`); `absolutizeType`
+    // pins each name to its home mangle, so a cross-namespace arg (`std::collections::Entry`) keeps its
+    // qualified name when the transitive `Optional<T>` scan below runs under the contract's (global) ctx —
+    // without it that scan would register a phantom bare `Optional_Entry_int32_int32` (unqualified, undefined
+    // payload). A shallow "bare-param only" substitution would instead leave `Entry<K,V>` un-monomorphized
+    // (a dangling `Optional_Entry_K_V`). Mirrors registerGenericTypeInst exactly.
     std::vector<SharedIdentifier> concrete;
-    for (auto& a : *args) {
-        SharedIdentifier c = a;
-        if (a && !_typeSubst.empty() && a->value && !a->genericArg) {
-            auto s = _typeSubst.find(*a->value);
-            if (s != _typeSubst.end()) c = s->second;
-        }
-        concrete.push_back(c);
-    }
+    for (auto& a : *args) concrete.push_back(absolutizeType(deepSubstType(a)));
     if (concrete.size() != params.size()) {
         unsupported(("wrong number of type arguments for generic contract `" + tmpl + "` (expected "
                      + std::to_string(params.size()) + ", got " + std::to_string(concrete.size()) + ")").c_str(),
@@ -8584,6 +8585,11 @@ std::string CEmitter::hoistStringTemp(SharedExpression e)
     ASTNode* n = e.get();
     if (dynamic_cast<StringNode*>(n) || dynamic_cast<IdentifierNode*>(n)
         || dynamic_cast<MemberAccessNode*>(n) || dynamic_cast<ThisAccessNode*>(n)) return "";
+    // A place-returning invocation (`fn ref string` — e.g. a `ref V value()` accessor, `map.getRef(k)`,
+    // `arr[i]` via a place method) is a BORROW, not a fresh owned rvalue. Hoisting it into a scope-dropped
+    // temp would free a buffer it doesn't own (double-free with the real owner). Leave it to addrOfOperand,
+    // which derefs the returned place as an lvalue and never drops it — mirrors the general-receiver guard.
+    if (auto* iv = dynamic_cast<InvocationNode*>(n)) if (invocationReturnsPlace(iv)) return "";
     if (!exprIsString(e)) return "";
     std::string t = "__strtmp" + std::to_string(_tempCounter++);
     _hoisted.push_back("kama_string " + t + " = " + emitExpression(e) + ";");
