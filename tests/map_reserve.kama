@@ -1,0 +1,47 @@
+// M0.5 — Map/Set preallocation via `reserve(n:)`. A preallocated build must be byte-for-byte equivalent to
+// a grow-from-8 one (reserve only changes WHEN buffers are sized, never WHAT is stored), a too-small reserve
+// must be a safe no-op (never shrinks), and reserve on an already-populated map must resize + rehash cleanly.
+import std::collections::{Map, Set};
+
+fn int32 main() {
+    int32 r = 0;
+
+    // reserve() up front, then a bulk insert with no incremental rehash.
+    Map<int32, int32> m = Map();
+    m.reserve(n: 100);
+    int32 i = 0;
+    while (i < 100) { m.put(key: i, value: i * 2); i = i + 1; }
+    if (m.length() == 100) { r = r + 10; }
+
+    // Every key resolves to exactly its stored value (correctness survived preallocation).
+    int32 miss = 0; int32 drift = 0;
+    i = 0;
+    while (i < 100) {
+        Optional<int32> ov = m.get(key: i);
+        int32 got = match (ov) { case Some(x): x; case None: 0 - 1; };
+        if (got < 0) { miss = miss + 1; } else { drift = drift + (got - i * 2); }
+        i = i + 1;
+    }
+    if (miss == 0 && drift == 0) { r = r + 10; }
+
+    // reserve() smaller than the live count is a no-op (no shrink, no corruption).
+    m.reserve(n: 4);
+    if (m.length() == 100) { r = r + 5; }
+
+    // reserve() on an ALREADY-POPULATED map resizes + rehashes the live entries cleanly.
+    Map<int32, int32> m2 = Map();
+    i = 0; while (i < 10) { m2.put(key: i, value: i); i = i + 1; }
+    m2.reserve(n: 500);                     // forces a rehome of the 10 live entries into bigger buffers
+    i = 10; while (i < 60) { m2.put(key: i, value: i); i = i + 1; }
+    int32 lost = 0;
+    i = 0; while (i < 60) { if (!m2.contains(key: i)) { lost = lost + 1; } i = i + 1; }
+    if (m2.length() == 60 && lost == 0) { r = r + 10; }
+
+    // Set.reserve — idempotent adds, membership intact.
+    Set<int32> s = Set();
+    s.reserve(n: 64);
+    i = 0; while (i < 64) { s.add(key: i); s.add(key: i); i = i + 1; }   // duplicate adds
+    if (s.length() == 64 && s.contains(key: 7) && !s.contains(key: 64)) { r = r + 10; }
+
+    return r;   // 10+10+5+10+10 = 45
+}

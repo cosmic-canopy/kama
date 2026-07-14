@@ -171,11 +171,25 @@ type resource Map<K: Hashable + Equatable, V>
         this.len = 0; this.tombs = 0; this.mods = this.mods + 1;
     }
 
-    // Grow to the next capacity and re-home the live entries (which sheds all tombstones). Each entry is
+    // Preallocate so at least `n` entries fit without a rehash (a no-op if already big enough). A known-size
+    // build skips the incremental grow-from-8 rehash storm. `nc` is the smallest power of two whose 0.75 load
+    // threshold clears `n` (`n*4/3` slots), never below 8 and never a shrink.
+    public fn void reserve(int32 n) {
+        if (n <= 0) { return; }
+        int32 need = n * 4 / 3 + 1;                 // slots to keep the load under 0.75 for n entries
+        int32 nc = 8;
+        while (nc < need) { nc = nc * 2; }          // round up to a power of two (mask-indexing invariant)
+        if (nc > this.cap) { this.growTo(nc: nc); }
+    }
+
+    // Grow to the next capacity (doubling) and re-home the live entries — see `growTo`.
+    fn void grow() { this.growTo(nc: this.cap == 0 ? 8 : this.cap * 2); }
+
+    // Re-home the live entries into fresh `nc`-slot buffers (which sheds all tombstones). Each entry is
     // RELOCATED bitwise into the fresh buffers — a move, not a copy or a drop — then the old buffers are
     // freed raw (no per-slot dtor: ownership already left them). Mirrors `DynamicArray`'s realloc relocation.
-    fn void grow() {
-        int32 nc = this.cap == 0 ? 8 : this.cap * 2;
+    // `nc` must be a power of two ≥ the live count (callers: `grow` doubles, `reserve` rounds up).
+    fn void growTo(int32 nc) {
         Ptr<K> nk; Ptr<V> nv; Ptr<uint8> ns;
         unsafe {
             nk = cast<Ptr<K>>(malloc(n: cast<usize>(nc) * sizeof(K)));
