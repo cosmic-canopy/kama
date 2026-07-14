@@ -67,8 +67,8 @@ static inline kama_string kama_fmt_f32(float v) {
 // Parse a leading float from a (NUL-terminated) kama_string — for JSON number deserialization. strtod stops
 // at the first non-numeric byte, so a trailing `}`/`,`/`]` is fine. Empty/garbage yields 0.0 (the caller's
 // reader sets its own error flag on a malformed token).
-static inline double kama_parse_f64(kama_string s) {
-    return strtod(s.data ? s.data : "", (char**)0);
+static inline double kama_parse_f64(kama_string* s) {
+    return strtod((s && s->data) ? s->data : "", (char**)0);
 }
 
 #endif // KAMA_FMT_H

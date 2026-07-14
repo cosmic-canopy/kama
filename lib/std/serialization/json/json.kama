@@ -144,7 +144,10 @@ fn string encode(Serialize v) {
     return w.finish();
 }
 
-extern fn float64 kama_parse_f64(string s);
+// Borrows the token string (`ref` → `kama_string*`): C reads `.data` via strtod and never owns/frees it,
+// so the caller keeps ownership and drops the token. (Passing an owned string BY VALUE to an extern would
+// "transfer ownership" to C, which never frees it — a leak.)
+extern fn float64 kama_parse_f64(ref string s);
 
 // A JSON reader: a recursive-descent parser over an owned source string, implementing Deserializer. It uses
 // a STICKY error flag — a malformed token sets `err` and returns a default, and the caller checks `failed()`
@@ -270,8 +273,8 @@ type resource JsonReader implements Deserializer {
     public fn uint16 readU16() { return cast<uint16>(this.readUint()); }
     public fn uint32 readU32() { return cast<uint32>(this.readUint()); }
     public fn uint64 readU64() { return this.readUint(); }
-    public fn float64 readF64() { return kama_parse_f64(s: this.numToken()); }
-    public fn float32 readF32() { return cast<float32>(kama_parse_f64(s: this.numToken())); }
+    public fn float64 readF64() { string t = this.numToken(); return kama_parse_f64(s: ref t); }
+    public fn float32 readF32() { string t = this.numToken(); return cast<float32>(kama_parse_f64(s: ref t)); }
     public fn bool readBool() {
         this.skipWs();
         uint8 c = this.peek();
