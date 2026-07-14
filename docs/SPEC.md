@@ -146,7 +146,10 @@ construction) finds the stored entry. `string` and every **integer width** satis
 the retroactive-conformance mechanism, *no* compiler blessing): `string` gets FNV-1a `Hashable` + a
 `Equatable` recorded nominally from its built-in `equals`; every integer gets a splitmix64 `Hashable` +
 scalar `equals` (a conformance on a **primitive** — `this` is the scalar itself). Floats get `Equatable`
-only (exact `==`) — intentionally not hash-keyable. A **user key** declares `implements Hashable, Equatable`
+only (exact `==`) — intentionally not hash-keyable. A third prelude contract,
+`type contract Comparable for both { fn Ordering compareTo(ref This other); }` (returning the prelude enum
+`Ordering { Less, Equal, Greater }`), gives every int/float/string a total order via the same pure-kama
+retro-impl mechanism — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable`
 and provides the two methods. Bounds are **nominal**: the `implements` is required (a coincidental `equals`
 is not enough), the same rule as `foreach`.
 
@@ -389,8 +392,9 @@ Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Ma
 **operations** `minI32/maxI32/clampI32/absI32/signI32` (+ the `I64` set), parallel to `std::math`'s float32
 `minf`/`maxf`/…, and explicit **wrapping** arithmetic `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
 `wrappingNegI32` (+ `I64`) for intentional overflow. `import std::num::{int32Max, minI32, wrappingAddI32,
-…}`. (A generic `min<T: Comparable>` waits on a `Comparable`/`Ordering` contract, which lands with the
-sorted containers.)
+…}`. (A generic `min<T: Comparable>` is now expressible: the prelude defines `Comparable`/`Ordering`
+— `fn Ordering compareTo(ref This other)` with retro-impls for every int/float/string — the bound for
+`PriorityQueue` + the sorted containers.)
 
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:

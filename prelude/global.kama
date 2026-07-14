@@ -12,6 +12,9 @@ enum Result<T, E> { Ok(T value), Err(E error) }
 // (always Result) whether or not there is a value; no dead/placeholder payload. A single-variant
 // enum (like `None`) so it lives in the prelude without needing value-type ctor emission.
 enum Unit { Unit }
+// The result of a three-way comparison (`Comparable.compareTo`). A single enum (not a signed int) keeps
+// ordering explicit and matchable — the ordering protocol for sorted containers + `PriorityQueue`.
+enum Ordering { Less, Equal, Greater }
 // Auto-deref opt-in: a type implementing Deref<T> forwards member access to its pointee `T`
 // (`ptr.method()`/`ptr.field` -> the T). The contract is the gate (explicit, nominal); the smart
 // pointers become ordinary kama types over this instead of compiler intrinsics.
@@ -32,6 +35,11 @@ type contract Copyable for resource { fn This copy(); }
 // in the prelude because they are language-level bounds.
 type contract Hashable for both { fn uint64 hash(); }
 type contract Equatable for both { fn bool equals(This other); }
+// Total ordering opt-in (nominal, like Equatable) — the bound for sorted containers (`SortedMap`/`SortedSet`,
+// B-tree) and `PriorityQueue` (binary heap). `compareTo` returns `Ordering`, three-way in ONE call (no
+// separate `<`/`==`). The operand is borrowed (`ref This`) — a comparison never consumes it, and a large
+// key (`string`) isn't copied. Primitive retro-impls below make every int/float/string universally comparable.
+type contract Comparable for both { fn Ordering compareTo(ref This other); }
 // Primitive conformances (pure-kama retro-impls, NO compiler blessing) — hosted here so `string`/`int32`
 // satisfy the standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `DynamicArray<int32>.contains`, an int-keyed
 // `Map`) without importing `std::collections`. `string` Hashable = FNV-1a over its UTF-8 bytes (its
@@ -130,6 +138,36 @@ implements Equatable for uint64 { public fn bool equals(uint64 other) { return t
 // needed via a bit-cast helper.
 implements Equatable for float32 { public fn bool equals(float32 other) { return this == other; } }
 implements Equatable for float64 { public fn bool equals(float64 other) { return this == other; } }
+// `Comparable` retro-impls (pure-kama, NO compiler blessing) — every int/float is totally ordered via a
+// three-way `<`/`>` fold to `Ordering`, and `string` is compared lexicographically over its UTF-8 bytes
+// (unsigned `s[i]`, so byte order == codepoint order for ASCII and correct byte-wise order elsewhere).
+implements Comparable for int8    { public fn Ordering compareTo(ref int8 other)    { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for int16   { public fn Ordering compareTo(ref int16 other)   { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for int32   { public fn Ordering compareTo(ref int32 other)   { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for int64   { public fn Ordering compareTo(ref int64 other)   { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for uint8   { public fn Ordering compareTo(ref uint8 other)   { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for uint16  { public fn Ordering compareTo(ref uint16 other)  { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for uint32  { public fn Ordering compareTo(ref uint32 other)  { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for uint64  { public fn Ordering compareTo(ref uint64 other)  { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for float32 { public fn Ordering compareTo(ref float32 other) { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for float64 { public fn Ordering compareTo(ref float64 other) { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+implements Comparable for string {
+    public fn Ordering compareTo(ref string other) {
+        int32 n = cast<int32>(this.length());
+        int32 m = cast<int32>(other.length());
+        int32 lim = n; if (m < n) { lim = m; }
+        int32 i = 0;
+        while (i < lim) {
+            uint8 a = this[i]; uint8 b = other[i];
+            if (a < b) { return Ordering::Less; }
+            if (a > b) { return Ordering::Greater; }
+            i = i + 1;
+        }
+        if (n < m) { return Ordering::Less; }
+        if (n > m) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
+}
 // Iteration opt-in (the `foreach` protocol, nominal). An iterator declares which it provides;
 // `foreach` verifies the declaration and emits DIRECT (monomorphized) calls — no vtable, zero-cost.
 // `Iterator<T>` yields each element BY VALUE (a copy); `IteratorMut<T>` yields a mutable place
