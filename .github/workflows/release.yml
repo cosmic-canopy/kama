@@ -27,7 +27,7 @@ jobs:
           - { os: macos-14,         name: macos-universal, extra: "-arch arm64 -arch x86_64", zig: aarch64-macos }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Derive version (from tag)
         shell: bash
@@ -40,6 +40,7 @@ jobs:
       - name: Install flex + bison (macOS)
         if: runner.os == 'macOS'
         run: |
+          brew untap aws/tap 2>/dev/null || true   # drop the preinstalled untrusted tap (brew Tap-Trust); we don't use it
           brew install bison flex
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
 
@@ -86,7 +87,7 @@ jobs:
           tar czf "${PKG}.tar.gz" "$PKG"
           shasum -a 256 "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: kama-${{ matrix.name }}
           path: kama-*.tar.gz*
@@ -101,7 +102,7 @@ jobs:
     defaults:
       run: { shell: 'msys2 {0}' }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -144,15 +145,15 @@ jobs:
           mv zigtmp/zig-*/* "$PKG/libexec/zig/"
           tar czf "${PKG}.tar.gz" "$PKG"
           sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: kama-windows-x64, path: kama-*.tar.gz* }
 
   vsix:
     name: package VSCode extension
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: '20' }
       - name: vsce package
         shell: bash
@@ -160,7 +161,7 @@ jobs:
           npm i -g @vscode/vsce
           cd editor/vscode
           vsce package --allow-missing-repository -o "../../kama-vscode-${GITHUB_REF_NAME#v}.vsix"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: kama-vsix, path: kama-vscode-*.vsix }
 
   publish-extension:
@@ -168,7 +169,7 @@ jobs:
     needs: [vsix]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with: { name: kama-vsix, path: . }
       - name: VS Code Marketplace
         continue-on-error: true   # skips cleanly until VSCE_PAT is configured
@@ -190,9 +191,9 @@ jobs:
     needs: [build, windows, vsix]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with: { path: dist, merge-multiple: true }
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/kama-*.tar.gz

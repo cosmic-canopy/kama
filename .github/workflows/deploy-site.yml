@@ -8,7 +8,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: sh tools/build-site
       - name: Deploy to Cloudflare Pages
         run: npx --yes wrangler@3 pages deploy _site --project-name=kama --branch=main
