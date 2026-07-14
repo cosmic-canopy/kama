@@ -1,0 +1,8 @@
+// A failing assert(cond:) aborts cleanly with "kama: panic: assertion failed". The condition is
+// runtime-opaque so the check isn't folded away.
+import std::num::{int32Max};
+fn int main() {
+    int32 zero = int32Max() - int32Max();   // 0, opaque
+    assert(cond: zero == 1);                  // false -> abort
+    return 0;   // unreachable
+}

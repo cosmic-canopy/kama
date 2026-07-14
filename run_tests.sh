@@ -191,6 +191,35 @@ for src in "$TESTS_DIR"/xfail/*.kama; do
     echo "PASS xfail/$name (rejected)"; pass=$((pass+1))
 done
 
+# Trap fixtures: tests/trap/<name>.kama MUST build, then ABORT at runtime — a clean trap that guards the
+# "no undefined behavior" guarantee (integer divide-by-zero, INT_MIN/-1, shift-past-width, float->int
+# overflow, signed overflow in a debug build, out-of-bounds index, panic/assert). We assert the process
+# was killed by a signal (exit >= 128; __builtin_trap -> SIGTRAP/SIGILL, abort -> SIGABRT). Optional
+# tests/trap/<name>.msg is a substring the stderr must contain (bounds/panic print "… out of bounds" /
+# "kama: panic: …"; a bare __builtin_trap prints nothing). Skipped under KAMA_SAN (UBSan would intercept
+# the trap) and KAMA_WASM (node/wasm abort exit codes differ) — native-default leg only, like xfail is
+# SAN-skipped. `ulimit -c 0` is best-effort core suppression (a pipe core_pattern ignores it, but those
+# cores go unwritten to systemd-coredump anyway).
+if [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ]; then
+    ulimit -c 0
+    for src in "$TESTS_DIR"/trap/*.kama; do
+        [ -e "$src" ] || continue
+        name="$(basename "$src" .kama)"
+        if ! "$KAMA" build "$src" -o "$TMP/trap_$name" >/dev/null 2>"$TMP/trap_$name.builderr"; then
+            echo "FAIL trap/$name (build failed)"; head -5 "$TMP/trap_$name.builderr"; fail=$((fail+1)); continue
+        fi
+        "$TMP/trap_$name" 2>"$TMP/trap_$name.err"; actual=$?
+        if [ "$actual" -lt 128 ]; then
+            echo "FAIL trap/$name (exited $actual, expected a runtime trap)"; fail=$((fail+1)); continue
+        fi
+        msg_file="$TESTS_DIR/trap/$name.msg"
+        if [ -f "$msg_file" ] && ! grep -qF "$(cat "$msg_file")" "$TMP/trap_$name.err"; then
+            echo "FAIL trap/$name (trapped, but stderr missing \"$(cat "$msg_file")\")"; head -2 "$TMP/trap_$name.err"; fail=$((fail+1)); continue
+        fi
+        echo "PASS trap/$name (trapped, exit $actual)"; pass=$((pass+1))
+    done
+fi
+
 echo "----"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
