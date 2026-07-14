@@ -78,6 +78,15 @@ remains here is genuinely later-track or opt-in.
   descriptor code must fall back to `T x = T(); x.field = …;`. Give extern-value types a real by-name
   aggregate initializer (`WGPUColor(r: 1.0, …)` → designated init). Verbose-but-correct today; a pure
   ergonomic win for the many-field descriptor structs a C graphics/OS API is built from.
+- **Transitive import of a type's public-API types (module ergonomics).** Surfaced writing `BitSet`
+  ([`lib/std/collections/bit_set.kama`](../lib/std/collections/bit_set.kama)): to `foreach` over a
+  collection's iterator, the iterator type must be imported *by name alongside the container*
+  (`import std::collections::{BitSet, BitSetIter}`) because resolving `bs.setBits()`'s type needs `BitSetIter`
+  in the consumer's scope. Generic-iterator collections dodge this — their iterator monomorphizes to a
+  globally-unique name (`SlotMapValueIter_int32`) that resolves with no import — so **BitSet is the only
+  collection that pays it** (its iterator is non-generic). Fix = importing a type also makes the types named in
+  its public method signatures resolvable (import brings the API surface, not just the symbol). Non-blocking
+  and isolated; a pure ergonomic/consistency win.
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today).
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
