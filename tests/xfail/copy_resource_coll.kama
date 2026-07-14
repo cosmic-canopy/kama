@@ -1,10 +1,10 @@
 // M26f-5 — `copy` of a collection whose ELEMENTS own resources but are NOT `Copyable` (no `copy`
 // method) is a compile error: each element would need its own deep copy. Add a `copy` method to
 // the element to opt into `Copyable` (see coll_copy_resource), or `give` to move the collection.
-import std::collections::{List};
-type resource Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} }
+import std::collections::{DynamicArray};
+type resource Res { DynamicArray<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} }
 fn int32 main() {
-    List<Res> a = List();
-    List<Res> b = copy a;   // ERROR: elements own resources but aren't Copyable
+    DynamicArray<Res> a = DynamicArray();
+    DynamicArray<Res> b = copy a;   // ERROR: elements own resources but aren't Copyable
     return 0;
 }

@@ -1,20 +1,20 @@
-// A List field serializes to a JSON array — both a primitive element list and a nested-object element list.
+// A DynamicArray field serializes to a JSON array — both a primitive element list and a nested-object element list.
 import std::serialization::json::{encode};
-import std::collections::{List};
+import std::collections::{DynamicArray};
 @generate(Serialize)
 type value Pt { @field int32 x; @field int32 y; public Pt(int32 x, int32 y) { this.x = x; this.y = y; } }
 @generate(Serialize)
 type resource Scene {
     @field string name;
-    @field List<int32> ids;
-    @field List<Pt> pts;
-    public Scene(string name, List<int32> ids, List<Pt> pts) {
+    @field DynamicArray<int32> ids;
+    @field DynamicArray<Pt> pts;
+    public Scene(string name, DynamicArray<int32> ids, DynamicArray<Pt> pts) {
         this.name = give name; this.ids = give ids; this.pts = give pts;
     }
 }
 fn int main() {
-    List<int32> ids = List(); ids.add(item: 7); ids.add(item: 8);
-    List<Pt> pts = List(); pts.add(item: Pt(x: 1, y: 2)); pts.add(item: Pt(x: 3, y: 4));
+    DynamicArray<int32> ids = DynamicArray(); ids.add(item: 7); ids.add(item: 8);
+    DynamicArray<Pt> pts = DynamicArray(); pts.add(item: Pt(x: 1, y: 2)); pts.add(item: Pt(x: 3, y: 4));
     Scene s = Scene(name: "lvl1", ids: give ids, pts: give pts);
     string j = encode(v: s);
     if (j == "{\"name\":\"lvl1\",\"ids\":[7,8],\"pts\":[{\"x\":1,\"y\":2},{\"x\":3,\"y\":4}]}") { return 0; }

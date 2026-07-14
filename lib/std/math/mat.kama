@@ -1,14 +1,14 @@
 namespace std::math;
 
 // Float32 matrices — column-major (GPU/WebGPU-native), column-vector convention (result = M * v). Storage is
-// `Fixed<Vec4,4>` columns: `cols[c]` is column c, `cols[c].x/.y/.z/.w` its rows. One `operator*` (matrix
+// `InlineArray<Vec4,4>` columns: `cols[c]` is column c, `cols[c].x/.y/.z/.w` its rows. One `operator*` (matrix
 // compose); vector transform is a named method. (Mat2/Mat3 added after Mat4 is proven.)
 export { Mat2, Mat3, Mat4 };
 
 type value Mat2 {
-    public Fixed<Vec2, 2> cols;
-    public Mat2(Fixed<Vec2, 2> cols) { this.cols = cols; }
-    public static fn Mat2 fromCols(Vec2 c0, Vec2 c1) { Fixed<Vec2, 2> cs = [c0, c1]; return Mat2(cols: cs); }
+    public InlineArray<Vec2, 2> cols;
+    public Mat2(InlineArray<Vec2, 2> cols) { this.cols = cols; }
+    public static fn Mat2 fromCols(Vec2 c0, Vec2 c1) { InlineArray<Vec2, 2> cs = [c0, c1]; return Mat2(cols: cs); }
     public static fn Mat2 identity() {
         return Mat2::fromCols(c0: Vec2(x: 1.0f32, y: 0.0f32), c1: Vec2(x: 0.0f32, y: 1.0f32));
     }
@@ -35,9 +35,9 @@ type value Mat2 {
 }
 
 type value Mat3 {
-    public Fixed<Vec3, 3> cols;
-    public Mat3(Fixed<Vec3, 3> cols) { this.cols = cols; }
-    public static fn Mat3 fromCols(Vec3 c0, Vec3 c1, Vec3 c2) { Fixed<Vec3, 3> cs = [c0, c1, c2]; return Mat3(cols: cs); }
+    public InlineArray<Vec3, 3> cols;
+    public Mat3(InlineArray<Vec3, 3> cols) { this.cols = cols; }
+    public static fn Mat3 fromCols(Vec3 c0, Vec3 c1, Vec3 c2) { InlineArray<Vec3, 3> cs = [c0, c1, c2]; return Mat3(cols: cs); }
     public static fn Mat3 identity() {
         return Mat3::fromCols(c0: Vec3(x: 1.0f32, y: 0.0f32, z: 0.0f32),
                               c1: Vec3(x: 0.0f32, y: 1.0f32, z: 0.0f32),
@@ -81,11 +81,11 @@ type value Mat3 {
 }
 
 type value Mat4 {
-    public Fixed<Vec4, 4> cols;
-    public Mat4(Fixed<Vec4, 4> cols) { this.cols = cols; }
+    public InlineArray<Vec4, 4> cols;
+    public Mat4(InlineArray<Vec4, 4> cols) { this.cols = cols; }
 
     public static fn Mat4 fromCols(Vec4 c0, Vec4 c1, Vec4 c2, Vec4 c3) {
-        Fixed<Vec4, 4> cs = [c0, c1, c2, c3];
+        InlineArray<Vec4, 4> cs = [c0, c1, c2, c3];
         return Mat4(cols: cs);
     }
     public static fn Mat4 identity() {

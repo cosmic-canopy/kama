@@ -1,5 +1,5 @@
 namespace std::collections;
-export { List };
+export { DynamicArray };
 
 extern "<stdlib.h>";
 extern fn Ptr malloc(usize n);
@@ -9,13 +9,13 @@ extern fn void free(Ptr p);
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a
 // live pointer to the list's mutation counter + the value it saw at creation, and rejects a structural
 // change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
-type value ListIter<T> implements Iterator<T> {
+type value DynamicArrayIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public ListIter(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
+    public DynamicArrayIter(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
     public fn Optional<T> next() {
-        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "List modified during iteration"); } }
+        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "DynamicArray modified during iteration"); } }
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
         unsafe { return Optional::Some(value: copy this.data[p]); }   // yield a COPY (the list keeps its element)
@@ -24,13 +24,13 @@ type value ListIter<T> implements Iterator<T> {
 
 // A mutable iterator (the `foreach (ref T x in list)` protocol): hasNext() + a place-returning next().
 // The invalidation check lives in hasNext() (it runs before each next()).
-type value ListIterMut<T> implements IteratorMut<T> {
+type value DynamicArrayIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public ListIterMut(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
+    public DynamicArrayIterMut(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
     public fn bool hasNext() {
-        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "List modified during iteration"); } }
+        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "DynamicArray modified during iteration"); } }
         return this.pos < this.len;
     }
     public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
@@ -40,11 +40,11 @@ type value ListIterMut<T> implements IteratorMut<T> {
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
-type resource List<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
+type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
                                   Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
     Ptr<T> data; int32 len; int32 cap; int32 mods;
 
-    public List() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; this.mods = 0; }
+    public DynamicArray() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; this.mods = 0; }
 
     public fn void add(T item) {
         if (this.len == this.cap) {
@@ -60,23 +60,23 @@ type resource List<T> implements Copyable(bare: give) when [T: Copyable], Iterab
     public fn int32 length() { return this.len; }
 
     public ref T operator[](int32 i) {
-        if (i < 0 || i >= this.len) { panic(msg: "List index out of bounds"); }
+        if (i < 0 || i >= this.len) { panic(msg: "DynamicArray index out of bounds"); }
         unsafe { return this.data[i]; }
     }
 
     // The by-value `foreach (T x in list)` yields COPIES, so it exists only for a Copyable element.
-    // (Move-only elements — `List<Owned>` — borrow instead: `foreach (ref T x in list)`.)
+    // (Move-only elements — `DynamicArray<Owned>` — borrow instead: `foreach (ref T x in list)`.)
     // Each iterator gets a live pointer to `mods` (its own address) + the current value (a snapshot).
-    public fn ListIter<T> iterator() when [T: Copyable] {
-        return ListIter::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
+    public fn DynamicArrayIter<T> iterator() when [T: Copyable] {
+        return DynamicArrayIter::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
-    public fn ListIterMut<T> iterMut() {
-        return ListIterMut::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
+    public fn DynamicArrayIterMut<T> iterMut() {
+        return DynamicArrayIterMut::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
-    public fn List<T> copy() {
-        List<T> result = List();
+    public fn DynamicArray<T> copy() {
+        DynamicArray<T> result = DynamicArray();
         int32 i = 0;
         while (i < this.len) { result.add(item: copy this[i]); i = i + 1; }
         return result;
@@ -93,7 +93,7 @@ type resource List<T> implements Copyable(bare: give) when [T: Copyable], Iterab
 
     // Remove the element at `index` (dropping it) and shift the tail down one slot. Bounds-checked.
     public fn void remove(int32 index) {
-        if (index < 0 || index >= this.len) { panic(msg: "List.remove index out of bounds"); }
+        if (index < 0 || index >= this.len) { panic(msg: "DynamicArray.remove index out of bounds"); }
         drop(value: this[index]);
         int32 i = index;
         // Relocate the tail down one slot through a LOCAL pointer alias: `d[i] = d[i+1]` is a raw store
@@ -138,14 +138,14 @@ type resource List<T> implements Copyable(bare: give) when [T: Copyable], Iterab
         w.endArray();
     }
     // Reconstruct from a JSON array — a fresh list, each element read via its own `deserialize` and moved in.
-    public static fn List<T> deserialize(Deserializer r) when [T: Deserialize] {
-        List<T> result = List();
+    public static fn DynamicArray<T> deserialize(Deserializer r) when [T: Deserialize] {
+        DynamicArray<T> result = DynamicArray();
         r.beginArray();
         while (r.moreElems()) { result.add(item: T::deserialize(r: r)); }
         return give result;
     }
 
-    ~List() {   // drop each element (a no-op for a value), then free the buffer
+    ~DynamicArray() {   // drop each element (a no-op for a value), then free the buffer
         int32 i = 0;
         while (i < this.len) { drop(value: this[i]); i = i + 1; }
         unsafe { free(p: cast<Ptr>(this.data)); }

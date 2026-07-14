@@ -3,10 +3,10 @@
 // completion (backlog-queued connect, buffered send, FIN) before the server accepts. Returns 55.
 import std::net::{TcpListener, TcpStream};
 import std::io::{IoError};
-import std::collections::{List, Array};
+import std::collections::{DynamicArray, FixedArray};
 
 fn int32 sendBytes(ref TcpStream s, int32 n) {
-    List<uint8> data = List();
+    DynamicArray<uint8> data = DynamicArray();
     int32 i = 0;
     int32 sum = 0;
     while (i < n) {
@@ -30,7 +30,7 @@ fn int32 clientSend(uint16 port, int32 n) {
 
 // Read to EOF with a small buffer (forces multiple recvs); check total length + checksum.
 fn int32 serverRecv(ref TcpStream s, int32 expectSum, int32 expectLen) {
-    Array<uint8> buf = Array(size: 1024);
+    FixedArray<uint8> buf = FixedArray(size: 1024);
     int32 total = 0;
     int32 sum = 0;
     bool done = false;

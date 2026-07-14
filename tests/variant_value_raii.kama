@@ -1,5 +1,5 @@
-import std::collections::{List};
-type resource Res { List<int32> items; public Res(int32 v){this.items.add(item: v);} ~Res(){} public fn int32 head(){return this.items[0];} }
+import std::collections::{DynamicArray};
+type resource Res { DynamicArray<int32> items; public Res(int32 v){this.items.add(item: v);} ~Res(){} public fn int32 head(){return this.items[0];} }
 enum Wrap { Has(Res r), Empty }
 fn int main()
 {

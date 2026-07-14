@@ -1,7 +1,7 @@
 // M26f-2 — a `resource` value moved on SOME paths but not others, still live at scope exit,
 // is a compile error (its drop can't be decided at compile time — option "B" rejects it; the
 // escape hatch is Optional<T>, M28).
-type resource Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
+type resource Res { DynamicArray<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
 fn int32 sink(Res r) { return r.head(); }
 fn int32 main() {
     Res a = Res(v: 1);

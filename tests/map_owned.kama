@@ -1,26 +1,26 @@
-// Owning keys AND owning values: Map<string, List<string>>. Exercises the ownership-critical paths that
+// Owning keys AND owning values: Map<string, DynamicArray<string>>. Exercises the ownership-critical paths that
 // must stay leak/double-free-free under ASan: storing owned keys+values, OVERWRITE (drop the old key +
-// value, install the new), deep-copy `get` (hand back an independent List), `remove` (drop key+value),
+// value, install the new), deep-copy `get` (hand back an independent DynamicArray), `remove` (drop key+value),
 // and end-of-scope drop of everything still live.
-import std::collections::{Map, List};
+import std::collections::{Map, DynamicArray};
 
-fn List<string> mk(string a, string b) {
-    List<string> xs = List();
+fn DynamicArray<string> mk(string a, string b) {
+    DynamicArray<string> xs = DynamicArray();
     xs.add(item: give a); xs.add(item: give b);
     return xs;
 }
 
 fn int main() {
-    Map<string, List<string>> m = Map();
+    Map<string, DynamicArray<string>> m = Map();
     m.put(key: "fruits",  value: mk(a: "apple", b: "pear"));
     m.put(key: "veggies", value: mk(a: "kale",  b: "corn"));
-    m.put(key: "fruits",  value: mk(a: "mango", b: "fig"));   // overwrite: old key + old List dropped
+    m.put(key: "fruits",  value: mk(a: "mango", b: "fig"));   // overwrite: old key + old DynamicArray dropped
 
     int32 r = 0;
     r = r + m.length();                                       // 2
     int32 n = match (m.get(key: "fruits")) { case Some(xs): xs.length(); case None: 0; };  // deep-copied out
     r = r + n;                                                // +2 -> 4
-    if (m.remove(key: "veggies")) { r = r + 1; }             // drops that List + key -> 5
+    if (m.remove(key: "veggies")) { r = r + 1; }             // drops that DynamicArray + key -> 5
     r = r + m.length();                                      // +1 -> 6
     return r;   // 6 (m's remaining entry dropped at scope exit)
 }

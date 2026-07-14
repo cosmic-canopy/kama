@@ -1,7 +1,7 @@
 namespace std::net;
 
 import std::io::{IoError, lastError};
-import std::collections::{List, Array};
+import std::collections::{DynamicArray, FixedArray};
 import std::net::{ReliableStream};
 
 export { TcpListener, TcpStream };
@@ -53,7 +53,7 @@ type resource TcpStream implements ReliableStream {
     }
 
     // Read up to into.length() bytes into `into`; returns the count (0 = peer closed). EINTR-retried.
-    public fn Result<usize, IoError> read(ref Array<uint8> into) {
+    public fn Result<usize, IoError> read(ref FixedArray<uint8> into) {
         while (true) {
             isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
@@ -62,7 +62,7 @@ type resource TcpStream implements ReliableStream {
     }
 
     // Write the whole buffer, looping until every byte is sent (partial sends + EINTR handled).
-    public fn Result<usize, IoError> writeAll(ref List<uint8> bytes) {
+    public fn Result<usize, IoError> writeAll(ref DynamicArray<uint8> bytes) {
         int32 total = cast<int32>(bytes.length());
         int32 off = 0;
         while (off < total) {
@@ -93,7 +93,7 @@ type resource TcpStream implements ReliableStream {
 
     // Single-syscall send — may write fewer than all bytes (or Err(WouldBlock) when the socket buffer is
     // full). For a non-blocking sender managing its own outbound buffer; blocking senders use writeAll.
-    public fn Result<usize, IoError> write(ref List<uint8> bytes) {
+    public fn Result<usize, IoError> write(ref DynamicArray<uint8> bytes) {
         isize n = kama_send(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
         if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
         return Result::Err(error: lastError());

@@ -1,10 +1,10 @@
 import std::memory::{Shared, Owned};
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // Base-class UPCAST: hold a Derived in a Shared<Base>/Owned<Base> handle. Polymorphism flows
 // through the Template-Method shape (public `area` calls protected virtual `compute`), and the
 // virtual destructor makes destruction through the base handle reach the derived dtor (no leak).
 type virtual resource Shape {
-    List<int32> tag;                                   // owns heap -> destructible; proves no slicing
+    DynamicArray<int32> tag;                                   // owns heap -> destructible; proves no slicing
     public Shape() { this.tag.add(item: 0); }
     ~Shape() { }
     public fn int32 area() { return this.compute(); }  // public, non-virtual
@@ -12,7 +12,7 @@ type virtual resource Shape {
 }
 type final resource Square extends Shape {
     int32 s;
-    List<int32> parts;                                 // DERIVED owns heap — a sliced Base__dtor would leak it
+    DynamicArray<int32> parts;                                 // DERIVED owns heap — a sliced Base__dtor would leak it
     public Square(int32 s) { this.s = s; this.parts.add(item: s); }
     ~Square() { }
     protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }

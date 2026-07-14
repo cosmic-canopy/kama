@@ -15,7 +15,7 @@
 import std::net::{TcpListener, TcpStream};
 import std::fs::{readFile};
 import std::io::{IoError};
-import std::collections::{List, Array};
+import std::collections::{DynamicArray, FixedArray};
 
 extern "<stdlib.h>";
 extern fn Ptr<int8> getenv(Ptr<int8> name);
@@ -52,16 +52,16 @@ fn uint16 parsePort(ref string s, uint16 dflt) {
 }
 
 // Append every byte of `s` to `dst`.
-fn void appendStr(ref List<uint8> dst, string s) {
+fn void appendStr(ref DynamicArray<uint8> dst, string s) {
     int32 n = cast<int32>(s.length());
     int32 i = 0;
     while (i < n) { dst.add(item: s[i]); i = i + 1; }
 }
 
 // Append the decimal digits of `n` (>= 0) to `dst`.
-fn void appendDec(ref List<uint8> dst, int32 n) {
+fn void appendDec(ref DynamicArray<uint8> dst, int32 n) {
     if (n == 0) { dst.add(item: cast<uint8>(48)); return; }
-    Array<uint8> tmp = Array(size: 20);
+    FixedArray<uint8> tmp = FixedArray(size: 20);
     int32 count = 0;
     int32 v = n;
     while (v > 0) {
@@ -76,7 +76,7 @@ fn void appendDec(ref List<uint8> dst, int32 n) {
 }
 
 // Append every byte of `body` to `dst`.
-fn void appendBytes(ref List<uint8> dst, ref List<uint8> body) {
+fn void appendBytes(ref DynamicArray<uint8> dst, ref DynamicArray<uint8> body) {
     int32 n = cast<int32>(body.length());
     int32 i = 0;
     while (i < n) { dst.add(item: body[i]); i = i + 1; }
@@ -98,7 +98,7 @@ fn string mimeType(ref string path) {
 }
 
 // Null-terminate `bytes` and write it to stdout as one line (cross-platform via CRT puts).
-fn void logLine(ref List<uint8> bytes) {
+fn void logLine(ref DynamicArray<uint8> bytes) {
     bytes.add(item: cast<uint8>(0));
     unsafe { puts(s: cast<Ptr<int8>>(addr(of: bytes[0]))); }
 }
@@ -124,8 +124,8 @@ fn string toRelPath(ref string path) {
 }
 
 // Send a full response (status line + headers + body). Returns 0 (fire-and-forget).
-fn int32 respond(ref TcpStream client, string status, string contentType, ref List<uint8> body) {
-    List<uint8> resp = List();
+fn int32 respond(ref TcpStream client, string status, string contentType, ref DynamicArray<uint8> body) {
+    DynamicArray<uint8> resp = DynamicArray();
     appendStr(dst: resp, s: "HTTP/1.1 ");
     appendStr(dst: resp, s: give status);
     appendStr(dst: resp, s: "\r\nContent-Type: ");
@@ -140,14 +140,14 @@ fn int32 respond(ref TcpStream client, string status, string contentType, ref Li
 
 // A tiny text/plain error page (404 / 400 / 405).
 fn int32 respondText(ref TcpStream client, string status, string text) {
-    List<uint8> body = List();
+    DynamicArray<uint8> body = DynamicArray();
     appendStr(dst: body, s: give text);
     return respond(client: client, status: give status, contentType: "text/plain; charset=utf-8", body: body);
 }
 
 // Handle one connection: read the request, resolve a file under `root`, send it (or an error).
 fn int32 handle(ref TcpStream client, ref string root) {
-    Array<uint8> buf = Array(size: 8192);
+    FixedArray<uint8> buf = FixedArray(size: 8192);
     Result<usize, IoError> rr = client.read(into: buf);
     int32 got = match (rr) { case Ok(c): cast<int32>(c); case Err(e): 0 - 1; };
     if (got <= 0) { return 0; }                                   // empty / failed read: drop the connection
@@ -164,7 +164,7 @@ fn int32 handle(ref TcpStream client, ref string root) {
 
     string rel  = toRelPath(path: path);
     string full = root + rel;
-    Result<List<uint8>, IoError> rf = readFile(path: full);
+    Result<DynamicArray<uint8>, IoError> rf = readFile(path: full);
     return match (rf) {
         case Ok(body): respond(client: client, status: "200 OK", contentType: mimeType(path: rel), body: body);
         case Err(e):   respondText(client: client, status: "404 Not Found", text: "404 Not Found\n");
@@ -184,7 +184,7 @@ fn int32 serve(ref TcpListener listener, ref string root) {
 }
 
 fn int32 run(ref TcpListener listener, ref string host, ref string root, uint16 port) {
-    List<uint8> banner = List();
+    DynamicArray<uint8> banner = DynamicArray();
     appendStr(dst: banner, s: "kama httpd: serving '");
     appendStr(dst: banner, s: copy root);
     appendStr(dst: banner, s: "' on http://");
@@ -196,7 +196,7 @@ fn int32 run(ref TcpListener listener, ref string host, ref string root, uint16 
 }
 
 fn int32 fail(ref string host, uint16 port) {
-    List<uint8> msg = List();
+    DynamicArray<uint8> msg = DynamicArray();
     appendStr(dst: msg, s: "kama httpd: could not bind ");
     appendStr(dst: msg, s: copy host);
     appendStr(dst: msg, s: ":");

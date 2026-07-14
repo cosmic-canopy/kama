@@ -1,8 +1,8 @@
 // Milestone B1 — a bare in-place ctor assigned to a class-typed lvalue (`this.m = Map()`, `x = Point(...)`)
 // constructs directly into the place, like a local-init stackCtor. Covers: a generic ctor into a field
-// (Map/List), a reassignment that re-inits (drops the old value — ASan-checked), and a non-generic ctor
+// (Map/DynamicArray), a reassignment that re-inits (drops the old value — ASan-checked), and a non-generic ctor
 // with args into a field + a local reassignment. Previously each required "bind to a local first".
-import std::collections::{Map, List};
+import std::collections::{Map, DynamicArray};
 
 type value Point {
     public int32 x; public int32 y;
@@ -12,9 +12,9 @@ type value Point {
 
 type resource Registry {
     Map<int32, int32> m;
-    List<int32> log;
+    DynamicArray<int32> log;
     Point origin;
-    public Registry() { this.m = Map(); this.log = List(); this.origin = Point(x: 1, y: 2); }
+    public Registry() { this.m = Map(); this.log = DynamicArray(); this.origin = Point(x: 1, y: 2); }
     public fn void put(int32 k, int32 v) { this.m.put(key: k, value: v); this.log.add(item: k); }
     public fn void reset() { this.m = Map(); }                 // re-init: drops the old map, builds a fresh one
     public fn void moveOrigin(int32 x, int32 y) { this.origin = Point(x: x, y: y); }

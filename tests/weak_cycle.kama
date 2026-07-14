@@ -3,12 +3,12 @@
 // drops, its pointee dtor drops `b`, whose dtor drops the `Weak` back into `a`'s Ctrl — that `Weak` drop must
 // NOT free the Ctrl while `a`'s own drop still needs it (the last strong handle releases `strong` only AFTER
 // the pointee dtor). Latent before the fix: benign at -O0, a UAF crash at -O2 / on wasm. Each node owns a
-// heap `List` so the pointee dtor is non-trivial. Returns a.val() = 10.
+// heap `DynamicArray` so the pointee dtor is non-trivial. Returns a.val() = 10.
 import std::memory::{Shared, Weak};
-import std::collections::{List};
+import std::collections::{DynamicArray};
 
 type resource Node {
-    List<int32> data;                                  // owns heap -> a real pointee dtor runs on cycle drop
+    DynamicArray<int32> data;                                  // owns heap -> a real pointee dtor runs on cycle drop
     Optional<Shared<Node>> next;                       // forward edge (owns)
     Optional<Weak<Node>> back;                          // back edge (weak) — breaks the ownership cycle
     public Node(int32 v) { this.data.add(item: v); this.next = Optional::None; this.back = Optional::None; }

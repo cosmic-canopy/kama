@@ -48,7 +48,7 @@ struct LexerInstanceData {
 
    /* Nesting depth of open generic `<…>` (type contexts only). The grammar bumps it on each
       generic `<` and drops it on the matching `>`; while >0 the lexer splits a `>>` into two `>`
-      (so `List<Shared<Circle>>` needs no space). 0 in expression context, so `a >> b` stays a shift. */
+      (so `DynamicArray<Shared<Circle>>` needs no space). 0 in expression context, so `a >> b` stays a shift. */
    int genericDepth = 0;
 };
 
@@ -380,13 +380,13 @@ basic_identifier
         $$ = id;
     }
   ;
-/* Comma-separated type arguments: `int32`, `int32, string`, `int32, List<int>` — mirrors
+/* Comma-separated type arguments: `int32`, `int32, string`, `int32, DynamicArray<int>` — mirrors
    interface_type_list. Always length ≥ 1 (the `<…>` syntax requires at least one). */
 type_arg_list
   : type_or_value_arg   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
   | type_arg_list COMMA type_or_value_arg   { $1->push_back($3); $$ = $1; }
   ;
-/* A generic argument is a type, or an integer VALUE for a const param (`Fixed<float, 4>`). A value
+/* A generic argument is a type, or an integer VALUE for a const param (`InlineArray<float, 4>`). A value
    arg is wrapped in an IdentifierNode carrying `constArgValue` (value name is null). */
 type_or_value_arg
   : type
@@ -853,7 +853,7 @@ primary_expression_no_parenthesis
   | array_literal
   ;
 
-/* fixed-array value literal initializing a `Fixed<T,N>`: `[a, b, c]` (elements) or `[v; N]` (fill).
+/* fixed-array value literal initializing a `InlineArray<T,N>`: `[a, b, c]` (elements) or `[v; N]` (fill).
    A leading `[` is a primary here; a `[` after a primary is postfix indexing — unambiguous. */
 array_literal
   : LEFT_BRACKET expression_list RIGHT_BRACKET
@@ -965,7 +965,7 @@ post_decrement_expression
   : postfix_expression MINUSMINUS   { $$ = std::make_shared<PostIncrDecrNode>(SCANNER_CODEGENCONTEXT, $2, $1); }
   ;
 cast_expression
-    /* The mid-rules track genericDepth across the cast's `<…>` so `cast<List<int>>(x)` needs no space;
+    /* The mid-rules track genericDepth across the cast's `<…>` so `cast<DynamicArray<int>>(x)` needs no space;
        the `--` fires before `( expression )` so a `>>` shift inside the cast body stays a shift. The
        operand is a full `expression` (like a parenthesized primary) so `cast<T>(a + b)` needs no inner
        parens — the surrounding `( … )` already delimits it. */
@@ -973,7 +973,7 @@ cast_expression
   ;
 sizeof_expression
   /* `sizeof(T)` / `alignof(T)` — the compile-time byte size / alignment of a type as a `usize`
-     (`type` self-manages its own `<…>` genericDepth, so `sizeof(Fixed<int32,4>)` parses too). */
+     (`type` self-manages its own `<…>` genericDepth, so `sizeof(InlineArray<int32,4>)` parses too). */
   : SIZEOF LPAREN type RPAREN   { $$ = std::make_shared<SizeofNode>(SCANNER_CODEGENCONTEXT, $3); }
   | ALIGNOF LPAREN type RPAREN   { auto s = std::make_shared<SizeofNode>(SCANNER_CODEGENCONTEXT, $3); s->isAlign = true; $$ = s; }
   ;

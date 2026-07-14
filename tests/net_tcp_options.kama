@@ -2,7 +2,7 @@
 // non-blocking, then a read with no data pending returns Err(WouldBlock) instead of stalling. Returns 55.
 import std::net::{TcpListener, TcpStream};
 import std::io::{IoError};
-import std::collections::{Array};
+import std::collections::{FixedArray};
 
 fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(u): true; case Err(e): false; }; }
 fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }
@@ -10,7 +10,7 @@ fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case
 fn int32 checkClient(ref TcpStream c) {
     if (!isOk(r: c.setNoDelay(on: true)))     { return 71; }
     if (!isOk(r: c.setNonBlocking(on: true))) { return 72; }
-    Array<uint8> buf = Array(size: 64);
+    FixedArray<uint8> buf = FixedArray(size: 64);
     Result<usize, IoError> rr = c.read(into: buf);
     bool wb = match (rr) { case Ok(n): false; case Err(e): isWouldBlock(e: e); };
     if (!wb) { return 73; }

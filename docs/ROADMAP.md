@@ -61,7 +61,7 @@ remains here is genuinely later-track or opt-in.
 
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
-  `List<string>` collect for `split` (the lazy `Split` iterator ships today).
+  `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
 - **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
   (also covers `string + <number>`); sequences with reflection (its to-string substrate).
 - **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (see
@@ -104,7 +104,7 @@ backend) — the compiler-intrinsic lowering, its user surface (`@generate`/`@fi
 gate, and the `DeError` set all live in [SPEC.md](SPEC.md) "Serialization". What remains is additive
 library + hardening work:
 
-- **Deserialize breadth** — `Array<E>`/`Fixed<T,N>` read; a bare `encode`/`decode` of an
+- **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T,N>` read; a bare `encode`/`decode` of an
   intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
 - **Enforce the poly-edge rule (hardening)** — a `Shared`/`Weak`/`Owned<Contract>` graph edge currently *assumes*
   every implementor is `@generate(Serialize, Deserialize)`; a non-`@generate` implementor is silently absent from
@@ -126,7 +126,7 @@ serialization, networking).
 
 - **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
   `std::fs`/`std::io` for asset + scene load.
-- **Container / data-structure reach.** `List`/`Array`/`string`/`Fixed` + `Map<K,V>`/`Set<K>` are shipped
+- **Container / data-structure reach.** `DynamicArray`/`FixedArray`/`string`/`InlineArray` + `Map<K,V>`/`Set<K>` are shipped
   (see [SPEC.md](SPEC.md)). **Tracked:** entry-wise iteration `foreach (Entry e in m.entries())` — a generic
   `Entry<K,V>` value yielded through `Optional` doesn't monomorphize yet. Still ahead:
   **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a system or
@@ -139,7 +139,7 @@ serialization, networking).
   sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
 - **Collections revisit — uniform preallocation, pluggable hasher, custom allocator.** The containers grew
   piecemeal; give them a consistent set of parametric knobs (all with defaults, so today's API is unchanged):
-  1. **Preallocation everywhere.** `List`/`Array` have `reserve(n:)`, but **`Map`/`Set` do not** — they start
+  1. **Preallocation everywhere.** `DynamicArray`/`FixedArray` have `reserve(n:)`, but **`Map`/`Set` do not** — they start
      at cap 0 and grow from 8, rehashing every entry ~log2(N) times on a bulk insert. This is a *measured*
      cost: on the `map` bench, at an EQUAL hash, kama (grow-from-8) is ~8.6 ms vs C (preallocated `cap`) ~5.7 ms
      — the whole remaining delta after hash. Add `Map`/`Set` `reserve(n:)` + a capacity ctor `Map(capacity:)`
@@ -153,7 +153,7 @@ serialization, networking).
   3. **Custom allocator.** The containers hardcode `malloc`/`realloc`/`calloc`/`free`. Thread an **allocator**
      parameter (arena/pool/stack/bump for hot loops; a *fallible* allocator for the no-heap embedded target).
      Bigger surface than it looks — it has to reach element construction/relocation and RAII drop — so it
-     rides with the embedded target rather than 1.0. `Map<K, V, H, A>` / `List<T, A>` with defaults is the
+     rides with the embedded target rather than 1.0. `Map<K, V, H, A>` / `DynamicArray<T, A>` with defaults is the
      likely shape.
 - **Browser networking transports** — native TCP ships (`std::net`); the browser has no raw sockets, so the
   wasm path needs **WebRTC DataChannels** (unreliable) / **WebSockets** (reliable) via a host FFI shim (a
@@ -190,7 +190,7 @@ serialization, networking).
   | Piece | What's needed |
   |---|---|
   | **Freestanding runtime** | `--target embedded` (`-ffreestanding -nostdlib`); `kama_runtime.h` stops assuming hosted libc; entry contract (`main()`+loop, or Arduino `setup()`/`loop()`) — no `argc/argv` shim, `main` never returns |
-  | **No-heap / pluggable allocator** | the big one — `Owned`/`Shared`/`List`/`string` are malloc-backed. Either a no-heap subset (`value` + `Fixed<T,N>` + `Ptr` + stack) **or** bring-your-own allocator so those ride a static arena/pool. **Ties directly to the planned "allocator passed to every collection" work** — the same seam serves embedded no-heap and engine arena pools |
+  | **No-heap / pluggable allocator** | the big one — `Owned`/`Shared`/`DynamicArray`/`string` are malloc-backed. Either a no-heap subset (`value` + `InlineArray<T,N>` + `Ptr` + stack) **or** bring-your-own allocator so those ride a static arena/pool. **Ties directly to the planned "allocator passed to every collection" work** — the same seam serves embedded no-heap and engine arena pools |
   | **Globals / statics** | MCU code lives on module-level state (peripheral handles, ISR flags, flash tables); new language surface with deterministic zero/const init. Also **`const` data in flash** (`.rodata`; on **AVR** the Harvard `PROGMEM` wart) |
   | **`hardware` qualifier** | the renamed `volatile` — `hardware Ptr<T>` → `volatile T*` for MMIO registers, and `hardware` on an ISR↔loop global; mirrors the shipped `const Ptr<T>` → `const T*`. **MMIO + single-core ISR only — NOT a concurrency primitive** (that's §6 atomics) |
   | **ISR declaration** | bind a function to an interrupt vector with the right calling convention (`__attribute__((interrupt))` / vendor `ISR()` macro) |
@@ -198,7 +198,7 @@ serialization, networking).
   | **Panic/trap handler** | make a bounds/overflow trap configurable (halt / reset / blink). The trap lowering is **already runtime-free** (`__builtin_trap`) — works freestanding today ✓ |
 
   **Why kama fits well:** no-GC + RAII → deterministic, no hidden pauses; allocation is explicit in the
-  emitted C (greppable no-heap audit); trap lowering already dependency-free; `Fixed<T,N>`, sized ints, and
+  emitted C (greppable no-heap audit); trap lowering already dependency-free; `InlineArray<T,N>`, sized ints, and
   `unsafe`/`Ptr` FFI already exist. **North star: blink an LED** (the embedded "first triangle") — forces
   exactly the critical path and nothing else. **Start Cortex-M, not AVR** (`zig cc`/clang do `thumbv*-none-eabi`
   cleanly; pico-sdk is tidy; AVR's Harvard/`PROGMEM`/`avr-gcc`-only pain comes later).

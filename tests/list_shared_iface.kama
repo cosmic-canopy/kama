@@ -1,19 +1,19 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 import std::memory::{Shared};
-// M27 — a `List<Shared<Shape>>` drops each stored smart pointer (ref-count decrement) at teardown
+// M27 — a `DynamicArray<Shared<Shape>>` drops each stored smart pointer (ref-count decrement) at teardown
 // and dispatches polymorphically through the borrowed element in `foreach`. Exercises the nested
 // collection-element registration fixed in this slice: `elemClass`/`elemDestructible` now resolve
-// because the inner `Shared_IShape` is registered before the outer `List` (was outer-first -> the
+// because the inner `Shared_IShape` is registered before the outer `DynamicArray` (was outer-first -> the
 // list silently leaked its elements). Each Sq is freed exactly once -> ASan-clean is the real proof.
 // (Written with no space in `Shared<Shape>>` — the `>>` lexer split handles the nested close.)
 type contract Shape for both { fn int32 area(); }
 type resource Sq implements Shape {
-    List<int32> side;                                          // owns heap -> destructible impl
+    DynamicArray<int32> side;                                          // owns heap -> destructible impl
     public Sq(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 fn int32 main() {
-    List<Shared<Shape>> xs = List();
+    DynamicArray<Shared<Shape>> xs = DynamicArray();
     Shared<Shape> a = new Sq(s: 3);
     Shared<Shape> b = new Sq(s: 4);
     Shared<Shape> c = new Sq(s: 5);

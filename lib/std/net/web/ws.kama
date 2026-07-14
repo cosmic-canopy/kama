@@ -1,7 +1,7 @@
 namespace std::net::web;
 
 import std::io::{IoError};
-import std::collections::{List, Array};
+import std::collections::{DynamicArray, FixedArray};
 import std::net::{ReliableStream};
 
 export { WsConnection, WsState };
@@ -43,14 +43,14 @@ type resource WsConnection implements ReliableStream {
         return WsState::Closed;
     }
 
-    public fn Result<usize, IoError> read(ref Array<uint8> into) {
+    public fn Result<usize, IoError> read(ref FixedArray<uint8> into) {
         int32 n = kama_ws_recv(h: this.handle, buf: addr(of: into[0]), n: cast<usize>(into.length()));
         if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
         if (n == (0 - 1)) { return Result::Err(error: IoError::WouldBlock); }
         return Result::Ok(value: cast<usize>(0));   // -2 = closed -> EOF
     }
 
-    public fn Result<usize, IoError> writeAll(ref List<uint8> bytes) {
+    public fn Result<usize, IoError> writeAll(ref DynamicArray<uint8> bytes) {
         if (kama_ws_send(h: this.handle, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length())) != 0) {
             return Result::Err(error: IoError::Other(code: 0 - 1));
         }

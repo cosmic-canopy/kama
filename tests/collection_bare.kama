@@ -1,11 +1,11 @@
-import std::collections::{Array};
-// A bare hand-off of a Copyable collection follows its `bare:` default — no ambiguity. `Array`'s
+import std::collections::{FixedArray};
+// A bare hand-off of a Copyable collection follows its `bare:` default — no ambiguity. `FixedArray`'s
 // default is `give`, so `b = a` RELOCATES the buffer (a move); `a` is then moved-from and using it
 // would be a compile-time use-after-move error. (This is the case the old `collection_bare` xfail
 // flagged as "ambiguous" before the ownership model gained the `bare:` contract parameter.)
 fn int main() {
-    Array<int32> a = Array(size: 2);
+    FixedArray<int32> a = FixedArray(size: 2);
     a[0] = 40; a[1] = 2;
-    Array<int32> b = a;      // bare = move (Array's bare default is `give`); no `give`/`copy` needed
+    FixedArray<int32> b = a;      // bare = move (FixedArray's bare default is `give`); no `give`/`copy` needed
     return b[0] + b[1];      // 42
 }

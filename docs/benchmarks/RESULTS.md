@@ -32,7 +32,7 @@ The compute workloads (fib/pi/collatz) are tuned so the slow interpreters finish
 compiled languages run in a few ms, so small absolute differences between them are noise — **except
 `dispatch`**, which measures *true* dynamic dispatch (see Workloads): the AOT cluster
 (kama/C/C++/Rust) converges there, while **Go**'s interface dispatch trails ~2×. The
-**`alloc`** workload (added once `List<T>` landed in M9) is the one to watch for the no-GC story: it
+**`alloc`** workload (added once `DynamicArray<T>` landed in M9) is the one to watch for the no-GC story: it
 churns ~2M growable-list appends and 2000 collection lifetimes, so it contrasts kama's deterministic
 **RAII** free against the **garbage collectors** (Go, C#, Java, Lua, Python, JS) and against the RAII
 peers (C++ `vector`, Rust `Vec`). Watch its **peak RSS** in particular — GC runtimes keep dead
@@ -58,11 +58,11 @@ diverged:
 - **dispatch** — 8×10⁶ virtual calls over a **heterogeneous, heap-owned collection** of mixed
   concrete types built at runtime, so the concrete type is *not* knowable at the call site and the
   call **cannot be devirtualized** — a true dynamic-dispatch measurement. Each language uses its
-  idiomatic owning collection (kama `List<Owned<Shape>>`, C++ `vector<unique_ptr>`, Rust
+  idiomatic owning collection (kama `DynamicArray<Owned<Shape>>`, C++ `vector<unique_ptr>`, Rust
   `Vec<Box<dyn>>`, C array of heap `Shape*`, Go `[]interface`, C#/Java `Shape[]`).
 - **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
-  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — kama `List<int32>`,
-  C++ `vector`, Rust `Vec`, Go slice, C# `List`, Java `ArrayList`, Lua table, Python/JS array, C manual realloc).
+  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — kama `DynamicArray<int32>`,
+  C++ `vector`, Rust `Vec`, Go slice, C# `DynamicArray`, Java `ArrayList`, Lua table, Python/JS array, C manual realloc).
 - **fnptr** — 8×10⁶ indirect calls through a function pointer, routed through a function boundary
   (`apply(op, x)`) so the call stays genuinely indirect (the fnptr analog of `dispatch`'s virtual calls).
   Each language uses its idiomatic callable — kama `fnptr` (a bare C function pointer, zero-cost), C/C++

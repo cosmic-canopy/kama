@@ -1,7 +1,7 @@
-// Array completion: contains / indexOf over an Equatable element. Uses a user `value` element (Tag) — its
+// FixedArray completion: contains / indexOf over an Equatable element. Uses a user `value` element (Tag) — its
 // `equals` routes the same generic `when T: Equatable` path as `string`; a value element also sidesteps the
-// still-open owning-element place-store (`Array<string>` `a[i] = <owned>`, ROADMAP §1).
-import std::collections::{Array};
+// still-open owning-element place-store (`FixedArray<string>` `a[i] = <owned>`, ROADMAP §1).
+import std::collections::{FixedArray};
 
 type value Tag implements Equatable {
     int32 id;
@@ -10,7 +10,7 @@ type value Tag implements Equatable {
 }
 
 fn int main() {
-    Array<Tag> a = Array(size: 3);
+    FixedArray<Tag> a = FixedArray(size: 3);
     Tag t0 = Tag(id: 10); Tag t1 = Tag(id: 20); Tag t2 = Tag(id: 30);
     a[0] = t0; a[1] = t1; a[2] = t2;
     int32 r = 0;

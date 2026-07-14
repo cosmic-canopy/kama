@@ -1,12 +1,12 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // M26h — the `type` marker + the ownership vocabulary. `type value` owns nothing and COPIES;
 // `type resource` owns/moves and is RAII-dropped; `type contract` is a public guarantee (dispatch
 // through a borrow). Crucially, `value`/`resource`/`contract` are NOT reserved — the `type` marker
 // (like `fn`) means they stay ordinary identifiers. Coexists with legacy `class`/`interface` (h-3
 // migrates those away). ASan-clean.
 type contract Shape for both { fn int32 area(); }
-type resource Box implements Shape {          // owns a List -> moves; satisfies a contract
-    List<int32> sides;
+type resource Box implements Shape {          // owns a DynamicArray -> moves; satisfies a contract
+    DynamicArray<int32> sides;
     public Box(int32 w, int32 h) { this.sides.add(item: w); this.sides.add(item: h); }
     public fn int32 area() { return this.sides[0] * this.sides[1]; }
 }

@@ -1,4 +1,4 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // M26i — inline constructor in argument position: `f(x: Ctor(...))`. Materialized as a HOISTED
 // temporary (pure ISO C, no GNU statement-expression), passed by value: a `value` copies, a
 // `resource` moves (the temp is consumed by the callee and dropped at fn-end — no double-free).
@@ -19,14 +19,14 @@ type value Wrap {
     public fn int32 val() { return this.v; }
 }
 type resource Res {
-    List<int32> data;                                   // owns a heap buffer -> destructible
+    DynamicArray<int32> data;                                   // owns a heap buffer -> destructible
     public Res(int32 v) { this.data.add(item: v); }
     public fn int32 get() { return this.data[0]; }
 }
 fn int32 useIt(Counter c) { return c.get(); }
 fn int32 pairSum(Pair p) { return p.sum(); }
 fn int32 wrapVal(Wrap w) { return w.val(); }
-fn int32 consume(Res r) { return r.get(); }             // by-value MOVE; r's List freed at fn-end
+fn int32 consume(Res r) { return r.get(); }             // by-value MOVE; r's DynamicArray freed at fn-end
 
 fn int32 main() {
     int32 x = useIt(c: Counter(start: 5));              // value ctor, local-init: 5

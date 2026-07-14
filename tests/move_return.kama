@@ -1,4 +1,4 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // M26f-2 — the factory case: `return give r` moves the local OUT (its dtor is suppressed in
 // the factory), so the returned value is dropped exactly once by the caller — not twice (the
 // "factory landmine"). One drop of code 3 -> trace 3.
@@ -6,7 +6,7 @@ extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
 
 type resource Res {
-    List<int32> items;
+    DynamicArray<int32> items;
     public Res(int32 v) { this.items.add(item: v); }
     ~Res() { kama_trace(code: 3); }
     public fn int32 head() { return this.items[0]; }

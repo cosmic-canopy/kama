@@ -33,7 +33,7 @@ type contract Copyable for resource { fn This copy(); }
 type contract Hashable for both { fn uint64 hash(); }
 type contract Equatable for both { fn bool equals(This other); }
 // Primitive conformances (pure-kama retro-impls, NO compiler blessing) — hosted here so `string`/`int32`
-// satisfy the standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `List<int32>.contains`, an int-keyed
+// satisfy the standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `DynamicArray<int32>.contains`, an int-keyed
 // `Map`) without importing `std::collections`. `string` Hashable = FNV-1a over its UTF-8 bytes (its
 // `Equatable` comes free from the built-in `equals`); `int32` = a splitmix64 hash finalizer + scalar equals.
 implements Hashable for string {
@@ -125,7 +125,7 @@ implements Hashable for uint64 {
 }
 implements Equatable for uint64 { public fn bool equals(uint64 other) { return this == other; } }
 // Floats get `Equatable` (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and
-// `List<float*>.contains` work — but NOT `Hashable`: float hash keys are a footgun (NaN != NaN, ±0.0),
+// `DynamicArray<float*>.contains` work — but NOT `Hashable`: float hash keys are a footgun (NaN != NaN, ±0.0),
 // and there is no bit-reinterpret cast, so a value-cast hash would collide badly. Add on demand if ever
 // needed via a bit-cast helper.
 implements Equatable for float32 { public fn bool equals(float32 other) { return this == other; } }
@@ -222,9 +222,9 @@ implements Deserialize for float32 { public static fn float32 deserialize(Deseri
 implements Deserialize for float64 { public static fn float64 deserialize(Deserializer r) { return r.readF64(); } }
 implements Deserialize for bool    { public static fn bool    deserialize(Deserializer r) { return r.readBool(); } }
 implements Deserialize for string  { public static fn string  deserialize(Deserializer r) { return r.readString(); } }
-// Generic deserialize trampoline: the `@generate` codegen can't spell `List<int32>::deserialize(r)` (a
+// Generic deserialize trampoline: the `@generate` codegen can't spell `DynamicArray<int32>::deserialize(r)` (a
 // static on a generic instance has no surface syntax), but a turbofish on THIS free fn does
-// (`__kamaDeserialize::<List<int32>>(r)`), and inside it `T::deserialize` resolves per instantiation.
+// (`__kamaDeserialize::<DynamicArray<int32>>(r)`), and inside it `T::deserialize` resolves per instantiation.
 fn T __kamaDeserialize<T: Deserialize>(Deserializer r) { return T::deserialize(r: r); }
 // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
 // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string

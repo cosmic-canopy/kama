@@ -1,11 +1,11 @@
-import std::collections::{List};
-// A Copyable collection (`List<int32>` — its element is Copyable) deep-copies into a variant field:
+import std::collections::{DynamicArray};
+// A Copyable collection (`DynamicArray<int32>` — its element is Copyable) deep-copies into a variant field:
 // `copy xs` clones the buffer and the clone is moved into the union (dropped by the tag dtor). Both
 // the original `xs` and the variant's copy free their own buffer -> ASan-clean is the proof.
-enum Bag { Items(List<int32> xs), Empty }
+enum Bag { Items(DynamicArray<int32> xs), Empty }
 fn int main()
 {
-    List<int32> xs;
+    DynamicArray<int32> xs;
     xs.add(item: 1);
     Bag b = Bag::Items(xs: copy xs);
     return 0;

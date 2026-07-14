@@ -1,6 +1,6 @@
 // A `resource` value moved in SOME match arms but not others is MaybeMoved at the join and live at
 // scope exit -> compile error (the conditional-drop guard; `match` is exhaustive, no implicit arm).
-type resource Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
+type resource Res { DynamicArray<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
 fn int32 sink(Res r) { return r.head(); }
 enum Two { A, B }
 fn int32 main() {

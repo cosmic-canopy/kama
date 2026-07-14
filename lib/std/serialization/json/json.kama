@@ -6,17 +6,17 @@ namespace std::serialization::json;
 // for arbitrary nesting because endObject/endArray leave a complete value (a following sibling gets its
 // comma) while a value right after fieldName does not.
 
-import std::collections::{List};
+import std::collections::{DynamicArray};
 import std::fmt::{i8Str, i16Str, i32Str, i64Str, u8Str, u16Str, u32Str, u64Str, f32Str, f64Str, boolStr};
 
 export { JsonWriter, JsonReader, encode, decode };
 
 type resource JsonWriter implements Serializer {
-    List<uint8> buf;
+    DynamicArray<uint8> buf;
     bool needComma;
 
     public JsonWriter() {
-        List<uint8> b = List();
+        DynamicArray<uint8> b = DynamicArray();
         this.buf = give b;
         this.needComma = false;
     }
@@ -194,7 +194,7 @@ type resource JsonReader implements Deserializer {
         if (c >= 65ui8 && c <= 70ui8) { return c - 65ui8 + 10ui8; }  // A-F
         this.err = true; return 0ui8;
     }
-    fn string bytesToString(ref List<uint8> b) {
+    fn string bytesToString(ref DynamicArray<uint8> b) {
         if (cast<int32>(b.length()) == 0) { return ""; }
         unsafe { return kama_string_from_raw(src: addr(of: b[0]), start: 0, len: cast<int32>(b.length())); }
     }
@@ -296,7 +296,7 @@ type resource JsonReader implements Deserializer {
         this.skipWs();
         if (this.peek() != 34ui8) { this.err = true; return ""; }   // opening "
         this.pos = this.pos + 1;
-        List<uint8> acc = List();
+        DynamicArray<uint8> acc = DynamicArray();
         while (this.pos < this.len) {
             uint8 c = this.src[this.pos];
             if (c == 34ui8) { this.pos = this.pos + 1; return this.bytesToString(b: acc); }   // closing "
@@ -324,7 +324,7 @@ type resource JsonReader implements Deserializer {
         return this.bytesToString(b: acc);
     }
     // \uXXXX -> UTF-8 (BMP; surrogate pairs deferred). Called with pos at the 'u'; leaves pos at the last hex.
-    fn void readUnicodeEscape(ref List<uint8> acc) {
+    fn void readUnicodeEscape(ref DynamicArray<uint8> acc) {
         if (this.pos + 4 >= this.len) { this.err = true; return; }
         uint32 cp = 0ui32;
         int32 k = 1;

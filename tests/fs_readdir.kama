@@ -1,9 +1,9 @@
 // std::fs — readDir returns real entries and filters "." / "..".
 import std::fs::{readDir};
 import std::io::{IoError};
-import std::collections::{List};
+import std::collections::{DynamicArray};
 
-fn int32 checkNames(ref List<string> names) {
+fn int32 checkNames(ref DynamicArray<string> names) {
     int32 n = cast<int32>(names.length());
     if (n <= 0) { return 31; }                 // the working dir must have entries
     bool bad = false;

@@ -1,4 +1,4 @@
 // M26f-4 — `copy` of a `resource` that has NOT opted into `Copyable` (no `copy` method) is a
 // compile error: it guides you to add a `copy` method (opt into `Copyable`) or `give` to move.
-type resource Res { List<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} }
+type resource Res { DynamicArray<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} }
 fn int32 main() { Res a = Res(v: 1); Res b = copy a; return 0; }   // ERROR: Res has no `copy` method

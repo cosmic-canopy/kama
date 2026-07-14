@@ -88,7 +88,7 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
 - **`split(separator:)`** — a lazy `Split` iterator (`implements Iterator<string>`, like `.chars()`),
   yielding each piece as an owned string with no collections import: `foreach (string p in s.split(separator:
   ","))`. Go `strings.Split` semantics (consecutive/trailing separators yield `""`; an empty separator
-  yields the whole string once). Collect into a `List<string>` explicitly if you need random access.
+  yields the whole string once). Collect into a `DynamicArray<string>` explicitly if you need random access.
 
 ```kama
 string path = "/usr/local/bin";
@@ -107,13 +107,13 @@ a **place** (an lvalue): you can write a field through it (`a[i].x = v`), index 
 bounds-checked. (Reading `a[i]` still yields a copy.)
 
 ```kama
-Array<int32> a = new Array<int32>(size: 4);   // fixed buffer, zero-initialized
+FixedArray<int32> a = new FixedArray<int32>(size: 4);   // fixed buffer, zero-initialized
 a[0] = 10;  a[1] = 20;                          // bounds-checked []
 int32 first = a[0];
 foreach (int32 x in a) { /* ... */ }            // iterate (x is a copy)
 foreach (ref int32 x in a) { x = x * 2; }       // `ref`: mutate each element in place
 
-List<Point> ps = new List<Point>();             // growable
+DynamicArray<Point> ps = new DynamicArray<Point>();             // growable
 ps.add(item: p);   int n = ps.length();   Point q = ps[0];
 
 string s = "ab";                                // borrowed literal (no alloc)
@@ -126,8 +126,8 @@ call on an element** works directly — `list[i].method()` borrows the element *
 mutates the stored element; a `const` collection allows only const methods on its elements. Elements enter a
 collection by the ownership rules below (`give` to move, `copy` to duplicate, a `value` copies).
 
-`List` / `Array` also offer `reserve(n:)` (List — preallocate to skip incremental growth), `remove(index:)`
-(List — drop the element and shift the tail), `clear()` (List), and `contains(item:)` / `indexOf(item:)`
+`DynamicArray` / `FixedArray` also offer `reserve(n:)` (DynamicArray — preallocate to skip incremental growth), `remove(index:)`
+(DynamicArray — drop the element and shift the tail), `clear()` (DynamicArray), and `contains(item:)` / `indexOf(item:)`
 (both — present **only when the element is `Equatable`**, i.e. `string` or a user type with `equals`).
 
 ### Hash maps & sets (`std::collections`) ✅
@@ -164,14 +164,14 @@ seen.add(key: "x");   bool member = seen.contains(key: "x");
 ```
 
 `foreach (K k in map)` / `foreach (K k in set)` iterates the keys (a by-value key iterator, present for a
-`Copyable` key; it guards against a mid-iteration `put`/`remove` like the `List` iterator). `copy m`
+`Copyable` key; it guards against a mid-iteration `put`/`remove` like the `DynamicArray` iterator). `copy m`
 deep-copies a whole map (independent clone) — present only when **both** key and value are `Copyable`,
 gated by a **multi-condition `when [K: Copyable, V: Copyable]`**. Entry-wise iteration
 (`foreach (Entry e in m.entries())`) is a tracked follow-up (a generic `Entry<K,V>` value yielded through
 `Optional` doesn't monomorphize yet).
 
 `Map` is **move-only**: it owns its keys and values (dropping them on overwrite, `remove`, `clear`, and at
-end of life — ASan/UBSan-clean for owning keys *and* values, e.g. `Map<string, List<string>>`). Lookups
+end of life — ASan/UBSan-clean for owning keys *and* values, e.g. `Map<string, DynamicArray<string>>`). Lookups
 **borrow** the key (`ref K`), so they don't consume a key you're holding; `get(key:)` returns
 `Optional<V>` with a **deep copy** of the value (present only when `V` is `Copyable`). A key that is an
 inline rvalue — a `string`/number literal or a user-type ctor — is materialized into a temp automatically,
@@ -242,7 +242,7 @@ method is literally named `copy`.
 
 ```kama
 type resource Res implements Copyable(bare: copy) {   // a bare hand-off deep-copies
-    List<int32> items;
+    DynamicArray<int32> items;
     ~Res() { }
     public fn Res copy() { Res r = Res(v: this.items[0]); return give r; }   // the Copyable method
 }
@@ -284,7 +284,7 @@ rvalue (`new`/constructor/call result) never takes a marker.
 | `Owned<T>` (unique) | **move** | move (emphasis) | ⛔ "is unique" |
 | `Shared<T>` (ref-counted) | **retain** (strong++) | **move** (transfer the handle) | retain (explicit) |
 | `Weak<T>` (weak ref) | **retain** (weak++) | **move** (transfer the handle) | retain (explicit) |
-| collection (`Array`/`List`/`string`) | ⛔ marker required | **move** (buffer) | **deep copy** (fresh buffer) |
+| collection (`FixedArray`/`DynamicArray`/`string`) | ⛔ marker required | **move** (buffer) | **deep copy** (fresh buffer) |
 | plain `resource` (move-only value) | **move** | move (emphasis) | ⛔ "opt into `Copyable`" |
 | `Copyable` resource (has `copy()`) | its declared `bare:` default | move | **deep copy** via `copy()` |
 | collection of `Copyable` elements | ⛔ marker required | move | **deep copy** (element-wise `copy()`) |
@@ -327,7 +327,7 @@ storage-agnostic; a `ref` may not name the smart pointer itself), which auto-der
 **transfer by value**, where the callee owns the argument and drops it at function end (`Owned` moves in,
 `Shared` retains). The pointee is a **`value`/`resource`** or a **contract** — `Owned`/`Shared`/`Weak<Shape>`
 own a concrete implementer behind a fat handle and dispatch polymorphically (see Contracts below). A smart
-pointer works as a *field*, *return*, and a **collection element** — `List<Shared<Shape>>` stores and drops
+pointer works as a *field*, *return*, and a **collection element** — `DynamicArray<Shared<Shape>>` stores and drops
 each handle in RAII order and dispatches polymorphically through it. See **Generics** below.
 
 ## Functions ✅
@@ -482,7 +482,7 @@ unsafe {
 }
 // p[0] = 1;                     // ERROR outside unsafe: "raw pointer access requires an `unsafe { }` block"
 
-Array<float32> verts = ...;
+FixedArray<float32> verts = ...;
 Ptr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule); usize n = verts.byteLen();
 // ... pass (data, n) to a C upload fn; dereferencing `data` still needs `unsafe`
 ```
@@ -512,7 +512,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   local — it would dangle), and it's second-class (used in-place, never stored).
 
 **`foreach` over a user type — the iterator protocol.** A user container is `foreach`-able (not just the
-built-in `Fixed`) via a small **iterator protocol** — not indexing, so it works for any shape (list, tree,
+built-in `InlineArray`) via a small **iterator protocol** — not indexing, so it works for any shape (list, tree,
 map, range). It's zero-cost: monomorphized to **direct calls** (no vtable), and the container is
 **borrowed, not consumed**. The container hands out an iterator via a nullary factory method, and that
 **iterator must `implements` the matching prelude contract** — `foreach` is **nominal**: a type with the
@@ -531,12 +531,12 @@ The prelude contracts (`type contract Iterator<T> for both { fn Optional<T> next
 `Iterator<int32> it` (vtable). `foreach` uses the same `implements`, checked nominally.
 
 Iterator safety: growing a collection (`add`) while iterating it would be a use-after-free when the
-buffer reallocates. The library `List` **guards against this at runtime** (C#-style): a modification
+buffer reallocates. The library `DynamicArray` **guards against this at runtime** (C#-style): a modification
 counter is bumped on every structural change (`add`), each iterator snapshots it, and `next()`/
 `hasNext()` `panic`s if it changed — *before* the stale cursor is dereferenced. In-place element writes
 (`foreach (ref x in list) { x = … }`) don't touch the counter and are fine — that's the point of `ref`.
-The guard lives in `List`'s own kama source (not the compiler), so it's a stdlib policy: a hand-rolled
-container chooses whether to pay for it. `Array`/`Fixed` are fixed-size and can't reallocate, so they
+The guard lives in `DynamicArray`'s own kama source (not the compiler), so it's a stdlib policy: a hand-rolled
+container chooses whether to pay for it. `FixedArray`/`InlineArray` are fixed-size and can't reallocate, so they
 need no guard. (The iterator's back-pointer to the counter uses the `addr(of: place)` builtin — the
 address of a place as a `Ptr<T>`; safe to take, `unsafe` to deref.)
 
@@ -635,7 +635,7 @@ expose fn int   version() { return 3; }
 **Rules** (checked at compile time — a clear error, never a silent no-op):
 - **Free functions only.** `expose` is not a member/type modifier; on a method/field/type it is rejected.
 - **C-ABI-safe signature.** A param or return may not be an owned-by-value type — a kama `string`, a
-  collection (`List`/`Array`/`Map`/`Set`/…), or an `Owned`/`Shared`/`Weak` smart pointer — since RAII /
+  collection (`DynamicArray`/`FixedArray`/`Map`/`Set`/…), or an `Owned`/`Shared`/`Weak` smart pointer — since RAII /
   refcount state cannot cross a raw C boundary; pass a `Ptr<T>` or an `extern` struct instead.
 - **No generics / no `fn ref T` place-return** (no single concrete C-ABI symbol); **bare names are unique**
   across the program (they share the C namespace — clashes with libc are yours to avoid, as with `extern`).
@@ -695,7 +695,7 @@ declared **`type resource`** and is move-only:
 
 ```kama
 type resource Buffer {
-    List<byte> data;                                 // owns heap → resource; fields stay private
+    DynamicArray<byte> data;                                 // owns heap → resource; fields stay private
     public Buffer(int n) { … }
     public fn int32 size() { return this.data.length(); }
 }
@@ -828,7 +828,7 @@ type resource Holder { Shared<Shape> shape;  public fn int64 area() { return thi
 fn Owned<Shape> make(int64 s) { Owned<Shape> o = new Square(s: s); return give o; }
 ```
 
-A `List<Shared<Shape>>` (the engine's scene) works — polymorphic elements stored and dropped in RAII order.
+A `DynamicArray<Shared<Shape>>` (the engine's scene) works — polymorphic elements stored and dropped in RAII order.
 
 ### Retroactive conformance — `implements C for T` ✅
 
@@ -917,7 +917,7 @@ and the caller derefs the place, so `g[i] = v`, `g[i] += 1`, `m[i][j] = v`, `m[i
 language (so a `Vec`/matrix can be written *in* kama). The place is a **second-class borrow** of
 `self`: it is used transiently and cannot be stored (there is no `ref`-local/`ref`-field to hold it),
 and a `const` receiver makes it read-only. Bounds safety is the operator's responsibility — a
-`Fixed`/collection-backed body is auto-checked; a raw `Ptr<T>` body is `unsafe`. The same place-return
+`InlineArray`/collection-backed body is auto-checked; a raw `Ptr<T>` body is `unsafe`. The same place-return
 works for a **named method** — `public fn ref T at(usize i) { … }` — so `v.at(i) = x` too. It also
 works on a **free function** and a **`static` method** — `fn ref int32 at(ref Buf b, usize i) { return
 b.d[i]; }`, called as `at(b: ref b, i: 0) = 5`. Because a free/static function has no `this`, the
@@ -939,7 +939,7 @@ type value Pair<A, B> { public A a; public B b; public Pair(A a, B b){ this.a = 
 fn T max<T>(T a, T b) { return a > b ? a : b; }         // generic fn — type args INFERRED from the call
 Pair<int32, string> p = Pair(a: 1, b: "x");             // generic type
 int32 m = max(a: 3, b: 4);                              // -> max<int32>, a static specialized C fn
-List<Shared<Shape>> scene;                              // nested generics, no space (the `>>` split)
+DynamicArray<Shared<Shape>> scene;                              // nested generics, no space (the `>>` split)
 ```
 
 - **Generic functions and types**; multi-parameter (`Pair<A, B>`), nested (`Box<Pair<int, int>>`) — nested
@@ -980,7 +980,7 @@ List<Shared<Shape>> scene;                              // nested generics, no s
   fn int32 sum<I: Iterator<int32>>(I it) { /* it.next() → static IntRange__next(&it) */ }
   ```
   (Both dispatch modes coexist by design — monomorphization can't express a heterogeneous
-  `List<Iterator<int32>>` or open-world runtime choice; the fat pointer can. See **Contracts**.)
+  `DynamicArray<Iterator<int32>>` or open-world runtime choice; the fat pointer can. See **Contracts**.)
 
 ## Access control ✅
 
@@ -1070,7 +1070,7 @@ Both are ordinary tagged unions consumed by `match`, so the caller is *forced* t
 case (exhaustiveness):
 
 ```kama
-fn Optional<int32> find(List<int32> xs, int32 target) { … }
+fn Optional<int32> find(DynamicArray<int32> xs, int32 target) { … }
 
 int32 idx = match (find(xs: list, target: 7)) {
     case Some(i): i;
@@ -1168,7 +1168,7 @@ exactly what you name:
 | You name | `reachesPointer` | Result |
 |---|---|---|
 | `int32` / `MyEnum` / `MyValueType` | — / false | by value (stack) |
-| tree `resource` (`User { string name }`, `List<int32>`) | false | by value (stack) |
+| tree `resource` (`User { string name }`, `DynamicArray<int32>`) | false | by value (stack) |
 | `Shared<T>` (value **or** resource) | any | heap graph (one node or many) |
 | bare graph type (`decode::<Node>` where `Node` reaches a pointer) | true | **compile error** → "reaches a pointer; decode as `Shared<Node>`" |
 

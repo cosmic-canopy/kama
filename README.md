@@ -25,7 +25,7 @@ the browser as WebAssembly.
   explicit in the generated C. No stop-the-world, no hidden runtime.
 - **Memory-safe by construction, without a borrow checker.** No raw pointers or `null` in
   the safe surface — heap and buffers are reached only through **smart pointers**
-  (`Owned`/`Shared`/`Weak`) and **collections** (`Array`/`List`/`string`), all bounds-checked
+  (`Owned`/`Shared`/`Weak`) and **collections** (`FixedArray`/`DynamicArray`/`string`), all bounds-checked
   and RAII-managed. Use-after-move is a compile error. Raw pointers live only inside an
   explicit, greppable `unsafe { }` block at the C/FFI seam.
 - **Ownership is the type axis.** Every type is a `type value` (owns nothing, copies), a

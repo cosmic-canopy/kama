@@ -7,7 +7,7 @@ type value Row {
     public ref int32 operator[](usize j) { if (j == 0) { return this.a; } return this.b; }
 }
 type value Mat {
-    Fixed<Row, 2> rows;
+    InlineArray<Row, 2> rows;
     public Mat() { Row r = Row(); this.rows = [r; 2]; }
     public ref Row operator[](usize i) { return this.rows[i]; }
 }

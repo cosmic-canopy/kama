@@ -1,4 +1,4 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // M26f-2 — moving a `resource` value DECLARED INSIDE a loop body is fine (it's fresh each
 // iteration). 3 iterations, each moves its own `a` into sink -> 3 drops of code 1:
 // ((1*31+1)*31+1)=993 -> exit 993 & 0xFF = 225.
@@ -6,7 +6,7 @@ extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
 
 type resource Res {
-    List<int32> items;
+    DynamicArray<int32> items;
     public Res(int32 v) { this.items.add(item: v); }
     ~Res() { kama_trace(code: 1); }
     public fn int32 head() { return this.items[0]; }

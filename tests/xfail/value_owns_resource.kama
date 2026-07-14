@@ -1,4 +1,4 @@
 // M26h — a `value` owns nothing; owning a collection (a resource) is a compile error.
-import std::collections::{List};
-type value Bad { List<int32> items; public Bad() { this.items.add(item: 1); } }
+import std::collections::{DynamicArray};
+type value Bad { DynamicArray<int32> items; public Bad() { this.items.add(item: 1); } }
 fn int32 main() { Bad b = Bad(); return 0; }

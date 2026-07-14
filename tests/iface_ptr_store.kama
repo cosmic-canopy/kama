@@ -1,14 +1,14 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 import std::memory::{Owned, Shared};
 // M26g-3 — owning polymorphism can be STORED and RETURNED: an interface smart pointer is an ordinary
 // value type, so `Shared<Shape>` works as a class FIELD and `Owned`/`Shared<Shape>` as a function
 // RETURN (M26e only rejected a *bare* interface in those positions). Dispatch stays polymorphic; the
-// field's owner drops it in RAII order. (A `List<Shared<Shape> >` now works too — the collection
+// field's owner drops it in RAII order. (A `DynamicArray<Shared<Shape> >` now works too — the collection
 // drops each stored handle in RAII order; see `list_shared_iface`. Only the `>>` split, dropping the
 // space, remains as a later ergonomic slice.)
 type contract Shape for both { fn int32 area(); }
 type resource Sq implements Shape {
-    List<int32> side;
+    DynamicArray<int32> side;
     public Sq(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }

@@ -1,18 +1,18 @@
 // M26i — `list[i].m()` borrows the element in place, so deep-const is preserved: a
 // MUTATING method called through an element of a const-borrowed collection is rejected
 // (only const methods are callable). Guards the in-place-borrow const-correctness.
-import std::collections::{List};
+import std::collections::{DynamicArray};
 type value Counter {
     int32 n;
     public Counter(int32 start) { this.n = start; }
     public fn int32 get() { return this.n; }
     public fn void bump(int32 by) { this.n = this.n + by; }   // mutates
 }
-fn void touch(const ref List<Counter> xs) {
+fn void touch(const ref DynamicArray<Counter> xs) {
     xs[0].bump(by: 1);          // non-const method on a const-borrowed element -> REJECT
 }
 fn int32 main() {
-    List<Counter> xs = List();
+    DynamicArray<Counter> xs = DynamicArray();
     Counter a = Counter(start: 1);
     xs.add(item: a);
     touch(xs: ref xs);

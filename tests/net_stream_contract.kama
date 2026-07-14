@@ -3,13 +3,13 @@
 // read-via-contract and checks count + sum. Single process, client-first (buffered + FIN). Returns 55.
 import std::net::{TcpListener, TcpStream, ReliableStream};
 import std::io::{IoError};
-import std::collections::{List, Array};
+import std::collections::{DynamicArray, FixedArray};
 
-fn int32 writeVia(ReliableStream s, ref List<uint8> bytes) {
+fn int32 writeVia(ReliableStream s, ref DynamicArray<uint8> bytes) {
     Result<usize, IoError> r = s.writeAll(bytes: bytes);
     return match (r) { case Ok(w): cast<int32>(w); case Err(e): -1; };
 }
-fn int32 readVia(ReliableStream s, ref Array<uint8> into) {
+fn int32 readVia(ReliableStream s, ref FixedArray<uint8> into) {
     Result<usize, IoError> r = s.read(into: into);
     return match (r) { case Ok(n): cast<int32>(n); case Err(e): -1; };
 }
@@ -19,7 +19,7 @@ fn int32 clientSend(uint16 port) {
     Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
     return match (rc) {
         case Ok(c): {
-            List<uint8> data = List();
+            DynamicArray<uint8> data = DynamicArray();
             data.add(item: cast<uint8>(10)); data.add(item: cast<uint8>(20));
             data.add(item: cast<uint8>(30)); data.add(item: cast<uint8>(40));
             := writeVia(s: c, bytes: data);            // dynamic dispatch through ReliableStream
@@ -29,7 +29,7 @@ fn int32 clientSend(uint16 port) {
 }
 
 fn int32 serverRecv(ref TcpStream srv) {
-    Array<uint8> buf = Array(size: 256);
+    FixedArray<uint8> buf = FixedArray(size: 256);
     int32 total = 0;
     int32 sum = 0;
     bool done = false;

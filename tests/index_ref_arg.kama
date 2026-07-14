@@ -1,10 +1,10 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // `ref a[i]` borrows the element in place (bounds-checked) — the callee mutates the real element.
 fn void addTo(ref int32 slot, int32 by) { slot = slot + by; }
 fn int32 main() {
-    Fixed<int32, 3> a = [5, 6, 7];
+    InlineArray<int32, 3> a = [5, 6, 7];
     addTo(slot: ref a[1], by: 100);     // a[1] -> 106
-    List<int32> l = List();
+    DynamicArray<int32> l = DynamicArray();
     l.add(item: 9);
     addTo(slot: ref l[0], by: 20);      // l[0] -> 29
     return a[1] + l[0];                 // 106 + 29 = 135

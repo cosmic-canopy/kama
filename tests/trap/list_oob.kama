@@ -1,8 +1,8 @@
-// Indexing a List out of range is a clean bounds trap (abort), not undefined behavior. The index is
+// Indexing a DynamicArray out of range is a clean bounds trap (abort), not undefined behavior. The index is
 // derived from the live length (runtime-opaque) so it can't fold. (list_bounds covers the valid edges.)
-import std::collections::{List};
+import std::collections::{DynamicArray};
 fn int main() {
-    List<int32> xs = List();
+    DynamicArray<int32> xs = DynamicArray();
     xs.add(item: 10);
     xs.add(item: 20);
     int32 i = cast<int32>(xs.length()) + 5;   // 7, past the end

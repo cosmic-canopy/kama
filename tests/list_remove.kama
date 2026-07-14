@@ -1,9 +1,9 @@
-// List completion: reserve / remove(index) (drops + shifts) / clear / contains / indexOf, over an OWNING
-// element (List<string>) so ASan covers the element drops on remove + clear.
-import std::collections::{List};
+// DynamicArray completion: reserve / remove(index) (drops + shifts) / clear / contains / indexOf, over an OWNING
+// element (DynamicArray<string>) so ASan covers the element drops on remove + clear.
+import std::collections::{DynamicArray};
 
 fn int main() {
-    List<string> xs = List();
+    DynamicArray<string> xs = DynamicArray();
     xs.reserve(n: 8);                       // preallocate — no reallocation across the adds
     xs.add(item: "a"); xs.add(item: "b"); xs.add(item: "c"); xs.add(item: "d");
 

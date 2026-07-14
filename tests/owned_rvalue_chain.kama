@@ -1,7 +1,7 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // A2 — an owned rvalue receiver reached through a METHOD CHAIN (`b.make().area()`). `make()` returns a
-// fresh owned Widget (heap List) used as the receiver of `.area()`; it must be materialized into a
+// fresh owned Widget (heap DynamicArray) used as the receiver of `.area()`; it must be materialized into a
 // scope-dtor'd temp and dropped exactly once. ASan/LeakSanitizer-clean == the chain receiver was freed.
-type resource Widget { List<int32> parts; public Widget(int32 s){ this.parts.add(item: s); } public fn int32 area(){ return this.parts[0]*this.parts[0]; } }
+type resource Widget { DynamicArray<int32> parts; public Widget(int32 s){ this.parts.add(item: s); } public fn int32 area(){ return this.parts[0]*this.parts[0]; } }
 type resource Builder { int32 seed; public Builder(int32 s){ this.seed = s; } public fn Widget make(){ return Widget(s: this.seed); } }
 fn int32 main() { Builder b = Builder(s: 7); return b.make().area(); }

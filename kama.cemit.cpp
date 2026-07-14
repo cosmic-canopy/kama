@@ -229,14 +229,14 @@ std::string CEmitter::cType(SharedIdentifier type)
         if (*type->value == "isize") return "ptrdiff_t";
     }
 
-    // Fixed<T, N> spells `Fixed_<mangleT>_<N>` (two args — the const size mangles to its value).
-    if (type->genericArg && type->value && *type->value == "Fixed" && type->genericArgs) {
-        std::string m = "Fixed";
+    // InlineArray<T, N> spells `InlineArray_<mangleT>_<N>` (two args — the const size mangles to its value).
+    if (type->genericArg && type->value && *type->value == "InlineArray" && type->genericArgs) {
+        std::string m = "InlineArray";
         for (auto& a : *type->genericArgs) m += "_" + mangleElem(a);
         return m;
     }
-    // `BindableFunctionPtr<Sig>` spells its mangled struct name. (List AND Array are library generic
-    // types now — std::collections — and smart pointers likewise; they flow through the generic-type
+    // `BindableFunctionPtr<Sig>` spells its mangled struct name. (DynamicArray AND FixedArray are library
+    // generic types now — std::collections — and smart pointers likewise; they flow through the generic-type
     // arm below.)
     if (type->genericArg && type->value && *type->value == "BindableFunctionPtr")
         return *type->value + "_" + mangleElem(type->genericArg);
@@ -2967,11 +2967,11 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
 {
     if (!t) return false;
     if (t->builtInVal == IDENTIFIER_STRING_VAL) return true;          // string
-    // List, Array, and the smart pointers are library generic types (std::collections / std::memory),
-    // not intrinsic collections; they route through registerGenericTypeInst. `Fixed<T,N>` (the
-    // const-generic value array) stays intrinsic.
+    // DynamicArray, FixedArray, and the smart pointers are library generic types (std::collections /
+    // std::memory), not intrinsic collections; they route through registerGenericTypeInst. `InlineArray<T,N>`
+    // (the const-generic value array) stays intrinsic.
     return t->genericArg && t->value &&
-           (*t->value == "BindableFunctionPtr" || *t->value == "Fixed");
+           (*t->value == "BindableFunctionPtr" || *t->value == "InlineArray");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -2999,8 +2999,8 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         return;
     }
 
-    // Fixed<T, N> — the const-generic value array (a distinct shape: two args, value semantics).
-    if (!isStr && collType->value && *collType->value == "Fixed") {
+    // InlineArray<T, N> — the const-generic value array (a distinct shape: two args, value semantics).
+    if (!isStr && collType->value && *collType->value == "InlineArray") {
         registerFixed(collType);
         return;
     }
@@ -3120,8 +3120,8 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
 {
     SharedIdentifierList args = fixedType->genericArgs;
     if (!args || args->size() != 2) {
-        unsupported("`Fixed<T, N>` takes exactly two arguments — an element type and a const size "
-                    "(`Fixed<float32, 4>`)", fixedType->line);
+        unsupported("`InlineArray<T, N>` takes exactly two arguments — an element type and a const size "
+                    "(`InlineArray<float32, 4>`)", fixedType->line);
         return;
     }
     SharedIdentifier elem = (*args)[0];
@@ -3132,7 +3132,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // use site (a caller's typed local / a bound instantiation). A concrete non-const size resolves here.
     if (!constArgN(nArg, n)) return;
     if (n <= 0) {
-        unsupported("the size of a `Fixed<T, N>` must be a positive integer", fixedType->line);
+        unsupported("the size of an `InlineArray<T, N>` must be a positive integer", fixedType->line);
         return;
     }
 
@@ -3140,17 +3140,17 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     std::string elemMangle = mangleElem(elem);
     std::string elemClass  = isClass(elemCType) ? elemCType : "";
 
-    // The element must OWN NOTHING (a `value` or primitive): a `Fixed` is a plain value with no
+    // The element must OWN NOTHING (a `value` or primitive): an `InlineArray` is a plain value with no
     // per-element dtor, so a `resource`/interface/destructible element would leak or dangle.
     if (isInterface(elemCType) || (!elemClass.empty() && isMoveOnlyValue(elemClass))) {
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
-        unsupported(("a `Fixed<T, N>` element must be a `value` (it owns nothing) — `" + nm +
-                     "` is a `resource`/contract, which would leak; wrap it in an owning `Array`/"
-                     "`List` instead").c_str(), fixedType->line);
+        unsupported(("an `InlineArray<T, N>` element must be a `value` (it owns nothing) — `" + nm +
+                     "` is a `resource`/contract, which would leak; wrap it in an owning `FixedArray`/"
+                     "`DynamicArray` instead").c_str(), fixedType->line);
         return;
     }
 
-    std::string cName = "Fixed_" + elemMangle + "_" + std::to_string(n);
+    std::string cName = "InlineArray_" + elemMangle + "_" + std::to_string(n);
     if (_collections.count(cName)) return;    // dedup
 
     CollectionInfo info;
@@ -3868,16 +3868,16 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     if (tmpl->parameters) for (auto& p : *tmpl->parameters) {
         if (!p || !p->type || !p->type->value) continue;
         const std::string& pty = *p->type->value;
-        // A `Fixed<ElemT, K>` parameter — infer any type-param element AND the const size K from the
-        // argument's concrete `Fixed<int32, 4>` type. This is the const-generic half of inference.
-        if (pty == "Fixed" && p->type->genericArgs && p->type->genericArgs->size() == 2) {
+        // An `InlineArray<ElemT, K>` parameter — infer any type-param element AND the const size K from the
+        // argument's concrete `InlineArray<int32, 4>` type. This is the const-generic half of inference.
+        if (pty == "InlineArray" && p->type->genericArgs && p->type->genericArgs->size() == 2) {
             std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             auto ai = byName.find(pname);
             if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
             SharedIdentifier at = exprTypeNode(ai->second, localTys);
-            if (!at || !at->value || *at->value != "Fixed" || !at->genericArgs || at->genericArgs->size() != 2) {
-                unsupported(("cannot infer the generic parameters of `Fixed<…>` — argument '" + pname +
-                             "' is not a `Fixed<…>` value").c_str(), line);
+            if (!at || !at->value || *at->value != "InlineArray" || !at->genericArgs || at->genericArgs->size() != 2) {
+                unsupported(("cannot infer the generic parameters of `InlineArray<…>` — argument '" + pname +
+                             "' is not an `InlineArray<…>` value").c_str(), line);
                 return false;
             }
             SharedIdentifier pElem = (*p->type->genericArgs)[0], pN = (*p->type->genericArgs)[1];

@@ -1,7 +1,7 @@
 // std::fs error path — reading / opening / stat-ing a missing path yields Err(NotFound).
 import std::fs::{readFile, stat, File, OpenMode};
 import std::io::{IoError};
-import std::collections::{List};
+import std::collections::{DynamicArray};
 
 fn int32 isNotFound(IoError e) { return match (e) { case NotFound: 1; case _: 0; }; }
 

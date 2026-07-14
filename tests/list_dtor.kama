@@ -1,5 +1,5 @@
-import std::collections::{List};
-// List<T> RAII + element-dtor chaining over the LIVE length (len=3, cap=4):
+import std::collections::{DynamicArray};
+// DynamicArray<T> RAII + element-dtor chaining over the LIVE length (len=3, cap=4):
 // the list's dtor must destroy exactly its 3 live elements, not its capacity.
 //
 // M26f-2: `add(item:)` takes the element BY VALUE, and a `resource` (destructible) value
@@ -18,7 +18,7 @@ type resource Probe
 
 fn int build()
 {
-    List<Probe> xs = List();
+    DynamicArray<Probe> xs = DynamicArray();
     Probe a = Probe(id: 1);
     Probe b = Probe(id: 2);
     Probe c = Probe(id: 4);

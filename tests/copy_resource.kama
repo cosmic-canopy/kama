@@ -1,4 +1,4 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // M26f-4 — a `resource` (destructible) VALUE opts into the `Copyable` contract by declaring a
 // public nullary `copy` returning its own type. Its presence makes the give/copy marker MANDATORY
 // ("scream when ambiguous"): `copy x` deep-copies (the source stays valid), `give x` moves. This
@@ -7,7 +7,7 @@ import std::collections::{List};
 // (ASan traps), a deep copy frees N distinct heap buffers cleanly.
 
 type resource Res implements Copyable(bare: give) {
-    List<int32> items;                                      // owns a heap buffer
+    DynamicArray<int32> items;                                      // owns a heap buffer
     public Res(int32 v) { this.items.add(item: v); }
     ~Res() { }                                              // resource (move-only); frees `items` too
     public fn Res copy() { Res r = Res(v: this.items[0]); return give r; }  // opt into Copyable

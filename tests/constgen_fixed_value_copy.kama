@@ -1,8 +1,8 @@
-// A Fixed<T,N> copies BY VALUE (a plain struct blit, no give/copy marker) — mutating the copy
+// A InlineArray<T,N> copies BY VALUE (a plain struct blit, no give/copy marker) — mutating the copy
 // leaves the original untouched. This is the safe-array payoff: no aliasing, no pointer decay.
 fn int32 main() {
-    Fixed<int32, 3> a = [1, 2, 3];
-    Fixed<int32, 3> b = a;   // value copy
+    InlineArray<int32, 3> a = [1, 2, 3];
+    InlineArray<int32, 3> b = a;   // value copy
     b[0] = 100;              // mutate the copy only
     return a[0] + b[0];      // 1 + 100 = 101 (a[0] still 1)
 }

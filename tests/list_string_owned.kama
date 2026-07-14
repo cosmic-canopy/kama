@@ -1,9 +1,9 @@
-// A `List<string>` owns its OWNED string elements: `add(item: give s)` moves them in, by-value
-// `foreach` yields owned copies (dropped each pass), and `~List` frees each — ASan-clean is the proof.
+// A `DynamicArray<string>` owns its OWNED string elements: `add(item: give s)` moves them in, by-value
+// `foreach` yields owned copies (dropped each pass), and `~DynamicArray` frees each — ASan-clean is the proof.
 // (A literal element mixes in fine — it is borrowed, cap==0, a no-op to drop.)
-import std::collections::{List};
+import std::collections::{DynamicArray};
 fn int main() {
-    List<string> xs;
+    DynamicArray<string> xs;
     string a = "ab" + ""; string b = "cde" + "";
     xs.add(item: give a);
     xs.add(item: give b);

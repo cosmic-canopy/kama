@@ -1,25 +1,25 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // M26f-5 — `copy` of a collection whose ELEMENTS are `Copyable` resources deep-copies each
 // element via its `copy()` method (a fresh, independent per-element buffer). This is the piece
 // M26f-3 deferred (it required the Copyable contract, M26f-4). Independence is proved by ASan:
-// a shallow copy would alias each element's inner `List` and double-free it at scope exit.
+// a shallow copy would alias each element's inner `DynamicArray` and double-free it at scope exit.
 type resource Res implements Copyable(bare: give) {
-    List<int32> items;                                     // owns a heap buffer
+    DynamicArray<int32> items;                                     // owns a heap buffer
     public Res(int32 v) { this.items.add(item: v); }
     ~Res() { }                                             // resource
     public fn Res copy() { Res r = Res(v: this.items[0]); return give r; }   // opt into Copyable
     public fn int32 head() { return this.items[0]; }
 }
-fn int32 sumHeads(ref List<Res> xs) {
+fn int32 sumHeads(ref DynamicArray<Res> xs) {
     int32 s = 0;
     foreach (ref Res r in xs) { s = s + r.head(); }   // borrow each element (resources aren't yielded by value)
     return s;
 }
 fn int32 main() {
-    List<Res> a = List();
+    DynamicArray<Res> a = DynamicArray();
     Res r1 = Res(v: 10);  a.add(item: give r1);
     Res r2 = Res(v: 20);  a.add(item: give r2);
-    List<Res> b = copy a;                                  // deep copy — each Res gets its own buffer
+    DynamicArray<Res> b = copy a;                                  // deep copy — each Res gets its own buffer
     int32 s = sumHeads(xs: ref a) + sumHeads(xs: ref b);   // 30 + 30 = 60 (both lists valid, independent)
     return s;                                              // a and b drop -> 4 Res freed cleanly
 }

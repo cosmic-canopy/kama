@@ -2,7 +2,7 @@
 // B receives via recvFrom. Verifies the connected send/recv path and payload. Returns 55.
 import std::net::{UdpSocket, SocketAddr, RecvFrom};
 import std::io::{IoError};
-import std::collections::{List, Array};
+import std::collections::{DynamicArray, FixedArray};
 
 fn int32 run(ref UdpSocket a, ref UdpSocket b, int32 bport) {
     string host = "127.0.0.1";
@@ -10,13 +10,13 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b, int32 bport) {
     int32 c = match (rc) { case Ok(u): 0; case Err(e): -1; };
     if (c != 0) { return 61; }
 
-    List<uint8> msg = List();
+    DynamicArray<uint8> msg = DynamicArray();
     msg.add(item: cast<uint8>(7)); msg.add(item: cast<uint8>(9)); msg.add(item: cast<uint8>(11));
     Result<usize, IoError> rs = a.send(bytes: msg);
     int32 sent = match (rs) { case Ok(w): cast<int32>(w); case Err(e): -1; };
     if (sent != 3) { return 62; }
 
-    Array<uint8> buf = Array(size: 64);
+    FixedArray<uint8> buf = FixedArray(size: 64);
     Result<RecvFrom, IoError> rr = b.recvFrom(into: buf);
     int32 got = match (rr) { case Ok(rf): cast<int32>(rf.count); case Err(e): -1; };
     if (got != 3) { return 63; }

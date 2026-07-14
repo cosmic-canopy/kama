@@ -1,7 +1,7 @@
 namespace std::fs;
 
 import std::io::{IoError, lastError};
-import std::collections::{List, Array};
+import std::collections::{DynamicArray, FixedArray};
 
 export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove };
 
@@ -47,7 +47,7 @@ type resource File {
     }
 
     // Read up to `into.length()` bytes into `into`; returns the count (0 = end of file). EINTR-retried.
-    public fn Result<usize, IoError> read(ref Array<uint8> into) {
+    public fn Result<usize, IoError> read(ref FixedArray<uint8> into) {
         while (true) {
             isize n = kama_read(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
@@ -56,9 +56,9 @@ type resource File {
     }
 
     // Read the whole file to EOF into an owning byte buffer.
-    public fn Result<List<uint8>, IoError> readAll() {
-        List<uint8> buf = List();
-        Array<uint8> scratch = Array(size: 65536);
+    public fn Result<DynamicArray<uint8>, IoError> readAll() {
+        DynamicArray<uint8> buf = DynamicArray();
+        FixedArray<uint8> scratch = FixedArray(size: 65536);
         bool eof = false;
         while (!eof) {
             isize n = kama_read(fd: this.fd, buf: addr(of: scratch[0]), n: cast<usize>(scratch.length()));
@@ -78,7 +78,7 @@ type resource File {
     }
 
     // Write the whole buffer, looping until every byte is sent (partial writes + EINTR handled).
-    public fn Result<usize, IoError> writeAll(ref List<uint8> bytes) {
+    public fn Result<usize, IoError> writeAll(ref DynamicArray<uint8> bytes) {
         int32 total = cast<int32>(bytes.length());
         int32 off = 0;
         while (off < total) {
@@ -97,7 +97,7 @@ type resource File {
 }
 
 // Read an entire file into an owning byte buffer (opens, reads to EOF, closes on drop).
-fn Result<List<uint8>, IoError> readFile(ref string path) {
+fn Result<DynamicArray<uint8>, IoError> readFile(ref string path) {
     Result<File, IoError> r = File::open(path: path, mode: OpenMode::Read);
     return match (r) {
         case Ok(f):  f.readAll();                       // f closes at arm end (RAII)
@@ -106,7 +106,7 @@ fn Result<List<uint8>, IoError> readFile(ref string path) {
 }
 
 // Create/truncate a file and write the whole buffer to it.
-fn Result<usize, IoError> writeFile(ref string path, ref List<uint8> bytes) {
+fn Result<usize, IoError> writeFile(ref string path, ref DynamicArray<uint8> bytes) {
     Result<File, IoError> r = File::open(path: path, mode: OpenMode::Write);
     return match (r) {
         case Ok(f):  f.writeAll(bytes: bytes);
@@ -129,11 +129,11 @@ fn Result<Unit, IoError> remove(ref string path) {
     return Result::Ok(value: Unit::Unit);
 }
 
-// List a directory's entries (excluding "." and ".."), each as an owned string.
-fn Result<List<string>, IoError> readDir(ref string path) {
+// DynamicArray a directory's entries (excluding "." and ".."), each as an owned string.
+fn Result<DynamicArray<string>, IoError> readDir(ref string path) {
     Ptr dirp = kama_diropen(path: path.cstr());
     if (dirp == null) { return Result::Err(error: lastError()); }
-    List<string> names = List();
+    DynamicArray<string> names = DynamicArray();
     while (true) {
         string name = kama_dirnext(dirp: dirp);
         if (name.isEmpty()) { break; }              // end of directory

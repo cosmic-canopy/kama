@@ -1,4 +1,4 @@
 // A free `fn ref T` result must borrow a `ref` parameter — a place into a LOCAL would dangle the
 // moment the function returns. Rejected by the escape check (a free fn has no `this` either).
-fn ref int32 bad(usize i) { Fixed<int32, 4> local = [0; 4]; return local[i]; }
+fn ref int32 bad(usize i) { InlineArray<int32, 4> local = [0; 4]; return local[i]; }
 fn int32 main() { return bad(i: 0); }

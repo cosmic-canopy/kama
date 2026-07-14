@@ -1,16 +1,16 @@
-// Composition: a List of a @generate type, and a List of Lists — everything chains .serialize()/deserialize().
+// Composition: a DynamicArray of a @generate type, and a DynamicArray of Lists — everything chains .serialize()/deserialize().
 import std::serialization::json::{encode, decode};
-import std::collections::{List};
+import std::collections::{DynamicArray};
 @generate(Serialize, Deserialize, noOnConstruction)
 type value Point { @field public int32 x; @field public int32 y; public Point(int32 x, int32 y) { this.x = x; this.y = y; } }
 fn int main() {
-    List<Point> ps = List(); ps.add(item: Point(x: 1, y: 2)); ps.add(item: Point(x: 3, y: 4));
-    Result<List<Point>, DeError> r1 = decode::<List<Point>>(src: give encode(v: ps));
+    DynamicArray<Point> ps = DynamicArray(); ps.add(item: Point(x: 1, y: 2)); ps.add(item: Point(x: 3, y: 4));
+    Result<DynamicArray<Point>, DeError> r1 = decode::<DynamicArray<Point>>(src: give encode(v: ps));
     int32 a = match (r1) { case Ok(b): b[1].x + b[1].y; case Err(e): 0 - 1; };   // 7
 
-    List<List<int32>> nested = List();
-    List<int32> inner = List(); inner.add(item: 5); inner.add(item: 6); nested.add(item: give inner);
-    Result<List<List<int32>>, DeError> r2 = decode::<List<List<int32>>>(src: give encode(v: nested));
+    DynamicArray<DynamicArray<int32>> nested = DynamicArray();
+    DynamicArray<int32> inner = DynamicArray(); inner.add(item: 5); inner.add(item: 6); nested.add(item: give inner);
+    Result<DynamicArray<DynamicArray<int32>>, DeError> r2 = decode::<DynamicArray<DynamicArray<int32>>>(src: give encode(v: nested));
     int32 b2 = match (r2) { case Ok(b): b[0][0] + b[0][1]; case Err(e): 0 - 1; };  // 11
     return a + b2;   // 18
 }

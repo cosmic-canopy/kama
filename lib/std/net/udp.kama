@@ -1,7 +1,7 @@
 namespace std::net;
 
 import std::io::{IoError, lastError};
-import std::collections::{List, Array};
+import std::collections::{DynamicArray, FixedArray};
 import std::net::{SocketAddr, RecvFrom};
 
 export { UdpSocket, DatagramSocket };
@@ -32,10 +32,10 @@ extern fn int32 kama_EINTR();
 // `fn tick<S: DatagramSocket>(ref S s)` runs unchanged on every platform. `setNonBlocking(false)` is a
 // no-op on web (the browser is always non-blocking); `WouldBlock` is the uniform "nothing ready" signal.
 type contract DatagramSocket for resource {
-    fn Result<usize, IoError> sendTo(ref List<uint8> bytes, ref SocketAddr to);
-    fn Result<RecvFrom, IoError> recvFrom(ref Array<uint8> into);
-    fn Result<usize, IoError> send(ref List<uint8> bytes);
-    fn Result<usize, IoError> recv(ref Array<uint8> into);
+    fn Result<usize, IoError> sendTo(ref DynamicArray<uint8> bytes, ref SocketAddr to);
+    fn Result<RecvFrom, IoError> recvFrom(ref FixedArray<uint8> into);
+    fn Result<usize, IoError> send(ref DynamicArray<uint8> bytes);
+    fn Result<usize, IoError> recv(ref FixedArray<uint8> into);
     fn Result<Unit, IoError> setNonBlocking(bool on);
 }
 
@@ -70,7 +70,7 @@ type resource UdpSocket implements DatagramSocket {
 
     // Send the whole buffer as one datagram to `to`. Returns the byte count (a datagram is atomic — a
     // short write is unusual). EINTR-retried. `Err(MessageTooLong)` if the payload exceeds the path MTU.
-    public fn Result<usize, IoError> sendTo(ref List<uint8> bytes, ref SocketAddr to) {
+    public fn Result<usize, IoError> sendTo(ref DynamicArray<uint8> bytes, ref SocketAddr to) {
         string h = to.ipString();
         while (true) {
             isize n = kama_sendto_inet(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()),
@@ -82,7 +82,7 @@ type resource UdpSocket implements DatagramSocket {
 
     // Receive one datagram into `into` (truncated to into.length() if larger); returns count + sender.
     // Non-blocking + nothing queued => Err(WouldBlock). EINTR-retried.
-    public fn Result<RecvFrom, IoError> recvFrom(ref Array<uint8> into) {
+    public fn Result<RecvFrom, IoError> recvFrom(ref FixedArray<uint8> into) {
         uint32 ip = 0ui32;
         uint16 port = 0ui16;
         while (true) {
@@ -94,7 +94,7 @@ type resource UdpSocket implements DatagramSocket {
     }
 
     // Send to the connected default peer (see connect). EINTR-retried.
-    public fn Result<usize, IoError> send(ref List<uint8> bytes) {
+    public fn Result<usize, IoError> send(ref DynamicArray<uint8> bytes) {
         while (true) {
             isize n = kama_send(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
@@ -103,7 +103,7 @@ type resource UdpSocket implements DatagramSocket {
     }
 
     // Receive from the connected default peer. Non-blocking + empty => Err(WouldBlock). EINTR-retried.
-    public fn Result<usize, IoError> recv(ref Array<uint8> into) {
+    public fn Result<usize, IoError> recv(ref FixedArray<uint8> into) {
         while (true) {
             isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }

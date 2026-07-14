@@ -299,7 +299,7 @@ static inline size_t NAME##__length(NAME* self) { return self->len; }\
  }
 #define KAMA_LIST_DEFINE(T, NAME, ELEM_DTOR, ELEM_COPY) KAMA_LIST_TYPE(T, NAME) KAMA_LIST_FUNCS(T, NAME, ELEM_DTOR, ELEM_COPY)
 
-// Fixed<T,N> — a fixed-size, bounds-checked VALUE array (`struct { T v[N]; }`). It owns no heap:
+// InlineArray<T,N> — a fixed-size, bounds-checked VALUE array (`struct { T v[N]; }`). It owns no heap:
 // it copies by value (a plain struct blit), has no destructor, and never decays to a raw pointer.
 // The element must be a `value` (owns nothing), so there is no per-element dtor/copy. This is how
 // kama reintroduces raw arrays SAFELY — indexing is bounds-checked (a runtime trap), the size is

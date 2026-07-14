@@ -1,7 +1,7 @@
 namespace std::net;
 
 import std::io::{IoError};
-import std::collections::{List, Array};
+import std::collections::{DynamicArray, FixedArray};
 
 export { ReliableStream };
 
@@ -11,7 +11,7 @@ export { ReliableStream };
 // toggles the drain model; on web it is a no-op (the browser is always non-blocking) and reads that would
 // stall return `Err(WouldBlock)`.
 type contract ReliableStream for resource {
-    fn Result<usize, IoError> read(ref Array<uint8> into);
-    fn Result<usize, IoError> writeAll(ref List<uint8> bytes);
+    fn Result<usize, IoError> read(ref FixedArray<uint8> into);
+    fn Result<usize, IoError> writeAll(ref DynamicArray<uint8> bytes);
     fn Result<Unit, IoError> setNonBlocking(bool on);
 }

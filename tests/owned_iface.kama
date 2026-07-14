@@ -1,10 +1,10 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 import std::memory::{Owned};
 // M26g-1 — `Owned<Shape>`: a UNIQUE-owning smart pointer over an INTERFACE. `new Rect(...)` boxes a
 // concrete class implementing the interface into a fat handle {obj, vtbl}; `s.area()` dispatches
 // polymorphically through the vtable; dropping the handle destroys the concrete object via the
 // vtable's `__dtor` slot (so a destructible impl's own heap is freed) then frees it. Move-only, like
-// `Owned<T>`. ASan-clean: the destructible `Square`'s `List` is freed exactly once.
+// `Owned<T>`. ASan-clean: the destructible `Square`'s `DynamicArray` is freed exactly once.
 type contract Shape for both { fn int32 area(); }
 type value Rect implements Shape {
     int32 w; int32 h;
@@ -12,14 +12,14 @@ type value Rect implements Shape {
     public fn int32 area() { return this.w * this.h; }         // non-destructible impl
 }
 type resource Square implements Shape {
-    List<int32> side;                                          // owns heap -> destructible impl
+    DynamicArray<int32> side;                                          // owns heap -> destructible impl
     public Square(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 fn int32 areaOf(Owned<Shape> s) { return s.area(); }          // callee owns s, drops it at fn-end
 fn int32 main() {
     Owned<Shape> a = new Rect(w: 3, h: 4);                    // boxed Rect  -> area 12
-    Owned<Shape> b = new Square(s: 5);                        // boxed Square -> area 25 (owns a List)
+    Owned<Shape> b = new Square(s: 5);                        // boxed Square -> area 25 (owns a DynamicArray)
     int32 total = a.area() + areaOf(s: give b);                // 12 + 25 = 37; b moved into the callee
     return total;                                              // a drops here (Rect freed)
 }

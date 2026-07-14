@@ -7,12 +7,12 @@ extern fn Ptr calloc(usize count, usize size);
 extern fn void free(Ptr p);
 
 // The primitive `Hashable`/`Equatable` conformances (`string`, `int32`) now live in the PRELUDE
-// (kama.driver.cpp `PRELUDE_SRC`) so they're universal — a `<T: Equatable>` bound or `List<int32>.contains`
+// (kama.driver.cpp `PRELUDE_SRC`) so they're universal — a `<T: Equatable>` bound or `DynamicArray<int32>.contains`
 // resolves without importing `std::collections`. They stay pure-kama retro-impls (no compiler blessing).
 
 // A by-value iterator over a map's KEYS (the `foreach (K k in map)` protocol; `Set` hands out the same).
 // It borrows the map's key + state buffers, walks only FULL slots, and yields each key BY VALUE (a copy),
-// so it exists only for a `Copyable` key. Like `ListIter` it snapshots the map's mutation counter and
+// so it exists only for a `Copyable` key. Like `DynamicArrayIter` it snapshots the map's mutation counter and
 // rejects a structural change (a `put`/`remove` that could rehash) made mid-iteration.
 type value MapKeyIter<K> implements Iterator<K> {
     Ptr<K> keys; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
@@ -173,7 +173,7 @@ type resource Map<K: Hashable + Equatable, V>
 
     // Grow to the next capacity and re-home the live entries (which sheds all tombstones). Each entry is
     // RELOCATED bitwise into the fresh buffers — a move, not a copy or a drop — then the old buffers are
-    // freed raw (no per-slot dtor: ownership already left them). Mirrors `List`'s realloc relocation.
+    // freed raw (no per-slot dtor: ownership already left them). Mirrors `DynamicArray`'s realloc relocation.
     fn void grow() {
         int32 nc = this.cap == 0 ? 8 : this.cap * 2;
         Ptr<K> nk; Ptr<V> nv; Ptr<uint8> ns;

@@ -1,3 +1,3 @@
 // M26h — a `resource` field is always private (ownership encapsulated).
-type resource Bad { public List<int32> items; public Bad() { this.items.add(item: 1); } }
+type resource Bad { public DynamicArray<int32> items; public Bad() { this.items.add(item: 1); } }
 fn int32 main() { Bad b = Bad(); return 0; }

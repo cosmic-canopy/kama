@@ -1,11 +1,11 @@
-// List/Array intrinsics at the bounds we expect: empty, first/last valid index, single element, remove at
+// DynamicArray/FixedArray intrinsics at the bounds we expect: empty, first/last valid index, single element, remove at
 // ends, contains/indexOf present/absent, clear, reserve-then-fill. Uses `string` elements for the equality
-// ops (universally `Equatable`); a `List<int32>.contains` currently also needs `int32`'s Equatable in scope
-// (import Map) — a tracked DX wart. Array index bounds use int32 (no equality needed).
-import std::collections::{List, Array};
+// ops (universally `Equatable`); a `DynamicArray<int32>.contains` currently also needs `int32`'s Equatable in scope
+// (import Map) — a tracked DX wart. FixedArray index bounds use int32 (no equality needed).
+import std::collections::{DynamicArray, FixedArray};
 fn int main() {
     int32 r = 0;
-    List<string> xs = List();
+    DynamicArray<string> xs = DynamicArray();
     if (xs.length() == 0)             { r = r + 2; }   // empty
     if (!xs.contains(item: "z"))      { r = r + 2; }   // absent in empty
     if (xs.indexOf(item: "z") == 0 - 1) { r = r + 2; }
@@ -24,7 +24,7 @@ fn int main() {
     xs.clear();
     if (xs.length() == 0)             { r = r + 2; }
 
-    Array<int32> a = Array(size: 3);                  // zero-initialized, all slots live
+    FixedArray<int32> a = FixedArray(size: 3);                  // zero-initialized, all slots live
     if (a[0] == 0 && a[2] == 0)       { r = r + 2; }   // zeroed
     a[0] = 5; a[2] = 9;
     if (a[0] == 5 && a[2] == 9)       { r = r + 2; }   // first/last write

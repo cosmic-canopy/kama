@@ -1,12 +1,12 @@
-import std::collections::{List};
+import std::collections::{DynamicArray};
 // M27 — a generic RESOURCE whose destructibility comes from an OWNING FIELD, not an explicit ~dtor:
-// `type resource Wrap<T>` holds a `List<T>`, so each `Wrap<int32>` is move-only and gets a SYNTHESIZED
+// `type resource Wrap<T>` holds a `DynamicArray<T>`, so each `Wrap<int32>` is move-only and gets a SYNTHESIZED
 // dtor that drops the list. Exercises computeDestructible under type substitution (the T-field's
 // destructibility must be seen through the subst), plus move-into-a-param + param-drop. ASan proves
 // the buffer is freed exactly once (the moved-from `a` is suppressed; only the callee's `w` drops).
 // (A `type value Wrap<T>` here is correctly rejected — a value can't own a resource; see the xfail.)
 type resource Wrap<T> {
-    List<T> items;
+    DynamicArray<T> items;
     public Wrap(T a, T b) { this.items.add(item: a); this.items.add(item: b); }
     public fn T first() { return this.items[0]; }
     public fn int32 size() { return this.items.length(); }

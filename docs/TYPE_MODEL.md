@@ -72,7 +72,7 @@ members (`Owned`/`Shared`/`Weak`/collections).
 
 ```kama
 type resource Buffer {
-    List<byte> data;                       // owned → Buffer is a resource; fields stay private
+    DynamicArray<byte> data;                       // owned → Buffer is a resource; fields stay private
     public fn int32 size() { return this.data.length(); }
 }
 

@@ -1,7 +1,7 @@
 // A free `fn ref T` result must borrow a `ref`/`out` param. A BY-VALUE param is owned by the callee
 // and destroyed at return, so a place into it would dangle — rejected by the escape check.
 type value Buf {
-    Fixed<int32, 4> d;
+    InlineArray<int32, 4> d;
     public Buf() { this.d = [0; 4]; }
 }
 fn ref int32 bad(Buf b, usize i) { return b.d[i]; }

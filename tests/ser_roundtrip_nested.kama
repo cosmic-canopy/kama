@@ -1,8 +1,8 @@
 // Nested @generate(Deserialize) — the bypass-ctor payoff: a nested resource field, an Optional<nested>, and a
-// List<nested> all reconstruct via direct in-place field-set (`result.child = Child::deserialize(r)`), no ctor
+// DynamicArray<nested> all reconstruct via direct in-place field-set (`result.child = Child::deserialize(r)`), no ctor
 // and no move-out-of-holder — which the old all-args-ctor model couldn't express for a nested resource.
 import std::serialization::json::{encode, decode};
-import std::collections::{List};
+import std::collections::{DynamicArray};
 
 @generate(Serialize, Deserialize, noOnConstruction)
 type resource Child {
@@ -17,8 +17,8 @@ type resource Parent {
     @field int32 id;
     @field Child main;                 // nested resource field (direct)
     @field Optional<Child> maybe;      // Optional<nested>
-    @field List<Child> kids;           // List<nested>
-    public Parent(int32 id, Child main, Optional<Child> maybe, List<Child> kids) {
+    @field DynamicArray<Child> kids;           // DynamicArray<nested>
+    public Parent(int32 id, Child main, Optional<Child> maybe, DynamicArray<Child> kids) {
         this.id = id; this.main = give main; this.maybe = give maybe; this.kids = give kids;
     }
     public fn int32 total() {
@@ -34,7 +34,7 @@ fn int main() {
     Child mainC = Child(v: 5, tag: "xyz");            // weight 8
     Child kid1  = Child(v: 1, tag: "a");              // weight 2
     Child kid2  = Child(v: 2, tag: "bb");             // weight 4
-    List<Child> ks = List();
+    DynamicArray<Child> ks = DynamicArray();
     ks.add(item: give kid1);
     ks.add(item: give kid2);
     Child mc = Child(v: 3, tag: "qq");                // weight 5

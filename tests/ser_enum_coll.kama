@@ -1,12 +1,12 @@
-// A List of enums with a string payload, an int payload, and a no-payload variant — composition + tag dispatch.
+// A DynamicArray of enums with a string payload, an int payload, and a no-payload variant — composition + tag dispatch.
 import std::serialization::json::{encode, decode};
-import std::collections::{List};
+import std::collections::{DynamicArray};
 @generate(Serialize, Deserialize)
 enum Tok { Word(string s), Num(int32 n), End }
 fn int main() {
-    List<Tok> ts = List(); string w = "hi";
+    DynamicArray<Tok> ts = DynamicArray(); string w = "hi";
     ts.add(item: Tok::Word(s: give w)); ts.add(item: Tok::Num(n: 42)); ts.add(item: Tok::End);
-    Result<List<Tok>, DeError> res = decode::<List<Tok>>(src: give encode(v: ts));
+    Result<DynamicArray<Tok>, DeError> res = decode::<DynamicArray<Tok>>(src: give encode(v: ts));
     return match (res) { case Ok(b):
         (match (b[0]) { case Word(s): cast<int32>(s.length()); case Num(n): 0; case End: 0; })
         + (match (b[1]) { case Num(n): n; case Word(s): 0; case End: 0; })

@@ -15,10 +15,10 @@ The entire language feature set is complete. In place today:
   **enums** (plain + tagged unions).
 - The full **smart-pointer family** (`Owned`/`Shared`/`Weak`) with the **value/ownership model** (`give`/
   `copy` hand-off, by-value transfer, no null in the safe surface, borrow-vs-storage rule).
-- Generic **collections** (`Array<T>`/`List<T>`/`string`, bounds-checked, monomorphized) and **user
+- Generic **collections** (`FixedArray<T>`/`DynamicArray<T>`/`string`, bounds-checked, monomorphized) and **user
   generics** (monomorphized types + functions, contract bounds `<K: Hashable + Comparable>`, the `This`
-  self-type, turbofish `f::<T>()`) — plus **const generics** and the **`Fixed<T,N>` safe fixed array**
-  (a bounds-checked value array; `Mat4 = Fixed<float32,16>` / `Fixed<Vec4,4>` is available today).
+  self-type, turbofish `f::<T>()`) — plus **const generics** and the **`InlineArray<T,N>` safe fixed array**
+  (a bounds-checked value array; `Mat4 = InlineArray<float32,16>` / `InlineArray<Vec4,4>` is available today).
 - **Place-indexing**: an indexed element is an lvalue, so `m[i][j] = v`, `arr[i].x = v`, `a[i] += x`,
   `ref a[i]`, and `foreach (ref T e in c)` all work — and a **user type can define its own
   `operator[]`** (and `fn ref T at(i)`), so a `Vec`/matrix can be written *in* kama.
@@ -54,7 +54,7 @@ the shared-nothing model in ROADMAP.md).
 | **Function pointers / delegates** | ✅ free `fnptr` + bound `BindableFunctionPtr` (captures a receiver); with a `this`/userdata pointer these cover callbacks (input, window, GPU completion), ECS system fns, and job functions | Pervasive — and satisfied. Inline *capturing closures* are a separate ergonomic nice-to-have (Tier 3; M+ under the ownership/RAII/move model), not a blocker. | done |
 | **Module system**: multi-file builds, `using`/imports, namespaces actually linked | ✅ — multi-file builds, `namespace`/`using`/aliases, private-by-default, shared header + per-module `.c` | An engine is hundreds of files. | done |
 | **Math layer**: vector/matrix/quaternion types + SIMD | ✅ (types) — **`std::math` shipped**: concrete float32 `Vec2/3/4`, `Mat2/3/4`, `Quat` + scalar helpers (`import std::math::{…}`). Column-major, WebGPU 0..1-depth `perspective`/`ortho`/`lookAt`, Mat4 `inverse`, full `Quat` (Hamilton/`rotate`/slerp/`toMat4`), method chaining. Native + ASan + wasm, exact-value fixtures. **SIMD is the remaining follow-up** (L) — portable vector extensions behind the unchanged, SIMD-ready-layout API. | Transforms, physics, culling, shading — the numeric core. | ✅ types → L (SIMD) |
-| **Fixed-size value arrays** (`float[4]`, matrix storage) | ✅ — **`Fixed<T,N>`** shipped: a bounds-checked value array (`struct{T v[N];}`, monomorphized per (T,N), value-copy, no pointer decay), with array literals `[a,b,c]`/`[v;N]`, `.length()`, `foreach`, nested `Fixed<Fixed<..>,..>`, and place-indexing. `Mat4 = Fixed<float32,16>` or `Fixed<Vec4,4>`. Const OOB is a compile error; dynamic OOB traps. | Compact stack numeric storage, SIMD lanes, ergonomic matrices. | done |
+| **InlineArray-size value arrays** (`float[4]`, matrix storage) | ✅ — **`InlineArray<T,N>`** shipped: a bounds-checked value array (`struct{T v[N];}`, monomorphized per (T,N), value-copy, no pointer decay), with array literals `[a,b,c]`/`[v;N]`, `.length()`, `foreach`, nested `InlineArray<InlineArray<..>,..>`, and place-indexing. `Mat4 = InlineArray<float32,16>` or `InlineArray<Vec4,4>`. Const OOB is a compile error; dynamic OOB traps. | Compact stack numeric storage, SIMD lanes, ergonomic matrices. | done |
 
 ## Tier 1 — Core ergonomics (painful without; needed soon after Tier 0)
 
@@ -65,7 +65,7 @@ the shared-nothing model in ROADMAP.md).
 | **Error model**: `Result`/`Optional` | ✅ — `Optional<T>`/`Result<T,E>` prelude tagged unions, consumed by exhaustive `match` (no exceptions, no `null`) | File/asset/GPU/shader-compile failures need a first-class, non-exception path (fits no-GC/deterministic). | done |
 | **Tagged unions / sum types + pattern matching** | ✅ — `enum` payloads/generic enums + value-producing exhaustive `match` (plain enums too) | Events, messages, render commands, animation/state machines, asset variants. | done |
 | **`Map<K,V>` / hash maps** | ✅ — **`Map<K,V>`/`Set<K>` shipped** (open-addressing/tombstoned, owning keys+values, deep `copy` + key iteration, ASan-clean) over prelude **`Hashable`/`Equatable`** contracts (splitmix64 for every integer width, FNV-1a for `string`; floats `Equatable`-only). Remaining is the **ordered/sorted (tree) map** — needs `Comparable`/`Ordering` — and the collections-revisit knobs (reserve/pluggable-hasher/allocator), both in ROADMAP §5. | Entity/resource/asset registries, caches, string→handle lookup. | done (hash map) → sorted map later |
-| **Slices / spans** (non-owning views over `Array`/`List`/buffers) | ❌ | Iterate a subrange, pass a buffer to a system or a GPU upload without copying or transferring ownership. | M |
+| **Slices / spans** (non-owning views over `FixedArray`/`DynamicArray`/buffers) | ❌ | Iterate a subrange, pass a buffer to a system or a GPU upload without copying or transferring ownership. | M |
 | **Allocator control**: arenas / pools / frame & stack allocators | ❌ (GOALS #3 wants these as library types) | Deterministic per-frame perf, zero mid-frame `malloc`, bump-reset allocators. Needs a placement-construct hook + the runtime unsafe core. | M–L |
 
 ## Tier 2 — Systems & scale
@@ -76,7 +76,7 @@ the shared-nothing model in ROADMAP.md).
 | **Bit/byte manipulation**: reinterpret/bitcast, byte buffers, endianness | 🟡 partial (bitwise ops only) | (De)serialization, networking, binary asset/scene formats. | M |
 | **File / network I/O** (files, sockets) | ✅ — **`std::fs`/`std::io`/`std::net` shipped** (RAII `File`, `readFile`/`writeFile`/`stat`/`readDir`; blocking TCP `TcpListener`/`TcpStream`; `Result<…,IoError>`), POSIX + Windows, over the bundled `kama_os.h` FFI boundary. `examples/httpd/` is a real static-file server on it. Follow-ups (UDP/DNS, buffered readers) tracked in ROADMAP §1. | Asset/scene loading, config, tooling, networking. | done |
 | **String formatting / interpolation** (`"${x}"`, number→string, logging) | 🟡 — the `string` type is rich (ops, `substring`/`find`/`trim`/`replace`/`split`, UTF-8 + `.chars()`), but there is no `Display`/to-string or interpolation yet (ROADMAP §2). | Logging, text assets, tooling. | M |
-| **comptime / const-eval** | 🟡 partial — `const` values, **const generics** (`Fixed<T,N>`, integer type params), and **`sizeof(T)`** (a monomorphizing compile-time builtin) are shipped; general compile-time *evaluation* (arithmetic on const params, lookup-table generation) is not. `alignof(T)` is the obvious missing sibling for allocators. | Lookup tables, shader/permutation specialization, asserts. | M |
+| **comptime / const-eval** | 🟡 partial — `const` values, **const generics** (`InlineArray<T,N>`, integer type params), and **`sizeof(T)`** (a monomorphizing compile-time builtin) are shipped; general compile-time *evaluation* (arithmetic on const params, lookup-table generation) is not. `alignof(T)` is the obvious missing sibling for allocators. | Lookup tables, shader/permutation specialization, asserts. | M |
 | **Reflection / metadata** | ✅ opt-in **serialization shipped** — `@generate(Serialize, Deserialize)` on a type/enum drives the compiler's `ClassInfo` (field name/type/order + variants). User surface = contracts + attributes (+ hand-written override); the field walk **and** the object-graph rebuild are a **compiler intrinsic** (lowering to C), with swappable library wire backends (`std::serialization::json` now). Two modes gated on `reachesPointer`: pointer-free ⇒ by-value (`decode::<T> -> T`); reaches a pointer ⇒ heap graph (`decode::<Shared<T>>`), incl. polymorphic `Shared/Weak/Owned<Contract>` + a `DeError` set. Remaining is additive library work (more wire back ends) — see [ROADMAP.md](ROADMAP.md) §4 / [SPEC.md](SPEC.md) "Serialization". | Auto-serialization, editor property panels, ECS introspection. | done (json; more back ends follow) |
 
 ## Tier 3 — Ecosystem & polish
@@ -101,7 +101,7 @@ The language is complete; the path is now entirely library + platform work.
 
 1. **Math types** (`Vec2/3/4`, `Mat4`, quaternion) as `type value`s (public fields) with operators + `::`
    static methods — the numeric core (Tier-0 math). **All the language machinery it needs is shipped** —
-   operators, static methods, and now `Fixed<T,N>` for matrix storage + `m[i][j]` place-indexing — so
+   operators, static methods, and now `InlineArray<T,N>` for matrix storage + `m[i][j]` place-indexing — so
    this is a pure library layer (a natural first opt-in **stdlib module**, per ROADMAP).
 2. **WebGPU bindings** (FFI is ready) → **a triangle on screen** → the engine spine + a real demo.
 3. Iterate as the engine grows: `Map`/slices/arenas as library types, then bit/byte + I/O, then threading.
