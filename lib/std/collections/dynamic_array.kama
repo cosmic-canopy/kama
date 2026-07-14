@@ -130,6 +130,22 @@ type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable]
         return give x;
     }
 
+    // Exchange the elements at `i` and `j` IN PLACE (O(1), no copy, no drop) — the primitive in-place
+    // algorithms need (heap sift, sort, shuffle). Move `d[i]` out to a local, relocate `d[j]` into slot `i`,
+    // then `give` the local into slot `j`. The two raw stores go through a LOCAL `Ptr<T>` alias `d` — a
+    // `this.data[i] = …` would route the owning element through the move-tracker and be rejected (see
+    // `remove`). Not a structural change (len/buffer unchanged), so `mods` is untouched, like `operator[]`.
+    public fn void swap(int32 i, int32 j) {
+        if (i < 0 || i >= this.len || j < 0 || j >= this.len) { panic(msg: "DynamicArray.swap index out of bounds"); }
+        if (i == j) { return; }
+        T tmp = this.takeAt(idx: i);                   // move d[i] OUT (slot i now stale)
+        Ptr<T> d = this.data;
+        unsafe { d[i] = d[j]; }                        // relocate d[j] into slot i via a local alias (a raw
+                                                       // `this.data[i] = …` move is move-tracker-rejected)
+        unsafe { this.data[j] = give tmp; }            // tracked hand-off of tmp into slot j (like `Map.put`);
+                                                       // tmp consumed, so it's not dropped again
+    }
+
     // Drop every element and reset to empty (keeps the allocated buffer for reuse).
     public fn void clear() {
         int32 i = 0;

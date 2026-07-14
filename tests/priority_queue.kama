@@ -1,0 +1,57 @@
+// PriorityQueue<T: Comparable> — binary heap. Min-heap (default) pops smallest-first, maxHeap() pops
+// largest-first, peek/peekRef read the root without removing, and a move-only element rides through
+// push/pop/swap with its ownership intact (ASan-clean). Exit code sums the asserts.
+import std::collections::{PriorityQueue};
+
+// A move-only (resource) element that is Comparable — proves the heap relocates owned elements correctly.
+type resource Task implements Comparable {
+    int32 prio;
+    public Task(int32 prio) { this.prio = prio; }
+    public fn int32 priority() { return this.prio; }
+    public fn Ordering compareTo(ref Task other) {
+        int32 mine = this.prio; int32 theirs = other.priority();   // named receivers (a primitive rvalue can't be one)
+        return mine.compareTo(other: theirs);
+    }
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // (a) min-heap: push out of order, drain in ascending order.
+    PriorityQueue<int32> mn = PriorityQueue();          // bare ctor == minHeap()
+    mn.push(item: 5); mn.push(item: 3); mn.push(item: 8);
+    mn.push(item: 1); mn.push(item: 9); mn.push(item: 2);
+    if (mn.length() == 6) { r = r + 5; }
+    int32 pk = match (mn.peek()) { case Some(x): x; case None: 0 - 1; };
+    if (pk == 1) { r = r + 5; }                          // smallest is the root
+
+    int32 prev = 0 - 1; bool sorted = true; int32 count = 0;
+    while (!mn.isEmpty()) {
+        int32 v = match (mn.pop()) { case Some(x): x; case None: 0 - 1; };
+        if (v < prev) { sorted = false; }               // each pop >= the last -> globally ascending
+        prev = v; count = count + 1;
+    }
+    if (sorted) { r = r + 5; }
+    if (count == 6) { r = r + 5; }
+    if (mn.length() == 0) { r = r + 5; }
+
+    // (b) max-heap: same pushes, pops descend.
+    PriorityQueue<int32> mx = PriorityQueue::maxHeap();
+    mx.push(item: 5); mx.push(item: 3); mx.push(item: 8); mx.push(item: 1);
+    int32 first  = match (mx.pop()) { case Some(x): x; case None: 0 - 1; };
+    int32 second = match (mx.pop()) { case Some(x): x; case None: 0 - 1; };
+    if (first == 8)  { r = r + 5; }                     // largest first
+    if (second == 5) { r = r + 5; }
+
+    // (c) move-only element: reclaim in priority order, borrow the next, drop the rest at scope exit.
+    PriorityQueue<Task> pq = PriorityQueue();
+    pq.push(item: Task(prio: 30));
+    pq.push(item: Task(prio: 10));
+    pq.push(item: Task(prio: 20));
+    int32 firstPrio = match (pq.pop()) { case Some(t): t.priority(); case None: 0 - 1; };
+    if (firstPrio == 10) { r = r + 5; }                 // lowest priority out first (min-heap)
+    int32 borrowed = pq.peekRef().priority();           // borrow the new root in place, no removal
+    if (borrowed == 20) { r = r + 5; }                  // remaining Tasks (20, 30) drop at scope exit
+
+    return r;   // 9 asserts * 5 = 45 (kept < 256 — exit codes are 8-bit)
+}

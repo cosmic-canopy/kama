@@ -1,0 +1,116 @@
+namespace std::collections;
+export { PriorityQueue };
+
+// A binary-heap priority queue over a growable array (= C++ `std::priority_queue` / Rust `BinaryHeap` /
+// Java `PriorityQueue`). Orders its `Comparable` element so `peek`/`pop` reach the extreme in O(log n);
+// `push` is O(log n), `length`/`peek` O(1). Move-only by default (it owns the backing `DynamicArray`) and
+// deep-copies exactly when its element is `Copyable`.
+//
+// The heap is stored as a complete binary tree flattened into the array: `data[0]` is the root, and node
+// `i`'s children are `2i+1` / `2i+2` (its parent is `(i-1)/2`). The invariant is that every parent sits
+// "higher" than its children — `push` bubbles a new leaf UP and `pop` sinks the moved-in root DOWN to
+// restore it.
+//
+// **Direction is chosen at construction.** A bare `PriorityQueue()` (or `minHeap()`) is a MIN-heap: the
+// SMALLEST element comes out first — the fit for cost/time priorities (A* by f-score, Dijkstra, event/timer
+// scheduling). `maxHeap()` inverts it (largest first). One implementation, one type; a single `maxOrder`
+// flag flips every comparison. Iteration order isn't meaningful for a heap, so it isn't `Iterable`; drain
+// it with repeated `pop`.
+type resource PriorityQueue<T: Comparable> implements Copyable(bare: give) when [T: Copyable] {
+    DynamicArray<T> data;   // the heap-ordered backing store (data[0] = root)
+    bool maxOrder;          // false = min-heap (smallest first), true = max-heap (largest first)
+
+    // A MIN-heap (smallest element first) — the common priority-by-cost default. Use `maxHeap()` to invert.
+    public PriorityQueue() { this.data = DynamicArray(); this.maxOrder = false; }
+
+    // Self-documenting factories (T inferred from the target type). `minHeap()` == the bare ctor; `maxHeap()`
+    // makes the LARGEST element come out first.
+    public static fn PriorityQueue<T> minHeap() { PriorityQueue<T> q = PriorityQueue(); return give q; }
+    public static fn PriorityQueue<T> maxHeap() { PriorityQueue<T> q = PriorityQueue(); q.maxOrder = true; return give q; }
+
+    public fn int32 length() { return this.data.length(); }
+    public fn bool isEmpty() { return this.data.length() == 0; }
+
+    // True iff `a` belongs ABOVE `b` in the heap (nearer the root): for a min-heap the smaller element, for a
+    // max-heap the larger. Equal elements never displace each other. Both operands are borrowed `ref T` so the
+    // receiver is a nameable ref that resolves `compareTo` for a primitive retro-impl AND a user element (like
+    // `DynamicArray.indexOf`'s `equals`); a raw `data[i]` isn't a nameable receiver.
+    fn bool higher(ref T a, ref T b) {
+        Ordering o = a.compareTo(other: b);
+        return match (o) {
+            case Less:    !this.maxOrder;   // a < b sits higher in a MIN-heap
+            case Greater: this.maxOrder;    // a > b sits higher in a MAX-heap
+            case Equal:   false;
+        };
+    }
+
+    // Insert `item` (consumes it): append as a new leaf, then bubble it up while it outranks its parent.
+    public fn void push(T item) {
+        this.data.add(item: give item);
+        this.siftUp(i: this.data.length() - 1);
+    }
+
+    // Bubble the node at `i` toward the root while it outranks its parent (restores the invariant after a push).
+    fn void siftUp(int32 i) {
+        while (i > 0) {
+            int32 parent = (i - 1) / 2;
+            if (!this.higher(a: this.data[i], b: this.data[parent])) { return; }   // in place — done
+            this.data.swap(i: i, j: parent);
+            i = parent;
+        }
+    }
+
+    // Remove and return the root (the min or max), moved OUT; `None` when empty. Swap the root with the last
+    // leaf, pop that leaf (now the old root) OUT, then sink the new root down to restore the heap.
+    public fn Optional<T> pop() {
+        int32 n = this.data.length();
+        if (n == 0) { return Optional::None; }
+        if (n == 1) { return this.data.pop(); }   // sole element — pop it, nothing to restore
+        this.data.swap(i: 0, j: n - 1);           // move the root to the end
+        Optional<T> top = this.data.pop();        // reclaim the old root (moved OUT of the array)
+        this.siftDown(i: 0);                      // sink the leaf now at the root back into place
+        return top;
+    }
+
+    // Sink the node at `i` toward the leaves while a child outranks it (restores the invariant after a pop).
+    fn void siftDown(int32 i) {
+        int32 n = this.data.length();
+        while (true) {
+            int32 l = 2 * i + 1;
+            int32 r = 2 * i + 2;
+            int32 top = i;
+            if (l < n && this.higher(a: this.data[l], b: this.data[top])) { top = l; }
+            if (r < n && this.higher(a: this.data[r], b: this.data[top])) { top = r; }
+            if (top == i) { return; }             // parent already outranks both children — done
+            this.data.swap(i: i, j: top);
+            i = top;
+        }
+    }
+
+    // Look at the root WITHOUT removing it — a copy (present only for a Copyable element), the value analogue
+    // of `pop`. For a move-only element borrow it instead via `peekRef`.
+    public fn Optional<T> peek() when [T: Copyable] {
+        if (this.data.length() == 0) { return Optional::None; }
+        return Optional::Some(value: copy this.data[0]);
+    }
+
+    // Borrow the root IN PLACE (any element, no Copyable bound). PANICS when empty (guard with `isEmpty` /
+    // `length`), like `DynamicArray`'s `operator[]` out of bounds — the in-place read accessor for a heap of
+    // move-only elements. The returned `ref T` may not escape and dangles across a `push`/`pop` that relocates.
+    public fn ref T peekRef() {
+        if (this.data.length() == 0) { panic(msg: "PriorityQueue.peekRef: empty"); }
+        return this.data[0];
+    }
+
+    // Drop every element and reset to empty (keeps the backing buffer for reuse).
+    public fn void clear() { this.data.clear(); }
+
+    // Deep-copy the whole queue (present only for a Copyable element): the backing array is cloned element by
+    // element and the ordering flag carried over, so the heap invariant is preserved without re-heapifying.
+    public fn PriorityQueue<T> copy() when [T: Copyable] {
+        PriorityQueue<T> result = PriorityQueue();
+        result.data = copy this.data;
+        result.maxOrder = this.maxOrder;
+        return give result;
+    }
+}

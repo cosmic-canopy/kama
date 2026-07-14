@@ -135,10 +135,11 @@ serialization, networking).
   `e.value()`, both `Copyable`) — this required building the `Entry<K,V>`-through-`Optional` monomorphization
   support in the emitter (contract-instance args now deep-substitute + absolutize nested generics; a
   `fn ref string` borrow is no longer hoisted into a dropped temp). No `entriesMut()` — a key is never mutated
-  in place; use `valuesMut()` / `getRef`. Still ahead:
+  in place; use `valuesMut()` / `getRef`. **`Deque<T>` (ring buffer)** and **`PriorityQueue<T: Comparable>`
+  (binary heap)** are shipped — the latter min-heap by default (`minHeap()`), `maxHeap()` to invert; over a
+  `DynamicArray` (which gained an O(1) `swap(i:,j:)` primitive) for A* / event scheduling. Still ahead:
   **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a system or
-  a GPU upload with no copy and no ownership transfer), **priority queue / binary heap** (A* pathfinding,
-  event/timer scheduling), **deque / ring buffer** (job & event queues, audio), **slot map / generational
+  a GPU upload with no copy and no ownership transfer), **slot map / generational
   arena** (stable handles with generation counters — *the* ECS/asset-registry structure, catches
   use-after-free), and a **sorted / tree map** (ordered iteration + range queries; needs
   `Comparable`/`Ordering`). Honest caveat: general **linked lists** are mostly a cache anti-pattern in

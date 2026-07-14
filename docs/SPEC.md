@@ -194,6 +194,15 @@ write-only; panics on an absent key, so guard with `contains` first, as a map lo
 A key that is an inline rvalue — a `string`/number literal or a user-type ctor — is materialized into a temp
 automatically, so `m.get(key: 5)` / `m.get(key: Point(1, 2))` work without binding a local first.
 
+`std::collections` also carries **`Deque<T>`** (a growable ring buffer — O(1) push/pop at both ends) and
+**`PriorityQueue<T: Comparable>`** (a binary heap). The queue is a **min-heap by default** (bare ctor or
+`PriorityQueue::minHeap()` — smallest out first, the fit for A* / event scheduling); `PriorityQueue::maxHeap()`
+inverts it. `push(item:)` and `pop() -> Optional<T>` are O(log n), `peek() -> Optional<T>` (copy, `Copyable`
+element) / `peekRef() -> ref T` (borrow, panics when empty) read the root O(1). It orders via the element's
+`Comparable.compareTo`, is move-only (deep-copies only for a `Copyable` element), and — since heap order isn't
+meaningful — isn't iterable; drain it with `pop`. (It's backed by a `DynamicArray`, which gained an O(1)
+`swap(i:, j:)` in-place element exchange.)
+
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 
 The smart-pointer triad `Owned`/`Shared`/`Weak` is **prelude / built-in — always in scope, no `import`**.
