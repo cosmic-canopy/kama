@@ -18,14 +18,19 @@ import std::app::{run};
 extern "<webgpu/webgpu.h>";
 extern "<stdlib.h>";
 
+// The platform seam (std::gpu): surface creation, present, and the per-tick pump — the only
+// web-vs-native differences. Same source builds for `--target wasm` and native (see kama_gpu.h).
+extern "kama_gpu.h";
+extern fn Ptr   kama_gpu_surface(Ptr instance, uint32 width, uint32 height, Ptr<int8> title);
+extern fn void  kama_gpu_present(Ptr surface);
+extern fn int32 kama_gpu_pump(Ptr device);
+
 // ----- libc -----
 extern fn Ptr calloc(usize count, usize size);
 
 // ----- WebGPU C structs (only the fields we touch; the header owns the layout) -----
 type extern value WGPUStringView { Ptr<int8> data; usize length; }
 type extern value WGPUChainedStruct { Ptr next; int32 sType; }
-type extern value WGPUEmscriptenSurfaceSourceCanvasHTMLSelector { WGPUChainedStruct chain; WGPUStringView selector; }
-type extern value WGPUSurfaceDescriptor { Ptr nextInChain; }
 type extern value WGPUSurfaceConfiguration {
     Ptr nextInChain; Ptr device; int32 format; uint64 usage;
     uint32 width; uint32 height; int32 alphaMode; int32 presentMode;
@@ -78,7 +83,6 @@ type extern value WGPURequestDeviceCallbackInfo  { Ptr nextInChain; int32 mode; 
 
 // ----- WebGPU functions -----
 extern fn Ptr  wgpuCreateInstance(Ptr descriptor);
-extern fn Ptr  wgpuInstanceCreateSurface(Ptr instance, Ptr descriptor);
 extern fn void wgpuInstanceRequestAdapter(Ptr instance, Ptr options, WGPURequestAdapterCallbackInfo callbackInfo);
 extern fn void wgpuAdapterRequestDevice(Ptr adapter, Ptr descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
 extern fn Ptr  wgpuDeviceGetQueue(Ptr device);
@@ -213,6 +217,7 @@ fn void onAdapter(int32 status, Ptr adapter, WGPUStringView message, Ptr u1, Ptr
 
 // One frame: acquire the swapchain texture, clear it to an animated colour, submit.
 fn int32 frameTick(Ptr state) {
+    int32 keep = 1;   // 1 = keep looping; native pump flips it to 0 on window close
     unsafe {
         Ptr<App> st = cast<Ptr<App>>(state);
         if (st[0].ready == 0) { return 1; }         // still initialising
@@ -256,9 +261,10 @@ fn int32 frameTick(Ptr state) {
         wgpuRenderPassEncoderEnd(renderPassEncoder: pass);
         Ptr cmd = wgpuCommandEncoderFinish(encoder: enc, descriptor: null);
         wgpuQueueSubmit(queue: st[0].queue, commandCount: 1, commands: cast<Ptr>(addr(of: cmd)));
-        // NB: no wgpuSurfacePresent on the web — emdawnwebgpu aborts on it; the browser
-        // auto-presents the canvas at the end of each requestAnimationFrame tick. (A native
-        // backend DOES call present — a web-vs-native difference the platform seam will handle.)
+        // Present through the seam: a real wgpuSurfacePresent natively, a no-op on the web (the
+        // browser auto-presents the canvas each requestAnimationFrame tick — emdawnwebgpu aborts on
+        // an explicit present).
+        kama_gpu_present(surface: surface);
 
         // Release this frame's transient objects. GetCurrentTexture hands back a ref we own,
         // so release `tex` too (matches Emscripten's reference; the surface keeps its own ref) —
@@ -268,8 +274,12 @@ fn int32 frameTick(Ptr state) {
         wgpuCommandEncoderRelease(encoder: enc);
         wgpuTextureViewRelease(textureView: view);
         wgpuTextureRelease(texture: tex);
+
+        // Pump the platform: native drains window events + polls the device and returns 0 when the
+        // window is closed (ending std::app's `while(tick())`); the web is a no-op that returns 1.
+        keep = kama_gpu_pump(device: st[0].device);
     }
-    return 1;
+    return keep;
 }
 
 fn int main() {
@@ -279,16 +289,10 @@ fn int main() {
     Ptr<App> st = cast<Ptr<App>>(calloc(count: 1, size: sizeof(App)));
     unsafe { st[0].instance = inst; }
 
-    // Surface from the page's <canvas id="canvas"> (chained selector struct).
-    string sel = "#canvas";
-    WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSrc = WGPUEmscriptenSurfaceSourceCanvasHTMLSelector();
-    canvasSrc.chain.sType = 262144;          // WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector
-    canvasSrc.selector.data = sel.cstr();
-    canvasSrc.selector.length = cast<usize>(sel.length());
-
-    WGPUSurfaceDescriptor sd = WGPUSurfaceDescriptor();
-    sd.nextInChain = cast<Ptr>(addr(of: canvasSrc));
-    Ptr surface = wgpuInstanceCreateSurface(instance: inst, descriptor: addr(of: sd));
+    // Surface via the seam: the page's <canvas id="canvas"> on the web, a real 512×512 window
+    // natively. Same call, one window/canvas per app — exactly what the triangle needs.
+    string title = "kama — triangle";
+    Ptr surface = kama_gpu_surface(instance: inst, width: 512, height: 512, title: title.cstr());
     unsafe { st[0].surface = surface; }
 
     // Kick off the async adapter request; onAdapter -> onDevice -> ready.

@@ -133,6 +133,16 @@ std::string resolveStdlibDir(const char* argv0)
     return "lib";
 }
 
+// The native WebGPU SDK root: wgpu-native's prebuilt drop (include/webgpu/{webgpu,wgpu}.h + a
+// lib/libwgpu_native.* under it). Fetched on demand by tools/fetch-webgpu.sh into a gitignored dir;
+// $KAMA_WGPU_DIR overrides. NOT vendored (multi-MB, MPL-2.0) — the repo stays lean and MIT: we only
+// link the unmodified prebuilt, so its file-level copyleft never reaches our sources.
+std::string resolveWgpuDir()
+{
+    if (const char* d = getenv("KAMA_WGPU_DIR")) return d;
+    return "third_party/wgpu";
+}
+
 // The native C compiler. A "-bundled" install ships a static zig at
 // <exe>/../libexec/zig/zig[.exe]; prefer it so `kama build` works with no system
 // toolchain. Otherwise fall back to system clang. (--cc overrides both, upstream.)
@@ -320,7 +330,8 @@ std::vector<SharedCompilationUnit> preludeModuleUnits()
 // Emit an already-parsed unit to a single `.c` (`srcPath` drives #line). Returns 0 on success.
 int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
                         const std::string& outPath, bool emitLines, bool* externsMathH = nullptr,
-                        bool* externsNetWeb = nullptr, bool* externsApp = nullptr)
+                        bool* externsNetWeb = nullptr, bool* externsApp = nullptr,
+                        bool* externsGpu = nullptr)
 {
     std::ofstream out(outPath);
     if (!out) {
@@ -334,6 +345,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
+    if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
     out.close();
     if (unsupported > 0) {
         fprintf(stderr, "kama: %d unlowered construct(s) — see the warnings above.\n", unsupported);
@@ -359,7 +371,8 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      const std::vector<std::string>& cPaths, bool emitLines,
                      bool* externsMathH = nullptr,   // link hint: did the program `extern "<math.h>";`?
                      bool* externsNetWeb = nullptr,  // link hint: did it `extern "kama_net_web.h";`?
-                     bool* externsApp = nullptr)     // link hint: did it `extern "kama_app.h";`? (std::app)
+                     bool* externsApp = nullptr,     // link hint: did it `extern "kama_app.h";`? (std::app)
+                     bool* externsGpu = nullptr)     // link hint: did it `extern "kama_gpu.h";`? (WebGPU seam)
 {
     std::ofstream header(headerPath);
     if (!header) { fprintf(stderr, "kama: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
@@ -380,6 +393,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
+    if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
     header.close();
     for (auto& f : moduleFiles) f->close();
 
@@ -601,9 +615,10 @@ int main(int argc, char** argv)
         bool needsLibm = false;   // set if the program `extern "<math.h>";`'s (std::math / libm) -> link -lm
         bool needsNetWeb = false; // set if the program `extern "kama_net_web.h";`'s (std::net::web) -> --js-library
         bool needsApp = false;    // set if the program `extern "kama_app.h";`'s (std::app) -> wasm -sEXIT_RUNTIME=1
+        bool needsGpu = false;    // set if the program `extern "kama_gpu.h";`'s (WebGPU seam) -> native surface libs
         if (units.size() == 1) {
             std::string cPath = stripExtension(input) + ".c";
-            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp) != 0) return 1;
+            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu) != 0) return 1;
             cFiles.push_back(cPath);
             genFiles.push_back(cPath);
         } else {
@@ -613,10 +628,24 @@ int main(int argc, char** argv)
             std::vector<std::string> cPaths;   // one per unit; index-suffixed so distinct dirs never collide
             for (size_t i = 0; i < units.size(); ++i)
                 cPaths.push_back(genDir + "/" + stripExtension(baseName(unitPaths[i])) + "_" + std::to_string(i) + ".c");
-            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp) != 0) return 1;
+            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu) != 0) return 1;
             cFiles   = cPaths;
             genFiles = cPaths;
             genFiles.push_back(headerPath);
+        }
+
+        // Native --webgpu needs the fetched wgpu-native SDK. Fail early with an actionable message
+        // rather than a raw "webgpu/webgpu.h not found" from the C compiler.
+        std::string wgpuDir;
+        if (!wasm && webgpu) {
+            wgpuDir = resolveWgpuDir();
+            if (!fileExists(wgpuDir + "/include/webgpu/webgpu.h")) {
+                fprintf(stderr,
+                    "kama: native --webgpu needs the wgpu-native SDK, not found at '%s'.\n"
+                    "      Run tools/fetch-webgpu.sh, or set $KAMA_WGPU_DIR to a drop with include/ + lib/.\n",
+                    wgpuDir.c_str());
+                return 2;
+            }
         }
 
         std::ostringstream cmd;
@@ -677,6 +706,15 @@ int main(int argc, char** argv)
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
         if (!headerDir.empty()) cmd << "-I" << headerDir << " ";   // the shared generated header
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
+        // Native --webgpu: find wgpu-native's webgpu.h / wgpu.h. (wasm gets its header from the port above.)
+        if (!wasm && webgpu) cmd << "-I\"" << wgpuDir << "/include\" ";
+        // The WebGPU platform seam (kama_gpu.h) — its include dir on BOTH targets (web = header-only
+        // static-inline; native also compiles kama_gpu.c below). Only when the program externs it.
+        if (needsGpu) cmd << "-I\"" << (resolveStdlibDir(argv[0]) + "/std/gpu") << "\" ";
+#if defined(__APPLE__)
+        // GLFW usually lives under a Homebrew prefix the bare compiler doesn't search by default.
+        if (!wasm && needsGpu) cmd << "-I/opt/homebrew/include -I/usr/local/include ";
+#endif
         // std::net::web (WebSocket / WebTransport) is a thin JS-glue --js-library, linked only when the
         // program actually externs its header. Both the header (compile) and the glue (link) live next to the
         // module in the stdlib. The glue moves bytes across the wasm/JS boundary via the exported heap views.
@@ -691,6 +729,38 @@ int main(int argc, char** argv)
         // its quit() (emscripten_force_exit) shut down cleanly with a real exit code.
         if (wasm && needsApp) cmd << "-sEXIT_RUNTIME=1 ";
         for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
+        // Native WebGPU seam: compile the surface TU (Objective-C on macOS — it attaches a CAMetalLayer
+        // to the NSWindow) and link GLFW + the window-system libs. Only when the program externs
+        // kama_gpu.h AND targets native (the web seam is header-only static-inline, compiled nowhere).
+        if (!wasm && needsGpu) {
+            std::string seam = resolveStdlibDir(argv[0]) + "/std/gpu/kama_gpu.c";
+#if defined(__APPLE__)
+            cmd << "-x objective-c \"" << seam << "\" -x none ";
+#else
+            cmd << "\"" << seam << "\" ";
+#endif
+        }
+        // Native --webgpu: link wgpu-native, with an rpath so the .dylib/.so is found at run time (dev
+        // loop — a shipped app would bundle it). The link stays out of the wasm path (emcc port covers it).
+        if (!wasm && webgpu) {
+            cmd << "-L\"" << wgpuDir << "/lib\" -lwgpu_native ";
+#if !defined(_WIN32)
+            cmd << "-Wl,-rpath,\"" << absolutePath(wgpuDir) << "/lib\" ";
+#endif
+        }
+        // The seam's window/surface libraries (GLFW + platform frameworks). Split from wgpu-native
+        // above so a windowless native build (e.g. the link-gate smoke) links only libwgpu_native.
+        if (!wasm && needsGpu) {
+#if defined(__APPLE__)
+            cmd << "-L/opt/homebrew/lib -L/usr/local/lib -lglfw "
+                   "-framework Cocoa -framework Metal -framework QuartzCore -framework IOKit "
+                   "-framework CoreFoundation -framework CoreVideo -lobjc ";
+#elif defined(_WIN32)
+            cmd << "-lglfw3 -lgdi32 -luser32 -ld3dcompiler ";
+#else
+            cmd << "-lglfw -lX11 -ldl -lpthread ";
+#endif
+        }
         for (auto& lib : links) cmd << "-l" << lib << " ";       // FFI link flags
         // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm
         // FFI). Native only — wasm/emscripten bundles libm. (--gc-sections still prunes unused code.)

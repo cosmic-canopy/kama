@@ -7,6 +7,9 @@ bison_report
 # all build artifacts (objects + generated parser/lexer) live here
 build/
 
+# fetched native SDKs (wgpu-native for native --webgpu) — never vendored; tools/fetch-webgpu.sh fills it
+third_party/
+
 # the root compiler binary (anchored to root so it doesn't also ignore bench/src/kama/)
 /kama
 

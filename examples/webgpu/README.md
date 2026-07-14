@@ -54,8 +54,32 @@ compiler flags as an incompatible-function-pointer type (Kama lowers enums to `i
 The compiler now demotes that to a warning at the `extern` boundary (the sanctioned unsafe seam), so it
 links — you'll see the warning at build time.
 
+## Native (Mac / Linux / Windows)
+
+The **same** `triangle.kama` also runs as a native desktop app. The web-vs-native differences —
+surface creation, present, and the per-tick event pump — live behind the **`std::gpu` seam**
+([`lib/std/gpu/kama_gpu.h`](../../lib/std/gpu/kama_gpu.h)), so the Kama source is identical across
+targets. Native uses **wgpu-native** (the WebGPU implementation) + **GLFW** (window/surface).
+
+```sh
+# 1. fetch the wgpu-native SDK (once) -> third_party/wgpu/ (gitignored; not vendored)
+tools/fetch-webgpu.sh
+# 2. install GLFW (once):  macOS: brew install glfw   |   Linux: apt install libglfw3-dev
+# 3. build + run
+examples/webgpu/build-native.sh                # -> out/triangle
+out/triangle                                    # a 512×512 window: the same spinning triangle
+```
+
+`--webgpu` on a native build links the fetched wgpu-native lib (via an rpath) + GLFW; `$KAMA_WGPU_DIR`
+overrides the SDK location. wgpu-native is MPL-2.0 (file-level copyleft) — we link the **unmodified
+prebuilt**, so kama stays MIT.
+
+> The hardcoded WebGPU enum constants (formats, sTypes, load/store ops) target the upstream
+> `webgpu.h` both backends track; if a native run renders wrong or aborts, reconcile those few
+> constants against `third_party/wgpu/include/webgpu/webgpu.h`.
+
 ## Scope
 
-Browser/WASM only — `--webgpu` links `emdawnwebgpu`, which is Emscripten-only. A **native** desktop
-(Win/Mac/Linux) path needs a native WebGPU implementation (Dawn / wgpu-native) plus a window/surface layer
-(GLFW/SDL); these same bindings are reused there behind a small platform seam. That's a separate milestone.
+Browser/WASM (`--target wasm --webgpu`, the `emdawnwebgpu` port) **and** native desktop (above). The
+next steps are an idiomatic safe `gpu::` wrapper and the engine spine (buffers/bindings/pipelines
+beyond a hardcoded triangle) — see [docs/ENGINE_READINESS.md](../../docs/ENGINE_READINESS.md).
