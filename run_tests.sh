@@ -197,10 +197,12 @@ done
 # was killed by a signal (exit >= 128; __builtin_trap -> SIGTRAP/SIGILL, abort -> SIGABRT). Optional
 # tests/trap/<name>.msg is a substring the stderr must contain (bounds/panic print "… out of bounds" /
 # "kama: panic: …"; a bare __builtin_trap prints nothing). Skipped under KAMA_SAN (UBSan would intercept
-# the trap) and KAMA_WASM (node/wasm abort exit codes differ) — native-default leg only, like xfail is
-# SAN-skipped. `ulimit -c 0` is best-effort core suppression (a pipe core_pattern ignores it, but those
-# cores go unwritten to systemd-coredump anyway).
-if [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ]; then
+# the trap) and KAMA_WASM (node/wasm abort exit codes differ), and on Windows/MSYS2 — there __builtin_trap
+# surfaces as a 128+SIGILL exit but abort() does NOT (it exits 127), so the "killed by a signal" assertion
+# is POSIX-only. Native POSIX (Linux/macOS) leg, like xfail is SAN-skipped. `ulimit -c 0` is best-effort
+# core suppression (a pipe core_pattern ignores it, but those cores go unwritten to systemd-coredump anyway).
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) TRAP_OK=0 ;; *) TRAP_OK=1 ;; esac
+if [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ] && [ "$TRAP_OK" = 1 ]; then
     ulimit -c 0
     for src in "$TESTS_DIR"/trap/*.kama; do
         [ -e "$src" ] || continue
@@ -217,6 +219,11 @@ if [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ]; then
             echo "FAIL trap/$name (trapped, but stderr missing \"$(cat "$msg_file")\")"; head -2 "$TMP/trap_$name.err"; fail=$((fail+1)); continue
         fi
         echo "PASS trap/$name (trapped, exit $actual)"; pass=$((pass+1))
+    done
+elif [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ] && [ "$TRAP_OK" = 0 ]; then
+    for src in "$TESTS_DIR"/trap/*.kama; do
+        [ -e "$src" ] || continue
+        echo "SKIP $(basename "$src" .kama) (trap: POSIX signal-exit convention only)"
     done
 fi
 
