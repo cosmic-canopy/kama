@@ -1,0 +1,188 @@
+namespace std::collections;
+export { BitSet, BitSetIter };
+
+extern "<stdlib.h>";
+extern fn Ptr calloc(usize count, usize size);
+extern fn void free(Ptr p);
+
+// A by-value iterator over the SET bit indices of a `BitSet` (`foreach (int32 i in bs.setBits())`), ascending.
+// It borrows the word buffer + snapshots the mutation counter and rejects a structural change (a grow, which
+// reallocates + re-homes the buffer) made mid-iteration — the same contract as the other collections' iterators.
+// Setting/clearing a bit IN PLACE keeps the buffer stable, so it does not invalidate a walk in flight. The scan
+// skips an all-zero word remainder in one jump (`pos -> (word+1) << 6`) so it visits set bits, not empty gaps.
+type value BitSetIter implements Iterator<int32> {
+    Ptr<uint64> words; int32 wordCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
+    public BitSetIter(Ptr<uint64> words, int32 wordCount, Ptr<int32> modsp, int32 modsAt) {
+        this.words = words; this.wordCount = wordCount; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public fn Optional<int32> next() {
+        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "BitSet modified during iteration"); } }
+        int32 total = this.wordCount * 64;
+        while (this.pos < total) {
+            int32 w = this.pos >> 6; int32 b = this.pos & 63;
+            uint64 word = 0ui64; unsafe { word = this.words[w]; }
+            uint64 rest = word >> cast<uint64>(b);
+            if (rest == 0ui64) { this.pos = (w + 1) << 6; continue; }   // no more set bits in this word — skip its tail
+            if ((rest & 1ui64) == 1ui64) { int32 idx = this.pos; this.pos = this.pos + 1; return Optional::Some(value: idx); }
+            this.pos = this.pos + 1;
+        }
+        return Optional::None;
+    }
+}
+
+// A dense, growable bit vector (peer: Rust `bit-vec`, C++ `bitset` / `std::vector<bool>`) — the ECS component
+// mask / flag set. Bit `i` lives in word `i >> 6` at mask `1 << (i & 63)`, over a `uint64` word buffer this owns.
+// Every word is zero-filled (allocated with `calloc`), so an unset bit reads false and a grown region starts
+// clear. `set`/`toggle` past the current capacity auto-grow (doubling the word count); `test`/`clear` on an
+// out-of-range bit are a no-op / `false` (never grow). `capacity()` reports the addressable bit range (word
+// count × 64, ≥ the highest set bit). A move-only value that owns its buffer, but Copyable via a deep word copy.
+type resource BitSet implements Copyable(bare: give) {
+    Ptr<uint64> words; int32 wordCount; int32 mods;
+
+    public BitSet() { unsafe { this.words = cast<Ptr<uint64>>(cast<usize>(0)); } this.wordCount = 0; this.mods = 0; }
+
+    // Preallocate room for at least `bits` bits (rounded up to a whole word). K,V-style target-type inference:
+    // `BitSet s = BitSet::withCapacity(bits: 256);`.
+    public static fn BitSet withCapacity(int32 bits) {
+        BitSet s = BitSet();
+        if (bits > 0) { s.growTo(nc: (bits + 63) >> 6); }
+        return give s;
+    }
+
+    // Bits currently addressable without a grow (word count × 64) — capacity, not the highest set bit.
+    public fn int32 capacity() { return this.wordCount * 64; }
+
+    // Count of set bits (population count) — a Kernighan `x & (x - 1)` fold per word (no `__builtin_popcountll`).
+    fn int32 popcount(uint64 x) { int32 c = 0; while (x != 0ui64) { x = x & (x - 1ui64); c = c + 1; } return c; }
+    public fn int32 count() {
+        int32 total = 0; int32 i = 0;
+        unsafe { while (i < this.wordCount) { total = total + this.popcount(x: this.words[i]); i = i + 1; } }
+        return total;
+    }
+
+    // True iff no bit is set (every word is zero).
+    public fn bool isEmpty() {
+        int32 i = 0;
+        unsafe { while (i < this.wordCount) { if (this.words[i] != 0ui64) { return false; } i = i + 1; } }
+        return true;
+    }
+
+    // Read bit `index`; an out-of-range bit is simply unset (`false`), never a grow.
+    public fn bool test(int32 index) {
+        if (index < 0) { return false; }
+        int32 w = index >> 6;
+        if (w >= this.wordCount) { return false; }
+        uint64 word = 0ui64; unsafe { word = this.words[w]; }
+        return ((word >> cast<uint64>(index & 63)) & 1ui64) == 1ui64;
+    }
+
+    // Set bit `index` to 1, growing the buffer if the bit lies past the current capacity.
+    public fn void set(int32 index) {
+        int32 w = index >> 6; this.ensureWords(wordIndex: w);
+        unsafe { this.words[w] = this.words[w] | (1ui64 << cast<uint64>(index & 63)); }
+    }
+
+    // Clear bit `index` to 0; an out-of-range bit is already clear (no-op, no grow).
+    public fn void clear(int32 index) {
+        if (index < 0) { return; }
+        int32 w = index >> 6;
+        if (w >= this.wordCount) { return; }
+        unsafe { this.words[w] = this.words[w] & (~(1ui64 << cast<uint64>(index & 63))); }
+    }
+
+    // Flip bit `index`; flipping an out-of-range (0) bit sets it, so this can grow.
+    public fn void toggle(int32 index) {
+        int32 w = index >> 6; this.ensureWords(wordIndex: w);
+        unsafe { this.words[w] = this.words[w] ^ (1ui64 << cast<uint64>(index & 63)); }
+    }
+
+    // Clear every bit (keeps the buffer). A structural change to the live contents, so it invalidates any
+    // in-flight `setBits()` iterator.
+    public fn void clearAll() {
+        int32 i = 0;
+        unsafe { while (i < this.wordCount) { this.words[i] = 0ui64; i = i + 1; } }
+        this.mods = this.mods + 1;
+    }
+
+    // In-place set union: this |= other. Grows to cover `other`'s words; `other`'s absent (higher) words are 0.
+    public fn void unionWith(ref BitSet other) {
+        int32 ow = other.rawWordCount();
+        if (ow > 0) { this.ensureWords(wordIndex: ow - 1); }
+        int32 i = 0;
+        unsafe { while (i < ow) { this.words[i] = this.words[i] | other.rawWord(i: i); i = i + 1; } }
+    }
+
+    // In-place set intersection: this &= other. Own words past `other`'s range mask against 0 (get cleared).
+    public fn void intersectWith(ref BitSet other) {
+        int32 i = 0;
+        unsafe { while (i < this.wordCount) { this.words[i] = this.words[i] & other.rawWord(i: i); i = i + 1; } }
+    }
+
+    // In-place set difference: this &= ~other. Only own words that overlap `other` change.
+    public fn void differenceWith(ref BitSet other) {
+        int32 i = 0;
+        unsafe { while (i < this.wordCount) { this.words[i] = this.words[i] & (~ other.rawWord(i: i)); i = i + 1; } }
+    }
+
+    // True iff every set bit of this is also set in `other` (this ⊆ other).
+    public fn bool isSubsetOf(ref BitSet other) {
+        int32 i = 0;
+        unsafe {
+            while (i < this.wordCount) {
+                if ((this.words[i] & (~ other.rawWord(i: i))) != 0ui64) { return false; }
+                i = i + 1;
+            }
+        }
+        return true;
+    }
+
+    // `foreach (int32 i in bs.setBits())` — the set bit indices, ascending. (BitSet itself is not `Iterable`;
+    // iterate the returned iterator, like `SlotMap.values()`.) To iterate, also import the iterator type:
+    // `import std::collections::{BitSet, BitSetIter};` (a non-generic helper type isn't pulled in implicitly).
+    public fn BitSetIter setBits() {
+        return BitSetIter(words: this.words, wordCount: this.wordCount, modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+
+    // Deep-copy into an independent buffer (bare `give` still MOVES). uint64 is always Copyable, so a BitSet
+    // is unconditionally Copyable — a plain word-for-word buffer clone.
+    public fn BitSet copy() {
+        BitSet result = BitSet();
+        if (this.wordCount > 0) {
+            result.growTo(nc: this.wordCount);
+            int32 i = 0;
+            unsafe { while (i < this.wordCount) { result.rawSetWord(i: i, value: this.words[i]); i = i + 1; } }
+        }
+        return result;
+    }
+
+    // --- internals ---
+    // Word accessors used by the set-algebra ops + copy to reach ANOTHER BitSet without touching its private
+    // fields cross-instance (a method call on `other`, like `Equatable.equals(other)`, is the safe pattern).
+    fn int32 rawWordCount() { return this.wordCount; }
+    fn uint64 rawWord(int32 i) { if (i < 0 || i >= this.wordCount) { return 0ui64; } unsafe { return this.words[i]; } }
+    fn void rawSetWord(int32 i, uint64 value) { unsafe { this.words[i] = value; } }
+
+    // Ensure word `wordIndex` is addressable, growing (doubling) if needed.
+    fn void ensureWords(int32 wordIndex) {
+        if (wordIndex >= this.wordCount) {
+            int32 nc = this.wordCount == 0 ? 1 : this.wordCount;
+            while (nc <= wordIndex) { nc = nc * 2; }
+            this.growTo(nc: nc);
+        }
+    }
+
+    // Grow the word buffer to `nc` words. `calloc` zeroes the new buffer (so the grown tail starts clear), the
+    // live words are copied over, the old buffer freed. A relocation, so it bumps `mods` (invalidates iterators).
+    fn void growTo(int32 nc) {
+        Ptr<uint64> nw;
+        unsafe { nw = cast<Ptr<uint64>>(calloc(count: cast<usize>(nc), size: sizeof(uint64))); }
+        int32 i = 0;
+        unsafe {
+            while (i < this.wordCount) { nw[i] = this.words[i]; i = i + 1; }
+            free(p: cast<Ptr>(this.words));
+        }
+        this.words = nw; this.wordCount = nc; this.mods = this.mods + 1;
+    }
+
+    ~BitSet() { unsafe { free(p: cast<Ptr>(this.words)); } }   // uint64 words need no per-element drop
+}

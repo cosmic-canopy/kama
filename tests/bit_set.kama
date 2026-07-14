@@ -1,0 +1,67 @@
+// BitSet — dense growable bit vector (ECS component masks / flag sets). set/test/clear/toggle, popcount,
+// grow past word boundaries, set-algebra over differing word lengths, ascending set-bit iteration, deep copy.
+import std::collections::{BitSet, BitSetIter};
+
+fn int32 main() {
+    int32 r = 0;
+
+    // (a) set / test / clear / toggle, growing past word boundaries (64, 128, ...).
+    BitSet bs = BitSet();
+    bs.set(index: 3); bs.set(index: 5); bs.set(index: 64); bs.set(index: 130);
+    if (bs.test(index: 3)) { r = r + 5; }
+    if (bs.test(index: 64)) { r = r + 5; }              // grew past word 0
+    if (bs.test(index: 130)) { r = r + 5; }             // grew into word 2
+    if (!bs.test(index: 4)) { r = r + 5; }
+    if (!bs.test(index: 1000)) { r = r + 5; }           // out of range -> false, no grow
+    if (bs.count() == 4) { r = r + 5; }
+    bs.clear(index: 5);
+    if (!bs.test(index: 5)) { r = r + 5; }
+    if (bs.count() == 3) { r = r + 5; }                 // {3, 64, 130}
+    bs.toggle(index: 3);                                // was set -> clears
+    if (!bs.test(index: 3)) { r = r + 5; }
+    bs.toggle(index: 200);                              // was unset -> sets
+    if (bs.test(index: 200)) { r = r + 5; }
+    if (bs.count() == 3) { r = r + 5; }                 // {64, 130, 200}
+    if (bs.capacity() >= 201) { r = r + 5; }            // addressable range covers bit 200
+
+    // (b) iterate SET bits, ascending.
+    BitSet it = BitSet();
+    it.set(index: 1); it.set(index: 70); it.set(index: 3);
+    int32 sum = 0; int32 cnt = 0; int32 lastSeen = 0 - 1; bool ordered = true;
+    foreach (int32 i in it.setBits()) {
+        if (i <= lastSeen) { ordered = false; }
+        lastSeen = i; sum = sum + i; cnt = cnt + 1;
+    }
+    if (cnt == 3) { r = r + 5; }
+    if (sum == 74) { r = r + 5; }                       // 1 + 3 + 70
+    if (ordered) { r = r + 5; }
+
+    // (c) set algebra over bitsets of DIFFERENT word lengths.
+    BitSet a = BitSet(); a.set(index: 1); a.set(index: 2); a.set(index: 100);   // 2 words
+    BitSet b = BitSet(); b.set(index: 2); b.set(index: 3);                       // 1 word
+
+    BitSet u = copy a; u.unionWith(other: b);                                  // {1,2,3,100}
+    if (u.count() == 4) { r = r + 5; }
+    if (u.test(index: 3) && u.test(index: 100)) { r = r + 5; }
+
+    BitSet x = copy a; x.intersectWith(other: b);                             // {2}
+    if (x.count() == 1 && x.test(index: 2)) { r = r + 5; }
+
+    BitSet d = copy a; d.differenceWith(other: b);                            // {1,100}
+    if (d.count() == 2 && d.test(index: 1) && d.test(index: 100)) { r = r + 5; }
+
+    BitSet sub = BitSet(); sub.set(index: 2);
+    if (sub.isSubsetOf(other: a)) { r = r + 5; }                               // {2} subset of {1,2,100}
+    if (!b.isSubsetOf(other: a)) { r = r + 5; }                                // {2,3} not a subset (3 absent)
+
+    // (d) copy independence + clearAll / isEmpty.
+    BitSet orig = BitSet(); orig.set(index: 10); orig.set(index: 20);
+    BitSet cp = copy orig;
+    orig.set(index: 30);                                                        // mutate the original only
+    if (cp.count() == 2 && !cp.test(index: 30)) { r = r + 5; }                  // the copy is independent
+    if (!orig.isEmpty()) { r = r + 5; }
+    orig.clearAll();
+    if (orig.isEmpty() && orig.count() == 0) { r = r + 5; }
+
+    return r;   // 24 asserts * 5 = 120 (< 256; exit codes are 8-bit)
+}
