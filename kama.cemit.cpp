@@ -7140,6 +7140,15 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // `Type::method(args)` — a static method (no implicit `self`). The qualifier head
         // resolves to a class; the named method must be `static`.
         std::string typeName = resolveUserName(*qual->back(), tq);
+        // A generic-type static factory (`Map<int32,int32> m = Map::withCapacity(...)`): the qualifier head
+        // names the bare template, so infer the concrete instance from the enclosing typed position — the
+        // same `_variantTargetType` channel the bare ctor and `Optional::Some` already consume (mirrors
+        // `resolveVariantType`). Nothing to infer from means it falls through to the usual resolution.
+        if (!_classes.count(typeName) && !_variantTargetType.empty()) {
+            auto of = _genericTypeInstOf.find(_variantTargetType);
+            if (of != _genericTypeInstOf.end() && of->second == typeName)
+                typeName = _variantTargetType;   // "Map" -> "Map_int32_int32"
+        }
         // Fallback: a bound type-parameter head (`T::make` in a generic `fn f<T: C>()`) substitutes to its
         // monomorphized concrete type, so a static contract method on a type-param resolves (e.g.
         // `json::decode<T: Deserialize>` calling `T::deserialize(...)`, or a collection's `T::deserialize`).

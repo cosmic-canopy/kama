@@ -182,6 +182,14 @@ type resource Map<K: Hashable + Equatable, V>
         if (nc > this.cap) { this.growTo(nc: nc); }
     }
 
+    // Build an empty map already sized for `capacity` entries — the self-documenting one-liner for the
+    // common `Map(); reserve(n:)` build. K,V come from the target type (`Map<K,V> m = Map::withCapacity(...)`).
+    public static fn Map<K,V> withCapacity(int32 capacity) {
+        Map<K,V> m = Map();
+        m.reserve(n: capacity);
+        return give m;
+    }
+
     // Grow to the next capacity (doubling) and re-home the live entries — see `growTo`.
     fn void grow() { this.growTo(nc: this.cap == 0 ? 8 : this.cap * 2); }
 

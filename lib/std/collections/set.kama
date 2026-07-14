@@ -16,6 +16,13 @@ type resource Set<K: Hashable + Equatable> implements Iterable<K> when [K: Copya
 
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
     public fn void reserve(int32 n) { this.m.reserve(n: n); }   // preallocate for a known-size build
+
+    // Build an empty set already sized for `capacity` entries (K from the target type).
+    public static fn Set<K> withCapacity(int32 capacity) {
+        Set<K> s = Set();
+        s.reserve(n: capacity);
+        return give s;
+    }
     public fn bool contains(ref K key) { return this.m.contains(key: key); }
     public fn bool remove(ref K key) { return this.m.remove(key: key); }
     public fn int32 length() { return this.m.length(); }

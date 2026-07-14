@@ -1,0 +1,47 @@
+// Target-type inference for a generic-type STATIC FACTORY: `Map<K,V> m = Map::withCapacity(...)` infers K,V
+// from the LHS declared type (the same channel the bare ctor `Map()` uses), so a scope-qualified static call
+// returning the generic type resolves to the concrete monomorphization. Covers a local decl, a Set decl, and
+// a NON-decl typed position (a function's `return`) to prove the target-type channel is position-general.
+import std::collections::{Map, Set};
+
+// Non-decl typed position: the return-statement's expected type carries K,V into the static call.
+fn Map<string, int32> build() {
+    Map<string, int32> m = Map::withCapacity(capacity: 8);
+    m.put(key: "hp", value: 100);
+    m.put(key: "mp", value: 42);
+    return give m;
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // Local-decl inference: K=int32, V=int32 inferred from the LHS, capacity preallocated.
+    Map<int32, int32> m = Map::withCapacity(capacity: 100);
+    int32 i = 0;
+    while (i < 100) { m.put(key: i, value: i * 2); i = i + 1; }
+    if (m.length() == 100) { r = r + 10; }
+
+    // Every key round-trips to exactly its stored value.
+    int32 miss = 0; int32 drift = 0;
+    i = 0;
+    while (i < 100) {
+        Optional<int32> ov = m.get(key: i);
+        int32 got = match (ov) { case Some(x): x; case None: 0 - 1; };
+        if (got < 0) { miss = miss + 1; } else { drift = drift + (got - i * 2); }
+        i = i + 1;
+    }
+    if (miss == 0 && drift == 0) { r = r + 10; }
+
+    // Set factory: K inferred from `Set<int32>`.
+    Set<int32> s = Set::withCapacity(capacity: 64);
+    i = 0; while (i < 64) { s.add(key: i); i = i + 1; }
+    if (s.length() == 64 && s.contains(key: 7) && !s.contains(key: 64)) { r = r + 10; }
+
+    // Non-decl typed position (function return) inferred correctly.
+    Map<string, int32> b = build();
+    Optional<int32> ohp = b.get(key: "hp");
+    int32 hp = match (ohp) { case Some(x): x; case None: 0; };
+    if (b.length() == 2 && hp == 100) { r = r + 15; }
+
+    return r;   // 10+10+10+15 = 45
+}
