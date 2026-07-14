@@ -159,6 +159,21 @@ fn Ptr makePipeline(Ptr device, int32 format) {
     return wgpuDeviceCreateRenderPipeline(device: device, descriptor: addr(of: pd));
 }
 
+// (Re)configure the surface for the device. Called once when the device is ready, and again
+// whenever wgpuSurfaceGetCurrentTexture reports the surface is out of date (native swapchains go
+// stale — e.g. after the first present, or on resize — and must be reconfigured to recover).
+fn void configureSurface(Ptr device, Ptr surface) {
+    WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration();
+    cfg.device = device;
+    cfg.format = 27;          // WGPUTextureFormat_BGRA8Unorm
+    cfg.usage = 16;           // WGPUTextureUsage_RenderAttachment
+    cfg.width = 512;
+    cfg.height = 512;
+    cfg.alphaMode = 0;        // WGPUCompositeAlphaMode_Auto
+    cfg.presentMode = 1;      // WGPUPresentMode_Fifo
+    wgpuSurfaceConfigure(surface: surface, config: addr(of: cfg));
+}
+
 // Device is ready: grab the queue, configure the surface for the canvas, go live.
 fn void onDevice(int32 status, Ptr device, WGPUStringView message, Ptr u1, Ptr u2) {
     unsafe {
@@ -166,15 +181,7 @@ fn void onDevice(int32 status, Ptr device, WGPUStringView message, Ptr u1, Ptr u
         st[0].device = device;
         st[0].queue = wgpuDeviceGetQueue(device: device);
 
-        WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration();
-        cfg.device = device;
-        cfg.format = 27;          // WGPUTextureFormat_BGRA8Unorm
-        cfg.usage = 16;           // WGPUTextureUsage_RenderAttachment
-        cfg.width = 512;
-        cfg.height = 512;
-        cfg.alphaMode = 0;        // WGPUCompositeAlphaMode_Auto
-        cfg.presentMode = 1;      // WGPUPresentMode_Fifo
-        wgpuSurfaceConfigure(surface: st[0].surface, config: addr(of: cfg));
+        configureSurface(device: device, surface: st[0].surface);
 
         st[0].pipeline = makePipeline(device: device, format: 27);   // BGRA8Unorm
 
@@ -234,7 +241,13 @@ fn int32 frameTick(Ptr state) {
         WGPUSurfaceTexture surfTex = WGPUSurfaceTexture();
         wgpuSurfaceGetCurrentTexture(surface: surface, surfaceTexture: addr(of: surfTex));
         Ptr tex = surfTex.texture;
-        if (tex == null) { return 1; }
+        if (tex == null) {
+            // Surface out of date (native swapchains go stale after present/resize) — reconfigure and
+            // retry next frame. Still pump so the window stays responsive.
+            configureSurface(device: st[0].device, surface: surface);
+            keep = kama_gpu_pump(device: st[0].device);
+            return keep;
+        }
 
         Ptr view = wgpuTextureCreateView(texture: tex, descriptor: null);
         Ptr enc = wgpuDeviceCreateCommandEncoder(device: st[0].device, descriptor: null);
