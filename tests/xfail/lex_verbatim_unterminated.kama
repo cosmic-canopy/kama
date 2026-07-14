@@ -1,0 +1,3 @@
+// A verbatim string (@"…") with no closing quote before EOF is a lex error.
+fn int main() {
+    string s = @"this verbatim string is never closed

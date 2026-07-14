@@ -1,0 +1,1 @@
+invalid multibyte char literal

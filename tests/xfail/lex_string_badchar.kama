@@ -1,0 +1,6 @@
+// An invalid escape sequence inside a regular string ("\q") is a lex error — a lone backslash that
+// forms no known escape is rejected, not passed through.
+fn int main() {
+    string s = "bad escape \q here";
+    return 0;
+}

@@ -1,0 +1,3 @@
+// A regular string literal with no closing quote before EOF is a lex error.
+fn int main() {
+    string s = "this string is never closed

@@ -111,7 +111,8 @@ identifier                  ({letter_char}|"_"){ident_char}*
 <IN_COMMENT>{new_line}                         { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
 <IN_COMMENT>{multi_line_comment_end}           { yy_pop_state(yyscanner); yyextra->next_column_number += 2; }
 <IN_COMMENT><<EOF>>                            { 
-                                                 error("unexpected end of file lexing multi-line comment", yyscanner); 
+                                                 error("unexpected end of file lexing multi-line comment", yyscanner);
+                                                 yyterminate();   /* stop — else flex re-matches <<EOF>> at EOF forever */
                                                }
 
 {verbatim_string_start}                        { 
@@ -139,7 +140,8 @@ identifier                  ({letter_char}|"_"){ident_char}*
                                                  return STRING_LITERAL; 
                                                }
 <IN_VERBATIM_STRING><<EOF>>                    { 
-                                                  error("unexpected end of file lexing verbatim string", yyscanner); 
+                                                  error("unexpected end of file lexing verbatim string", yyscanner);
+                                                  yyterminate();   /* stop — else flex re-matches <<EOF>> at EOF forever */
                                                }
 
 {dec_literal_no_suffix}                        { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return DEC_LITERAL_NO_SUFFIX; }
@@ -195,6 +197,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 <IN_REGULAR_STRING>.                           { error("unexpected character lexing string", yyscanner); }
 <IN_REGULAR_STRING><<EOF>>                     {
                                                   error("unexpected end of file lexing string", yyscanner);
+                                                  yyterminate();   /* stop — else flex re-matches <<EOF>> at EOF forever */
                                                }
 
 {identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return getToken(yytext); }

@@ -1,0 +1,3 @@
+// A multi-line comment left open at end-of-file is a lex error, not silently accepted.
+fn int main() {
+    /* this comment is never closed and runs off the end of the file
