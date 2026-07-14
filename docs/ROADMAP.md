@@ -137,12 +137,13 @@ serialization, networking).
   `fn ref string` borrow is no longer hoisted into a dropped temp). No `entriesMut()` — a key is never mutated
   in place; use `valuesMut()` / `getRef`. **`Deque<T>` (ring buffer)** and **`PriorityQueue<T: Comparable>`
   (binary heap)** are shipped — the latter min-heap by default (`minHeap()`), `maxHeap()` to invert; over a
-  `DynamicArray` (which gained an O(1) `swap(i:,j:)` primitive) for A* / event scheduling. Still ahead:
-  **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a system or
-  a GPU upload with no copy and no ownership transfer), **slot map / generational
-  arena** (stable handles with generation counters — *the* ECS/asset-registry structure, catches
-  use-after-free), and a **sorted / tree map** (ordered iteration + range queries; needs
-  `Comparable`/`Ordering`). Honest caveat: general **linked lists** are mostly a cache anti-pattern in
+  `DynamicArray` (which gained an O(1) `swap(i:,j:)` primitive) for A* / event scheduling. **`SlotMap<V>`
+  (generational slot map)** is shipped — `insert` returns a stable `Handle`, and `get`/`getRef`/`remove` reject
+  a stale handle (one whose slot was removed/reused) via a per-slot odd-while-occupied generation, so a
+  dangling handle is a clean `None`/panic, not a use-after-free (*the* ECS/asset-registry structure). Still
+  ahead: **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a
+  system or a GPU upload with no copy and no ownership transfer) and a **sorted / tree map** (ordered iteration
+  + range queries; needs `Comparable`/`Ordering`). Honest caveat: general **linked lists** are mostly a cache anti-pattern in
   data-oriented engines (the useful form is an intrusive free-list / LRU); raw **BSTs** are subsumed by the
   sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
 - **Collections revisit — uniform preallocation, pluggable hasher, custom allocator.** The containers grew

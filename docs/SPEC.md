@@ -203,6 +203,15 @@ element) / `peekRef() -> ref T` (borrow, panics when empty) read the root O(1). 
 meaningful — isn't iterable; drain it with `pop`. (It's backed by a `DynamicArray`, which gained an O(1)
 `swap(i:, j:)` in-place element exchange.)
 
+**`SlotMap<V>`** is a generational slot map (Rust's `slotmap`; the ECS entity / asset registry): `insert(value:)
+-> Handle` hands back a stable, Copyable `Handle`, and `get(handle:) -> Optional<V>` (copy, `Copyable`) /
+`getRef(handle:) -> ref V` (borrow, panics on a stale handle) / `remove(handle:) -> Optional<V>` (moves out)
+all **reject a stale handle** — one whose slot was removed, or removed and reused for a different value —
+returning `None` (or panicking on `getRef`) instead of aliasing the new occupant. That's a per-slot generation
+counter (odd while occupied, bumped on every insert/remove), so a handle can safely outlive the value it names
+and a dangling handle is caught, not a use-after-free. `contains(handle:)`, `length`/`isEmpty`, `clear`, and
+`values()`/`valuesMut()` (iterate the live values, copy or borrow) round it out.
+
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 
 The smart-pointer triad `Owned`/`Shared`/`Weak` is **prelude / built-in — always in scope, no `import`**.
