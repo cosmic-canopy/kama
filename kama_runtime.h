@@ -523,12 +523,12 @@ static inline void kama_panic(kama_string msg) {
     extern void abort(void);
 #if defined(_WIN32)
     extern int _write(int, const void*, unsigned int);
-    (void)_write(2, "kama: panic: ", 14);
+    (void)_write(2, "kama: panic: ", 13);
     if (msg.len) (void)_write(2, msg.data, (unsigned int)msg.len);
     (void)_write(2, "\n", 1);
 #else
     extern long write(int, const void*, size_t);
-    (void)write(2, "kama: panic: ", 14);
+    (void)write(2, "kama: panic: ", 13);
     if (msg.len) (void)write(2, msg.data, msg.len);
     (void)write(2, "\n", 1);
 #endif
