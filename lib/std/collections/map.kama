@@ -1,5 +1,5 @@
 namespace std::collections;
-export { Map, MapKeyIter };
+export { Map, MapKeyIter, MapValueIter, MapValueIterMut };
 
 extern "<stdlib.h>";
 extern fn Ptr malloc(usize n);
@@ -31,6 +31,49 @@ type value MapKeyIter<K> implements Iterator<K> {
         }
         return Optional::None;
     }
+}
+
+// A by-value iterator over a map's VALUES (`foreach (V v in map.values())`), present only for a Copyable
+// value. Like `MapKeyIter` it borrows the value + state buffers, walks only FULL slots, yields each value BY
+// VALUE (a copy), and rejects a structural change made mid-iteration via the `mods` snapshot.
+type value MapValueIter<V> implements Iterator<V> {
+    Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
+    public MapValueIter(Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
+        this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    // Deep-copy a value through a typed `ref V` borrow — see `Map.cloneVal` for why a raw-buffer `copy` aliases.
+    fn V cloneVal(ref V v) { return copy v; }
+    public fn Optional<V> next() {
+        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); } }
+        while (this.pos < this.cap) {
+            int32 p = this.pos; this.pos = this.pos + 1;
+            uint8 s = 0ui8; unsafe { s = this.state[p]; }
+            if (s == 1ui8) { unsafe { return Optional::Some(value: this.cloneVal(v: this.vals[p])); } }
+        }
+        return Optional::None;
+    }
+}
+
+// A mutable iterator over a map's VALUES (`foreach (ref V v in map.valuesMut())`), for ANY value type — the
+// borrow accessor that lets a Map of move-only values be walked + mutated in place. `hasNext()` advances to
+// the next FULL slot (idempotent) and runs the mid-iteration invalidation check; `next()` hands out the
+// `ref V` at that slot. Same borrow safety as `DynamicArrayIterMut` (the ref may not escape; a structural
+// change is caught).
+type value MapValueIterMut<V> implements IteratorMut<V> {
+    Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
+    public MapValueIterMut(Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
+        this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public fn bool hasNext() {
+        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); } }
+        while (this.pos < this.cap) {
+            uint8 s = 0ui8; unsafe { s = this.state[this.pos]; }
+            if (s == 1ui8) { return true; }            // stop AT the full slot (idempotent — next() consumes it)
+            this.pos = this.pos + 1;
+        }
+        return false;
+    }
+    public fn ref V next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.vals[p]; } }
 }
 
 // A general open-addressing hash map over `K: Hashable + Equatable` -> `V`. Linear probing with
@@ -121,6 +164,29 @@ type resource Map<K: Hashable + Equatable, V>
         unsafe { return Optional::Some(value: this.cloneVal(v: this.vals[i])); }   // hand back a copy; map keeps its own
     }
 
+    // Borrow the stored value for `key` IN PLACE (any V, no Copyable bound) — the read/mutate accessor that
+    // makes a Map of move-only values (`Owned`/`Shared`/a collection) first-class instead of write-only. A map
+    // lookup is PARTIAL, so this PANICS on an absent key (guard with `contains` first), like `operator[]` panics
+    // out of bounds — hence the explicit `getRef` name, not `operator[]` (which would hide the can-fail nature).
+    // The returned `ref V` may not escape and dangles if held across a `put` that rehashes — the same borrow
+    // boundary as an array `ref` held across `add`→realloc (the deliberate no-borrow-checker tradeoff).
+    public fn ref V getRef(ref K key) {
+        int32 i = this.slotOf(key: key);
+        if (i < 0) { panic(msg: "Map.getRef: absent key"); }
+        unsafe { return this.vals[i]; }
+    }
+
+    // `foreach (V v in map.values())` — a by-value value iterator (present only for a Copyable value), the
+    // value analogue of `iterator()`. `valuesMut()` borrows instead, for any value type.
+    public fn MapValueIter<V> values() when [V: Copyable] {
+        return MapValueIter::<V>(vals: this.vals, state: this.state, cap: this.cap,
+                                 modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    public fn MapValueIterMut<V> valuesMut() {
+        return MapValueIterMut::<V>(vals: this.vals, state: this.state, cap: this.cap,
+                                    modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+
     // Insert or overwrite. Consumes both `key` and `value` (owns what it stores). On overwrite the
     // existing key stays, so the incoming key and the old value are dropped. The probe loop only LOCATES
     // the slot; the moves (`give`) happen after it, since `give` inside a loop is rejected (it could
@@ -151,14 +217,30 @@ type resource Map<K: Hashable + Equatable, V>
         }
     }
 
-    // Remove the entry for `key`. Returns whether one was present. The slot becomes a tombstone so the
-    // probe runs of other keys stay intact; its key + value are dropped.
-    public fn bool remove(ref K key) {
+    // Remove the entry for `key`, returning its VALUE moved OUT (`None` when absent). The key is dropped and
+    // the slot becomes a tombstone so other keys' probe runs stay intact. Discard the result to just delete —
+    // the returned `Optional<V>` drops the value cleanly (a move-out-then-drop, ASan-clean). Reclaiming the
+    // value (`match`) hands the caller its ownership, so a Map of move-only values is fully symmetric.
+    public fn Optional<V> remove(ref K key) {
         int32 i = this.slotOf(key: key);
-        if (i < 0) { return false; }
-        unsafe { drop(value: this.keys[i]); drop(value: this.vals[i]); this.state[i] = 2ui8; }
+        if (i < 0) { return Optional::None; }
+        unsafe { drop(value: this.keys[i]); }         // key dropped (lookup `key` is a borrow, not stored)
+        V v = this.takeVal(slot: i);                  // value relocated OUT (the slot is now stale)
+        unsafe { this.state[i] = 2ui8; }              // tombstone so the stale slot is never dropped again
         this.len = this.len - 1; this.tombs = this.tombs + 1; this.mods = this.mods + 1;
-        return true;
+        return Optional::Some(value: give v);
+    }
+
+    // Move the value at `slot` OUT of the buffer into a fresh owned local. A direct `V v = this.vals[slot]` is
+    // rejected (giving out of an element leaves a moved-from owner); instead relocate bitwise through raw
+    // `Ptr<V>` aliases into a zero-init'd local, then `give`. The caller tombstones the stale slot so it's
+    // never dropped again — the same move-out idiom as `Deque.takeAt`.
+    fn V takeVal(int32 slot) {
+        V x;                                          // zero-init owned local (the move-out target)
+        Ptr<V> dst = addr(of: x);
+        Ptr<V> s = this.vals;
+        unsafe { dst[0] = s[slot]; }                  // raw bitwise move out of the slot (untracked)
+        return give x;
     }
 
     public fn void clear() {

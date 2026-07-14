@@ -1,0 +1,40 @@
+// DynamicArray.remove now RETURNS the removed element (moved out, tail shifted); pop() returns the last as
+// Optional<T> (None when empty). Reclaim by binding the return, or discard to drop. Move-only `resource`
+// elements stay ASan-clean through the move-out.
+import std::collections::{DynamicArray};
+
+type resource Box {
+    int32 v;
+    public Box(int32 v) { this.v = v; }
+    public fn int32 get() { return this.v; }
+}
+
+fn int main() {
+    DynamicArray<Box> xs = DynamicArray();
+    xs.add(item: Box(v: 1)); xs.add(item: Box(v: 2)); xs.add(item: Box(v: 3)); xs.add(item: Box(v: 4));
+
+    int32 r = 0;
+    // RECLAIM at an index (shifts the tail down): take Box(2) out -> [1,3,4]
+    Box taken = xs.remove(index: 1);
+    r = r + taken.get();                 // 2 (taken drops at scope exit)
+
+    // pop the back -> Box(4) -> [1,3]
+    Optional<Box> last = xs.pop();
+    int32 lastv = match (last) { case Some(b): b.get(); case None: 0; };   // 4
+    r = r + lastv;
+
+    // DISCARD a removed element (the returned Box drops) -> [3]
+    xs.remove(index: 0);                 // drops Box(1)
+    r = r + xs.length();                 // 1
+    r = r + xs[0].get();                 // 3
+
+    // pop to empty, then pop empty -> None
+    Optional<Box> p1 = xs.pop();         // Box(3)
+    int32 p1v = match (p1) { case Some(b): b.get(); case None: 0; };       // 3
+    r = r + p1v;
+    Optional<Box> p2 = xs.pop();         // empty -> None
+    int32 p2v = match (p2) { case Some(b): b.get(); case None: 100; };     // 100
+    r = r + p2v;
+
+    return r;   // 2+4+1+3+3+100 = 113
+}

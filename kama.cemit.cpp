@@ -443,7 +443,11 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
     std::string ct = hoistCtorIfInline(e);
     if (!ct.empty()) return "&" + ct;   // inline ctor operand → a hoisted, addressable temp
     rejectUnhoistableCtor(e);
-    bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n);
+    // A place-returning call (`fn ref T` — `getRef(k)`, a user `at(i)`) emits as `(*call)`, an lvalue whose
+    // address folds back to the returned `T*`. Treating it as a place (not a compound-literal copy) is what
+    // lets a chained mutation `m.getRef(k).bump()` / `m.getRef(k) = x` write THROUGH the borrow, like `a[i]`.
+    bool lvalue = dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n)
+                  || invocationReturnsPlace(dynamic_cast<InvocationNode*>(n));
     std::string em = emitExpression(e);
     if (lvalue || cls.empty()) return "&(" + em + ")";
     return "(" + cls + "[]){ " + em + " }";   // rvalue → addressable compound-literal temporary
@@ -4395,17 +4399,24 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     // full direct calls; `iterCType`/`optC` the concrete types.
     std::string iterCType, iterInit, nextCall, hasNextCall, optC;
     if (fe->isRef) {
+        // Mirror the by-value branch: a container hands out a mutable iterator via `iterMut()`, OR the operand
+        // IS its own mutable iterator (implements `IteratorMut` directly) and is iterated by value — the latter
+        // lets an rvalue operand (`m.valuesMut()`) work, exactly as `s.chars()` does for the by-value form.
         MethodInfo* iterMi = findMethod(cc, "iterMut", nullptr);
-        if (!iterMi || !iterMi->params.empty()) {
-            unsupported(("`foreach (ref …)` over `" + container + "` needs a nullary `iterMut()` "
-                         "(a mutable iterator)").c_str(), fe->line); *_out << "\n"; return;
+        if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
+        ClassInfo* ic = nullptr;
+        if (iterMi) {
+            if (!implementsContractTemplate(cc, "IterableMut")) {   // nominal: the container must declare it
+                unsupported(("`" + container + "` must `implements IterableMut<T>` to be used in a "
+                             "`foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
+            }
+            iterCType = cTypeInInstance(container, iterMi->returnType);
+            ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
+            iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
+        } else {   // the operand IS the mutable iterator (used by value — an rvalue materializes into `__it`)
+            iterCType = container; ic = cc;
+            iterInit = emitIterable();
         }
-        if (!implementsContractTemplate(cc, "IterableMut")) {   // nominal: the container must declare it
-            unsupported(("`" + container + "` must `implements IterableMut<T>` to be used in a "
-                         "`foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
-        }
-        iterCType = cTypeInInstance(container, iterMi->returnType);
-        ClassInfo* ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
         MethodInfo* hasNextMi = ic ? findMethod(ic, "hasNext", nullptr) : nullptr;
         MethodInfo* nextMi    = ic ? findMethod(ic, "next", nullptr) : nullptr;
         if (!hasNextMi || !nextMi || !nextMi->isPlaceReturn) {
@@ -4416,7 +4427,6 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             unsupported(("the mutable iterator `" + iterCType + "` must `implements IteratorMut<T>` "
                          "to be used in a `foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
         }
-        iterInit    = iterMi->cName + "(&(" + emitIterable() + "))";
         hasNextCall = hasNextMi->cName + "(&" + it + ")";
         nextCall    = nextMi->cName + "(&" + it + ")";
     } else {
@@ -6956,10 +6966,13 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 else doCopy = cpy && _classes[argCls].bareDefault == COPY;
                 if (doCopy) field = argCls + "__copy(&(" + val + "))";
                 else { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); field = val; }
-            } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl && handoff) {
-                // Hand a collection/`string` into the union: `copy` deep-copies (`__copy`; the union owns
+            } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl
+                       && !isFixedColl(argCls) && handoff) {
+                // Hand a heap collection/`string` into the union: `copy` deep-copies (`__copy`; the union owns
                 // the clone, the source survives), `give` transfers the struct (buffer) and nulls the
                 // source so its scope-drop is a no-op (the union now owns it, dropped by the tag dtor).
+                // (`InlineArray` is excluded — it's a value that owns nothing, so it falls to the plain-value
+                // branch below; nulling its non-existent `.data`/`.len` would be wrong.)
                 if (handoff == 2) {                                  // copy = deep copy into the payload
                     auto ci = _collections.find(argCls);
                     if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
@@ -6977,8 +6990,8 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                     field = t;
                 }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl
-                       && isNamedValue(argExpr.get())) {
-                // A bare NAMED collection/`string` into a variant would alias (the union owns it AND the
+                       && !isFixedColl(argCls) && isNamedValue(argExpr.get())) {
+                // A bare NAMED heap collection/`string` into a variant would alias (the union owns it AND the
                 // source frees it → double-free / dangle). Ownership transfer must be explicit — `give`
                 // (move) or `copy` (deep). A fresh rvalue payload (a call result / literal) needs no marker.
                 unsupported("a collection/`string` into a variant transfers ownership — say `give` (move) "
@@ -6988,7 +7001,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 // Primitive / plain value / fresh smart-ptr rvalue (factory result): consumed in place.
                 // A `give`/`copy` on a plain value (primitive or `value` struct) is a no-op — a value is
                 // always copied — so only a stray marker on a fell-through resource rvalue is an error.
-                bool plainValue = argCls.empty()
+                bool plainValue = argCls.empty() || isFixedColl(argCls)   // InlineArray: a value that owns nothing
                     || (_classes.count(argCls) && _classes[argCls].kind == TypeKind::Value);
                 // A tagged-union (enum) value accepts `give` into the outer variant — the tag+payload copies
                 // bitwise (a no-op move for a non-owning enum like `Result::Ok(value: give myEnum)` in

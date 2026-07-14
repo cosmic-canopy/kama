@@ -126,9 +126,14 @@ call on an element** works directly — `list[i].method()` borrows the element *
 mutates the stored element; a `const` collection allows only const methods on its elements. Elements enter a
 collection by the ownership rules below (`give` to move, `copy` to duplicate, a `value` copies).
 
-`DynamicArray` / `FixedArray` also offer `reserve(n:)` (DynamicArray — preallocate to skip incremental growth), `remove(index:)`
-(DynamicArray — drop the element and shift the tail), `clear()` (DynamicArray), and `contains(item:)` / `indexOf(item:)`
-(both — present **only when the element is `Equatable`**, i.e. `string` or a user type with `equals`).
+`DynamicArray` / `FixedArray` also offer `reserve(n:)` (DynamicArray — preallocate to skip incremental growth),
+`clear()` (DynamicArray), and `contains(item:)` / `indexOf(item:)` (both — present **only when the element is
+`Equatable`**, i.e. `string` or a user type with `equals`). Removal on `DynamicArray` **returns the removed
+element moved out** — `remove(index:) -> T` (shifts the tail; bounds-checked, so always a valid `T`) and
+`pop() -> Optional<T>` (the last element, O(1), `None` when empty). Reclaim the element by binding the return,
+or **discard it to drop** (`xs.remove(index: i);` drops cleanly). This is the one consistent removal shape
+across every container — a single method that hands ownership back (matching `Deque.popFront`/`popBack` and
+Rust's `Vec::remove`/`pop`), never a silent drop.
 
 ### Hash maps & sets (`std::collections`) ✅
 
@@ -167,18 +172,24 @@ seen.add(key: "x");   bool member = seen.contains(key: "x");
 ```
 
 `foreach (K k in map)` / `foreach (K k in set)` iterates the keys (a by-value key iterator, present for a
-`Copyable` key; it guards against a mid-iteration `put`/`remove` like the `DynamicArray` iterator). `copy m`
-deep-copies a whole map (independent clone) — present only when **both** key and value are `Copyable`,
-gated by a **multi-condition `when [K: Copyable, V: Copyable]`**. Entry-wise iteration
-(`foreach (Entry e in m.entries())`) is a tracked follow-up (a generic `Entry<K,V>` value yielded through
-`Optional` doesn't monomorphize yet).
+`Copyable` key; it guards against a mid-iteration `put`/`remove` like the `DynamicArray` iterator).
+`foreach (V v in m.values())` iterates the **values** by copy (present for a `Copyable` value), and
+`foreach (ref V v in m.valuesMut())` **borrows every value in place** to mutate it — the value analogue of
+`iterMut()`, and the way to walk a map whose key isn't `Copyable`. `copy m` deep-copies a whole map
+(independent clone) — present only when **both** key and value are `Copyable`, gated by a **multi-condition
+`when [K: Copyable, V: Copyable]`**. Entry-wise iteration (`foreach (Entry e in m.entries())`) is a tracked
+follow-up (a generic `Entry<K,V>` value yielded through `Optional` doesn't monomorphize yet).
 
-`Map` is **move-only**: it owns its keys and values (dropping them on overwrite, `remove`, `clear`, and at
-end of life — ASan/UBSan-clean for owning keys *and* values, e.g. `Map<string, DynamicArray<string>>`). Lookups
-**borrow** the key (`ref K`), so they don't consume a key you're holding; `get(key:)` returns
-`Optional<V>` with a **deep copy** of the value (present only when `V` is `Copyable`). A key that is an
-inline rvalue — a `string`/number literal or a user-type ctor — is materialized into a temp automatically,
-so `m.get(key: 5)` / `m.get(key: Point(1, 2))` work without binding a local first.
+`Map` is **move-only**: it owns its keys and values (dropping the key + handing the value back on `remove`,
+dropping both on overwrite/`clear`/end of life — ASan/UBSan-clean for owning keys *and* values, e.g.
+`Map<string, DynamicArray<string>>`). Lookups **borrow** the key (`ref K`), so they don't consume a key you're
+holding. Three value accessors form a consistent trio: `get(key:) -> Optional<V>` hands back a **deep copy**
+(present only when `V` is `Copyable`); `getRef(key:) -> ref V` **borrows the stored value in place** (any `V` —
+the accessor that makes a `Map` of move-only values like `Owned`/`Shared`/a collection first-class rather than
+write-only; panics on an absent key, so guard with `contains` first, as a map lookup is *partial*);
+`remove(key:) -> Optional<V>` **moves the value out** (`None` when absent — reclaim it or discard to drop).
+A key that is an inline rvalue — a `string`/number literal or a user-type ctor — is materialized into a temp
+automatically, so `m.get(key: 5)` / `m.get(key: Point(1, 2))` work without binding a local first.
 
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 

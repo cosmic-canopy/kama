@@ -91,10 +91,13 @@ type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable]
         }
     }
 
-    // Remove the element at `index` (dropping it) and shift the tail down one slot. Bounds-checked.
-    public fn void remove(int32 index) {
+    // Remove the element at `index`, returning it moved OUT, and shift the tail down one slot. Bounds-checked
+    // (so it always yields a valid `T`, not an `Optional`). Discard the result to just delete — the returned
+    // `T` drops cleanly. The element is relocated OUT bitwise via `takeAt` (the move-out idiom `Deque` uses);
+    // a direct `T x = this[index]` is rejected as giving out of an element.
+    public fn T remove(int32 index) {
         if (index < 0 || index >= this.len) { panic(msg: "DynamicArray.remove index out of bounds"); }
-        drop(value: this[index]);
+        T x = this.takeAt(idx: index);                 // move the element out (the slot is now stale)
         int32 i = index;
         // Relocate the tail down one slot through a LOCAL pointer alias: `d[i] = d[i+1]` is a raw store
         // (a bitwise move that leaves no owner holding a moved-from field), whereas `this.data[i] = …`
@@ -102,7 +105,29 @@ type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable]
         Ptr<T> d = this.data;
         unsafe { while (i + 1 < this.len) { d[i] = d[i + 1]; i = i + 1; } }
         this.len = this.len - 1;
-        this.mods = this.mods + 1;                     // structural change — invalidates any live iterator
+        this.mods = this.mods + 1;                      // structural change — invalidates any live iterator
+        return give x;
+    }
+
+    // Remove + return the last element (moved out), or `None` when empty — the O(1) stack pop (no shift).
+    // Matches `Deque.popBack` / Rust `Vec::pop`.
+    public fn Optional<T> pop() {
+        if (this.len == 0) { return Optional::None; }
+        T x = this.takeAt(idx: this.len - 1);
+        this.len = this.len - 1;
+        this.mods = this.mods + 1;
+        return Optional::Some(value: give x);
+    }
+
+    // Move the element at `idx` OUT of the buffer into a fresh owned local (the slot is left stale — the
+    // caller either overwrites it by shifting or drops it by decrementing `len`). Bitwise-relocate through raw
+    // `Ptr<T>` aliases into a zero-init'd local, then `give` — the same move-out idiom as `Deque.takeAt`.
+    fn T takeAt(int32 idx) {
+        T x;                                           // zero-init owned local (the move-out target)
+        Ptr<T> dst = addr(of: x);
+        Ptr<T> d = this.data;
+        unsafe { dst[0] = d[idx]; }                    // raw bitwise move out of the slot (untracked)
+        return give x;
     }
 
     // Drop every element and reset to empty (keeps the allocated buffer for reuse).

@@ -1,0 +1,26 @@
+// Map.getRef: borrow a non-Copyable (move-only `resource`) value IN PLACE and mutate it — the accessor that
+// makes a Map of move-only values first-class instead of write-only (a bare `get` needs a Copyable value and
+// hands back a copy). No copy/move happens, so it stays ASan-clean; the map keeps owning each value.
+import std::collections::{Map};
+
+type resource Counter {
+    int32 n;
+    public Counter(int32 n) { this.n = n; }
+    public fn void bump() { this.n = this.n + 1; }
+    public fn int32 get() { return this.n; }
+}
+
+fn int main() {
+    Map<int32, Counter> m = Map();
+    m.put(key: 1, value: Counter(n: 10));
+    m.put(key: 2, value: Counter(n: 20));
+
+    m.getRef(key: 1).bump();          // borrow + mutate in place -> 11
+    m.getRef(key: 1).bump();          // -> 12
+    m.getRef(key: 2).bump();          // -> 21
+
+    int32 r = 0;
+    r = r + m.getRef(key: 1).get();   // 12 (mutation stuck across re-borrows)
+    r = r + m.getRef(key: 2).get();   // 21
+    return r;   // 33 (m drops both Counters at scope exit)
+}

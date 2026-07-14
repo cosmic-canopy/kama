@@ -1,0 +1,29 @@
+// Map value iteration: valuesMut() borrows every value in place (any V — works for a MOVE-ONLY value, where
+// values() can't exist), and values() yields copies (Copyable V). Together they complete borrow-all parity
+// with DynamicArray/Deque. ASan-clean.
+import std::collections::{Map};
+
+type resource Counter {
+    int32 n;
+    public Counter(int32 n) { this.n = n; }
+    public fn void bump() { this.n = this.n + 1; }
+    public fn int32 get() { return this.n; }
+}
+
+fn int main() {
+    // (a) valuesMut over a MOVE-ONLY value map, read back via getRef (values() is unavailable for non-Copyable).
+    Map<int32, Counter> cm = Map();
+    cm.put(key: 1, value: Counter(n: 10));
+    cm.put(key: 2, value: Counter(n: 20));
+    foreach (ref Counter c in cm.valuesMut()) { c.bump(); }   // -> 11, 21
+    int32 a = cm.getRef(key: 1).get() + cm.getRef(key: 2).get();   // 32
+
+    // (b) values() copy-iteration over a Copyable-value map.
+    Map<int32, int32> im = Map();
+    im.put(key: 1, value: 70);
+    im.put(key: 2, value: 80);
+    int32 b = 0;
+    foreach (int32 v in im.values()) { b = b + v; }           // 150
+
+    return a + b;   // 32 + 150 = 182 (kept < 256 — exit codes are 8-bit)
+}

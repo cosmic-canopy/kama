@@ -127,8 +127,13 @@ serialization, networking).
 - **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
   `std::fs`/`std::io` for asset + scene load.
 - **Container / data-structure reach.** `DynamicArray`/`FixedArray`/`string`/`InlineArray` + `Map<K,V>`/`Set<K>` are shipped
-  (see [SPEC.md](SPEC.md)). **Tracked:** entry-wise iteration `foreach (Entry e in m.entries())` — a generic
-  `Entry<K,V>` value yielded through `Optional` doesn't monomorphize yet. Still ahead:
+  (see [SPEC.md](SPEC.md)). **Ownership-consistency pass done:** every container hands ownership back on removal
+  (`DynamicArray.remove(index:) -> T` / `pop() -> Optional<T>`, `Map.remove(key:) -> Optional<V>`, matching
+  `Deque.popFront`/`popBack`), and `Map` gained an in-place value borrow (`getRef(key:) -> ref V`) plus value
+  iteration (`values()`/`valuesMut()`) — closing the "non-`Copyable` map value is write-only" hole. **Tracked
+  (next):** entry-wise iteration `foreach (Entry e in m.entries())` — blocked on a language feature (a generic
+  `Entry<K,V>` value yielded through `Optional` doesn't monomorphize yet); build the `Entry<K,V>`
+  monomorphization support, then add `entries()`/`entriesMut()`. Still ahead:
   **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a system or
   a GPU upload with no copy and no ownership transfer), **priority queue / binary heap** (A* pathfinding,
   event/timer scheduling), **deque / ring buffer** (job & event queues, audio), **slot map / generational
