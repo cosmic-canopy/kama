@@ -3,12 +3,33 @@
 // WRITABLE — so we poll for writability first (the correct protocol). On loopback: connecting to a listening
 // port resolves writable+connected (Ok); connecting to a dead port resolves with ConnectionRefused (either
 // synchronously from connectNonBlocking on Linux, or after the poll on macOS/Windows where the connect is
-// async). Returns 55.
+// async). Returns 55 when both behave.
+//
+// DIAGNOSTIC MODE (Windows CI probe — Linux/macOS still exit 55). The dead-port connect fails only on
+// Windows; when it does NOT cleanly refuse, connectDead returns a packed code so one CI run reveals the
+// actual Winsock behavior. main surfaces that code directly (100..198). Decode:
+//     x  = code - 100
+//     w1 = x / 36            first poll(1000ms): 0 = timed out, 1 = reported ready, 2 = wait error
+//     wr = (x % 36) / 18     socket was writable after the first poll (readyFor().writable): 0/1
+//     c1 = (x % 18) / 3      checkConnected after 1s: 0 = Ok/SO_ERROR 0, 1 = refused, 2 = other error
+//     c2 = (x % 18) % 3      checkConnected after a further 4s wait: 0 = Ok/SO_ERROR 0, 1 = refused, 2 = other
+//   (c1 == 1 never reaches the diagnostic — it means "refused within 1s", the correct macOS/Linux outcome.)
+//   Reading it:  100 = never resolves (looks connected even after ~5s).  101 = timed out at 1s, refused only
+//   after the longer wait  -> Theory A (window too short; gate on readiness + wait longer/loop).
+//   154/155 = reported writable at 1s but SO_ERROR still 0  -> Theory B (select signals writable early).
 import std::net::{TcpListener, TcpStream, Poller, Interest, Ready};
 import std::io::{IoError};
 
 fn bool okUnit(Result<Unit, IoError> r) { return match (r) { case Ok(u): true; case Err(e): false; }; }
 fn bool isRefused(IoError e) { return match (e) { case ConnectionRefused: true; case _: false; }; }
+
+// checkConnected() -> class: 0 = Ok (SO_ERROR 0), 1 = ConnectionRefused, 2 = other error.
+fn int32 checkClass(ref TcpStream s) {
+    return match (s.checkConnected()) {
+        case Ok(u):  0;
+        case Err(e): (isRefused(e: e) ? 1 : 2);
+    };
+}
 
 // Block until a non-blocking connect RESOLVES (socket writable), then read its outcome. `checkConnected()`'s
 // SO_ERROR is 0 while the handshake is still in flight (macOS/Windows), so reading it immediately would
@@ -36,19 +57,40 @@ fn int32 connectListening(uint16 port) {
     };
 }
 
+// An in-flight connect to a DEAD port (macOS/Windows). Returns 0 when it correctly refuses within 1s
+// (macOS), else a packed diagnostic (100..198 — see header legend) capturing what Windows actually did.
+fn int32 deadProbe(ref TcpStream s) {
+    int32 w1 = 2;          // first-wait class (default: error/none)
+    int32 wr = 0;          // writable after the first wait
+    int32 c1 = 2;          // checkConnected class after 1s
+    int32 c2 = 2;          // checkConnected class after a further 4s
+    match (Poller::create()) {
+        case Ok(p): {
+            p.add(fd: s.rawHandle(), interest: Interest::Write);
+            Result<int32, IoError> r1 = p.wait(timeoutMs: 1000);
+            w1 = match (r1) { case Ok(k): (k > 0 ? 1 : 0); case Err(e): 2; };
+            Ready rdy = p.readyFor(fd: s.rawHandle());
+            wr = rdy.writable ? 1 : 0;
+            c1 = checkClass(s: s);
+            if (c1 != 1) {                                  // not yet refused — give it much longer
+                Result<int32, IoError> r2 = p.wait(timeoutMs: 4000);
+                c2 = checkClass(s: s);
+            }
+        }
+        case Err(e): { }
+    };
+    if (c1 == 1) { return 0; }                             // refused within 1s (macOS/Linux) -> passes (55)
+    return 100 + w1 * 36 + wr * 18 + c1 * 3 + c2;          // Windows diagnostic
+}
+
 // Connect (non-blocking) to a port with nothing listening; expect ConnectionRefused. Returns 0 when refused.
 fn int32 connectDead(uint16 port) {
     string host = "127.0.0.1";
     Result<TcpStream, IoError> r = TcpStream::connectNonBlocking(host: host, port: port);
-    int32 rc = -1;
-    match (r) {
-        case Ok(s): {                                  // in flight — resolve via the poll, then SO_ERROR
-            Result<Unit, IoError> cc = resolve(s: s);
-            match (cc) { case Ok(u): { rc = 3; } case Err(e): { rc = isRefused(e: e) ? 0 : 4; } };
-        }
-        case Err(e): { rc = isRefused(e: e) ? 0 : 5; }   // synchronous refusal (Linux loopback)
+    return match (r) {
+        case Ok(s):  deadProbe(s: s);                      // in flight (macOS/Windows)
+        case Err(e): (isRefused(e: e) ? 0 : 95);           // synchronous refusal (Linux); else 95
     };
-    return rc;
 }
 
 fn int main() {
@@ -60,7 +102,9 @@ fn int main() {
         case Ok(l): {
             int32 a = connectListening(port: live);
             int32 b = connectDead(port: dead);
-            := ((a == 0) && (b == 0)) ? 55 : (90 + a * 4 + b);
+            // Both clean -> 55 (Linux/macOS stay green). Live-connect failure -> 90+a (91/92). Otherwise
+            // surface the dead-connect DIAGNOSTIC code b directly (100..198) — decode per the header legend.
+            := (a != 0) ? (90 + a) : ((b == 0) ? 55 : b);
         }
         case Err(e): 80;
     };
