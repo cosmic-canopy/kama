@@ -49,8 +49,8 @@
     "keywords": {
       "patterns": [
         { "name": "keyword.control.kama", "match": "\\b(if|else|match|case|while|do|for|foreach|break|continue|return)\\b" },
-        { "name": "keyword.other.modifier.kama", "match": "\\b(abstract|override|virtual|final|static|private|protected|public|friend|const|volatile|ref|out|in|extern|export)\\b" },
-        { "name": "keyword.other.kama", "match": "\\b(fn|fnptr|type|namespace|using|extends|implements|operator|unsafe|give|copy|cast)\\b" },
+        { "name": "keyword.other.modifier.kama", "match": "\\b(abstract|override|virtual|final|static|private|protected|public|friend|const|volatile|ref|out|in|extern|export|expose)\\b" },
+        { "name": "keyword.other.kama", "match": "\\b(fn|fnptr|type|namespace|using|import|extends|implements|operator|unsafe|give|copy|cast|as|when|sizeof|alignof)\\b" },
         { "name": "keyword.operator.new.kama", "match": "\\b(new)\\b" },
         { "name": "variable.language.kama", "match": "\\b(this|base)\\b" }
       ]
@@ -58,7 +58,7 @@
     "declarations": {
       "patterns": [
         {
-          "match": "\\b(type)\\s+(value|resource|contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(type)\\s+(value|resource|view|contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "storage.type.kama" },
             "2": { "name": "storage.modifier.kama" },
@@ -76,7 +76,7 @@
     },
     "types": {
       "patterns": [
-        { "name": "storage.type.primitive.kama", "match": "\\b(bool|int|int8|int16|int32|int64|uint8|uint16|uint32|uint64|float32|float64|double|string|void)\\b" },
+        { "name": "storage.type.primitive.kama", "match": "\\b(bool|char|int|int8|int16|int32|int64|uint8|uint16|uint32|uint64|float32|float64|double|string|void)\\b" },
         { "name": "entity.name.type.kama", "match": "\\b([A-Z][A-Za-z0-9_]*)\\b" }
       ]
     },

@@ -97,6 +97,12 @@ run_one() {
     actual=$?
 }
 
+# Editor-syntax drift guard: the hand-maintained VSCode grammar must cover every kama.l keyword. Run once
+# (the plain native pass), not under the SAN/WASM re-runs. Keeps the highlighter honest as the language grows.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-syntax-drift.sh ]; then
+    if sh tools/check-syntax-drift.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
     name="$(basename "$src" .kama)"

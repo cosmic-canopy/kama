@@ -1,0 +1,4 @@
+// Transitive: Optional<View> monomorphizes to a struct with a View field — same field-reject.
+import std::collections::{View};
+type value Holder { Optional<View<int32>> ov; public Holder(){ } }
+fn int32 main() { return 0; }

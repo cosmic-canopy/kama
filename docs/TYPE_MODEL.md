@@ -1,14 +1,14 @@
 # kama type model — `value` / `resource` / `contract`
 
-Every type declaration is introduced by a `type` marker (`type value` / `type resource` / `type contract`);
-the vocabulary + access-control rules below are enforced by the compiler. This doc is the durable rationale
+Every type declaration is introduced by a `type` marker (`type value` / `type resource` / `type view` /
+`type contract`); the vocabulary + access-control rules below are enforced by the compiler. This doc is the durable rationale
 — see also [GOALS.md §3c](../GOALS.md).
 
 ## The `type` marker
 
 Every type declaration begins with the reserved keyword **`type`**, followed by a *kind* — exactly
 parallel to `fn` on every function. This makes declarations greppable and self-describing (`grep -n
-'^type '`). The kind words `value` / `resource` / `contract` (and the qualifiers `virtual` /
+'^type '`). The kind words `value` / `resource` / `view` / `contract` (and the qualifiers `virtual` /
 `abstract` / `final`) appear *only* right after `type`, so they are **contextual, not reserved** — they
 stay ordinary identifiers everywhere else (`int32 value = 5;`, a field or method named `resource`, etc.).
 Only `type` itself is a keyword.
@@ -16,6 +16,7 @@ Only `type` itself is a keyword.
 ```kama
 type value Name    { … }   // owns nothing — copies
 type resource Name { … }   // owns / has identity — moves, RAII-dropped
+type view Name     { … }   // borrows a range it doesn't own — a stack-only slice/span
 type contract Name { … }   // a public-only guarantee (an interface)
 ```
 
@@ -27,12 +28,13 @@ axis. The axis a no-GC / RAII language actually turns on is: **does this type ow
 kama makes ownership the **declared nature** of a type, so the designer picks the right lever at
 *design* time — a "type designer" language that retrains humans and LLMs to think ownership-first.
 
-## The three kinds
+## The kinds
 
 | kind | owns? | hand-off default | polymorphism |
 |---|---|---|---|
 | **`value`** | nothing (raw data; may still encapsulate) | **copy** | contracts only (external / erased) |
 | **`resource`** | something, or identity | **move** | contracts *and* internal vtable |
+| **`view`** | nothing — *borrows* a range | **copy** (a borrow; stack-only, can't escape) | contracts only |
 | **`contract`** | — (a public-only guarantee, no state) | — | *is* the polymorphism / substitutability lever |
 
 These are the *nature* nouns. `virtual` / `abstract` / `final` are **qualifiers** (below), not kinds.
@@ -86,6 +88,37 @@ type resource Token { }   // owns nothing, but move-only by *identity* — a cap
   a special rule.)
 - A non-owning member does **not** make you a resource: a raw `Ptr<T>` (unsafe borrow) or a borrowed
   `contract` value confers no ownership → still a `value`.
+
+### `view` — borrows a range it doesn't own, stack-only
+
+A `view` is a **non-owning, second-class borrow** of a contiguous run of memory — a slice / span. The
+flagship is the stdlib `View<T>` (`{ Ptr<T> data; int32 len }`), but the kind is general: an engine can
+declare its own `type view StridedView<T>`, `type view Grid2D<T>`, `type view EcsQuery { ref World w; … }`.
+It is kama's answer to a **safe span without a borrow checker** — the same shape as C# `ref struct`
+(`Span<T>`, `ReadOnlySpan<T>`, `Utf8JsonReader`).
+
+```kama
+type view View<T> {                               // a slice/span over a buffer it borrows
+    Ptr<T> data; int32 len;                       // fields are private-only (the raw Ptr must not leak)
+    public View(Ptr<T> data, int32 len) { this.data = data; this.len = len; }
+    public ref T operator[](int32 i) { /* bounds-checked */ unsafe { return this.data[i]; } }
+}
+
+DynamicArray<float32> verts = …;
+uploadToGpu(window: verts.slice(from: 2, count: 6));   // zero copy, no ownership transfer
+```
+
+- **Codegens like a `value`** — inline, bitwise-copied, no dtor. But it is *not* a transparent data-bag:
+  it has an invariant (a borrowed `Ptr<T>` that must not leak, `ptr`/`len` kept consistent), so — like a
+  `resource` — its **fields are private-only**.
+- **Owns nothing.** A `view` may **not** declare a `~dtor` and may **not** have an owning/resource field
+  (that would make it try to free memory it doesn't own) — the compiler rejects both.
+- **Second-class borrow (the escape rule).** Exactly like a `contract` value, a `view` may be a
+  **parameter or a local** but **not** a field, a collection element, or an `enum` payload — and it may be
+  **returned only when it borrows `this` or a `ref`/view parameter** (so the buffer outlives the call, the
+  same structural rule as a `ref T` place-return). A `view` over a *local* can't be returned — it would
+  dangle. To hand back data, **own it** (copy into a `DynamicArray`). Read-only intent at a call site is a
+  `const View<T>` parameter. No lifetime tracking is needed — the escape check is purely structural.
 
 ### `contract` — a public-only guarantee
 

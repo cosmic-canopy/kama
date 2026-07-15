@@ -1496,6 +1496,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             else                *_out << "return &(" << p << ");\n";
             return;
         }
+        // View-return escape check (B4): a `type view` return borrows its buffer, so allow it only when
+        // the returned view roots at `this` or a `ref`/by-value view parameter — the borrow then
+        // outlives the call. The by-value sibling of the `ref T` place-return rule above; structural
+        // root-tracing, no lifetime analysis (north star 3e). A view over a LOCAL is (correctly) rejected.
+        if (retExpr && isViewCType(_currentReturnCType)) {
+            std::string root = viewReturnRoot(retExpr);
+            if (root != "this" && !_refParams.count(root) && !_viewParams.count(root))
+                unsupported("a view borrows its buffer, so it can only be returned when it borrows `this` "
+                            "or a `ref` parameter — returning a view over a local would dangle; return an "
+                            "owning `DynamicArray` to hand back data", n->line);
+            // fall through to the normal by-value return emission below (a view is a value, not a place)
+        }
         // Capture the return value BEFORE running any destructors (it may
         // reference locals about to be destroyed), then unwind, then return.
         if (retExpr && _currentReturnCType != "void") {
@@ -2507,9 +2519,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         if (cd->typeKind) {
             if      (*cd->typeKind == "value")    kind = TypeKind::Value;
             else if (*cd->typeKind == "resource") kind = TypeKind::Resource;
+            // `type view` — a non-escaping borrow. It codegens exactly like a `value` (inline struct,
+            // owns nothing, no dtor); the `isBorrow` flag below drives the escape check. Registering it
+            // as Value means every `== TypeKind::Value` path (layout, bitwise-copy, sealed-ness) already
+            // does the right thing — only the escape sites and the integrity guards branch on isBorrow.
+            else if (*cd->typeKind == "view")     kind = TypeKind::Value;
             else if (*cd->typeKind == "contract") continue;   // handled as an interface
             else unsupported(("unknown type kind `" + *cd->typeKind
-                              + "` — expected `value`, `resource`, or `contract`").c_str(), cd->line);
+                              + "` — expected `value`, `resource`, `view`, or `contract`").c_str(), cd->line);
         }
         // A `for value|resource|both` clause gates a CONTRACT's implementers — meaningless on a value/resource.
         if (cd->forKinds && !cd->forKinds->empty())
@@ -2525,6 +2542,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ClassInfo ci;
         ci.name  = isExt ? *cd->name->value : qualify(*cd->name->value);   // scope-mangle / FFI literal name
         ci.kind  = kind;
+        ci.isBorrow = cd->typeKind && *cd->typeKind == "view";   // non-escaping borrow (see escape sites)
+        if (ci.isBorrow && cd->name && cd->name->value)
+            _viewTypeNames.insert(*cd->name->value);   // bare name — recognizes `View(...)` in the return check
         // A non-generic prelude type (e.g. `Chars`, the codepoint iterator) has method bodies but no
         // owning module to emit them — flag it so the header emits them static-inline.
         if (unit == _preludeUnit && (!cd->typeParams || cd->typeParams->empty())) ci.preludeStatic = true;
@@ -2758,7 +2778,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     if (cc->declarator) ci.ctorParams = paramSigsOf(cc->declarator->params);
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
                     // `~dtor` ⟺ `resource`. A `value` owns nothing, so a destructor makes it
-                    // a resource; that disagreement is the lesson in the message.
+                    // a resource; that disagreement is the lesson in the message. A `view` borrows and
+                    // owns nothing either — a `~dtor` would try to free memory it doesn't own.
+                    if (ci.isBorrow)
+                        unsupported("a `view` borrows and owns nothing — it may not declare a `~dtor` "
+                                    "(it would free memory it doesn't own)", dd->line);
                     if (ci.kind == TypeKind::Value)
                         unsupported("a `value` owns nothing — a `~dtor` makes it a `resource`; "
                                     "declare it `type resource`", dd->line);
@@ -3030,14 +3054,19 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         return;
     }
 
-    // an interface borrows its object — it can't be a BARE collection element (a
-    // `List`/`Array` of interface fat pointers would dangle). Own the object: store an
-    // `Owned<I>`/`Shared<I>` (a `List<Shared<I>>`) instead — the smart-ptr-over-interface.
-    if (isInterface(elemCType)) {
+    // a non-escaping borrow — a contract (fat pointer) or a `type view` (borrowed `Ptr<T>`) — can't be
+    // a BARE collection element (a `DynamicArray` of them would dangle). Own the referent instead:
+    // a contract → store `Shared<I>` (`DynamicArray<Shared<I>>`); a view → copy into an owning collection.
+    if (isNonEscapingBorrow(elemCType)) {
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
-        unsupported(("a contract (`" + nm + "`) borrows its object, so it can't be a collection "
-                     "element — it would dangle; store an owning `Shared<" + nm + ">` instead").c_str(),
-                    collType->line);
+        if (isInterface(elemCType))
+            unsupported(("a contract (`" + nm + "`) borrows its object, so it can't be a collection "
+                         "element — it would dangle; store an owning `Shared<" + nm + ">` instead").c_str(),
+                        collType->line);
+        else
+            unsupported(("a view (`" + nm + "`) borrows its buffer, so it can't be a collection "
+                         "element — it would dangle; copy into an owning collection instead").c_str(),
+                        collType->line);
         return;
     }
 
@@ -3595,6 +3624,16 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // a generic tagged union (Optional<Shared<T>>) — scan each variant's substituted payload so
     // the inner `Shared_int32` etc. registers (inner-first) before this instance's dtor references it.
     for (auto& v : ci.variants) for (auto& f : v.payload) scanTypeForCollections(f.type);
+    // A view in a tagged-union PAYLOAD (`Optional<View>`) would let the borrow be stored or returned via
+    // the wrapper — the plain-field reject (emitClassStruct) doesn't see a union payload, so catch it here
+    // where the payload type is substituted concrete (`View_int32`, now registered by the scan above). A
+    // view is local/parameter-only; it can't be wrapped-and-stored.
+    for (auto& v : ci.variants)
+        for (auto& f : v.payload)
+            if (f.type && isViewCType(cType(f.type)))
+                unsupported(("a view (`" + cType(f.type) + "`) can't be an `enum` payload (`" + ci.name
+                             + "`) — it borrows and would escape via the enum; a view is local/parameter-only").c_str(),
+                            f.type->line);
 
     _typeSubst = savedSubst;
     _nsCtx = savedCtx;
@@ -4650,12 +4689,23 @@ bool CEmitter::isNamedValue(ASTNode* e)
 // be a parameter or local, but it can't be STORED beyond the call that produced it
 // (a field, a return, a collection element) without dangling. Reject the bare-interface
 // case with guidance toward owning the object (`Shared<I>` — enables that).
-void CEmitter::rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line)
+void CEmitter::rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line, bool alsoView)
 {
-    if (!ty || !isInterface(cType(ty))) return;
-    std::string nm = (ty->value && !ty->value->empty()) ? *ty->value : cType(ty);
-    unsupported(("a contract (`" + nm + "`) borrows its object, so it can't be " + whereClause
-                 + " — it would dangle; own the object instead (e.g. `Shared<" + nm + ">`)").c_str(), line);
+    if (!ty) return;
+    std::string ct = cType(ty);
+    bool iface = isInterface(ct);
+    // A `type view` is also a non-escaping borrow — reject it as a FIELD (alsoView), but NOT as a
+    // return (a view MAY be returned when it borrows `this`/a `ref` param; that's checked per-ReturnNode).
+    bool view  = false;
+    if (alsoView && !iface) { auto it = _classes.find(ct); view = it != _classes.end() && it->second.isBorrow; }
+    if (!iface && !view) return;
+    std::string nm = (ty->value && !ty->value->empty()) ? *ty->value : ct;
+    if (iface)
+        unsupported(("a contract (`" + nm + "`) borrows its object, so it can't be " + whereClause
+                     + " — it would dangle; own the object instead (e.g. `Shared<" + nm + ">`)").c_str(), line);
+    else
+        unsupported(("a view (`" + nm + "`) borrows its buffer, so it can't be " + whereClause
+                     + " — it would dangle; copy the elements into an owning `DynamicArray` instead").c_str(), line);
 }
 
 // A plain transferable lvalue: a bare identifier naming a smart-pointer local/
@@ -5912,6 +5962,47 @@ std::string CEmitter::rootBinding(SharedExpression e) const
     return "";
 }
 
+// The root a view-CONSTRUCTOR's borrowed pointer argument comes from, tracing through the safe
+// forms a view is built with: `addr(of: this.data[i])` (pointer offset) and `this.dataPtr()` (a
+// place-returning accessor call). Anything else falls back to rootBinding (`this.data` -> "this";
+// a local -> the local's name -> rejected). No lifetime analysis — one structural step.
+std::string CEmitter::borrowArgRoot(SharedExpression e) const
+{
+    if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
+        std::string callee = (inv->identifier && inv->identifier->value) ? *inv->identifier->value : "";
+        if (callee == "addr" && inv->args && inv->args->size() == 1)     // addr(of: this.data[i]) -> this
+            return borrowArgRoot((*inv->args)[0]->expression);
+        if (inv->expression)                                             // this.dataPtr() -> this
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
+                if (ma->expression) return rootBinding(ma->expression);
+        return "";                                                       // unknown call -> conservatively reject
+    }
+    return rootBinding(e);                                               // this.data -> "this"; local -> its name
+}
+
+// The root a RETURNED view ultimately borrows, dispatched on the return form:
+//  - a view constructor `View(data: <p>, len: <n>)` -> the root of its FIRST argument (the borrowed
+//    pointer/ref; a `type view`'s ctor takes its borrow first, by convention);
+//  - a chained call `recv.slice(...)` returning a view -> the receiver's root;
+//  - a bare place (a view local/param) -> rootBinding (a param roots at itself; a local likewise, and a
+//    local's borrow provenance is unknown, so it is correctly rejected).
+std::string CEmitter::viewReturnRoot(SharedExpression e) const
+{
+    if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
+        std::string callee = (inv->identifier && inv->identifier->value) ? *inv->identifier->value : "";
+        bool bareCall = !inv->expression;   // `View(...)` has no receiver; `recv.m(...)` does
+        if (bareCall && _viewTypeNames.count(callee)) {                  // a view constructor
+            if (inv->args && !inv->args->empty()) return borrowArgRoot((*inv->args)[0]->expression);
+            return "";
+        }
+        if (inv->expression)                                            // chained: `recv.slice(...)`
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
+                if (ma->expression) return rootBinding(ma->expression);
+        return "";                                                      // unknown call form -> reject
+    }
+    return rootBinding(e);                                              // bare view local/param
+}
+
 // is a write/call root `const`? A const local/param, `this` inside a const
 // method (recorded as "this" in _constLocals), or — in a const method — a bare field
 // of the current class (a write to `f` is really `self->f`).
@@ -6114,6 +6205,16 @@ Visibility CEmitter::visibilityOf(SharedModifierList mods, Visibility dflt, int 
 Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mods, int line)
 {
     if (ci.isExternStruct) return Visibility::Public;
+    // A `view` field is always private — like a `resource` it has an encapsulation invariant (its raw
+    // borrowed `Ptr<T>` must not leak into the safe surface, and ptr/len must stay consistent). Expose
+    // data through methods (`operator[]`, `length`, `iterator`, …). It codegens as a value but is NOT a
+    // transparent data-bag like a plain `value`.
+    if (ci.isBorrow) {
+        if (modHas(mods, "public") || modHas(mods, "protected") || modHas(mods, "private"))
+            unsupported("a `view` field is always private — it borrows a raw pointer that must not leak; "
+                        "expose behavior through methods", line);
+        return Visibility::Private;
+    }
     if (ci.kind == TypeKind::Value) {
         if (modHas(mods, "protected"))
             unsupported("a `value` field can't be `protected` — protected belongs to an extensible `resource`", line);
@@ -7335,6 +7436,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
                 _pendingParamDtors.push_back({pn, pty});
                 if (ownsByValue(pty)) _moveState[pn] = MoveState::NotMoved;   // track move-only / collection / string param
             }
+            if (!paramByRef(p.get()) && isViewCType(pty)) _viewParams.insert(pn);   // valid root for a view return
         }
     }
 
@@ -7361,6 +7463,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     *_out << "\n\n";
 
     _refParams.clear();
+    _viewParams.clear();
 
     if (isEntry) {
         // Synthesized portable entry point. Argument marshaling (List<String>)
@@ -7395,7 +7498,9 @@ void CEmitter::emitStruct(ClassInfo& ci)
         hasMember = true;
     }
     for (auto& f : ci.fields) {
-        rejectStoredInterface(f.type, "stored in a field", f.type ? f.type->line : (ci.node ? ci.node->line : 0));
+        rejectStoredInterface(f.type, "stored in a field", f.type ? f.type->line : (ci.node ? ci.node->line : 0),
+                              /*alsoView=*/true);   // a view can't be a field (would dangle) — but a view's OWN
+                                                    // `Ptr<T>`/`int` fields are fine; only view-TYPED fields reject
         indent(1);
         *_out << cType(f.type) << " " << f.name << ";\n";
         hasMember = true;
@@ -7765,6 +7870,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
     _refParams.clear();
+    _viewParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
     _moveState.clear();   // per-method move analysis
     _inCtor = isCtor;   // const fields are writable only here
@@ -7787,6 +7893,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             // fn-end (a `ref` is a borrow — never). The root scope is already on the stack, so record it
             // directly (dropped last). recordDestructibleLocal also move-tracks an ownsByValue param.
             if (!paramByRef(p.get()) && (isSmartPtrClass(pty) || ownsByValue(pty))) recordDestructibleLocal(pn, pty);
+            if (!paramByRef(p.get()) && isViewCType(pty)) _viewParams.insert(pn);   // valid root for a view return
         }
     }
 
@@ -9316,6 +9423,18 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
     computeDestructible();
+    // A `type view` borrows and owns nothing, so it must not be destructible — a destructible view means
+    // it has an owning/resource field (a `DynamicArray`, `Owned`/`Shared`, `string`, …) that its (absent)
+    // dtor would have to free. Reject with guidance toward a raw `Ptr<T>` (a non-owning field). Runs after
+    // the fixpoint so a transitively-owning field is caught. (A view in an enum PAYLOAD is caught earlier,
+    // at registerGenericTypeInst, where the payload type is substituted concrete.)
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.isBorrow && ci.destructible)
+            unsupported(("a `view` (`" + ci.name + "`) borrows and owns nothing — it may not have an owning "
+                         "or resource field (hold a non-owning `Ptr<T>` instead)").c_str(),
+                        ci.node ? ci.node->line : 0);
+    }
     computeReachesPointer();   // serialization mode gate (by-value vs. graph)
     computeGraphNodeTypes();   // graph node closure + Shared<T> deserialize return types (Phase D)
 

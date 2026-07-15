@@ -10,7 +10,8 @@ semantics/feature reference. Status flags below: ✅ implemented, 🚧 reserved 
 
 kama compiles to **portable C** (native + WASM). No garbage collector — object lifetimes are deterministic
 (RAII). Calls use **named arguments** (no positional). Every type declaration is `type value` (owns nothing,
-copies), `type resource` (owns/has identity, moves, RAII-dropped), or `type contract` (an interface).
+copies), `type resource` (owns/has identity, moves, RAII-dropped), `type view` (a non-owning stack-only
+borrow — a slice/span), or `type contract` (an interface).
 
 ## Types ✅
 
@@ -134,6 +135,31 @@ element moved out** — `remove(index:) -> T` (shifts the tail; bounds-checked, 
 or **discard it to drop** (`xs.remove(index: i);` drops cleanly). This is the one consistent removal shape
 across every container — a single method that hands ownership back (matching `Deque.popFront`/`popBack` and
 Rust's `Vec::remove`/`pop`), never a silent drop.
+
+### Slices / spans — `View<T>` ✅
+
+A **`View<T>`** is a non-owning window over a contiguous run of `T` — a slice / span (zero copy, no
+ownership transfer). It is a **`type view`** (the stack-only-borrow kind; see *Type declarations*): the
+escape check keeps it from being stored or outliving its buffer, so it can't dangle without a borrow checker.
+
+```kama
+DynamicArray<float32> verts = new DynamicArray<float32>();  // … fill …
+View<float32> all = verts.view();                       // borrow the whole buffer
+View<float32> mid = verts.slice(from: 2, count: 4);     // a sub-range [2, 6)
+uploadToGpu(window: verts.slice(from: 0, count: 3));    // pass a subrange down — no copy
+foreach (ref float32 x in mid) { x = x * 2.0; }         // mutate-through: writes back to `verts`
+int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index (a place)
+```
+
+- Obtain one from a container: `DynamicArray`/`FixedArray` expose **`view()`** (whole) and
+  **`slice(from:, count:)`** (bounds-checked sub-range); `View<T>` itself has `slice`, `length()`,
+  `isEmpty()`, `operator[]` (a mutate-through place), and `iterator()`/`iterMut()` for `foreach`.
+- A view **flows down the call stack** as a by-value parameter; **`const View<T>`** expresses read-only
+  intent. It may **not** be stored in a field/collection/`enum`, and may be **returned only** when it
+  borrows `this` or a `ref`/view parameter (so `arr.slice(...)` on a `ref`/`this` receiver is fine; a view
+  over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`.
+- *Known limitation:* a view is invalidated if the backing `DynamicArray` is **resized** (`add`/`reserve`)
+  while the view is live — the same contract as a C++ `span`/iterator; not enforced (no lifetime tracking).
 
 ### Hash maps & sets (`std::collections`) ✅
 
@@ -701,7 +727,7 @@ scripting-host interface — is future work; the keyword is live today for the C
 casts. Branching on an enum is done with **`match`** (see Enums & `match` below); arbitrary-integer branching
 is done with `if` / `else if`. There is no `switch` statement.
 
-## Type declarations — `value` / `resource` / `contract` ✅
+## Type declarations — `value` / `resource` / `view` / `contract` ✅
 
 Every type declaration is introduced by the **`type` marker** followed by a *kind* — parallel to `fn` on
 every function, so declarations are greppable and self-describing:
@@ -713,14 +739,21 @@ every function, so declarations are greppable and self-describing:
   **private only** (ownership stays encapsulated). An empty `type resource Token { }` is a valid move-only
   identity/token. Extensible variants add a qualifier after `type`: `type virtual resource`, `type abstract
   resource`, `type final resource`.
+- **`type view Name { … }`** — a non-owning, **stack-only borrow** (a slice/span; C# `ref struct`). It
+  **copies** like a value (inline, no dtor) but owns nothing and is a **second-class borrow**: the escape
+  check forbids it as a field, a collection element, or an `enum` payload, and allows it as a **return only
+  when it borrows `this` or a `ref`/view parameter** (the same structural rule as a `ref T` place-return — no
+  lifetime tracking), so it can't dangle. A view may **not** declare a `~dtor` or own a resource field, and
+  its fields are **private only** (its raw `Ptr<T>` must not leak). The flagship is the stdlib `View<T>`; the
+  kind is general (`type view StridedView<T>`, `Grid2D<T>`, …). See *Collections & strings* for `View<T>`.
 - **`type contract Name { … }`** — a public-only guarantee (an interface); methods only, no bodies, no
   fields, no ctor/dtor. Types satisfy it via `implements`; it may refine another with `implements` too
   (`type contract Animated for both implements Drawable { … }` — a conformer must supply Drawable's methods
   as well, and dispatch through `Animated` reaches them).
 
 The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words `value` / `resource` /
-`contract` are **contextual, not reserved** — because they appear only right after `type`, they remain
-ordinary identifiers everywhere else (`int32 value = 5;`). Only `type` is a keyword.
+`view` / `contract` are **contextual, not reserved** — because they appear only right after `type`, they
+remain ordinary identifiers everywhere else (`int32 value = 5;`). Only `type` is a keyword.
 
 ```kama
 type value Counter {

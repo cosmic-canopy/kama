@@ -1,0 +1,55 @@
+// M7 — `View<T>` slice/span: construct from a container, index, mutate-through, iterate, pass down,
+// const read-only, sub-slice. A view borrows; it is never stored or returned past its buffer.
+import std::collections::{DynamicArray, FixedArray, View};
+
+// A view flows DOWN the call stack as a by-value parameter (zero copy).
+fn int32 sumView(View<int32> v) {
+    int32 s = 0;
+    int32 i = 0;
+    while (i < v.length()) { s = s + v[i]; i = i + 1; }
+    return s;
+}
+
+// `const View<T>` expresses read-only intent at the boundary.
+fn int32 firstOf(const View<int32> v) { return v[0]; }
+
+// Mutating through a view writes back to the borrowed buffer.
+fn void doubleAll(View<int32> v) {
+    foreach (ref int32 x in v) { x = x * 2; }
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    DynamicArray<int32> a = DynamicArray();
+    a.add(item: 10); a.add(item: 20); a.add(item: 30); a.add(item: 40);
+
+    View<int32> all = a.view();
+    if (all.length() == 4 && !all.isEmpty()) { r = r + 1; }                 // 1
+    if (sumView(v: a.view()) == 100) { r = r + 1; }                         // 2
+
+    View<int32> mid = a.slice(from: 1, count: 2);                           // {20, 30}
+    if (mid.length() == 2 && mid[0] == 20 && mid[1] == 30) { r = r + 1; }   // 3
+
+    doubleAll(v: a.slice(from: 1, count: 2));                               // a -> {10, 40, 60, 40}
+    if (a[0] == 10 && a[1] == 40 && a[2] == 60 && a[3] == 40) { r = r + 1; }// 4
+
+    int32 s = 0;
+    View<int32> forSum = a.view();                                         // foreach needs an lvalue
+    foreach (int32 x in forSum) { s = s + x; }                             // 150
+    if (s == 150) { r = r + 1; }                                           // 5
+
+    if (firstOf(v: a.view()) == 10) { r = r + 1; }                         // 6
+
+    View<int32> sub = all.slice(from: 2, count: 2);                        // {60, 40} (aliases a's buffer)
+    if (sub.length() == 2 && sub[0] == 60 && sub[1] == 40) { r = r + 1; }  // 7
+
+    FixedArray<int32> f = FixedArray(size: 3);
+    f[0] = 5; f[1] = 6; f[2] = 7;
+    if (sumView(v: f.view()) == 18) { r = r + 1; }                         // 8
+
+    View<int32> e = a.slice(from: 2, count: 0);
+    if (e.isEmpty() && e.length() == 0) { r = r + 1; }                     // 9
+
+    return r;   // 9
+}

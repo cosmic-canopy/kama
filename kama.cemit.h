@@ -133,6 +133,10 @@ struct RawFriendGrant {
 struct ClassInfo {
     std::string                       name;       // struct name (== kama class name)
     TypeKind                          kind = TypeKind::Intrinsic;   // set to value/resource for user types
+    // `type view` — a non-escaping, stack-only borrow (C# `ref struct`): codegens like a `value`
+    // (inline, owns nothing, no dtor) but the escape checker forbids it as a return/field/collection
+    // element (like a `contract`). It borrows raw `Ptr<T>` it does not own; see isNonEscapingBorrow.
+    bool                              isBorrow = false;
     std::vector<FieldInfo>            fields;      // declaration order
     std::set<std::string>            fieldNames;
     std::set<std::string>            constFields;   // `const` data members — write-once in the ctor
@@ -343,6 +347,17 @@ private:
     std::map<std::string, SigInfo> _sigs;    // function-pointer signature types
     bool isSigType(const std::string& name) const { return _sigs.count(name) != 0; }
     std::set<std::string> _refParams;        // by-ref params of the function being emitted
+    std::set<std::string> _viewParams;       // by-VALUE `type view` params of the fn being emitted — a valid
+                                             // root for a view return (borrows caller memory that outlives the
+                                             // call). (A `ref`-view param is already in _refParams.)
+    std::set<std::string> _viewTypeNames;    // bare names of every `type view` declaration — recognizes a view
+                                             // constructor call `View(...)` in the view-return escape check
+    // A `type view` cType (a non-escaping borrow that codegens as a value). Distinct from
+    // isNonEscapingBorrow, which also includes contracts.
+    bool isViewCType(const std::string& name) const {
+        auto it = _classes.find(name);
+        return it != _classes.end() && it->second.isBorrow;
+    }
     std::vector<std::string> _foreachColls;  // root bindings of collections being iterated (nested foreach) —
                                              // growing one mid-iteration (`add`) invalidates its element refs
 
@@ -610,7 +625,9 @@ private:
     // it can't be stored beyond the call that made it (it would dangle). Reject a bare
     // contract in a stored/returned position; own the object instead (`Shared<I>`).
     // `whereClause` completes "it can't be ___" (e.g. "stored in a field").
-    void rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line);
+    // Reject a non-escaping borrow in a storage position. Contracts are always rejected; a `type view`
+    // is rejected only when `alsoView` (the FIELD site) — a view MAY be returned (checked per-ReturnNode).
+    void rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line, bool alsoView = false);
     std::string smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem = false);  // null the dtor's guard field
     // Cross-element smart-ptr UPCAST: widen a CONCRETE-element owning handle into a
     // CONTRACT-element (intrinsic fat) handle — the Liskov "is a" (`Shared<Shape> s = a;`
@@ -725,6 +742,14 @@ private:
 
     // Contracts
     bool isInterface(const std::string& name) const { return _interfaces.count(name) != 0; }
+    // A non-escaping borrow: a contract (fat-ptr, borrows its object) OR a `type view` (borrows a raw
+    // `Ptr<T>`). Both are rejected as a FIELD or COLLECTION ELEMENT — they'd dangle. (A view may still be
+    // RETURNED when it borrows `this`/a `ref` param; that is checked per-ReturnNode, not here.)
+    bool isNonEscapingBorrow(const std::string& name) const {
+        if (isInterface(name)) return true;
+        auto it = _classes.find(name);
+        return it != _classes.end() && it->second.isBorrow;
+    }
     std::string ifaceSlotSig(SharedParameterList params);     // "(void* self, T a, ...)"
     void emitInterfaceTypes(InterfaceInfo& ii);               // vtbl struct + fat-pointer struct
     void emitClassInterfaceVtables(ClassInfo& ci);            // the C__as_I instances
@@ -828,6 +853,11 @@ private:
     // Const-correctness (deep): a const binding is immutable.
     std::set<std::string> _constLocals;                       // const local names in scope
     std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
+    // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
+    // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a
+    // view-ctor's borrowed-pointer argument through `addr(of: …)` and a `recv.dataPtr()` call.
+    std::string viewReturnRoot(SharedExpression e) const;
+    std::string borrowArgRoot(SharedExpression e) const;
     bool        rootIsConst(const std::string& root) const;   // const local/param/this/field
     bool        isConstFieldWrite(SharedExpression target);   // writing a const data member
     // Access control.

@@ -178,9 +178,15 @@ serialization, networking).
   predecessor-swaps relocate move-only keys+values ASan-clean. It **needed a language feature**, now shipped:
   a `fn ref T` may return the result of a place-returning method call (`recv.getRef(...)`) when the receiver
   roots at `this` — the escape check traces the root through the call, as `operator[]` already does — so a
-  recursive `getRef` forwards an in-place borrow up through the `Owned`-boxed tree. Still ahead: **slice/span
-  `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a system or a GPU upload
-  with no copy and no ownership transfer). Honest caveat: general **linked lists** are mostly a cache
+  recursive `getRef` forwards an in-place borrow up through the `Owned`-boxed tree. **Slice/span `View<T>`
+  — DONE** (M7): a first-class **`type view`** kind (a non-owning, stack-only borrow = C# `ref struct`) on the
+  value/resource/contract ownership axis; the stdlib `View<T>` + `arr.view()`/`arr.slice(from:,count:)` give a
+  zero-copy subrange, index + mutate-through + `foreach`, `const View<T>` for read-only. Escape-checked exactly
+  like a contract value (never a field, collection element, or `enum` payload; returnable only when it borrows
+  `this`/a `ref` param — structural, no lifetime tracking) so it can't dangle; a view owns nothing (no `~dtor`,
+  no owning fields, private fields). Users/the engine can author their own (`type view StridedView<T>`/`Grid2D`).
+  *Known limitation:* a view over a `DynamicArray` is invalidated by a resize (`add`/`reserve`) — same contract
+  as a C++ `span`/iterator; not enforced (no lifetime tracking). Honest caveat: general **linked lists** are mostly a cache
   anti-pattern in data-oriented engines (the useful form is an intrusive free-list / LRU); raw **BSTs** are
   subsumed by the sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
 - **Collections revisit — uniform preallocation, pluggable hasher, custom allocator.** The containers grew

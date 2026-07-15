@@ -1,4 +1,5 @@
 namespace std::collections;
+import std::collections::{View};
 export { FixedArray };
 
 extern "<stdlib.h>";
@@ -45,6 +46,16 @@ type resource FixedArray<T> implements Copyable(bare: give) when [T: Copyable], 
 
     // The safe FixedArray->pointer bridge: obtaining the buffer pointer is safe; dereferencing it is `unsafe`.
     public fn Ptr<T> dataPtr() { return this.data; }
+
+    // Borrow the whole array (or a sub-range) as a non-owning `View<T>` slice — zero copy. See
+    // DynamicArray.view/slice; a `FixedArray` never resizes, so a view over it stays valid for the
+    // array's lifetime (passed down, never stored — the `view` kind enforces it).
+    public fn View<T> view() { return View::<T>(data: this.data, len: this.size); }
+    public fn View<T> slice(int32 from, int32 count) {
+        if (from < 0 || count < 0 || from + count > this.size) { panic(msg: "FixedArray.slice out of bounds"); }
+        if (count == 0) { return View::<T>(data: this.data, len: 0); }
+        unsafe { return View::<T>(data: addr(of: this.data[from]), len: count); }
+    }
 
     // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements borrow instead: `foreach (ref T x in arr)`.)

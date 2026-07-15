@@ -1,10 +1,11 @@
 # kama keyword reference
 
 Every type declaration begins with the **`type` marker** followed by a *kind*: **`type value`** (owns
-nothing, copies), **`type resource`** (owns/identity, move-only, RAII-dropped), or **`type contract`** (a
-public-only guarantee — an interface). The kind words `value`/`resource`/`contract` are **contextual, not
+nothing, copies), **`type resource`** (owns/identity, move-only, RAII-dropped), **`type view`** (a
+non-owning, stack-only borrow — a slice/span; C# `ref struct`), or **`type contract`** (a public-only
+guarantee — an interface). The kind words `value`/`resource`/`view`/`contract` are **contextual, not
 reserved** — they mean a kind only right after `type`, and stay ordinary identifiers everywhere else
-(`int32 value = 5;`). See the [type-model doc](TYPE_MODEL.md) and the rows below.
+(`int32 value = 5;`, `View v = a.view();`). See the [type-model doc](TYPE_MODEL.md) and the rows below.
 
 Legend for the status column:
 
@@ -19,8 +20,8 @@ Legend for the status column:
 | `char` | ✅ | a Unicode scalar value (codepoint), a distinct primitive backed by `uint32` (NOT a numeric type — no silent int mixing). Literals `'a'` / `'\n'` / `'\u{…}'`; equality + ordering; `char↔int` via `cast`. Yielded by `.chars()` |
 | `int` | ✅ | alias → `int32` |
 | `double` | ✅ | alias → `float64` (C `double`) |
-| `type` | ✅ | **the type-declaration marker** — every type is `type <kind> Name { … }` (parallel to `fn`). The kind is `value`/`resource`/`contract` (+ the `virtual`/`abstract`/`final` qualifiers after `type`). Greppable (`grep '^type '`) |
-| `value` `resource` `contract` | ✅ | **contextual, not reserved.** They name a kind **only right after `type`**; everywhere else they are ordinary identifiers (`int32 value = 5;`, a field/method named `resource`). `type value` = owns nothing, copies, sealed, fields private-or-`public` per field, no dtor. `type resource` = owns/identity, move-only, RAII-dropped, fields private-only. `type contract` = public-only guarantee (an interface): methods only, no bodies/fields/ctor/dtor; satisfied via `implements`; may refine another via `implements` (`type contract A for both implements B`) |
+| `type` | ✅ | **the type-declaration marker** — every type is `type <kind> Name { … }` (parallel to `fn`). The kind is `value`/`resource`/`view`/`contract` (+ the `virtual`/`abstract`/`final` qualifiers after `type`). Greppable (`grep '^type '`) |
+| `value` `resource` `view` `contract` | ✅ | **contextual, not reserved.** They name a kind **only right after `type`**; everywhere else they are ordinary identifiers (`int32 value = 5;`, a field/method named `resource`). `type value` = owns nothing, copies, sealed, fields private-or-`public` per field, no dtor. `type resource` = owns/identity, move-only, RAII-dropped, fields private-only. `type view` = a non-owning **stack-only borrow** (a slice/span — the flagship is `View<T>`; C# `ref struct`): codegens like a `value` (inline, copies, no dtor) but the escape check forbids it as a field, collection element, or an escaping return; owns nothing (no `~dtor`, no owning fields), fields private-only. `type contract` = public-only guarantee (an interface): methods only, no bodies/fields/ctor/dtor; satisfied via `implements`; may refine another via `implements` (`type contract A for both implements B`) |
 | `enum` `namespace` | ✅ | an `enum` is a plain set or a **tagged union** (variants carry payloads; may be generic), consumed by `match` |
 | `match` `case` | ✅ | **`match`** is the one construct for branching on an enum — plain enums, tagged unions, and `Optional`/`Result` alike. Value-producing (statement or expression position), **compile-time exhaustive**, with a `_` wildcard; `case` heads each arm and binds payloads (`case Some(v): …`). The subject may be a variable, method call, or free-function call. Arbitrary-integer branching uses `if`/`else if` — there is no `switch` |
 | `operator` | ✅ | **operator overloading.** Full set: arithmetic `+ - * / %`, comparison `== != < > <= >=`, bitwise `& \| ^ << >>`, unary `- ! ~`, `++`/`--`. **Arity picks the form:** 0 params = unary on `this` (`Vec2 operator-()`), 1 = binary method (`Vec2 operator+(Vec2 rhs)`, `this` is the left operand), 2 = binary free/static form (`Vec2 operator*(int32 s, Vec2 v)` — enables scalar-on-the-left). Positional lowering to `Type__op_add(&lhs, rhs)`. **Type-based dispatch:** a type may carry several `operator*` distinguished by operand type — `mat*vec` + `mat*mat`, `v*s` + `s*v` — like C++/C#/Rust; only the same symbol AND operand type collide. **Chaining** (`a + b + c`, in any position incl. a condition — nested rvalues wrap in a C99 compound-literal array); **compound assignment** `pos += vel` ≡ `pos = pos + vel`. `==` is **explicit** (no auto structural equality). `[]`, `true`/`false` conversion operators out of scope. In a `contract`, an operator is a **bound** for generic math |

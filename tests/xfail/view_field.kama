@@ -1,0 +1,4 @@
+// A view borrows its buffer — storing it in a field would dangle. Copy into an owning collection.
+import std::collections::{View};
+type value Holder { View<int32> v; public Holder(){ } }
+fn int32 main() { return 0; }

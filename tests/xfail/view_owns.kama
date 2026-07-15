@@ -1,0 +1,4 @@
+// A view may not own a resource field — it would have to free memory it doesn't own.
+import std::collections::{DynamicArray};
+type view Bad { DynamicArray<int32> owned; }
+fn int32 main() { return 0; }

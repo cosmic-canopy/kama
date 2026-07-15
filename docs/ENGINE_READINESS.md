@@ -41,8 +41,8 @@ That is a complete systems-language core. The math layer (`std::math`), native f
 (`std::fs`/`std::io`/`std::net`), the **`Map<K,V>`/`Set<K>`** hash containers, opt-in **serialization**
 (`@generate`, intrinsic + json backend), and the **`expose` + `kama build --shared`** kama→host C-ABI
 boundary are all **shipped**; the remaining engine work is further **library and platform reach**, not
-language features: WebGPU bindings, more C bindings, slices, allocators, and threading (already *designed* —
-the shared-nothing model in ROADMAP.md).
+language features: WebGPU bindings, more C bindings, allocators, and threading (already *designed* —
+the shared-nothing model in ROADMAP.md). (Slices/spans **shipped** — the `type view` kind + `View<T>`.)
 
 ---
 
@@ -65,7 +65,7 @@ the shared-nothing model in ROADMAP.md).
 | **Error model**: `Result`/`Optional` | ✅ — `Optional<T>`/`Result<T,E>` prelude tagged unions, consumed by exhaustive `match` (no exceptions, no `null`) | File/asset/GPU/shader-compile failures need a first-class, non-exception path (fits no-GC/deterministic). | done |
 | **Tagged unions / sum types + pattern matching** | ✅ — `enum` payloads/generic enums + value-producing exhaustive `match` (plain enums too) | Events, messages, render commands, animation/state machines, asset variants. | done |
 | **`Map<K,V>` / hash maps + sorted maps** | ✅ — **`Map<K,V>`/`Set<K>`** (open-addressing/tombstoned, owning keys+values, deep `copy` + key iteration, ASan-clean) over prelude **`Hashable`/`Equatable`** (splitmix64 per integer width, FNV-1a for `string`; floats `Equatable`-only), **AND `SortedMap<K,V>`/`SortedSet<K>`** — a **B-tree** (min-degree 6) over prelude **`Comparable`/`Ordering`**: ordered iteration + `first`/`last`/`floor`/`ceil`/`range` + `getRef` in-place borrow + deep `copy` + JSON serde, move-only keys/values ASan-clean through splits/borrows/merges. Remaining collections-revisit knobs (reserve/pluggable-hasher/allocator) in ROADMAP §5. | Entity/resource/asset registries, caches, string→handle lookup; timelines / z-order / spatial-sort / range scans (sorted). | done |
-| **Slices / spans** (non-owning views over `FixedArray`/`DynamicArray`/buffers) | ❌ | Iterate a subrange, pass a buffer to a system or a GPU upload without copying or transferring ownership. | M |
+| **Slices / spans** (non-owning views over `FixedArray`/`DynamicArray`/buffers) | ✅ — **`type view` kind + `View<T>`**: a stack-only borrow (C# `ref struct`), `arr.view()`/`arr.slice(from:,count:)`, index + mutate-through + `foreach`, `const View<T>` for read-only; escape-checked (never a field/collection-element/escaping-return), zero-copy. Engine can author its own (`type view StridedView<T>`/`Grid2D<T>`). | Iterate a subrange, pass a buffer to a system or a GPU upload without copying or transferring ownership. | done |
 | **Allocator control**: arenas / pools / frame & stack allocators | ❌ (GOALS #3 wants these as library types) | Deterministic per-frame perf, zero mid-frame `malloc`, bump-reset allocators. Needs a placement-construct hook + the runtime unsafe core. | M–L |
 
 ## Tier 2 — Systems & scale

@@ -1,4 +1,5 @@
 namespace std::collections;
+import std::collections::{View};
 export { DynamicArray };
 
 extern "<stdlib.h>";
@@ -58,6 +59,23 @@ type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable]
     }
 
     public fn int32 length() { return this.len; }
+
+    // The safe DynamicArray->pointer bridge (see FixedArray.dataPtr): obtaining the buffer pointer is
+    // safe; dereferencing it is `unsafe`. Valid only until the next resizing op (add/insert/reserve).
+    public fn Ptr<T> dataPtr() { return this.data; }
+
+    // Borrow the whole array as a `View<T>` (a non-owning slice / span) — zero copy, no ownership
+    // transfer. The view may be passed DOWN the call stack (a `const View<T>` param = read-only) but
+    // never stored (the `view` kind's escape check enforces that). Valid only while the array isn't
+    // resized. Mutating through the view writes back to this array's buffer.
+    public fn View<T> view() { return View::<T>(data: this.data, len: this.len); }
+
+    // Borrow the sub-range `[from, from+count)` as a `View<T>`, bounds-checked (panics on overrun).
+    public fn View<T> slice(int32 from, int32 count) {
+        if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "DynamicArray.slice out of bounds"); }
+        if (count == 0) { return View::<T>(data: this.data, len: 0); }
+        unsafe { return View::<T>(data: addr(of: this.data[from]), len: count); }
+    }
 
     // Insert `item` at `index` (0..len), shifting the elements at `index..len` up one slot; `index == len`
     // is a plain append. The order-preserving counterpart to `remove` — for an ordered insert (e.g. a

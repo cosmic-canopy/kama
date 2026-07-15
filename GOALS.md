@@ -50,19 +50,23 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    boundary** (checked inside `unsafe`), where you genuinely talk to C. This is the deliberate avoidance of
    the null-reference "billion-dollar mistake."
 
-3c. **Ownership is the type axis — `value` / `resource` / `contract`.** kama organizes types by
+3c. **Ownership is the type axis — `value` / `resource` / `view` / `contract`.** kama organizes types by
    *what they own*, not the C/C++ `class`/`struct`/`pod` legacy. Every declaration is `type <kind>
    Name` (the `type` marker, parallel to `fn`): a **`type value`** owns nothing (raw data, **copied**;
    the stricter cousin of a "value type" — no smuggled shared refs; may still encapsulate private
    fields to guard an invariant). A **`type resource`** owns something, or has identity (**moved**,
-   RAII-dropped). A **`type contract`** is a public-only guarantee a type satisfies — kama's word for
-   an interface. Polymorphism's goal is **substitutability, not reuse**: inheritance bundles the two,
+   RAII-dropped). A **`type view`** *borrows* a range of memory it does not own — a non-owning,
+   **stack-only** slice/span (the flagship is `View<T>`; C# `ref struct`). It copies like a value but is
+   a *second-class borrow*: the escape check forbids it from being a field, a collection element, or an
+   escaping return, so — with no borrow checker — it can never dangle. A **`type contract`** is a
+   public-only guarantee a type satisfies — kama's word for an interface (also a borrow, of one object).
+   Polymorphism's goal is **substitutability, not reuse**: inheritance bundles the two,
    so kama unbundles them — **generics** give reuse (zero-cost monomorphization), **contracts** give
    substitutability, and `type virtual`/`abstract resource` is only for sharing *implementation* up an
    owned hierarchy. Hand-offs follow **"every kind is movable; the default is declared, a marker
    overrides"**: each kind has a natural bare hand-off (move for `Owned`/`resource`, retain for
    `Shared`/`Weak`), a `Copyable` resource declares its bare default at opt-in (`Copyable(bare: give|copy)`),
-   and `give`/`copy` override it. The kind words `value`/`resource`/`contract` are
+   and `give`/`copy` override it. The kind words `value`/`resource`/`view`/`contract` are
    **contextual** (they name a kind only right after `type`), so they stay ordinary identifiers
    everywhere else. *(Full model in `docs/TYPE_MODEL.md`.)*
 
