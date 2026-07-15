@@ -1,40 +1,15 @@
 namespace std::collections;
-export { Allocator, GlobalAllocator, Arena, BumpAllocator };
+export { Arena, BumpAllocator };
 
 extern "<stdlib.h>";
 extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 
-// The pluggable memory source for the collections — a copyable VALUE handle (like C++
-// `std::pmr::polymorphic_allocator`, Rust `&Bump`, or Zig `std.mem.Allocator`). A container carries
-// `A alloc` BY VALUE and routes every buffer through `this.alloc.allocate(...)` /
-// `this.alloc.deallocate(...)`. A stateful allocator is a small handle pointing into a CALLER-owned
-// region (an `Arena`) that MUST outlive the container — a documented contract, not a borrow-checked
-// one (a raw `Ptr` is not escape-checked, and there is no lifetime tracking). `for value` because
-// every allocator is a cheap copyable handle; the methods are INSTANCE methods (unlike the `Hasher`
-// contract's static finalizer) because a stateful allocator mutates through its stored pointer.
-//
-// Panic-on-OOM: `allocate` returns a raw `Ptr`; exhaustion panics. A fallible
-// `allocate -> Optional<Ptr>` variant is deferred to the embedded no-heap milestone and rides this
-// same seam non-breakingly (see ROADMAP).
-type contract Allocator for value {
-    fn Ptr allocate(usize bytes);
-    fn void deallocate(Ptr pointer, usize bytes);
-}
-
-// The default allocator: a zero-size handle straight onto libc malloc/free. The M8 default
-// `A: Allocator = GlobalAllocator` fills it in for `DynamicArray<T>` / `Map<K,V>`, so the bare
-// collection types are unchanged and pay nothing (the field adds no state — an empty struct).
-type value GlobalAllocator implements Allocator {
-    public GlobalAllocator() {}
-    public fn Ptr allocate(usize bytes) {
-        Ptr p;
-        unsafe { p = malloc(n: bytes); }
-        if (cast<usize>(p) == cast<usize>(0)) { panic(msg: "GlobalAllocator: out of memory"); }
-        return p;
-    }
-    public fn void deallocate(Ptr pointer, usize bytes) { unsafe { free(p: pointer); } }
-}
+// The `Allocator` contract + the default `GlobalAllocator` are FOUNDATIONAL and live in the global
+// prelude (`prelude/global.kama`, beside the other core capability contracts), so both `Owned<T, A>`
+// and the collections can name them unqualified and they survive `--no-std`. This file holds the
+// concrete opt-in STRATEGY types (`Arena` + its `BumpAllocator` handle) — not needed by the core, so
+// they stay in the library.
 
 // A caller-owned bump/arena region: one malloc'd byte buffer, allocations bump `offset` forward, an
 // individual `deallocate` is a no-op, and `reset()` bulk-frees the whole region in O(1). The Arena

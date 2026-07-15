@@ -940,6 +940,7 @@ new_expression
   ;
 object_creation_expression
   : NEW type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $2, $4 ); }
+  | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $5, $7, $3 ); }
   ;
 unary_expression
   : postfix_expression

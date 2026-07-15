@@ -1,0 +1,29 @@
+// M11a allocator-aware `new`: a boxed object drawn from a caller-owned arena via
+// `new(allocator: a) T(...)` → `Owned<T, BumpAllocator>`. The box stores the handle, so its dtor
+// releases through the SAME allocator (a no-op for a bump arena — the Arena bulk-frees its buffer).
+// ASan-clean: exactly ONE malloc (the arena buffer) + ONE free (the Arena dtor); the box dealloc is a
+// no-op, and the Node lives inside the arena region.
+import std::memory::{Owned};
+import std::collections::{Arena, BumpAllocator};
+
+type value Node {
+    int32 v;
+    Node(int32 v) { this.v = v; }
+    public fn int32 get() { return this.v; }
+    public fn void bump() { this.v = this.v + 1; }
+}
+
+fn int32 main() {
+    Arena arena = Arena(capacity: 1 << 12);         // declared FIRST → drops LAST (outlives the box)
+
+    Owned<Node, BumpAllocator> n = new(allocator: arena.handle()) Node(v: 40);
+    n.bump();
+    n.bump();
+    int32 r = n.get();                              // 42, via auto-deref through the arena-backed box
+
+    // a second box from the SAME arena — both bump-allocate into the one region
+    Owned<Node, BumpAllocator> m = new(allocator: arena.handle()) Node(v: 100);
+    r = r + m.get();                                // 142
+
+    return r;                                        // 142
+}

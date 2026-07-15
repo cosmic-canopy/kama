@@ -1,5 +1,4 @@
 namespace std::collections;
-import std::collections::{Allocator, GlobalAllocator};
 export { BitSet, BitSetIter };
 
 extern "<string.h>";

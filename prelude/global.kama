@@ -40,6 +40,18 @@ type contract Equatable for both { fn bool equals(This other); }
 // separate `<`/`==`). The operand is borrowed (`ref This`) — a comparison never consumes it, and a large
 // key (`string`) isn't copied. Primitive retro-impls below make every int/float/string universally comparable.
 type contract Comparable for both { fn Ordering compareTo(ref This other); }
+// The pluggable memory source — a copyable VALUE handle (C++ `std::pmr::polymorphic_allocator`, Rust
+// `&Bump`, Zig `std.mem.Allocator`). An `Owned<T, A>` box or a container carries `A alloc` BY VALUE and
+// routes every allocation through `this.alloc.allocate(...)` / `this.alloc.deallocate(...)`. FOUNDATIONAL
+// like the bounds above, so it lives in the global prelude — both the smart-pointer triad and the
+// collections name it, and it survives `--no-std`. `for value` (a cheap copyable handle); INSTANCE
+// methods (unlike `Hasher`'s static finalizer) because a stateful allocator mutates through its stored
+// pointer. Panic-on-OOM; a fallible `allocate -> Optional<Ptr>` rides this seam later (embedded milestone).
+// The concrete STRATEGY types (`Arena`/`BumpAllocator`) stay in `std::collections` (opt-in, not core).
+type contract Allocator for value {
+    fn Ptr allocate(usize bytes);
+    fn void deallocate(Ptr pointer, usize bytes);
+}
 // Primitive conformances (pure-kama retro-impls, NO compiler blessing) — hosted here so `string`/`int32`
 // satisfy the standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `DynamicArray<int32>.contains`, an int-keyed
 // `Map`) without importing `std::collections`. `hash()` returns a CHEAP CONTENT hash (identity for integers,
@@ -287,4 +299,22 @@ type value Split implements Iterator<string> {
         this.done = true;
         return Optional::Some(value: kama_string_from_raw(src: this.data, start: this.pos, len: this.len - this.pos));
     }
+}
+
+// The default allocator (satisfies `Allocator`): a zero-size handle straight onto libc malloc/free. The
+// M8 default `A: Allocator = GlobalAllocator` fills it in for `Owned<T>` / `DynamicArray<T>` / `Map<K,V>`,
+// so the bare types are unchanged and pay nothing at runtime (the field carries no state — an empty
+// struct). Concrete impls live at the end of the prelude, after the contracts they satisfy.
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+type value GlobalAllocator implements Allocator {
+    public GlobalAllocator() {}
+    public fn Ptr allocate(usize bytes) {
+        Ptr p;
+        unsafe { p = malloc(n: bytes); }
+        if (cast<usize>(p) == cast<usize>(0)) { panic(msg: "GlobalAllocator: out of memory"); }
+        return p;
+    }
+    public fn void deallocate(Ptr pointer, usize bytes) { unsafe { free(p: pointer); } }
 }

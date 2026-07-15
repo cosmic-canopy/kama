@@ -1,16 +1,26 @@
 namespace std::memory;
 export { Owned };
 
-extern "<stdlib.h>";
-extern fn void free(Ptr p);
-
-// A unique-owning heap pointer (Rust's `Box<T>`). `implements HeapOwner<T>` makes it a
-// `new T(args)` target (heap placement, 0 copies); `Deref<T>` forwards `.method()`/`.field`
-// to the pointee. Move-only: `Owned b = give a;`. RAII frees the heap object.
-type resource Owned<T> implements Deref<T>, HeapOwner<T> {
+// A unique-owning heap pointer (Rust's `Box<T>`). `implements HeapOwner<T>` makes it a `new T(args)`
+// target (heap placement, 0 copies); `Deref<T>` forwards `.method()`/`.field` to the pointee. Move-only:
+// `Owned b = give a;`. RAII frees the heap object through its allocator.
+//
+// The heap block is drawn from the allocator `A` (M8 default `GlobalAllocator` → libc malloc/free, so a
+// bare `Owned<T>` is unchanged). A placement `new(allocator: a) T(args)` draws the block from `a` and
+// stores the handle in `alloc` (via `adoptIn`), so the dtor releases it through the SAME allocator —
+// letting a boxed object live in a caller-owned arena and be bulk-reclaimed on `reset()`. The allocator
+// is a copyable VALUE handle carried by value (zero-size for `GlobalAllocator`).
+type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T> {
     Ptr<T> p;
-    public static fn Owned<T> adopt(Ptr<T> raw) { Owned<T> b; b.p = raw; return b; }
+    A alloc;
+    // HeapOwner: adopt a raw block into a box with the DEFAULT allocator (the bare-`new` path). `alloc`
+    // is left as the zero-init default (`GlobalAllocator` carries no state, so its `deallocate` == `free`).
+    public static fn Owned<T, A> adopt(Ptr<T> raw) { Owned<T, A> b; b.p = raw; return b; }
+    // Placement adopt: a raw block that came FROM `allocator`, stored so the dtor releases it through the
+    // same handle (the `new(allocator: a) T(...)` path).
+    public static fn Owned<T, A> adoptIn(Ptr<T> raw, A allocator) { Owned<T, A> b; b.p = raw; b.alloc = allocator; return b; }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    // run pointee dtor, then free — guarding a null pointer (a zero-initialized/moved-from handle).
-    ~Owned() { unsafe { if (cast<usize>(this.p) != 0) { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); } } }
+    // run pointee dtor, then release through the allocator — guarding a null pointer (a
+    // zero-initialized/moved-from handle).
+    ~Owned() { unsafe { if (cast<usize>(this.p) != 0) { drop(value: this.deref()); this.alloc.deallocate(pointer: cast<Ptr>(this.p), bytes: sizeof(T)); } } }
 }

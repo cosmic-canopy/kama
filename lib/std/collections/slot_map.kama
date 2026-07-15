@@ -1,5 +1,4 @@
 namespace std::collections;
-import std::collections::{Allocator, GlobalAllocator};
 export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut };
 
 // A stable, generation-checked reference into a `SlotMap`. `index` is the slot; `generation` is the slot's

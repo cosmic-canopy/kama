@@ -597,6 +597,14 @@ private:
     // If `cls` implements the prelude `Deref<T>` contract, the pointee class `T` (auto-deref target);
     // "" otherwise. Nominal — the `implements Deref<T>` is the opt-in gate. Inert when no Deref is in scope.
     std::string derefTarget(const std::string& cls);
+    // Placement `new(allocator: a) T(...)`: the allocator arg's {C expression, allocator class}, or {"",""}
+    // for a bare `new`. Diagnoses a missing/ill-typed `allocator:` slot. `emit` gates side-effecting emission
+    // of the expression (false = just resolve the class, for a pre-flight check).
+    std::pair<std::string,std::string> placementAllocator(ObjectCreationNode* oc, int line, bool emit);
+    // The allocator type-arg of an `Owned<T, A>` box instance (its last generic arg); "" if `ty` is not an
+    // `Owned` instance. Used to reject a bare `new` into a STATEFUL-allocator box (which would leak — the
+    // block is malloc'd but the box's no-op `deallocate` never frees it).
+    std::string boxAllocatorArg(const std::string& ty);
     // If `cls` implements the prelude `HeapOwner<T>` contract, the owned element `T` (so `new T(args)` can
     // placement-construct into `cls` via its `adopt(Ptr<T>)`); "" otherwise. Inert when no HeapOwner in scope.
     std::string heapOwnerTarget(const std::string& cls);

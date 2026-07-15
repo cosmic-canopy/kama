@@ -1223,6 +1223,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // keep the two in sync (esp. the Shared ctrl asymmetry: iface path emits
                     // kama_ctrl_new(), the library-adopt path lets `adopt` allocate it).
                     std::string octy = cType(oc->type);
+                    // Allocator-aware `new(allocator: …)` is M11a-supported ONLY for a concrete-element library
+                    // `Owned<T, A>`. Reject the intrinsic/polymorphic smart-ptr path (`Owned<Interface>`,
+                    // `Shared`, `Weak`) here (D3 + poly D4); the concrete library-adopt branch below rejects a
+                    // concrete `Shared`/`Weak` by the absence of `adoptIn`.
+                    if (oc->placement && !oc->placement->empty() && isSmartPtrClass(ty))
+                        unsupported("allocator-aware `new(allocator: …)` is not supported for interface / `Shared` "
+                                    "/ `Weak` targets in this release — only a concrete `Owned<T, A>`", n->line);
                     if (isBindableClass(ty)) {
                         emitBindableNew(nm, ty, oc, depth);   // bind obj + method
                     } else if (isSmartPtrClass(ty)) {
@@ -1297,13 +1304,40 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         else if (isClass(C) && _classes[C].isAbstractClass)
                             unsupported(("cannot instantiate abstract class '" + C + "'").c_str(), n->line);
                         else {
+                            // Placement `new(allocator: a)`: draw the block from `a` (via its `allocate`) and
+                            // adopt through `adoptIn` so the box stores the handle for its dtor's `deallocate`.
+                            // A bare `new` keeps the libc malloc + `adopt` path (byte-for-byte as before).
+                            auto pa = placementAllocator(oc, n->line, /*emit=*/true);
+                            bool placed = !pa.second.empty();
+                            // A bare `new` default-constructs the box's allocator — safe only for a STATELESS
+                            // one (no fields, e.g. GlobalAllocator). A stateful `Owned<T, A>` needs the handle,
+                            // so require the placement form (else the block would leak on a no-op deallocate).
+                            if (!placed) {
+                                std::string ba = boxAllocatorArg(ty);
+                                if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())
+                                    unsupported(("`Owned<T, " + ba + ">` uses a stateful allocator — construct it with "
+                                                 "`new(allocator: …) T(...)`, not a bare `new`").c_str(), n->line);
+                            }
+                            const char* adoptName = placed ? "adoptIn" : "adopt";
                             ClassInfo* ao = nullptr;
-                            MethodInfo* adoptM = findMethod(&_classes[ty], "adopt", &ao);
-                            if (!adoptM) { unsupported(("`" + ty + "` implements HeapOwner but has no `adopt` method").c_str(), n->line); }
+                            MethodInfo* adoptM = findMethod(&_classes[ty], adoptName, &ao);
+                            if (placed && !adoptM)
+                                unsupported(("allocator-aware `new(allocator: …)` is only supported for `Owned<T, A>` "
+                                             "in this release (`" + ty + "` has no `adoptIn`)").c_str(), n->line);
+                            else if (!adoptM) { unsupported(("`" + ty + "` implements HeapOwner but has no `adopt` method").c_str(), n->line); }
                             else {
                                 std::string hp = "__heap" + std::to_string(_tempCounter++);
+                                std::string ap;
+                                if (placed) {   // materialize the allocator handle once, then allocate through it
+                                    ap = "__alloc" + std::to_string(_tempCounter++);
+                                    line(n->line); indent(depth);
+                                    *_out << pa.second << " " << ap << " = " << pa.first << ";\n";
+                                }
                                 line(n->line); indent(depth);
-                                *_out << C << "* " << hp << " = (" << C << "*)malloc(sizeof(" << C << "));\n";
+                                if (placed)
+                                    *_out << C << "* " << hp << " = (" << C << "*)" << pa.second << "__allocate(&" << ap << ", sizeof(" << C << "));\n";
+                                else
+                                    *_out << C << "* " << hp << " = (" << C << "*)malloc(sizeof(" << C << "));\n";
                                 indent(depth); *_out << "if (!" << hp << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
                                 if (isClass(C) && _classes[C].hasCtor) {
                                     line(n->line);
@@ -1319,7 +1353,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     if (!bp.empty()) bp.pop_back();
                                     adoptArg = "(" + T + "*)&(" + hp + "->" + bp + ")";
                                 }
-                                indent(depth); *_out << nm << " = " << adoptM->cName << "(" << adoptArg << ");\n";
+                                indent(depth); *_out << nm << " = " << adoptM->cName << "(" << adoptArg
+                                                     << (placed ? ", " + ap : "") << ");\n";
                             }
                         }
                     } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl) {
@@ -5636,6 +5671,38 @@ std::string CEmitter::derefTarget(const std::string& cls)
     return "";
 }
 
+// Placement `new(allocator: a) T(...)`: extract the `allocator:` arg's C expression + its allocator class.
+// Returns {"",""} for a bare `new` (no placement list). `emit=false` resolves the class only (no emission),
+// for the pre-flight target-kind check; `emit=true` materializes the C expression (evaluated once by the
+// caller into a temp). Diagnoses a missing `allocator:` slot or a non-class allocator.
+std::pair<std::string,std::string> CEmitter::placementAllocator(ObjectCreationNode* oc, int line, bool emit)
+{
+    if (!oc || !oc->placement || oc->placement->empty()) return {"", ""};
+    for (auto& a : *oc->placement) {
+        if (a && a->name && a->name->value && *a->name->value == "allocator" && a->expression) {
+            std::string ty = exprClass(a->expression);
+            if (ty.empty() || !_classes.count(ty))
+                unsupported("placement `new(allocator: …)` needs an `Allocator` value", line);
+            return {emit ? emitExpression(a->expression) : std::string(), ty};
+        }
+    }
+    unsupported("placement `new(...)` accepts only an `allocator:` argument", line);
+    return {"", ""};
+}
+
+// The allocator type-arg of an `Owned<T, A>` box instance (its last generic arg); "" if not an `Owned`
+// instance. Only `Owned` boxes (keyed by template) qualify — a user HeapOwner isn't gated.
+std::string CEmitter::boxAllocatorArg(const std::string& ty)
+{
+    auto t = _genericTypeInstOf.find(ty);
+    if (t == _genericTypeInstOf.end() || t->second != _ownedTmpl) return "";   // only gate real `Owned` boxes
+    auto ci = _classes.find(ty);
+    if (ci == _classes.end()) return "";
+    for (auto& f : ci->second.fields)                                          // the box's `A alloc` field,
+        if (f.name == "alloc" && f.type) return cTypeInInstance(ty, f.type);   // resolved to the concrete A
+    return "";
+}
+
 // If `e` is `this.field[i]` (or `obj.field[i]`) where `field` is a raw `Ptr<T>`, return the element's
 // concrete C-type (resolving `T` under the current instance subst); else "". This is a raw pointer
 // slot (unsafe manual memory) — a container's own buffer — distinct from a collection / user operator[].
@@ -7085,6 +7152,12 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         _hoisted.push_back(targetCType + " " + t + " = {0};");
         return t;
     };
+    // Allocator-aware placement is M11a-supported only for a concrete library `Owned<T, A>` — reject the
+    // intrinsic/poly smart-ptr path here (mirror the local-decl guard); the library block below rejects a
+    // concrete `Shared`/`Weak` by the absence of `adoptIn`.
+    if (oc->placement && !oc->placement->empty() && isSmartPtrClass(targetCType))
+        return reject("allocator-aware `new(allocator: …)` is not supported for interface / `Shared` / `Weak` "
+                      "targets in this release — only a concrete `Owned<T, A>`");
 
     // ---- LIBRARY HeapOwner, concrete element: `T* hp = malloc; C__ctor(hp,…); box = Owner__adopt(hp)` ----
     // (mirror emitLocalVariableDeclaration ~1265-1300, incl. the derived→base upcast; `adopt` itself
@@ -7099,12 +7172,31 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
                           + "(...)` — name the element type or a derived of it, not the owner");
         if (isClass(C) && _classes[C].isAbstractClass)
             return reject("cannot instantiate abstract class '" + C + "'");
+        // Placement `new(allocator: a)` in arg/return/payload position — thread the allocator identically to
+        // the local-decl path (draw the block from `a`, adopt through `adoptIn`), else the allocator would be
+        // silently dropped and the block leaked. A bare `new` keeps the libc malloc + `adopt` form.
+        auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
+        bool placed = !pa.second.empty();
+        if (!placed) {   // bare `new` into a stateful-allocator box leaks — require the placement form
+            std::string ba = boxAllocatorArg(targetCType);
+            if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())
+                return reject("`Owned<T, " + ba + ">` uses a stateful allocator — construct it with "
+                              "`new(allocator: …) T(...)`, not a bare `new`");
+        }
+        const char* adoptName = placed ? "adoptIn" : "adopt";
         ClassInfo* ao = nullptr;
-        MethodInfo* adoptM = findMethod(&_classes[targetCType], "adopt", &ao);
+        MethodInfo* adoptM = findMethod(&_classes[targetCType], adoptName, &ao);
+        if (placed && !adoptM)
+            return reject("allocator-aware `new(allocator: …)` is only supported for `Owned<T, A>` in this "
+                          "release (`" + targetCType + "` has no `adoptIn`)");
         if (!adoptM) return reject("`" + targetCType + "` implements HeapOwner but has no `adopt` method");
         std::string hp = "__heap"   + std::to_string(_tempCounter++);
         std::string t  = "__newarg" + std::to_string(_tempCounter++);
-        std::string box = C + "* " + hp + " = (" + C + "*)malloc(sizeof(" + C + "));";
+        std::string ap = placed ? "__alloc" + std::to_string(_tempCounter++) : "";
+        std::string box;
+        if (placed) box  = pa.second + " " + ap + " = " + pa.first + "; "
+                         + C + "* " + hp + " = (" + C + "*)" + pa.second + "__allocate(&" + ap + ", sizeof(" + C + "));";
+        else        box  = C + "* " + hp + " = (" + C + "*)malloc(sizeof(" + C + "));";
         if (isClass(C) && _classes[C].hasCtor)
             box += " " + emitReorderedCall(C + "__ctor", hp, _classes[C].ctorParams, oc->args, srcLine) + ";";
         std::string adoptArg = hp;                             // adopt the base subobject when widening (offset-0)
@@ -7113,7 +7205,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
             if (!bp.empty()) bp.pop_back();
             adoptArg = "(" + T + "*)&(" + hp + "->" + bp + ")";
         }
-        box += " " + targetCType + " " + t + " = " + adoptM->cName + "(" + adoptArg + ");";
+        box += " " + targetCType + " " + t + " = " + adoptM->cName + "(" + adoptArg + (placed ? ", " + ap : "") + ");";
         _hoisted.push_back(box);
         return t;
     }
@@ -8955,8 +9047,15 @@ std::string CEmitter::exprClass(SharedExpression e)
 
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
-        if (isSmartPtrClass(recv)) recv = _classes[recv].collElemClass;   // auto-deref: look up on T
-        else { std::string dt = derefTarget(recv); if (!dt.empty()) recv = dt; }   // user Deref<T> auto-deref
+        // Auto-deref a smart-pointer / `Deref<T>` receiver to its pointee T — but ONLY when the member is
+        // not a field of the wrapper itself. A smart pointer's OWN field (e.g. `Owned<T,A>.alloc`, accessed
+        // as `this.alloc` inside its dtor) must resolve on the wrapper, not be forwarded to the pointee.
+        bool memberOnWrapper = !recv.empty() && ma->identifier && ma->identifier->value
+                            && _classes.count(recv) && findFieldOwner(&_classes[recv], *ma->identifier->value);
+        if (!memberOnWrapper) {
+            if (isSmartPtrClass(recv)) recv = _classes[recv].collElemClass;   // auto-deref: look up on T
+            else { std::string dt = derefTarget(recv); if (!dt.empty()) recv = dt; }   // user Deref<T> auto-deref
+        }
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)
@@ -9814,7 +9913,15 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             *_out << ci->name << " " << ci->name << "__copy(" << ci->name << "* self);\n";
     emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
     for (ClassInfo* ci : classes) {
-        if (ci->preludeStatic) continue;   // emitted static-inline below (a non-generic prelude type)
+        if (ci->preludeStatic) {
+            // A non-generic prelude type's BODIES are emitted static-inline at the very end (below), but its
+            // PROTOTYPES must come out here — a generic container monomorph emitted before that end pass may
+            // call them (e.g. `DynamicArray<T, GlobalAllocator>` calling `GlobalAllocator__allocate`). Emit
+            // them `static` so the later static-inline definitions don't follow a non-static implicit decl.
+            scopeOf(ci->scope, ci->usings, ci->symbolAliases);
+            _emitStaticClass = true; emitClassPrototypes(*ci); _emitStaticClass = false;
+            continue;
+        }
         scopeOf(ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci);
     }
     emitPolyContractResolvers();   // Phase E: per-contract graph-edge dispatch (after node-helper protos + extern vtbl decls)

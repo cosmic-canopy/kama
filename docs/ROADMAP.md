@@ -260,18 +260,37 @@ serialization, networking).
        variant/arg emission (`Optional::Some(copy this.data[0])`) bound only `Optional<T>`'s `T`, leaving a
        nested `DynamicArray<T,A>`'s `A` unbound. Also made `PriorityQueue::minHeap`/`maxHeap` return the
        enclosing `A` (a private-field write from the wrong instance otherwise).
-     - **SortedMap / SortedSet — deferred (needs M11).** Their B-tree node *boxes* come from `new
-       BTreeNode<…>` (a global-heap `Owned`), so a custom `A` can only reach the inner arrays, not the
-       nodes — a half-honored allocator, worse than none (reset the arena and the node boxes survive on the
-       malloc heap). Left unchanged until allocator-aware `new`.
-     - **M11 — allocator-aware `new` / `Owned<T, A>` (its own session).** The `new` intrinsic + the `Owned`
-       smart pointer need an allocator channel so heap-*boxed* objects (not just raw container buffers) draw
-       from a chosen allocator. This completes allocator coverage: **engine readiness** — the frame-arena
-       story is whole only once `new`/`Owned` honor an allocator (a system can then arena-back ALL its
-       per-frame allocations, boxed objects included, and bulk-reset — see ENGINE_READINESS); **embedded
-       readiness** — a no-heap target needs *every* allocation routed through a supplied allocator (M10
-       covers containers, M11 covers `new`/`Owned`). Once it lands, SortedMap gets a clean full
-       `SortedMap<K,V,A>`.
+     - **M11a — allocator-aware `new` / `Owned<T, A>`. ✅ DONE** (triple-green native/SAN/WASM 539/539/539).
+       A placement form `new(allocator: a) T(args)` draws the heap block from `a` and yields `Owned<T, A>`
+       (the box stores the handle; its dtor releases through the same allocator). Bare `new T(args)` /
+       `Owned<T>` are unchanged (`A` defaults to `GlobalAllocator`). Foundational relocation: the `Allocator`
+       contract + `GlobalAllocator` moved from `std::collections` to the **global prelude** (so both the
+       smart pointers and the collections name them, and they survive `--no-std`); `Arena`/`BumpAllocator`
+       stay in `std::collections`. Grammar: one conflict-free production `NEW LPAREN argument_list RPAREN type
+       LPAREN args RPAREN` (a `type` never starts with `(`). Scope guards: a placement into `Shared`/`Weak`/
+       `Owned<Interface>` is rejected (they keep the default allocator, gain a channel in M11c), and a **bare**
+       `new` into a *stateful*-allocator box is rejected (it would leak). Three latent emitter bugs surfaced +
+       fixed: (a) `preludeStatic` (non-generic prelude type) method *prototypes* were emitted after the
+       generic-container monomorphs that call them — now emitted early (a `GlobalAllocator` used as a
+       collection type-arg exposed it); (b) `exprClass` on a `MemberAccess` auto-deref'd a smart-pointer /
+       `Deref<T>` receiver even for the wrapper's OWN field (`this.alloc` inside `~Owned`) — now only
+       auto-derefs when the member isn't a field of the wrapper; (c) the local-decl and hoisted-`new`
+       (`tryHoistInlineNew`, arg/return/payload positions) paths both thread the allocator (the hoisted one
+       would otherwise silently drop it). Fixtures `owned_arena` (local), `owned_arena_hoist` (arg + return) +
+       xfails `new_alloc_shared`/`new_alloc_iface`/`new_bare_stateful`.
+     - **M11b — `SortedMap<K, V, A>` / `SortedSet<K, A>` retrofit — deferred (next session).** Their B-tree
+       node *boxes* come from `new BTreeNode<…>` (a global-heap `Owned`); now that `new` honors an allocator,
+       thread `A` through `SortedMap`/`BTreeNode` and route the `new BTreeNode` sites through
+       `new(allocator: this.alloc) …`. Completes allocator coverage for the containers.
+     - **M11c — `Shared<T, A>` + `Weak<T, A>` + `Owned<Interface, A>` — deferred.** A `Weak` can outlive its
+       `Shared` and is A-agnostic at the C level, so the deallocator must be type-erased in the control block;
+       the intrinsic-macro/iface `new` path also needs the allocator channel. The engine wants it eventually;
+       `Owned` (M11a) unblocks SortedMap without it.
+     - **Zero-size-field elision — deferred optimization.** M11a carries a `GlobalAllocator alloc` field on the
+       default `Owned<T>` (mirroring the M10 collections), which pads the handle (the runtime call inlines to a
+       bare `free`, but the field is real). A general "drop any empty-struct field + synthesize a throwaway
+       receiver for method calls on it" pass would reclaim it on `Owned` *and* every collection at once — its
+       own tested change (touch-sites: struct decl, field read/assign, copy, serialize).
      - **Fallible allocation — deferred with the embedded milestone.** `allocate -> Optional<Ptr>` (vs
        today's panic-on-OOM) is what a no-heap embedded target needs; it colors the mutating APIs with
        failure propagation. It rides this same `Allocator` seam non-breakingly. Fallible + M11 are the two

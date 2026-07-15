@@ -1,0 +1,9 @@
+import std::memory::{Owned};
+import std::collections::{Arena, BumpAllocator};
+type contract Shape for resource { fn int32 area(); }
+type resource Circle implements Shape { int32 r; public Circle(int32 r){ this.r=r; } public fn int32 area(){ return this.r * this.r; } }
+fn int32 main() {
+    Arena arena = Arena(capacity: 1 << 10);
+    Owned<Shape> s = new(allocator: arena.handle()) Circle(r: 3);   // ERROR: allocator-aware new unsupported for interface targets
+    return s.area();
+}

@@ -617,10 +617,13 @@ class ObjectCreationNode : public ExpressionStatementNode {
 public:
     SharedIdentifier type;
     SharedArgumentList args;
-    ObjectCreationNode(CodeGenContext& context, SharedIdentifier type, SharedArgumentList args)
+    SharedArgumentList placement;   // null for bare `new`; carries the placement `allocator: expr` list
+    ObjectCreationNode(CodeGenContext& context, SharedIdentifier type, SharedArgumentList args,
+                       SharedArgumentList placement = SharedArgumentList())
         : ASTNode(context),  ExpressionStatementNode(context)
         , type(type)
-        , args(args) { }
+        , args(args)
+        , placement(placement) { }
 };
 
 class InvocationNode : public ExpressionStatementNode {

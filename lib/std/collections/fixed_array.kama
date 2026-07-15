@@ -1,5 +1,5 @@
 namespace std::collections;
-import std::collections::{View, Allocator, GlobalAllocator};
+import std::collections::{View};
 export { FixedArray };
 
 extern "<string.h>";

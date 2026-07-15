@@ -1,5 +1,5 @@
 namespace std::collections;
-import std::collections::{View, Allocator, GlobalAllocator};
+import std::collections::{View};
 export { DynamicArray };
 
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a

@@ -259,7 +259,7 @@ forwards an in-place borrow up the tree via the escape checker's chained-ref-ret
 return a place-returning method call whose receiver roots at `this`). `SortedSet<K>` wraps `SortedMap<K, Unit>`,
 as `Set` wraps `Map`.
 
-### Custom allocators (`std::collections`) ✅ (M10a–M10b — all direct-heap containers)
+### Custom allocators ✅ (M10a–M10b — all direct-heap containers)
 
 A collection's memory source is a trailing type parameter `A: Allocator = GlobalAllocator`. Because it
 defaults (M8 default type parameters), `DynamicArray<T>` / `Map<K,V>` / bare `BitSet` are unchanged; the
@@ -272,7 +272,10 @@ eager `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueu
 remain on `GlobalAllocator` — their B-tree nodes box through `new`/`Owned`, which gains an allocator channel in
 **M11** (allocator-aware `new`).
 An **`Allocator` is a copyable value handle** (the C++ `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig
-`std.mem.Allocator` model), a two-method contract in `std::collections`:
+`std.mem.Allocator` model), a two-method contract. It is **foundational**, so the `Allocator` contract and the
+default `GlobalAllocator` live in the **global prelude** (beside `Comparable`/`Hashable`) — both the collections
+*and* the smart pointers name them, and they survive `--no-std`. The concrete strategy types `Arena`/`BumpAllocator`
+stay in `std::collections`.
 
 ```kama
 type contract Allocator for value {
@@ -288,7 +291,8 @@ onto libc `malloc`/`free`) costs nothing. A **stateful** allocator is a small ha
 **outlive** the container — a documented contract, not a borrow-checked one (a raw `Ptr` isn't escape-checked
 and there is no lifetime tracking). Since Kama has no constructor overloading, a stateful allocator arrives via
 a **named static factory** (`DynamicArray::withAllocator(allocator:)`), which assigns `alloc` after the bare
-construction. `GlobalAllocator`, `Arena`, and `BumpAllocator` ship in `std::collections`:
+construction. `Allocator`/`GlobalAllocator` are prelude (global, no import); `Arena` and `BumpAllocator` ship in
+`std::collections`:
 
 ```kama
 import std::collections::{DynamicArray, Map, Arena, BumpAllocator};
@@ -301,9 +305,28 @@ Map<int32, int32, A: BumpAllocator> m = Map::withAllocator(allocator: arena.hand
 
 **Panic-on-OOM** today; a **fallible** `allocate -> Optional<Ptr>` is deferred to the embedded no-heap
 milestone (it rides this same seam). Coverage is the direct-`malloc` containers (M10a: `DynamicArray`, `Map`,
-`Set`; M10b: `Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`). `SortedMap`/`SortedSet` allocate
-their B-tree node boxes via `new` (a global-heap `Owned`), so they await **allocator-aware `new` / `Owned<T,
-A>`** — its own future milestone that completes both the engine frame-arena and the embedded no-heap stories.
+`Set`; M10b: `Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`).
+
+### Allocator-aware `new` / `Owned<T, A>` ✅ (M11a)
+
+Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>`. A bare
+`new T(args)` is unchanged (`A` defaults to `GlobalAllocator` → libc malloc/free); a **placement** form
+`new(allocator: a) T(args)` draws the block from `a` and stores the handle in the box, so its dtor releases
+through the **same** allocator — letting a boxed object live in a caller-owned arena and be bulk-reclaimed on
+`reset()`:
+
+```kama
+Arena arena = Arena(capacity: 1 << 12);                       // drops last (outlives the box)
+Owned<Node, BumpAllocator> n = new(allocator: arena.handle()) Node(v: 42);
+// n's dtor deallocate() is a no-op; the Node lives in the arena; the Arena frees the region.
+```
+
+The allocator must be spelled on the box type (`Owned<T, A>`, explicit over implicit). A stateful `A` **requires**
+the placement form — a bare `new` into a stateful-allocator box is a compile error (it would leak). This release
+covers **`Owned`**; `Shared`/`Weak` and `Owned<Interface>` keep the default allocator (a placement into them is
+rejected) and gain a channel later. With allocator-aware `new`, **`SortedMap`/`SortedSet`** (whose B-tree nodes
+box through `new`/`Owned`) get their full `SortedMap<K, V, A>` retrofit — the next milestone — completing both the
+engine frame-arena and the embedded no-heap stories.
 
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 
