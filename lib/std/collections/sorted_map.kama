@@ -26,17 +26,22 @@ export { SortedMap };
 // B-tree algorithms live here as methods so `this` touches its own `keys`/`vals`/`kids` fields directly (the
 // normal in-place field mutation); a child is mutated via `this.kids[c].method()` (auto-deref through the
 // `Owned` box) and whole subtrees move via `this.kids.remove(...)` / `insertAt(...)`.
-type resource BTreeNode<K: Comparable, V> {
-    DynamicArray<K> keys;
-    DynamicArray<V> vals;                              // parallel to keys (vals[i] belongs to keys[i])
-    DynamicArray<Owned<BTreeNode<K,V>>> kids;          // empty for a leaf; length == keys.length()+1 internal
+type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
+    DynamicArray<K, A> keys;
+    DynamicArray<V, A> vals;                            // parallel to keys (vals[i] belongs to keys[i])
+    DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> kids;   // empty for a leaf; length == keys.length()+1 internal
     bool leaf;
+    A alloc;                                            // draws this node's arrays + its child boxes from A
 
-    public BTreeNode(bool leaf) {
-        DynamicArray<K> k = DynamicArray();
-        DynamicArray<V> v = DynamicArray();
-        DynamicArray<Owned<BTreeNode<K,V>>> c = DynamicArray();
-        this.keys = give k; this.vals = give v; this.kids = give c; this.leaf = leaf;
+    // Build an empty node whose arrays draw from `allocator`. The arrays are LAZY (cap = 0), so a
+    // zero-init `A` (the transient handle `SortedMap.withAllocator` passes before it rebuilds the root)
+    // is never dereferenced here — allocation waits for the first `add`. Interior child boxes are drawn
+    // from this same `alloc` via the placement `new(allocator: this.alloc)` sites below.
+    public BTreeNode(bool leaf, A allocator) {
+        DynamicArray<K, A> k = DynamicArray::withAllocator(allocator: allocator);
+        DynamicArray<V, A> v = DynamicArray::withAllocator(allocator: allocator);
+        DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> c = DynamicArray::withAllocator(allocator: allocator);
+        this.keys = give k; this.vals = give v; this.kids = give c; this.leaf = leaf; this.alloc = allocator;
     }
 
     public fn int32 keyCount() { return this.keys.length(); }
@@ -56,9 +61,9 @@ type resource BTreeNode<K: Comparable, V> {
     }
     fn K takeKeyAt(int32 i) { return this.keys.remove(index: i); }   // move the key out (+ shift)
     fn V takeValAt(int32 i) { return this.vals.remove(index: i); }
-    fn void pushKid(Owned<BTreeNode<K,V>> c) { this.kids.add(item: give c); }
-    fn void insertKidAt(int32 i, Owned<BTreeNode<K,V>> c) { this.kids.insertAt(index: i, item: give c); }
-    fn Owned<BTreeNode<K,V>> takeKidAt(int32 i) { return this.kids.remove(index: i); }
+    fn void pushKid(Owned<BTreeNode<K,V,A>, A> c) { this.kids.add(item: give c); }
+    fn void insertKidAt(int32 i, Owned<BTreeNode<K,V,A>, A> c) { this.kids.insertAt(index: i, item: give c); }
+    fn Owned<BTreeNode<K,V,A>, A> takeKidAt(int32 i) { return this.kids.remove(index: i); }
     // Overwrite the value at `i` in place: move the old value out (drop it), install the new one.
     fn void overwriteVal(int32 i, V value) {
         V old = this.vals.remove(index: i); drop(value: old);
@@ -115,7 +120,7 @@ type resource BTreeNode<K: Comparable, V> {
     // inserted at `i+1`, and the child keeps its left half. The child had 11 keys (0..10); median index = 5.
     fn void splitChild(int32 i) {
         bool childLeaf = this.kids[i].isLeaf();
-        Owned<BTreeNode<K,V>> z = new BTreeNode<K,V>(leaf: childLeaf);
+        Owned<BTreeNode<K,V,A>, A> z = new(allocator: this.alloc) BTreeNode<K,V,A>(leaf: childLeaf, allocator: this.alloc);
         // Move the child's right-half keys/vals (old indices 6..10) into z, in order. Removing at index 6
         // repeatedly pulls each successive right-half element down to index 6 (the DynamicArray shift).
         int32 t = 0;
@@ -128,7 +133,7 @@ type resource BTreeNode<K: Comparable, V> {
         if (!childLeaf) {                                // move the right-half children (old indices 6..11)
             int32 u = 0;
             while (u < 6) {                              // B = 6 right-half children
-                Owned<BTreeNode<K,V>> gc = this.kids[i].takeKidAt(i: 6);
+                Owned<BTreeNode<K,V,A>, A> gc = this.kids[i].takeKidAt(i: 6);
                 z.pushKid(c: give gc);
                 u = u + 1;
             }
@@ -144,13 +149,13 @@ type resource BTreeNode<K: Comparable, V> {
     // children into a fresh child node, leave this node holding just that child, then split it. (A B-tree
     // grows only at the root, and the root box is a field we can't `give` out — so we hollow it in place.)
     public fn void growRootInPlace() {
-        Owned<BTreeNode<K,V>> child = new BTreeNode<K,V>(leaf: this.leaf);
+        Owned<BTreeNode<K,V,A>, A> child = new(allocator: this.alloc) BTreeNode<K,V,A>(leaf: this.leaf, allocator: this.alloc);
         while (this.keys.length() > 0) {
             K k = this.keys.remove(index: 0); V v = this.vals.remove(index: 0);
             child.pushKeyVal(key: give k, value: give v);
         }
         while (this.kids.length() > 0) {
-            Owned<BTreeNode<K,V>> gc = this.kids.remove(index: 0);
+            Owned<BTreeNode<K,V,A>, A> gc = this.kids.remove(index: 0);
             child.pushKid(c: give gc);
         }
         this.leaf = false;
@@ -265,8 +270,8 @@ type resource BTreeNode<K: Comparable, V> {
 
     // --- delete helpers (each delegates to the backing DynamicArray's tested move-out / shift) ---
     fn int32 kidCount() { return this.kids.length(); }
-    fn Owned<BTreeNode<K,V>> takeFirstKid() { return this.kids.remove(index: 0); }
-    fn Owned<BTreeNode<K,V>> takeLastKid() { return this.kids.remove(index: this.kids.length() - 1); }
+    fn Owned<BTreeNode<K,V,A>, A> takeFirstKid() { return this.kids.remove(index: 0); }
+    fn Owned<BTreeNode<K,V,A>, A> takeLastKid() { return this.kids.remove(index: this.kids.length() - 1); }
     // Remove + return THIS node's own last (resp. first) pair — the value by return, the key via out-pointer
     // (no tuples; a `resource` pair can't expose fields). Used by the sibling rotations.
     fn V popLastOwnPair(ref K outKey) {
@@ -279,12 +284,12 @@ type resource BTreeNode<K: Comparable, V> {
         outKey = give k; return give v;
     }
     // Fold `other`'s keys/vals/children onto the END of this node, consuming it (used by merge + root shrink).
-    fn void absorb(Owned<BTreeNode<K,V>> other) {
+    fn void absorb(Owned<BTreeNode<K,V,A>, A> other) {
         while (other.keyCount() > 0) {
             K k = other.takeKeyAt(i: 0); V v = other.takeValAt(i: 0);
             this.pushKeyVal(key: give k, value: give v);
         }
-        while (other.kidCount() > 0) { Owned<BTreeNode<K,V>> gc = other.takeFirstKid(); this.pushKid(c: give gc); }
+        while (other.kidCount() > 0) { Owned<BTreeNode<K,V,A>, A> gc = other.takeFirstKid(); this.pushKid(c: give gc); }
     }
     // Remove + return the MAX (resp. MIN) pair of THIS subtree, rebalancing thin children on the way down so
     // the invariant holds — a delete of the extreme key. Value by return, key via out-pointer.
@@ -311,7 +316,7 @@ type resource BTreeNode<K: Comparable, V> {
     // Merge child i, separator keys[i]/vals[i], and child i+1 into child i (which then holds 2B-1 keys).
     fn void mergeChildren(int32 i) {
         K sepK = this.takeKeyAt(i: i); V sepV = this.takeValAt(i: i);   // separator out of THIS node
-        Owned<BTreeNode<K,V>> right = this.takeKidAt(i: i + 1);      // right child out of THIS node
+        Owned<BTreeNode<K,V,A>, A> right = this.takeKidAt(i: i + 1);      // right child out of THIS node
         this.kids[i].pushKeyVal(key: give sepK, value: give sepV);
         this.kids[i].absorb(other: give right);                  // right's contents fold onto left child
     }
@@ -320,7 +325,7 @@ type resource BTreeNode<K: Comparable, V> {
         K sepK = this.takeKeyAt(i: i - 1); V sepV = this.takeValAt(i: i - 1);
         this.kids[i].insertKeyVal(i: 0, key: give sepK, value: give sepV);            // separator to child front
         if (!this.kids[i].isLeaf()) {
-            Owned<BTreeNode<K,V>> lastKid = this.kids[i - 1].takeLastKid();
+            Owned<BTreeNode<K,V,A>, A> lastKid = this.kids[i - 1].takeLastKid();
             this.kids[i].insertKidAt(i: 0, c: give lastKid);
         }
         K upK; V upV = this.kids[i - 1].popLastOwnPair(outKey: upK);         // sibling max up
@@ -330,7 +335,7 @@ type resource BTreeNode<K: Comparable, V> {
         K sepK = this.takeKeyAt(i: i); V sepV = this.takeValAt(i: i);
         this.kids[i].pushKeyVal(key: give sepK, value: give sepV);                     // separator to child end
         if (!this.kids[i].isLeaf()) {
-            Owned<BTreeNode<K,V>> firstKid = this.kids[i + 1].takeFirstKid();
+            Owned<BTreeNode<K,V,A>, A> firstKid = this.kids[i + 1].takeFirstKid();
             this.kids[i].pushKid(c: give firstKid);
         }
         K upK; V upV = this.kids[i + 1].popFirstOwnPair(outKey: upK);         // sibling min up
@@ -393,7 +398,7 @@ type resource BTreeNode<K: Comparable, V> {
     // Root shrank to 0 keys after a merge: pull its single child's contents up, so the tree loses a level
     // without moving the root box (which is a field we can't `give` out) — the mirror of growRootInPlace.
     public fn void promoteOnlyChild() {
-        Owned<BTreeNode<K,V>> child = this.kids.remove(index: 0);
+        Owned<BTreeNode<K,V,A>, A> child = this.kids.remove(index: 0);
         bool cl = child.isLeaf();
         this.absorb(other: give child);
         this.leaf = cl;
@@ -444,16 +449,32 @@ type resource BTreeNode<K: Comparable, V> {
 // The ordered map. Its root is always a live `BTreeNode` (an empty leaf when the map is empty), so no path
 // special-cases a null root; `len` is the entry count. Every structural change bumps `mods` so a live
 // iterator can detect mid-iteration mutation.
-type resource SortedMap<K: Comparable, V>
+type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
         implements Copyable(bare: give) when [K: Copyable, V: Copyable],
                    Serialize when [K: Serialize, V: Serialize],
                    Deserialize when [K: Deserialize, V: Deserialize] {
-    Owned<BTreeNode<K,V>> root;
+    // The ROOT box is drawn from `GlobalAllocator` (the `Owned`'s A defaults to Global), independent of
+    // the node's own `A`: a bare `new` into a stateless-allocator box is allowed for any pointee A and
+    // never touches a not-yet-set handle. Every INTERIOR node box is drawn from `A` (the placement
+    // `new(allocator:)` sites in BTreeNode), so all but this one root box lives in the arena.
+    Owned<BTreeNode<K,V,A>> root;
     int32 len; int32 mods;
+    A alloc;                                            // the allocator the tree's nodes + arrays draw from
 
     public SortedMap() {
-        Owned<BTreeNode<K,V>> r = new BTreeNode<K,V>(leaf: true);
+        Owned<BTreeNode<K,V,A>> r = new BTreeNode<K,V,A>(leaf: true, allocator: this.alloc);
         this.root = give r; this.len = 0; this.mods = 0;
+    }
+
+    // Back the whole tree with a caller-owned allocator (e.g. an `Arena`). The bare ctor above built a
+    // root whose arrays bound the zero-init `alloc`, so REPLACE it (dropping the default root) with one
+    // built from the real handle — mirrors `PriorityQueue::withAllocator` replacing its embedded array.
+    public static fn SortedMap<K,V,A> withAllocator(A allocator) {
+        SortedMap<K,V,A> result = SortedMap();
+        result.alloc = allocator;
+        Owned<BTreeNode<K,V,A>> r = new BTreeNode<K,V,A>(leaf: true, allocator: allocator);
+        result.root = give r;
+        return give result;
     }
 
     public fn int32 length() { return this.len; }
@@ -512,8 +533,8 @@ type resource SortedMap<K: Comparable, V>
     // Deep-copy the whole map (present only when both key and value are Copyable): a fresh tree with an
     // independent clone of every entry, rebuilt from the sorted key/value copies (popped from the end, an
     // O(1) move each). `bare: give` — a plain hand-off still MOVES.
-    public fn SortedMap<K,V> copy() when [K: Copyable, V: Copyable] {
-        SortedMap<K,V> result = SortedMap();
+    public fn SortedMap<K,V,A> copy() when [K: Copyable, V: Copyable] {
+        SortedMap<K,V,A> result = SortedMap::withAllocator(allocator: this.alloc);   // clone into the SAME allocator
         DynamicArray<K> ks = this.keys();
         DynamicArray<V> vs = this.values();
         while (ks.length() > 0) {
@@ -531,6 +552,9 @@ type resource SortedMap<K: Comparable, V>
         this.root.serializeInto(w: w);
         w.endArray();
     }
+    // Deserialize is GlobalAllocator-only: the wire format carries no allocator handle, so it builds a
+    // default `SortedMap<K,V>` (a stateful-A instance would bare-ctor a zero-init handle and crash on the
+    // first `put`). Same convention as the other collections' A-ignoring deserialize.
     public static fn SortedMap<K,V> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
         SortedMap<K,V> result = SortedMap();
         r.beginArray();

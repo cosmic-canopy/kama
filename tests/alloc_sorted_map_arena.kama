@@ -1,0 +1,55 @@
+// M11b custom allocator — SortedMap/SortedSet (a B-tree) backed by a caller-owned Arena. M10 reached the
+// nodes' inner arrays; M11b threads `A` through the NODE BOXES too, so every INTERIOR node draws from the
+// arena via `new(allocator: this.alloc) BTreeNode<K,V,A>(...)`. Exactly one box per tree (the root) stays
+// GlobalAllocator (a bare box, freed by RAII); all interior nodes + all inner arrays live in the arena, so
+// `reset()` reclaims them. Enough keys are inserted to force splits AND a root growth (height increase),
+// exercising every arena-backed new-site. ASan verifies no leak / double-free (arena declared first →
+// outlives the map, so its buffer is freed last).
+import std::collections::{SortedMap, SortedSet, DynamicArray, Arena, BumpAllocator};
+
+fn int32 main() {
+    int32 r = 0;
+    Arena arena = Arena(capacity: 1 << 16);           // declared FIRST → drops LAST (outlives the containers)
+
+    // (a) an arena-backed SortedMap<int32,int32,BumpAllocator>. Insert 40 keys in a scrambled order to
+    // force several node splits and at least one root growth (the tree exceeds height 1).
+    SortedMap<int32, int32, BumpAllocator> sm = SortedMap::withAllocator(allocator: arena.handle());
+    int32 i = 0;
+    while (i < 40) { int32 k = (i * 17) % 40; sm.put(key: k, value: k * 2); i = i + 1; }
+    if (sm.length() == 40) { r = r + 10; }
+
+    // ordered lookups + sorted iteration over the arena-backed tree
+    Optional<int32> f = sm.first(); Optional<int32> l = sm.last();
+    bool ends = match (f) { case Some(x): x == 0; case None: false; }
+             && match (l) { case Some(x): x == 39; case None: false; };
+    if (ends) { r = r + 10; }
+    DynamicArray<int32> ks = sm.keys();
+    int32 prev = 0 - 1; bool sorted = true; int32 cnt = 0;
+    foreach (int32 kk in ks) { if (kk <= prev) { sorted = false; } prev = kk; cnt = cnt + 1; }
+    if (sorted && cnt == 40) { r = r + 10; }
+
+    // getRef borrow + a value read; remove reclaims a moved-out value; deletes force merges/borrows that
+    // relocate arena-backed child boxes.
+    int32 got = sm.getRef(key: 20);
+    if (got == 40) { r = r + 10; }
+    Optional<int32> rem = sm.remove(key: 33);
+    int32 rv = match (rem) { case Some(v): v; case None: 0 - 1; };
+    if (rv == 66 && sm.length() == 39) { r = r + 10; }
+    i = 0;
+    while (i < 40) { if (i % 3 == 0) { sm.remove(key: i); } i = i + 1; }   // scramble deletes → merges
+    if (sm.length() < 39) { r = r + 10; }
+
+    // (b) an arena-backed SortedSet<int32,BumpAllocator> sharing the SAME arena.
+    SortedSet<int32, BumpAllocator> ss = SortedSet::withAllocator(allocator: arena.handle());
+    i = 0;
+    while (i < 30) { ss.add(key: (i * 7) % 30); i = i + 1; }
+    if (ss.length() == 30 && ss.contains(key: 15)) { r = r + 10; }
+    DynamicArray<int32> es = ss.elements();
+    bool ssorted = true; prev = 0 - 1; int32 c2 = 0;
+    foreach (int32 e in es) { if (e <= prev) { ssorted = false; } prev = e; c2 = c2 + 1; }
+    if (ssorted && c2 == 30) { r = r + 10; }
+
+    // the containers drop here (their interior boxes/arrays no-op-deallocate into the arena; each root box
+    // is freed via libc); then `arena` drops last, freeing its one buffer. ASan-clean.
+    return r;   // 8 asserts * 10 = 80
+}

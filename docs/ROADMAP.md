@@ -278,10 +278,24 @@ serialization, networking).
        (`tryHoistInlineNew`, arg/return/payload positions) paths both thread the allocator (the hoisted one
        would otherwise silently drop it). Fixtures `owned_arena` (local), `owned_arena_hoist` (arg + return) +
        xfails `new_alloc_shared`/`new_alloc_iface`/`new_bare_stateful`.
-     - **M11b — `SortedMap<K, V, A>` / `SortedSet<K, A>` retrofit — deferred (next session).** Their B-tree
-       node *boxes* come from `new BTreeNode<…>` (a global-heap `Owned`); now that `new` honors an allocator,
-       thread `A` through `SortedMap`/`BTreeNode` and route the `new BTreeNode` sites through
-       `new(allocator: this.alloc) …`. Completes allocator coverage for the containers.
+     - **M11b — `SortedMap<K, V, A>` / `SortedSet<K, A>` retrofit. ✅ DONE** (triple-green native/SAN/WASM
+       541/541/541). Threaded `A` through the B-tree: `BTreeNode<K, V, A>` gains an `A alloc` field, its inner
+       arrays become `DynamicArray<K/V, A>` + `DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> kids`, and the two
+       *interior* node-creation sites (`splitChild`, `growRootInPlace`) placement-`new(allocator: this.alloc)
+       BTreeNode<K,V,A>(…)` → interior boxes live in the arena, so `reset()` reclaims the whole tree.
+       **Design call (the one non-mechanical part):** SortedMap is the first collection whose bare ctor *eagerly*
+       heap-allocates (the always-live root), so the M10 "bare-ctor-then-post-assign-allocator" idiom breaks — a
+       bare `new` into a stateful-`A` root box is rejected (M11a D2 guard) and a placement root would need the
+       not-yet-assigned handle (`withAllocator` runs the bare ctor first). Resolution: the **root box stays
+       `GlobalAllocator`** (`Owned<BTreeNode<K,V,A>>`, box `A` defaults Global — a bare `new` into a stateless box
+       is legal for any pointee `A`, and its lazy inner arrays never touch the zero-init handle); `withAllocator`
+       rebuilds the root so its arrays bind the real allocator. One box per tree outside the arena, freed by RAII —
+       a documented wart, consistent with the campaign's "clean mirror now" pattern. Deserialize stays
+       `GlobalAllocator`-only (no handle on the wire). **No emitter fix needed** — the M10b `exprClass`/
+       `cTypeInInstance` field-type-under-owner-instance hardening already covered the deepest A-nesting in the
+       codebase (`DynamicArray<Owned<BTreeNode<K,V,A>, A>, A>`, a self-referential triply-nested registration).
+       Fixtures `alloc_sorted_map_arena` (arena-backed map + set, splits/merges/root-growth, ASan-clean) +
+       `alloc_sorted_map_default`.
      - **M11c — `Shared<T, A>` + `Weak<T, A>` + `Owned<Interface, A>` — deferred.** A `Weak` can outlive its
        `Shared` and is A-agnostic at the C level, so the deallocator must be type-erased in the control block;
        the intrinsic-macro/iface `new` path also needs the allocator channel. The engine wants it eventually;

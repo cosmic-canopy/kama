@@ -268,9 +268,12 @@ allocator is opt-in. Every container that manages its own heap buffer carries it
 `BitSet` is now the all-defaulted instance), `SlotMap<V, A>`, and `PriorityQueue<T, A>` (which owns no buffer
 itself — it threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named static
 factory: `withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` for the
-eager `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. Only **`SortedMap`/`SortedSet`**
-remain on `GlobalAllocator` — their B-tree nodes box through `new`/`Owned`, which gains an allocator channel in
-**M11** (allocator-aware `new`).
+eager `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. **M11b** completes the set:
+`SortedMap<K, V, A>` / `SortedSet<K, A>` thread `A` through the B-tree — the node *contents* (inner arrays) and
+every *interior* node box draw from `A` (via the placement `new(allocator:) BTreeNode` below), so `arena.reset()`
+reclaims the whole tree. (One box per tree — the always-live root — stays `GlobalAllocator`, freed by RAII: a
+bare `new` into a stateless-allocator box is legal for any pointee `A` and sidesteps the eager-root/`withAllocator`
+ordering, whereas a placement root would require the not-yet-assigned handle. A minor, documented wart.)
 An **`Allocator` is a copyable value handle** (the C++ `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig
 `std.mem.Allocator` model), a two-method contract. It is **foundational**, so the `Allocator` contract and the
 default `GlobalAllocator` live in the **global prelude** (beside `Comparable`/`Hashable`) — both the collections
@@ -305,7 +308,8 @@ Map<int32, int32, A: BumpAllocator> m = Map::withAllocator(allocator: arena.hand
 
 **Panic-on-OOM** today; a **fallible** `allocate -> Optional<Ptr>` is deferred to the embedded no-heap
 milestone (it rides this same seam). Coverage is the direct-`malloc` containers (M10a: `DynamicArray`, `Map`,
-`Set`; M10b: `Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`).
+`Set`; M10b: `Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet`
+B-tree (M11b, via allocator-aware `new`).
 
 ### Allocator-aware `new` / `Owned<T, A>` ✅ (M11a)
 
@@ -325,8 +329,9 @@ The allocator must be spelled on the box type (`Owned<T, A>`, explicit over impl
 the placement form — a bare `new` into a stateful-allocator box is a compile error (it would leak). This release
 covers **`Owned`**; `Shared`/`Weak` and `Owned<Interface>` keep the default allocator (a placement into them is
 rejected) and gain a channel later. With allocator-aware `new`, **`SortedMap`/`SortedSet`** (whose B-tree nodes
-box through `new`/`Owned`) get their full `SortedMap<K, V, A>` retrofit — the next milestone — completing both the
-engine frame-arena and the embedded no-heap stories.
+box through `new`/`Owned`) got their full `SortedMap<K, V, A>` / `SortedSet<K, A>` retrofit in **M11b** (interior
+node boxes placement-`new` from `A`; the root box stays `GlobalAllocator`). `Shared<T, A>`/`Weak<T, A>` follow in
+M11c (a type-erased deallocator in the control block, since a `Weak` outlives its `Shared`).
 
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 

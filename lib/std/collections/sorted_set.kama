@@ -6,12 +6,19 @@ export { SortedSet };
 // `Unit`), exactly as `Set` wraps `Map<K, Unit>`. Members iterate in ascending order and it answers the same
 // ordered queries as the map (`first`/`last`/`floor`/`ceil`/`range`) that a hash `Set` can't. Move-only: it
 // owns the backing map (and thus every key); lookups borrow the key.
-type resource SortedSet<K: Comparable> implements Copyable(bare: give) when [K: Copyable],
+type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [K: Copyable],
         Serialize when [K: Serialize, K: Copyable], Deserialize when [K: Deserialize] {
-    SortedMap<K, Unit> m;
+    SortedMap<K, Unit, A> m;
 
     // Build the inner map in a typed local, then move it in (the field-init can't infer its type args).
-    public SortedSet() { SortedMap<K, Unit> inner = SortedMap(); this.m = give inner; }
+    public SortedSet() { SortedMap<K, Unit, A> inner = SortedMap(); this.m = give inner; }
+
+    // Back the set with a caller-owned allocator (e.g. an `Arena`) — forwards to the inner map's factory.
+    public static fn SortedSet<K, A> withAllocator(A allocator) {
+        SortedSet<K, A> result = SortedSet();
+        result.m = SortedMap::withAllocator(allocator: allocator);   // drops the empty default-built inner map
+        return give result;
+    }
 
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
     public fn bool contains(ref K key) { return this.m.contains(key: key); }
@@ -32,7 +39,7 @@ type resource SortedSet<K: Comparable> implements Copyable(bare: give) when [K: 
     // `foreach (K k in set.elements())` — ascending members (key copies).
     public fn DynamicArray<K> elements() when [K: Copyable] { return this.m.keys(); }
     public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable] { return this.m.range(from: from, to: to); }
-    public fn SortedSet<K> copy() when [K: Copyable] { SortedSet<K> result = SortedSet(); result.m = copy this.m; return give result; }
+    public fn SortedSet<K, A> copy() when [K: Copyable] { SortedSet<K, A> result = SortedSet(); result.m = copy this.m; return give result; }
 
     // Serialize as a JSON array of the members in ascending order (Serialize needs a Copyable key — the key
     // view yields copies); deserialize just `add`s each key back.
