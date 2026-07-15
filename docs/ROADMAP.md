@@ -103,6 +103,16 @@ remains here is genuinely later-track or opt-in.
   in a return (`Some(value: f(this.d[i]))`); binding to a local first (`V x = this.d[i]; … Some(value: x)`)
   resolves `operator[]` correctly. The nested-in-argument position skips user-`operator[]` resolution for a
   generically-typed element and falls back to raw `Ptr` subscripting.
+- **DIAGNOSTIC — `DynamicArray<View>` (a `view` element in a LIBRARY collection) rejects with a confusing
+  message.** Surfaced writing `View` (M7): a view as a collection element is correctly rejected, but only the
+  *intrinsic* collection-element check (`registerCollection`) emits the clean "a view can't be a collection
+  element" error — library collections (`DynamicArray`/`Deque`/…, which route through
+  `registerGenericTypeInst`) instead surface it *indirectly* via the escape check on the collection's own
+  element-moving method (e.g. `remove() -> View` returning a view over a local), pointing at an internal line
+  with "returning a view over a local would dangle." (The same indirect path the pre-existing
+  `DynamicArray<Contract>` rejection uses.) Behaviour is correct (it IS rejected); the fix is a proper
+  element-type check for library collections in `registerGenericTypeInst` so the diagnostic points at the
+  user's declaration. Low priority — correctness is fine, only the message is off.
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today). Two small
   ergonomic gaps surfaced writing `SortedMap` (M6), both with clean idioms today: (a) an rvalue passed to a
