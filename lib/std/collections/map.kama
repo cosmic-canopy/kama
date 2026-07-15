@@ -130,7 +130,7 @@ type value MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
 // borrow the key (`ref K`); `put` consumes the key + value it stores (by value). `foreach (K k in m)`
 // iterates the keys, and `copy m` deep-copies — each present only when its keys (and, for `copy`, values)
 // are `Copyable` (multi-`when`). `entries()` yields each `Entry<K,V>` key-value pair by value.
-type resource Map<K: Hashable + Equatable, V>
+type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher>
         implements Copyable(bare: give) when [K: Copyable, V: Copyable], Iterable<K> when [K: Copyable],
                    Serialize when [K: Serialize, V: Serialize], Deserialize when [K: Deserialize, V: Deserialize] {
     Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 len; int32 cap; int32 tombs; int32 mods;
@@ -157,7 +157,11 @@ type resource Map<K: Hashable + Equatable, V>
     // contract dispatch resolves — for a `string` OR user key (a class receiver) and for a PRIMITIVE key
     // (`int32`, whose `hash`/`equals` are scalar-receiver retro impls). A raw-buffer element `this.keys[i]`
     // is handed in by `ref`, never used as a receiver directly.
-    fn uint64 hashKey(ref K k) { return k.hash(); }
+    // `k.hash()` is the CHEAP CONTENT hash (identity for an int, FNV for a string); the pluggable
+    // `H::finish` avalanches it before it is masked to a slot. `H` defaults to `DefaultHasher`
+    // (splitmix64) so `Map<K,V>` is unchanged; `Map<K,V,FastHasher>` swaps in a cheaper mixer. The
+    // static call resolves per monomorphization (like `K::deserialize`) — no stored hasher instance.
+    fn uint64 hashKey(ref K k) { return H::finish(raw: k.hash()); }
     fn bool eqKeys(ref K a, ref K b) { return a.equals(other: b); }
 
     // The slot an entry lives in (or would): probe from hash(key) until the key is found (returns its
@@ -185,8 +189,8 @@ type resource Map<K: Hashable + Equatable, V>
 
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
-    public fn Map<K,V> copy() when [K: Copyable, V: Copyable] {
-        Map<K,V> result = Map();
+    public fn Map<K,V,H> copy() when [K: Copyable, V: Copyable] {
+        Map<K,V,H> result = Map();
         int32 i = 0;
         while (i < this.cap) {
             uint8 s = 0ui8; unsafe { s = this.state[i]; }
@@ -315,8 +319,8 @@ type resource Map<K: Hashable + Equatable, V>
 
     // Build an empty map already sized for `capacity` entries — the self-documenting one-liner for the
     // common `Map(); reserve(n:)` build. K,V come from the target type (`Map<K,V> m = Map::withCapacity(...)`).
-    public static fn Map<K,V> withCapacity(int32 capacity) {
-        Map<K,V> m = Map();
+    public static fn Map<K,V,H> withCapacity(int32 capacity) {
+        Map<K,V,H> m = Map();
         m.reserve(n: capacity);
         return give m;
     }
@@ -375,8 +379,8 @@ type resource Map<K: Hashable + Equatable, V>
     }
     // Reconstruct from the pair array: each entry is `{"key":k,"value":v}` (key before value on the wire),
     // read positionally — `moreFields()` consumes the object structure (commas + closing brace).
-    public static fn Map<K,V> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
-        Map<K,V> result = Map();
+    public static fn Map<K,V,H> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
+        Map<K,V,H> result = Map();
         r.beginArray();
         while (r.moreElems()) {
             r.beginObject();

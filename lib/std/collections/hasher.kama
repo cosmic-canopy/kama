@@ -1,0 +1,39 @@
+namespace std::collections;
+export { Hasher, DefaultHasher, FastHasher };
+
+// The pluggable hash FINALIZER (the `Map`/`Set` mixer, not the per-key content hash). A key's
+// `Hashable.hash()` produces a cheap content `uint64` (identity for integers, FNV-1a for strings);
+// the Map then runs it through `H::finish` to avalanche it before masking to a slot, so `slot =
+// H::finish(k.hash()) & (cap-1)`. Making the finalizer a type parameter (`Map<K,V,H: Hasher =
+// DefaultHasher>`) lets a caller swap a cheaper mixer in for trusted keys without touching any key
+// type. `finish` is STATIC (a `Hasher` is zero-size, carries no state) so `H::finish(raw)` is a
+// direct, zero-cost call resolved per monomorphization — no stored hasher instance.
+//
+// NOTE (threat model): `DefaultHasher` is deterministic/unseeded — a strong avalanche and the right
+// default for trusted keys (entity ids, asset names), matching Java `HashMap` / C++ `unordered_map`.
+// It is NOT HashDoS-resistant against attacker-chosen keys; true resistance needs a SEEDED, keyed
+// hash over the key bytes (SipHash-class) — a separate future protocol that rides this same seam
+// non-breakingly (see ROADMAP). Don't add a finish-stage `SeededHasher`: a seed here would defend
+// integer keys but leave string keys (unseeded FNV-1a) exposed, i.e. misleading safety.
+type contract Hasher for value { static fn uint64 finish(uint64 raw); }
+
+// The default finalizer: splitmix64 — a well-worn avalanche (these are the exact constants that used
+// to live baked inside every integer `hash()`, so an integer key hashes identically to pre-M9). A
+// bijection over its input, so it never reduces entropy: re-mixing an already-mixed content hash
+// (string FNV) is harmless, and distinct raw hashes stay distinct (collisions come only from the mask).
+type value DefaultHasher implements Hasher {
+    public static fn uint64 finish(uint64 raw) {
+        uint64 x = raw + 11400714819323198485ui64;
+        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
+        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
+        return x ^ (x >> 31ui64);
+    }
+}
+
+// An opt-in cheap finalizer: a single Fibonacci-hashing multiply (Knuth's 2^64/φ multiplier). One
+// multiply vs splitmix's three — measurably faster in hot lookup loops — for keys already well
+// distributed (sequential integer ids). Weaker avalanche; select it explicitly (`Map<K,V,FastHasher>`)
+// only when you trust your key distribution.
+type value FastHasher implements Hasher {
+    public static fn uint64 finish(uint64 raw) { return raw * 11400714819323198485ui64; }
+}

@@ -3647,10 +3647,21 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
 
     // each concrete type argument must satisfy its parameter's contract bounds. Runs once per
     // unique instance (after dedup); with _typeSubst still at the caller's binding so a nested arg is
-    // already the resolved `concrete[i]`.
+    // already the resolved `concrete[i]`. A bound NAMES a contract visible where the TEMPLATE was
+    // declared (like a default type arg — see the M8 default-slot ctx handling), NOT at the use site, so
+    // resolve bound names under the template's home ctx: a prelude-global bound (`Hashable`) resolves
+    // from anywhere via the global fallback, but a stdlib-namespaced bound (`std::collections::Hasher`
+    // on `Map`) is invisible at a use site that imported only `Map`. The concrete args are already
+    // absolutized, so the ctx swap only affects the contract-name lookup.
     SharedBoundsList bounds = _genericTypeBounds.count(tmpl) ? _genericTypeBounds[tmpl] : SharedBoundsList();
-    if (bounds) for (size_t i = 0; i < params.size() && i < bounds->size(); ++i)
-        checkBounds(params[i], concrete[i], (*bounds)[i], args->front() ? args->front()->line : 0);
+    if (bounds) {
+        NsCtx savedBoundCtx = _nsCtx;
+        auto bctx = _genericTypeCtx.find(tmpl);
+        if (bctx != _genericTypeCtx.end()) _nsCtx = bctx->second;
+        for (size_t i = 0; i < params.size() && i < bounds->size(); ++i)
+            checkBounds(params[i], concrete[i], (*bounds)[i], args->front() ? args->front()->line : 0);
+        _nsCtx = savedBoundCtx;
+    }
 
     // Register the KEY first so the transitive scan below can't recurse into this same instance.
     _genericTypeInsts[mangled] = { tmpl, mangled, concrete };

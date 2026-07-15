@@ -186,31 +186,35 @@ dtor for owned hierarchies).
 Default visibility everywhere: **private**. Full per-member matrix (default in **bold**;
 protected† = only inside a `virtual`/`abstract resource`):
 
-| member | `value` | `resource` | `contract` |
-|---|---|---|---|
-| field | **private**, public | **private** only | — (no fields) |
-| method (non-virtual) | **private**, public | **private**, public, protected† | public-only, no body |
-| operator | **private**, public | **private**, public | public-only (if required) |
-| static method | **private**, public | **private**, public, protected† | — |
-| constructor | private, **public** | private, **public**, protected | — |
-| destructor | ⛔ (→ resource) | ✅ 0..1 (RAII-called) | ⛔ |
-| virtual / abstract | ⛔ | ✅ **protected-only** | ⛔ (it *is* the abstraction) |
-| final | ⛔ (already sealed) | ✅ (seal an override / a subclass branch) | ⛔ |
+| member | `value` | `resource` | `view` | `contract` |
+|---|---|---|---|---|
+| field | **private**, public | **private** only | **private** only | — (no fields) |
+| method (non-virtual) | **private**, public | **private**, public, protected† | **private**, public | public-only, no body |
+| operator | **private**, public | **private**, public | **private**, public | public-only (if required) |
+| static method | **private**, public | **private**, public, protected† | **private**, public | — |
+| constructor | private, **public** | private, **public**, protected | private, **public** | — |
+| destructor | ⛔ (→ resource) | ✅ 0..1 (RAII-called) | ⛔ (→ resource) | ⛔ |
+| virtual / abstract | ⛔ | ✅ **protected-only** | ⛔ (sealed) | ⛔ (it *is* the abstraction) |
+| final | ⛔ (already sealed) | ✅ (seal an override / a subclass branch) | ⛔ (already sealed) | ⛔ |
 
-Seven rules make the grid memorable:
+Eight rules make the grid memorable:
 
 1. Default = **private** everywhere.
 2. **`protected` ⟺ an extensible `resource`** (`virtual`/`abstract`). It's meaningless without a
-   subclass, so it's an error on a `value`, a sealed `resource`, or a `contract`.
+   subclass, so it's an error on a `value`, a `view`, a sealed `resource`, or a `contract`.
 3. **overridable ⟹ protected.** `virtual`/`abstract` methods are **protected-only** — private can't
    be meaningfully overridden, and public-overridable is bad design. The public polymorphic face is a
    **contract** (or a public non-virtual method). This bakes in **NVI** (Non-Virtual Interface).
-4. **public fields ⟺ `value`**; a `resource` keeps fields **private** (ownership encapsulated).
-5. **`~dtor` ⟺ `resource`** (forbidden on a `value` — it owns nothing).
-6. **`virtual`/`abstract`/`final` ⟺ `resource`** (values are sealed → use contracts; a contract
-   already *is* the abstraction).
+4. **public fields ⟺ `value`**; a `resource` (ownership encapsulated) **and a `view`** (its borrowed
+   raw `Ptr` must not leak) keep fields **private**.
+5. **`~dtor` ⟺ `resource`** (forbidden on a `value` or a `view` — neither owns anything to free).
+6. **`virtual`/`abstract`/`final` ⟺ `resource`** (values and views are sealed → use contracts; a
+   contract already *is* the abstraction).
 7. **`contract`** = all-public methods, no fields, no bodies, no ctor/dtor; may refine other
    contracts. `friend` grants apply as elsewhere.
+8. **`view`** codegens like a `value` (inline, bit-copied, sealed, no `~dtor`) but adds two guards:
+   **private-only fields** and the **second-class borrow** rule — a parameter/local/return-that-borrows-
+   `this`, never a field, collection element, or `enum` payload (see the `view` section above).
 
 ### Extensibility qualifiers
 
@@ -244,6 +248,9 @@ handed off in an initializer, assignment, argument, or return; a fresh `new`/cto
 takes a marker.
 
 - **`value`** → **copy** (a value's "move" *is* a copy; the source stays valid).
+- **`view`** → **copy** (a bit-copy of the borrow — `{ptr, len}` — so the source stays valid, exactly
+  like a `value`). A view owns nothing, so `give` is meaningless and `copy` is redundant; and because a
+  view is a *second-class borrow*, no hand-off can outlive the buffer it borrows (the escape rule, above).
 - **`resource` without a copy contract** (move-only) → **move** on a bare hand-off (the source is
   consumed); `give` is optional emphasis; `copy` is an error — nothing to copy with — until it opts in.
 - **`resource` with a copy contract** → it **must declare its bare default** at opt-in:
@@ -253,6 +260,10 @@ takes a marker.
 - **`Shared`/`Weak`** (shared ownership, `implements Copyable(bare: copy)`) → a bare hand-off **retains**
   (refcount++); `copy` is the explicit retain; **`give` moves the handle** — the ref transfers and the
   source is consumed (how a `Shared` returns from a factory without a spurious retain/drop).
+- **`contract`** → **no hand-off of its own.** A `contract` holds no state and isn't instantiable, so a
+  contract-typed binding is always a concrete implementor (a `value`/`resource`) or a smart pointer over
+  one — the hand-off follows *that* type's rule. In a generic `<T: SomeContract>`, a `T` hand-off is
+  whatever `T`'s kind dictates (a `value` `T` copies, a `resource` `T` moves).
 
 A bare hand-off is **never a silent copy of a resource** (the double-drop hole is closed in every case)
 and **never a silent move of a `Shared`** you meant to share (a `Shared`'s bare default is retain). This

@@ -42,8 +42,12 @@ type contract Equatable for both { fn bool equals(This other); }
 type contract Comparable for both { fn Ordering compareTo(ref This other); }
 // Primitive conformances (pure-kama retro-impls, NO compiler blessing) — hosted here so `string`/`int32`
 // satisfy the standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `DynamicArray<int32>.contains`, an int-keyed
-// `Map`) without importing `std::collections`. `string` Hashable = FNV-1a over its UTF-8 bytes (its
-// `Equatable` comes free from the built-in `equals`); `int32` = a splitmix64 hash finalizer + scalar equals.
+// `Map`) without importing `std::collections`. `hash()` returns a CHEAP CONTENT hash (identity for integers,
+// FNV-1a for strings); the AVALANCHE/mixer is a separate, pluggable step the `Map`/`Set` apply via their
+// `Hasher::finish` (default `DefaultHasher` = splitmix64, in std::collections). Splitting the two lets a
+// caller swap a cheaper mixer for trusted keys. `string` Hashable = FNV-1a over its UTF-8 bytes (already a
+// distributed accumulator — a string has no meaningful un-mixed scalar; the Map's finalizer re-mixes it
+// harmlessly, splitmix being a bijection); its `Equatable` comes free from the built-in `equals`.
 implements Hashable for string {
     public fn uint64 hash() {
         uint64 h = 2166136261ui64;
@@ -56,80 +60,42 @@ implements Hashable for string {
     }
 }
 implements Hashable for int32 {
-    public fn uint64 hash() {
-        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;
-        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
-        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
-        return x ^ (x >> 31ui64);
-    }
+    public fn uint64 hash() { return cast<uint64>(this); }
 }
 implements Equatable for int32 {
     public fn bool equals(int32 other) { return this == other; }
 }
-// The remaining integer widths get the SAME splitmix64 hash (over a `cast<uint64>(this)` — signed
-// widths sign-extend, which is fine: equal values still hash equal) + scalar `equals`, so every integer
-// type is a universal `Map`/`Set` key and satisfies `<T: Hashable + Equatable>` without an import.
+// Every remaining integer width is its own content hash — `cast<uint64>(this)` (signed widths sign-extend,
+// which is fine: equal values still hash equal) + scalar `equals` — so every integer type is a universal
+// `Map`/`Set` key and satisfies `<T: Hashable + Equatable>` without an import. The `Map`'s `Hasher::finish`
+// supplies the avalanche; a well-behaved key sequence (0,1,2,…) maps to consecutive slots, which open
+// addressing handles fine, and `FastHasher` can be selected to skip splitmix entirely for such keys.
 implements Hashable for int8 {
-    public fn uint64 hash() {
-        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;
-        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
-        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
-        return x ^ (x >> 31ui64);
-    }
+    public fn uint64 hash() { return cast<uint64>(this); }
 }
 implements Equatable for int8 { public fn bool equals(int8 other) { return this == other; } }
 implements Hashable for int16 {
-    public fn uint64 hash() {
-        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;
-        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
-        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
-        return x ^ (x >> 31ui64);
-    }
+    public fn uint64 hash() { return cast<uint64>(this); }
 }
 implements Equatable for int16 { public fn bool equals(int16 other) { return this == other; } }
 implements Hashable for int64 {
-    public fn uint64 hash() {
-        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;
-        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
-        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
-        return x ^ (x >> 31ui64);
-    }
+    public fn uint64 hash() { return cast<uint64>(this); }
 }
 implements Equatable for int64 { public fn bool equals(int64 other) { return this == other; } }
 implements Hashable for uint8 {
-    public fn uint64 hash() {
-        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;
-        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
-        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
-        return x ^ (x >> 31ui64);
-    }
+    public fn uint64 hash() { return cast<uint64>(this); }
 }
 implements Equatable for uint8 { public fn bool equals(uint8 other) { return this == other; } }
 implements Hashable for uint16 {
-    public fn uint64 hash() {
-        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;
-        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
-        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
-        return x ^ (x >> 31ui64);
-    }
+    public fn uint64 hash() { return cast<uint64>(this); }
 }
 implements Equatable for uint16 { public fn bool equals(uint16 other) { return this == other; } }
 implements Hashable for uint32 {
-    public fn uint64 hash() {
-        uint64 x = cast<uint64>(this) + 11400714819323198485ui64;
-        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
-        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
-        return x ^ (x >> 31ui64);
-    }
+    public fn uint64 hash() { return cast<uint64>(this); }
 }
 implements Equatable for uint32 { public fn bool equals(uint32 other) { return this == other; } }
 implements Hashable for uint64 {
-    public fn uint64 hash() {
-        uint64 x = this + 11400714819323198485ui64;
-        x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
-        x = (x ^ (x >> 27ui64)) * 10723151780598845931ui64;
-        return x ^ (x >> 31ui64);
-    }
+    public fn uint64 hash() { return this; }
 }
 implements Equatable for uint64 { public fn bool equals(uint64 other) { return this == other; } }
 // Floats get `Equatable` (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and

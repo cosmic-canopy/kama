@@ -206,17 +206,27 @@ serialization, networking).
   The **keystone language feature — default type parameters + named type-arg override — is DONE** (a trailing
   `<…, H = DefaultHasher, A = GlobalAllocator>` fills when omitted, `Map<int32, V, A: Arena>` names an arg to
   skip a default; see SPEC "Generics"), so `Map<K,V>` stays valid while `H`/`A` become opt-in. Remaining:
-  1. **Preallocation everywhere.** `DynamicArray`/`FixedArray` have `reserve(n:)`, but **`Map`/`Set` do not** — they start
-     at cap 0 and grow from 8, rehashing every entry ~log2(N) times on a bulk insert. This is a *measured*
-     cost: on the `map` bench, at an EQUAL hash, kama (grow-from-8) is ~8.6 ms vs C (preallocated `cap`) ~5.7 ms
-     — the whole remaining delta after hash. Add `Map`/`Set` `reserve(n:)` + a capacity ctor `Map(capacity:)`
-     so a known-size build skips the rehash storm (and the bench can preallocate for a fair compare).
-  2. **Pluggable hasher (quality/speed as a user choice).** Today `Map`/`Set` bake in the strong splitmix64
-     `Hashable` finalizer (two dependent 64-bit muls — the entire `map`-vs-C gap once hash is equalized). Let
-     the user pick, à la Rust's `BuildHasher`: `Map<K, V, H>` with a default strong hasher, swappable to a
-     fast one (single Fibonacci multiply / `h ^ (h>>>16)` xorshift) for trusted-key hot loops — strong stays
-     the default (DoS-resistant), fast is opt-in. (Cheap independent win regardless: `Map`/`Set` cap is always
-     a power of two, so `hash % cap` in `slotOf`/`put`/`grow` → `hash & (cap-1)` drops the `udiv`, ~11%.)
+  1. **Preallocation everywhere. ✅ DONE.** `Map`/`Set` gained `reserve(n:)` + a `withCapacity(capacity:)`
+     factory (they start at cap 0 and grew from 8, rehashing ~log2(N)× on a bulk insert; preallocation skips
+     that rehash storm). `DynamicArray`/`FixedArray` already had `reserve(n:)`.
+  2. **Pluggable hasher (quality/speed as a user choice). ✅ DONE.** The splitmix64 avalanche was pulled OUT
+     of the primitive `hash()` impls (which now return a cheap CONTENT hash — identity for ints, FNV-1a for
+     strings) and INTO a pluggable finalizer: `type contract Hasher for value { static fn uint64 finish(uint64
+     raw); }` in `std::collections`, so `Map<K, V, H: Hasher = DefaultHasher>` / `Set<K, H>` compute `slot =
+     H::finish(k.hash()) & (cap-1)`. **`DefaultHasher`** (splitmix64) is the default — the integer path stays
+     behavior-identical to before — and **`FastHasher`** (single Fibonacci multiply) is the opt-in cheap mixer
+     for trusted-key hot loops (à la Rust's `BuildHasher`). `H::finish` is a static call on the class type
+     param, resolved per monomorphization (the `T::deserialize` path); no stored hasher instance, zero cost.
+     (The power-of-two `hash & (cap-1)` slot mask was already in place.)
+     - **Follow-on — HashDoS-resistant keyed hashing (deferred).** `DefaultHasher` is deterministic/*unseeded*
+       — a strong avalanche and the right default for trusted keys (Java `HashMap` / C++ `unordered_map`
+       posture), but NOT resistant to attacker-chosen keys. A seed at the `finish` stage can't fix this: it
+       would defend integer keys but leave string keys (unseeded FNV-1a content hash) fully exposed — two
+       strings colliding under FNV collide in every map regardless of the seed. Real resistance needs a
+       **seeded, keyed hash over the key bytes** (SipHash-class): the seed must enter the per-byte content
+       accumulation, i.e. a keyed-hash protocol + OS entropy + per-map seed storage. It **rides this same
+       pluggable `Hasher` seam non-breakingly** (no existing `Map<K,V>` changes), so it's a clean future
+       milestone — do NOT ship a finish-stage `SeededHasher` (misleading safety for the case that matters).
   3. **Custom allocator.** The containers hardcode `malloc`/`realloc`/`calloc`/`free`. Thread an **allocator**
      parameter (arena/pool/stack/bump for hot loops; a *fallible* allocator for the no-heap embedded target).
      Bigger surface than it looks — it has to reach element construction/relocation and RAII drop — so it

@@ -163,8 +163,9 @@ int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index 
 
 ### Hash maps & sets (`std::collections`) ✅
 
-`Map<K, V>` (open-addressing, linear-probing, tombstoned, grows at 0.75 load) and `Set<K>` (a thin wrapper
-over `Map<K, Unit>`), over a key `K: Hashable + Equatable`. These two contracts are in the **prelude**:
+`Map<K, V, H: Hasher = DefaultHasher>` (open-addressing, linear-probing, tombstoned, grows at 0.75 load) and
+`Set<K, H: Hasher = DefaultHasher>` (a thin wrapper over `Map<K, Unit, H>`), over a key `K: Hashable +
+Equatable`. These two key contracts are in the **prelude**:
 
 ```kama
 type contract Hashable  for both { fn uint64 hash(); }
@@ -174,9 +175,14 @@ type contract Equatable for both { fn bool equals(This other); }
 Keys are hashed and compared **by content**, so a lookup key built any way (a concat, a fresh
 construction) finds the stored entry. `string` and every **integer width** satisfy both out of the box, via
 **pure-kama** `implements` blocks that ship in the **prelude** (universal — no `std::collections` import;
-the retroactive-conformance mechanism, *no* compiler blessing): `string` gets FNV-1a `Hashable` + a
-`Equatable` recorded nominally from its built-in `equals`; every integer gets a splitmix64 `Hashable` +
-scalar `equals` (a conformance on a **primitive** — `this` is the scalar itself). Floats get `Equatable`
+the retroactive-conformance mechanism, *no* compiler blessing). **`hash()` returns a cheap CONTENT hash**
+— identity (`cast<uint64>(this)`) for an integer, FNV-1a over the UTF-8 bytes for a `string` — and the
+**avalanche/mixer is a separate, pluggable step** the `Map`/`Set` apply via their `H: Hasher` type
+parameter: `slot = H::finish(k.hash()) & (cap-1)`. `H` defaults to **`DefaultHasher`** (splitmix64, strong
+avalanche, DoS-*agnostic* — see below) so `Map<K, V>` is unchanged; `Map<K, V, FastHasher>` swaps in a
+cheaper single-multiply mixer for trusted, well-distributed keys (the `Hasher` contract + both hashers live
+in `std::collections`). `string`'s `Equatable` is recorded nominally from its built-in `equals`; each
+integer's is scalar (a conformance on a **primitive** — `this` is the scalar itself). Floats get `Equatable`
 only (exact `==`) — intentionally not hash-keyable. A third prelude contract,
 `type contract Comparable for both { fn Ordering compareTo(ref This other); }` (returning the prelude enum
 `Ordering { Less, Equal, Greater }`), gives every int/float/string a total order via the same pure-kama

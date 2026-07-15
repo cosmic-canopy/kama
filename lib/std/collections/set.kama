@@ -6,20 +6,20 @@ export { Set };
 // information, so `Unit` is the zero-size payload). Move-only: it owns the backing map, which owns every
 // key; the compiler-derived destructor drops the map (and thus the keys). Lookups borrow the key.
 // `foreach (K k in set)` iterates the members (the map's key iterator), for a `Copyable` key.
-type resource Set<K: Hashable + Equatable> implements Iterable<K> when [K: Copyable],
+type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher> implements Iterable<K> when [K: Copyable],
         Serialize when [K: Serialize, K: Copyable], Deserialize when [K: Deserialize] {
-    Map<K, Unit> m;
+    Map<K, Unit, H> m;
 
     // `this.m = Map()` won't infer the map's type args from the field, so build it in a typed local
     // first, then move it in (the tracked bare-generic-ctor-in-a-non-local-init gap).
-    public Set() { Map<K, Unit> inner = Map(); this.m = give inner; }
+    public Set() { Map<K, Unit, H> inner = Map(); this.m = give inner; }
 
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
     public fn void reserve(int32 n) { this.m.reserve(n: n); }   // preallocate for a known-size build
 
     // Build an empty set already sized for `capacity` entries (K from the target type).
-    public static fn Set<K> withCapacity(int32 capacity) {
-        Set<K> s = Set();
+    public static fn Set<K,H> withCapacity(int32 capacity) {
+        Set<K,H> s = Set();
         s.reserve(n: capacity);
         return give s;
     }
@@ -43,8 +43,8 @@ type resource Set<K: Hashable + Equatable> implements Iterable<K> when [K: Copya
         foreach (K k in this.m) { this.serElem(k: k, w: w); }
         w.endArray();
     }
-    public static fn Set<K> deserialize(Deserializer r) when [K: Deserialize] {
-        Set<K> result = Set();
+    public static fn Set<K,H> deserialize(Deserializer r) when [K: Deserialize] {
+        Set<K,H> result = Set();
         r.beginArray();
         while (r.moreElems()) { result.add(key: K::deserialize(r: r)); }
         return give result;
