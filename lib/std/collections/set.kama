@@ -6,13 +6,22 @@ export { Set };
 // information, so `Unit` is the zero-size payload). Move-only: it owns the backing map, which owns every
 // key; the compiler-derived destructor drops the map (and thus the keys). Lookups borrow the key.
 // `foreach (K k in set)` iterates the members (the map's key iterator), for a `Copyable` key.
-type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher> implements Iterable<K> when [K: Copyable],
+type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator> implements Iterable<K> when [K: Copyable],
         Serialize when [K: Serialize, K: Copyable], Deserialize when [K: Deserialize] {
-    Map<K, Unit, H> m;
+    Map<K, Unit, H, A> m;
 
     // `this.m = Map()` won't infer the map's type args from the field, so build it in a typed local
     // first, then move it in (the tracked bare-generic-ctor-in-a-non-local-init gap).
-    public Set() { Map<K, Unit, H> inner = Map(); this.m = give inner; }
+    public Set() { Map<K, Unit, H, A> inner = Map(); this.m = give inner; }
+
+    // Build an empty set whose backing map draws from `allocator` (e.g. an `Arena` bump handle). The
+    // bare `Set()` builds an empty (cap-0) inner map that is dropped when replaced by the arena-backed one.
+    public static fn Set<K,H,A> withAllocator(A allocator) {
+        Set<K,H,A> result = Set();
+        Map<K, Unit, H, A> inner = Map::withAllocator(allocator: allocator);
+        result.m = give inner;
+        return give result;
+    }
 
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
     public fn void reserve(int32 n) { this.m.reserve(n: n); }   // preallocate for a known-size build

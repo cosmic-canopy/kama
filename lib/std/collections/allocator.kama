@@ -1,0 +1,90 @@
+namespace std::collections;
+export { Allocator, GlobalAllocator, Arena, BumpAllocator };
+
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+
+// The pluggable memory source for the collections — a copyable VALUE handle (like C++
+// `std::pmr::polymorphic_allocator`, Rust `&Bump`, or Zig `std.mem.Allocator`). A container carries
+// `A alloc` BY VALUE and routes every buffer through `this.alloc.allocate(...)` /
+// `this.alloc.deallocate(...)`. A stateful allocator is a small handle pointing into a CALLER-owned
+// region (an `Arena`) that MUST outlive the container — a documented contract, not a borrow-checked
+// one (a raw `Ptr` is not escape-checked, and there is no lifetime tracking). `for value` because
+// every allocator is a cheap copyable handle; the methods are INSTANCE methods (unlike the `Hasher`
+// contract's static finalizer) because a stateful allocator mutates through its stored pointer.
+//
+// Panic-on-OOM: `allocate` returns a raw `Ptr`; exhaustion panics. A fallible
+// `allocate -> Optional<Ptr>` variant is deferred to the embedded no-heap milestone and rides this
+// same seam non-breakingly (see ROADMAP).
+type contract Allocator for value {
+    fn Ptr allocate(usize bytes);
+    fn void deallocate(Ptr pointer, usize bytes);
+}
+
+// The default allocator: a zero-size handle straight onto libc malloc/free. The M8 default
+// `A: Allocator = GlobalAllocator` fills it in for `DynamicArray<T>` / `Map<K,V>`, so the bare
+// collection types are unchanged and pay nothing (the field adds no state — an empty struct).
+type value GlobalAllocator implements Allocator {
+    public GlobalAllocator() {}
+    public fn Ptr allocate(usize bytes) {
+        Ptr p;
+        unsafe { p = malloc(n: bytes); }
+        if (cast<usize>(p) == cast<usize>(0)) { panic(msg: "GlobalAllocator: out of memory"); }
+        return p;
+    }
+    public fn void deallocate(Ptr pointer, usize bytes) { unsafe { free(p: pointer); } }
+}
+
+// A caller-owned bump/arena region: one malloc'd byte buffer, allocations bump `offset` forward, an
+// individual `deallocate` is a no-op, and `reset()` bulk-frees the whole region in O(1). The Arena
+// OWNS the buffer (frees it in its dtor); a `BumpAllocator` handle is a cheap VALUE pointing back
+// into this Arena's mutable `offset`, so N containers can draw from ONE arena. The Arena must
+// OUTLIVE every container built from `handle()` — declare it first so it drops last.
+type resource Arena {
+    Ptr<uint8> buffer; int32 capacity; int32 offset;
+
+    public Arena(int32 capacity) {
+        unsafe { this.buffer = cast<Ptr<uint8>>(malloc(n: cast<usize>(capacity))); }
+        if (cast<usize>(this.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
+        this.capacity = capacity; this.offset = 0;
+    }
+
+    // Hand out a copyable allocator handle that bumps THIS arena. It captures the buffer base (stable
+    // — the arena never reallocs) plus a live pointer to `offset` (via `addr(of: this.offset)`, the
+    // same field-address idiom the iterators use for `mods`), so every by-value copy of the handle
+    // mutates the same bump pointer.
+    public fn BumpAllocator handle() {
+        return BumpAllocator(buffer: this.buffer, offset: addr(of: this.offset), capacity: this.capacity);
+    }
+
+    // Bulk-free: rewind the bump pointer so the whole region is reusable (O(1)). Does NOT drop the
+    // containers living in it — the caller drops those first, then resets.
+    public fn void reset() { this.offset = 0; }
+
+    ~Arena() { unsafe { free(p: cast<Ptr>(this.buffer)); } }
+}
+
+// A copyable value handle onto an `Arena`. Stores the buffer base + a raw pointer to the arena's
+// `offset` cell + the capacity, so a by-value copy still bumps the SAME arena. `allocate` bumps
+// (8-byte aligned) and panics on exhaustion; `deallocate` is a no-op (the Arena bulk-frees via
+// `reset()` / its dtor). It NEVER frees the arena buffer.
+type value BumpAllocator implements Allocator {
+    Ptr<uint8> buffer; Ptr<int32> offset; int32 capacity;
+
+    public BumpAllocator(Ptr<uint8> buffer, Ptr<int32> offset, int32 capacity) {
+        this.buffer = buffer; this.offset = offset; this.capacity = capacity;
+    }
+
+    public fn Ptr allocate(usize bytes) {
+        int32 b = cast<int32>(bytes);
+        unsafe {
+            int32 o = ((this.offset[0] + 7) / 8) * 8;                 // 8-byte align the bump pointer
+            if (o + b > this.capacity) { panic(msg: "BumpAllocator: arena exhausted"); }
+            this.offset[0] = o + b;
+            return cast<Ptr>(addr(of: this.buffer[o]));
+        }
+    }
+
+    public fn void deallocate(Ptr pointer, usize bytes) { }           // no-op: the Arena owns the region
+}

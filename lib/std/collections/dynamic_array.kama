@@ -1,11 +1,6 @@
 namespace std::collections;
-import std::collections::{View};
+import std::collections::{View, Allocator, GlobalAllocator};
 export { DynamicArray };
-
-extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn Ptr realloc(Ptr p, usize n);
-extern fn void free(Ptr p);
 
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a
 // live pointer to the list's mutation counter + the value it saw at creation, and rejects a structural
@@ -41,17 +36,44 @@ type value DynamicArrayIterMut<T> implements IteratorMut<T> {
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
-type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
+type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
                                   Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
-    Ptr<T> data; int32 len; int32 cap; int32 mods;
+    Ptr<T> data; int32 len; int32 cap; int32 mods; A alloc;
 
+    // The bare list draws from the default `GlobalAllocator` (a zero-size field — no state, no cost).
+    // The `alloc` field is a plain value (not Owned/Shared), so the bare ctor need not set it; a
+    // custom-allocator list is built by `withAllocator`, which assigns `alloc` after construction
+    // (Kama has no ctor overloading, so there is one ctor and the allocator arrives via the factory).
     public DynamicArray() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; this.mods = 0; }
+
+    // Build an empty list whose buffer is drawn from `allocator` (e.g. an `Arena` bump handle), so all
+    // of this list's allocations route into that region. The handle is a cheap copyable value stored
+    // by value; it is set after the bare construction (no overloaded ctor).
+    public static fn DynamicArray<T, A> withAllocator(A allocator) {
+        DynamicArray<T, A> result = DynamicArray();
+        result.alloc = allocator;
+        return give result;
+    }
+
+    // Grow the backing buffer to `nc` elements: allocate a fresh block from `this.alloc`, bitwise-relocate
+    // the live prefix, and release the old block through the same allocator. Replaces the old in-place
+    // `realloc` so every allocation flows through the allocator (matching Map/Deque's grow idiom).
+    fn void growTo(int32 nc) {
+        Ptr<T> nd;
+        unsafe { nd = cast<Ptr<T>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T))); }
+        Ptr<T> od = this.data;
+        int32 i = 0;
+        unsafe { while (i < this.len) { nd[i] = od[i]; i = i + 1; } }   // relocate the live prefix (raw move)
+        if (this.cap > 0) {
+            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+        }
+        this.data = nd; this.cap = nc;
+    }
 
     public fn void add(T item) {
         if (this.len == this.cap) {
             int32 nc = this.cap == 0 ? 4 : this.cap * 2;
-            unsafe { this.data = cast<Ptr<T>>(realloc(p: cast<Ptr>(this.data), n: cast<usize>(nc) * sizeof(T))); }
-            this.cap = nc;
+            this.growTo(nc: nc);
         }
         unsafe { this.data[this.len] = give item; }   // relocate the element into the fresh slot (raw move)
         this.len = this.len + 1;
@@ -86,8 +108,7 @@ type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable]
         if (index < 0 || index > this.len) { panic(msg: "DynamicArray.insertAt index out of bounds"); }
         if (this.len == this.cap) {
             int32 nc = this.cap == 0 ? 4 : this.cap * 2;
-            unsafe { this.data = cast<Ptr<T>>(realloc(p: cast<Ptr>(this.data), n: cast<usize>(nc) * sizeof(T))); }
-            this.cap = nc;
+            this.growTo(nc: nc);
         }
         Ptr<T> d = this.data;
         int32 i = this.len;
@@ -112,9 +133,12 @@ type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable]
         return DynamicArrayIterMut::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
-    // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
-    public fn DynamicArray<T> copy() {
-        DynamicArray<T> result = DynamicArray();
+    // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied). The copy
+    // draws from the SAME allocator as the source (the handle is copied), so a bump-backed list's copy
+    // lands in the same arena.
+    public fn DynamicArray<T, A> copy() {
+        DynamicArray<T, A> result = DynamicArray();
+        result.alloc = this.alloc;                    // copy the allocator handle (a value) — same arena
         int32 i = 0;
         while (i < this.len) { result.add(item: copy this[i]); i = i + 1; }
         return result;
@@ -123,10 +147,7 @@ type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable]
     // Grow the buffer so at least `n` elements fit without a later reallocation (a no-op if already big
     // enough). Lets a caller who knows the size up front skip the incremental doublings.
     public fn void reserve(int32 n) {
-        if (n > this.cap) {
-            unsafe { this.data = cast<Ptr<T>>(realloc(p: cast<Ptr>(this.data), n: cast<usize>(n) * sizeof(T))); }
-            this.cap = n;
-        }
+        if (n > this.cap) { this.growTo(nc: n); }
     }
 
     // Remove the element at `index`, returning it moved OUT, and shift the tail down one slot. Bounds-checked
@@ -224,9 +245,11 @@ type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable]
         return give result;
     }
 
-    ~DynamicArray() {   // drop each element (a no-op for a value), then free the buffer
+    ~DynamicArray() {   // drop each element (a no-op for a value), then release the buffer via the allocator
         int32 i = 0;
         while (i < this.len) { drop(value: this[i]); i = i + 1; }
-        unsafe { free(p: cast<Ptr>(this.data)); }
+        if (this.cap > 0) {
+            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+        }
     }
 }

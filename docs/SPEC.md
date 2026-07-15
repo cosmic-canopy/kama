@@ -163,9 +163,10 @@ int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index 
 
 ### Hash maps & sets (`std::collections`) ✅
 
-`Map<K, V, H: Hasher = DefaultHasher>` (open-addressing, linear-probing, tombstoned, grows at 0.75 load) and
-`Set<K, H: Hasher = DefaultHasher>` (a thin wrapper over `Map<K, Unit, H>`), over a key `K: Hashable +
-Equatable`. These two key contracts are in the **prelude**:
+`Map<K, V, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>` (open-addressing, linear-probing,
+tombstoned, grows at 0.75 load) and `Set<K, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>` (a
+thin wrapper over `Map<K, Unit, H, A>`), over a key `K: Hashable + Equatable` (the trailing `A` is the custom
+allocator — see "Custom allocators" below). These two key contracts are in the **prelude**:
 
 ```kama
 type contract Hashable  for both { fn uint64 hash(); }
@@ -257,6 +258,44 @@ merges + predecessor-swaps (remove) relocate move-only keys **and** values with 
 forwards an in-place borrow up the tree via the escape checker's chained-ref-return rule (a `fn ref T` may
 return a place-returning method call whose receiver roots at `this`). `SortedSet<K>` wraps `SortedMap<K, Unit>`,
 as `Set` wraps `Map`.
+
+### Custom allocators (`std::collections`) ✅ (M10a — DynamicArray, Map, Set)
+
+A collection's memory source is a trailing type parameter `A: Allocator = GlobalAllocator`. Because it
+defaults (M8 default type parameters), `DynamicArray<T>` / `Map<K,V>` are unchanged; the allocator is opt-in.
+An **`Allocator` is a copyable value handle** (the C++ `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig
+`std.mem.Allocator` model), a two-method contract in `std::collections`:
+
+```kama
+type contract Allocator for value {
+    fn Ptr allocate(usize bytes);            // null -> panic (panic-on-OOM)
+    fn void deallocate(Ptr pointer, usize bytes);
+}
+```
+
+The container stores `A alloc` by value and routes every buffer through `this.alloc.allocate/deallocate`;
+dispatch is a **direct monomorphized call** (no vtable), so a `GlobalAllocator` (a zero-size handle straight
+onto libc `malloc`/`free`) costs nothing. A **stateful** allocator is a small handle pointing into a
+**caller-owned `Arena`** (one heap buffer, bump-allocated, `reset()` bulk-frees in O(1)); the arena must
+**outlive** the container — a documented contract, not a borrow-checked one (a raw `Ptr` isn't escape-checked
+and there is no lifetime tracking). Since Kama has no constructor overloading, a stateful allocator arrives via
+a **named static factory** (`DynamicArray::withAllocator(allocator:)`), which assigns `alloc` after the bare
+construction. `GlobalAllocator`, `Arena`, and `BumpAllocator` ship in `std::collections`:
+
+```kama
+import std::collections::{DynamicArray, Map, Arena, BumpAllocator};
+
+Arena arena = Arena(capacity: 1 << 16);                                  // caller-owned; drops last
+DynamicArray<int32, BumpAllocator> xs = DynamicArray::withAllocator(allocator: arena.handle());
+Map<int32, int32, A: BumpAllocator> m = Map::withAllocator(allocator: arena.handle());  // named arg skips H
+// ... fill/use; xs and m draw from the one arena; their deallocate is a no-op; the Arena frees the buffer.
+```
+
+**Panic-on-OOM** today; a **fallible** `allocate -> Optional<Ptr>` is deferred to the embedded no-heap
+milestone (it rides this same seam). Coverage is the direct-`malloc` containers (M10a: `DynamicArray`, `Map`,
+`Set`; M10b: `Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`). `SortedMap`/`SortedSet` allocate
+their B-tree node boxes via `new` (a global-heap `Owned`), so they await **allocator-aware `new` / `Owned<T,
+A>`** — its own future milestone that completes both the engine frame-arena and the embedded no-heap stories.
 
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 

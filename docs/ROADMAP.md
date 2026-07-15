@@ -227,11 +227,43 @@ serialization, networking).
        accumulation, i.e. a keyed-hash protocol + OS entropy + per-map seed storage. It **rides this same
        pluggable `Hasher` seam non-breakingly** (no existing `Map<K,V>` changes), so it's a clean future
        milestone — do NOT ship a finish-stage `SeededHasher` (misleading safety for the case that matters).
-  3. **Custom allocator.** The containers hardcode `malloc`/`realloc`/`calloc`/`free`. Thread an **allocator**
-     parameter (arena/pool/stack/bump for hot loops; a *fallible* allocator for the no-heap embedded target).
-     Bigger surface than it looks — it has to reach element construction/relocation and RAII drop — so it
-     rides with the embedded target rather than 1.0. `Map<K, V, H, A>` / `DynamicArray<T, A>` with defaults is the
-     likely shape.
+  3. **Custom allocator (M10). 🚧 M10a DONE.** The containers hardcoded `malloc`/`realloc`/`calloc`/`free`;
+     now the memory source is a type parameter `A: Allocator = GlobalAllocator` (rides the M8 default, so
+     `DynamicArray<T>` / `Map<K,V>` are unchanged). The contract is a copyable **value handle** (à la C++
+     `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig `std.mem.Allocator`): `type contract Allocator for
+     value { fn Ptr allocate(usize bytes); fn void deallocate(Ptr pointer, usize bytes); }` in
+     `std::collections`. The container stores `A alloc` by value and routes every buffer through it; a
+     stateful allocator is a small handle pointing into a **caller-owned `Arena`** that must outlive the
+     container (documented, not borrow-checked — a raw `Ptr` isn't escape-checked). A stateful allocator
+     arrives via a named static factory `DynamicArray::withAllocator(allocator:)` (no ctor overloading in
+     Kama; the factory assigns `alloc` post-construction). Dispatch is a **direct monomorphized call**
+     (`BumpAllocator__allocate(&self->alloc, bytes)`), zero-cost. **Panic-on-OOM.**
+     - **M10a shipped:** `Allocator` contract + `GlobalAllocator` (zero-size malloc/free) + `Arena` +
+       `BumpAllocator` (`lib/std/collections/allocator.kama`); retrofit of `DynamicArray<T, A>` and
+       `Map<K,V,H,A>` / `Set<K,H,A>` (the two-trailing-default + named-override case). Fixtures
+       `allocator_arena` (one arena backing a DynamicArray + a Map, ASan-clean) and `allocator_default`.
+       Also fixed a latent M8 bug it exposed: a defaulted-type-param generic returned by a free function
+       cached an unfilled monomorph name in its `retCType` (params/defaults/ctx are now recorded in the
+       type pre-registration pass, ahead of `collectSignatures`).
+     - **M10b (remaining):** thread `A` through the rest of the direct-`malloc` containers — `Deque<T,A>`,
+       `FixedArray<T,A>`, `BitSet<A>` (gains its first type param), `SlotMap<V,A>`, `PriorityQueue<T,A>`.
+       No new emitter surface (mechanical repeats of the DynamicArray pattern).
+     - **SortedMap / SortedSet — deferred (needs M11).** Their B-tree node *boxes* come from `new
+       BTreeNode<…>` (a global-heap `Owned`), so a custom `A` can only reach the inner arrays, not the
+       nodes — a half-honored allocator, worse than none (reset the arena and the node boxes survive on the
+       malloc heap). Left unchanged until allocator-aware `new`.
+     - **M11 — allocator-aware `new` / `Owned<T, A>` (its own session).** The `new` intrinsic + the `Owned`
+       smart pointer need an allocator channel so heap-*boxed* objects (not just raw container buffers) draw
+       from a chosen allocator. This completes allocator coverage: **engine readiness** — the frame-arena
+       story is whole only once `new`/`Owned` honor an allocator (a system can then arena-back ALL its
+       per-frame allocations, boxed objects included, and bulk-reset — see ENGINE_READINESS); **embedded
+       readiness** — a no-heap target needs *every* allocation routed through a supplied allocator (M10
+       covers containers, M11 covers `new`/`Owned`). Once it lands, SortedMap gets a clean full
+       `SortedMap<K,V,A>`.
+     - **Fallible allocation — deferred with the embedded milestone.** `allocate -> Optional<Ptr>` (vs
+       today's panic-on-OOM) is what a no-heap embedded target needs; it colors the mutating APIs with
+       failure propagation. It rides this same `Allocator` seam non-breakingly. Fallible + M11 are the two
+       remaining gates for a true no-heap embedded build.
 - **Browser networking transports** — native TCP ships (`std::net`); the browser has no raw sockets, so the
   wasm path needs **WebRTC DataChannels** (unreliable) / **WebSockets** (reliable) via a host FFI shim (a
   real wasm nuance). Native UDP/DNS and the rest of the stdlib reach are the §1 follow-ups.

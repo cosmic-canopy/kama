@@ -9429,12 +9429,34 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     // instance name rather than resolving the bare template stub.
                     if (cd->typeKind && *cd->typeKind == "contract") {
                         std::string n = qualify(*cd->name->value);
-                        if (cd->typeParams && !cd->typeParams->empty()) _genericContracts[n].name = n;
-                        else                                            _interfaces[n].name = n;
+                        if (cd->typeParams && !cd->typeParams->empty()) {
+                            _genericContracts[n].name = n;
+                            // Record params/defaults/ctx NOW (not just in collectInterfaces), so
+                            // genericTypeMangle can fill a defaulted type-arg during the earlier
+                            // collectSignatures pass — see the generic-TYPE note below.
+                            std::vector<std::string> ps;
+                            for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);
+                            _genericContractParams[n] = ps;
+                            if (cd->typeDefaults) _genericContractDefaults[n] = *cd->typeDefaults;
+                            _genericContractCtx[n] = _nsCtx;
+                        } else _interfaces[n].name = n;
                     } else if (cd->typeParams && !cd->typeParams->empty()) {
                         // a generic TYPE template pre-registers in _genericTypes, NOT _classes
                         // (an empty _classes entry would be emitted as a bogus struct). collectClasses fills it.
                         std::string n = qualify(*cd->name->value); _genericTypes[n].name = n;
+                        // Also record params/defaults/ctx here (ahead of collectClasses), so a DEFAULTED
+                        // type-arg mangles to its filled instance name (`DynamicArray<int32>` ->
+                        // `DynamicArray_int32_GlobalAllocator`) even in collectSignatures — which runs
+                        // BEFORE collectClasses and BEFORE this template's own unit (the CLI/main unit is
+                        // collected first, its imports appended after). Without this, a free function
+                        // returning `DynamicArray<int32>` cached an unfilled `DynamicArray_int32` retCType
+                        // that named no registered class (breaking e.g. `make().length()`). Idempotent —
+                        // collectClasses re-records the same values.
+                        std::vector<std::string> ps;
+                        for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);
+                        _genericTypeParams[n] = ps;
+                        if (cd->typeDefaults) _genericTypeDefaults[n] = *cd->typeDefaults;
+                        _genericTypeCtx[n] = _nsCtx;
                     } else {
                         bool ext = false;
                         if (cd->modifiers) for (auto& mod : *cd->modifiers)
@@ -9449,7 +9471,16 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     std::string n = qualify(*ed->identifier->value);
                     // pre-register a tagged/generic enum where its real home is (a class-like
                     // type / a generic template), NOT _enums — else emitEnum would emit a bogus enum.
-                    if (ed->typeParams && !ed->typeParams->empty()) _genericTypes[n].name = n;
+                    if (ed->typeParams && !ed->typeParams->empty()) {
+                        _genericTypes[n].name = n;
+                        // Record params/defaults/ctx now (like the generic-type branch above) so a
+                        // defaulted enum type-arg mangles filled during collectSignatures.
+                        std::vector<std::string> ps;
+                        for (auto& p : *ed->typeParams) if (p) ps.push_back(*p);
+                        _genericTypeParams[n] = ps;
+                        if (ed->typeDefaults) _genericTypeDefaults[n] = *ed->typeDefaults;
+                        _genericTypeCtx[n] = _nsCtx;
+                    }
                     else if (enumIsTagged(ed))                      _classes[n].name = n;
                     else                                            _enums[n].name = n;
                 }

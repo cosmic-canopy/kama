@@ -1,10 +1,11 @@
 namespace std::collections;
 export { Map, Entry, MapKeyIter, MapValueIter, MapValueIterMut, MapEntryIter };
 
-extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn Ptr calloc(usize count, usize size);
-extern fn void free(Ptr p);
+// Buffers are drawn from the map's `A alloc` (an `Allocator` handle), not libc directly. `allocate`
+// returns UNINITIALIZED bytes, so the `state` tag buffer is zeroed with `memset` after allocation
+// (a bump allocator also hands back dirty reused memory, so container-side zeroing is the correct place).
+extern "<string.h>";
+extern fn Ptr memset(Ptr p, int32 value, usize n);
 
 // The primitive `Hashable`/`Equatable` conformances (`string`, `int32`) now live in the PRELUDE
 // (kama.driver.cpp `PRELUDE_SRC`) so they're universal — a `<T: Equatable>` bound or `DynamicArray<int32>.contains`
@@ -130,11 +131,14 @@ type value MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
 // borrow the key (`ref K`); `put` consumes the key + value it stores (by value). `foreach (K k in m)`
 // iterates the keys, and `copy m` deep-copies — each present only when its keys (and, for `copy`, values)
 // are `Copyable` (multi-`when`). `entries()` yields each `Entry<K,V>` key-value pair by value.
-type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher>
+type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
         implements Copyable(bare: give) when [K: Copyable, V: Copyable], Iterable<K> when [K: Copyable],
                    Serialize when [K: Serialize, V: Serialize], Deserialize when [K: Deserialize, V: Deserialize] {
-    Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 len; int32 cap; int32 tombs; int32 mods;
+    Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 len; int32 cap; int32 tombs; int32 mods; A alloc;
 
+    // The bare map draws from the default `GlobalAllocator` (a zero-size field — no state, no cost). A
+    // custom-allocator map is built by `withAllocator`, which sets `alloc` after construction (Kama has
+    // no ctor overloading; `alloc` is a plain value, so the bare ctor need not set it).
     public Map() {
         unsafe {
             this.keys = cast<Ptr<K>>(cast<usize>(0));
@@ -142,6 +146,14 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher>
             this.state = cast<Ptr<uint8>>(cast<usize>(0));
         }
         this.len = 0; this.cap = 0; this.tombs = 0; this.mods = 0;
+    }
+
+    // Build an empty map whose three buffers are drawn from `allocator` (e.g. an `Arena` bump handle),
+    // so all of this map's allocations route into that region. The handle is a cheap copyable value.
+    public static fn Map<K,V,H,A> withAllocator(A allocator) {
+        Map<K,V,H,A> result = Map();
+        result.alloc = allocator;
+        return give result;
     }
 
     public fn int32 length() { return this.len; }
@@ -189,8 +201,9 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher>
 
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
-    public fn Map<K,V,H> copy() when [K: Copyable, V: Copyable] {
-        Map<K,V,H> result = Map();
+    public fn Map<K,V,H,A> copy() when [K: Copyable, V: Copyable] {
+        Map<K,V,H,A> result = Map();
+        result.alloc = this.alloc;                  // copy the allocator handle (a value) — same arena
         int32 i = 0;
         while (i < this.cap) {
             uint8 s = 0ui8; unsafe { s = this.state[i]; }
@@ -335,9 +348,10 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher>
     fn void growTo(int32 nc) {
         Ptr<K> nk; Ptr<V> nv; Ptr<uint8> ns;
         unsafe {
-            nk = cast<Ptr<K>>(malloc(n: cast<usize>(nc) * sizeof(K)));
-            nv = cast<Ptr<V>>(malloc(n: cast<usize>(nc) * sizeof(V)));
-            ns = cast<Ptr<uint8>>(calloc(count: cast<usize>(nc), size: sizeof(uint8)));
+            nk = cast<Ptr<K>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K)));
+            nv = cast<Ptr<V>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V)));
+            ns = cast<Ptr<uint8>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8)));
+            memset(p: cast<Ptr>(ns), value: 0, n: cast<usize>(nc) * sizeof(uint8));   // tag buffer starts all-EMPTY
         }
         int32 i = 0;
         while (i < this.cap) {
@@ -352,7 +366,13 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher>
             }
             i = i + 1;
         }
-        unsafe { free(p: cast<Ptr>(this.keys)); free(p: cast<Ptr>(this.vals)); free(p: cast<Ptr>(this.state)); }
+        if (this.cap > 0) {
+            unsafe {
+                this.alloc.deallocate(pointer: cast<Ptr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
+                this.alloc.deallocate(pointer: cast<Ptr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
+                this.alloc.deallocate(pointer: cast<Ptr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
+            }
+        }
         this.keys = nk; this.vals = nv; this.state = ns; this.cap = nc; this.tombs = 0;
     }
 
@@ -398,6 +418,12 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher>
             unsafe { if (this.state[i] == 1ui8) { drop(value: this.keys[i]); drop(value: this.vals[i]); } }
             i = i + 1;
         }
-        unsafe { free(p: cast<Ptr>(this.keys)); free(p: cast<Ptr>(this.vals)); free(p: cast<Ptr>(this.state)); }
+        if (this.cap > 0) {
+            unsafe {
+                this.alloc.deallocate(pointer: cast<Ptr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
+                this.alloc.deallocate(pointer: cast<Ptr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
+                this.alloc.deallocate(pointer: cast<Ptr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
+            }
+        }
     }
 }
