@@ -259,10 +259,18 @@ forwards an in-place borrow up the tree via the escape checker's chained-ref-ret
 return a place-returning method call whose receiver roots at `this`). `SortedSet<K>` wraps `SortedMap<K, Unit>`,
 as `Set` wraps `Map`.
 
-### Custom allocators (`std::collections`) ✅ (M10a — DynamicArray, Map, Set)
+### Custom allocators (`std::collections`) ✅ (M10a–M10b — all direct-heap containers)
 
 A collection's memory source is a trailing type parameter `A: Allocator = GlobalAllocator`. Because it
-defaults (M8 default type parameters), `DynamicArray<T>` / `Map<K,V>` are unchanged; the allocator is opt-in.
+defaults (M8 default type parameters), `DynamicArray<T>` / `Map<K,V>` / bare `BitSet` are unchanged; the
+allocator is opt-in. Every container that manages its own heap buffer carries it: **M10a** — `DynamicArray`,
+`Map`, `Set`; **M10b** — `Deque<T, A>`, `FixedArray<T, A>`, `BitSet<A>` (its first type parameter, so a plain
+`BitSet` is now the all-defaulted instance), `SlotMap<V, A>`, and `PriorityQueue<T, A>` (which owns no buffer
+itself — it threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named static
+factory: `withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` for the
+eager `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. Only **`SortedMap`/`SortedSet`**
+remain on `GlobalAllocator` — their B-tree nodes box through `new`/`Owned`, which gains an allocator channel in
+**M11** (allocator-aware `new`).
 An **`Allocator` is a copyable value handle** (the C++ `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig
 `std.mem.Allocator` model), a two-method contract in `std::collections`:
 

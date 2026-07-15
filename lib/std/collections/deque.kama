@@ -1,9 +1,6 @@
 namespace std::collections;
+import std::collections::{Allocator, GlobalAllocator};
 export { Deque };
-
-extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
 
 // A by-value iterator (the `foreach (T x in deque)` protocol): yields each element by value, front to back.
 // Like the DynamicArray iterator it snapshots the deque's mutation counter and rejects a structural change
@@ -45,22 +42,32 @@ type value DequeIterMut<T> implements IteratorMut<T> {
 // buffer); Copyable EXACTLY when its element is (a deep, element-by-element copy). `head` is the physical
 // slot of the front element; the `len` live elements occupy `data[(head + i) % cap]` for i in 0..len, so the
 // window wraps around the end of the buffer. `mods` is a modification counter iterators snapshot.
-type resource Deque<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
+type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
                             Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
-    Ptr<T> data; int32 head; int32 len; int32 cap; int32 mods;
+    Ptr<T> data; int32 head; int32 len; int32 cap; int32 mods; A alloc;
 
     public Deque() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.head = 0; this.len = 0; this.cap = 0; this.mods = 0; }
+
+    // Draw the ring buffer from a caller-owned allocator (e.g. an `Arena`). The bare `Deque()` uses the
+    // default zero-size `GlobalAllocator`; this sets the handle before any grow. See DynamicArray.withAllocator.
+    public static fn Deque<T, A> withAllocator(A allocator) {
+        Deque<T, A> result = Deque();
+        result.alloc = allocator;
+        return give result;
+    }
 
     // Relinearize into a fresh `nc`-slot buffer: the wrapped window becomes a flat 0..len run at the front.
     // Element relocation goes through LOCAL pointer aliases (`nd[i] = od[…]` is a raw bitwise move that
     // leaves no owner holding a moved-from slot), the same technique DynamicArray.remove uses.
     fn void growTo(int32 nc) {
         Ptr<T> nd;
-        unsafe { nd = cast<Ptr<T>>(malloc(n: cast<usize>(nc) * sizeof(T))); }
+        unsafe { nd = cast<Ptr<T>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T))); }
         Ptr<T> od = this.data;
         int32 i = 0;
         unsafe { while (i < this.len) { nd[i] = od[(this.head + i) % this.cap]; i = i + 1; } }
-        unsafe { free(p: cast<Ptr>(this.data)); }
+        if (this.cap > 0) {
+            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+        }
         this.data = nd; this.head = 0; this.cap = nc;
     }
     fn void ensureOne() { if (this.len == this.cap) { this.growTo(nc: this.cap == 0 ? 4 : this.cap * 2); } }
@@ -133,8 +140,9 @@ type resource Deque<T> implements Copyable(bare: give) when [T: Copyable], Itera
     }
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied in order).
-    public fn Deque<T> copy() {
-        Deque<T> result = Deque();
+    public fn Deque<T, A> copy() {
+        Deque<T, A> result = Deque();
+        result.alloc = this.alloc;                    // copy the allocator handle (a value) — same arena
         result.reserve(n: this.len);
         int32 i = 0;
         while (i < this.len) { result.pushBack(item: copy this[i]); i = i + 1; }
@@ -177,9 +185,11 @@ type resource Deque<T> implements Copyable(bare: give) when [T: Copyable], Itera
         return give result;
     }
 
-    ~Deque() {   // drop each live element (a no-op for a value), then free the buffer
+    ~Deque() {   // drop each live element (a no-op for a value), then release the buffer via the allocator
         int32 i = 0;
         while (i < this.len) { drop(value: this[i]); i = i + 1; }
-        unsafe { free(p: cast<Ptr>(this.data)); }
+        if (this.cap > 0) {
+            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+        }
     }
 }

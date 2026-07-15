@@ -562,6 +562,10 @@ private:
     // Generic TYPES: discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
     void scanTypeForGenericTypes(SharedIdentifier t);
     void registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args);
+    // True iff EVERY type-param of a generic template carries a default — so it may be named BARE
+    // (zero type args), like an all-defaulted `BitSet<A = GlobalAllocator>` written just `BitSet`.
+    // Its defaults then fill in at genericTypeMangle / registerGenericTypeInst (empty args).
+    bool allTypeParamsDefaulted(const std::string& tmpl) const;
     // True iff a (post-substitution) type arg still carries an UNBOUND type-parameter — a bare name resolving
     // to no known type (nor a primitive / This / Ptr / usize / isize), recursing into nested generic args.
     // Guards registerGenericTypeInst against a generic FUNCTION's signature scanned before instantiation.

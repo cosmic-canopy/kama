@@ -1,10 +1,9 @@
 namespace std::collections;
-import std::collections::{View};
+import std::collections::{View, Allocator, GlobalAllocator};
 export { FixedArray };
 
-extern "<stdlib.h>";
-extern fn Ptr calloc(usize count, usize size);
-extern fn void free(Ptr p);
+extern "<string.h>";
+extern fn Ptr memset(Ptr p, int32 value, usize n);
 
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
 type value FixedArrayIter<T> implements Iterator<T> {
@@ -28,13 +27,38 @@ type value FixedArrayIterMut<T> implements IteratorMut<T> {
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
 // `size` elements is live from construction (zero-initialized) to drop — unlike `DynamicArray`, which tracks a
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
-type resource FixedArray<T> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
+type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
                                   Serialize when [T: Serialize] {
-    Ptr<T> data; int32 size;
+    Ptr<T> data; int32 size; A alloc;
 
-    public FixedArray(int32 size) {
-        unsafe { this.data = cast<Ptr<T>>(calloc(count: cast<usize>(size), size: sizeof(T))); }
+    // Allocation is EAGER (a FixedArray has all `size` elements live from construction), so unlike the
+    // growable containers the allocator can't be post-assigned after a bare ctor. The ctor allocates through
+    // `this.alloc` — the default zero-size `GlobalAllocator` for the bare `FixedArray(size:)` path — and the
+    // arena path goes through `withAllocator`, which sets the handle FIRST via a no-op `FixedArray(size: 0)`.
+    public FixedArray(int32 size) { this.allocBuffer(size: size); }
+
+    // Zero-initialized buffer from `this.alloc` (`allocate` returns UNINITIALIZED bytes, so `memset` restores
+    // the documented zero-init semantics — a bump allocator also hands back dirty reused memory). `size <= 0`
+    // leaves a null buffer so the dtor's guard skips a deallocate.
+    fn void allocBuffer(int32 size) {
+        if (size > 0) {
+            unsafe {
+                this.data = cast<Ptr<T>>(this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T)));
+                memset(p: cast<Ptr>(this.data), value: 0, n: cast<usize>(size) * sizeof(T));
+            }
+        } else {
+            unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); }
+        }
         this.size = size;
+    }
+
+    // Build an `size`-element array drawn from a caller-owned allocator (e.g. an `Arena`). Sets the handle
+    // before allocating, via a no-op bare `FixedArray(size: 0)` (null buffer, no heap op).
+    public static fn FixedArray<T, A> withAllocator(A allocator, int32 size) {
+        FixedArray<T, A> result = FixedArray(size: 0);
+        result.alloc = allocator;
+        result.allocBuffer(size: size);
+        return give result;
     }
 
     public fn int32 length() { return this.size; }
@@ -74,8 +98,8 @@ type resource FixedArray<T> implements Copyable(bare: give) when [T: Copyable], 
     }
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
-    public fn FixedArray<T> copy() {
-        FixedArray<T> result = FixedArray(size: this.size);
+    public fn FixedArray<T, A> copy() {
+        FixedArray<T, A> result = FixedArray::withAllocator(allocator: this.alloc, size: this.size);  // same arena
         int32 i = 0;
         while (i < this.size) { result[i] = copy this[i]; i = i + 1; }
         return result;
@@ -92,9 +116,11 @@ type resource FixedArray<T> implements Copyable(bare: give) when [T: Copyable], 
         w.endArray();
     }
 
-    ~FixedArray() {   // drop each element (a no-op for a value), then free the buffer
+    ~FixedArray() {   // drop each element (a no-op for a value), then release the buffer via the allocator
         int32 i = 0;
         while (i < this.size) { drop(value: this[i]); i = i + 1; }
-        unsafe { free(p: cast<Ptr>(this.data)); }
+        if (this.size > 0) {
+            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.size) * sizeof(T)); }
+        }
     }
 }

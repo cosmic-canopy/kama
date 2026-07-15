@@ -1,0 +1,22 @@
+// M10b custom allocator — Deque backed by a caller-owned Arena. Force several ring-buffer grows
+// (4->8->...->128) all in-arena. ASan-clean = one malloc (the Arena buffer) + one free (its dtor);
+// every container `deallocate` is a no-op. `arena` is declared FIRST so it drops LAST (outlives the deque).
+import std::collections::{Deque, Arena, BumpAllocator};
+
+fn int32 main() {
+    int32 r = 0;
+    Arena arena = Arena(capacity: 1 << 16);
+
+    Deque<int32, BumpAllocator> d = Deque::withAllocator(allocator: arena.handle());
+    int32 i = 0; while (i < 100) { d.pushBack(item: i); i = i + 1; }   // grows the ring several times
+    if (d.length() == 100 && d[0] == 0 && d[99] == 99) { r = r + 20; }
+
+    d.pushFront(item: 0 - 7);
+    if (d[0] == 0 - 7 && d.length() == 101) { r = r + 10; }
+
+    Optional<int32> f = d.popFront();
+    int32 fv = match (f) { case Some(x): x; case None: 0 - 1; };
+    if (fv == 0 - 7) { r = r + 10; }
+
+    return r;   // 40
+}

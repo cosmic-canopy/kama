@@ -1,0 +1,22 @@
+// M10b custom allocator — SlotMap backed by a caller-owned Arena. Three parallel buffers all drawn from
+// the arena; force grows (doubling from 8) then get/remove by handle to prove the arena round-trip.
+import std::collections::{SlotMap, Handle, Arena, BumpAllocator};
+
+fn int32 main() {
+    int32 r = 0;
+    Arena arena = Arena(capacity: 1 << 16);
+
+    SlotMap<int32, BumpAllocator> sm = SlotMap::withAllocator(allocator: arena.handle());
+    Handle h0 = sm.insert(value: 10);
+    int32 i = 0; while (i < 50) { sm.insert(value: i); i = i + 1; }   // grows the three buffers
+
+    Optional<int32> g = sm.get(handle: h0);
+    int32 gv = match (g) { case Some(x): x; case None: 0 - 1; };
+    if (gv == 10 && sm.length() == 51) { r = r + 20; }
+
+    Optional<int32> rem = sm.remove(handle: h0);
+    int32 rv = match (rem) { case Some(x): x; case None: 0 - 1; };
+    if (rv == 10 && !sm.contains(handle: h0) && sm.length() == 50) { r = r + 10; }
+
+    return r;   // 30
+}

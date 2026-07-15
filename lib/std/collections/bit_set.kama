@@ -1,9 +1,9 @@
 namespace std::collections;
+import std::collections::{Allocator, GlobalAllocator};
 export { BitSet, BitSetIter };
 
-extern "<stdlib.h>";
-extern fn Ptr calloc(usize count, usize size);
-extern fn void free(Ptr p);
+extern "<string.h>";
+extern fn Ptr memset(Ptr p, int32 value, usize n);
 
 // A by-value iterator over the SET bit indices of a `BitSet` (`foreach (int32 i in bs.setBits())`), ascending.
 // It borrows the word buffer + snapshots the mutation counter and rejects a structural change (a grow, which
@@ -36,17 +36,25 @@ type value BitSetIter implements Iterator<int32> {
 // clear. `set`/`toggle` past the current capacity auto-grow (doubling the word count); `test`/`clear` on an
 // out-of-range bit are a no-op / `false` (never grow). `capacity()` reports the addressable bit range (word
 // count × 64, ≥ the highest set bit). A move-only value that owns its buffer, but Copyable via a deep word copy.
-type resource BitSet implements Copyable(bare: give) {
-    Ptr<uint64> words; int32 wordCount; int32 mods;
+type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: give) {
+    Ptr<uint64> words; int32 wordCount; int32 mods; A alloc;
 
     public BitSet() { unsafe { this.words = cast<Ptr<uint64>>(cast<usize>(0)); } this.wordCount = 0; this.mods = 0; }
 
     // Preallocate room for at least `bits` bits (rounded up to a whole word). K,V-style target-type inference:
     // `BitSet s = BitSet::withCapacity(bits: 256);`.
-    public static fn BitSet withCapacity(int32 bits) {
-        BitSet s = BitSet();
+    public static fn BitSet<A> withCapacity(int32 bits) {
+        BitSet<A> s = BitSet();
         if (bits > 0) { s.growTo(nc: (bits + 63) >> 6); }
         return give s;
+    }
+
+    // Draw the word buffer from a caller-owned allocator (e.g. an `Arena`). The bare `BitSet()` uses the
+    // default zero-size `GlobalAllocator`; this sets the handle before any grow.
+    public static fn BitSet<A> withAllocator(A allocator) {
+        BitSet<A> result = BitSet();
+        result.alloc = allocator;
+        return give result;
     }
 
     // Bits currently addressable without a grow (word count × 64) — capacity, not the highest set bit.
@@ -105,7 +113,9 @@ type resource BitSet implements Copyable(bare: give) {
     }
 
     // In-place set union: this |= other. Grows to cover `other`'s words; `other`'s absent (higher) words are 0.
-    public fn void unionWith(ref BitSet other) {
+    // The operand shares this BitSet's allocator TYPE `A` (set algebra only READS `other`, so no allocation
+    // crosses — it's purely a type-naming constraint; mixing a Global and an Arena BitSet isn't supported).
+    public fn void unionWith(ref BitSet<A> other) {
         int32 ow = other.rawWordCount();
         if (ow > 0) { this.ensureWords(wordIndex: ow - 1); }
         int32 i = 0;
@@ -113,19 +123,19 @@ type resource BitSet implements Copyable(bare: give) {
     }
 
     // In-place set intersection: this &= other. Own words past `other`'s range mask against 0 (get cleared).
-    public fn void intersectWith(ref BitSet other) {
+    public fn void intersectWith(ref BitSet<A> other) {
         int32 i = 0;
         unsafe { while (i < this.wordCount) { this.words[i] = this.words[i] & other.rawWord(i: i); i = i + 1; } }
     }
 
     // In-place set difference: this &= ~other. Only own words that overlap `other` change.
-    public fn void differenceWith(ref BitSet other) {
+    public fn void differenceWith(ref BitSet<A> other) {
         int32 i = 0;
         unsafe { while (i < this.wordCount) { this.words[i] = this.words[i] & (~ other.rawWord(i: i)); i = i + 1; } }
     }
 
     // True iff every set bit of this is also set in `other` (this ⊆ other).
-    public fn bool isSubsetOf(ref BitSet other) {
+    public fn bool isSubsetOf(ref BitSet<A> other) {
         int32 i = 0;
         unsafe {
             while (i < this.wordCount) {
@@ -145,8 +155,9 @@ type resource BitSet implements Copyable(bare: give) {
 
     // Deep-copy into an independent buffer (bare `give` still MOVES). uint64 is always Copyable, so a BitSet
     // is unconditionally Copyable — a plain word-for-word buffer clone.
-    public fn BitSet copy() {
-        BitSet result = BitSet();
+    public fn BitSet<A> copy() {
+        BitSet<A> result = BitSet();
+        result.alloc = this.alloc;                    // copy the allocator handle (a value) — same arena
         if (this.wordCount > 0) {
             result.growTo(nc: this.wordCount);
             int32 i = 0;
@@ -171,18 +182,26 @@ type resource BitSet implements Copyable(bare: give) {
         }
     }
 
-    // Grow the word buffer to `nc` words. `calloc` zeroes the new buffer (so the grown tail starts clear), the
-    // live words are copied over, the old buffer freed. A relocation, so it bumps `mods` (invalidates iterators).
+    // Grow the word buffer to `nc` words via `this.alloc`. `allocate` returns UNINITIALIZED bytes, so the
+    // buffer is `memset` to zero (the grown tail must start clear); the live words are copied over and the old
+    // buffer released. A relocation, so it bumps `mods` (invalidates iterators).
     fn void growTo(int32 nc) {
         Ptr<uint64> nw;
-        unsafe { nw = cast<Ptr<uint64>>(calloc(count: cast<usize>(nc), size: sizeof(uint64))); }
-        int32 i = 0;
         unsafe {
-            while (i < this.wordCount) { nw[i] = this.words[i]; i = i + 1; }
-            free(p: cast<Ptr>(this.words));
+            nw = cast<Ptr<uint64>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64)));
+            memset(p: cast<Ptr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));
+        }
+        int32 i = 0;
+        unsafe { while (i < this.wordCount) { nw[i] = this.words[i]; i = i + 1; } }
+        if (this.wordCount > 0) {
+            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64)); }
         }
         this.words = nw; this.wordCount = nc; this.mods = this.mods + 1;
     }
 
-    ~BitSet() { unsafe { free(p: cast<Ptr>(this.words)); } }   // uint64 words need no per-element drop
+    ~BitSet() {   // uint64 words need no per-element drop — just release the buffer via the allocator
+        if (this.wordCount > 0) {
+            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64)); }
+        }
+    }
 }

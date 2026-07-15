@@ -1,9 +1,6 @@
 namespace std::collections;
+import std::collections::{Allocator, GlobalAllocator};
 export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut };
-
-extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
 
 // A stable, generation-checked reference into a `SlotMap`. `index` is the slot; `generation` is the slot's
 // occupancy stamp captured at insert time. A get/remove succeeds only if the slot STILL carries that same
@@ -70,9 +67,9 @@ type value SlotMapValueIterMut<V> implements IteratorMut<V> {
 // vacate). A handle stores the odd stamp from its insert, so `valid` is just `gens[index] == handle.generation`
 // — a removed slot (now even) or a reused slot (now a higher odd) both mismatch. `slotCount` is the high-water
 // slot count; `freeList` is sized to `cap`, so a push never overflows (occupied + free <= slotCount <= cap).
-type resource SlotMap<V> {
+type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     Ptr<V> values; Ptr<uint32> gens; Ptr<int32> freeList;
-    int32 slotCount; int32 freeLen; int32 len; int32 cap; int32 mods;
+    int32 slotCount; int32 freeLen; int32 len; int32 cap; int32 mods; A alloc;
 
     public SlotMap() {
         unsafe {
@@ -81,6 +78,14 @@ type resource SlotMap<V> {
             this.freeList = cast<Ptr<int32>>(cast<usize>(0));
         }
         this.slotCount = 0; this.freeLen = 0; this.len = 0; this.cap = 0; this.mods = 0;
+    }
+
+    // Draw the three parallel buffers from a caller-owned allocator (e.g. an `Arena`). The bare `SlotMap()`
+    // uses the default zero-size `GlobalAllocator`; this sets the handle before any grow.
+    public static fn SlotMap<V, A> withAllocator(A allocator) {
+        SlotMap<V, A> result = SlotMap();
+        result.alloc = allocator;
+        return give result;
     }
 
     public fn int32 length() { return this.len; }
@@ -186,28 +191,40 @@ type resource SlotMap<V> {
     fn void growTo(int32 nc) {
         Ptr<V> nv; Ptr<uint32> ng; Ptr<int32> nf;
         unsafe {
-            nv = cast<Ptr<V>>(malloc(n: cast<usize>(nc) * sizeof(V)));
-            ng = cast<Ptr<uint32>>(malloc(n: cast<usize>(nc) * sizeof(uint32)));
-            nf = cast<Ptr<int32>>(malloc(n: cast<usize>(nc) * sizeof(int32)));
+            nv = cast<Ptr<V>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V)));
+            ng = cast<Ptr<uint32>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32)));
+            nf = cast<Ptr<int32>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(int32)));
         }
         int32 i = 0;
         unsafe {
             while (i < this.slotCount) { nv[i] = this.values[i]; ng[i] = this.gens[i]; i = i + 1; }  // bitwise relocate
             i = 0;
             while (i < this.freeLen) { nf[i] = this.freeList[i]; i = i + 1; }
-            free(p: cast<Ptr>(this.values)); free(p: cast<Ptr>(this.gens)); free(p: cast<Ptr>(this.freeList));
+        }
+        if (this.cap > 0) {
+            unsafe {
+                this.alloc.deallocate(pointer: cast<Ptr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
+                this.alloc.deallocate(pointer: cast<Ptr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
+                this.alloc.deallocate(pointer: cast<Ptr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(int32));
+            }
         }
         this.values = nv; this.gens = ng; this.freeList = nf; this.cap = nc;
     }
 
-    ~SlotMap() {   // drop each live (occupied) value, then free the three buffers
+    ~SlotMap() {   // drop each live (occupied) value, then release the three buffers via the allocator
         int32 i = 0;
         unsafe {
             while (i < this.slotCount) {
                 if ((this.gens[i] & 1ui32) == 1ui32) { drop(value: this.values[i]); }
                 i = i + 1;
             }
-            free(p: cast<Ptr>(this.values)); free(p: cast<Ptr>(this.gens)); free(p: cast<Ptr>(this.freeList));
+        }
+        if (this.cap > 0) {
+            unsafe {
+                this.alloc.deallocate(pointer: cast<Ptr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
+                this.alloc.deallocate(pointer: cast<Ptr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
+                this.alloc.deallocate(pointer: cast<Ptr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(int32));
+            }
         }
     }
 }

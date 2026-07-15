@@ -249,6 +249,14 @@ std::string CEmitter::cType(SharedIdentifier type)
         if (_genericTypes.count(tmpl) || _genericContracts.count(tmpl))
             return genericTypeMangle(tmpl, type->genericArgs);
     }
+    // A generic TYPE named BARE (no type args) whose params are ALL defaulted (`BitSet` ==
+    // `BitSet<GlobalAllocator>`): spell the defaulted instance name — NOT under _typeSubst, where a bare
+    // param name is substituted above. (A bare type-param isn't in _genericTypes, so this never fires for one.)
+    if (type->value && !type->genericArg) {
+        std::string tmpl = resolveUserName(*type->value, type->qualifier);
+        if (_genericTypes.count(tmpl) && allTypeParamsDefaulted(tmpl))
+            return genericTypeMangle(tmpl, nullptr);
+    }
     switch (type->builtInVal) {
         case IDENTIFIER_INT8_VAL:    return "int8_t";
         case IDENTIFIER_INT16_VAL:   return "int16_t";
@@ -1092,9 +1100,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         bool isConstDecl = (cvd != nullptr);
         if (declType) {
             // a bare generic type without a type argument (`Box b` instead of `Box<int32> b`)
-            // is not a usable type — the template is not a concrete class.
+            // is not a usable type — the template is not a concrete class. EXCEPTION: an all-defaulted
+            // generic (`BitSet` == `BitSet<GlobalAllocator>`) is a complete type spelled bare.
             if (declType->value && !declType->genericArg
-                && _genericTypes.count(resolveUserName(*declType->value, declType->qualifier)))
+                && _genericTypes.count(resolveUserName(*declType->value, declType->qualifier))
+                && !allTypeParamsDefaulted(resolveUserName(*declType->value, declType->qualifier)))
                 unsupported(("generic type `" + *declType->value + "` needs a type argument, e.g. `"
                              + *declType->value + "<int32>`").c_str(), n->line);
             std::string ty = cType(declType);
@@ -3000,6 +3010,9 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
             // `Shared_Circle` (not just `Shared`) — fixes the `List<Shared<Circle>>` collision.
             if (elem->genericArgs) for (auto& a : *elem->genericArgs) base += "_" + mangleElem(a);
             else if (elem->genericArg) base += "_" + mangleElem(elem->genericArg);
+            // A bare all-defaulted generic (`BitSet` == `BitSet<GlobalAllocator>`) mangles to its
+            // defaulted instance name, matching cType (so a `DynamicArray<BitSet>` element mangles right).
+            else if (_genericTypes.count(base) && allTypeParamsDefaulted(base)) return genericTypeMangle(base, nullptr);
             return base;
         }
     }
@@ -3064,6 +3077,16 @@ bool CEmitter::validateGenericArgs(const std::string& tmpl, const char* kind,
                          + std::to_string(params.size()) + ", missing `" + params[i] + "`)").c_str(), line);
             return false;
         }
+    return true;
+}
+
+bool CEmitter::allTypeParamsDefaulted(const std::string& tmpl) const
+{
+    auto p = _genericTypeParams.find(tmpl);
+    if (p == _genericTypeParams.end() || p->second.empty()) return false;
+    auto d = _genericTypeDefaults.find(tmpl);
+    if (d == _genericTypeDefaults.end() || d->second.size() != p->second.size()) return false;
+    for (auto& def : d->second) if (!def) return false;        // a null entry = a required param
     return true;
 }
 
@@ -3474,9 +3497,13 @@ void CEmitter::scanTypeForCollections(SharedIdentifier t)
 // recursion into the args is driven by scanTypeForCollections (which calls this at each type node).
 void CEmitter::scanTypeForGenericTypes(SharedIdentifier t)
 {
-    if (!t || !t->value || !t->genericArg) return;             // genericArg mirrors genericArgs[0]
+    if (!t || !t->value) return;
     std::string tmpl = resolveUserName(*t->value, t->qualifier);
-    if (_genericTypes.count(tmpl)) registerGenericTypeInst(tmpl, t->genericArgs);
+    if (!_genericTypes.count(tmpl)) return;
+    // Explicit args (`Pair<A,B>`), OR a BARE all-defaulted generic (`BitSet` == `BitSet<GlobalAllocator>`) —
+    // the latter drives the instance from its defaults (registerGenericTypeInst fills them from empty args).
+    if (t->genericArg) registerGenericTypeInst(tmpl, t->genericArgs);
+    else if (allTypeParamsDefaulted(tmpl)) registerGenericTypeInst(tmpl, nullptr);
 }
 
 // Deep-substitute a type node under the active _typeSubst (see the header). A bare param -> its
@@ -3550,7 +3577,9 @@ bool CEmitter::argCarriesUnboundParam(const SharedIdentifier& a)
 // `Box<T>` holding `List<T>` registers `List_int32`. Deduped by the mangled name.
 void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifierList args)
 {
-    if (!args || args->empty()) return;
+    // Empty args is valid ONLY for a bare all-defaulted generic (`BitSet` == `BitSet<GlobalAllocator>`);
+    // otherwise there is nothing to instantiate. Below, `args` may be null/empty (defaults fill every slot).
+    if ((!args || args->empty()) && !allTypeParamsDefaulted(tmpl)) return;
     const std::vector<std::string>& params = _genericTypeParams[tmpl];
 
     // Resolve each arg to its concrete binding — DEEPLY (a nested `Rc<T>` -> `Rc<Counter>`), so a
@@ -3558,7 +3587,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // and loop mangleElem for a mutually-recursive generic type).
     // Bind the use-site args to the template's params: leading POSITIONAL, then NAMED overrides
     // (`A: Arena` skips an earlier default), then fill trailing unbound params from their `= Default`.
-    int line = args->front() ? args->front()->line : 0;
+    int line = (args && !args->empty() && args->front()) ? args->front()->line : 0;
     auto dit = _genericTypeDefaults.find(tmpl);
     const std::vector<SharedIdentifier> emptyDefs;
     const std::vector<SharedIdentifier>& defs = dit != _genericTypeDefaults.end() ? dit->second : emptyDefs;
@@ -3659,7 +3688,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         auto bctx = _genericTypeCtx.find(tmpl);
         if (bctx != _genericTypeCtx.end()) _nsCtx = bctx->second;
         for (size_t i = 0; i < params.size() && i < bounds->size(); ++i)
-            checkBounds(params[i], concrete[i], (*bounds)[i], args->front() ? args->front()->line : 0);
+            checkBounds(params[i], concrete[i], (*bounds)[i], line);   // `line` is null-args-safe (bare all-defaulted use)
         _nsCtx = savedBoundCtx;
     }
 
@@ -8916,7 +8945,10 @@ std::string CEmitter::exprClass(SharedExpression e)
             ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
             if (owner)
                 for (auto& f : owner->fields)
-                    if (f.name == *id->value && f.type && isClass(cType(f.type))) return cType(f.type);
+                    if (f.name == *id->value && f.type) {   // resolve under the OWNER instance's type args
+                        std::string ft = cTypeInInstance(_currentClass->name, f.type);
+                        if (isClass(ft)) return ft;
+                    }
         }
         return "";
     }
@@ -8929,8 +8961,13 @@ std::string CEmitter::exprClass(SharedExpression e)
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)
                 for (auto& f : owner->fields)
-                    if (f.name == *ma->identifier->value && f.type && isClass(cType(f.type)))
-                        return cType(f.type);
+                    if (f.name == *ma->identifier->value && f.type) {
+                        // Resolve the field type under its OWNER INSTANCE's type args — NOT the ambient
+                        // _typeSubst, which inside an enum-variant/arg emission may bind only some params
+                        // (e.g. `Optional<T>`'s `T`), leaving a nested `DynamicArray<T,A>`'s `A` unbound.
+                        std::string ft = cTypeInInstance(recv, f.type);
+                        if (isClass(ft)) return ft;
+                    }
         }
         return "";
     }

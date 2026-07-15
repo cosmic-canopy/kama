@@ -227,7 +227,7 @@ serialization, networking).
        accumulation, i.e. a keyed-hash protocol + OS entropy + per-map seed storage. It **rides this same
        pluggable `Hasher` seam non-breakingly** (no existing `Map<K,V>` changes), so it's a clean future
        milestone — do NOT ship a finish-stage `SeededHasher` (misleading safety for the case that matters).
-  3. **Custom allocator (M10). 🚧 M10a DONE.** The containers hardcoded `malloc`/`realloc`/`calloc`/`free`;
+  3. **Custom allocator (M10). ✅ M10a + M10b DONE.** The containers hardcoded `malloc`/`realloc`/`calloc`/`free`;
      now the memory source is a type parameter `A: Allocator = GlobalAllocator` (rides the M8 default, so
      `DynamicArray<T>` / `Map<K,V>` are unchanged). The contract is a copyable **value handle** (à la C++
      `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig `std.mem.Allocator`): `type contract Allocator for
@@ -245,9 +245,20 @@ serialization, networking).
        Also fixed a latent M8 bug it exposed: a defaulted-type-param generic returned by a free function
        cached an unfilled monomorph name in its `retCType` (params/defaults/ctx are now recorded in the
        type pre-registration pass, ahead of `collectSignatures`).
-     - **M10b (remaining):** thread `A` through the rest of the direct-`malloc` containers — `Deque<T,A>`,
-       `FixedArray<T,A>`, `BitSet<A>` (gains its first type param), `SlotMap<V,A>`, `PriorityQueue<T,A>`.
-       No new emitter surface (mechanical repeats of the DynamicArray pattern).
+     - **M10b shipped:** threaded `A` through the rest of the direct-heap containers — `Deque<T,A>`,
+       `FixedArray<T,A>` (eager ctor → `withAllocator(allocator:, size:)` + private `allocBuffer` helper +
+       `memset`), `BitSet<A>` (its FIRST type param — a plain `BitSet` is now the all-defaulted instance),
+       `SlotMap<V,A>`, and `PriorityQueue<T,A>` (owns no buffer; threads `A` to its embedded
+       `DynamicArray<T,A>`, with `withAllocator(allocator:, maxOrder:)`). Fixtures `alloc_{deque,fixedarray,
+       bitset,slotmap,pq}_arena` + `alloc_collections_default`, triple-green 533/533/533. Needed two emitter
+       fixes (both exercised for the first time by BitSet + the two-param PriorityQueue field):
+       (a) a BARE all-defaulted generic (`BitSet` ≡ `BitSet<GlobalAllocator>`) now resolves everywhere — cType/
+       mangleElem/scanType/registerGenericTypeInst fill from defaults on empty args, the local-decl guard
+       allows it, and the bounds check is null-args-safe; (b) `exprClass` resolves a field's type under its
+       OWNER instance's type args (`cTypeInInstance`), not the ambient `_typeSubst` — which inside an enum-
+       variant/arg emission (`Optional::Some(copy this.data[0])`) bound only `Optional<T>`'s `T`, leaving a
+       nested `DynamicArray<T,A>`'s `A` unbound. Also made `PriorityQueue::minHeap`/`maxHeap` return the
+       enclosing `A` (a private-field write from the wrong instance otherwise).
      - **SortedMap / SortedSet — deferred (needs M11).** Their B-tree node *boxes* come from `new
        BTreeNode<…>` (a global-heap `Owned`), so a custom `A` can only reach the inner arrays, not the
        nodes — a half-honored allocator, worse than none (reset the arena and the node boxes survive on the
