@@ -95,14 +95,15 @@ remains here is genuinely later-track or opt-in.
   moved-set is keyed by variable **name**, not by the scoped binding; it must be scoped to the declaration and
   reset when a name is re-declared. Workaround: rename the later variable. A correctness-of-diagnostics bug
   (rejects valid code), not a miscompile.
-- **BUG — generic `DynamicArray<V>.operator[]` mis-lowers to a raw pointer subscript inside a nested
-  argument.** Surfaced writing `SortedMap` (M6): `return Optional::Some(value: this.clone(v: this.d[i]))` where
-  `d` is a generic `DynamicArray<V>` field emits `this.d[i]` as a **raw pointer index** (→ "raw pointer access
-  requires an `unsafe {}` block", and under `unsafe` a C "subscripted value is not an array" on the struct)
-  instead of resolving `operator[]`. It only bites when the indexing is nested inside another call's argument
-  in a return (`Some(value: f(this.d[i]))`); binding to a local first (`V x = this.d[i]; … Some(value: x)`)
-  resolves `operator[]` correctly. The nested-in-argument position skips user-`operator[]` resolution for a
-  generically-typed element and falls back to raw `Ptr` subscripting.
+- **✅ FIXED (M10b, `55adb51`) — generic `DynamicArray<V>.operator[]` mis-lowered to a raw pointer subscript
+  inside a nested argument.** Surfaced writing `SortedMap` (M6): `return Optional::Some(value: this.clone(v:
+  this.d[i]))` where `d` is a generic `DynamicArray<V>` field emitted `this.d[i]` as a raw pointer index
+  instead of resolving `operator[]`. Root cause (found via lldb during M10b): the emission ran under the enum
+  variant's `_typeSubst` (only `Optional<T>`'s `T` bound), so `exprClass` resolving `this.d`'s field type
+  `DynamicArray<T,A>` left the `A` param unbound → non-class → the raw-`Ptr` fallback. Fix: `exprClass` now
+  resolves a field's type under its OWNER instance's type args (`cTypeInInstance`), not the ambient subst. The
+  `SortedMap` "bind to a local first" workarounds were removed; regression fixture
+  `generic_index_optional_return`.
 - **DIAGNOSTIC — `DynamicArray<View>` (a `view` element in a LIBRARY collection) rejects with a confusing
   message.** Surfaced writing `View` (M7): a view as a collection element is correctly rejected, but only the
   *intrinsic* collection-element check (`registerCollection`) emits the clean "a view can't be a collection

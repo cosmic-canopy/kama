@@ -1,0 +1,36 @@
+// Regression (was a ROADMAP §2 known bug, fixed in M10b): a generic `DynamicArray<V>` field's
+// `operator[]` nested inside a call argument in a `return Optional::Some(...)` must resolve the USER
+// operator[] — not fall back to a raw-pointer subscript ("raw pointer access requires unsafe"). Root
+// cause was `exprClass` resolving `this.d`'s field type under the ambient `_typeSubst` (the enum
+// variant's, which bound only `Optional<T>`'s `T`), leaving `DynamicArray<T,A>`'s `A` unbound; now it
+// resolves under the field's OWNER instance (`cTypeInInstance`). SortedMap used to work around it by
+// binding the cloned value to a local first.
+import std::collections::{DynamicArray};
+
+type resource Store<V> {
+    DynamicArray<V> d;
+    public Store() { this.d = DynamicArray(); }
+    public fn void add(V x) { this.d.add(item: give x); }
+    fn V clone(ref V v) when [V: Copyable] { return copy v; }
+
+    // operator[] nested inside `clone(...)`'s argument, inside `Some(...)`, inside a return.
+    public fn Optional<V> cloned(int32 i) when [V: Copyable] {
+        if (i < 0 || i >= this.d.length()) { return Optional::None; }
+        return Optional::Some(value: this.clone(v: this.d[i]));
+    }
+    // bare operator[] directly inside `Some(...)` in a return.
+    public fn Optional<V> direct(int32 i) when [V: Copyable] {
+        if (i < 0 || i >= this.d.length()) { return Optional::None; }
+        return Optional::Some(value: this.d[i]);
+    }
+}
+
+fn int32 main() {
+    int32 r = 0;
+    Store<int32> s = Store(); s.add(x: 5); s.add(x: 9);
+    Optional<int32> a = s.cloned(i: 1);
+    int32 av = match (a) { case Some(x): x; case None: 0; };  // 9
+    Optional<int32> b = s.direct(i: 0);
+    int32 bv = match (b) { case Some(x): x; case None: 0; };  // 5
+    return av + bv;   // 14
+}

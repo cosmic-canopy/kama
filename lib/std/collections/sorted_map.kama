@@ -84,7 +84,7 @@ type resource BTreeNode<K: Comparable, V> {
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o) { case Equal: 0; case Greater: 1; case Less: 2; };
-            if (d == 0) { V cv = this.cloneVal(v: this.vals[i]); return Optional::Some(value: give cv); }
+            if (d == 0) { return Optional::Some(value: this.cloneVal(v: this.vals[i])); }
             if (d == 1) { if (this.leaf) { return Optional::None; } return this.kids[i].get(key: key); }
             i = i + 1;
         }
@@ -192,7 +192,7 @@ type resource BTreeNode<K: Comparable, V> {
     public fn Optional<K> minKey() when [K: Copyable] {
         if (this.leaf) {
             if (this.keys.length() == 0) { return Optional::None; }
-            K k = this.cloneKey(k: this.keys[0]); return Optional::Some(value: give k);
+            return Optional::Some(value: this.cloneKey(k: this.keys[0]));
         }
         return this.kids[0].minKey();
     }
@@ -200,7 +200,7 @@ type resource BTreeNode<K: Comparable, V> {
         if (this.leaf) {
             int32 n = this.keys.length();
             if (n == 0) { return Optional::None; }
-            K k = this.cloneKey(k: this.keys[n - 1]); return Optional::Some(value: give k);
+            return Optional::Some(value: this.cloneKey(k: this.keys[n - 1]));
         }
         return this.kids[this.keys.length()].maxKey();
     }
@@ -212,7 +212,7 @@ type resource BTreeNode<K: Comparable, V> {
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o) { case Less: 0; case Equal: 1; case Greater: 2; };
-            if (d == 1) { K k = this.cloneKey(k: this.keys[i]); return Optional::Some(value: give k); }
+            if (d == 1) { return Optional::Some(value: this.cloneKey(k: this.keys[i])); }
             if (d == 2) { break; }
             cand = i; i = i + 1;
         }
@@ -221,7 +221,7 @@ type resource BTreeNode<K: Comparable, V> {
             bool got = match (cf) { case Some(x): true; case None: false; };
             if (got) { return cf; }
         }
-        if (cand >= 0) { K k = this.cloneKey(k: this.keys[cand]); return Optional::Some(value: give k); }
+        if (cand >= 0) { return Optional::Some(value: this.cloneKey(k: this.keys[cand])); }
         return Optional::None;
     }
     public fn Optional<K> ceil(ref K key) when [K: Copyable] {
@@ -229,7 +229,7 @@ type resource BTreeNode<K: Comparable, V> {
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o) { case Less: 0; case Equal: 1; case Greater: 2; };
-            if (d == 1) { K k = this.cloneKey(k: this.keys[i]); return Optional::Some(value: give k); }
+            if (d == 1) { return Optional::Some(value: this.cloneKey(k: this.keys[i])); }
             if (d == 2) { break; }
             i = i + 1;
         }
@@ -238,7 +238,7 @@ type resource BTreeNode<K: Comparable, V> {
             bool got = match (cc) { case Some(x): true; case None: false; };
             if (got) { return cc; }
         }
-        if (i < n) { K k = this.cloneKey(k: this.keys[i]); return Optional::Some(value: give k); }
+        if (i < n) { return Optional::Some(value: this.cloneKey(k: this.keys[i])); }
         return Optional::None;
     }
 
