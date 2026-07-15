@@ -1463,16 +1463,37 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // A returned place must borrow something that OUTLIVES the call — `this` (the caller owns
             // the receiver) or a `ref` parameter (a borrow the caller holds). A place rooted at a
             // LOCAL would dangle the moment the callee returns. Targeted rule, no lifetimes.
-            std::string root = retExpr ? rootBinding(retExpr) : std::string();
+            //
+            // Chained ref-return: when the place is itself a place-returning method call
+            // (`recv.getRef(...)`), its result borrows the RECEIVER — exactly as `operator[]` /`.`/`[]`
+            // already do (the place "borrows self, which outlives the call", above). The callee is itself
+            // subject to THIS same check, so it can only hand back a borrow of its own `this` (= recv) or a
+            // ref-param — never one of its locals. So trace the root through the call to the receiver: a
+            // `this`-rooted receiver is accepted, a local receiver is still (correctly) rejected. This is
+            // the structural root-tracing stepped one level through the call — no lifetime analysis added.
+            std::string root;
+            if (retExpr) {
+                if (auto* inv = dynamic_cast<InvocationNode*>(retExpr.get())) {
+                    if (inv->expression)
+                        if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
+                            if (ma->expression) root = rootBinding(ma->expression);   // receiver's root
+                }
+                if (root.empty()) root = rootBinding(retExpr);   // non-call place (field/element/this)
+            }
             if (root != "this" && !_refParams.count(root))
                 unsupported("a `ref T` result must borrow `this` or a `ref` parameter — returning a "
                             "place into a local would dangle", n->line);
+            // A place-returning CALL (`return recv.getRef(...)`) already yields the borrow as a pointer, so
+            // return it directly; a structural place (`this.f[i]`) is an lvalue we address with `&`.
+            bool retIsPlaceCall = retExpr && dynamic_cast<InvocationNode*>(retExpr.get()) != nullptr;
             bool ph = _hoistOK; _hoistOK = true;
             std::string p = retExpr ? emitPlace(retExpr) : std::string("0");
             _hoistOK = ph;
             flushHoisted(depth);
             emitUnwindAll(depth);
-            indent(depth); *_out << "return &(" << p << ");\n";
+            indent(depth);
+            if (retIsPlaceCall) *_out << "return " << p << ";\n";
+            else                *_out << "return &(" << p << ");\n";
             return;
         }
         // Capture the return value BEFORE running any destructors (it may

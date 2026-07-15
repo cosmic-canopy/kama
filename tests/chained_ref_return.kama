@@ -1,0 +1,57 @@
+// A `fn ref T` may RETURN the result of a place-returning method call (`recv.getRef(...)`) when the
+// receiver roots at `this` — a chained/recursive borrow that forwards up through `Owned` deref and
+// `DynamicArray.operator[]`. The returned `ref` borrows the receiver (which outlives the call), exactly as
+// `operator[]` already does; the escape checker traces the root through the call instead of rejecting it.
+// Consistent with Kama's RAII-without-lifetime-tracking model: it dangles only if held across a structural
+// change, the usual borrow rule. Here a two-level tree hands back an in-place borrow read + mutated.
+import std::collections::{DynamicArray};
+import std::memory::{Owned};
+
+type resource Node {
+    DynamicArray<int32> vals;
+    DynamicArray<Owned<Node>> kids;
+    bool leaf;
+    public Node(bool leaf) {
+        DynamicArray<int32> v = DynamicArray(); DynamicArray<Owned<Node>> c = DynamicArray();
+        this.vals = give v; this.kids = give c; this.leaf = leaf;
+    }
+    public fn void add(int32 x) { this.vals.add(item: x); }
+    public fn void addKid(Owned<Node> c) { this.kids.add(item: give c); }
+    // borrow the value at (child `c`, index `i`) IN PLACE — a leaf returns its own slot directly (borrows
+    // `this`), an internal node FORWARDS the borrow from its child (a place-call whose receiver `this.kids[c]`
+    // roots at `this`). The forwarded `ref` is returned straight up the recursion.
+    public fn ref int32 slot(int32 c, int32 i) {
+        if (this.leaf) { return this.vals[i]; }
+        return this.kids[c].slot(c: 0, i: i);
+    }
+}
+
+type resource Tree {
+    Owned<Node> root;
+    public Tree(Owned<Node> r) { this.root = give r; }
+    public fn ref int32 slot(int32 c, int32 i) { return this.root.slot(c: c, i: i); }  // another forward layer
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    Owned<Node> root = new Node(leaf: false);
+    Owned<Node> child = new Node(leaf: true);
+    child.add(x: 10); child.add(x: 20); child.add(x: 30);
+    root.addKid(c: give child);
+    Tree t = Tree(r: give root);
+
+    // (a) read a borrow chained through Tree -> root(Owned) -> child(Owned) -> vals[i]
+    int32 a = t.slot(c: 0, i: 1);
+    if (a == 20) { r = r + 10; }
+
+    // (b) mutate in place through the chained borrow (the ref is a real lvalue)
+    t.slot(c: 0, i: 2) = 300;
+    int32 b = t.slot(c: 0, i: 2);
+    if (b == 300) { r = r + 10; }
+
+    // (c) the other slots are unchanged
+    if (t.slot(c: 0, i: 0) == 10) { r = r + 10; }
+
+    return r;   // 30
+}
