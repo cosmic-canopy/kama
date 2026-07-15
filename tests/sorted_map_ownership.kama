@@ -1,0 +1,64 @@
+// SortedMap ownership: an owning KEY (string, lexicographic Comparable) and a MOVE-ONLY value (a `resource`
+// with no copy) ride through the B-tree's splits, borrows, merges, and predecessor/successor swaps with their
+// ownership intact — the ASan gate. A move-only value is borrowed + mutated in place via getRef, reclaimed on
+// remove, and the rest drop when the map goes out of scope (no leak, no double-free).
+import std::collections::{SortedMap, DynamicArray};
+
+// A move-only value (no `Copyable`): proves the tree never copies or drops a value it shouldn't.
+type resource Counter {
+    int32 n;
+    public Counter(int32 n) { this.n = n; }
+    public fn void bump() { this.n = this.n + 1; }
+    public fn int32 get() { return this.n; }
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // (a) owning string keys, lexicographic order, enough to split.
+    SortedMap<string, int32> sm = SortedMap();
+    sm.put(key: "delta", value: 4); sm.put(key: "alpha", value: 1); sm.put(key: "echo", value: 5);
+    sm.put(key: "bravo", value: 2); sm.put(key: "golf", value: 7); sm.put(key: "charlie", value: 3);
+    sm.put(key: "foxtrot", value: 6); sm.put(key: "hotel", value: 8); sm.put(key: "india", value: 9);
+    sm.put(key: "juliet", value: 10); sm.put(key: "kilo", value: 11); sm.put(key: "lima", value: 12);
+    if (sm.length() == 12) { r = r + 5; }
+    string alpha = "alpha"; string lima = "lima";
+    Optional<string> f = sm.first(); Optional<string> l = sm.last();
+    bool ends = match (f) { case Some(x): x.equals(other: alpha); case None: false; }
+             && match (l) { case Some(x): x.equals(other: lima); case None: false; };
+    if (ends) { r = r + 5; }
+    // lexicographic sorted iteration
+    DynamicArray<string> ks = sm.keys();
+    string prev = ""; bool sorted = true; int32 cnt = 0;
+    foreach (string k in ks) {
+        Ordering o = k.compareTo(other: prev);
+        bool gt = match (o) { case Greater: true; case Less: false; case Equal: false; };
+        if (!gt) { sorted = false; }
+        prev = give k; cnt = cnt + 1;
+    }
+    if (sorted && cnt == 12) { r = r + 5; }
+    // remove owning keys -> forces a merge; the string keys drop cleanly
+    string rd = "delta"; string re = "echo"; string rf = "foxtrot";
+    sm.remove(key: rd); sm.remove(key: re); sm.remove(key: rf);
+    if (sm.length() == 9 && !sm.contains(key: rd)) { r = r + 5; }
+
+    // (b) MOVE-ONLY values: insert 40 (forces splits), mutate one in place via getRef, reclaim one on remove.
+    SortedMap<int32, Counter> cm = SortedMap();
+    int32 i = 0;
+    while (i < 40) { int32 kk = (i * 17) % 40; cm.put(key: kk, value: Counter(n: kk)); i = i + 1; }
+    if (cm.length() == 40) { r = r + 5; }
+    cm.getRef(key: 20).bump(); cm.getRef(key: 20).bump();       // borrow + mutate in place (chained ref)
+    int32 b = cm.getRef(key: 20).get();
+    if (b == 22) { r = r + 5; }
+    Optional<Counter> got = cm.remove(key: 33);                  // reclaim the moved-out value
+    int32 rv = match (got) { case Some(c): c.get(); case None: 0 - 1; };
+    if (rv == 33) { r = r + 5; }
+    if (cm.length() == 39) { r = r + 5; }
+    // delete a scrambled third -> merges/borrows relocating move-only values
+    i = 0;
+    while (i < 40) { if (i % 3 == 0) { cm.remove(key: i); } i = i + 1; }
+    // the remaining Counters drop when `cm` leaves scope — ASan verifies no leak / double-free
+    if (cm.length() < 40) { r = r + 5; }
+
+    return r;   // 9 asserts * 5 = 45
+}

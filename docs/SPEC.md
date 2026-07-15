@@ -212,6 +212,20 @@ counter (odd while occupied, bumped on every insert/remove), so a handle can saf
 and a dangling handle is caught, not a use-after-free. `contains(handle:)`, `length`/`isEmpty`, `clear`, and
 `values()`/`valuesMut()` (iterate the live values, copy or borrow) round it out.
 
+**`SortedMap<K: Comparable, V>` / `SortedSet<K: Comparable>`** are the **ordered** map/set — a **B-tree**
+(min-degree 6; peer: Rust `BTreeMap`, C++ `std::map`) keyed by `Comparable.compareTo`, not a hash. They mirror
+`Map`/`Set` (`put`/`get`(copy)/`getRef`(in-place borrow, panics absent)/`remove -> Optional<V>`/`contains`/
+`length`/`isEmpty`/`clear`/deep `copy`/JSON serde), but keys stay **sorted**, so they add the ordered queries a
+hash map can't answer: `first()`/`last()` (min/max key), `floor(key:)`/`ceil(key:)` (nearest ≤ / ≥), `range
+(from:, to:)` (a half-open key window), and `keys()`/`values()` (resp. `SortedSet.elements()`) yielding a fresh
+`DynamicArray` of copies in **ascending order** (serde likewise emits an ascending pair array). Each node backs
+its keys, values, and child boxes with `DynamicArray` (reusing its move-out / shift / RAII) and holds children
+as `Owned<BTreeNode>` heap boxes, so a subtree moves as one owned pointer and the splits (insert) / borrows +
+merges + predecessor-swaps (remove) relocate move-only keys **and** values with ownership intact. `getRef`
+forwards an in-place borrow up the tree via the escape checker's chained-ref-return rule (a `fn ref T` may
+return a place-returning method call whose receiver roots at `this`). `SortedSet<K>` wraps `SortedMap<K, Unit>`,
+as `Set` wraps `Map`.
+
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 
 The smart-pointer triad `Owned`/`Shared`/`Weak` is **prelude / built-in — always in scope, no `import`**.

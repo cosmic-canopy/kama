@@ -1,0 +1,29 @@
+// SortedMap serializes as a JSON array of {"key","value"} objects in ASCENDING key order (unlike Map, whose
+// order is hash-arbitrary), and round-trips through decode. String keys exercise an owning-key round-trip.
+import std::collections::{SortedMap};
+import std::serialization::json::{encode, decode};
+
+fn int main() {
+    SortedMap<string, int32> m = SortedMap();
+    m.put(key: "cherry", value: 3); m.put(key: "apple", value: 1);
+    m.put(key: "banana", value: 2); m.put(key: "date", value: 4);
+
+    string j = encode(v: m);
+    Result<SortedMap<string, int32>, DeError> res = decode::<SortedMap<string, int32>>(src: give j);
+    int32 r = 0;
+    match (res) {
+        case Ok(m2): {
+            if (m2.length() == 4) { r = r + 10; }
+            string b = "banana";
+            int32 g = match (m2.get(key: b)) { case Some(v): v; case None: 0 - 1; };
+            if (g == 2) { r = r + 10; }
+            string apple = "apple"; string date = "date";
+            Optional<string> f = m2.first(); Optional<string> l = m2.last();
+            bool ends = match (f) { case Some(x): x.equals(other: apple); case None: false; }
+                     && match (l) { case Some(x): x.equals(other: date); case None: false; };
+            if (ends) { r = r + 10; }                     // deserialized tree is correctly ordered
+        }
+        case Err(e): { r = 0 - 1; }
+    };
+    return r;   // 30
+}

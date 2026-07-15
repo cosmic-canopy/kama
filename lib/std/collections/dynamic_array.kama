@@ -59,6 +59,26 @@ type resource DynamicArray<T> implements Copyable(bare: give) when [T: Copyable]
 
     public fn int32 length() { return this.len; }
 
+    // Insert `item` at `index` (0..len), shifting the elements at `index..len` up one slot; `index == len`
+    // is a plain append. The order-preserving counterpart to `remove` — for an ordered insert (e.g. a
+    // sorted array or a B-tree node keeping its keys sorted). The tail shift goes through a LOCAL pointer
+    // alias (`d[i] = d[i-1]`, a raw relocation) exactly like `remove`; the incoming element is the tracked
+    // `give` hand-off into the opened slot (the field-ptr target, like `add`).
+    public fn void insertAt(int32 index, T item) {
+        if (index < 0 || index > this.len) { panic(msg: "DynamicArray.insertAt index out of bounds"); }
+        if (this.len == this.cap) {
+            int32 nc = this.cap == 0 ? 4 : this.cap * 2;
+            unsafe { this.data = cast<Ptr<T>>(realloc(p: cast<Ptr>(this.data), n: cast<usize>(nc) * sizeof(T))); }
+            this.cap = nc;
+        }
+        Ptr<T> d = this.data;
+        int32 i = this.len;
+        unsafe { while (i > index) { d[i] = d[i - 1]; i = i - 1; } }   // open slot `index` (raw tail shift)
+        unsafe { this.data[index] = give item; }                      // tracked hand-off into the slot
+        this.len = this.len + 1;
+        this.mods = this.mods + 1;                                     // structural change — invalidates iterators
+    }
+
     public ref T operator[](int32 i) {
         if (i < 0 || i >= this.len) { panic(msg: "DynamicArray index out of bounds"); }
         unsafe { return this.data[i]; }

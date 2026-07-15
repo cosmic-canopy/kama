@@ -1,0 +1,546 @@
+namespace std::collections;
+import std::memory::{Owned};
+export { SortedMap };
+
+// An ordered map over `K: Comparable` -> `V`, backed by a B-tree (peer: Rust `BTreeMap`, C++ `std::map`).
+// Unlike `Map` (a hash table, unordered), a `SortedMap` keeps its keys in ascending `compareTo` order, so
+// iteration yields entries sorted and it answers ordered queries (`first`/`last`/`floor`/`ceil`/`range`)
+// that a hash map can't. Move-only by default (it owns the tree, which owns every key + value); deep-copies
+// exactly when both key and value are `Copyable`.
+//
+// The tree has min-degree B = 6: every node holds 5..11 keys (a full node is 11 = 2B-1 keys / 12 children),
+// except the root which may hold as few as 1. Height stays O(log_B n), so lookup / insert / remove are all
+// O(log n). Insert splits full children on the way down (CLRS preemptive split); remove borrows-or-merges a
+// thin child before descending, so the tree stays balanced without a second upward pass.
+//
+// Each node backs its keys, values, and child boxes with `DynamicArray`, so every element move (insert,
+// remove, the split/merge relocations) reuses the array's tested move-out / shift / RAII machinery instead
+// of hand-rolled raw-pointer choreography. A child is an `Owned<BTreeNode>` heap box, so moving a whole
+// subtree between parents is a single owned-pointer move, and dropping a node recursively frees its subtree.
+
+// B-tree tuning: B = 6. A node is FULL at 2B-1 = 11 keys (split then); MINKEYS = B-1 = 5 is the floor for a
+// non-root node (borrow/merge below it). MEDIAN = B-1 = 5 is the index that rises on a split.
+//   (kept as small helper fns — a value read at each use, no module-level mutable state.)
+
+// A single B-tree node. Internal to the module — reached only through `SortedMap` and its iterators. All the
+// B-tree algorithms live here as methods so `this` touches its own `keys`/`vals`/`kids` fields directly (the
+// normal in-place field mutation); a child is mutated via `this.kids[c].method()` (auto-deref through the
+// `Owned` box) and whole subtrees move via `this.kids.remove(...)` / `insertAt(...)`.
+type resource BTreeNode<K: Comparable, V> {
+    DynamicArray<K> keys;
+    DynamicArray<V> vals;                              // parallel to keys (vals[i] belongs to keys[i])
+    DynamicArray<Owned<BTreeNode<K,V>>> kids;          // empty for a leaf; length == keys.length()+1 internal
+    bool leaf;
+
+    public BTreeNode(bool leaf) {
+        DynamicArray<K> k = DynamicArray();
+        DynamicArray<V> v = DynamicArray();
+        DynamicArray<Owned<BTreeNode<K,V>>> c = DynamicArray();
+        this.keys = give k; this.vals = give v; this.kids = give c; this.leaf = leaf;
+    }
+
+    public fn int32 keyCount() { return this.keys.length(); }
+    public fn bool isLeaf() { return this.leaf; }
+    public fn bool full() { return this.keys.length() >= 11; }      // 2B-1
+
+    // Three-way compare through a `ref K` receiver so a primitive key's scalar retro-impl resolves (a raw
+    // `this.keys[i].compareTo(...)` receiver wouldn't) — the `Map.eqKeys` / `PriorityQueue.higher` idiom.
+    fn Ordering cmpKeys(ref K a, ref K b) { return a.compareTo(other: b); }
+    fn V cloneVal(ref V v) when [V: Copyable] { return copy v; }
+    fn K cloneKey(ref K k) when [K: Copyable] { return copy k; }
+
+    // --- element hand-off helpers (move-only-safe; delegate to the tested DynamicArray ops) ---
+    fn void pushKeyVal(K key, V value) { this.keys.add(item: give key); this.vals.add(item: give value); }
+    fn void insertKeyVal(int32 i, K key, V value) {
+        this.keys.insertAt(index: i, item: give key); this.vals.insertAt(index: i, item: give value);
+    }
+    fn K takeKeyAt(int32 i) { return this.keys.remove(index: i); }   // move the key out (+ shift)
+    fn V takeValAt(int32 i) { return this.vals.remove(index: i); }
+    fn void pushKid(Owned<BTreeNode<K,V>> c) { this.kids.add(item: give c); }
+    fn void insertKidAt(int32 i, Owned<BTreeNode<K,V>> c) { this.kids.insertAt(index: i, item: give c); }
+    fn Owned<BTreeNode<K,V>> takeKidAt(int32 i) { return this.kids.remove(index: i); }
+    // Overwrite the value at `i` in place: move the old value out (drop it), install the new one.
+    fn void overwriteVal(int32 i, V value) {
+        V old = this.vals.remove(index: i); drop(value: old);
+        this.vals.insertAt(index: i, item: give value);
+    }
+
+    // --- read paths ---
+    public fn bool contains(ref K key) {
+        int32 i = 0; int32 n = this.keys.length();
+        while (i < n) {
+            Ordering o = this.cmpKeys(a: this.keys[i], b: key);
+            int32 d = match (o) { case Equal: 0; case Greater: 1; case Less: 2; };
+            if (d == 0) { return true; }
+            if (d == 1) { if (this.leaf) { return false; } return this.kids[i].contains(key: key); }
+            i = i + 1;
+        }
+        if (this.leaf) { return false; }
+        return this.kids[i].contains(key: key);         // descend the rightmost child
+    }
+
+    public fn Optional<V> get(ref K key) when [V: Copyable] {
+        int32 i = 0; int32 n = this.keys.length();
+        while (i < n) {
+            Ordering o = this.cmpKeys(a: this.keys[i], b: key);
+            int32 d = match (o) { case Equal: 0; case Greater: 1; case Less: 2; };
+            if (d == 0) { V cv = this.cloneVal(v: this.vals[i]); return Optional::Some(value: give cv); }
+            if (d == 1) { if (this.leaf) { return Optional::None; } return this.kids[i].get(key: key); }
+            i = i + 1;
+        }
+        if (this.leaf) { return Optional::None; }
+        return this.kids[i].get(key: key);
+    }
+
+    // Borrow the stored value for `key` IN PLACE (any V — no Copyable bound), the read/mutate accessor that
+    // makes a SortedMap of move-only values first-class. PANICS on an absent key (guard with `contains`),
+    // like `Map.getRef`. The returned `ref V` chains up through each node's `getRef` (a place-returning call
+    // whose receiver roots at `this`); it dangles if held across a structural change, the usual borrow rule.
+    public fn ref V getRef(ref K key) {
+        int32 i = 0; int32 n = this.keys.length();
+        while (i < n) {
+            Ordering o = this.cmpKeys(a: this.keys[i], b: key);
+            int32 d = match (o) { case Equal: 0; case Greater: 1; case Less: 2; };
+            if (d == 0) { return this.vals[i]; }        // borrow the stored value in place
+            if (d == 1) { if (this.leaf) { panic(msg: "SortedMap.getRef: absent key"); } return this.kids[i].getRef(key: key); }
+            i = i + 1;
+        }
+        if (this.leaf) { panic(msg: "SortedMap.getRef: absent key"); }
+        return this.kids[i].getRef(key: key);
+    }
+
+    // --- insert ---
+    // Split the FULL child at index `i` of THIS (non-full) node: its median key/value rises into this node at
+    // `i`, its right half (keys/vals MEDIAN+1.., children MEDIAN+1..) migrates into a fresh right sibling `z`
+    // inserted at `i+1`, and the child keeps its left half. The child had 11 keys (0..10); median index = 5.
+    fn void splitChild(int32 i) {
+        bool childLeaf = this.kids[i].isLeaf();
+        Owned<BTreeNode<K,V>> z = new BTreeNode<K,V>(leaf: childLeaf);
+        // Move the child's right-half keys/vals (old indices 6..10) into z, in order. Removing at index 6
+        // repeatedly pulls each successive right-half element down to index 6 (the DynamicArray shift).
+        int32 t = 0;
+        while (t < 5) {                                  // MINKEYS = 5 right-half keys
+            K rk = this.kids[i].takeKeyAt(i: 6);
+            V rv = this.kids[i].takeValAt(i: 6);
+            z.pushKeyVal(key: give rk, value: give rv);
+            t = t + 1;
+        }
+        if (!childLeaf) {                                // move the right-half children (old indices 6..11)
+            int32 u = 0;
+            while (u < 6) {                              // B = 6 right-half children
+                Owned<BTreeNode<K,V>> gc = this.kids[i].takeKidAt(i: 6);
+                z.pushKid(c: give gc);
+                u = u + 1;
+            }
+        }
+        // The median is now the child's last key (index 5); move it up into this node, and wire z in.
+        K medK = this.kids[i].takeKeyAt(i: 5);
+        V medV = this.kids[i].takeValAt(i: 5);
+        this.insertKeyVal(i: i, key: give medK, value: give medV);
+        this.insertKidAt(i: i + 1, c: give z);
+    }
+
+    // Grow the tree's height by one WITHOUT moving this (root) box: relocate all of this node's keys/vals/
+    // children into a fresh child node, leave this node holding just that child, then split it. (A B-tree
+    // grows only at the root, and the root box is a field we can't `give` out — so we hollow it in place.)
+    public fn void growRootInPlace() {
+        Owned<BTreeNode<K,V>> child = new BTreeNode<K,V>(leaf: this.leaf);
+        while (this.keys.length() > 0) {
+            K k = this.keys.remove(index: 0); V v = this.vals.remove(index: 0);
+            child.pushKeyVal(key: give k, value: give v);
+        }
+        while (this.kids.length() > 0) {
+            Owned<BTreeNode<K,V>> gc = this.kids.remove(index: 0);
+            child.pushKid(c: give gc);
+        }
+        this.leaf = false;
+        this.kids.add(item: give child);     // this now holds 0 keys + the single (former-self) child
+        this.splitChild(i: 0);
+    }
+
+    // Insert (or overwrite) into THIS node, which is guaranteed NOT full. Returns true iff a NEW key was
+    // added (false on overwrite) so the map can track `len`. Splits a full target child before descending.
+    public fn bool insertNonFull(K key, V value) {
+        // Find the first index i where key <= keys[i] (linear — a node has <= 11 keys).
+        int32 i = 0; int32 n = this.keys.length(); bool stop = false;
+        while (i < n && !stop) {
+            Ordering o = this.cmpKeys(a: this.keys[i], b: key);
+            match (o) { case Less: { i = i + 1; } case Equal: { stop = true; } case Greater: { stop = true; } };
+        }
+        // Overwrite if keys[i] == key at this node.
+        bool over = false;
+        if (i < n) {
+            Ordering o2 = this.cmpKeys(a: this.keys[i], b: key);
+            over = match (o2) { case Equal: true; case Less: false; case Greater: false; };
+        }
+        if (over) { this.overwriteVal(i: i, value: give value); drop(value: key); return false; }
+
+        if (this.leaf) { this.insertKeyVal(i: i, key: give key, value: give value); return true; }
+
+        // Internal: descend into child i, splitting it first if full (then re-pick the side of the median).
+        if (this.kids[i].full()) {
+            this.splitChild(i: i);
+            Ordering o3 = this.cmpKeys(a: this.keys[i], b: key);
+            int32 d = match (o3) { case Less: 1; case Greater: 0; case Equal: 2; };
+            if (d == 2) { this.overwriteVal(i: i, value: give value); drop(value: key); return false; }
+            if (d == 1) { i = i + 1; }
+        }
+        return this.kids[i].insertNonFull(key: give key, value: give value);
+    }
+
+    // --- ordered min/max (leftmost / rightmost leaf) ---
+    public fn Optional<K> minKey() when [K: Copyable] {
+        if (this.leaf) {
+            if (this.keys.length() == 0) { return Optional::None; }
+            K k = this.cloneKey(k: this.keys[0]); return Optional::Some(value: give k);
+        }
+        return this.kids[0].minKey();
+    }
+    public fn Optional<K> maxKey() when [K: Copyable] {
+        if (this.leaf) {
+            int32 n = this.keys.length();
+            if (n == 0) { return Optional::None; }
+            K k = this.cloneKey(k: this.keys[n - 1]); return Optional::Some(value: give k);
+        }
+        return this.kids[this.keys.length()].maxKey();
+    }
+
+    // Greatest key <= `key` (floor) / least key >= `key` (ceil), None if none. A root-to-leaf descent
+    // tracking the best candidate at each level, preferring a closer one found deeper in the subtree.
+    public fn Optional<K> floor(ref K key) when [K: Copyable] {
+        int32 i = 0; int32 n = this.keys.length(); int32 cand = 0 - 1;
+        while (i < n) {
+            Ordering o = this.cmpKeys(a: this.keys[i], b: key);
+            int32 d = match (o) { case Less: 0; case Equal: 1; case Greater: 2; };
+            if (d == 1) { K k = this.cloneKey(k: this.keys[i]); return Optional::Some(value: give k); }
+            if (d == 2) { break; }
+            cand = i; i = i + 1;
+        }
+        if (!this.leaf) {
+            Optional<K> cf = this.kids[i].floor(key: key);
+            bool got = match (cf) { case Some(x): true; case None: false; };
+            if (got) { return cf; }
+        }
+        if (cand >= 0) { K k = this.cloneKey(k: this.keys[cand]); return Optional::Some(value: give k); }
+        return Optional::None;
+    }
+    public fn Optional<K> ceil(ref K key) when [K: Copyable] {
+        int32 i = 0; int32 n = this.keys.length();
+        while (i < n) {
+            Ordering o = this.cmpKeys(a: this.keys[i], b: key);
+            int32 d = match (o) { case Less: 0; case Equal: 1; case Greater: 2; };
+            if (d == 1) { K k = this.cloneKey(k: this.keys[i]); return Optional::Some(value: give k); }
+            if (d == 2) { break; }
+            i = i + 1;
+        }
+        if (!this.leaf) {
+            Optional<K> cc = this.kids[i].ceil(key: key);
+            bool got = match (cc) { case Some(x): true; case None: false; };
+            if (got) { return cc; }
+        }
+        if (i < n) { K k = this.cloneKey(k: this.keys[i]); return Optional::Some(value: give k); }
+        return Optional::None;
+    }
+
+    // In-order (ascending) collection of key/value copies into a caller-owned array — the eager backing for
+    // sorted iteration. (A lazy cursor would need raw node pointers, which the `Owned` boxes don't expose.)
+    public fn void collectKeys(ref DynamicArray<K> dest) when [K: Copyable] {
+        int32 i = 0; int32 n = this.keys.length();
+        while (i < n) {
+            if (!this.leaf) { this.kids[i].collectKeys(dest: dest); }
+            K k = this.cloneKey(k: this.keys[i]); dest.add(item: give k);
+            i = i + 1;
+        }
+        if (!this.leaf) { this.kids[n].collectKeys(dest: dest); }
+    }
+    public fn void collectVals(ref DynamicArray<V> dest) when [V: Copyable] {
+        int32 i = 0; int32 n = this.keys.length();
+        while (i < n) {
+            if (!this.leaf) { this.kids[i].collectVals(dest: dest); }
+            V v = this.cloneVal(v: this.vals[i]); dest.add(item: give v);
+            i = i + 1;
+        }
+        if (!this.leaf) { this.kids[n].collectVals(dest: dest); }
+    }
+
+    // --- delete helpers (each delegates to the backing DynamicArray's tested move-out / shift) ---
+    fn int32 kidCount() { return this.kids.length(); }
+    fn Owned<BTreeNode<K,V>> takeFirstKid() { return this.kids.remove(index: 0); }
+    fn Owned<BTreeNode<K,V>> takeLastKid() { return this.kids.remove(index: this.kids.length() - 1); }
+    // Remove + return THIS node's own last (resp. first) pair — the value by return, the key via out-pointer
+    // (no tuples; a `resource` pair can't expose fields). Used by the sibling rotations.
+    fn V popLastOwnPair(ref K outKey) {
+        int32 last = this.keys.length() - 1;
+        K k = this.keys.remove(index: last); V v = this.vals.remove(index: last);
+        outKey = give k; return give v;
+    }
+    fn V popFirstOwnPair(ref K outKey) {
+        K k = this.keys.remove(index: 0); V v = this.vals.remove(index: 0);
+        outKey = give k; return give v;
+    }
+    // Fold `other`'s keys/vals/children onto the END of this node, consuming it (used by merge + root shrink).
+    fn void absorb(Owned<BTreeNode<K,V>> other) {
+        while (other.keyCount() > 0) {
+            K k = other.takeKeyAt(i: 0); V v = other.takeValAt(i: 0);
+            this.pushKeyVal(key: give k, value: give v);
+        }
+        while (other.kidCount() > 0) { Owned<BTreeNode<K,V>> gc = other.takeFirstKid(); this.pushKid(c: give gc); }
+    }
+    // Remove + return the MAX (resp. MIN) pair of THIS subtree, rebalancing thin children on the way down so
+    // the invariant holds — a delete of the extreme key. Value by return, key via out-pointer.
+    fn V takeMaxPair(ref K outKey) {
+        if (this.leaf) {
+            int32 last = this.keys.length() - 1;
+            K k = this.keys.remove(index: last); V v = this.vals.remove(index: last);
+            outKey = give k; return give v;
+        }
+        int32 lastChild = this.keys.length();
+        int32 t = lastChild;
+        if (this.kids[lastChild].keyCount() < 6) { t = this.fill(i: lastChild); }   // < B == thin
+        return this.kids[t].takeMaxPair(outKey: outKey);
+    }
+    fn V takeMinPair(ref K outKey) {
+        if (this.leaf) {
+            K k = this.keys.remove(index: 0); V v = this.vals.remove(index: 0);
+            outKey = give k; return give v;
+        }
+        int32 t = 0;
+        if (this.kids[0].keyCount() < 6) { t = this.fill(i: 0); }
+        return this.kids[t].takeMinPair(outKey: outKey);
+    }
+    // Merge child i, separator keys[i]/vals[i], and child i+1 into child i (which then holds 2B-1 keys).
+    fn void mergeChildren(int32 i) {
+        K sepK = this.takeKeyAt(i: i); V sepV = this.takeValAt(i: i);   // separator out of THIS node
+        Owned<BTreeNode<K,V>> right = this.takeKidAt(i: i + 1);      // right child out of THIS node
+        this.kids[i].pushKeyVal(key: give sepK, value: give sepV);
+        this.kids[i].absorb(other: give right);                  // right's contents fold onto left child
+    }
+    // Rotate a key right (child i borrows from left sibling i-1) / left (borrows from right sibling i+1).
+    fn void borrowFromPrev(int32 i) {
+        K sepK = this.takeKeyAt(i: i - 1); V sepV = this.takeValAt(i: i - 1);
+        this.kids[i].insertKeyVal(i: 0, key: give sepK, value: give sepV);            // separator to child front
+        if (!this.kids[i].isLeaf()) {
+            Owned<BTreeNode<K,V>> lastKid = this.kids[i - 1].takeLastKid();
+            this.kids[i].insertKidAt(i: 0, c: give lastKid);
+        }
+        K upK; V upV = this.kids[i - 1].popLastOwnPair(outKey: upK);         // sibling max up
+        this.insertKeyVal(i: i - 1, key: give upK, value: give upV);
+    }
+    fn void borrowFromNext(int32 i) {
+        K sepK = this.takeKeyAt(i: i); V sepV = this.takeValAt(i: i);
+        this.kids[i].pushKeyVal(key: give sepK, value: give sepV);                     // separator to child end
+        if (!this.kids[i].isLeaf()) {
+            Owned<BTreeNode<K,V>> firstKid = this.kids[i + 1].takeFirstKid();
+            this.kids[i].pushKid(c: give firstKid);
+        }
+        K upK; V upV = this.kids[i + 1].popFirstOwnPair(outKey: upK);         // sibling min up
+        this.insertKeyVal(i: i, key: give upK, value: give upV);
+    }
+    // Ensure child i has >= B keys before a descend: borrow from a rich sibling, else merge. Returns the child
+    // index to descend into (a merge with the LEFT sibling shifts the target to i-1).
+    fn int32 fill(int32 i) {
+        if (i != 0) { if (this.kids[i - 1].keyCount() >= 6) { this.borrowFromPrev(i: i); return i; } }
+        if (i != this.keys.length()) { if (this.kids[i + 1].keyCount() >= 6) { this.borrowFromNext(i: i); return i; } }
+        if (i != this.keys.length()) { this.mergeChildren(i: i); return i; }
+        this.mergeChildren(i: i - 1); return i - 1;
+    }
+
+    // Remove `key` from THIS subtree (kept >= B keys by callers, or the root), returning its value moved out
+    // (None if absent). CLRS 3-case delete: leaf; internal (replace with predecessor/successor, or merge);
+    // descend (fill a thin child first).
+    public fn Optional<V> removeKey(ref K key) {
+        int32 i = 0; int32 n = this.keys.length();
+        while (i < n) {
+            Ordering o = this.cmpKeys(a: this.keys[i], b: key);
+            int32 d = match (o) { case Less: 0; case Equal: 1; case Greater: 2; };
+            if (d == 0) { i = i + 1; continue; }
+            break;
+        }
+        bool found = false;
+        if (i < n) {
+            Ordering o2 = this.cmpKeys(a: this.keys[i], b: key);
+            found = match (o2) { case Equal: true; case Less: false; case Greater: false; };
+        }
+
+        if (found) {
+            if (this.leaf) {                                     // CASE 1: leaf — remove in place
+                K k = this.keys.remove(index: i); drop(value: k);
+                V v = this.vals.remove(index: i);
+                return Optional::Some(value: give v);
+            }
+            if (this.kids[i].keyCount() >= 6) {                  // CASE 2a: predecessor from left child
+                V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i); drop(value: oldk);
+                K pk; V pv = this.kids[i].takeMaxPair(outKey: pk);
+                this.insertKeyVal(i: i, key: give pk, value: give pv);
+                return Optional::Some(value: give removed);
+            }
+            if (this.kids[i + 1].keyCount() >= 6) {              // CASE 2b: successor from right child
+                V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i); drop(value: oldk);
+                K sk; V sv = this.kids[i + 1].takeMinPair(outKey: sk);
+                this.insertKeyVal(i: i, key: give sk, value: give sv);
+                return Optional::Some(value: give removed);
+            }
+            this.mergeChildren(i: i);                            // CASE 2c: both thin — merge, then delete below
+            return this.kids[i].removeKey(key: key);
+        }
+
+        if (this.leaf) { return Optional::None; }                // absent
+        int32 t = i;
+        if (this.kids[i].keyCount() < 6) { t = this.fill(i: i); }   // fill a thin child before descending
+        return this.kids[t].removeKey(key: key);
+    }
+
+    // Root shrank to 0 keys after a merge: pull its single child's contents up, so the tree loses a level
+    // without moving the root box (which is a field we can't `give` out) — the mirror of growRootInPlace.
+    public fn void promoteOnlyChild() {
+        Owned<BTreeNode<K,V>> child = this.kids.remove(index: 0);
+        bool cl = child.isLeaf();
+        this.absorb(other: give child);
+        this.leaf = cl;
+    }
+
+    // In-order collect of the keys in [lo, hi) into `dest` — the ordered range query. Prunes subtrees that
+    // can't overlap the window: a child left of a key < lo is skipped, and the walk stops once a key >= hi.
+    public fn void collectRange(ref K lo, ref K hi, ref DynamicArray<K> dest) when [K: Copyable] {
+        int32 i = 0; int32 n = this.keys.length();
+        while (i < n) {
+            Ordering vsHi = this.cmpKeys(a: this.keys[i], b: hi);
+            bool geHi = match (vsHi) { case Less: false; case Equal: true; case Greater: true; };
+            if (geHi) {                                          // keys[i] >= hi: descend its left child, then stop
+                if (!this.leaf) { this.kids[i].collectRange(lo: lo, hi: hi, dest: dest); }
+                return;
+            }
+            Ordering vsLo = this.cmpKeys(a: this.keys[i], b: lo);
+            bool geLo = match (vsLo) { case Less: false; case Equal: true; case Greater: true; };
+            if (!this.leaf) { if (geLo) { this.kids[i].collectRange(lo: lo, hi: hi, dest: dest); } }
+            if (geLo) { K k = this.cloneKey(k: this.keys[i]); dest.add(item: give k); }   // lo <= keys[i] < hi
+            i = i + 1;
+        }
+        if (!this.leaf) { this.kids[n].collectRange(lo: lo, hi: hi, dest: dest); }
+    }
+
+    // Drop every key/value/child and reset to an empty leaf (the backing arrays' clear drops each element;
+    // dropping a child `Owned` recursively frees its subtree).
+    public fn void clearNode() { this.keys.clear(); this.vals.clear(); this.kids.clear(); this.leaf = true; }
+
+    // In-order emit of each entry as a `{"key":k,"value":v}` object (key/value through a `ref` helper so a
+    // primitive element's retro-impl `serialize` resolves) — the map serializes to a SORTED pair array.
+    fn void serKey(ref K k, ref Serializer w) when [K: Serialize] { k.serialize(w: w); }
+    fn void serVal(ref V v, ref Serializer w) when [V: Serialize] { v.serialize(w: w); }
+    public fn void serializeInto(ref Serializer w) when [K: Serialize, V: Serialize] {
+        int32 i = 0; int32 n = this.keys.length();
+        while (i < n) {
+            if (!this.leaf) { this.kids[i].serializeInto(w: w); }
+            w.beginObject();
+            w.fieldName(name: "key");   this.serKey(k: this.keys[i], w: w);
+            w.fieldName(name: "value"); this.serVal(v: this.vals[i], w: w);
+            w.endObject();
+            i = i + 1;
+        }
+        if (!this.leaf) { this.kids[n].serializeInto(w: w); }
+    }
+}
+
+// The ordered map. Its root is always a live `BTreeNode` (an empty leaf when the map is empty), so no path
+// special-cases a null root; `len` is the entry count. Every structural change bumps `mods` so a live
+// iterator can detect mid-iteration mutation.
+type resource SortedMap<K: Comparable, V>
+        implements Copyable(bare: give) when [K: Copyable, V: Copyable],
+                   Serialize when [K: Serialize, V: Serialize],
+                   Deserialize when [K: Deserialize, V: Deserialize] {
+    Owned<BTreeNode<K,V>> root;
+    int32 len; int32 mods;
+
+    public SortedMap() {
+        Owned<BTreeNode<K,V>> r = new BTreeNode<K,V>(leaf: true);
+        this.root = give r; this.len = 0; this.mods = 0;
+    }
+
+    public fn int32 length() { return this.len; }
+    public fn bool isEmpty() { return this.len == 0; }
+    public fn bool contains(ref K key) { return this.root.contains(key: key); }
+    public fn Optional<V> get(ref K key) when [V: Copyable] { return this.root.get(key: key); }
+    public fn ref V getRef(ref K key) { return this.root.getRef(key: key); }
+
+    // Insert or overwrite. Consumes both key and value (the tree owns what it stores). If the root is full,
+    // grow the height first: a fresh internal node adopts the old root as child 0 and splits it, so the new
+    // root has room — the only way a B-tree's height increases.
+    public fn void put(K key, V value) {
+        if (this.root.full()) { this.root.growRootInPlace(); }
+        bool inserted = this.root.insertNonFull(key: give key, value: give value);
+        if (inserted) { this.len = this.len + 1; }
+        this.mods = this.mods + 1;
+    }
+
+    // Remove the entry for `key`, returning its VALUE moved OUT (`None` when absent) — same ownership contract
+    // as `Map.remove`. If the root emptied (a merge pulled its last key down), drop a level in place.
+    public fn Optional<V> remove(ref K key) {
+        Optional<V> r = this.root.removeKey(key: key);
+        if (this.root.keyCount() == 0) { if (!this.root.isLeaf()) { this.root.promoteOnlyChild(); } }
+        bool removed = match (r) { case Some(v): true; case None: false; };
+        if (removed) { this.len = this.len - 1; this.mods = this.mods + 1; }
+        return r;
+    }
+
+    // Smallest / largest key (None when empty) — O(log n) leftmost/rightmost spine walk.
+    public fn Optional<K> first() when [K: Copyable] { if (this.len == 0) { return Optional::None; } return this.root.minKey(); }
+    public fn Optional<K> last() when [K: Copyable] { if (this.len == 0) { return Optional::None; } return this.root.maxKey(); }
+
+    // Greatest key <= `key` / least key >= `key` (None if none) — the ordered nearest-neighbour queries a
+    // hash map can't answer (timelines, ranges, floor/ceil lookups). Java NavigableMap's floorKey/ceilingKey.
+    public fn Optional<K> floor(ref K key) when [K: Copyable] { return this.root.floor(key: key); }
+    public fn Optional<K> ceil(ref K key) when [K: Copyable] { return this.root.ceil(key: key); }
+
+    // Ascending iteration: a fresh `DynamicArray` of key (resp. value) COPIES in sorted-key order — iterate
+    // with `foreach (K k in m.keys())`. Eager (materialized) so it reuses the array's tested iterator + stays
+    // valid independent of the tree; O(n) space. `values()` is ordered by key, parallel to `keys()`.
+    public fn DynamicArray<K> keys() when [K: Copyable] {
+        DynamicArray<K> acc = DynamicArray(); this.root.collectKeys(dest: acc); return give acc;
+    }
+    public fn DynamicArray<V> values() when [V: Copyable] {
+        DynamicArray<V> acc = DynamicArray(); this.root.collectVals(dest: acc); return give acc;
+    }
+
+    // Ascending keys in the half-open window [from, to) — the ordered range query (empty if from >= to).
+    public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable] {
+        DynamicArray<K> acc = DynamicArray(); this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
+    }
+
+    // Drop every entry, resetting to an empty single-leaf tree (keeps the root box).
+    public fn void clear() { this.root.clearNode(); this.len = 0; this.mods = this.mods + 1; }
+
+    // Deep-copy the whole map (present only when both key and value are Copyable): a fresh tree with an
+    // independent clone of every entry, rebuilt from the sorted key/value copies (popped from the end, an
+    // O(1) move each). `bare: give` — a plain hand-off still MOVES.
+    public fn SortedMap<K,V> copy() when [K: Copyable, V: Copyable] {
+        SortedMap<K,V> result = SortedMap();
+        DynamicArray<K> ks = this.keys();
+        DynamicArray<V> vs = this.values();
+        while (ks.length() > 0) {
+            int32 last = ks.length() - 1;
+            K k = ks.remove(index: last); V v = vs.remove(index: last);   // O(1) tail removal
+            result.put(key: give k, value: give v);
+        }
+        return give result;
+    }
+
+    // Serialize as a JSON array of `{"key":k,"value":v}` objects in ASCENDING key order (unlike `Map`, whose
+    // order is hash-arbitrary). Deserialize `put`s each pair back (the tree re-sorts).
+    public fn void serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
+        w.beginArray(count: cast<usize>(this.len));
+        this.root.serializeInto(w: w);
+        w.endArray();
+    }
+    public static fn SortedMap<K,V> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
+        SortedMap<K,V> result = SortedMap();
+        r.beginArray();
+        while (r.moreElems()) {
+            r.beginObject();
+            bool __f1 = r.moreFields(); string __n1 = r.fieldName(); K k = K::deserialize(r: r);
+            bool __f2 = r.moreFields(); string __n2 = r.fieldName(); V v = V::deserialize(r: r);
+            bool __f3 = r.moreFields();
+            result.put(key: give k, value: give v);
+        }
+        return give result;
+    }
+}

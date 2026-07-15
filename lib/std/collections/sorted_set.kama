@@ -1,0 +1,53 @@
+namespace std::collections;
+import std::collections::{SortedMap, DynamicArray};
+export { SortedSet };
+
+// An ordered set over `K: Comparable` — a thin wrapper on `SortedMap<K, Unit>` (the value is the zero-size
+// `Unit`), exactly as `Set` wraps `Map<K, Unit>`. Members iterate in ascending order and it answers the same
+// ordered queries as the map (`first`/`last`/`floor`/`ceil`/`range`) that a hash `Set` can't. Move-only: it
+// owns the backing map (and thus every key); lookups borrow the key.
+type resource SortedSet<K: Comparable> implements Copyable(bare: give) when [K: Copyable],
+        Serialize when [K: Serialize, K: Copyable], Deserialize when [K: Deserialize] {
+    SortedMap<K, Unit> m;
+
+    // Build the inner map in a typed local, then move it in (the field-init can't infer its type args).
+    public SortedSet() { SortedMap<K, Unit> inner = SortedMap(); this.m = give inner; }
+
+    public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
+    public fn bool contains(ref K key) { return this.m.contains(key: key); }
+    // `SortedMap.remove` returns the removed value (`Optional<Unit>` here); a set reports presence as a bool.
+    public fn bool remove(ref K key) {
+        Optional<Unit> hit = this.m.remove(key: key);
+        return match (hit) { case Some(u): true; case None: false; };
+    }
+    public fn int32 length() { return this.m.length(); }
+    public fn bool isEmpty() { return this.m.isEmpty(); }
+    public fn void clear() { this.m.clear(); }
+
+    // Ordered queries + iteration forward to the backing map's key views.
+    public fn Optional<K> first() when [K: Copyable] { return this.m.first(); }
+    public fn Optional<K> last() when [K: Copyable] { return this.m.last(); }
+    public fn Optional<K> floor(ref K key) when [K: Copyable] { return this.m.floor(key: key); }
+    public fn Optional<K> ceil(ref K key) when [K: Copyable] { return this.m.ceil(key: key); }
+    // `foreach (K k in set.elements())` — ascending members (key copies).
+    public fn DynamicArray<K> elements() when [K: Copyable] { return this.m.keys(); }
+    public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable] { return this.m.range(from: from, to: to); }
+    public fn SortedSet<K> copy() when [K: Copyable] { SortedSet<K> result = SortedSet(); result.m = copy this.m; return give result; }
+
+    // Serialize as a JSON array of the members in ascending order (Serialize needs a Copyable key — the key
+    // view yields copies); deserialize just `add`s each key back.
+    fn void serElem(ref K k, ref Serializer w) when [K: Serialize] { k.serialize(w: w); }
+    public fn void serialize(ref Serializer w) when [K: Serialize, K: Copyable] {
+        DynamicArray<K> es = this.m.keys();
+        w.beginArray(count: cast<usize>(es.length()));
+        int32 i = 0;
+        while (i < es.length()) { this.serElem(k: es[i], w: w); i = i + 1; }
+        w.endArray();
+    }
+    public static fn SortedSet<K> deserialize(Deserializer r) when [K: Deserialize] {
+        SortedSet<K> result = SortedSet();
+        r.beginArray();
+        while (r.moreElems()) { result.add(key: K::deserialize(r: r)); }
+        return give result;
+    }
+}

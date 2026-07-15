@@ -87,8 +87,29 @@ remains here is genuinely later-track or opt-in.
   collection that pays it** (its iterator is non-generic). Fix = importing a type also makes the types named in
   its public method signatures resolvable (import brings the API surface, not just the symbol). Non-blocking
   and isolated; a pure ergonomic/consistency win.
+- **BUG — move-tracker: moved-state leaks across same-named variables in sibling scopes.** Surfaced writing
+  `SortedMap` (M6): `give`-consuming a resource variable named `k` in one scope leaves the tracker believing a
+  **different** `k` (a fresh binding — e.g. an `int32 k` in a later sibling `{}` block, or a `foreach (string
+  k …)` loop var vs a subsequent `int32 k`) is still moved, so its first use is a false "use of `k` after it
+  was moved". Minimal repro: `S k = S(); S d = give k; { int32 k = 5; return k + k; }` → false positive. The
+  moved-set is keyed by variable **name**, not by the scoped binding; it must be scoped to the declaration and
+  reset when a name is re-declared. Workaround: rename the later variable. A correctness-of-diagnostics bug
+  (rejects valid code), not a miscompile.
+- **BUG — generic `DynamicArray<V>.operator[]` mis-lowers to a raw pointer subscript inside a nested
+  argument.** Surfaced writing `SortedMap` (M6): `return Optional::Some(value: this.clone(v: this.d[i]))` where
+  `d` is a generic `DynamicArray<V>` field emits `this.d[i]` as a **raw pointer index** (→ "raw pointer access
+  requires an `unsafe {}` block", and under `unsafe` a C "subscripted value is not an array" on the struct)
+  instead of resolving `operator[]`. It only bites when the indexing is nested inside another call's argument
+  in a return (`Some(value: f(this.d[i]))`); binding to a local first (`V x = this.d[i]; … Some(value: x)`)
+  resolves `operator[]` correctly. The nested-in-argument position skips user-`operator[]` resolution for a
+  generically-typed element and falls back to raw `Ptr` subscripting.
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
-  post-increment returning the old value in expression position (`i++` works as a statement today).
+  post-increment returning the old value in expression position (`i++` works as a statement today). Two small
+  ergonomic gaps surfaced writing `SortedMap` (M6), both with clean idioms today: (a) an rvalue passed to a
+  `ref` parameter emits `&(rvalue)` (invalid C) — bind to a local first (or auto-hoist a temp, as some other
+  positions already do); (b) `give` into a raw `Ptr<T>` deref (`p[0] = give x`) is rejected for an owning `T`
+  ("not a bare sub-expression") — a `ref T` out-parameter (`out = give x`) works and is the idiom the B-tree
+  uses for its pair moves.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by
@@ -149,12 +170,19 @@ serialization, networking).
   `DynamicArray` (which gained an O(1) `swap(i:,j:)` primitive) for A* / event scheduling. **`SlotMap<V>`
   (generational slot map)** is shipped — `insert` returns a stable `Handle`, and `get`/`getRef`/`remove` reject
   a stale handle (one whose slot was removed/reused) via a per-slot odd-while-occupied generation, so a
-  dangling handle is a clean `None`/panic, not a use-after-free (*the* ECS/asset-registry structure). Still
-  ahead: **slice/span `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a
-  system or a GPU upload with no copy and no ownership transfer) and a **sorted / tree map** (ordered iteration
-  + range queries; needs `Comparable`/`Ordering`). Honest caveat: general **linked lists** are mostly a cache anti-pattern in
-  data-oriented engines (the useful form is an intrusive free-list / LRU); raw **BSTs** are subsumed by the
-  sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
+  dangling handle is a clean `None`/panic, not a use-after-free (*the* ECS/asset-registry structure).
+  **`SortedMap<K: Comparable, V>` / `SortedSet<K>` (B-tree, min-degree 6) shipped** — ordered iteration +
+  `first`/`last`/`floor`/`ceil`/`range` beyond the hash map's surface, plus `getRef` in-place borrow, deep
+  `copy`, and JSON serde (ascending-key order); nodes back their keys/values/child-boxes with `DynamicArray`
+  (reusing its move-out / shift / RAII) and a child is an `Owned<BTreeNode>` box, so splits/borrows/merges/
+  predecessor-swaps relocate move-only keys+values ASan-clean. It **needed a language feature**, now shipped:
+  a `fn ref T` may return the result of a place-returning method call (`recv.getRef(...)`) when the receiver
+  roots at `this` — the escape check traces the root through the call, as `operator[]` already does — so a
+  recursive `getRef` forwards an in-place borrow up through the `Owned`-boxed tree. Still ahead: **slice/span
+  `View<T>`** (a non-owning subrange view — the highest-value next; hand a buffer to a system or a GPU upload
+  with no copy and no ownership transfer). Honest caveat: general **linked lists** are mostly a cache
+  anti-pattern in data-oriented engines (the useful form is an intrusive free-list / LRU); raw **BSTs** are
+  subsumed by the sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
 - **Collections revisit — uniform preallocation, pluggable hasher, custom allocator.** The containers grew
   piecemeal; give them a consistent set of parametric knobs (all with defaults, so today's API is unchanged):
   1. **Preallocation everywhere.** `DynamicArray`/`FixedArray` have `reserve(n:)`, but **`Map`/`Set` do not** — they start

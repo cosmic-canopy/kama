@@ -1,0 +1,47 @@
+// SortedSet<K: Comparable> — an ordered set over SortedMap<K, Unit>. Members iterate ascending; add is
+// idempotent; remove reports presence; and it answers the same ordered queries (first/last/floor/ceil/range)
+// as the map. Exercised with int members (forcing splits/merges) and a copy for independence.
+import std::collections::{SortedSet, DynamicArray};
+
+fn int32 main() {
+    int32 r = 0;
+    SortedSet<int32> s = SortedSet();
+
+    // add 0..49 scrambled (idempotent duplicates)
+    int32 i = 0;
+    while (i < 50) { s.add(key: (i * 23) % 50); i = i + 1; }
+    s.add(key: 10); s.add(key: 10);                       // duplicates are no-ops
+    if (s.length() == 50) { r = r + 5; }
+    if (s.contains(key: 25) && !s.contains(key: 99)) { r = r + 5; }
+
+    // remove reports presence
+    if (s.remove(key: 25) && !s.contains(key: 25) && s.length() == 49) { r = r + 5; }
+    if (!s.remove(key: 25)) { r = r + 5; }                // already gone -> false
+
+    // ordered queries
+    int32 fst = match (s.first()) { case Some(x): x; case None: 0 - 1; };
+    int32 lst = match (s.last()) { case Some(x): x; case None: 0 - 1; };
+    if (fst == 0 && lst == 49) { r = r + 5; }
+    int32 q = 25;
+    int32 fl = match (s.floor(key: q)) { case Some(x): x; case None: 0 - 1; };   // 25 gone -> 24
+    int32 ce = match (s.ceil(key: q)) { case Some(x): x; case None: 0 - 1; };    // -> 26
+    if (fl == 24 && ce == 26) { r = r + 5; }
+
+    // ascending iteration
+    int32 prev = 0 - 1; bool sorted = true; int32 cnt = 0;
+    DynamicArray<int32> es = s.elements();
+    foreach (int32 k in es) { if (k <= prev) { sorted = false; } prev = k; cnt = cnt + 1; }
+    if (sorted && cnt == 49) { r = r + 5; }
+
+    // range [10, 15) -> {10,11,12,13,14}
+    int32 lo = 10; int32 hi = 15;
+    DynamicArray<int32> rg = s.range(from: lo, to: hi);
+    if (rg.length() == 5) { r = r + 5; }
+
+    // copy independence
+    SortedSet<int32> cp = copy s;
+    s.remove(key: 30); s.add(key: 100);
+    if (cp.length() == 49 && cp.contains(key: 30) && !cp.contains(key: 100)) { r = r + 5; }
+
+    return r;   // 9 asserts * 5 = 45
+}
