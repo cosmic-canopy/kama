@@ -1064,6 +1064,23 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   ```
   (Both dispatch modes coexist by design — monomorphization can't express a heterogeneous
   `DynamicArray<Iterator<int32>>` or open-world runtime choice; the fat pointer can. See **Contracts**.)
+- **Default type parameters + named type-arg override** — a **trailing** type parameter may carry a default
+  `= DefaultType`, filled in when the use site omits it. So a library can grow parameters (a pluggable hasher,
+  a custom allocator) without breaking existing call sites: `Map<string, int32>` keeps meaning
+  `Map<string, int32, DefaultHasher, GlobalAllocator>`. Overriding a *later* default without spelling an
+  earlier one uses Kama's **named argument model applied to type args** — name the arg to skip a default
+  (`Map<int32, Entity, A: ArenaAllocator>`). Leading args stay positional; a positional arg may not follow a
+  named one; the `:` is unambiguous at use sites (contract bounds appear only in *declarations*). Defaults +
+  named overrides resolve to one canonical positional tuple **before** monomorphization, so the omitted,
+  named, and fully-spelled forms all dedup to a single specialized instance.
+  ```kama
+  type value Wrap<T, U = int32> { public T first; public U second; /* … */ }
+  Wrap<bool>          a = Wrap(a: true,  b: 7);     // U defaults to int32
+  Wrap<bool, float64> c = Wrap(a: true,  b: 3.5);   // U overridden positionally
+  Wrap<bool, U: int32> d = /* … */;                 // named override — same instance as `Wrap<bool>`
+  ```
+  Default **function/constructor** parameters are a deliberate non-goal (one way to do a thing) — a
+  self-documenting named static factory (`Map::withAllocator(allocator: …)`) covers that need instead.
 
 ## Access control ✅
 

@@ -417,6 +417,7 @@ private:
     std::map<std::string, ClassInfo>          _genericTypes;        // template name -> ClassInfo shape (NOT in _classes)
     std::map<std::string, std::vector<std::string>> _genericTypeParams;  // template name -> type-param names [A, B]
     std::map<std::string, SharedBoundsList>   _genericTypeBounds;   // template name -> per-param contract bounds
+    std::map<std::string, std::vector<SharedIdentifier>> _genericTypeDefaults; // template name -> per-param default type (null entry = required, no default)
     std::map<std::string, NsCtx>              _genericTypeCtx;      // template name -> home namespace ctx
     std::map<std::string, NsCtx>              _genericTypeInstCtx;  // instance -> registration (use-site) ctx, so a
                                                                     // prelude template's user-type args resolve at emit time
@@ -432,6 +433,7 @@ private:
     // method NAME (T-independent), so it reads the template's methods directly (no instance needed).
     std::map<std::string, InterfaceInfo>            _genericContracts;      // template name -> InterfaceInfo shape (NOT in _interfaces)
     std::map<std::string, std::vector<std::string>> _genericContractParams; // template name -> type-param names [T]
+    std::map<std::string, std::vector<SharedIdentifier>> _genericContractDefaults; // template name -> per-param default type (null entry = required)
     std::map<std::string, NsCtx>                    _genericContractCtx;    // template name -> home namespace ctx
     std::map<std::string, NsCtx>                    _genericContractInstCtx;// instance -> use-site ctx (its type args, e.g. a user `Point`, resolve here — like _genericTypeInstCtx)
     std::set<std::string>                           _genericContractInsts;  // mangled instance names already registered (dedup)
@@ -565,6 +567,19 @@ private:
     // Guards registerGenericTypeInst against a generic FUNCTION's signature scanned before instantiation.
     bool argCarriesUnboundParam(const SharedIdentifier& a);
     std::string genericTypeMangle(const std::string& tmpl, SharedIdentifierList args);  // "Pair" + "_int32" + "_string"
+    // Expand use-site type args into the full positional binding for a generic template: leading POSITIONAL
+    // args in order, NAMED overrides (`A: T`) placed by param name, trailing gaps filled from `defaults`.
+    // `full[i]`/`isDefault[i]` are index-aligned with `params` (a null `full[i]` = a required param left
+    // unbound). Silent + best-effort — the registration path re-validates and reports precise errors.
+    void positionalizeGenericArgs(const std::vector<std::string>& params,
+                                  const std::vector<SharedIdentifier>& defaults,
+                                  SharedIdentifierList args,
+                                  std::vector<SharedIdentifier>& full,
+                                  std::vector<bool>& isDefault);
+    // Reports a precise error (returns false) for a malformed use-site type-arg list; true when well-formed.
+    bool validateGenericArgs(const std::string& tmpl, const char* kind,
+                             const std::vector<std::string>& params, SharedIdentifierList args,
+                             const std::vector<SharedIdentifier>& bound, int line);
     void emitGenericTypeInst(const GenericTypeInst& gi, int phase);   // 0=struct typedef, 1=protos, 2=bodies
 
     // Generic CONTRACTS: discover `Iterator<int32>` uses, build one specialized InterfaceInfo each

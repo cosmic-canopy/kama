@@ -1,0 +1,3 @@
+// M8: naming a type-arg that is not a parameter of the template is a compile-time error.
+type value Wrap<T, U = int32> { public T a; public U b; public Wrap(T x, U y){ this.a = x; this.b = y; } }
+fn int main() { Wrap<int32, Z: float64> w = Wrap(x: 1, y: 2.0); return 0; }

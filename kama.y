@@ -206,7 +206,7 @@ struct kamayystype {
 %type <strings> import_path export_manifest_opt export_name_list for_kinds_opt kind_name_list
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
-%type <identifier> type_param type_decl_head enum_underlying_opt implements_entry method_when_opt when_clause when_cond_list
+%type <identifier> type_param type_param_default_opt type_decl_head enum_underlying_opt implements_entry method_when_opt when_clause when_cond_list
 %type <identifierlist> friend_member_list interface_type_list type_arg_list type_param_list bound_list type_params_opt
 %type <modifier> modifier function_modifier_opt parameter_modifier_opt
 %type <modifierlist> modifiers modifiers_opt
@@ -390,6 +390,7 @@ type_arg_list
    arg is wrapped in an IdentifierNode carrying `constArgValue` (value name is null). */
 type_or_value_arg
   : type
+  | IDENTIFIER COLON type   { $3->argName = $1; $$ = $3; }   /* NAMED override: `A: Arena` skips an earlier default */
   | literal   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, SharedString()); id->constArgValue = $1; $$ = id; }
   ;
 
@@ -597,9 +598,14 @@ type_param_list
   | type_param_list COMMA type_param   { $1->push_back($3); $$ = $1; }
   ;
 type_param
-  : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | IDENTIFIER COLON bound_list   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->bounds = $3; $$ = id; }
-  | CONST IDENTIFIER COLON integral_type   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); id->isConstParam = true; $$ = id; }   /* `const N: int` — a compile-time value param */
+  : IDENTIFIER type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->defaultArg = $2; $$ = id; }
+  | IDENTIFIER COLON bound_list type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->bounds = $3; id->defaultArg = $4; $$ = id; }
+  | CONST IDENTIFIER COLON integral_type type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); id->isConstParam = true; id->defaultArg = $5; $$ = id; }   /* `const N: int` — a compile-time value param */
+  ;
+/* Optional `= DefaultType` (or `= literal` for a const param) on a trailing type parameter. */
+type_param_default_opt
+  : /* Nothing */   { $$ = SharedIdentifier(); }
+  | EQ type_or_value_arg   { $$ = $2; }
   ;
 /* Contract bounds on a type parameter: `IHashable` or `IHashable + IComparable` (`+` = AND).
    Each bound is a `type_name`, so a generic contract bound (`IFoo<int>`) parses + gets genericDepth. */
@@ -1228,9 +1234,11 @@ enum_declaration
           n->typeParams = std::make_shared<StringList>();
           n->typeBounds = std::make_shared<BoundsList>();
           n->constParams = std::make_shared<StringList>();
+          n->typeDefaults = std::make_shared<IdentifierList>();
           for (auto& a : *$3->genericArgs) if (a && a->value) {
               n->typeParams->push_back(a->value);
               n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+              n->typeDefaults->push_back(a->defaultArg);
               if (a->isConstParam) n->constParams->push_back(a->value);
           }
           $3->genericArgs = SharedIdentifierList();
@@ -1245,9 +1253,11 @@ enum_declaration
           n->typeParams = std::make_shared<StringList>();
           n->typeBounds = std::make_shared<BoundsList>();
           n->constParams = std::make_shared<StringList>();
+          n->typeDefaults = std::make_shared<IdentifierList>();
           for (auto& a : *$4->genericArgs) if (a && a->value) {
               n->typeParams->push_back(a->value);
               n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+              n->typeDefaults->push_back(a->defaultArg);
               if (a->isConstParam) n->constParams->push_back(a->value);
           }
           $4->genericArgs = SharedIdentifierList();
@@ -1295,12 +1305,14 @@ SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList
     n->forKinds   = forKinds;   // `for value|resource|both` — mandatory on a `type contract`, else empty
     n->attributes = attributes; // `@generate(...)` etc. (null when the un-attributed alternative was used)
     if (head->genericArgs && !head->genericArgs->empty()) {
-        n->typeParams  = std::make_shared<StringList>();
-        n->typeBounds  = std::make_shared<BoundsList>();
-        n->constParams = std::make_shared<StringList>();
+        n->typeParams   = std::make_shared<StringList>();
+        n->typeBounds   = std::make_shared<BoundsList>();
+        n->constParams  = std::make_shared<StringList>();
+        n->typeDefaults = std::make_shared<IdentifierList>();
         for (auto& a : *head->genericArgs) if (a && a->value) {
             n->typeParams->push_back(a->value);
             n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+            n->typeDefaults->push_back(a->defaultArg);   // null when this param has no `= Default`
             if (a->isConstParam) n->constParams->push_back(a->value);
         }
         head->genericArgs = SharedIdentifierList();

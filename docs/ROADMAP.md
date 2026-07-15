@@ -155,7 +155,9 @@ library + hardening work:
   is a separate small module.
 - **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the `@`-attribute infra)
   emitting a use-site warning. Its own small task.
-- **Optional/default parameters (language, adjacent)** — the "options struct with optionals" ctor pattern.
+- **Optional/default *function/constructor* parameters (language, adjacent)** — the "options struct with
+  optionals" ctor pattern. Kept a deliberate non-goal for now: named static factories + named params cover
+  it. (Distinct from **default *type* parameters**, which shipped — see below.)
 
 **String interpolation `"${x}"` rides on the same `std::fmt` to-string substrate**, so it sequences here.
 
@@ -200,7 +202,10 @@ serialization, networking).
   anti-pattern in data-oriented engines (the useful form is an intrusive free-list / LRU); raw **BSTs** are
   subsumed by the sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
 - **Collections revisit — uniform preallocation, pluggable hasher, custom allocator.** The containers grew
-  piecemeal; give them a consistent set of parametric knobs (all with defaults, so today's API is unchanged):
+  piecemeal; give them a consistent set of parametric knobs (all with defaults, so today's API is unchanged).
+  The **keystone language feature — default type parameters + named type-arg override — is DONE** (a trailing
+  `<…, H = DefaultHasher, A = GlobalAllocator>` fills when omitted, `Map<int32, V, A: Arena>` names an arg to
+  skip a default; see SPEC "Generics"), so `Map<K,V>` stays valid while `H`/`A` become opt-in. Remaining:
   1. **Preallocation everywhere.** `DynamicArray`/`FixedArray` have `reserve(n:)`, but **`Map`/`Set` do not** — they start
      at cap 0 and grow from 8, rehashing every entry ~log2(N) times on a bulk insert. This is a *measured*
      cost: on the `map` bench, at an EQUAL hash, kama (grow-from-8) is ~8.6 ms vs C (preallocated `cap`) ~5.7 ms

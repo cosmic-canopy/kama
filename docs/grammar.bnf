@@ -137,6 +137,7 @@ type_arg_list
    arg is wrapped in an IdentifierNode carrying `constArgValue` (value name is null). */
 type_or_value_arg
   : type
+  | IDENTIFIER COLON type      /* NAMED override: `A: Arena` skips an earlier default */
   | literal
   ;
 
@@ -306,9 +307,14 @@ type_param_list
   | type_param_list COMMA type_param
   ;
 type_param
-  : IDENTIFIER
-  | IDENTIFIER COLON bound_list
-  | CONST IDENTIFIER COLON integral_type      /* `const N: int` — a compile-time value param */
+  : IDENTIFIER type_param_default_opt
+  | IDENTIFIER COLON bound_list type_param_default_opt
+  | CONST IDENTIFIER COLON integral_type type_param_default_opt      /* `const N: int` — a compile-time value param */
+  ;
+/* Optional `= DefaultType` (or `= literal` for a const param) on a trailing type parameter. */
+type_param_default_opt
+  : /* Nothing */
+  | EQ type_or_value_arg
   ;
 /* Contract bounds on a type parameter: `IHashable` or `IHashable + IComparable` (`+` = AND).
    Each bound is a `type_name`, so a generic contract bound (`IFoo<int>`) parses + gets genericDepth. */

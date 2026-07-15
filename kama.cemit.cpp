@@ -2343,6 +2343,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
             std::vector<std::string> ps;
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);
             _genericContractParams[ii.name] = ps;
+            if (cd->typeDefaults) _genericContractDefaults[ii.name] = *cd->typeDefaults;
             _genericContractCtx[ii.name]    = _nsCtx;
             _genericContracts[ii.name]      = ii;
         } else {
@@ -2414,6 +2415,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 for (auto& p : *ed->typeParams) if (p) ps.push_back(*p);
                 _genericTypeParams[name] = ps;
                 _genericTypeBounds[name] = ed->typeBounds;
+                if (ed->typeDefaults) _genericTypeDefaults[name] = *ed->typeDefaults;
                 _genericTypeCtx[name]    = _nsCtx;
                 _genericTypes[name]      = ci;
             } else {
@@ -2907,6 +2909,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);   // [A, B, …]
             _genericTypeParams[ci.name] = ps;
             _genericTypeBounds[ci.name] = cd->typeBounds;   // per-param contract bounds
+            if (cd->typeDefaults) _genericTypeDefaults[ci.name] = *cd->typeDefaults;   // per-param `= Default` (null entry = required)
             _genericTypeCtx[ci.name]    = _nsCtx;
             _genericTypes[ci.name]      = ci;
             if (cd->name && cd->name->value) {              // capture the prelude triad's template keys (Phase D)
@@ -3005,10 +3008,106 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
 // the mangled struct name for `Pair<A, B, …>` — the template's scoped name + one "_<mangle>"
 // suffix per type arg. `mangleElem` resolves a bound `T` under _typeSubst, so this is used identically
 // at discovery (concrete args), at cType (field/decl args under subst), and to name the specialized ClassInfo.
+void CEmitter::positionalizeGenericArgs(const std::vector<std::string>& params,
+                                        const std::vector<SharedIdentifier>& defaults,
+                                        SharedIdentifierList args,
+                                        std::vector<SharedIdentifier>& full,
+                                        std::vector<bool>& isDefault)
+{
+    full.assign(params.size(), SharedIdentifier());
+    isDefault.assign(params.size(), false);
+    size_t pos = 0;
+    if (args) for (auto& a : *args) {
+        if (a && a->argName) {                                   // named override -> place by param name
+            for (size_t i = 0; i < params.size(); ++i)
+                if (params[i] == *a->argName) { full[i] = a; break; }
+        } else if (pos < params.size()) {                        // positional -> next free leading slot
+            full[pos++] = a;
+        }
+        // overflow / unknown-name are ignored here; the registration path reports them precisely.
+    }
+    for (size_t i = 0; i < params.size(); ++i)                   // fill trailing gaps from defaults
+        if (!full[i] && i < defaults.size()) { full[i] = defaults[i]; isDefault[i] = true; }
+}
+
+// Report a precise error for a bad use-site type-arg list (unknown named param, positional-after-named,
+// too many args, or a required param left unbound). `bound` is positionalizeGenericArgs's output. Returns
+// false (after emitting the error) on any problem, true when the binding is well-formed. `kind` is
+// "type"/"contract" for the message.
+bool CEmitter::validateGenericArgs(const std::string& tmpl, const char* kind,
+                                   const std::vector<std::string>& params, SharedIdentifierList args,
+                                   const std::vector<SharedIdentifier>& bound, int line)
+{
+    size_t pos = 0; bool sawNamed = false;
+    if (args) for (auto& a : *args) {
+        if (a && a->argName) {
+            sawNamed = true;
+            bool found = false;
+            for (auto& p : params) if (p == *a->argName) { found = true; break; }
+            if (!found) {
+                unsupported(("unknown type parameter `" + *a->argName + "` for generic " + kind + " `" + tmpl + "`").c_str(), a->line);
+                return false;
+            }
+        } else {
+            if (sawNamed) { unsupported("positional type argument after a named one", a ? a->line : line); return false; }
+            if (pos >= params.size()) {
+                unsupported(("wrong number of type arguments for generic " + std::string(kind) + " `" + tmpl + "` (expected "
+                             + std::to_string(params.size()) + ", got more)").c_str(), line);
+                return false;
+            }
+            pos++;
+        }
+    }
+    for (size_t i = 0; i < params.size(); ++i)
+        if (!bound[i]) {
+            unsupported(("wrong number of type arguments for generic " + std::string(kind) + " `" + tmpl + "` (expected "
+                         + std::to_string(params.size()) + ", missing `" + params[i] + "`)").c_str(), line);
+            return false;
+        }
+    return true;
+}
+
 std::string CEmitter::genericTypeMangle(const std::string& tmpl, SharedIdentifierList args)
 {
+    // Default type params + named overrides: expand the use-site args into the full positional list so
+    // `Wrap<bool>`, `Wrap<bool, int32>`, and `Wrap<bool, U: int32>` all mangle to the SAME instance name.
+    // A DEFAULT names a type visible where the template was DECLARED, so mangle it under that home ctx —
+    // matching registerGeneric*Inst, which resolves defaults under the home ctx too.
+    const std::vector<std::string>* params = nullptr;
+    const std::vector<SharedIdentifier>* defs = nullptr;
+    const NsCtx* homeCtx = nullptr;
+    auto tp = _genericTypeParams.find(tmpl);
+    if (tp != _genericTypeParams.end()) {
+        params = &tp->second;
+        auto d = _genericTypeDefaults.find(tmpl);  if (d != _genericTypeDefaults.end()) defs = &d->second;
+        auto c = _genericTypeCtx.find(tmpl);        if (c != _genericTypeCtx.end())      homeCtx = &c->second;
+    } else {
+        auto cp = _genericContractParams.find(tmpl);
+        if (cp != _genericContractParams.end()) {
+            params = &cp->second;
+            auto d = _genericContractDefaults.find(tmpl);  if (d != _genericContractDefaults.end()) defs = &d->second;
+            auto c = _genericContractCtx.find(tmpl);        if (c != _genericContractCtx.end())      homeCtx = &c->second;
+        }
+    }
+
     std::string m = tmpl;
-    if (args) for (auto& a : *args) m += "_" + mangleElem(a);
+    static const std::vector<SharedIdentifier> noDefs;
+    if (params && !params->empty()) {
+        std::vector<SharedIdentifier> full; std::vector<bool> isDefault;
+        positionalizeGenericArgs(*params, defs ? *defs : noDefs, args, full, isDefault);
+        for (size_t i = 0; i < full.size(); ++i) {
+            if (!full[i]) continue;                              // unbound required param — invalid; registration reports
+            if (isDefault[i] && homeCtx) {                       // mangle the default under its home ctx
+                NsCtx saved = _nsCtx; _nsCtx = *homeCtx;
+                m += "_" + mangleElem(full[i]);
+                _nsCtx = saved;
+            } else {
+                m += "_" + mangleElem(full[i]);
+            }
+        }
+        return m;
+    }
+    if (args) for (auto& a : *args) m += "_" + mangleElem(a);   // fallback: params unknown — raw args
     return m;
 }
 
@@ -3457,14 +3556,29 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // Resolve each arg to its concrete binding — DEEPLY (a nested `Rc<T>` -> `Rc<Counter>`), so a
     // generic arg carrying a type-param is never stored raw in _typeSubst (which would self-reference
     // and loop mangleElem for a mutually-recursive generic type).
+    // Bind the use-site args to the template's params: leading POSITIONAL, then NAMED overrides
+    // (`A: Arena` skips an earlier default), then fill trailing unbound params from their `= Default`.
+    int line = args->front() ? args->front()->line : 0;
+    auto dit = _genericTypeDefaults.find(tmpl);
+    const std::vector<SharedIdentifier> emptyDefs;
+    const std::vector<SharedIdentifier>& defs = dit != _genericTypeDefaults.end() ? dit->second : emptyDefs;
+    std::vector<SharedIdentifier> bound; std::vector<bool> isDefault;
+    positionalizeGenericArgs(params, defs, args, bound, isDefault);
+    if (!validateGenericArgs(tmpl, "type", params, args, bound, line)) return;
+
+    // Resolve each binding to its concrete type — use-site args under the current ctx, DEFAULTS under the
+    // template's home ctx (a default names a type visible where the template was declared, not at the use site).
     std::vector<SharedIdentifier> concrete;
-    for (auto& a : *args) concrete.push_back(absolutizeType(deepSubstType(a)));
-    // Arity: N type arguments must match the template's N type parameters.
-    if (concrete.size() != params.size()) {
-        unsupported(("wrong number of type arguments for generic type `" + tmpl + "` (expected "
-                     + std::to_string(params.size()) + ", got " + std::to_string(concrete.size()) + ")").c_str(),
-                    args->front() ? args->front()->line : 0);
-        return;
+    for (size_t i = 0; i < bound.size(); ++i) {
+        if (isDefault[i]) {
+            NsCtx savedDefCtx = _nsCtx;
+            auto hit = _genericTypeCtx.find(tmpl);
+            if (hit != _genericTypeCtx.end()) _nsCtx = hit->second;
+            concrete.push_back(absolutizeType(deepSubstType(bound[i])));
+            _nsCtx = savedDefCtx;
+        } else {
+            concrete.push_back(absolutizeType(deepSubstType(bound[i])));
+        }
     }
 
     // Defer if a substituted arg still carries an unbound type-param — this only happens when scanning a
@@ -3678,13 +3792,26 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl, SharedIdenti
     // without it that scan would register a phantom bare `Optional_Entry_int32_int32` (unqualified, undefined
     // payload). A shallow "bare-param only" substitution would instead leave `Entry<K,V>` un-monomorphized
     // (a dangling `Optional_Entry_K_V`). Mirrors registerGenericTypeInst exactly.
+    // Bind positional + named args, then fill trailing defaults (mirror of registerGenericTypeInst).
+    int line = args->front() ? args->front()->line : 0;
+    auto dit = _genericContractDefaults.find(tmpl);
+    const std::vector<SharedIdentifier> emptyDefs;
+    const std::vector<SharedIdentifier>& defs = dit != _genericContractDefaults.end() ? dit->second : emptyDefs;
+    std::vector<SharedIdentifier> bound; std::vector<bool> isDefault;
+    positionalizeGenericArgs(params, defs, args, bound, isDefault);
+    if (!validateGenericArgs(tmpl, "contract", params, args, bound, line)) return;
+
     std::vector<SharedIdentifier> concrete;
-    for (auto& a : *args) concrete.push_back(absolutizeType(deepSubstType(a)));
-    if (concrete.size() != params.size()) {
-        unsupported(("wrong number of type arguments for generic contract `" + tmpl + "` (expected "
-                     + std::to_string(params.size()) + ", got " + std::to_string(concrete.size()) + ")").c_str(),
-                    args->front() ? args->front()->line : 0);
-        return;
+    for (size_t i = 0; i < bound.size(); ++i) {
+        if (isDefault[i]) {
+            NsCtx savedDefCtx = _nsCtx;
+            auto hit = _genericContractCtx.find(tmpl);
+            if (hit != _genericContractCtx.end()) _nsCtx = hit->second;
+            concrete.push_back(absolutizeType(deepSubstType(bound[i])));
+            _nsCtx = savedDefCtx;
+        } else {
+            concrete.push_back(absolutizeType(deepSubstType(bound[i])));
+        }
     }
 
     std::string mangled = tmpl;

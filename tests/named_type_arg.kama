@@ -1,0 +1,31 @@
+// M8: NAMED type-arg override. With two trailing defaults `M = Tag1, N = Tag2`, a use site can set a LATER
+// param by name (`N: Tag3`) without spelling the earlier default — the C++ positional-default wart, fixed by
+// Kama's named-argument model applied to type args. Leading args stay positional; naming skips a default.
+type value Tag1 { public int32 code; public Tag1() { this.code = 1; } }
+type value Tag2 { public int32 code; public Tag2() { this.code = 2; } }
+type value Tag3 { public int32 code; public Tag3() { this.code = 3; } }
+
+type value Cfg<T, M = Tag1, N = Tag2> {
+    public T value;
+    public M mid;
+    public N last;
+    public Cfg(T v, M m, N n) { this.value = v; this.mid = m; this.last = n; }
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // Both defaults: M = Tag1, N = Tag2.
+    Cfg<int32> a = Cfg(v: 5, m: Tag1(), n: Tag2());
+    if (a.value == 5 && a.mid.code == 1 && a.last.code == 2) { r = r + 10; }
+
+    // NAMED override: set N, keep M's default — skip M without naming Tag1.
+    Cfg<int32, N: Tag3> b = Cfg(v: 9, m: Tag1(), n: Tag3());
+    if (b.value == 9 && b.mid.code == 1 && b.last.code == 3) { r = r + 10; }
+
+    // Positional override of M only; N falls back to its default (Tag2).
+    Cfg<int32, Tag3> c = Cfg(v: 1, m: Tag3(), n: Tag2());
+    if (c.mid.code == 3 && c.last.code == 2) { r = r + 10; }
+
+    return r;   // 30
+}

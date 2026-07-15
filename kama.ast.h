@@ -234,6 +234,8 @@ public:
     SharedIdentifierList whenParams;
     SharedIdentifierList whenBounds;
     SharedExpression constArgValue;    // const generic ARGUMENT that is a literal (`4` in `Fixed<T,4>`)
+    SharedIdentifier defaultArg;       // type-PARAMETER default (`H: BuildHasher = DefaultHasher`) — the default type; null if none
+    SharedString argName;              // use-site type-ARGUMENT named override (`A:` in `Map<int32, A: Arena>`); null = positional
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
     IdentifierNode(CodeGenContext& context, SharedString value, int builtInVal = IDENTIFIER_NONE_VAL)
@@ -674,6 +676,7 @@ public:
     SharedStringList typeParams;
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedIdentifierList typeDefaults; // per-param default type (`= DefaultHasher`) parallel to typeParams; null entry = no default
     SharedStringList forKinds;     // `type contract X for value|resource|both` — which kinds may implement it
     SharedAttributeList attributes;  // `@generate(...)` etc. (null when none); serialization metadata
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
@@ -885,6 +888,7 @@ public:
     SharedStringList typeParams;
     SharedBoundsList typeBounds;
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedIdentifierList typeDefaults; // per-param default type (`= …`) parallel to typeParams; null entry = no default
     SharedAttributeList attributes;  // `@generate(Serialize, Deserialize)` on the enum (null when un-attributed)
     EnumDeclarationNode(CodeGenContext& context, SharedModifierList modifiers, SharedIdentifier identifier, SharedEnumMemberDeclarationList body)
         : ASTNode(context),  StatementNode(context)
