@@ -1,1 +1,1 @@
-stateful allocator
+is stateful — construct it with `new(allocator

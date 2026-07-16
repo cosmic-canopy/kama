@@ -95,6 +95,17 @@ remains here is genuinely later-track or opt-in.
   moved-set is keyed by variable **name**, not by the scoped binding; it must be scoped to the declaration and
   reset when a name is re-declared. Workaround: rename the later variable. A correctness-of-diagnostics bug
   (rejects valid code), not a miscompile.
+- **BUG (latent, undiagnosed) — a stateful-allocator `Shared`/`Weak` graph edge is silently unsound through
+  `@generate(Deserialize)`.** Surfaced by the M11c code review. `graphEdgeOf` (kama.cemit.cpp ~8548) matches
+  any `Shared<X, A>` / `Weak<X, A>` regardless of `A`, and the two-pass graph reader `emitGraphRefRead` /
+  `wireInto` (~8796) reconstructs a node by poking `.p`/`.c` while its ctrl comes from the runtime
+  `kama_ctrl_new` (libc) — leaving the handle's `.alloc` at calloc-zero. So round-tripping a graph node whose
+  edge is `Shared<N, BumpAllocator>` yields a handle with a **zeroed `BumpAllocator`** that frees through a
+  no-op `deallocate` → the libc-allocated pointee + ctrl **leak** (+ an MSan read of the uninitialized handle).
+  Not an M11c regression — deserialize is documented `GlobalAllocator`-only — but it isn't *rejected*. Fix:
+  diagnose a non-`GlobalAllocator` allocator arg on a graph-mode `Shared`/`Weak` edge (in `graphEdgeOf` or the
+  `@generate(Deserialize)` validation) with a clear "graph serialization is GlobalAllocator-only" message.
+  Small, self-contained; do it with M11d (interface-element allocators) or the next serialization pass.
 - **✅ FIXED (M10b, `55adb51`) — generic `DynamicArray<V>.operator[]` mis-lowered to a raw pointer subscript
   inside a nested argument.** Surfaced writing `SortedMap` (M6): `return Optional::Some(value: this.clone(v:
   this.d[i]))` where `d` is a generic `DynamicArray<V>` field emitted `this.d[i]` as a raw pointer index

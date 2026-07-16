@@ -1317,7 +1317,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             if (!placed) {
                                 std::string ba = boxAllocatorArg(ty);
                                 if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())
-                                    unsupported(("`Owned<T, " + ba + ">` uses a stateful allocator — construct it with "
+                                    unsupported(("this box's allocator `" + ba + "` is stateful — construct it with "
                                                  "`new(allocator: …) T(...)`, not a bare `new`").c_str(), n->line);
                             } else {
                                 // The box's declared allocator type must match the `new(allocator: …)` handle —
@@ -7209,7 +7209,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         if (!placed) {   // bare `new` into a stateful-allocator box leaks — require the placement form
             std::string ba = boxAllocatorArg(targetCType);
             if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())
-                return reject("`Owned<T, " + ba + ">` uses a stateful allocator — construct it with "
+                return reject("this box's allocator `" + ba + "` is stateful — construct it with "
                               "`new(allocator: …) T(...)`, not a bare `new`");
         } else {
             std::string boxA = boxAllocatorArg(targetCType);   // declared box allocator must match the handle
