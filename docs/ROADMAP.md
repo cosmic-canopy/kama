@@ -100,16 +100,13 @@ remains here is genuinely later-track or opt-in.
   a field name (the `this.x = x` idiom) stays allowed. A static method has no `this`, so a local there can never
   shadow a field (the check is skipped). Fixtures: `move_sibling_scope`, `xfail/shadow_{enclosing,param,field}`,
   `xfail/move_reuse_same_scope`.
-- **DIAGNOSTIC — `DynamicArray<View>` (a `view` element in a LIBRARY collection) rejects with a confusing
-  message.** Surfaced writing `View`: a view as a collection element is correctly rejected, but only the
-  *intrinsic* collection-element check (`registerCollection`) emits the clean "a view can't be a collection
-  element" error — library collections (`DynamicArray`/`Deque`/…, which route through
-  `registerGenericTypeInst`) instead surface it *indirectly* via the escape check on the collection's own
-  element-moving method (e.g. `remove() -> View` returning a view over a local), pointing at an internal line
-  with "returning a view over a local would dangle." (The same indirect path the pre-existing
-  `DynamicArray<Contract>` rejection uses.) Behaviour is correct (it IS rejected); the fix is a proper
-  element-type check for library collections in `registerGenericTypeInst` so the diagnostic points at the
-  user's declaration. Low priority — correctness is fine, only the message is off.
+- **✅ DONE (hardening Session C) — `DynamicArray<View>` misdirected diagnostic.** A `view` element in a
+  LIBRARY collection was correctly rejected but only *indirectly* (via the escape check on the collection's
+  own element-moving method, pointing at an internal library line). Fixed with an element-type check in
+  `registerGenericTypeInst`: a view generic type-arg on a non-variant template (`ci.variants.empty()` — so
+  `Optional<View>` keeps its distinct enum-payload message) now rejects at the user's use-site decl with the
+  same clean "a view … can't be a collection element … copy into an owning collection instead" wording as the
+  intrinsic path. Fixture: `xfail/view_collection_elem` (msg tightened to assert the new path).
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today). Two small
   ergonomic gaps surfaced writing `SortedMap`: (a) ~~an rvalue passed to a `ref` parameter emits
@@ -142,10 +139,13 @@ Serialization ships today (by-value + object-graph + polymorphic contracts, json
 
 - **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T,N>` read; a bare `encode`/`decode` of an
   intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
-- **Enforce the poly-edge rule (hardening)** — a `Shared`/`Weak`/`Owned<Contract>` graph edge currently *assumes*
-  every implementor is `@generate(Serialize, Deserialize)`; a non-`@generate` implementor is silently absent from
-  the dispatch tables (its `.vtbl` → no writer). Turn this into a **compile error** at the edge (or require the
-  element contract to refine `Serialize`/`Deserialize`). Small, additive; no wire/behavior change.
+- **✅ DONE (hardening Session C) — Enforce the poly-edge rule.** A `Shared`/`Weak`/`Owned<Contract>` graph
+  edge assumed every implementor is `@generate(Serialize, Deserialize)`; a non-`@generate` nominal implementor
+  was silently absent from the dispatch tables (its `.vtbl` → no writer → dropped from the wire). Now a
+  **compile error** at the edge field in `computeGraphNodeTypes` — a nominal (`impl && !retro`) implementor
+  lacking both `@generate` flags is rejected: "implements the serialized graph-edge contract … but is not
+  `@generate` … silently dropped from the wire." No wire/behavior change for valid programs. Fixture:
+  `xfail/poly_edge_nongenerate`.
 - **More back ends (library, no compiler change)** — YAML; **binary** (packing + `@bits(n)` + little-endian
   canonical); **XML**/**HTML**. Each is a `Serializer`/`Deserializer` impl + `encode`/`decode`. `std::encoding::base64`
   is a separate small module.

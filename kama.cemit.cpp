@@ -3745,6 +3745,24 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // unbound-`N` skip.)
     for (auto& c : concrete) if (argCarriesUnboundParam(c)) return;
 
+    // A `type view` as a generic type ARGUMENT (a collection's buffered element, a user generic's field)
+    // stores a borrow that dangles. A collection buffers behind `Ptr<View>` — NOT a bare `View` field — so
+    // emitClassStruct's field-reject misses it, and today the only signal is the indirect escape check on an
+    // element-returning library method (a diagnostic pointing at a library line, not the user's decl). Reject
+    // here at the instantiation, at the user's use-site line. Skip variant/enum templates (`Optional<View>`) —
+    // the payload guard at the tail of this function owns those with its own message.
+    if (_genericTypes.count(tmpl) && _genericTypes[tmpl].variants.empty())
+        for (auto& c : concrete) {
+            std::string base = (c && c->value) ? resolveUserName(*c->value, c->qualifier) : "";
+            bool viewArg = (!base.empty() && _genericTypes.count(base) && _genericTypes[base].isBorrow)
+                        || (c && isViewCType(cType(c)));
+            if (viewArg) {
+                unsupported(("a view (`" + cType(c) + "`) borrows its buffer, so it can't be a collection "
+                             "element — it would dangle; copy into an owning collection instead").c_str(), line);
+                return;
+            }
+        }
+
     std::string mangled = tmpl;
     for (auto& c : concrete) mangled += "_" + mangleElem(c);
     if (_genericTypeInsts.count(mangled)) return;               // dedup
@@ -8866,8 +8884,20 @@ void CEmitter::computeGraphNodeTypes()
                 for (auto& kv2 : _classes) {
                     ClassInfo& c2 = kv2.second;
                     if (c2.isGraphNode) continue;
-                    bool impl = std::find(c2.interfaces.begin(), c2.interfaces.end(), e.elemC) != c2.interfaces.end();
-                    if (impl && (c2.genSerialize || c2.genDeserialize)) { c2.isGraphNode = true; work.push_back(kv2.first); }
+                    // A NOMINAL implementor (`implements Shape`), not a retro `implements Shape for T` — a retro
+                    // impl targets a foreign/primitive type that can't be a fat-pointer `Shared<Shape>` value, so
+                    // it's excluded from the poly dispatch tables (emitPolyContractResolvers) anyway.
+                    bool impl  = std::find(c2.interfaces.begin(),      c2.interfaces.end(),      e.elemC) != c2.interfaces.end();
+                    bool retro = std::find(c2.retroInterfaces.begin(), c2.retroInterfaces.end(), e.elemC) != c2.retroInterfaces.end();
+                    if (!impl || retro) continue;
+                    if (c2.genSerialize || c2.genDeserialize) { c2.isGraphNode = true; work.push_back(kv2.first); }
+                    // A non-@generate implementor has no node writer — at runtime it would flow through the edge
+                    // and be SILENTLY dropped from the wire. Reject at the edge field; the author must mark it
+                    // @generate or not route it through a serialized graph edge.
+                    else unsupported(("`" + kv2.first + "` implements the serialized graph-edge contract `" + e.elemC +
+                                      "` but is not `@generate(Serialize/Deserialize)` — it would be silently dropped "
+                                      "from the wire; mark it `@generate` or don't route it through a serialized graph "
+                                      "edge").c_str(), f.type ? f.type->line : 0);
                 }
                 continue;
             }

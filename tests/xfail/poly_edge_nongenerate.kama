@@ -1,0 +1,36 @@
+// A `Shared<Shape>` graph edge is polymorphic: at runtime ANY implementor of the contract can flow
+// through it. Each concrete node is written via its own `@generate` machinery — so a nominal implementor
+// that is NOT `@generate` has no node writer and would be SILENTLY dropped from the wire. The compiler
+// must reject it at the edge field. Here `Tri implements Shape` but omits `@generate` → compile error.
+import std::serialization::json::{encode};
+import std::memory::{Shared};
+
+type contract Shape for both { fn int32 area(); }
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Sq implements Shape {
+    @field int32 side;
+    public Sq(int32 side) { this.side = side; }
+    public fn int32 area() { return this.side * this.side; }
+}
+
+// The hole: nominally implements the serialized graph-edge contract Shape, but is not @generate.
+type resource Tri implements Shape {
+    int32 b; int32 h;
+    public Tri(int32 b, int32 h) { this.b = b; this.h = h; }
+    public fn int32 area() { return (this.b * this.h) / 2; }
+}
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Scene {
+    @field Shared<Shape> s;
+    public Scene(Shared<Shape> s) { this.s = give s; }
+}
+
+fn int main() {
+    Shared<Sq> sq = new Sq(side: 4);
+    Shared<Shape> edge = sq;
+    Scene sc = Scene(s: give edge);
+    string j = encode(v: sc);
+    return 0;
+}

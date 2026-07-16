@@ -1396,7 +1396,9 @@ expired). `Shared`/`Weak` dedup by pointee identity; a `Weak` writes its id only
 `DeError::DuplicateId`. Cycles ride `Weak` back-edges; a dangling id → `DeError::UnresolvedReference`. A
 polymorphic edge — `Shared`/`Weak`/`Owned<Contract>` — reconstructs the concrete type from each node's `__type`
 tag and re-forms the fat handle with that concrete's vtable; a tag naming a type that doesn't implement the
-contract → `DeError::TypeMismatch` (its implementors must be `@generate(Serialize, Deserialize)`).
+contract → `DeError::TypeMismatch`. Every nominal implementor of a contract used as a graph edge **must** be
+`@generate(Serialize, Deserialize)` — this is **compile-enforced**: a non-`@generate` implementor (which would
+have no node writer and be silently dropped from the wire) is a compile error at the edge field.
 `DeError` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId}`.
 
 The `Owned`/`Shared`/`Weak` triad is **prelude / built-in** (always in scope, no `import`) — RAII-over-GC is the

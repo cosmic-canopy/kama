@@ -1,1 +1,1 @@
-would dangle
+copy into an owning collection instead
