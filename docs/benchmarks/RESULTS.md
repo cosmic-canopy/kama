@@ -1,6 +1,6 @@
 # kama benchmark results
 
-_Generated: 2026-07-13 20:02 · arch: aarch64 (Linux) · in the `kama-bench` container_
+_Generated: 2026-07-16 02:13 · arch: aarch64 (Linux) · in the `kama-bench` container_
 
 Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · openjdk version "21.0.11" 2026-04-21 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
 Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after each time is relative to kama for that workload (native → kama, wasm → kama→wasm). Peak RSS: `/usr/bin/time -v`.
@@ -32,7 +32,7 @@ The compute workloads (fib/pi/collatz) are tuned so the slow interpreters finish
 compiled languages run in a few ms, so small absolute differences between them are noise — **except
 `dispatch`**, which measures *true* dynamic dispatch (see Workloads): the AOT cluster
 (kama/C/C++/Rust) converges there, while **Go**'s interface dispatch trails ~2×. The
-**`alloc`** workload (added once `DynamicArray<T>` landed in M9) is the one to watch for the no-GC story: it
+**`alloc`** workload (added once `List<T>` landed in M9) is the one to watch for the no-GC story: it
 churns ~2M growable-list appends and 2000 collection lifetimes, so it contrasts kama's deterministic
 **RAII** free against the **garbage collectors** (Go, C#, Java, Lua, Python, JS) and against the RAII
 peers (C++ `vector`, Rust `Vec`). Watch its **peak RSS** in particular — GC runtimes keep dead
@@ -58,11 +58,11 @@ diverged:
 - **dispatch** — 8×10⁶ virtual calls over a **heterogeneous, heap-owned collection** of mixed
   concrete types built at runtime, so the concrete type is *not* knowable at the call site and the
   call **cannot be devirtualized** — a true dynamic-dispatch measurement. Each language uses its
-  idiomatic owning collection (kama `DynamicArray<Owned<Shape>>`, C++ `vector<unique_ptr>`, Rust
+  idiomatic owning collection (kama `List<Owned<Shape>>`, C++ `vector<unique_ptr>`, Rust
   `Vec<Box<dyn>>`, C array of heap `Shape*`, Go `[]interface`, C#/Java `Shape[]`).
 - **alloc** — 2000× (build a growable list, append 1..1000, sum, drop) ≈ 2M appends + 2000 lifetimes
-  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — kama `DynamicArray<int32>`,
-  C++ `vector`, Rust `Vec`, Go slice, C# `DynamicArray`, Java `ArrayList`, Lua table, Python/JS array, C manual realloc).
+  (allocator / GC pressure vs RAII; each language uses its idiomatic growable list — kama `List<int32>`,
+  C++ `vector`, Rust `Vec`, Go slice, C# `List`, Java `ArrayList`, Lua table, Python/JS array, C manual realloc).
 - **fnptr** — 8×10⁶ indirect calls through a function pointer, routed through a function boundary
   (`apply(op, x)`) so the call stays genuinely indirect (the fnptr analog of `dispatch`'s virtual calls).
   Each language uses its idiomatic callable — kama `fnptr` (a bare C function pointer, zero-cost), C/C++
@@ -86,25 +86,25 @@ diverged:
 
 | workload | kama | C | C++ | Rust | Go | C# (JIT) | Java (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|---|
-| fib | 6.05 (1.0×) | 6.38 (1.1×) | 6.31 (1.0×) | 8.09 (1.3×) | 10.36 (1.7×) | 32.28 (5.3×) | 26.78 (4.4×) | 96.87 (16.0×) | 214.24 (35.4×) |
-| pi | 11.93 (1.0×) | 11.77 (1.0×) | 12.13 (1.0×) | 12.02 (1.0×) | 14.02 (1.2×) | 32.44 (2.7×) | 36.45 (3.1×) | 122.92 (10.3×) | 1643.04 (137.7×) |
-| collatz | 66.3 (1.0×) | 66.19 (1.0×) | 66.23 (1.0×) | 66.3 (1.0×) | 91.05 (1.4×) | 122.79 (1.9×) | 136.75 (2.1×) | 977.63 (14.7×) | 2947.83 (44.5×) |
-| dispatch | 6.3 (1.0×) | 6.24 (1.0×) | 6.49 (1.0×) | 6.46 (1.0×) | 13.93 (2.2×) | 25.14 (4.0×) | 29.5 (4.7×) | 103.42 (16.4×) | 642.01 (101.9×) |
-| alloc | 1.21 (1.0×) | 1.16 (1.0×) | 1.58 (1.3×) | 2.3 (1.9×) | 6.53 (5.4×) | 24.03 (19.9×) | 44.68 (36.9×) | 24.42 (20.2×) | 105.58 (87.3×) |
-| fnptr | 2.5 (1.0×) | 2.51 (1.0×) | 2.72 (1.1×) | 2.69 (1.1×) | 5.06 (2.0×) | 32.04 (12.8×) | 28.8 (11.5×) | 139.06 (55.6×) | 707.93 (283.2×) |
-| map | 8.95 (1.0×) | 2.76 (0.3×) | 4.63 (0.5×) | 8.58 (1.0×) | 23.06 (2.6×) | 58.59 (6.5×) | 42.39 (4.7×) | 7.4 (0.8×) | 127.96 (14.3×) |
+| fib | 6.03 (1.0×) | 5.82 (1.0×) | 6.15 (1.0×) | 6.49 (1.1×) | 10.07 (1.7×) | 31.88 (5.3×) | 25.37 (4.2×) | 88.51 (14.7×) | 212.89 (35.3×) |
+| pi | 11.8 (1.0×) | 11.69 (1.0×) | 11.99 (1.0×) | 11.98 (1.0×) | 13.96 (1.2×) | 33.77 (2.9×) | 35.49 (3.0×) | 119.41 (10.1×) | 1660.79 (140.7×) |
+| collatz | 65.74 (1.0×) | 65.61 (1.0×) | 65.84 (1.0×) | 66.06 (1.0×) | 90.86 (1.4×) | 125.68 (1.9×) | 132.07 (2.0×) | 968.75 (14.7×) | 2996.56 (45.6×) |
+| dispatch | 6.21 (1.0×) | 6.23 (1.0×) | 6.41 (1.0×) | 6.34 (1.0×) | 14.47 (2.3×) | 27.83 (4.5×) | 28.5 (4.6×) | 102.99 (16.6×) | 622.36 (100.2×) |
+| alloc | 1.36 (1.0×) | 1.21 (0.9×) | 1.61 (1.2×) | 2.29 (1.7×) | 6.53 (4.8×) | 23.48 (17.3×) | 42.86 (31.5×) | 24.22 (17.8×) | 109.35 (80.4×) |
+| fnptr | 2.46 (1.0×) | 2.49 (1.0×) | 2.7 (1.1×) | 2.76 (1.1×) | 5.04 (2.0×) | 34.18 (13.9×) | 27.87 (11.3×) | 138.31 (56.2×) | 703.88 (286.1×) |
+| map | 8.88 (1.0×) | 2.69 (0.3×) | 4.55 (0.5×) | 8.47 (1.0×) | 23.09 (2.6×) | 56.56 (6.4×) | 40.96 (4.6×) | 7.39 (0.8×) | 125.42 (14.1×) |
 
 ## NATIVE — peak resident memory (MB)
 
 | workload | kama | C | C++ | Rust | Go | C# (JIT) | Java (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|---|
-| fib | 2 | 2 | 3 | 2 | 2 | 19 | 38 | 2 | 8 |
-| pi | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
-| collatz | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
-| dispatch | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
+| fib | 2 | 2 | 3 | 2 | 2 | 19 | 39 | 2 | 8 |
+| pi | 2 | 2 | 3 | 2 | 2 | 20 | 40 | 2 | 8 |
+| collatz | 2 | 2 | 3 | 2 | 2 | 20 | 40 | 2 | 8 |
+| dispatch | 2 | 2 | 3 | 2 | 2 | 20 | 40 | 2 | 8 |
 | alloc | 2 | 2 | 3 | 2 | 6 | 25 | 79 | 2 | 8 |
-| fnptr | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
-| map | 5 | 4 | 7 | 4 | 5 | 27 | 68 | 3 | 21 |
+| fnptr | 2 | 2 | 3 | 2 | 2 | 20 | 40 | 2 | 8 |
+| map | 5 | 4 | 7 | 4 | 5 | 27 | 69 | 4 | 21 |
 
 ## NATIVE — package size
 
@@ -132,25 +132,25 @@ Interpreted languages (Lua, Python, JS) have no compile step and are omitted._
 
 | lang | compile time | binaries built |
 |---|---|---|
-| kama | 738 ms | 7 |
-| C | 298 ms | 7 |
-| C++ | 626 ms | 7 |
-| Rust | 1575 ms | 7 |
-| Go | 1350 ms | 7 |
-| C# (JIT) | 1415 ms | 1 |
-| Java (JIT) | 232 ms | 1 |
+| kama | 1445 ms | 7 |
+| C | 268 ms | 7 |
+| C++ | 559 ms | 7 |
+| Rust | 1534 ms | 7 |
+| Go | 1294 ms | 7 |
+| C# (JIT) | 1591 ms | 1 |
+| Java (JIT) | 278 ms | 1 |
 
 ## WASM track — execution time under node (median, ms)
 
 | workload | kama→wasm | JS | TS |
 |---|---|---|---|
-| fib | 19.42 (1.0×) | 30.45 (1.6×) | 28.63 (1.5×) |
-| pi | 20.94 (1.0×) | 26.12 (1.2×) | 27.04 (1.3×) |
-| collatz | 92.75 (1.0×) | 419.05 (4.5×) | 423.02 (4.6×) |
-| dispatch | 27.73 (1.0×) | 22.07 (0.8×) | 22.86 (0.8×) |
-| alloc | 16.22 (1.0×) | 16.65 (1.0×) | 15.96 (1.0×) |
-| fnptr | 11.1 (1.0×) | 42.94 (3.9×) | 42.13 (3.8×) |
-| map | 22.95 (1.0×) | 47.13 (2.1×) | — |
+| fib | 19.39 (1.0×) | 28.2 (1.5×) | 27.38 (1.4×) |
+| pi | 20.64 (1.0×) | 25.41 (1.2×) | 26.23 (1.3×) |
+| collatz | 92.53 (1.0×) | 417.29 (4.5×) | 415.35 (4.5×) |
+| dispatch | 26.57 (1.0×) | 21.72 (0.8×) | 22.21 (0.8×) |
+| alloc | 16.26 (1.0×) | 15.52 (1.0×) | 15.34 (0.9×) |
+| fnptr | 11.11 (1.0×) | 41.75 (3.8×) | 41.15 (3.7×) |
+| map | 21.65 (1.0×) | 46.13 (2.1×) | — |
 
 ## WASM track — peak resident memory (MB)
 
@@ -160,7 +160,7 @@ Interpreted languages (Lua, Python, JS) have no compile step and are omitted._
 | pi | 42 | 45 | 45 |
 | collatz | 42 | 45 | 45 |
 | dispatch | 44 | 44 | 44 |
-| alloc | 44 | 46 | 46 |
+| alloc | 46 | 46 | 46 |
 | fnptr | 42 | 45 | 45 |
 | map | 48 | 54 | n/a |
 
@@ -178,8 +178,8 @@ _kama→wasm is transpile-to-C **plus** `emcc -O3`; TS is `tsc`. Hand-written JS
 
 | lang | compile time | binaries built |
 |---|---|---|
-| kama→wasm | 3864 ms | 7 |
-| TS | 229 ms | 1 |
+| kama→wasm | 3962 ms | 7 |
+| TS | 228 ms | 1 |
 
 ## Caveats
 - **`dispatch` measures *true* dynamic dispatch.** An earlier variant called two stack locals of
