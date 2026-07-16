@@ -1436,6 +1436,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         flushHoisted(depth);
                         indent(depth);
                         *_out << cc << ";\n";
+                    } else if (_classes[ty].isExternStruct) {
+                        // extern (C-POD) struct: no kama ctor — aggregate-init the named fields onto
+                        // the `= {0}` declared above (`WGPUColor c = WGPUColor(r: 1.0, g: 0.5)`).
+                        std::string s = externAggregateInit(nm, _classes[ty], stackCtor->args, n->line);
+                        if (!s.empty()) { line(n->line); indent(depth); *_out << s << "\n"; }
                     }
                     // class with no ctor: left default-initialized
                 } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
@@ -1866,12 +1871,22 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (as->token == EQ) {
             std::string lty = exprClass(as->unaryExpression);
             if (auto* iv = dynamic_cast<InvocationNode*>(as->expression.get()))
-                if (iv->identifier && iv->identifier->value && isClass(lty) && _classes[lty].hasCtor
+                if (iv->identifier && iv->identifier->value && isClass(lty)
+                    && (_classes[lty].hasCtor || _classes[lty].isExternStruct)
                     && !isSmartPtrClass(lty)) {
                     std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
                     auto g = _genericTypeInstOf.find(lty);
                     if (rn == lty || (g != _genericTypeInstOf.end() && g->second == rn)) {
                         checkConstWrite(as->unaryExpression, n->line);
+                        if (_classes[lty].isExternStruct) {
+                            // extern (C-POD) reassignment (`cfg = WGPUX(field: v)`): reset to `{0}`
+                            // then set the named fields. POD -> no dtor release, no move-state.
+                            std::string b = emitExpression(as->unaryExpression);
+                            std::string s = externAggregateInit(b, _classes[lty], iv->args, n->line);
+                            line(n->line); indent(depth);
+                            *_out << b << " = (" << lty << "){0}; " << s << "\n";
+                            return;
+                        }
                         std::string lname;
                         if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
                             if (lid->value && (!lid->qualifier || lid->qualifier->empty())) lname = *lid->value;
@@ -6020,6 +6035,32 @@ static std::string litRvalueCType(ASTNode* n)
     return "";
 }
 
+// Field-wise init of an extern (C-POD) struct from NAMED args, e.g. `c.r = 1.0; c.g = 0.5;`. The
+// struct is already `= {0}`, so only provided fields are set (unset -> zero). An unknown field or a
+// positional arg is a clean compile error. Returns "" for no args. Extern structs are POD (no
+// ctor/dtor) -> no move/drop; the caller emits/hoists the returned string.
+std::string CEmitter::externAggregateInit(const std::string& nm, ClassInfo& ci,
+                                          SharedArgumentList args, int srcLine)
+{
+    std::string out;
+    if (args)
+        for (auto& a : *args) {
+            if (!a->name || !a->name->value) {
+                unsupported(("extern struct '" + ci.name + "' init needs named field arguments "
+                             "(e.g. `" + ci.name + "(field: value)`)").c_str(), srcLine);
+                continue;
+            }
+            const std::string& fn = *a->name->value;
+            if (!ci.fieldNames.count(fn)) {
+                unsupported(("unknown field '" + fn + "' in extern struct '" + ci.name
+                             + "' initializer").c_str(), srcLine);
+                continue;
+            }
+            out += nm + "." + fn + " = " + emitExpression(a->expression) + "; ";
+        }
+    return out;
+}
+
 std::string CEmitter::emitReorderedCall(const std::string& cName, const std::string& leadArg,
                                         const std::vector<ParamSig>& params,
                                         SharedArgumentList args, int srcLine)
@@ -6062,6 +6103,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         // value. Only for a by-value param of the exact class in a hoist-enabled statement context;
         // otherwise fall through to the normal path (which rejects an unsupported position cleanly).
         std::string val;
+        bool valHoisted = false;   // an earlier branch already materialized `val` into an addressable temp
         InvocationNode* ctorIv = dynamic_cast<InvocationNode*>(argExpr.get());
         std::string ctorCls;
         if (ctorIv && ctorIv->identifier && ctorIv->identifier->value) {
@@ -6108,11 +6150,20 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
             && !isInterface(p.className) && !_classes[ctorCls].isIntrinsicColl) {
             std::string t = "__ctorarg" + std::to_string(_tempCounter++);
-            std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
-            _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
-            // A `ref` borrow keeps the temp alive through the call; if it owns anything, drop it at scope end.
-            if (p.byRef && _classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
-            val = t;
+            if (_classes[ctorCls].isExternStruct) {
+                // extern (C-POD) struct inline in arg position (`f(color: WGPUColor(r: 1.0))`):
+                // aggregate-init a zeroed temp; no kama ctor / dtor.
+                std::string fi = externAggregateInit(t, _classes[ctorCls], ctorIv->args, srcLine);
+                _hoisted.push_back(ctorCls + " " + t + " = {0}; " + fi);
+                val = t;
+            } else {
+                std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
+                _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
+                // A `ref` borrow keeps the temp alive through the call; if it owns anything, drop it at scope end.
+                if (p.byRef && _classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
+                val = t;
+            }
+            valHoisted = true;
         } else if (_hoistOK && handoff == 0 && ctorImplementsParam && !p.byRef
                    && !_classes[ctorCls].isIntrinsicColl) {
             // A3 — an inline STACK ctor of a concrete that implements a BY-VALUE contract parameter
@@ -6126,6 +6177,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
             if (_classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
             val = t;
+            valHoisted = true;
         } else if (dynamic_cast<ObjectCreationNode*>(argExpr.get())) {
             // an inline `new T(...)` argument — box it into a hoisted temp (malloc + ctor + adopt/vtbl),
             // passed BY VALUE so the callee owns and drops it (a fresh unaliased box, consumed once — not
@@ -6142,11 +6194,13 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 std::string t = tryHoistInlineNew(argExpr, p.className, srcLine);
                 val = t.empty() ? emitExpression(argExpr) : t;   // "" => not an owning target; emitExpression diagnoses
             }
+            valHoisted = true;   // rejected (byRef) or boxed temp — never a bare rvalue for the ref hoist below
         } else if (p.byRef && dynamic_cast<ElementAccessNode*>(argExpr.get())) {
             // `ref a[i]` borrows the ELEMENT: emit it as a place (`*NAME__at(...)`) so the `&(...)`
             // below is the bounds-checked `T*` (index evaluated once), not the address of a by-value
             // `__get` rvalue. Folds to `NAME__at(&a, i)`.
             val = emitPlace(argExpr);
+            valHoisted = true;   // an addressable place — `&(...)` below is already legal
         } else {
             // An owned-string rvalue argument to a string INTRINSIC (`kama_string__*`) is borrowed by the
             // callee (read-only — none of concat/equals/contains/... store it), so hoist it into a
@@ -6184,8 +6238,10 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 _matchTargetCType = _variantTargetType = p.className;
                 val = emitExpression(argExpr);
                 _matchTargetCType = pmt; _variantTargetType = pvt;
+                valHoisted = true;   // union/match compound literal — keep its existing addressable form
             } else {
                 val = st.empty() ? emitExpression(argExpr) : st;
+                valHoisted = !st.empty();   // st => a hoisted string/primitive temp; else a bare rvalue
             }
         }
         if (handoff && (p.byRef || isInterface(p.className)))
@@ -6237,6 +6293,23 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // with `ref stackValue`. (Weak can't be borrowed — it may be dead; tryUpgrade.)
             std::string argCls = exprClass(argExpr);
             std::string dt = derefTarget(argCls);   // library Deref<T> pointee ("" if not a Deref type)
+            // A class RVALUE (a factory / call result, not a named lvalue) has no address, so the
+            // `&(val)` below would be illegal C (`&(makePoint())`). For a `const ref` borrow, materialize
+            // a scope-dtor'd temp (read-only borrow, freed at scope end — sound, mirrors the string /
+            // literal hoists). A non-const `ref` would mutate a discarded temp — reject cleanly. Smart-ptr
+            // / Deref / `this` keep their dedicated paths below (excluded here).
+            if (!valHoisted && isClass(argCls) && !isSmartPtrClass(argCls) && dt.empty()
+                && !isNamedValue(argExpr.get()) && !dynamic_cast<ThisAccessNode*>(argExpr.get())) {
+                if (!p.isConst)
+                    unsupported("a non-const `ref` cannot take a temporary (a call/constructor result) — "
+                                "its mutation would be lost; bind it to a local first, then pass that", srcLine);
+                else if (_hoistOK) {
+                    std::string t = "__refarg" + std::to_string(_tempCounter++);
+                    _hoisted.push_back(argCls + " " + t + " = " + val + ";");
+                    if (_classes[argCls].destructible) recordDestructibleLocal(t, argCls);
+                    val = t;
+                }
+            }
             if (isSmartPtrClass(argCls) && _classes[argCls].collElemClass == p.className) {
                 if (smartKind(argCls) == CollKind::Weak)
                     unsupported(("cannot borrow through a `Weak<" + p.className

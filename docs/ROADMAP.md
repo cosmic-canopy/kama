@@ -71,12 +71,12 @@ remains here is genuinely later-track or opt-in.
   (`hardware Ptr<T>` → `volatile T*`, mirroring `const Ptr<T>`) and single-core ISR↔loop flags.
   **Explicitly NOT a concurrency primitive** — cross-thread sharing is §6 atomics. Reserved-then-lit like
   before; the token stays a hard error until the embedded target ships.
-- **Aggregate initializer for `type extern value` (FFI ergonomics).** Surfaced writing the WebGPU bindings
-  ([`examples/webgpu/`](examples/webgpu/)): a field-wise call on a POD extern struct — `WGPUColor(r: 1.0,
-  g: 0.5)` — silently zero-inits (the field args are dropped) instead of setting the named fields, so C-API
-  descriptor code must fall back to `T x = T(); x.field = …;`. Give extern-value types a real by-name
-  aggregate initializer (`WGPUColor(r: 1.0, …)` → designated init). Verbose-but-correct today; a pure
-  ergonomic win for the many-field descriptor structs a C graphics/OS API is built from.
+- ~~**Aggregate initializer for `type extern value` (FFI ergonomics).**~~ **DONE** (hardening Session B).
+  A field-wise call on a POD extern struct — `WGPUColor(r: 1.0, g: 0.5)` — used to silently zero-init
+  (the field args were dropped) instead of setting the named fields. Now emits real by-name aggregate
+  init (`nm.field = expr;` per provided arg, unset fields stay zero); an unknown field name is a clean
+  compile error. Wired at all three construction positions (local init, reassignment, inline arg).
+  Fixtures: `tests/extern_value_init.kama`, `tests/xfail/extern_value_unknown_field.kama`.
 - **Transitive import of a type's public-API types (module ergonomics).** Surfaced writing `BitSet`
   ([`lib/std/collections/bit_set.kama`](../lib/std/collections/bit_set.kama)): to `foreach` over a
   collection's iterator, the iterator type must be imported *by name alongside the container*
@@ -112,9 +112,11 @@ remains here is genuinely later-track or opt-in.
   user's declaration. Low priority — correctness is fine, only the message is off.
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today). Two small
-  ergonomic gaps surfaced writing `SortedMap`, both with clean idioms today: (a) an rvalue passed to a
-  `ref` parameter emits `&(rvalue)` (invalid C) — bind to a local first (or auto-hoist a temp, as some other
-  positions already do); (b) `give` into a raw `Ptr<T>` deref (`p[0] = give x`) is rejected for an owning `T`
+  ergonomic gaps surfaced writing `SortedMap`: (a) ~~an rvalue passed to a `ref` parameter emits
+  `&(rvalue)` (invalid C)~~ **DONE** (hardening Session B) — a class rvalue (factory / call result) to a
+  `const ref` param now auto-hoists a scope-dtor'd temp; a non-const `ref` rvalue is a clean error (its
+  mutation would be lost — bind to a local first). Fixtures: `tests/ref_arg_rvalue.kama`,
+  `tests/xfail/ref_arg_rvalue_mut.kama`. (b) `give` into a raw `Ptr<T>` deref (`p[0] = give x`) is rejected for an owning `T`
   ("not a bare sub-expression") — a `ref T` out-parameter (`out = give x`) works and is the idiom the B-tree
   uses for its pair moves.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way

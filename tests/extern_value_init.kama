@@ -1,0 +1,15 @@
+// A `type extern value` (C-POD) struct can be aggregate-initialized with named field args
+// (`div_t(quot: 3, rem: 2)`); previously the args were silently dropped and the struct
+// zero-inited. Unset fields stay zero (from the `= {0}` declaration). See ROADMAP §2.
+extern "<stdlib.h>";
+type extern value div_t { int32 quot; int32 rem; }
+
+fn int32 sumDiv(div_t d) { return d.quot + d.rem; }
+
+fn int32 main() {
+    div_t d = div_t(quot: 3, rem: 2);          // full aggregate init -> 5
+    div_t d2 = div_t(quot: 40);                // partial: rem stays 0
+    d = div_t(quot: 10, rem: 5);               // reassignment -> 15
+    int32 inl = sumDiv(d: div_t(quot: 7, rem: 8));   // inline in arg position -> 15
+    return d.quot + d.rem + d2.quot + d2.rem + inl;  // 15 + 40 + 15 = 70? recompute below
+}
