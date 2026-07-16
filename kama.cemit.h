@@ -816,6 +816,7 @@ private:
     // Classes
     bool isClass(const std::string& name) const { return _classes.count(name) != 0; }
     bool isBaseOf(const std::string& base, const std::string& derived) const;   // base in derived's chain
+    std::string namespaceOfType(const std::string& value) const;  // `ns::path` of a registered type with bare name `value`, else "" (missing-import diagnostic)
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is Ptr<T>, the element C-type; else ""
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is Ptr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive

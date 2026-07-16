@@ -146,8 +146,10 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     }
 
     // `foreach (int32 i in bs.setBits())` — the set bit indices, ascending. (BitSet itself is not `Iterable`;
-    // iterate the returned iterator, like `SlotMap.values()`.) To iterate, also import the iterator type:
-    // `import std::collections::{BitSet, BitSetIter};` (a non-generic helper type isn't pulled in implicitly).
+    // iterate the returned iterator, like `SlotMap.values()`.) Importing `BitSet` alone suffices — the
+    // `BitSetIter` return type resolves in THIS module, not the caller's scope, so iterating needs no
+    // separate import. (Only explicitly naming the type — `BitSetIter it = bs.setBits()` — requires
+    // `import std::collections::{BitSetIter}`, like naming any type.)
     public fn BitSetIter setBits() {
         return BitSetIter(words: this.words, wordCount: this.wordCount, modsp: addr(of: this.mods), modsAt: this.mods);
     }

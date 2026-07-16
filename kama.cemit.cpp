@@ -166,6 +166,38 @@ std::string CEmitter::resolveUserName(const std::string& value, SharedStringList
     return value;   // builtin/forward/unresolved — caller handles
 }
 
+// The `ns::path` of a registered type (class / enum / interface / generic template) whose bare trailing
+// name is `value`, or "" if none exists. Turns an unresolved user type name into a clean "not imported —
+// it lives in X" diagnostic instead of leaking a C-level 'undeclared identifier'. Safe against
+// type-params / forward-refs: those aren't registered types, so this returns "" and the caller stays quiet.
+std::string CEmitter::namespaceOfType(const std::string& value) const
+{
+    auto demangleNs = [](const std::string& key) -> std::string {
+        auto p = key.rfind("__");
+        if (p == std::string::npos) return std::string();   // no namespace segment
+        std::string ns = key.substr(0, p), out;
+        for (size_t i = 0; i < ns.size(); ++i) {
+            if (i + 1 < ns.size() && ns[i] == '_' && ns[i + 1] == '_') { out += "::"; ++i; }
+            else out += ns[i];
+        }
+        return out;
+    };
+    auto trailing = [](const std::string& key) -> std::string {
+        auto p = key.rfind("__");
+        return p == std::string::npos ? std::string() : key.substr(p + 2);   // only NAMESPACED keys match
+    };
+    auto scan = [&](const auto& m) -> std::string {
+        for (auto& kv : m) if (trailing(kv.first) == value) return demangleNs(kv.first);
+        return std::string();
+    };
+    std::string r;
+    if (!(r = scan(_classes)).empty())      return r;
+    if (!(r = scan(_enums)).empty())        return r;
+    if (!(r = scan(_interfaces)).empty())   return r;
+    if (!(r = scan(_genericTypes)).empty()) return r;
+    return std::string();
+}
+
 // Resolve a function reference to its mangled cName (same search as types).
 std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qualifier)
 {
@@ -1119,6 +1151,19 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 unsupported(("generic type `" + *declType->value + "` needs a type argument, e.g. `"
                              + *declType->value + "<int32>`").c_str(), n->line);
             std::string ty = cType(declType);
+            // A bare user type name that resolved to nothing (not a class/enum/interface/sig/generic/
+            // primitive/type-param — `cType` handed the name straight back) but names a real type in
+            // another namespace = a missing import. Clean diagnostic instead of a C-level 'undeclared
+            // identifier' leak (e.g. `BitSetIter it = bs.setBits()` without importing `BitSetIter`).
+            if (declType->value && !declType->genericArg && declType->builtInVal == 0 && ty == *declType->value
+                && !isClass(ty) && !isInterface(ty) && !isEnum(ty) && !isSigType(ty)
+                && !_genericTypes.count(ty) && !_genericContracts.count(ty) && !_externNames.count(ty)) {
+                std::string ns = namespaceOfType(*declType->value);
+                if (!ns.empty())
+                    unsupported(("type `" + *declType->value + "` is not imported — it lives in `" + ns
+                                 + "`; add it to your `import` (`import " + ns + "::{" + *declType->value
+                                 + "}`)").c_str(), n->line);
+            }
             bool cls = isClass(ty);
             bool iface = isInterface(ty);
             auto emitDeclarator = [&](auto& d) {

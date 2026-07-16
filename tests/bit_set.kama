@@ -1,6 +1,6 @@
 // BitSet — dense growable bit vector (ECS component masks / flag sets). set/test/clear/toggle, popcount,
 // grow past word boundaries, set-algebra over differing word lengths, ascending set-bit iteration, deep copy.
-import std::collections::{BitSet, BitSetIter};
+import std::collections::{BitSet};   // BitSetIter is NOT imported — iterating setBits() resolves it transitively
 
 fn int32 main() {
     int32 r = 0;

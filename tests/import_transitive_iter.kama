@@ -1,0 +1,12 @@
+// Session E (hardening) work item 2 — importing `BitSet` ALONE is enough to iterate `setBits()`: the
+// concrete iterator type (`BitSetIter`) is never named at the use site, so it needs no separate import.
+// The return type resolves in its DECLARING module (std::collections) via the method signature, not the
+// caller's import scope. (Explicitly naming the iterator type still requires the import — see the xfail.)
+import std::collections::{BitSet};
+fn int32 main() {
+    BitSet bs = BitSet();
+    bs.set(index: 3); bs.set(index: 7);
+    int32 sum = 0;
+    foreach (int32 i in bs.setBits()) { sum = sum + i; }
+    return sum;   // 3 + 7 = 10
+}

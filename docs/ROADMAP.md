@@ -77,15 +77,19 @@ remains here is genuinely later-track or opt-in.
   init (`nm.field = expr;` per provided arg, unset fields stay zero); an unknown field name is a clean
   compile error. Wired at all three construction positions (local init, reassignment, inline arg).
   Fixtures: `tests/extern_value_init.kama`, `tests/xfail/extern_value_unknown_field.kama`.
-- **Transitive import of a type's public-API types (module ergonomics).** Surfaced writing `BitSet`
-  ([`lib/std/collections/bit_set.kama`](../lib/std/collections/bit_set.kama)): to `foreach` over a
-  collection's iterator, the iterator type must be imported *by name alongside the container*
-  (`import std::collections::{BitSet, BitSetIter}`) because resolving `bs.setBits()`'s type needs `BitSetIter`
-  in the consumer's scope. Generic-iterator collections dodge this — their iterator monomorphizes to a
-  globally-unique name (`SlotMapValueIter_int32`) that resolves with no import — so **BitSet is the only
-  collection that pays it** (its iterator is non-generic). Fix = importing a type also makes the types named in
-  its public method signatures resolvable (import brings the API surface, not just the symbol). Non-blocking
-  and isolated; a pure ergonomic/consistency win.
+- **✅ RESOLVED (already worked; diagnostic polished in hardening Session E) — transitive import of a
+  type's public-API types.** Investigated writing `BitSet`
+  ([`lib/std/collections/bit_set.kama`](../lib/std/collections/bit_set.kama)): **iterating already needs no
+  extra import** — `foreach (i in bs.setBits())` with only `import {BitSet}` resolves `setBits()`'s
+  `BitSetIter` return type in its DECLARING module (`std::collections`) via `cTypeInInstance`, not the
+  caller's scope. (The old note claimed BitSet "pays it"; empirically it does not — `tests/bit_set.kama`
+  builds+runs with `BitSetIter` dropped from its import.) The consistency was always there. **Session E added
+  the missing polish:** explicitly NAMING an unimported type (`BitSetIter it = bs.setBits()`) — which
+  correctly still requires the import, like naming any type in Rust/C#/Java/Swift — now yields a clean
+  kama diagnostic (`type X is not imported — it lives in std::collections`) instead of leaking a C-level
+  `undeclared identifier`. Fixtures: `tests/import_transitive_iter.kama`,
+  `tests/xfail/import_named_iter_unimported.kama`. (Diagnostic currently covers the local-declaration
+  position; param/return/field positions could follow if a case surfaces.)
 - **✅ FIXED (hardening Session A) — move-tracker: moved-state leaked across same-named variables in sibling
   scopes.** Surfaced writing `SortedMap`: `give`-consuming a resource variable named `k` in one scope left the
   tracker believing a **different** `k` (a fresh binding — e.g. an `int32 k` in a later sibling `{}` block, or
