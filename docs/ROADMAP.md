@@ -95,17 +95,15 @@ remains here is genuinely later-track or opt-in.
   moved-set is keyed by variable **name**, not by the scoped binding; it must be scoped to the declaration and
   reset when a name is re-declared. Workaround: rename the later variable. A correctness-of-diagnostics bug
   (rejects valid code), not a miscompile.
-- **BUG (latent, undiagnosed) — a stateful-allocator `Shared`/`Weak` graph edge is silently unsound through
-  `@generate(Deserialize)`.** Surfaced by the M11c code review. `graphEdgeOf` (kama.cemit.cpp ~8548) matches
-  any `Shared<X, A>` / `Weak<X, A>` regardless of `A`, and the two-pass graph reader `emitGraphRefRead` /
-  `wireInto` (~8796) reconstructs a node by poking `.p`/`.c` while its ctrl comes from the runtime
-  `kama_ctrl_new` (libc) — leaving the handle's `.alloc` at calloc-zero. So round-tripping a graph node whose
-  edge is `Shared<N, BumpAllocator>` yields a handle with a **zeroed `BumpAllocator`** that frees through a
-  no-op `deallocate` → the libc-allocated pointee + ctrl **leak** (+ an MSan read of the uninitialized handle).
-  Not an M11c regression — deserialize is documented `GlobalAllocator`-only — but it isn't *rejected*. Fix:
-  diagnose a non-`GlobalAllocator` allocator arg on a graph-mode `Shared`/`Weak` edge (in `graphEdgeOf` or the
-  `@generate(Deserialize)` validation) with a clear "graph serialization is GlobalAllocator-only" message.
-  Small, self-contained; do it with M11d (interface-element allocators) or the next serialization pass.
+- **✅ FIXED (M11d) — a stateful-allocator `Shared`/`Weak`/`Owned` graph edge is now rejected at compile time.**
+  Was: `graphEdgeOf` (kama.cemit.cpp ~8548) matched any `Shared<X, A>` / `Weak<X, A>` regardless of `A`, and the
+  two-pass graph reader reconstructed a node with the handle's `.alloc` at calloc-zero → a `Shared<N,
+  BumpAllocator>` graph edge round-tripped to a **zeroed** allocator whose no-op `deallocate` **leaked** the
+  libc pointee + ctrl. Deserialize is `GlobalAllocator`-only by design, so `graphEdgeOf` now diagnoses a
+  non-`GlobalAllocator` edge (concrete triad via `boxAllocatorArg`, interface-erased via
+  `CollectionInfo::allocType`) with "graph-mode serialization is GlobalAllocator-only …" before either the
+  writer or reader is emitted. Threading the allocator through the graph driver (the full fix) stays out of
+  scope. Xfail `graph_alloc_iface`.
 - **✅ FIXED (M10b, `55adb51`) — generic `DynamicArray<V>.operator[]` mis-lowered to a raw pointer subscript
   inside a nested argument.** Surfaced writing `SortedMap` (M6): `return Optional::Some(value: this.clone(v:
   this.d[i]))` where `d` is a generic `DynamicArray<V>` field emitted `this.d[i]` as a raw pointer index
@@ -328,17 +326,39 @@ serialization, networking).
        `A`). Fixtures `shared_arena`, `weak_arena` (Weak-outlives-Shared), `shared_arena_hoist` (arg/return),
        `shared_arena_cycle` (refcount cycle). Also corrected the stale `!Movable` prelude comments (`Shared`/
        `Weak` are movable — `give` moves the handle — per TYPE_MODEL/KEYWORDS).
-     - **M11d — `Owned/Shared/Weak<Interface, A>` (stateful-A through the intrinsic iface path) — deferred.**
-       The interface-element handle is type-erased intrinsic C (`{obj, vtbl, ctrl}`, runtime `kama_ctrl`,
-       `KAMA_*_IFACE_FUNCS` + emitter wrappers — all hardcode `kama_free`), so routing a *stateful* allocator
-       needs a type-erased dealloc fn-ptr (+ allocator instance + size) in `kama_ctrl` and new macros — a
-       runtime-ABI change. Default-`GlobalAllocator` interface boxes keep working (byte-identical); a stateful-A
-       placement into an interface box is rejected with a clear diagnostic until then.
+     - **M11d — `Owned/Shared/Weak<Interface, A>` (stateful-A through the intrinsic iface path). ✅ DONE**
+       (triple-green native/SAN/WASM 551/538/538). Completes the campaign — every box, concrete *and*
+       contract-erased, now honors a stateful allocator. The interface-element handle is type-erased intrinsic
+       C (`{obj, vtbl[, ctrl]}`, runtime `kama_ctrl`, `KAMA_*_IFACE_FUNCS` — hardcoded `kama_free`).
+       **Design call: mirror M11c rather than the original "type-erased dealloc fn-ptr in `kama_ctrl`" plan** —
+       `kama_ctrl` stays byte-identical; instead the fat handle grows a by-value `A alloc` + pointee `objsize`
+       (new `KAMA_*_IFACE_ALLOC_{TYPE,FUNCS}` macros), drawing the pointee + ctrl from `A` and freeing both
+       through it. This is consistent with the shipped concrete path, needs no shared-ABI change, and the
+       per-`(element, allocator)` monomorph naming M11c added already gives the distinct struct for free. Only a
+       *stateful* box (`allocType != GlobalAllocator`) selects the `_ALLOC_` macros → default-`GlobalAllocator`
+       interface boxes stay **byte-identical** (verified). The handle's by-value `A` field means its TYPE is laid
+       out in `unifiedStructOrder` (after the allocator struct, like `Fixed<T,N>`) and its FUNCS after class
+       prototypes (so `A__deallocate` is declared) — two new deferred-emission passes. `alloc`+`objsize` are
+       carried across the cross-struct transitions (Shared→Weak reseat, `downgrade`, concrete→iface upcast,
+       `__upgrade`). The **optimal** store-once design (allocator in a monomorphized/erased ctrl, thin handles —
+       Rust `Arc<T,A>`) is noted below as a deferred optimization (it can't unify `Owned`, which has no ctrl, and
+       would reopen shipped M11c). Fixtures `owned_arena_iface`, `shared_arena_iface`, `weak_arena_iface`
+       (Weak-outlives-Shared), `upcast_shared_arena_iface`, `new_arg_shared_arena_iface` (hoisted new-site) +
+       xfails `new_alloc_iface` (allocator-type mismatch) and `graph_alloc_iface` (the graph-edge reject below).
      - **Zero-size-field elision — deferred optimization.** M11a carries a `GlobalAllocator alloc` field on the
        default `Owned<T>` (mirroring the M10 collections), which pads the handle (the runtime call inlines to a
        bare `free`, but the field is real). A general "drop any empty-struct field + synthesize a throwaway
        receiver for method calls on it" pass would reclaim it on `Owned` *and* every collection at once — its
        own tested change (touch-sites: struct decl, field read/assign, copy, serialize).
+     - **Store-once allocator / thin smart-ptr handles — deferred optimization (Rust `Arc<T,A>` model).** The
+       whole M11 family carries `A` **per handle** (a small copyable value handle over externally-owned arena
+       state — copying it duplicates pointers, not real allocator state). The memory-optimal alternative stores
+       the allocator **once** in a monomorphized control block and keeps handles thin (pointers), so `copy()`
+       just bumps a count. Not taken because (a) `Owned` has no control block, so it can't unify; (b) it would
+       reopen the shipped concrete M11c path for consistency; (c) the savings are small precisely *because* the
+       allocator handle is already lightweight — and the common default-`GlobalAllocator` handle fatness is
+       already covered by zero-size-field elision above. Revisit as a whole-family refactor gated on profiling,
+       bundled with that elision pass.
      - **Fallible allocation — deferred with the embedded milestone.** `allocate -> Optional<Ptr>` (vs
        today's panic-on-OOM) is what a no-heap embedded target needs; it colors the mutating APIs with
        failure propagation. It rides this same `Allocator` seam non-breakingly. Fallible + M11 are the two

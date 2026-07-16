@@ -1,0 +1,27 @@
+// M11d: allocator-aware placement `new(allocator: a)` into an INTERFACE box in ARG and RETURN position —
+// exercises the HOISTED new-site mirror (tryHoistInlineNew), which must thread the allocator identically to
+// the local-decl path or the block leaks. `make` returns a `Shared<Shape, A>` (return position); `areaOf`
+// takes one (arg position, and a placement `new` is handed straight into it). ASan-clean: 1 malloc + 1 free.
+import std::memory::{Shared};
+import std::collections::{Arena, BumpAllocator};
+
+type contract Shape for both { fn int32 area(); }
+
+type value Circle implements Shape {
+    int32 r;
+    public Circle(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+
+fn Shared<Shape, BumpAllocator> make(BumpAllocator alloc, int32 r) {
+    return new(allocator: alloc) Circle(r: r);       // RETURN position → the hoisted new-site
+}
+
+fn int32 areaOf(Shared<Shape, BumpAllocator> s) { return s.area(); }
+
+fn int32 main() {
+    Arena arena = Arena(capacity: 1 << 12);
+    Shared<Shape, BumpAllocator> s = make(alloc: arena.handle(), r: 9);   // 81, via return-position new
+    int32 viaArg = areaOf(s: make(alloc: arena.handle(), r: 4));          // 16, via arg-position hoisted new
+    return s.area() + viaArg;                                             // 97
+}

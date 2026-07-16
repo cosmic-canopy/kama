@@ -1223,15 +1223,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // keep the two in sync (esp. the Shared ctrl asymmetry: iface path emits
                     // kama_ctrl_new(), the library-adopt path lets `adopt` allocate it).
                     std::string octy = cType(oc->type);
-                    // Allocator-aware `new(allocator: …)` is supported for the concrete-element library boxes
-                    // (`Owned<T, A>`, `Shared<T, A>` — the library-adopt branch below via `adoptIn`). The
-                    // INTERFACE-element path is the type-erased intrinsic C macro path (`isSmartPtrClass`),
-                    // whose ctrl block is `kama_free`d directly — routing a stateful allocator through it is a
-                    // runtime-ABI change (M11d), so reject it here.
-                    if (oc->placement && !oc->placement->empty() && isSmartPtrClass(ty))
-                        unsupported("allocator-aware `new(allocator: …)` into an interface-element smart pointer "
-                                    "(`Owned`/`Shared`/`Weak<SomeContract>`) is not supported yet — use a "
-                                    "concrete-element box (`Owned<T, A>`, `Shared<T, A>`)", n->line);
+                    // Allocator-aware `new(allocator: …)` threads a stateful allocator through BOTH the
+                    // concrete-element library boxes (`Owned<T, A>` via `adoptIn`) AND the type-erased
+                    // INTERFACE-element intrinsic path (`isSmartPtrClass`, M11d — each fat handle carries its
+                    // own `A alloc` value + `objsize`, drawing the pointee/ctrl from `A`); handled inline below.
                     if (isBindableClass(ty)) {
                         emitBindableNew(nm, ty, oc, depth);   // bind obj + method
                     } else if (isSmartPtrClass(ty)) {
@@ -1252,8 +1247,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             else if (_classes[octy].isAbstractClass)
                                 unsupported(("cannot instantiate abstract class '" + octy + "'").c_str(), n->line);
                             else {
+                                // Placement `new(allocator: a)` (M11d): draw the pointee AND (Shared) the ctrl
+                                // from `a`, and store `a`+`objsize` in the fat handle so its dtor frees through it.
+                                // A default GlobalAllocator box keeps the libc malloc + kama_ctrl_new() path.
+                                bool useAlloc = ifaceNewAllocator(ty, oc, n->line);
+                                std::string ap;
                                 line(n->line); indent(depth);
-                                *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
+                                if (useAlloc) {
+                                    auto pa = placementAllocator(oc, n->line, /*emit=*/true);
+                                    ap = "__alloc" + std::to_string(_tempCounter++);
+                                    *_out << pa.second << " " << ap << " = " << pa.first << ";\n"; indent(depth);
+                                    *_out << nm << ".obj = (void*)" << pa.second << "__allocate(&" << ap << ", sizeof(" << octy << "));\n";
+                                } else {
+                                    *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
+                                }
                                 indent(depth); *_out << "if (!" << nm << ".obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
                                 if (_classes[octy].hasCtor) {
                                     line(n->line);
@@ -1264,8 +1271,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     indent(depth); *_out << cc << ";\n";
                                 }
                                 indent(depth); *_out << nm << ".vtbl = &" << octy << "__as_" << T << ";\n";
+                                if (useAlloc) {
+                                    indent(depth); *_out << nm << ".alloc = " << ap << ";\n";
+                                    indent(depth); *_out << nm << ".objsize = sizeof(" << octy << ");\n";
+                                }
                                 if (smartKind(ty) == CollKind::Shared) {   // ref-counted owned interface
-                                    indent(depth); *_out << nm << ".ctrl = kama_ctrl_new();\n";
+                                    indent(depth);
+                                    if (useAlloc)   // ctrl drawn from the SAME allocator (validated == the box's A)
+                                        *_out << nm << ".ctrl = (kama_ctrl*)" << _collections[ty].allocType
+                                              << "__allocate(&" << ap << ", sizeof(kama_ctrl)); "
+                                              << nm << ".ctrl->strong = 1; " << nm << ".ctrl->weak = 0;\n";
+                                    else
+                                        *_out << nm << ".ctrl = kama_ctrl_new();\n";
                                 }
                             }
                         }
@@ -1400,9 +1417,17 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // contract Weak copies {obj, vtbl}; a thin Weak copies {ptr}.
                     line(n->line); indent(depth);
                     std::string src = emitExpression(init);
-                    if (isInterface(_classes[ty].collElemClass))
+                    if (isInterface(_classes[ty].collElemClass)) {
                         *_out << nm << ".obj = (" << src << ").obj; " << nm << ".vtbl = (" << src << ").vtbl; "
                              << nm << ".ctrl = (" << src << ").ctrl;\n";
+                        // stateful-A iface Weak (M11d): carry the allocator + pointee size so it frees the ctrl
+                        // through the right A even after its Shared is gone.
+                        std::string wa = _collections.count(ty) ? _collections[ty].allocType : "";
+                        if (!wa.empty() && wa != "GlobalAllocator") {
+                            indent(depth); *_out << nm << ".alloc = (" << src << ").alloc; "
+                                                 << nm << ".objsize = (" << src << ").objsize;\n";
+                        }
+                    }
                     else
                         *_out << nm << ".ptr = (" << src << ").ptr; " << nm << ".ctrl = (" << src << ").ctrl;\n";
                     indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->weak++;\n";
@@ -1961,9 +1986,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // Shared->Weak reseat: field-copy + weak retain. A fat contract Weak
                 // copies {obj, vtbl}; a thin Weak copies {ptr}.
                 indent(d2);
-                if (isInterface(_classes[ty].collElemClass))
+                if (isInterface(_classes[ty].collElemClass)) {
                     *_out << b << ".obj = (" << src << ").obj; " << b << ".vtbl = (" << src << ").vtbl; "
                          << b << ".ctrl = (" << src << ").ctrl;\n";
+                    std::string wa = _collections.count(ty) ? _collections[ty].allocType : "";
+                    if (!wa.empty() && wa != "GlobalAllocator") {   // stateful-A iface Weak reseat (M11d)
+                        indent(d2); *_out << b << ".alloc = (" << src << ").alloc; "
+                                          << b << ".objsize = (" << src << ").objsize;\n";
+                    }
+                }
                 else
                     *_out << b << ".ptr = (" << src << ").ptr; " << b << ".ctrl = (" << src << ").ctrl;\n";
                 indent(d2); *_out << "if (" << b << ".ctrl) " << b << ".ctrl->weak++;\n";
@@ -3690,7 +3721,16 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                 if (resolveUserName(ifn, nullptr) == _heapOwnerContract) { implementsHeapOwner = true; break; }
         if (implementsHeapOwner) {
             CollKind k = ti->second.copyable ? CollKind::Shared : CollKind::Owned;   // Copyable => refcounted
+            // The box's allocator type arg (the concrete arg that `implements Allocator`) — GlobalAllocator/""
+            // stays the default libc path; a stateful one routes the intrinsic macros through it (M11d).
+            std::string allocTy;
+            for (auto& c : concrete) {
+                std::string ct = cType(c);
+                auto aci = _classes.find(ct);
+                if (aci != _classes.end() && implementsContractTemplate(&aci->second, "Allocator")) { allocTy = ct; break; }
+            }
             registerSmartPtr(k, concrete[0], mangled);
+            _collections[mangled].allocType = allocTy;
             // A refcounted (Shared) owner may have a WEAK partner: a method (`downgrade`) returning a
             // DIFFERENT generic resource `RcWeak<T>` (not the owner itself). Route the weak to the Weak
             // IFACE + wire `downgrade`/`tryUpgrade` so the library API works on the type-erased pair.
@@ -3710,6 +3750,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                     std::string weakMangled = weakTmpl;
                     for (auto& c : concrete) weakMangled += "_" + mangleElem(c);
                     registerSmartPtr(CollKind::Weak, concrete[0], weakMangled);
+                    _collections[weakMangled].allocType   = allocTy;       // the Weak frees the ctrl through its own A copy
                     _collections[mangled].ifacePartner    = weakMangled;   // Rc_Shape downgrades to RcWeak_Shape
                     _collections[mangled].downgradeName   = downName;
                     _collections[weakMangled].ifacePartner = mangled;      // RcWeak_Shape upgrades to Rc_Shape
@@ -4451,11 +4492,14 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
 void CEmitter::emitSharedToWeakDowngrade(const CollectionInfo& info)
 {
     const std::string& wk = info.ifacePartner;           // the Weak partner (RcWeak_<elem>)
+    bool ifaceAlloc = info.elemIsInterface && !info.allocType.empty() && info.allocType != "GlobalAllocator";
     *_out << "static inline " << wk << " " << info.cName << "__" << info.downgradeName
           << "(" << info.cName << "* self) {\n"
           << "    " << wk << " w;\n"
-          << "    w.obj = self->obj; w.vtbl = self->vtbl; w.ctrl = self->ctrl;\n"
-          << "    if (w.ctrl) w.ctrl->weak++;\n"
+          << "    w.obj = self->obj; w.vtbl = self->vtbl; w.ctrl = self->ctrl;\n";
+    if (ifaceAlloc)   // carry the allocator + pointee size so the Weak frees the ctrl through the right A
+        *_out << "    w.alloc = self->alloc; w.objsize = self->objsize;\n";
+    *_out << "    if (w.ctrl) w.ctrl->weak++;\n"
           << "    return w;\n"
           << "}\n";
 }
@@ -4489,6 +4533,42 @@ void CEmitter::emitStringFind(const CollectionInfo& info)
 }
 
 // Emit the KAMA_*_{TYPE,FUNCS}(...) macro line per registered instantiation.
+// An allocator-aware INTERFACE smart ptr (M11d) whose fat handle embeds `A alloc` BY VALUE — so, like
+// `Fixed<T,N>`, its TYPE typedef must be laid out AFTER the allocator struct (in unifiedStructOrder),
+// not in the early collection-TYPE phase where the allocator is still an incomplete forward decl.
+bool CEmitter::isIfaceAllocColl(const CollectionInfo& info) const
+{
+    return info.elemIsInterface && !info.allocType.empty() && info.allocType != "GlobalAllocator"
+        && (info.kind == CollKind::Owned || info.kind == CollKind::Shared || info.kind == CollKind::Weak);
+}
+
+// Emit just the `_IFACE_ALLOC_TYPE` typedef for one such collection (called from the ordered struct-body
+// pass, once the `A` struct is complete). The FUNCS half is emitted by emitIfaceAllocFuncs.
+void CEmitter::emitIfaceAllocType(const CollectionInfo& info)
+{
+    const char* k = info.kind == CollKind::Owned ? "OWNED" : info.kind == CollKind::Shared ? "SHARED" : "WEAK";
+    *_out << "KAMA_" << k << "_IFACE_ALLOC_TYPE(" << info.cName << ", " << info.elemClass << "_vtbl, "
+          << info.allocType << ")\n";
+}
+
+// Emit the `_IFACE_ALLOC_FUNCS` half. Deferred until AFTER class prototypes (unlike the plain collection
+// FUNCS at emitCollectionDefs) because the dtor calls `A__deallocate` — the allocator's method prototype
+// isn't emitted until the prelude/class-prototype pass. (A library collection holding one of these frees
+// its elements from a real function in the late body pass, so no ordering hazard there.)
+void CEmitter::emitIfaceAllocFuncs(CollectionInfo& info)
+{
+    if (info.kind == CollKind::Owned)
+        *_out << "KAMA_OWNED_IFACE_ALLOC_FUNCS(" << info.cName << ", " << info.allocType << ")\n";
+    else if (info.kind == CollKind::Shared) {
+        *_out << "KAMA_SHARED_IFACE_ALLOC_FUNCS(" << info.cName << ", " << info.allocType << ")\n";
+        if (!info.downgradeName.empty()) emitSharedToWeakDowngrade(info);
+    } else {   // Weak
+        *_out << "KAMA_WEAK_IFACE_ALLOC_FUNCS(" << info.cName << ", " << info.allocType << ", "
+              << info.ifacePartner << ")\n";
+        emitWeakTryUpgrade(info);
+    }
+}
+
 // `typesOnly` picks the struct-typedef half (emitted before class struct bodies so a
 // class may hold a collection/smart-ptr BY VALUE) vs the funcs half (after class
 // prototypes, where element dtors are declared).
@@ -4500,6 +4580,10 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
     // must be emitted first. Alphabetical order breaks e.g. `List_...` (emitted before `Shared_...`).
     for (const std::string& cName : _collectionOrder) {
         CollectionInfo& info = _collections[cName];
+        // The iface-ALLOC variant embeds `A` by value + frees through `A__deallocate` -> both halves are
+        // deferred: the TYPE to unifiedStructOrder (after A's struct), the FUNCS to after class prototypes
+        // (after A's method protos). See emitIfaceAllocType / emitIfaceAllocFuncs.
+        if (isIfaceAllocColl(info)) continue;
         std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "KAMA_ELEM_NODTOR";
         std::string tail = typesOnly ? ")\n"                          // _TYPE(T, NAME)
                                      : (", " + elemDtor + ")\n");     // _FUNCS(T, NAME, ELEM_DTOR)
@@ -4511,15 +4595,21 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
             *_out << "KAMA_ARRAY_" << suf << "(" << info.elemCType << ", " << info.cName << collTail;
         else if (info.kind == CollKind::List)
             *_out << "KAMA_LIST_" << suf << "(" << info.elemCType << ", " << info.cName << collTail;
-        else if (info.kind == CollKind::Owned && info.elemIsInterface)
+        // A stateful allocator on the intrinsic INTERFACE box selects the `_ALLOC_` macro variant (fat handle
+        // carries `A alloc`+`objsize`, frees through `A`); a default/absent GlobalAllocator keeps the plain
+        // macros (byte-identical). `A` is spelled after the vtbl (TYPE) / alone (FUNCS).
+        bool ifaceAlloc = info.elemIsInterface && !info.allocType.empty() && info.allocType != "GlobalAllocator";
+        if (info.kind == CollKind::Owned && info.elemIsInterface)
             // fat-element `Owned<I>` — TYPE takes the vtbl type, FUNCS drops via the vtbl slot.
-            *_out << "KAMA_OWNED_IFACE_" << suf << "(" << info.cName
-                 << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : ")\n");
+            *_out << (ifaceAlloc ? "KAMA_OWNED_IFACE_ALLOC_" : "KAMA_OWNED_IFACE_") << suf << "(" << info.cName
+                 << (typesOnly ? (", " + info.elemClass + "_vtbl" + (ifaceAlloc ? ", " + info.allocType : "") + ")\n")
+                               : (ifaceAlloc ? ", " + info.allocType + ")\n" : ")\n"));
         else if (info.kind == CollKind::Owned)
             *_out << "KAMA_OWNED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Shared && info.elemIsInterface) {
-            *_out << "KAMA_SHARED_IFACE_" << suf << "(" << info.cName
-                 << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : ")\n");
+            *_out << (ifaceAlloc ? "KAMA_SHARED_IFACE_ALLOC_" : "KAMA_SHARED_IFACE_") << suf << "(" << info.cName
+                 << (typesOnly ? (", " + info.elemClass + "_vtbl" + (ifaceAlloc ? ", " + info.allocType : "") + ")\n")
+                               : (ifaceAlloc ? ", " + info.allocType + ")\n" : ")\n"));
             // a library `Rc<Shape>` (Shared IFACE with a weak partner) gets a `downgrade()` that
             // field-copies {obj,vtbl,ctrl} into its Weak partner + bumps `weak`.
             if (!typesOnly && !info.downgradeName.empty()) emitSharedToWeakDowngrade(info);
@@ -4528,8 +4618,10 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
             *_out << "KAMA_SHARED_" << suf << "(" << info.elemCType << ", " << info.cName << tail;
         else if (info.kind == CollKind::Weak && info.elemIsInterface) {
             // The C `__upgrade` (-> the Shared partner) stays an internal helper; `tryUpgrade` wraps it.
-            *_out << "KAMA_WEAK_IFACE_" << suf << "(" << info.cName
-                 << (typesOnly ? (", " + info.elemClass + "_vtbl)\n") : (", " + info.ifacePartner + ")\n"));
+            *_out << (ifaceAlloc ? "KAMA_WEAK_IFACE_ALLOC_" : "KAMA_WEAK_IFACE_") << suf << "(" << info.cName
+                 << (typesOnly ? (", " + info.elemClass + "_vtbl" + (ifaceAlloc ? ", " + info.allocType : "") + ")\n")
+                               : (ifaceAlloc ? (", " + info.allocType + ", " + info.ifacePartner + ")\n")
+                                             : (", " + info.ifacePartner + ")\n")));
             if (!typesOnly) emitWeakTryUpgrade(info);
         }
         else if (info.kind == CollKind::Weak) {
@@ -4992,6 +5084,13 @@ void CEmitter::emitSmartPtrUpcast(const std::string& nm, const std::string& dstT
         if (retain) { indent(depth); *_out << "if (" << nm << ".ctrl) " << nm << ".ctrl->"
                                             << (dk == CollKind::Weak ? "weak" : "strong") << "++;\n"; }
     }
+    // A stateful-allocator dst (M11d): carry the concrete source's own `alloc` value into the fat handle, and
+    // the pointee's `objsize`, so the iface box frees obj/ctrl through the SAME allocator the source used.
+    std::string dstAlloc = _collections.count(dstTy) ? _collections[dstTy].allocType : "";
+    if (!dstAlloc.empty() && dstAlloc != "GlobalAllocator") {
+        indent(depth); *_out << nm << ".alloc = (" << srcE << ").alloc;\n";
+        indent(depth); *_out << nm << ".objsize = sizeof(" << libT << ");\n";
+    }
     // move (bare `Owned`, or `give`): consume the source at compile time so its dtor is skipped —
     // the destination handle now owns the ref (it shares the same ctrl without an increment).
     if (!retain) { std::string mv = moveOnlySource(src, line); if (!mv.empty()) markMoved(mv); }
@@ -5339,7 +5438,11 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
         auto dep = [&](SharedIdentifier ty) -> ClassInfo* {
             auto it = _classes.find(cType(ty));
             if (it == _classes.end() || it->second.isExternStruct) return nullptr;
-            if (it->second.isIntrinsicColl && it->second.collKind != CollKind::Fixed) return nullptr;  // pointer storage
+            // Pointer-storing collections aren't a by-value dep — EXCEPT `Fixed<T,N>` (inline array) and an
+            // allocator-aware iface smart ptr (M11d), whose fat handle embeds `A alloc` by value.
+            if (it->second.isIntrinsicColl && it->second.collKind != CollKind::Fixed
+                && !(_collections.count(it->second.name) && isIfaceAllocColl(_collections[it->second.name])))
+                return nullptr;
             return &it->second;
         };
         std::vector<ClassInfo*> deps;
@@ -5353,6 +5456,11 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
                 !(it->second.isIntrinsicColl && it->second.collKind != CollKind::Fixed))
                 deps.push_back(&it->second);
         }
+        // an allocator-aware iface smart ptr (M11d) embeds `A alloc` by value -> its layout needs A's struct.
+        if (ci->isIntrinsicColl && _collections.count(ci->name) && isIfaceAllocColl(_collections[ci->name])) {
+            auto it = _classes.find(_collections[ci->name].allocType);
+            if (it != _classes.end() && !it->second.isExternStruct) deps.push_back(&it->second);
+        }
 
         // restore the outer context BEFORE recursing, so each recursed node sets up its own binding.
         _nsCtx = savedCtxOuter; _typeSubst = savedSubstOuter;
@@ -5365,7 +5473,9 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
 
     for (auto& kv : _classes)
         if ((!kv.second.isIntrinsicColl && !kv.second.isExternStruct) ||
-            (kv.second.isIntrinsicColl && kv.second.collKind == CollKind::Fixed))   // Fixed lays out by value
+            (kv.second.isIntrinsicColl && kv.second.collKind == CollKind::Fixed) ||   // Fixed lays out by value
+            (kv.second.isIntrinsicColl && _collections.count(kv.second.name)          // iface-ALLOC embeds `A`
+                 && isIfaceAllocColl(_collections[kv.second.name])))
             visit(&kv.second);
     _nsCtx = savedCtxOuter; _typeSubst = savedSubstOuter;
     return out;
@@ -5728,6 +5838,27 @@ std::string CEmitter::boxAllocatorArg(const std::string& ty)
     for (auto& f : ci->second.fields)                                          // the box's `A alloc` field,
         if (f.name == "alloc" && f.type) return cTypeInInstance(ty, f.type);   // resolved to the concrete A
     return "";
+}
+
+bool CEmitter::ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, int line)
+{
+    std::string allocType = _collections.count(ty) ? _collections[ty].allocType : "";
+    bool boxStateful = !allocType.empty() && allocType != "GlobalAllocator";
+    auto pa = placementAllocator(oc, line, /*emit=*/false);   // resolve the handle type only (no emission)
+    bool placed = !pa.second.empty();
+    if (placed) {
+        // No inference axis: the placement handle's type must equal the box's declared allocator.
+        if (allocType != pa.second)
+            unsupported((allocType.empty()
+                ? "`" + ty + "` has no allocator parameter — a placement `new(allocator: …)` needs a box like "
+                  "`Owned<Contract, A>`/`Shared<Contract, A>`"
+                : "the box's allocator type `" + allocType + "` does not match the `new(allocator: …)` handle `"
+                  + pa.second + "` — spell the box's allocator explicitly").c_str(), line);
+    } else if (boxStateful) {
+        unsupported(("this box's allocator `" + allocType + "` is stateful — construct it with "
+                     "`new(allocator: …) T(...)`, not a bare `new`").c_str(), line);
+    }
+    return boxStateful;   // a matched, non-Global placement drives the `_ALLOC_` emission path
 }
 
 // If `e` is `this.field[i]` (or `obj.field[i]`) where `field` is a raw `Ptr<T>`, return the element's
@@ -7179,14 +7310,9 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         _hoisted.push_back(targetCType + " " + t + " = {0};");
         return t;
     };
-    // Allocator-aware placement is supported for the concrete-element library boxes (`Owned<T, A>`,
-    // `Shared<T, A>` — via `adoptIn` below). The INTERFACE-element intrinsic C macro path (`isSmartPtrClass`)
-    // `kama_free`s its ctrl directly, so a stateful allocator through it is a runtime-ABI change (M11d) —
-    // reject here (mirror the local-decl guard).
-    if (oc->placement && !oc->placement->empty() && isSmartPtrClass(targetCType))
-        return reject("allocator-aware `new(allocator: …)` into an interface-element smart pointer "
-                      "(`Owned`/`Shared`/`Weak<SomeContract>`) is not supported yet — use a concrete-element "
-                      "box (`Owned<T, A>`, `Shared<T, A>`)");
+    // Allocator-aware placement threads a stateful allocator through the concrete-element library boxes
+    // (`Owned<T, A>` via `adoptIn` below) AND the type-erased INTERFACE-element intrinsic path (M11d, in the
+    // `isInterface(T)` block below — each fat handle carries its own `A alloc` value + `objsize`).
 
     // ---- LIBRARY HeapOwner, concrete element: `T* hp = malloc; C__ctor(hp,…); box = Owner__adopt(hp)` ----
     // (mirror emitLocalVariableDeclaration ~1265-1300, incl. the derived→base upcast; `adopt` itself
@@ -7259,13 +7385,31 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
                           + "` owns a class that satisfies the contract");
         if (_classes[octy].isAbstractClass)
             return reject("cannot instantiate abstract class '" + octy + "'");
-        std::string t = "__newarg" + std::to_string(_tempCounter++);
-        std::string box = targetCType + " " + t + " = {0}; " + t + ".obj = malloc(sizeof(" + octy + "));";
+        // Placement `new(allocator: a)` in arg/return/payload position — thread the allocator identically to
+        // the local-decl path (draw the pointee/ctrl from `a`, store `a`+objsize in the fat handle). M11d.
+        bool useAlloc = ifaceNewAllocator(targetCType, oc, srcLine);
+        std::string aTy = _collections.count(targetCType) ? _collections[targetCType].allocType : "";
+        std::string t  = "__newarg" + std::to_string(_tempCounter++);
+        std::string ap = useAlloc ? "__alloc" + std::to_string(_tempCounter++) : "";
+        std::string box = targetCType + " " + t + " = {0};";
+        if (useAlloc) {
+            auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
+            box += " " + pa.second + " " + ap + " = " + pa.first + "; "
+                 + t + ".obj = (void*)" + pa.second + "__allocate(&" + ap + ", sizeof(" + octy + "));";
+        } else {
+            box += " " + t + ".obj = malloc(sizeof(" + octy + "));";
+        }
         if (_classes[octy].hasCtor)
             box += " " + emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + t + ".obj",
                                            _classes[octy].ctorParams, oc->args, srcLine) + ";";
         box += " " + t + ".vtbl = &" + octy + "__as_" + T + ";";
-        if (smartKind(targetCType) == CollKind::Shared) box += " " + t + ".ctrl = kama_ctrl_new();";
+        if (useAlloc)
+            box += " " + t + ".alloc = " + ap + "; " + t + ".objsize = sizeof(" + octy + ");";
+        if (smartKind(targetCType) == CollKind::Shared)
+            box += useAlloc
+                 ? " " + t + ".ctrl = (kama_ctrl*)" + aTy + "__allocate(&" + ap + ", sizeof(kama_ctrl)); "
+                   + t + ".ctrl->strong = 1; " + t + ".ctrl->weak = 0;"
+                 : " " + t + ".ctrl = kama_ctrl_new();";
         _hoisted.push_back(box);
         return t;
     }
@@ -8542,18 +8686,28 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
     bool opt = (*ty->value == "Optional" && ty->genericArg);
     SharedIdentifier inner = opt ? ty->genericArg : ty;
     std::string ic = cType(inner);
+    // Graph deserialize reconstructs a Shared/Weak/Owned edge with a ZEROED allocator (it has no handle on the
+    // wire), so a STATEFUL-allocator edge would later free through a bogus/zeroed `A` -> leak/UAF. Deserialize
+    // is GlobalAllocator-only by design; reject a non-Global edge at the one spot the box type is known.
+    auto rejectStatefulEdge = [&](const std::string& a) {
+        if (!a.empty() && a != "GlobalAllocator")
+            unsupported("graph-mode serialization is GlobalAllocator-only — a Shared/Weak/Owned<…, A> edge with "
+                        "a stateful allocator can't be reconstructed (deserialize wires a zeroed allocator); use "
+                        "the default allocator for @generate graph fields", ty->line);
+    };
     // Concrete-element triad instance (`Shared<Leaf>` etc.) — a library generic instance keyed by template.
     auto g = _genericTypeInstOf.find(ic);
     if (g != _genericTypeInstOf.end()) {
         if      (g->second == _sharedTmpl) e.kind = "Shared";
         else if (g->second == _ownedTmpl)  e.kind = "Owned";
         else if (g->second == _weakTmpl)   e.kind = "Weak";
-        if (!e.kind.empty()) { e.elemC = inner->genericArg ? cType(inner->genericArg) : ""; e.elemIsContract = isInterface(e.elemC); e.optional = opt; return e; }
+        if (!e.kind.empty()) { rejectStatefulEdge(boxAllocatorArg(ic)); e.elemC = inner->genericArg ? cType(inner->genericArg) : ""; e.elemIsContract = isInterface(e.elemC); e.optional = opt; return e; }
     }
     // Interface-erased intrinsic smart pointer (`Owned<Contract>` / `Shared<Contract>` / Box<dyn>).
     if (isSmartPtrClass(ic)) {
         CollKind k = smartKind(ic);
         e.kind  = (k == CollKind::Shared) ? "Shared" : (k == CollKind::Weak) ? "Weak" : "Owned";
+        rejectStatefulEdge(_collections.count(ic) ? _collections[ic].allocType : "");
         e.elemC = _classes.count(ic) ? _classes[ic].collElemClass : "";
         e.elemIsContract = isInterface(e.elemC);
         e.optional = opt;
@@ -9902,6 +10056,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 CollectionInfo& info = _collections[ci->name];
                 *_out << "KAMA_FIXED_TYPE(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName << ")\n";
+            } else if (_collections.count(ci->name) && isIfaceAllocColl(_collections[ci->name])) {
+                emitIfaceAllocType(_collections[ci->name]);   // fat handle embeds `A` by value (after A's struct)
             }
             continue;   // macro / header provides it
         }
@@ -9957,6 +10113,11 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         }
         scopeOf(ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci);
     }
+    // Allocator-aware INTERFACE smart-ptr FUNCS (M11d): deferred to HERE so the `A__deallocate` the dtor calls
+    // is already prototyped (above). Registration order (inner-first) so a Weak partner's Shared is complete.
+    for (const std::string& cName : _collectionOrder)
+        if (_collections.count(cName) && isIfaceAllocColl(_collections[cName]))
+            emitIfaceAllocFuncs(_collections[cName]);
     emitPolyContractResolvers();   // Phase E: per-contract graph-edge dispatch (after node-helper protos + extern vtbl decls)
     // Retroactive `implements C for T { … }` for a COLLECTION/primitive target (`string` → `kama_string`):
     // the normal per-class emitters early-out for a collection, so emit a non-static PROTOTYPE here — BEFORE

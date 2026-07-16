@@ -311,7 +311,7 @@ milestone (it rides this same seam). Coverage is the direct-`malloc` containers 
 `Set`; M10b: `Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet`
 B-tree (M11b, via allocator-aware `new`).
 
-### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅ (M11a–M11c)
+### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅ (M11a–M11d)
 
 Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>` and, from **M11c**,
 `Shared<T, A>` / `Weak<T, A>`. A bare `new T(args)` is unchanged (`A` defaults to `GlobalAllocator` → libc
@@ -335,9 +335,13 @@ its own copyable `A` value (copied through `copy()`/`downgrade()`/`tryUpgrade()`
 allocator; `arena.reset()` reclaims a whole ref-counted graph. With allocator-aware `new`,
 **`SortedMap`/`SortedSet`** (whose B-tree nodes box through `new`/`Owned`) got their full `SortedMap<K, V, A>` /
 `SortedSet<K, A>` retrofit in **M11b** (interior node boxes placement-`new` from `A`; the root box stays
-`GlobalAllocator`). Remaining: **interface-element** boxes (`Owned/Shared/Weak<Contract>`) keep the default
-allocator under a stateful `A` (the type-erased intrinsic handle needs a runtime-ABI channel — M11d); a stateful
-placement into one is rejected with a clear diagnostic.
+`GlobalAllocator`). **Interface-element** boxes (`Owned/Shared/Weak<Contract, A>`, e.g. `Shared<Shape,
+BumpAllocator>`) got the same treatment in **M11d**: the type-erased fat handle (`{obj, vtbl[, ctrl]}`) grows a
+by-value `A alloc` + pointee `objsize`, so the pointee and control block are drawn from `A` and freed through it
+— completing allocator coverage for **every** box (concrete and contract-erased). Default-`GlobalAllocator`
+interface boxes are byte-identical to before (they keep the plain intrinsic macros). One design limit:
+object-graph serialization (`@generate` `Shared`/`Weak`/`Owned` edges) is **`GlobalAllocator`-only** — a graph
+edge spelling a stateful `A` is rejected at compile time (deserialize has no allocator on the wire).
 
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 

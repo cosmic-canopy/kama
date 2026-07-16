@@ -1,0 +1,26 @@
+// M11d bundled reject (ROADMAP §2): a graph-mode `Shared`/`Weak`/`Owned<…, A>` edge with a STATEFUL
+// allocator is silently unsound — graph deserialize reconstructs the handle with a ZEROED allocator (there
+// is no allocator on the wire), so a later free would route through a bogus `A` (leak/UAF). Deserialize is
+// GlobalAllocator-only by design, so a non-Global allocator on a graph edge must be REJECTED at compile time.
+import std::serialization::json::{encode, decode};
+import std::memory::{Shared};
+import std::collections::{BumpAllocator};
+
+type contract Shape for both { fn int32 area(); }
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Circle implements Shape {
+    @field int32 r;
+    public Circle(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type resource Scene {
+    @field Shared<Shape, BumpAllocator> a;   // ERROR: stateful allocator on a graph edge
+    public Scene(Shared<Shape, BumpAllocator> a) { this.a = give a; }
+}
+
+fn int main() {
+    return 0;
+}

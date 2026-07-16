@@ -263,6 +263,11 @@ struct CollectionInfo {
     // Defaults to the conventional `Shared_`/`Weak_` prefix; set explicitly for a library `Rc`/`RcWeak` pair.
     std::string  ifacePartner;
     std::string  downgradeName;    // a Shared with a library weak partner: the `downgrade` method name to emit ("" = none)
+    // The intrinsic INTERFACE box's allocator type arg (`Shared<Shape, BumpAllocator>` -> "..BumpAllocator");
+    // "" or "GlobalAllocator" => the default libc path (existing macros, byte-identical). A stateful one selects
+    // the `KAMA_*_IFACE_ALLOC_*` macros + threads `A alloc`/`objsize` through the handle (M11d). Set at the
+    // interface divert (the intrinsic collection has no `alloc` FIELD, so it can't be read via boxAllocatorArg).
+    std::string  allocType;
 };
 
 // A `contract`: a set of method prototypes, lowered to a vtable struct
@@ -527,6 +532,9 @@ private:
     // before class struct bodies so a class may hold one BY VALUE); else the funcs
     // (`_FUNCS`, after class prototypes where element dtors are declared).
     void emitCollectionDefs(bool typesOnly);
+    bool isIfaceAllocColl(const CollectionInfo& info) const;   // M11d: fat handle embeds `A alloc` by value
+    void emitIfaceAllocType(const CollectionInfo& info);       // its TYPE, laid out after the allocator struct
+    void emitIfaceAllocFuncs(CollectionInfo& info);            // its FUNCS, deferred past the allocator's protos
     // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
                               std::string& recvExpr, std::string& idx);
@@ -605,6 +613,11 @@ private:
     // `Owned` instance. Used to reject a bare `new` into a STATEFUL-allocator box (which would leak — the
     // block is malloc'd but the box's no-op `deallocate` never frees it).
     std::string boxAllocatorArg(const std::string& ty);
+    // Validate a `new [(allocator: a)]` into an intrinsic INTERFACE box `ty` (M11d) and report whether the
+    // allocator-aware emission path applies (the box's `allocType` is a stateful, non-Global allocator).
+    // Rejects a stateful box built with a bare `new`, or a placement whose handle type != the box's declared
+    // `A`. Pre-flight only (placementAllocator with emit=false) — the caller re-runs it with emit=true.
+    bool ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, int line);
     // If `cls` implements the prelude `HeapOwner<T>` contract, the owned element `T` (so `new T(args)` can
     // placement-construct into `cls` via its `adopt(Ptr<T>)`); "" otherwise. Inert when no HeapOwner in scope.
     std::string heapOwnerTarget(const std::string& cls);

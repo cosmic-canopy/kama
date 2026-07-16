@@ -1,0 +1,24 @@
+// M11d cross-element UPCAST with a stateful allocator: a concrete arena-backed `Shared<Circle, A>` widens
+// into the type-erased `Shared<Shape, A>` (retain). The fat handle carries the SAME allocator the concrete
+// source used (via `.alloc`) + the pointee `objsize`, so it frees obj/ctrl through that arena. ASan-clean:
+// ONE malloc (arena buffer) + ONE free (Arena dtor); the concrete + upcast handles share one ctrl.
+import std::memory::{Shared};
+import std::collections::{Arena, BumpAllocator};
+
+type contract Shape for both { fn int32 area(); }
+
+type value Circle implements Shape {
+    int32 r;
+    public Circle(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+
+fn int32 main() {
+    Arena arena = Arena(capacity: 1 << 12);
+
+    Shared<Circle, BumpAllocator> a = new(allocator: arena.handle()) Circle(r: 5);   // concrete, area 25
+    Shared<Shape, BumpAllocator> s = a;              // UPCAST: retain into the fat handle (strong=2)
+    int32 viaConcrete = a.area();                    // 25
+    int32 viaContract = s.area();                    // 25 (dynamic dispatch through the vtbl)
+    return viaConcrete + viaContract;                // 50; the Circle + ctrl live inside the arena
+}

@@ -1,0 +1,33 @@
+// M11d: a `Weak<Contract, A>` that OUTLIVES its `Shared` — the lifetime crux for the type-erased interface
+// path. The Shared is arena-backed and dies inside `orphan`, leaving the ctrl (weak=1) in the arena. Back
+// in main the Weak is expired (tryUpgrade → None), then the Weak itself drops LAST and frees the ctrl
+// through ITS OWN allocator copy (a no-op — the Arena bulk-frees). ASan-clean: one malloc + one free.
+import std::memory::{Shared, Weak};
+import std::collections::{Arena, BumpAllocator};
+
+type contract Shape for both { fn int32 area(); }
+
+type value Circle implements Shape {
+    int32 r;
+    public Circle(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+
+// s drops at fn-end (strong 1→0, pointee released — an arena no-op); the ctrl stays (weak=1) in the arena.
+fn Weak<Shape, BumpAllocator> orphan(BumpAllocator alloc) {
+    Shared<Shape, BumpAllocator> s = new(allocator: alloc) Circle(r: 7);
+    Weak<Shape, BumpAllocator> w = s;
+    return give w;
+}
+
+fn int main() {
+    Arena arena = Arena(capacity: 1 << 12);                        // outlives the returned Weak
+    Weak<Shape, BumpAllocator> w = orphan(alloc: arena.handle());  // its Shared already died
+
+    Optional<Shared<Shape, BumpAllocator>> up = w.tryUpgrade();    // expired → None
+    return match (up) {
+        case Some(s2): 100;                                        // not taken
+        case None: 5;
+    };
+    // w drops here (weak 1→0, strong==0 → frees ctrl via w's allocator = no-op); arena drops last
+}

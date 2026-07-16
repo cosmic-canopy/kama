@@ -1,0 +1,22 @@
+// M11d allocator-aware `Owned<Contract, A>`: a boxed CONCRETE object, type-erased behind an INTERFACE,
+// drawn from a caller-owned arena via `new(allocator: a) Circle(...)`. The fat handle {obj, vtbl, alloc,
+// objsize} frees `obj` through the arena's BumpAllocator (a no-op — the Arena bulk-frees its one buffer).
+// Polymorphic `.area()` dispatch through the vtbl. ASan-clean: ONE malloc (arena buffer) + ONE free.
+import std::memory::{Owned};
+import std::collections::{Arena, BumpAllocator};
+
+type contract Shape for both { fn int32 area(); }
+
+type value Circle implements Shape {
+    int32 r;
+    public Circle(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+
+fn int32 main() {
+    Arena arena = Arena(capacity: 1 << 12);         // declared FIRST → drops LAST (outlives the boxes)
+
+    Owned<Shape, BumpAllocator> a = new(allocator: arena.handle()) Circle(r: 5);   // 25, via the vtbl
+    Owned<Shape, BumpAllocator> b = new(allocator: arena.handle()) Circle(r: 4);   // 16
+    return a.area() + b.area();                     // 41; each Circle lives inside the arena region
+}

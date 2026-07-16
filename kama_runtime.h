@@ -78,6 +78,21 @@ static inline void NAME##__dtor(NAME* self) {                                  \
     }                                                                          \
 }
 
+// Allocator-aware Owned<I> (M11d): the fat handle carries its own copy of the caller's allocator value
+// `alloc` (a lightweight value handle over externally-owned state, e.g. an arena) + the concrete pointee's
+// `objsize`, so the drop frees `obj` through THAT allocator instead of libc. Selected only for a stateful
+// allocator; a default GlobalAllocator box keeps the plain macros above (byte-identical).
+#define KAMA_OWNED_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
+    typedef struct NAME { void* obj; const VTBL* vtbl; ATYPE alloc; size_t objsize; } NAME;
+#define KAMA_OWNED_IFACE_ALLOC_FUNCS(NAME, ATYPE)                             \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    if (self->obj) {                                                           \
+        if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj);   \
+        ATYPE##__deallocate(&self->alloc, self->obj, self->objsize);           \
+        self->obj = NULL;                                                      \
+    }                                                                          \
+}
+
 // Shared<T> — ref-counted shared ownership (shared_ptr / Rc). Copy retains;
 // drop releases; the pointee is destroyed + freed when the last strong handle
 // goes away. The control block (counts) is a SEPARATE allocation so a future
@@ -117,6 +132,28 @@ static inline void NAME##__dtor(NAME* self) {                                  \
             kama_free(self->obj);                                            \
             self->ctrl->strong = 0;                                           \
             if (self->ctrl->weak == 0) kama_free(self->ctrl);                     \
+        } else { self->ctrl->strong--; }                                     \
+        self->obj = NULL; self->ctrl = NULL;                                  \
+    }                                                                          \
+}                                                                              \
+static inline bool NAME##__valid(NAME* self) { return self->obj != NULL; }
+
+// Allocator-aware Shared<I> (M11d): fat handle carries its own `alloc` value copy + pointee `objsize`.
+// Both the pointee AND the ctrl block are drawn from `alloc` at the new-site, so the last strong drop frees
+// both through it (cycle-safe order preserved: release AFTER the pointee dtor). A Weak that outlives the
+// Shared frees the ctrl through its OWN equal `alloc` copy (all copies are equal — a value handle over
+// externally-owned state). Default GlobalAllocator boxes keep the plain macros above (byte-identical).
+#define KAMA_SHARED_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
+    typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; ATYPE alloc; size_t objsize; } NAME;
+#define KAMA_SHARED_IFACE_ALLOC_FUNCS(NAME, ATYPE)                            \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    if (self->ctrl) {                                                          \
+        if (self->ctrl->strong == 1) {                                        \
+            if (self->vtbl && self->vtbl->__dtor) self->vtbl->__dtor(self->obj); \
+            ATYPE##__deallocate(&self->alloc, self->obj, self->objsize);       \
+            self->ctrl->strong = 0;                                           \
+            if (self->ctrl->weak == 0)                                        \
+                ATYPE##__deallocate(&self->alloc, (void*)self->ctrl, sizeof(kama_ctrl)); \
         } else { self->ctrl->strong--; }                                     \
         self->obj = NULL; self->ctrl = NULL;                                  \
     }                                                                          \
@@ -165,6 +202,32 @@ static inline SHARED_NAME NAME##__upgrade(NAME* self) {                         
     SHARED_NAME s;                                                            \
     if (self->ctrl && self->ctrl->strong > 0) {                              \
         self->ctrl->strong++; s.obj = self->obj; s.vtbl = self->vtbl; s.ctrl = self->ctrl; \
+    } else { s.obj = NULL; s.vtbl = NULL; s.ctrl = NULL; }                     \
+    return s;                                                                 \
+}
+
+// Allocator-aware Weak<I> (M11d): same fat layout as Shared + `alloc`/`objsize`; counts `weak`, never
+// touches the concrete object. Frees the ctrl (through its own `alloc` copy) when BOTH counts reach 0.
+// `__upgrade` MUST propagate `alloc`+`objsize` into the returned Shared so the upgraded strong handle frees
+// through the right allocator (init `= {0}` so the empty/expired case leaves them zeroed).
+#define KAMA_WEAK_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
+    typedef struct NAME { void* obj; const VTBL* vtbl; kama_ctrl* ctrl; ATYPE alloc; size_t objsize; } NAME;
+#define KAMA_WEAK_IFACE_ALLOC_FUNCS(NAME, ATYPE, SHARED_NAME)                 \
+static inline void NAME##__dtor(NAME* self) {                                  \
+    if (self->ctrl) {                                                          \
+        if (--self->ctrl->weak == 0 && self->ctrl->strong == 0)              \
+            ATYPE##__deallocate(&self->alloc, (void*)self->ctrl, sizeof(kama_ctrl)); \
+        self->obj = NULL; self->ctrl = NULL;                                  \
+    }                                                                          \
+}                                                                              \
+static inline bool NAME##__expired(NAME* self) {                              \
+    return self->ctrl == NULL || self->ctrl->strong == 0;                     \
+}                                                                              \
+static inline SHARED_NAME NAME##__upgrade(NAME* self) {                        \
+    SHARED_NAME s = {0};                                                      \
+    if (self->ctrl && self->ctrl->strong > 0) {                              \
+        self->ctrl->strong++; s.obj = self->obj; s.vtbl = self->vtbl;         \
+        s.ctrl = self->ctrl; s.alloc = self->alloc; s.objsize = self->objsize; \
     } else { s.obj = NULL; s.vtbl = NULL; s.ctrl = NULL; }                     \
     return s;                                                                 \
 }

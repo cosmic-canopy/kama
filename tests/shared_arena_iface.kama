@@ -1,0 +1,22 @@
+// M11d allocator-aware `Shared<Contract, A>`: a ref-counted, type-erased-over-interface box drawn from a
+// caller-owned arena. BOTH the pointee AND the shared `kama_ctrl` block live inside the arena; a bare-`=`
+// copy (2nd strong handle) struct-copies the same allocator, so whichever handle drops last frees the ctrl
+// through the arena (a no-op — the Arena bulk-frees its one buffer). ASan-clean: ONE malloc + ONE free.
+import std::memory::{Shared};
+import std::collections::{Arena, BumpAllocator};
+
+type contract Shape for both { fn int32 area(); }
+
+type value Circle implements Shape {
+    int32 r;
+    public Circle(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+
+fn int main() {
+    Arena arena = Arena(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
+
+    Shared<Shape, BumpAllocator> c = new(allocator: arena.handle()) Circle(r: 6);   // area 36
+    Shared<Shape, BumpAllocator> d = c;                  // retain → strong=2, shares the arena-backed ctrl
+    return c.area() + d.area();                          // 72, both handles observe the one Circle
+}
