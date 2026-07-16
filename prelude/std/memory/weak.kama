@@ -6,21 +6,28 @@ extern fn void free(Ptr p);
 
 // A non-owning weak handle into a `Shared<T>` family (Rust's `Weak<T>`). It holds the object alive for
 // no one — `tryUpgrade()` returns `Some(Shared)` only while a strong handle still exists, else `None`.
-// `Copyable, !Movable` = copy-only: a bare hand-off duplicates the weak handle (weak++); `give` errors.
-// `Ctrl` and `free` come from the `shared.kama` sibling in this module.
-type resource Weak<T> implements Copyable(bare: copy) {
+// `Copyable(bare: copy)`: a bare hand-off duplicates the weak handle (weak++); `give` MOVES it. `Ctrl` and
+// `free` come from the `shared.kama` sibling in this module.
+//
+// Carries a copy of the same allocator `A` as its `Shared` (`downgrade()` copies it through, and it is
+// monomorphized identically), so a `Weak` that OUTLIVES its `Shared` and observes `strong == 0 &&
+// weak == 0` frees the ctrl block through an `A` equal to the one that allocated it. Constructs by
+// returning a FRESH ctor rvalue (never a named local, which would re-fire the `copy()` marker); the ctor
+// is also how it rebuilds a `Shared` (cross-type — field-poke can't reach the sibling's private fields).
+type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable(bare: copy) {
     Ptr<T> p;
     Ptr<Ctrl> c;
-    public Weak(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
-    public fn Weak<T> copy() {                                        // Copyable -> another weak handle
+    A alloc;
+    public Weak(Ptr<T> p, Ptr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }
+    public fn Weak<T, A> copy() {                                     // Copyable -> another weak handle
         unsafe { this.c[0].weak = this.c[0].weak + 1; }
-        return Weak(p: this.p, c: this.c);
+        return Weak(p: this.p, c: this.c, alloc: this.alloc);
     }
-    public fn Optional<Shared<T>> tryUpgrade() {
+    public fn Optional<Shared<T, A>> tryUpgrade() {
         unsafe {
             if (this.c[0].strong > 0) {
                 this.c[0].strong = this.c[0].strong + 1;
-                return Optional::Some(value: Shared(p: this.p, c: this.c));   // fresh ctor -> no marker
+                return Optional::Some(value: Shared(p: this.p, c: this.c, alloc: this.alloc));   // cross-type ctor
             }
         }
         return Optional::None;
@@ -29,7 +36,7 @@ type resource Weak<T> implements Copyable(bare: copy) {
         unsafe {
             if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
                 this.c[0].weak = this.c[0].weak - 1;
-                if (this.c[0].strong == 0 && this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); }
+                if (this.c[0].strong == 0 && this.c[0].weak == 0) { this.alloc.deallocate(pointer: cast<Ptr>(this.c), bytes: sizeof(Ctrl)); }
             }
         }
     }

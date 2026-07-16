@@ -1,0 +1,27 @@
+// M11c: the refcount-cycle teardown (see weak_cycle) with BOTH boxes arena-backed. Node `a` owns `b`
+// (Shared forward edge); `b` holds a `Weak` back-edge to `a`. When `a` (root) drops, its pointee dtor
+// drops `b`, whose dtor drops the `Weak` back into `a`'s ctrl — that `Weak` drop must NOT free the ctrl
+// (routed through the arena allocator now) while `a`'s own last-strong drop still needs it. Each node
+// owns a heap `DynamicArray` (Global) so the pointee dtor is non-trivial. The Arena outlives both nodes.
+// ASan-clean: no UAF, no double-free of the arena-backed ctrl. Returns a.val() = 10.
+import std::memory::{Shared, Weak};
+import std::collections::{DynamicArray, Arena, BumpAllocator};
+
+type resource Node {
+    DynamicArray<int32> data;                              // owns heap → a real pointee dtor runs on teardown
+    Optional<Shared<Node, BumpAllocator>> next;           // forward edge (owns), arena-backed
+    Optional<Weak<Node, BumpAllocator>> back;             // back edge (weak) — breaks the ownership cycle
+    public Node(int32 v) { this.data.add(item: v); this.next = Optional::None; this.back = Optional::None; }
+    public fn void setNext(Shared<Node, BumpAllocator> n) { this.next = Optional::Some(value: give n); }
+    public fn void setBack(Weak<Node, BumpAllocator> w) { this.back = Optional::Some(value: give w); }
+    public fn int32 val() { return this.data[0]; }
+}
+
+fn int main() {
+    Arena arena = Arena(capacity: 1 << 16);                        // outlives both nodes
+    Shared<Node, BumpAllocator> a = new(allocator: arena.handle()) Node(v: 10);
+    Shared<Node, BumpAllocator> b = new(allocator: arena.handle()) Node(v: 20);
+    b.setBack(w: a.downgrade());                                   // b → a (weak back-edge)
+    a.setNext(n: give b);                                          // a → b (owns); a is the root
+    return a.val();                                               // 10; `a` drops here → cycle teardown
+}

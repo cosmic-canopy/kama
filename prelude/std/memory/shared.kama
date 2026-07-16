@@ -10,15 +10,28 @@ extern fn void free(Ptr p);
 // the runtime `kama_ctrl` layout, so a `BindableFunctionPtr` can retain a Shared it binds.
 type value Ctrl { public usize strong; public usize weak; }
 
-// A reference-counted shared-ownership pointer (Rust's `Rc<T>`). `Copyable, !Movable` = copy-only:
-// a bare hand-off (`Shared b = a;`) RETAINS (strong++) via `copy()`; `give` is a compile error (there
-// is no move to make). The pointee is released exactly once, when the last strong handle drops.
-// `implements HeapOwner<T>` makes `new T(args)` a heap-placement + adopt; `Deref<T>` forwards access.
-type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy),
+// A reference-counted shared-ownership pointer (Rust's `Rc<T>`). `Copyable(bare: copy)`: a bare hand-off
+// (`Shared b = a;`) RETAINS (strong++) via `copy()`; `give b = a` MOVES the handle (transfers the ref, no
+// count change — every kind is movable). The pointee is released exactly once, when the last strong handle
+// drops. `implements HeapOwner<T>` makes `new T(args)` a heap-placement + adopt; `Deref<T>` forwards access.
+//
+// The pointee AND the shared control block are drawn from the allocator `A` (M8 default `GlobalAllocator`
+// → libc malloc/free, so a bare `Shared<T>` is unchanged). A placement `new(allocator: a) T(args)` draws
+// the pointee from `a` (the emitter) and the ctrl block from `a` (`adoptIn`), storing the handle in
+// `alloc` so BOTH frees route through the SAME allocator — letting a ref-counted graph live in a
+// caller-owned arena and be bulk-reclaimed on `reset()`. Every handle (a `copy()`, a `downgrade()`'s
+// `Weak`) carries a copy of the value handle `A`, so whichever handle observes `strong == 0 && weak == 0`
+// frees the ctrl through an `A` equal to the one that made it (`A` is monomorphized identically across the
+// `Shared`/`Weak` family). `copy()`/`downgrade()`/`tryUpgrade()` return a FRESH ctor rvalue (never a named
+// local — a bare `return <local>` re-invokes `copy()` and recurses); the ctor is also how a `Weak` builds a
+// `Shared` and vice versa (cross-type, so field-poke can't reach the sibling's private fields). `adopt`
+// alone builds same-type by field-poke + `give` (the move avoids needing a default `A` value for the ctor).
+type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy),
                                     Deserialize when [T: Deserialize] {
     Ptr<T> p;
     Ptr<Ctrl> c;
-    public Shared(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }   // shares an existing ctrl
+    A alloc;
+    public Shared(Ptr<T> p, Ptr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }   // shares an existing ctrl
     // Deserialize INTO a Shared: a graph root is heap + shared-owned, so `decode::<Shared<N>>` reconstructs the
     // whole object graph and hands back the owning root handle. Delegates to `T::deserialize` — for a graph type
     // `N` the `@generate(Deserialize)` intrinsic emits `N::deserialize` returning `Shared<N>` (the two-pass graph
@@ -27,22 +40,36 @@ type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy),
     // `N::deserialize` yields a `Shared<N>` — i.e. `N` is a graph type. Instantiating `Shared<X>::deserialize`
     // for a non-graph `X` (whose `X::deserialize` returns `X`) is a type error — decode a plain value as
     // `decode::<X>` instead.
-    public static fn Shared<T> deserialize(Deserializer r) when [T: Deserialize] {
+    public static fn Shared<T, A> deserialize(Deserializer r) when [T: Deserialize] {
         return T::deserialize(r: r);
     }
-    public static fn Shared<T> adopt(Ptr<T> raw) {
+    // HeapOwner: adopt a raw pointee into a box with the DEFAULT allocator (the bare-`new` path). The ctrl
+    // block is drawn from libc `malloc`. Field-poke `p`/`c` then `give` the handle out — the move transfers
+    // the ref (no `copy()` retain, and unlike a ctor rvalue it needs no default-`A` value to pass). `alloc`
+    // is left unset: this path is only reached with `A == GlobalAllocator` (a bare `new` into a stateful-`A`
+    // box is rejected by the emitter), and `GlobalAllocator` is stateless — its `deallocate` == `free`
+    // (matching the malloc) and never reads the handle, so an unset value is inert (same as the M10 bare
+    // container ctors leaving `alloc` at its default).
+    public static fn Shared<T, A> adopt(Ptr<T> raw) {
         Ptr<Ctrl> ctrl;
         unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
-        return Shared(p: raw, c: ctrl);                               // fresh ctor -> no marker
+        Shared<T, A> s; s.p = raw; s.c = ctrl; return give s;
+    }
+    // Placement adopt: a pointee that came FROM `allocator`; draw the ctrl block from the SAME `allocator`
+    // and store the handle so the dtor releases both through it (the `new(allocator: a) T(...)` path).
+    public static fn Shared<T, A> adoptIn(Ptr<T> raw, A allocator) {
+        Ptr<Ctrl> ctrl;
+        unsafe { ctrl = cast<Ptr<Ctrl>>(allocator.allocate(bytes: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
+        return Shared(p: raw, c: ctrl, alloc: allocator);
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    public fn Shared<T> copy() {                                      // Copyable -> retain
+    public fn Shared<T, A> copy() {                                   // Copyable -> retain, carry the allocator
         unsafe { this.c[0].strong = this.c[0].strong + 1; }
-        return Shared(p: this.p, c: this.c);
+        return Shared(p: this.p, c: this.c, alloc: this.alloc);
     }
-    public fn Weak<T> downgrade() {
+    public fn Weak<T, A> downgrade() {
         unsafe { this.c[0].weak = this.c[0].weak + 1; }
-        return Weak(p: this.p, c: this.c);
+        return Weak(p: this.p, c: this.c, alloc: this.alloc);        // cross-type -> Weak's public ctor
     }
     ~Shared() {
         unsafe {
@@ -53,9 +80,9 @@ type resource Shared<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy),
                     // when `strong == 0 && weak == 0`. Releasing strong only AFTER the dtor keeps the Ctrl
                     // alive across the drop, so the final `weak == 0` check below never touches freed memory.
                     drop(value: this.deref());                        // run the pointee's dtor once
-                    free(p: cast<Ptr>(this.p));
+                    this.alloc.deallocate(pointer: cast<Ptr>(this.p), bytes: sizeof(T));
                     this.c[0].strong = 0;
-                    if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); }
+                    if (this.c[0].weak == 0) { this.alloc.deallocate(pointer: cast<Ptr>(this.c), bytes: sizeof(Ctrl)); }
                 } else {
                     this.c[0].strong = this.c[0].strong - 1;
                 }

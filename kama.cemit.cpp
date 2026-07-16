@@ -1223,13 +1223,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // keep the two in sync (esp. the Shared ctrl asymmetry: iface path emits
                     // kama_ctrl_new(), the library-adopt path lets `adopt` allocate it).
                     std::string octy = cType(oc->type);
-                    // Allocator-aware `new(allocator: …)` is M11a-supported ONLY for a concrete-element library
-                    // `Owned<T, A>`. Reject the intrinsic/polymorphic smart-ptr path (`Owned<Interface>`,
-                    // `Shared`, `Weak`) here (D3 + poly D4); the concrete library-adopt branch below rejects a
-                    // concrete `Shared`/`Weak` by the absence of `adoptIn`.
+                    // Allocator-aware `new(allocator: …)` is supported for the concrete-element library boxes
+                    // (`Owned<T, A>`, `Shared<T, A>` — the library-adopt branch below via `adoptIn`). The
+                    // INTERFACE-element path is the type-erased intrinsic C macro path (`isSmartPtrClass`),
+                    // whose ctrl block is `kama_free`d directly — routing a stateful allocator through it is a
+                    // runtime-ABI change (M11d), so reject it here.
                     if (oc->placement && !oc->placement->empty() && isSmartPtrClass(ty))
-                        unsupported("allocator-aware `new(allocator: …)` is not supported for interface / `Shared` "
-                                    "/ `Weak` targets in this release — only a concrete `Owned<T, A>`", n->line);
+                        unsupported("allocator-aware `new(allocator: …)` into an interface-element smart pointer "
+                                    "(`Owned`/`Shared`/`Weak<SomeContract>`) is not supported yet — use a "
+                                    "concrete-element box (`Owned<T, A>`, `Shared<T, A>`)", n->line);
                     if (isBindableClass(ty)) {
                         emitBindableNew(nm, ty, oc, depth);   // bind obj + method
                     } else if (isSmartPtrClass(ty)) {
@@ -1317,13 +1319,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())
                                     unsupported(("`Owned<T, " + ba + ">` uses a stateful allocator — construct it with "
                                                  "`new(allocator: …) T(...)`, not a bare `new`").c_str(), n->line);
+                            } else {
+                                // The box's declared allocator type must match the `new(allocator: …)` handle —
+                                // there is no inference axis; spell it (e.g. `Shared<T, BumpAllocator>`).
+                                std::string boxA = boxAllocatorArg(ty);
+                                if (!boxA.empty() && boxA != pa.second)
+                                    unsupported(("the box's allocator type `" + boxA + "` does not match the `new(allocator: …)` "
+                                                 "handle `" + pa.second + "` — spell the box's allocator explicitly").c_str(), n->line);
                             }
                             const char* adoptName = placed ? "adoptIn" : "adopt";
                             ClassInfo* ao = nullptr;
                             MethodInfo* adoptM = findMethod(&_classes[ty], adoptName, &ao);
                             if (placed && !adoptM)
-                                unsupported(("allocator-aware `new(allocator: …)` is only supported for `Owned<T, A>` "
-                                             "in this release (`" + ty + "` has no `adoptIn`)").c_str(), n->line);
+                                unsupported(("allocator-aware `new(allocator: …)` needs an `adoptIn(raw, allocator)` on `"
+                                             + ty + "`").c_str(), n->line);
                             else if (!adoptM) { unsupported(("`" + ty + "` implements HeapOwner but has no `adopt` method").c_str(), n->line); }
                             else {
                                 std::string hp = "__heap" + std::to_string(_tempCounter++);
@@ -1354,7 +1363,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     adoptArg = "(" + T + "*)&(" + hp + "->" + bp + ")";
                                 }
                                 indent(depth); *_out << nm << " = " << adoptM->cName << "(" << adoptArg
-                                                     << (placed ? ", " + ap : "") << ");\n";
+                                                     << (ap.empty() ? "" : ", " + ap) << ");\n";
                             }
                         }
                     } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl) {
@@ -3041,6 +3050,14 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         default: {  // class / generic element — resolve to its mangled name (the suffix)
             if (!elem->value) return "void";
             std::string base = resolveUserName(*elem->value, elem->qualifier);
+            // A generic INSTANCE (`Shared<C>`, `DynamicArray<int32>`) mangles through genericTypeMangle so
+            // its DEFAULT type params + named overrides fill EXACTLY as in cType — a partially-applied
+            // `Shared<C>` becomes `Shared_C_GlobalAllocator` (not `Shared_C`), matching the class struct
+            // name. Else a nested `Optional<Shared<C>>` name (built here in registerGenericTypeInst) would
+            // diverge from its filled body → two incompatible C structs. (M8 default-fill; latent until a
+            // smart pointer with a defaulted param was nested in a generic.)
+            if (elem->genericArgs && (_genericTypes.count(base) || _genericContracts.count(base)))
+                return genericTypeMangle(base, elem->genericArgs);
             // recurse into a nested generic arg so `Shared<Circle>` mangles to
             // `Shared_Circle` (not just `Shared`) — fixes the `List<Shared<Circle>>` collision.
             if (elem->genericArgs) for (auto& a : *elem->genericArgs) base += "_" + mangleElem(a);
@@ -3686,7 +3703,12 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                     if (rn != tmpl && _genericTypes.count(rn)) { downName = kv.first; weakTmpl = rn; break; }
                 }
                 if (!weakTmpl.empty()) {
-                    std::string weakMangled = weakTmpl + "_" + mangleElem(concrete[0]);
+                    // Name the Weak partner over the SAME concrete args as the Shared (element +
+                    // allocator/…), so it matches `mangleElem(Weak<…>)` — which fills default type params
+                    // (e.g. `Weak<Shape>` → `Weak_Shape_GlobalAllocator`). Using only the element would
+                    // diverge from every downstream `Weak<…>` reference.
+                    std::string weakMangled = weakTmpl;
+                    for (auto& c : concrete) weakMangled += "_" + mangleElem(c);
                     registerSmartPtr(CollKind::Weak, concrete[0], weakMangled);
                     _collections[mangled].ifacePartner    = weakMangled;   // Rc_Shape downgrades to RcWeak_Shape
                     _collections[mangled].downgradeName   = downName;
@@ -5013,8 +5035,11 @@ void CEmitter::emitSmartPtrBaseUpcast(const std::string& nm, const std::string& 
     std::string basePtr = "&((" + srcCls + "__deref(&(" + srcE + ")))->" + bp + ")";
     if (copyable) {
         // Shared/Weak: build the base handle sharing the source's ctrl; retain bumps the count,
-        // a move transfers the ref (no bump — the source's dtor is suppressed below).
-        indent(depth); *_out << dstTy << "__ctor(&" << nm << ", " << basePtr << ", (" << srcE << ").c);\n";
+        // a move transfers the ref (no bump — the source's dtor is suppressed below). Carry the
+        // source's allocator handle so the base handle releases the shared ctrl through the SAME
+        // allocator (a zero-init default would `free` an arena-owned ctrl → double-free on reset).
+        std::string allocArg = boxAllocatorArg(dstTy).empty() ? "" : (", (" + srcE + ").alloc");
+        indent(depth); *_out << dstTy << "__ctor(&" << nm << ", " << basePtr << ", (" << srcE << ").c" << allocArg << ");\n";
         if (retain) { indent(depth); *_out << "(" << srcE << ").c->strong++;\n"; }
     } else {
         // Owned: adopt the base subobject (no ctrl); always a move.
@@ -5690,12 +5715,14 @@ std::pair<std::string,std::string> CEmitter::placementAllocator(ObjectCreationNo
     return {"", ""};
 }
 
-// The allocator type-arg of an `Owned<T, A>` box instance (its last generic arg); "" if not an `Owned`
-// instance. Only `Owned` boxes (keyed by template) qualify — a user HeapOwner isn't gated.
+// The allocator type-arg of an `Owned<T, A>` / `Shared<T, A>` box instance (its `alloc` field type);
+// "" if not one. Only the built-in `Owned`/`Shared` boxes (keyed by template) qualify — a user
+// HeapOwner isn't gated. Drives the "bare `new` into a stateful-A box leaks" diagnostic; `Weak` is
+// never a `new` target so it isn't gated here.
 std::string CEmitter::boxAllocatorArg(const std::string& ty)
 {
     auto t = _genericTypeInstOf.find(ty);
-    if (t == _genericTypeInstOf.end() || t->second != _ownedTmpl) return "";   // only gate real `Owned` boxes
+    if (t == _genericTypeInstOf.end() || (t->second != _ownedTmpl && t->second != _sharedTmpl)) return "";
     auto ci = _classes.find(ty);
     if (ci == _classes.end()) return "";
     for (auto& f : ci->second.fields)                                          // the box's `A alloc` field,
@@ -7152,12 +7179,14 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         _hoisted.push_back(targetCType + " " + t + " = {0};");
         return t;
     };
-    // Allocator-aware placement is M11a-supported only for a concrete library `Owned<T, A>` — reject the
-    // intrinsic/poly smart-ptr path here (mirror the local-decl guard); the library block below rejects a
-    // concrete `Shared`/`Weak` by the absence of `adoptIn`.
+    // Allocator-aware placement is supported for the concrete-element library boxes (`Owned<T, A>`,
+    // `Shared<T, A>` — via `adoptIn` below). The INTERFACE-element intrinsic C macro path (`isSmartPtrClass`)
+    // `kama_free`s its ctrl directly, so a stateful allocator through it is a runtime-ABI change (M11d) —
+    // reject here (mirror the local-decl guard).
     if (oc->placement && !oc->placement->empty() && isSmartPtrClass(targetCType))
-        return reject("allocator-aware `new(allocator: …)` is not supported for interface / `Shared` / `Weak` "
-                      "targets in this release — only a concrete `Owned<T, A>`");
+        return reject("allocator-aware `new(allocator: …)` into an interface-element smart pointer "
+                      "(`Owned`/`Shared`/`Weak<SomeContract>`) is not supported yet — use a concrete-element "
+                      "box (`Owned<T, A>`, `Shared<T, A>`)");
 
     // ---- LIBRARY HeapOwner, concrete element: `T* hp = malloc; C__ctor(hp,…); box = Owner__adopt(hp)` ----
     // (mirror emitLocalVariableDeclaration ~1265-1300, incl. the derived→base upcast; `adopt` itself
@@ -7182,13 +7211,17 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
             if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())
                 return reject("`Owned<T, " + ba + ">` uses a stateful allocator — construct it with "
                               "`new(allocator: …) T(...)`, not a bare `new`");
+        } else {
+            std::string boxA = boxAllocatorArg(targetCType);   // declared box allocator must match the handle
+            if (!boxA.empty() && boxA != pa.second)
+                return reject("the box's allocator type `" + boxA + "` does not match the `new(allocator: …)` "
+                              "handle `" + pa.second + "` — spell the box's allocator explicitly");
         }
         const char* adoptName = placed ? "adoptIn" : "adopt";
         ClassInfo* ao = nullptr;
         MethodInfo* adoptM = findMethod(&_classes[targetCType], adoptName, &ao);
         if (placed && !adoptM)
-            return reject("allocator-aware `new(allocator: …)` is only supported for `Owned<T, A>` in this "
-                          "release (`" + targetCType + "` has no `adoptIn`)");
+            return reject("allocator-aware `new(allocator: …)` needs an `adoptIn(raw, allocator)` on `" + targetCType + "`");
         if (!adoptM) return reject("`" + targetCType + "` implements HeapOwner but has no `adopt` method");
         std::string hp = "__heap"   + std::to_string(_tempCounter++);
         std::string t  = "__newarg" + std::to_string(_tempCounter++);

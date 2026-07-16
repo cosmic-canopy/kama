@@ -23,9 +23,10 @@ type contract Deref<T> for both { fn ref T deref(); }
 // placement-constructs T on the heap (0 copies) and hands the raw Ptr<T> to `adopt`, which wraps it.
 // `new` stays valid ONLY into such an owner, so it can never leak a bare raw pointer.
 type contract HeapOwner<T> for resource { static fn This adopt(Ptr<T> raw); }
-// Ownership capability markers (compiler-recognized). `Movable` is implicit on every `resource`
-// (`!Movable` subtracts it → copy-only). `Copyable` = a public `copy()` returning `This`; a resource
-// that implements it is duplicable. Together, `Copyable, !Movable` = shared-ownership (retain on copy).
+// Ownership capability markers (compiler-recognized). EVERY owning kind is movable — `give` moves it
+// (see TYPE_MODEL.md; there is no `!Movable`). `Copyable` = a public `copy()` returning `This`; a resource
+// that implements it is ALSO duplicable. A `Copyable(bare: copy)` resource = shared-ownership: a bare
+// hand-off RETAINS (`copy()`), while `give` still MOVES the handle (the `Shared`/`Weak` model).
 type contract Movable for resource { }
 type contract Copyable for resource { fn This copy(); }
 // Hashing + equality opt-in (the `Map`/`Set` key protocol, nominal). A generic bound `<K: Hashable +

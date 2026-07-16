@@ -311,27 +311,33 @@ milestone (it rides this same seam). Coverage is the direct-`malloc` containers 
 `Set`; M10b: `Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet`
 B-tree (M11b, via allocator-aware `new`).
 
-### Allocator-aware `new` / `Owned<T, A>` ✅ (M11a)
+### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅ (M11a–M11c)
 
-Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>`. A bare
-`new T(args)` is unchanged (`A` defaults to `GlobalAllocator` → libc malloc/free); a **placement** form
-`new(allocator: a) T(args)` draws the block from `a` and stores the handle in the box, so its dtor releases
-through the **same** allocator — letting a boxed object live in a caller-owned arena and be bulk-reclaimed on
-`reset()`:
+Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>` and, from **M11c**,
+`Shared<T, A>` / `Weak<T, A>`. A bare `new T(args)` is unchanged (`A` defaults to `GlobalAllocator` → libc
+malloc/free); a **placement** form `new(allocator: a) T(args)` draws the block from `a` and stores the handle in
+the box, so its dtor releases through the **same** allocator — letting a boxed object live in a caller-owned
+arena and be bulk-reclaimed on `reset()`:
 
 ```kama
 Arena arena = Arena(capacity: 1 << 12);                       // drops last (outlives the box)
-Owned<Node, BumpAllocator> n = new(allocator: arena.handle()) Node(v: 42);
-// n's dtor deallocate() is a no-op; the Node lives in the arena; the Arena frees the region.
+Owned<Node, BumpAllocator>  n = new(allocator: arena.handle()) Node(v: 42);
+Shared<Node, BumpAllocator> s = new(allocator: arena.handle()) Node(v: 7);   // pointee AND ctrl from the arena
+// n/s dtor deallocate() is a no-op; the objects live in the arena; the Arena frees the region.
 ```
 
-The allocator must be spelled on the box type (`Owned<T, A>`, explicit over implicit). A stateful `A` **requires**
-the placement form — a bare `new` into a stateful-allocator box is a compile error (it would leak). This release
-covers **`Owned`**; `Shared`/`Weak` and `Owned<Interface>` keep the default allocator (a placement into them is
-rejected) and gain a channel later. With allocator-aware `new`, **`SortedMap`/`SortedSet`** (whose B-tree nodes
-box through `new`/`Owned`) got their full `SortedMap<K, V, A>` / `SortedSet<K, A>` retrofit in **M11b** (interior
-node boxes placement-`new` from `A`; the root box stays `GlobalAllocator`). `Shared<T, A>`/`Weak<T, A>` follow in
-M11c (a type-erased deallocator in the control block, since a `Weak` outlives its `Shared`).
+The allocator must be spelled on the box type (`Owned<T, A>` / `Shared<T, A>`, explicit over implicit — a
+`new(allocator: BumpAllocator)` into a box spelled `Shared<T>` is a compile error). A stateful `A` **requires**
+the placement form — a bare `new` into a stateful-allocator box is a compile error (it would leak). For
+`Shared`/`Weak`, **both** the pointee and the shared control block are drawn from `A`, and every handle carries
+its own copyable `A` value (copied through `copy()`/`downgrade()`/`tryUpgrade()`), so whichever handle observes
+`strong == 0 && weak == 0` — even a `Weak` that outlived its `Shared` — frees the ctrl through the right
+allocator; `arena.reset()` reclaims a whole ref-counted graph. With allocator-aware `new`,
+**`SortedMap`/`SortedSet`** (whose B-tree nodes box through `new`/`Owned`) got their full `SortedMap<K, V, A>` /
+`SortedSet<K, A>` retrofit in **M11b** (interior node boxes placement-`new` from `A`; the root box stays
+`GlobalAllocator`). Remaining: **interface-element** boxes (`Owned/Shared/Weak<Contract>`) keep the default
+allocator under a stateful `A` (the type-erased intrinsic handle needs a runtime-ABI channel — M11d); a stateful
+placement into one is rejected with a clear diagnostic.
 
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 

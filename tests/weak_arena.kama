@@ -1,0 +1,32 @@
+// M11c: a `Weak<T, A>` that OUTLIVES its `Shared` — the lifetime crux. The Shared is arena-backed and
+// dies inside `orphan`, leaving the ctrl block (weak=1) in the arena. Back in main the Weak is expired
+// (tryUpgrade → None), then the Weak itself drops LAST among the handles and frees the ctrl through ITS
+// OWN allocator copy (a no-op — the Arena bulk-frees). The Arena (in main) outlives the returned Weak.
+// ASan-clean: one arena buffer malloc + one Arena-dtor free; every box deallocate is a no-op.
+import std::memory::{Shared, Weak};
+import std::collections::{Arena, BumpAllocator};
+
+type value Counter {
+    int32 value;
+    Counter(int32 start) { this.value = start; }
+    public fn int32 get() { return this.value; }
+}
+
+// The Shared lives only for this fn; its Weak is returned. `s` drops at fn-end (strong 1→0, pointee
+// released — an arena no-op), the ctrl stays (weak=1) inside the still-live arena.
+fn Weak<Counter, BumpAllocator> orphan(BumpAllocator alloc) {
+    Shared<Counter, BumpAllocator> s = new(allocator: alloc) Counter(start: 7);
+    return s.downgrade();
+}
+
+fn int main() {
+    Arena arena = Arena(capacity: 1 << 12);                          // outlives the returned Weak
+    Weak<Counter, BumpAllocator> w = orphan(alloc: arena.handle());  // its Shared already died
+
+    Optional<Shared<Counter, BumpAllocator>> up = w.tryUpgrade();    // expired → None
+    return match (up) {
+        case Some(s2): 100;                                          // not taken
+        case None: 5;
+    };
+    // w drops here (weak 1→0, strong==0 → frees ctrl via w's allocator = no-op); arena drops last
+}

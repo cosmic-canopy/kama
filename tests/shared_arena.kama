@@ -1,0 +1,25 @@
+// M11c allocator-aware `Shared<T, A>`: a ref-counted box drawn from a caller-owned arena via
+// `new(allocator: a) T(...)`. BOTH the pointee AND the shared control block live inside the arena, and
+// the box's `deallocate` is a no-op (the Arena bulk-frees its one buffer). A `copy()` (second strong
+// handle) carries the SAME allocator, so whichever handle drops last frees the ctrl through the arena.
+// ASan-clean: exactly ONE malloc (the arena buffer) + ONE free (the Arena dtor).
+import std::memory::{Shared};
+import std::collections::{Arena, BumpAllocator};
+
+type value Counter {
+    int32 value;
+    Counter(int32 start) { this.value = start; }
+    public fn void bump() { this.value = this.value + 1; }
+    public fn int32 get() { return this.value; }
+}
+
+fn int main() {
+    Arena arena = Arena(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
+
+    Shared<Counter, BumpAllocator> c = new(allocator: arena.handle()) Counter(start: 40);
+    Shared<Counter, BumpAllocator> d = c;                // copy → strong=2, shares the arena-backed ctrl
+    c.bump();
+    c.bump();                                            // 42 (both handles observe the one pointee)
+
+    return d.get();                                      // 42, via the second strong handle
+}

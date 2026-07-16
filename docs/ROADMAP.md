@@ -296,10 +296,33 @@ serialization, networking).
        codebase (`DynamicArray<Owned<BTreeNode<K,V,A>, A>, A>`, a self-referential triply-nested registration).
        Fixtures `alloc_sorted_map_arena` (arena-backed map + set, splits/merges/root-growth, ASan-clean) +
        `alloc_sorted_map_default`.
-     - **M11c — `Shared<T, A>` + `Weak<T, A>` + `Owned<Interface, A>` — deferred.** A `Weak` can outlive its
-       `Shared` and is A-agnostic at the C level, so the deallocator must be type-erased in the control block;
-       the intrinsic-macro/iface `new` path also needs the allocator channel. The engine wants it eventually;
-       `Owned` (M11a) unblocks SortedMap without it.
+     - **M11c — concrete `Shared<T, A>` + `Weak<T, A>`. ✅ DONE** (triple-green native/SAN/WASM 545/545/545).
+       Both the pointee AND the shared control block are drawn from `A`: a placement `new(allocator: a) T(...)`
+       yields `Shared<T, A>` whose `~dtor` releases both through the stored handle (`arena.reset()` reclaims the
+       whole ref-counted graph). **Design call: every handle carries its own `A alloc` value copy** (not a
+       type-erased ctrl-block deallocator) — `A` is monomorphized identically across the `Shared`/`Weak`/
+       `Optional<Shared>` family and copied through `copy()`/`downgrade()`/`tryUpgrade()`, so whichever handle
+       observes `strong == 0 && weak == 0` (even a `Weak` that outlived its `Shared`) frees the ctrl through an
+       `A` equal to the one that made it; a stateful `BumpAllocator`'s `deallocate` is a no-op, so it is
+       irrelevant *which* handle frees. Construction returns a fresh **ctor rvalue** (a bare `return <local>`
+       of a copy-only handle re-fires `copy()` → recursion); `adopt` (the bare-`new` path, needs no explicit
+       allocator) instead field-pokes + **`give`s** the handle out, sidestepping the default-allocator value.
+       **Two latent bugs surfaced + fixed:** (1) `mangleElem` never filled default type params (only `cType`
+       did) — dormant until `Shared` (the first *defaulted* generic) was nested in `Optional<Shared<…>>` via
+       `tryUpgrade`, where the `Optional` instance name diverged from its filled body → two incompatible C
+       structs; now `mangleElem` routes generic instances through `genericTypeMangle`. (2) the intrinsic
+       interface-`Weak` partner was named from only its element (`Weak_Shape`), diverging from the now-filled
+       `Weak<Shape>` refs (`Weak_Shape_GlobalAllocator`). Also a clean **allocator-type-mismatch diagnostic**
+       (a box `Shared<T>` with a `new(allocator: BumpAllocator)` handle — no inference axis; spell the box's
+       `A`). Fixtures `shared_arena`, `weak_arena` (Weak-outlives-Shared), `shared_arena_hoist` (arg/return),
+       `shared_arena_cycle` (refcount cycle). Also corrected the stale `!Movable` prelude comments (`Shared`/
+       `Weak` are movable — `give` moves the handle — per TYPE_MODEL/KEYWORDS).
+     - **M11d — `Owned/Shared/Weak<Interface, A>` (stateful-A through the intrinsic iface path) — deferred.**
+       The interface-element handle is type-erased intrinsic C (`{obj, vtbl, ctrl}`, runtime `kama_ctrl`,
+       `KAMA_*_IFACE_FUNCS` + emitter wrappers — all hardcode `kama_free`), so routing a *stateful* allocator
+       needs a type-erased dealloc fn-ptr (+ allocator instance + size) in `kama_ctrl` and new macros — a
+       runtime-ABI change. Default-`GlobalAllocator` interface boxes keep working (byte-identical); a stateful-A
+       placement into an interface box is rejected with a clear diagnostic until then.
      - **Zero-size-field elision — deferred optimization.** M11a carries a `GlobalAllocator alloc` field on the
        default `Owned<T>` (mirroring the M10 collections), which pads the handle (the runtime call inlines to a
        bare `free`, but the field is real). A general "drop any empty-struct field + synthesize a throwaway
