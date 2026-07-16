@@ -71,58 +71,11 @@ remains here is genuinely later-track or opt-in.
   (`hardware Ptr<T>` → `volatile T*`, mirroring `const Ptr<T>`) and single-core ISR↔loop flags.
   **Explicitly NOT a concurrency primitive** — cross-thread sharing is §6 atomics. Reserved-then-lit like
   before; the token stays a hard error until the embedded target ships.
-- ~~**Aggregate initializer for `type extern value` (FFI ergonomics).**~~ **DONE** (hardening Session B).
-  A field-wise call on a POD extern struct — `WGPUColor(r: 1.0, g: 0.5)` — used to silently zero-init
-  (the field args were dropped) instead of setting the named fields. Now emits real by-name aggregate
-  init (`nm.field = expr;` per provided arg, unset fields stay zero); an unknown field name is a clean
-  compile error. Wired at all three construction positions (local init, reassignment, inline arg).
-  Fixtures: `tests/extern_value_init.kama`, `tests/xfail/extern_value_unknown_field.kama`.
-- **✅ RESOLVED (already worked; diagnostic polished in hardening Session E) — transitive import of a
-  type's public-API types.** Investigated writing `BitSet`
-  ([`lib/std/collections/bit_set.kama`](../lib/std/collections/bit_set.kama)): **iterating already needs no
-  extra import** — `foreach (i in bs.setBits())` with only `import {BitSet}` resolves `setBits()`'s
-  `BitSetIter` return type in its DECLARING module (`std::collections`) via `cTypeInInstance`, not the
-  caller's scope. (The old note claimed BitSet "pays it"; empirically it does not — `tests/bit_set.kama`
-  builds+runs with `BitSetIter` dropped from its import.) The consistency was always there. **Session E added
-  the missing polish:** explicitly NAMING an unimported type (`BitSetIter it = bs.setBits()`) — which
-  correctly still requires the import, like naming any type in Rust/C#/Java/Swift — now yields a clean
-  kama diagnostic (`type X is not imported — it lives in std::collections`) instead of leaking a C-level
-  `undeclared identifier`. Fixtures: `tests/import_transitive_iter.kama`,
-  `tests/xfail/import_named_iter_unimported.kama`. (Diagnostic currently covers the local-declaration
-  position; param/return/field positions could follow if a case surfaces.)
-- **✅ FIXED (hardening Session A) — move-tracker: moved-state leaked across same-named variables in sibling
-  scopes.** Surfaced writing `SortedMap`: `give`-consuming a resource variable named `k` in one scope left the
-  tracker believing a **different** `k` (a fresh binding — e.g. an `int32 k` in a later sibling `{}` block, or
-  a `foreach (string k …)` loop var vs a subsequent `int32 k`) was still moved, a false "use of `k` after it
-  was moved". Root cause: `_moveState` is keyed by bare variable **name** and was never cleared on scope exit.
-  Fix: a `popScope()` helper erases the closing scope's locals' move-state before every scope pop (sound — a
-  name going out of scope is lexically dead). Bundled with the **local-shadowing ban** below (which lets the
-  fix stay a simple erase — within any live enclosing scope one name = one binding).
-- **✅ ADDED (hardening Session A) — local variable shadowing is now a compile error.** A local declaration
-  may not shadow a parameter, an enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned;
-  "favor explicit / one way"; enforces the previously-latent flat-name-map assumption). A **parameter** sharing
-  a field name (the `this.x = x` idiom) stays allowed. A static method has no `this`, so a local there can never
-  shadow a field (the check is skipped). Fixtures: `move_sibling_scope`, `xfail/shadow_{enclosing,param,field}`,
-  `xfail/move_reuse_same_scope`.
-- **✅ DONE (hardening Session C) — `DynamicArray<View>` misdirected diagnostic.** A `view` element in a
-  LIBRARY collection was correctly rejected but only *indirectly* (via the escape check on the collection's
-  own element-moving method, pointing at an internal library line). Fixed with an element-type check in
-  `registerGenericTypeInst`: a view generic type-arg on a non-variant template (`ci.variants.empty()` — so
-  `Optional<View>` keeps its distinct enum-payload message) now rejects at the user's use-site decl with the
-  same clean "a view … can't be a collection element … copy into an owning collection instead" wording as the
-  intrinsic path. Fixture: `xfail/view_collection_elem` (msg tightened to assert the new path).
-- **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
-  post-increment returning the old value in expression position (`i++` works as a statement today). Two small
-  ergonomic gaps surfaced writing `SortedMap`: (a) ~~an rvalue passed to a `ref` parameter emits
-  `&(rvalue)` (invalid C)~~ **DONE** (hardening Session B) — a class rvalue (factory / call result) to a
-  `const ref` param now auto-hoists a scope-dtor'd temp; a non-const `ref` rvalue is a clean error (its
-  mutation would be lost — bind to a local first). Fixtures: `tests/ref_arg_rvalue.kama`,
-  `tests/xfail/ref_arg_rvalue_mut.kama`. (b) ~~`give` into a raw `Ptr<T>` deref (`p[0] = give x`) is rejected
-  for an owning `T`~~ **DONE** (hardening Session E) — a `give`/`copy`-marked move into a bare-LOCAL `Ptr<T>`
-  slot (`buf[i] = give w`) now works like the already-supported FIELD form (`this.data[i] = give w`): the
-  source local is consumed (marked moved). An UNMARKED local store (`nd[i] = od[j]`) is deliberately left as
-  the untracked raw-relocate collections rely on — only an explicit marker is a tracked move, and the
-  `unsafe { }` block is the opt-out. Fixtures: `tests/give_ptr_local.kama`, `tests/xfail/give_ptr_local_reuse.kama`.
+- **Opt-in `Equatable` derive (auto `==` for `value` types) — post-1.0 minor nicety.** Deferred into the
+  construction-model campaign's broader derive story (`Equatable`/`Hashable`/`Copyable` as one consistent
+  opt-in `@generate` surface, not three ad-hoc ones) — see `docs/design/construction-model.md` §8c. Kama today
+  requires a hand-written `operator==` (auto structural `==` is a deliberate non-default); the derive would
+  synthesize a memberwise `==` on request.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by
@@ -138,6 +91,17 @@ remains here is genuinely later-track or opt-in.
   pruning suffices, or explicit per-module opt-in / dead-function elimination is warranted before a large
   stdlib grows. (`std::math` / `std::io` already ship as directory modules under this mechanism — the open
   question is whether pruning scales, not whether the packaging shape works.)
+- **Design spike — a safe wrapper for the raw-`Ptr` in/out dance (`Slot<T>` / `MaybeUninit`).** Container
+  authors move owned values across the safe↔unsafe boundary by hand (see the `give`-into-a-raw-slot rule in
+  [SPEC.md](SPEC.md) `unsafe { }`): `give` bridges a tracked value *INTO* a raw slot (source consumed —
+  the one marker that reaches into `unsafe`), but there is **no symmetric way OUT** — you can't `give`
+  out of a raw element (`moveOnlySource` rejects it), so reading back is a manual "zero-init a local, bitwise
+  copy, take responsibility" dance (see `Deque.takeAt`, and the round-trip in `tests/give_ptr_local.kama`).
+  This asymmetry is the sharp, easy-to-misuse part of the raw layer — deliberately gated behind `unsafe` and
+  confined to a few stdlib containers (the Rust-`Vec`-internals bet), but a candidate for a small safe
+  abstraction: a typed `Slot<T>` (kama's `MaybeUninit`) with `write(give x)` / `take() -> T` intrinsics so
+  container authors stop hand-rolling both directions. Spike: is the wrapper worth the surface, or does the
+  handful of container sites not justify it? Non-blocking; pure ergonomics for stdlib authors, not users.
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
@@ -146,13 +110,6 @@ Serialization ships today (by-value + object-graph + polymorphic contracts, json
 
 - **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T,N>` read; a bare `encode`/`decode` of an
   intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
-- **✅ DONE (hardening Session C) — Enforce the poly-edge rule.** A `Shared`/`Weak`/`Owned<Contract>` graph
-  edge assumed every implementor is `@generate(Serialize, Deserialize)`; a non-`@generate` nominal implementor
-  was silently absent from the dispatch tables (its `.vtbl` → no writer → dropped from the wire). Now a
-  **compile error** at the edge field in `computeGraphNodeTypes` — a nominal (`impl && !retro`) implementor
-  lacking both `@generate` flags is rejected: "implements the serialized graph-edge contract … but is not
-  `@generate` … silently dropped from the wire." No wire/behavior change for valid programs. Fixture:
-  `xfail/poly_edge_nongenerate`.
 - **More back ends (library, no compiler change)** — YAML; **binary** (packing + `@bits(n)` + little-endian
   canonical); **XML**/**HTML**. Each is a `Serializer`/`Deserializer` impl + `encode`/`decode`. `std::encoding::base64`
   is a separate small module.
@@ -459,14 +416,6 @@ near-parity on `alloc`/`dispatch`.
 
 ## 10. Tooling / distribution (deferred)
 
-- ~~**Compiler build-warning cleanup (hygiene).**~~ **DONE (hardening Session D).** The host build
-  (`tools/cdev make`) now compiles warning-free: deleted the unused hand-written **`transpileToFile`**
-  (kama.driver.cpp) + **`isValidChar`** (kama.l); **`typeToStr`** was already gone; **`yynerrs`** is
-  bison-generated, so it's silenced on that TU only (`$(BUILD)/kama.parser.o: CXXFLAGS +=
-  -Wno-unused-but-set-variable`) rather than editing generated code. A CI-only **`-Werror`** gate on the
-  primary Linux leg (`make EXTRA_CXXFLAGS=-Werror`) keeps new warnings from creeping in; macOS/Windows stay
-  ungated to avoid compiler/bison-version drift breaking CI. (Emitted-C `-Wparentheses` notes are in
-  generated output, separate.)
 - **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
   deferred.
 - **FreeBSD CI** — a non-blocking `vmactions/freebsd-vm` job (Windows is now proven; FreeBSD is the next

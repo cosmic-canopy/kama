@@ -135,6 +135,28 @@ model lands, revisit whether named ctors / the shared initializer need any param
 today's "allowed." A static method/factory has no `this`, so the field case is moot there — consistent
 with §2's "no implicit raw ctor; construct through named seams."
 
+## 8c. Opt-in `Equatable` derive — deferred here from hardening Phase E (user decision, 2026-07-16)
+
+Phase E's ergonomic triage surfaced the boilerplate of hand-writing `operator==` on every `value` type
+(`this.x == o.x && this.y == o.y …`, easy to forget a field). Kama today **explicitly rejects** auto
+structural `==` (`tests/xfail/operator_eq_missing.kama`), so adding a derive is a *stance change*, not a
+mere fix — and it overlaps this model's construction/derive surface. **Decision: fold it into this
+campaign's broader derive story**, not ship it in isolation.
+
+- **Shape (leaning):** an **opt-in** `@generate(Equatable)` that synthesizes a memberwise `==` (and `!=`),
+  reusing the exact mechanism `@generate(Serialize, Deserialize)` already uses (attribute parse →
+  `ClassInfo` flag → field-walk → emit the body in C; ~80–150 LOC by that precedent). Opt-in keeps it
+  **explicit** (you ask per-type) — no implicit structural equality on every value, so it doesn't violate
+  "explicit over implicit."
+- **Design it alongside the sibling derives**, not alone: `Equatable`, `Hashable`, and `Copyable` share
+  the same "memberwise, opt-in, field-walked" shape and should get ONE consistent derive surface (spelling,
+  field opt-out `@skip`, generic-bound handling `when [T: Equatable]`) rather than three ad-hoc ones. This
+  model already blesses type-associated ops (`ctor`/`decode`); a derive block is the same family.
+- **Scope note:** only for `value` types by default (structural equality of a `resource`/identity type is
+  usually wrong). Interacts with the memberwise-ctor synthesis (§4) — both walk the public field set.
+
+Tracked as a **minor nicety** in ROADMAP §2 (post-1.0), pointing here as the home for the decision.
+
 ## 9. Open questions (resolve before/while implementing)
 
 - **Delegation syntax** — `ctor square(side) => Rect(...)` (expression-delegate) vs an explicit

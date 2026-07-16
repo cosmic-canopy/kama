@@ -1,0 +1,12 @@
+// Session E (hardening) work item 3 — post/pre increment already work in EXPRESSION position (not just as
+// a statement): the grammar chains unary->postfix->post_increment into full `expression`, and the emitter
+// lowers `x++` to `(x++)` (old value) / `++x` to `(++x)` (new value). Confirms the (previously
+// stale-in-ROADMAP) capability.
+fn int32 main() {
+    int32 i = 5;
+    int32 a = i++;             // post: a = 5 (old), i -> 6
+    int32 b = ++i;             // pre:  i -> 7, b = 7 (new)
+    int32 c = i--;             // post: c = 7 (old), i -> 6
+    int32 d = (i++) + 10;      // post inside a subexpression: d = 6 + 10 = 16, i -> 7
+    return a + b + c + d + i;  // 5 + 7 + 7 + 16 + 7 = 42
+}

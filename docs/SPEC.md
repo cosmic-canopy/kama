@@ -668,6 +668,13 @@ while the collection is alive + unmodified, and dereferencing it requires `unsaf
 (including a safety-gate violation) is a **hard build error** — kama never emits incomplete C and claims
 success.
 
+Moving an **owned** value into a raw slot uses `give`: `unsafe { buf[i] = give w; }` stores the bytes and
+**consumes** `w` (its scope-drop is skipped — a use-after-move is a compile error), the one marker that
+carries ownership across into unsafe manual storage. An *unmarked* `slot[i] = x` is a plain bitwise store
+(the untracked raw-relocate a container uses internally, e.g. moving elements between buffers). Getting a
+value back *out* is manual (bitwise-copy into a local, take responsibility) — there is no `give`-out of a
+raw slot; a safe `Slot<T>`/`MaybeUninit` wrapper for both directions is a tracked design spike.
+
 ### Writing a collection *in* kama — `sizeof`, `panic`/`assert`, place-returning methods ✅
 
 The above pieces (a place-returning `operator[]`, `Ptr<T>` + `unsafe`, generics, RAII) let a `Vec`/matrix
