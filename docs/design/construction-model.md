@@ -122,6 +122,19 @@ Two orthogonal axes:
 6. DRY via designated (primary) + convenience (delegating) ctors.
 7. Value types may add named ctors; suppress memberwise via a private field.
 
+## 8b. Interaction with the shadowing ban (hardening Session A, landed)
+
+The hardening pass (Session A, 2026-07-16) made **local variable shadowing** a compile error — a local
+may not shadow a parameter, an enclosing-scope local, or an in-scope field. Deliberately scoped to
+**locals only**: a **parameter** sharing a field's name (the `this.x = x` idiom) stays **allowed with no
+usage restriction**. The stricter rule once considered here — "a field-shadowing param may only be read
+inside the RHS of its own field's assignment" — was **deferred into this construction model** (user
+decision), because (a) this model reshapes constructors anyway, so the param/field relationship is about
+to change, and (b) the strict rule would reject legitimate patterns like `this.area = w * h`. When this
+model lands, revisit whether named ctors / the shared initializer need any param↔field discipline beyond
+today's "allowed." A static method/factory has no `this`, so the field case is moot there — consistent
+with §2's "no implicit raw ctor; construct through named seams."
+
 ## 9. Open questions (resolve before/while implementing)
 
 - **Delegation syntax** — `ctor square(side) => Rect(...)` (expression-delegate) vs an explicit

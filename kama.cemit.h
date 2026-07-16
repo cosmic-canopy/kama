@@ -352,6 +352,8 @@ private:
     std::map<std::string, SigInfo> _sigs;    // function-pointer signature types
     bool isSigType(const std::string& name) const { return _sigs.count(name) != 0; }
     std::set<std::string> _refParams;        // by-ref params of the function being emitted
+    std::set<std::string> _paramNames;       // parameter names of the function being emitted — a local
+                                             // declaration shadowing one is a compile error (see emitDeclarator)
     std::set<std::string> _viewParams;       // by-VALUE `type view` params of the fn being emitted — a valid
                                              // root for a view return (borrows caller memory that outlives the
                                              // call). (A `ref`-view param is already in _refParams.)
@@ -464,7 +466,11 @@ private:
 
     // RAII scope stack: live destructible locals per lexical scope.
     struct LiveLocal { std::string cVar; std::string className; };
-    struct Scope { std::vector<LiveLocal> locals; bool isLoopBoundary = false; bool isFunctionRoot = false; };
+    struct Scope { std::vector<LiveLocal> locals; std::vector<std::string> declaredNames;
+                   bool isLoopBoundary = false; bool isFunctionRoot = false; };
+    // Erase move-state for the closing scope's locals, then pop it. A name going out of scope is
+    // lexically dead, so a sibling scope reusing it must start NotMoved (not inherit a stale Moved).
+    void popScope();
     std::vector<Scope> _scopes;
     // By-value smart-ptr params the callee owns — dropped at fn-end. emitFunction
     // records them here (its function-root scope is created later, in emitBlockScoped,

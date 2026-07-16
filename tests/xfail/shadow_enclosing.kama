@@ -1,0 +1,5 @@
+// Session A — a nested block re-declaring a still-live enclosing local is a compile error.
+fn int32 main() {
+    int32 x = 1;
+    { int32 x = 2; return x + x; }   // ERROR: shadows an enclosing-scope local
+}

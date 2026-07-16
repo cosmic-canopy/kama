@@ -1,0 +1,16 @@
+// Session A — sibling-scope move-state must NOT leak. A `give` that consumes a local in one block
+// must not mark a same-named local in a LATER sibling block as already-moved (the sorted_map bug).
+// Also covers a foreach-bound name reused by a later sibling local.
+import std::collections::{DynamicArray};
+type resource Res { DynamicArray<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
+fn int32 take(Res r) { return r.head(); }
+fn int32 main() {
+    int32 total = 0;
+    { Res r = Res(v: 10); total = total + take(r: give r); }   // block 1: give r
+    { Res r = Res(v: 20); total = total + take(r: give r); }   // sibling block 2: fresh r, must compile
+    DynamicArray<int32> xs = DynamicArray();
+    xs.add(item: 1); xs.add(item: 2); xs.add(item: 3);
+    foreach (int32 s in xs) { total = total + s; }             // foreach binds `s`  (+6)
+    int32 s = 12;                                              // later sibling reuse of `s` — must compile
+    return total + s;   // 10 + 20 + 6 + 12 = 48
+}

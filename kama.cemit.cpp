@@ -950,6 +950,17 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
     }
 }
 
+// Pop the innermost scope, first erasing move-state for the locals it owned. A name going out of
+// scope is lexically dead, so a sibling scope that later reuses the name must start NotMoved rather
+// than inherit a stale Moved (the sibling-scope false use-after-move bug). Erasing an untracked name
+// is a harmless no-op, so the pass is uniform. Only true scope-pops call this; the early-exit dtor
+// walks for return/break/continue leave enclosing scopes live and must NOT clear their move-state.
+void CEmitter::popScope()
+{
+    for (auto& l : _scopes.back().locals) _moveState.erase(l.cVar);
+    _scopes.pop_back();
+}
+
 // Drop the destructible temps a condition hoisted into the current scope since `preLoc`, then
 // unregister them. Used by `if`/`while`/`for` after a value-producing condition: the temps were
 // declared in the condition's wrapper block (or the loop's `while(1){…}` body), so their dtor must
@@ -1028,7 +1039,7 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
 
     indent(depth);
     *_out << "}";
-    _scopes.pop_back();
+    popScope();
 }
 
 // write hoisted temp statements (inline-ctor-in-arg materialization) at `depth`, then clear.
@@ -1112,6 +1123,23 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             bool iface = isInterface(ty);
             auto emitDeclarator = [&](auto& d) {
                 std::string nm = (d->name && d->name->value) ? *d->name->value : "";
+                // Ban shadowing (enforces the flat-name-map assumption above; C#-aligned, "one way"). A
+                // local may not shadow a parameter, an enclosing-scope local, or an in-scope field. (A
+                // param sharing a FIELD name — the `this.x = x` idiom — is allowed and handled elsewhere.)
+                if (!nm.empty()) {
+                    if (_paramNames.count(nm))
+                        unsupported(("local `" + nm + "` shadows a parameter — rename it").c_str(), n->line);
+                    else {
+                        bool enc = false;
+                        for (auto& sc : _scopes) { for (auto& dn : sc.declaredNames) if (dn == nm) { enc = true; break; } if (enc) break; }
+                        if (enc)
+                            unsupported(("local `" + nm + "` shadows an enclosing-scope local — rename it").c_str(), n->line);
+                        else if (_currentClass && !_inStaticMethod && _currentClass->fieldNames.count(nm))
+                            // A static method has no `this` → no bare field access → nothing to shadow.
+                            unsupported(("local `" + nm + "` shadows a field — rename it").c_str(), n->line);
+                    }
+                    if (!_scopes.empty()) _scopes.back().declaredNames.push_back(nm);
+                }
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
                 _localCTypes[nm] = ty;                        // full C type (incl. primitives) for assignment-RHS lowering
                 if (isConstDecl) {
@@ -1800,7 +1828,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (!iterRoot.empty()) _foreachColls.pop_back();
         if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
         if (fe->isRef && !hadRef) _refParams.erase(nm);
-        _scopes.pop_back();
+        popScope();
 
         indent(depth + 1); *_out << "}\n";   // close for
         indent(depth);     *_out << "}\n";   // close wrapper
@@ -2214,7 +2242,7 @@ void CEmitter::emitBody(SharedStatement stmt, int depth, bool loopBoundary)
             emitScopeCleanup(_scopes.back(), depth + 1);
         indent(depth);
         *_out << "}";
-        _scopes.pop_back();
+        popScope();
     }
 }
 
@@ -4887,11 +4915,11 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     if (!iterRoot.empty()) _foreachColls.pop_back();
     if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
     if (fe->isRef && !hadRef) _refParams.erase(nm);
-    _scopes.pop_back();
+    popScope();
 
     indent(depth + 1); *_out << "}\n";   // close while
     emitScopeCleanup(_scopes.back(), depth + 1);   // drop relocated iterable temps (e.g. `s.trim()`) after the loop
-    _scopes.pop_back();                            // wrapper scope
+    popScope();                                    // wrapper scope
     indent(depth);     *_out << "}\n";   // close wrapper
 }
 
@@ -7086,7 +7114,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         for (auto& sv : savedTypes) { if (sv.had) _localTypes[sv.name] = sv.prev; else _localTypes.erase(sv.name); }
         armEnds.push_back(_moveState);
         armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);
-        _scopes.pop_back();
+        popScope();
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
@@ -7257,7 +7285,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         indent(depth + 2); *_out << "break;\n";
         armEnds.push_back(_moveState);
         armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);
-        _scopes.pop_back();
+        popScope();
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
@@ -7850,6 +7878,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
+    _paramNames.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
     _moveState.clear();   // per-function move analysis
     _pendingParamDtors.clear();
@@ -7859,6 +7888,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         for (auto& p : *fn->parameters) {
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
+            _paramNames.insert(pn);   // a later local declaration shadowing a param is a compile error
             if (paramByRef(p.get())) _refParams.insert(pn);
             if (p->isConst) _constLocals.insert(pn);   // const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
@@ -8234,6 +8264,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     line(ci.dtorNode ? ci.dtorNode->line : (ci.node ? ci.node->line : 0));
     _currentClass = &ci;
     _refParams.clear();
+    _paramNames.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
     _currentReturnCType = "void";
     _tempCounter = 0;
@@ -8306,6 +8337,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
     _refParams.clear();
+    _paramNames.clear();
     _viewParams.clear();
     _localTypes.clear(); _constLocals.clear(); _inCtor = false;
     _moveState.clear();   // per-method move analysis
@@ -8320,6 +8352,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         for (auto& p : *params) {
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
+            _paramNames.insert(pn);   // a later local declaration shadowing a param is a compile error
             if (paramByRef(p.get())) _refParams.insert(pn);
             if (p->isConst) _constLocals.insert(pn);   // const param is immutable
             std::string pty = p->type ? cType(p->type) : "";

@@ -86,14 +86,20 @@ remains here is genuinely later-track or opt-in.
   collection that pays it** (its iterator is non-generic). Fix = importing a type also makes the types named in
   its public method signatures resolvable (import brings the API surface, not just the symbol). Non-blocking
   and isolated; a pure ergonomic/consistency win.
-- **BUG — move-tracker: moved-state leaks across same-named variables in sibling scopes.** Surfaced writing
-  `SortedMap`: `give`-consuming a resource variable named `k` in one scope leaves the tracker believing a
-  **different** `k` (a fresh binding — e.g. an `int32 k` in a later sibling `{}` block, or a `foreach (string
-  k …)` loop var vs a subsequent `int32 k`) is still moved, so its first use is a false "use of `k` after it
-  was moved". Minimal repro: `S k = S(); S d = give k; { int32 k = 5; return k + k; }` → false positive. The
-  moved-set is keyed by variable **name**, not by the scoped binding; it must be scoped to the declaration and
-  reset when a name is re-declared. Workaround: rename the later variable. A correctness-of-diagnostics bug
-  (rejects valid code), not a miscompile.
+- **✅ FIXED (hardening Session A) — move-tracker: moved-state leaked across same-named variables in sibling
+  scopes.** Surfaced writing `SortedMap`: `give`-consuming a resource variable named `k` in one scope left the
+  tracker believing a **different** `k` (a fresh binding — e.g. an `int32 k` in a later sibling `{}` block, or
+  a `foreach (string k …)` loop var vs a subsequent `int32 k`) was still moved, a false "use of `k` after it
+  was moved". Root cause: `_moveState` is keyed by bare variable **name** and was never cleared on scope exit.
+  Fix: a `popScope()` helper erases the closing scope's locals' move-state before every scope pop (sound — a
+  name going out of scope is lexically dead). Bundled with the **local-shadowing ban** below (which lets the
+  fix stay a simple erase — within any live enclosing scope one name = one binding).
+- **✅ ADDED (hardening Session A) — local variable shadowing is now a compile error.** A local declaration
+  may not shadow a parameter, an enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned;
+  "favor explicit / one way"; enforces the previously-latent flat-name-map assumption). A **parameter** sharing
+  a field name (the `this.x = x` idiom) stays allowed. A static method has no `this`, so a local there can never
+  shadow a field (the check is skipped). Fixtures: `move_sibling_scope`, `xfail/shadow_{enclosing,param,field}`,
+  `xfail/move_reuse_same_scope`.
 - **DIAGNOSTIC — `DynamicArray<View>` (a `view` element in a LIBRARY collection) rejects with a confusing
   message.** Surfaced writing `View`: a view as a collection element is correctly rejected, but only the
   *intrinsic* collection-element check (`registerCollection`) emits the clean "a view can't be a collection

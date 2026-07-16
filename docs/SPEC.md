@@ -459,6 +459,12 @@ A marker on a fresh rvalue is an error. Move tracking is compile-time: reading a
 field/element, moving inside a loop a value declared outside it, and a conditional move that is still live at
 scope exit are all rejected — there is no runtime drop flag.
 
+**Local variable shadowing is a compile error.** A local declaration may not shadow a parameter, an
+enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned; one name = one binding within
+any live scope — keeps both name resolution and move tracking unambiguous). Sibling scopes may reuse a name
+freely (they never coexist). A *parameter* sharing a field's name — the `this.x = x` constructor idiom — is
+allowed; a static method has no `this`, so a local there can never shadow a field.
+
 `Shared<T>` — ref-counted shared ownership (= C++ `shared_ptr` / Rust `Rc`). **Copyable**: each copy retains
 (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.
 
