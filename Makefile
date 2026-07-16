@@ -55,6 +55,10 @@ $(OBJECTS): $(HEADERS)
 $(BUILD)/kama.lexer.o $(BUILD)/kama.parser.o $(BUILD)/kama.driver.o $(BUILD)/kama.cemit.o: $(BUILD)/kama.parser.hpp
 $(BUILD)/kama.lexer.o $(BUILD)/kama.driver.o: $(BUILD)/kama.lexer.hpp
 
+# Bison emits `int yynerrs` set-but-never-read. It's generated code (never edit it), so
+# silence that one warning on this TU only — keeps the -Werror CI gate clean.
+$(BUILD)/kama.parser.o: CXXFLAGS += -Wno-unused-but-set-variable
+
 # Compile: hand-written sources live in the root, generated ones in build/.
 # -Ibuild so #include "kama.parser.hpp" finds the generated header.
 $(BUILD)/%.o: %.cpp | $(BUILD)

@@ -19,7 +19,6 @@
 
 #define YY_EXTRA_TYPE struct LexerInstanceData *
 
-static int isValidChar(const char );
 static int getToken(const char *);
 char getSimpleEscape(const char* input, int index);
 std::string hexToUTF8(int cp);
@@ -261,14 +260,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 "^"     { RETURN_TOKEN(CARET, 1); }
 
 .       {
-//          if (isValidChar(yytext[0])) 
-//          {
-//            return RETURN_TOKEN(*yytext, 1);
-//          }
-//          else 
-//          {
-              error("invalid token", yyscanner); 
-//          }
+              error("invalid token", yyscanner);
         }
 %%
 
@@ -437,38 +429,6 @@ static int getToken(const char *lexeme)
   if (token == -1)
     token = IDENTIFIER;
   return token;
-}
-
-static int isValidChar(const char c)
-{
-  static char table [] = {
-    /* low part: 33-63 decimal */
-    '!', 0, 0, 0, '%', '&', 0, '(', ')', '*',
-    '+', 0, '-', '.', '/', 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, ':', ';', '<', '=', '>',
-    '?',
-
-    /* high part: 123-126 decimal */
-    /* '{', '|', '}', '~', */
-
-    /* special: 94 decimal */
-    /* '^', */
-  };
-
-  int index = ((int)c) - 33;
-
-  if (index >= 0) 
-  {
-    if (index <= 30)
-    {
-      return table[index];
-    }
-    else if((index >= (123-33) && (index <= (126-33))) || (index == (94-33)))
-    {
-      return 1;
-    }
-  }
-  return 0;
 }
 
 std::string hexToUTF8(int cp)

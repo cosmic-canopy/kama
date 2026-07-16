@@ -354,14 +354,6 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     return 0;
 }
 
-// Transpile `inputFile` to C, writing to `outPath`. Returns 0 on success.
-int transpileToFile(const std::string& inputFile, const std::string& outPath, bool emitLines)
-{
-    SharedCompilationUnit unit = parseFile(inputFile);
-    if (!unit) return 1;
-    return transpileUnitToFile(unit, absolutePath(inputFile), outPath, emitLines);
-}
-
 // Emit a multi-file program from already-parsed `units` (parallel to `sourcePaths`): one
 // shared header (`headerPath`, included as `headerName`) + one `.c` per unit (`cPaths`).
 // Returns 0 on success.

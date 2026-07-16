@@ -444,12 +444,14 @@ near-parity on `alloc`/`dispatch`.
 
 ## 10. Tooling / distribution (deferred)
 
-- **Compiler build-warning cleanup (hygiene).** The host compiler build (`tools/cdev make`) emits a handful of
-  warnings; drive them to zero and consider a `-Werror` CI gate so new ones can't creep in. Current set:
-  hand-written **`transpileToFile`** + **`typeToStr`** (kama.driver.cpp) and **`isValidChar`** (kama.l) are
-  unused — delete or wire up; **`yynerrs`** is bison-generated (`build/kama.parser.cpp`), so suppress it on the
-  generated TU (a per-file `-Wno-unused-but-set-variable`, or a bison `%define` that consumes it) rather than
-  editing generated code. (Emitted-C `-Wparentheses` notes are in generated output, separate.)
+- ~~**Compiler build-warning cleanup (hygiene).**~~ **DONE (hardening Session D).** The host build
+  (`tools/cdev make`) now compiles warning-free: deleted the unused hand-written **`transpileToFile`**
+  (kama.driver.cpp) + **`isValidChar`** (kama.l); **`typeToStr`** was already gone; **`yynerrs`** is
+  bison-generated, so it's silenced on that TU only (`$(BUILD)/kama.parser.o: CXXFLAGS +=
+  -Wno-unused-but-set-variable`) rather than editing generated code. A CI-only **`-Werror`** gate on the
+  primary Linux leg (`make EXTRA_CXXFLAGS=-Werror`) keeps new warnings from creeping in; macOS/Windows stay
+  ungated to avoid compiler/bison-version drift breaking CI. (Emitted-C `-Wparentheses` notes are in
+  generated output, separate.)
 - **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
   deferred.
 - **FreeBSD CI** — a non-blocking `vmactions/freebsd-vm` job (Windows is now proven; FreeBSD is the next

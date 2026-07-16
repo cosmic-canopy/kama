@@ -19,8 +19,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, name: linux-x64 }
-          - { os: macos-14,      name: macos-arm64 }
+          # -Werror gates the primary Linux leg only (zero-warnings gate); macOS/Windows stay
+          # ungated to avoid compiler/bison-version drift breaking CI — the code is identical
+          # across legs, so any warning in portable code is still caught here.
+          - { os: ubuntu-latest, name: linux-x64,   werror: "-Werror" }
+          - { os: macos-14,      name: macos-arm64, werror: "" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -38,7 +41,7 @@ jobs:
           # The Makefile auto-detects the keg-only bison at /opt/homebrew/opt/bison/bin.
 
       - name: Build
-        run: make
+        run: make EXTRA_CXXFLAGS=${{ matrix.werror }}
 
       - name: Version
         run: ./kama --version
