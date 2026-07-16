@@ -1,0 +1,23 @@
+// Session E (hardening) work item 1 — `give` a move-only `resource` into a bare `Ptr<T>` LOCAL slot
+// (`buf[0] = give w`), the same raw-slot move already allowed through a FIELD (`this.data[0] = give w`).
+// Proves the store happens (read it back = 42) and the moved source is consumed (its scope dtor is
+// skipped, so no double-drop — ASan-clean; a bare copy would leave `w` live and drop it twice).
+type resource Widget {
+    int32 id;
+    public Widget(int32 id) { this.id = id; }
+    public fn int32 get() { return this.id; }
+    ~Widget() { }
+}
+
+fn int32 main() {
+    Ptr<Widget> buf;
+    unsafe { buf = cast<Ptr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)) * cast<usize>(2))); }
+    Widget w = Widget(id: 42);
+    unsafe { buf[0] = give w; }               // the newly-allowed bare-local raw-slot MOVE (consumes w)
+    Widget got;                               // zero-init owned local — the move-out target
+    Ptr<Widget> gp = addr(of: got);
+    unsafe { gp[0] = buf[0]; }                // untracked raw copy back out of the slot (the collection idiom)
+    int32 r = got.get();                      // 42 — proves the give actually stored w's bytes
+    unsafe { free(p: cast<Ptr>(buf)); }
+    return r;                                 // 42
+}

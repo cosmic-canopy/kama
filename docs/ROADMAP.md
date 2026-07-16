@@ -113,9 +113,12 @@ remains here is genuinely later-track or opt-in.
   `&(rvalue)` (invalid C)~~ **DONE** (hardening Session B) — a class rvalue (factory / call result) to a
   `const ref` param now auto-hoists a scope-dtor'd temp; a non-const `ref` rvalue is a clean error (its
   mutation would be lost — bind to a local first). Fixtures: `tests/ref_arg_rvalue.kama`,
-  `tests/xfail/ref_arg_rvalue_mut.kama`. (b) `give` into a raw `Ptr<T>` deref (`p[0] = give x`) is rejected for an owning `T`
-  ("not a bare sub-expression") — a `ref T` out-parameter (`out = give x`) works and is the idiom the B-tree
-  uses for its pair moves.
+  `tests/xfail/ref_arg_rvalue_mut.kama`. (b) ~~`give` into a raw `Ptr<T>` deref (`p[0] = give x`) is rejected
+  for an owning `T`~~ **DONE** (hardening Session E) — a `give`/`copy`-marked move into a bare-LOCAL `Ptr<T>`
+  slot (`buf[i] = give w`) now works like the already-supported FIELD form (`this.data[i] = give w`): the
+  source local is consumed (marked moved). An UNMARKED local store (`nd[i] = od[j]`) is deliberately left as
+  the untracked raw-relocate collections rely on — only an explicit marker is a tracked move, and the
+  `unsafe { }` block is the opt-out. Fixtures: `tests/give_ptr_local.kama`, `tests/xfail/give_ptr_local_reuse.kama`.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by

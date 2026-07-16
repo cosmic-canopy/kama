@@ -1972,12 +1972,21 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // resource source (mark it moved so its scope dtor is skipped). This is how a library container
         // relocates an element into its buffer. Only intercepted for an owned RHS (marker or resource) —
         // a plain `ptr[i] = value` or a value-producing RHS keeps the generic path below.
-        if (as->token == EQ && !ptrElemType(as->unaryExpression).empty()) {
+        // A bare-LOCAL `Ptr<T>` slot (`buf[i]`, not `this.field[i]`) is the UNTRACKED raw-relocate escape
+        // hatch collections rely on (`nd[i] = od[j]`), so there an UNMARKED store stays a plain C store —
+        // only an explicit `give`/`copy` is a tracked move. A FIELD slot keeps the implicit-owned guard.
+        std::string pfield = ptrElemType(as->unaryExpression);                              // `this.data[i]` FIELD slot
+        std::string plocal = pfield.empty() ? ptrLocalElemType(as->unaryExpression) : "";   // bare-LOCAL `buf[i]` slot
+        if (as->token == EQ && (!pfield.empty() || !plocal.empty())) {
             SharedExpression rhs = as->expression;
             bool give = false, marked = false;
             if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { give = h->isGive; rhs = h->value; marked = true; }
+            bool tgtField = !pfield.empty();
             std::string rc = exprClass(rhs);
-            bool ownedRhs = marked || (!rc.empty() && (isMoveOnlyValue(rc) || isSmartPtrClass(rc)));
+            // A FIELD slot keeps the implicit-owned guard (an unmarked resource/smart RHS is a move); a
+            // bare-LOCAL slot moves ONLY on an explicit `give`/`copy` — an unmarked local store stays the
+            // untracked raw-relocate (`nd[i] = od[j]`) and falls through to the generic C store below.
+            bool ownedRhs = marked || (tgtField && !rc.empty() && (isMoveOnlyValue(rc) || isSmartPtrClass(rc)));
             if (ownedRhs) {
                 std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
                 line(n->line);
@@ -5939,6 +5948,28 @@ std::string CEmitter::ptrElemType(SharedExpression e)
         if (f.name == *ma->identifier->value && f.type && f.type->value
             && *f.type->value == "Ptr" && f.type->genericArg)
             return cType(f.type->genericArg);
+    return "";
+}
+
+// A bare-LOCAL/param `Ptr<T>` element target `buf[i]` (NOT `this.field[i]` — that's ptrElemType above):
+// the element C-type, used ONLY in the assignment store path for an explicit `give`/`copy` raw-slot move
+// into a local pointer. Kept separate from ptrElemType (which also feeds exprClass) so this stays out of
+// exprClass — an UNMARKED local store (`nd[i] = od[j]`, the untracked raw-relocate collections rely on)
+// must keep its plain-C-store semantics. `Ptr<T>` lowers to `T*`, so strip one trailing `*`; bare `Ptr`
+// -> `void*` is not indexable (excluded). Only locals/params live in `_localCTypes`, and a `ref T` param
+// lowers to `T` (no `*`), so no false positives.
+std::string CEmitter::ptrLocalElemType(SharedExpression e)
+{
+    auto* ea = dynamic_cast<ElementAccessNode*>(e.get());
+    if (!ea) return "";
+    SharedExpression recv = ea->expression ? ea->expression
+                                           : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+    auto* id = dynamic_cast<IdentifierNode*>(recv.get());
+    if (!id || !id->value) return "";
+    auto it = _localCTypes.find(*id->value);
+    if (it == _localCTypes.end()) return "";
+    const std::string& ct = it->second;
+    if (ct.size() > 1 && ct.back() == '*' && ct != "void*") return ct.substr(0, ct.size() - 1);
     return "";
 }
 

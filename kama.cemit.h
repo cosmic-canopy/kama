@@ -817,6 +817,7 @@ private:
     bool isClass(const std::string& name) const { return _classes.count(name) != 0; }
     bool isBaseOf(const std::string& base, const std::string& derived) const;   // base in derived's chain
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is Ptr<T>, the element C-type; else ""
+    std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is Ptr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
     std::string lvalueCType(SharedExpression e);        // C type of an lvalue local/param/field, KEEPING collection/string types
     bool exprIsString(SharedExpression e);              // true iff `e` statically has kama type `string` (kama_string)
