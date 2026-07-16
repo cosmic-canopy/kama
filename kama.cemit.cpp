@@ -7902,8 +7902,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _viewParams.clear();
 
     if (isEntry) {
-        // Synthesized portable entry point. Argument marshaling (List<String>)
-        // arrives once collections land; for now args are ignored.
+        // Synthesized portable entry point. argv marshaling (argv -> a
+        // DynamicArray<string>) is not yet wired; args are currently ignored.
         *_out << "int main(int argc, char** argv) {\n"
              << "    (void)argc; (void)argv;\n"
              << "    return (int)kama_main();\n"

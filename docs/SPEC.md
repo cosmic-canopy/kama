@@ -259,17 +259,17 @@ forwards an in-place borrow up the tree via the escape checker's chained-ref-ret
 return a place-returning method call whose receiver roots at `this`). `SortedSet<K>` wraps `SortedMap<K, Unit>`,
 as `Set` wraps `Map`.
 
-### Custom allocators ✅ (M10a–M10b — all direct-heap containers)
+### Custom allocators ✅
 
 A collection's memory source is a trailing type parameter `A: Allocator = GlobalAllocator`. Because it
-defaults (M8 default type parameters), `DynamicArray<T>` / `Map<K,V>` / bare `BitSet` are unchanged; the
-allocator is opt-in. Every container that manages its own heap buffer carries it: **M10a** — `DynamicArray`,
-`Map`, `Set`; **M10b** — `Deque<T, A>`, `FixedArray<T, A>`, `BitSet<A>` (its first type parameter, so a plain
-`BitSet` is now the all-defaulted instance), `SlotMap<V, A>`, and `PriorityQueue<T, A>` (which owns no buffer
-itself — it threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named static
-factory: `withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` for the
-eager `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. **M11b** completes the set:
-`SortedMap<K, V, A>` / `SortedSet<K, A>` thread `A` through the B-tree — the node *contents* (inner arrays) and
+defaults (default type parameters), `DynamicArray<T>` / `Map<K,V>` / bare `BitSet` are unchanged; the
+allocator is opt-in. Every container that manages its own heap buffer carries it: `DynamicArray`, `Map`,
+`Set`, `Deque<T, A>`, `FixedArray<T, A>`, `BitSet<A>` (its first type parameter, so a plain `BitSet` is now
+the all-defaulted instance), `SlotMap<V, A>`, and `PriorityQueue<T, A>` (which owns no buffer itself — it
+threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named static factory:
+`withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` for the eager
+`FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. The ordered containers thread it
+too: `SortedMap<K, V, A>` / `SortedSet<K, A>` push `A` through the B-tree — the node *contents* (inner arrays) and
 every *interior* node box draw from `A` (via the placement `new(allocator:) BTreeNode` below), so `arena.reset()`
 reclaims the whole tree. (One box per tree — the always-live root — stays `GlobalAllocator`, freed by RAII: a
 bare `new` into a stateless-allocator box is legal for any pointee `A` and sidesteps the eager-root/`withAllocator`
@@ -307,14 +307,14 @@ Map<int32, int32, A: BumpAllocator> m = Map::withAllocator(allocator: arena.hand
 ```
 
 **Panic-on-OOM** today; a **fallible** `allocate -> Optional<Ptr>` is deferred to the embedded no-heap
-milestone (it rides this same seam). Coverage is the direct-`malloc` containers (M10a: `DynamicArray`, `Map`,
-`Set`; M10b: `Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet`
-B-tree (M11b, via allocator-aware `new`).
+milestone (it rides this same seam). Coverage is the direct-`malloc` containers (`DynamicArray`, `Map`, `Set`,
+`Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet` B-tree
+(via allocator-aware `new`).
 
-### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅ (M11a–M11d)
+### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅
 
-Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>` and, from **M11c**,
-`Shared<T, A>` / `Weak<T, A>`. A bare `new T(args)` is unchanged (`A` defaults to `GlobalAllocator` → libc
+Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>`,
+`Shared<T, A>`, and `Weak<T, A>`. A bare `new T(args)` is unchanged (`A` defaults to `GlobalAllocator` → libc
 malloc/free); a **placement** form `new(allocator: a) T(args)` draws the block from `a` and stores the handle in
 the box, so its dtor releases through the **same** allocator — letting a boxed object live in a caller-owned
 arena and be bulk-reclaimed on `reset()`:
@@ -333,10 +333,10 @@ the placement form — a bare `new` into a stateful-allocator box is a compile e
 its own copyable `A` value (copied through `copy()`/`downgrade()`/`tryUpgrade()`), so whichever handle observes
 `strong == 0 && weak == 0` — even a `Weak` that outlived its `Shared` — frees the ctrl through the right
 allocator; `arena.reset()` reclaims a whole ref-counted graph. With allocator-aware `new`,
-**`SortedMap`/`SortedSet`** (whose B-tree nodes box through `new`/`Owned`) got their full `SortedMap<K, V, A>` /
-`SortedSet<K, A>` retrofit in **M11b** (interior node boxes placement-`new` from `A`; the root box stays
+**`SortedMap`/`SortedSet`** (whose B-tree nodes box through `new`/`Owned`) thread `A` through their full
+`SortedMap<K, V, A>` / `SortedSet<K, A>` form (interior node boxes placement-`new` from `A`; the root box stays
 `GlobalAllocator`). **Interface-element** boxes (`Owned/Shared/Weak<Contract, A>`, e.g. `Shared<Shape,
-BumpAllocator>`) got the same treatment in **M11d**: the type-erased fat handle (`{obj, vtbl[, ctrl]}`) grows a
+BumpAllocator>`) draw from the allocator the same way: the type-erased fat handle (`{obj, vtbl[, ctrl]}`) grows a
 by-value `A alloc` + pointee `objsize`, so the pointee and control block are drawn from `A` and freed through it
 — completing allocator coverage for **every** box (concrete and contract-erased). Default-`GlobalAllocator`
 interface boxes are byte-identical to before (they keep the plain intrinsic macros). One design limit:

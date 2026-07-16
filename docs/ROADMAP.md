@@ -5,8 +5,8 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 ## The shape
 
-- **1.0 — language complete.** Strings, the **std I/O** foundation (`std::io`/`fs`/`net`), and the **math
-  layer** (`std::math` — Vec/Mat/Quat) are **shipped**; the remaining gate is a small set of
+- **1.0 — language complete.** The core language, the std I/O foundation (`std::io`/`fs`/`net`), and the
+  math layer (`std::math`) are in place (see [SPEC.md](SPEC.md)); the remaining gate is a small set of
   language-completeness residuals + the docs-reconcile/naming pass, after which the language surface is
   stable: you build *with* it, not *on* it.
 - **1.x — systems & runtime.** Capabilities built ON the finished language: reflection + serialization, a
@@ -21,10 +21,9 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 ## 1. Remaining before 1.0
 
-Strings, the std I/O foundation (`std::io`/`fs`/`net` + the `examples/httpd` proof), and the math layer
-(`std::math` — Vec/Mat/Quat) are **shipped**. What the language *is* lives in [SPEC.md](SPEC.md); the
-engine capability matrix in [ENGINE_READINESS.md](ENGINE_READINESS.md); the history in the git log. What
-remains to call the language **complete**:
+What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix in
+[ENGINE_READINESS.md](ENGINE_READINESS.md); the history in the git log. What remains to call the language
+**complete**:
 
 1. **Language-completeness residual (1.0 blocker — deep emitter work).** One fundamental (non-library)
    gap in the move-tracking / ownership-lowering core; it reproduces with plain resources/collections and
@@ -88,33 +87,15 @@ remains here is genuinely later-track or opt-in.
   its public method signatures resolvable (import brings the API surface, not just the symbol). Non-blocking
   and isolated; a pure ergonomic/consistency win.
 - **BUG — move-tracker: moved-state leaks across same-named variables in sibling scopes.** Surfaced writing
-  `SortedMap` (M6): `give`-consuming a resource variable named `k` in one scope leaves the tracker believing a
+  `SortedMap`: `give`-consuming a resource variable named `k` in one scope leaves the tracker believing a
   **different** `k` (a fresh binding — e.g. an `int32 k` in a later sibling `{}` block, or a `foreach (string
   k …)` loop var vs a subsequent `int32 k`) is still moved, so its first use is a false "use of `k` after it
   was moved". Minimal repro: `S k = S(); S d = give k; { int32 k = 5; return k + k; }` → false positive. The
   moved-set is keyed by variable **name**, not by the scoped binding; it must be scoped to the declaration and
   reset when a name is re-declared. Workaround: rename the later variable. A correctness-of-diagnostics bug
   (rejects valid code), not a miscompile.
-- **✅ FIXED (M11d) — a stateful-allocator `Shared`/`Weak`/`Owned` graph edge is now rejected at compile time.**
-  Was: `graphEdgeOf` (kama.cemit.cpp ~8548) matched any `Shared<X, A>` / `Weak<X, A>` regardless of `A`, and the
-  two-pass graph reader reconstructed a node with the handle's `.alloc` at calloc-zero → a `Shared<N,
-  BumpAllocator>` graph edge round-tripped to a **zeroed** allocator whose no-op `deallocate` **leaked** the
-  libc pointee + ctrl. Deserialize is `GlobalAllocator`-only by design, so `graphEdgeOf` now diagnoses a
-  non-`GlobalAllocator` edge (concrete triad via `boxAllocatorArg`, interface-erased via
-  `CollectionInfo::allocType`) with "graph-mode serialization is GlobalAllocator-only …" before either the
-  writer or reader is emitted. Threading the allocator through the graph driver (the full fix) stays out of
-  scope. Xfail `graph_alloc_iface`.
-- **✅ FIXED (M10b, `55adb51`) — generic `DynamicArray<V>.operator[]` mis-lowered to a raw pointer subscript
-  inside a nested argument.** Surfaced writing `SortedMap` (M6): `return Optional::Some(value: this.clone(v:
-  this.d[i]))` where `d` is a generic `DynamicArray<V>` field emitted `this.d[i]` as a raw pointer index
-  instead of resolving `operator[]`. Root cause (found via lldb during M10b): the emission ran under the enum
-  variant's `_typeSubst` (only `Optional<T>`'s `T` bound), so `exprClass` resolving `this.d`'s field type
-  `DynamicArray<T,A>` left the `A` param unbound → non-class → the raw-`Ptr` fallback. Fix: `exprClass` now
-  resolves a field's type under its OWNER instance's type args (`cTypeInInstance`), not the ambient subst. The
-  `SortedMap` "bind to a local first" workarounds were removed; regression fixture
-  `generic_index_optional_return`.
 - **DIAGNOSTIC — `DynamicArray<View>` (a `view` element in a LIBRARY collection) rejects with a confusing
-  message.** Surfaced writing `View` (M7): a view as a collection element is correctly rejected, but only the
+  message.** Surfaced writing `View`: a view as a collection element is correctly rejected, but only the
   *intrinsic* collection-element check (`registerCollection`) emits the clean "a view can't be a collection
   element" error — library collections (`DynamicArray`/`Deque`/…, which route through
   `registerGenericTypeInst`) instead surface it *indirectly* via the escape check on the collection's own
@@ -125,7 +106,7 @@ remains here is genuinely later-track or opt-in.
   user's declaration. Low priority — correctness is fine, only the message is off.
 - **Minor niceties (post-1.0):** an opt-in `Equatable` derive (auto `==` for `value` types) and
   post-increment returning the old value in expression position (`i++` works as a statement today). Two small
-  ergonomic gaps surfaced writing `SortedMap` (M6), both with clean idioms today: (a) an rvalue passed to a
+  ergonomic gaps surfaced writing `SortedMap`, both with clean idioms today: (a) an rvalue passed to a
   `ref` parameter emits `&(rvalue)` (invalid C) — bind to a local first (or auto-hoist a temp, as some other
   positions already do); (b) `give` into a raw `Ptr<T>` deref (`p[0] = give x`) is rejected for an owning `T`
   ("not a bare sub-expression") — a `ref T` out-parameter (`out = give x`) works and is the idiom the B-tree
@@ -148,11 +129,8 @@ remains here is genuinely later-track or opt-in.
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
-**Serialization is feature-complete and shipped** (by-value + object-graph + polymorphic contracts, json
-backend) — the compiler-intrinsic lowering, its user surface (`@generate`/`@field`/`@skip`, the
-`Serialize`/`Deserialize` contracts, `encode`/`decode`, hand-written override), the `reachesPointer` mode
-gate, and the `DeError` set all live in [SPEC.md](SPEC.md) "Serialization". What remains is additive
-library + hardening work:
+Serialization ships today (by-value + object-graph + polymorphic contracts, json backend) — see
+[SPEC.md](SPEC.md) "Serialization". What remains is additive library + hardening work:
 
 - **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T,N>` read; a bare `encode`/`decode` of an
   intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
@@ -178,191 +156,44 @@ serialization, networking).
 
 - **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
   `std::fs`/`std::io` for asset + scene load.
-- **Container / data-structure reach.** `DynamicArray`/`FixedArray`/`string`/`InlineArray` + `Map<K,V>`/`Set<K>` are shipped
-  (see [SPEC.md](SPEC.md)). **Ownership-consistency pass done:** every container hands ownership back on removal
-  (`DynamicArray.remove(index:) -> T` / `pop() -> Optional<T>`, `Map.remove(key:) -> Optional<V>`, matching
-  `Deque.popFront`/`popBack`), and `Map` gained an in-place value borrow (`getRef(key:) -> ref V`) plus value
-  iteration (`values()`/`valuesMut()`) — closing the "non-`Copyable` map value is write-only" hole. **Entry-wise
-  iteration done:** `foreach (Entry<K,V> e in m.entries())` yields each key-value pair by copy (`e.key()` /
-  `e.value()`, both `Copyable`) — this required building the `Entry<K,V>`-through-`Optional` monomorphization
-  support in the emitter (contract-instance args now deep-substitute + absolutize nested generics; a
-  `fn ref string` borrow is no longer hoisted into a dropped temp). No `entriesMut()` — a key is never mutated
-  in place; use `valuesMut()` / `getRef`. **`Deque<T>` (ring buffer)** and **`PriorityQueue<T: Comparable>`
-  (binary heap)** are shipped — the latter min-heap by default (`minHeap()`), `maxHeap()` to invert; over a
-  `DynamicArray` (which gained an O(1) `swap(i:,j:)` primitive) for A* / event scheduling. **`SlotMap<V>`
-  (generational slot map)** is shipped — `insert` returns a stable `Handle`, and `get`/`getRef`/`remove` reject
-  a stale handle (one whose slot was removed/reused) via a per-slot odd-while-occupied generation, so a
-  dangling handle is a clean `None`/panic, not a use-after-free (*the* ECS/asset-registry structure).
-  **`SortedMap<K: Comparable, V>` / `SortedSet<K>` (B-tree, min-degree 6) shipped** — ordered iteration +
-  `first`/`last`/`floor`/`ceil`/`range` beyond the hash map's surface, plus `getRef` in-place borrow, deep
-  `copy`, and JSON serde (ascending-key order); nodes back their keys/values/child-boxes with `DynamicArray`
-  (reusing its move-out / shift / RAII) and a child is an `Owned<BTreeNode>` box, so splits/borrows/merges/
-  predecessor-swaps relocate move-only keys+values ASan-clean. It **needed a language feature**, now shipped:
-  a `fn ref T` may return the result of a place-returning method call (`recv.getRef(...)`) when the receiver
-  roots at `this` — the escape check traces the root through the call, as `operator[]` already does — so a
-  recursive `getRef` forwards an in-place borrow up through the `Owned`-boxed tree. **Slice/span `View<T>`
-  — DONE** (M7): a first-class **`type view`** kind (a non-owning, stack-only borrow = C# `ref struct`) on the
-  value/resource/contract ownership axis; the stdlib `View<T>` + `arr.view()`/`arr.slice(from:,count:)` give a
-  zero-copy subrange, index + mutate-through + `foreach`, `const View<T>` for read-only. Escape-checked exactly
-  like a contract value (never a field, collection element, or `enum` payload; returnable only when it borrows
-  `this`/a `ref` param — structural, no lifetime tracking) so it can't dangle; a view owns nothing (no `~dtor`,
-  no owning fields, private fields). Users/the engine can author their own (`type view StridedView<T>`/`Grid2D`).
-  *Known limitation:* a view over a `DynamicArray` is invalidated by a resize (`add`/`reserve`) — same contract
-  as a C++ `span`/iterator; not enforced (no lifetime tracking). Honest caveat: general **linked lists** are mostly a cache
-  anti-pattern in data-oriented engines (the useful form is an intrusive free-list / LRU); raw **BSTs** are
-  subsumed by the sorted map; **spatial trees** (quadtree/octree/BVH/k-d) are engine-specific, not stdlib.
-- **Collections revisit — uniform preallocation, pluggable hasher, custom allocator.** The containers grew
-  piecemeal; give them a consistent set of parametric knobs (all with defaults, so today's API is unchanged).
-  The **keystone language feature — default type parameters + named type-arg override — is DONE** (a trailing
-  `<…, H = DefaultHasher, A = GlobalAllocator>` fills when omitted, `Map<int32, V, A: Arena>` names an arg to
-  skip a default; see SPEC "Generics"), so `Map<K,V>` stays valid while `H`/`A` become opt-in. Remaining:
-  1. **Preallocation everywhere. ✅ DONE.** `Map`/`Set` gained `reserve(n:)` + a `withCapacity(capacity:)`
-     factory (they start at cap 0 and grew from 8, rehashing ~log2(N)× on a bulk insert; preallocation skips
-     that rehash storm). `DynamicArray`/`FixedArray` already had `reserve(n:)`.
-  2. **Pluggable hasher (quality/speed as a user choice). ✅ DONE.** The splitmix64 avalanche was pulled OUT
-     of the primitive `hash()` impls (which now return a cheap CONTENT hash — identity for ints, FNV-1a for
-     strings) and INTO a pluggable finalizer: `type contract Hasher for value { static fn uint64 finish(uint64
-     raw); }` in `std::collections`, so `Map<K, V, H: Hasher = DefaultHasher>` / `Set<K, H>` compute `slot =
-     H::finish(k.hash()) & (cap-1)`. **`DefaultHasher`** (splitmix64) is the default — the integer path stays
-     behavior-identical to before — and **`FastHasher`** (single Fibonacci multiply) is the opt-in cheap mixer
-     for trusted-key hot loops (à la Rust's `BuildHasher`). `H::finish` is a static call on the class type
-     param, resolved per monomorphization (the `T::deserialize` path); no stored hasher instance, zero cost.
-     (The power-of-two `hash & (cap-1)` slot mask was already in place.)
-     - **Follow-on — HashDoS-resistant keyed hashing (deferred).** `DefaultHasher` is deterministic/*unseeded*
-       — a strong avalanche and the right default for trusted keys (Java `HashMap` / C++ `unordered_map`
-       posture), but NOT resistant to attacker-chosen keys. A seed at the `finish` stage can't fix this: it
-       would defend integer keys but leave string keys (unseeded FNV-1a content hash) fully exposed — two
-       strings colliding under FNV collide in every map regardless of the seed. Real resistance needs a
-       **seeded, keyed hash over the key bytes** (SipHash-class): the seed must enter the per-byte content
-       accumulation, i.e. a keyed-hash protocol + OS entropy + per-map seed storage. It **rides this same
-       pluggable `Hasher` seam non-breakingly** (no existing `Map<K,V>` changes), so it's a clean future
-       milestone — do NOT ship a finish-stage `SeededHasher` (misleading safety for the case that matters).
-  3. **Custom allocator (M10). ✅ M10a + M10b DONE.** The containers hardcoded `malloc`/`realloc`/`calloc`/`free`;
-     now the memory source is a type parameter `A: Allocator = GlobalAllocator` (rides the M8 default, so
-     `DynamicArray<T>` / `Map<K,V>` are unchanged). The contract is a copyable **value handle** (à la C++
-     `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig `std.mem.Allocator`): `type contract Allocator for
-     value { fn Ptr allocate(usize bytes); fn void deallocate(Ptr pointer, usize bytes); }` in
-     `std::collections`. The container stores `A alloc` by value and routes every buffer through it; a
-     stateful allocator is a small handle pointing into a **caller-owned `Arena`** that must outlive the
-     container (documented, not borrow-checked — a raw `Ptr` isn't escape-checked). A stateful allocator
-     arrives via a named static factory `DynamicArray::withAllocator(allocator:)` (no ctor overloading in
-     Kama; the factory assigns `alloc` post-construction). Dispatch is a **direct monomorphized call**
-     (`BumpAllocator__allocate(&self->alloc, bytes)`), zero-cost. **Panic-on-OOM.**
-     - **M10a shipped:** `Allocator` contract + `GlobalAllocator` (zero-size malloc/free) + `Arena` +
-       `BumpAllocator` (`lib/std/collections/allocator.kama`); retrofit of `DynamicArray<T, A>` and
-       `Map<K,V,H,A>` / `Set<K,H,A>` (the two-trailing-default + named-override case). Fixtures
-       `allocator_arena` (one arena backing a DynamicArray + a Map, ASan-clean) and `allocator_default`.
-       Also fixed a latent M8 bug it exposed: a defaulted-type-param generic returned by a free function
-       cached an unfilled monomorph name in its `retCType` (params/defaults/ctx are now recorded in the
-       type pre-registration pass, ahead of `collectSignatures`).
-     - **M10b shipped:** threaded `A` through the rest of the direct-heap containers — `Deque<T,A>`,
-       `FixedArray<T,A>` (eager ctor → `withAllocator(allocator:, size:)` + private `allocBuffer` helper +
-       `memset`), `BitSet<A>` (its FIRST type param — a plain `BitSet` is now the all-defaulted instance),
-       `SlotMap<V,A>`, and `PriorityQueue<T,A>` (owns no buffer; threads `A` to its embedded
-       `DynamicArray<T,A>`, with `withAllocator(allocator:, maxOrder:)`). Fixtures `alloc_{deque,fixedarray,
-       bitset,slotmap,pq}_arena` + `alloc_collections_default`, triple-green 533/533/533. Needed two emitter
-       fixes (both exercised for the first time by BitSet + the two-param PriorityQueue field):
-       (a) a BARE all-defaulted generic (`BitSet` ≡ `BitSet<GlobalAllocator>`) now resolves everywhere — cType/
-       mangleElem/scanType/registerGenericTypeInst fill from defaults on empty args, the local-decl guard
-       allows it, and the bounds check is null-args-safe; (b) `exprClass` resolves a field's type under its
-       OWNER instance's type args (`cTypeInInstance`), not the ambient `_typeSubst` — which inside an enum-
-       variant/arg emission (`Optional::Some(copy this.data[0])`) bound only `Optional<T>`'s `T`, leaving a
-       nested `DynamicArray<T,A>`'s `A` unbound. Also made `PriorityQueue::minHeap`/`maxHeap` return the
-       enclosing `A` (a private-field write from the wrong instance otherwise).
-     - **M11a — allocator-aware `new` / `Owned<T, A>`. ✅ DONE** (triple-green native/SAN/WASM 539/539/539).
-       A placement form `new(allocator: a) T(args)` draws the heap block from `a` and yields `Owned<T, A>`
-       (the box stores the handle; its dtor releases through the same allocator). Bare `new T(args)` /
-       `Owned<T>` are unchanged (`A` defaults to `GlobalAllocator`). Foundational relocation: the `Allocator`
-       contract + `GlobalAllocator` moved from `std::collections` to the **global prelude** (so both the
-       smart pointers and the collections name them, and they survive `--no-std`); `Arena`/`BumpAllocator`
-       stay in `std::collections`. Grammar: one conflict-free production `NEW LPAREN argument_list RPAREN type
-       LPAREN args RPAREN` (a `type` never starts with `(`). Scope guards: a placement into `Shared`/`Weak`/
-       `Owned<Interface>` is rejected (they keep the default allocator, gain a channel in M11c), and a **bare**
-       `new` into a *stateful*-allocator box is rejected (it would leak). Three latent emitter bugs surfaced +
-       fixed: (a) `preludeStatic` (non-generic prelude type) method *prototypes* were emitted after the
-       generic-container monomorphs that call them — now emitted early (a `GlobalAllocator` used as a
-       collection type-arg exposed it); (b) `exprClass` on a `MemberAccess` auto-deref'd a smart-pointer /
-       `Deref<T>` receiver even for the wrapper's OWN field (`this.alloc` inside `~Owned`) — now only
-       auto-derefs when the member isn't a field of the wrapper; (c) the local-decl and hoisted-`new`
-       (`tryHoistInlineNew`, arg/return/payload positions) paths both thread the allocator (the hoisted one
-       would otherwise silently drop it). Fixtures `owned_arena` (local), `owned_arena_hoist` (arg + return) +
-       xfails `new_alloc_shared`/`new_alloc_iface`/`new_bare_stateful`.
-     - **M11b — `SortedMap<K, V, A>` / `SortedSet<K, A>` retrofit. ✅ DONE** (triple-green native/SAN/WASM
-       541/541/541). Threaded `A` through the B-tree: `BTreeNode<K, V, A>` gains an `A alloc` field, its inner
-       arrays become `DynamicArray<K/V, A>` + `DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> kids`, and the two
-       *interior* node-creation sites (`splitChild`, `growRootInPlace`) placement-`new(allocator: this.alloc)
-       BTreeNode<K,V,A>(…)` → interior boxes live in the arena, so `reset()` reclaims the whole tree.
-       **Design call (the one non-mechanical part):** SortedMap is the first collection whose bare ctor *eagerly*
-       heap-allocates (the always-live root), so the M10 "bare-ctor-then-post-assign-allocator" idiom breaks — a
-       bare `new` into a stateful-`A` root box is rejected (M11a D2 guard) and a placement root would need the
-       not-yet-assigned handle (`withAllocator` runs the bare ctor first). Resolution: the **root box stays
-       `GlobalAllocator`** (`Owned<BTreeNode<K,V,A>>`, box `A` defaults Global — a bare `new` into a stateless box
-       is legal for any pointee `A`, and its lazy inner arrays never touch the zero-init handle); `withAllocator`
-       rebuilds the root so its arrays bind the real allocator. One box per tree outside the arena, freed by RAII —
-       a documented wart, consistent with the campaign's "clean mirror now" pattern. Deserialize stays
-       `GlobalAllocator`-only (no handle on the wire). **No emitter fix needed** — the M10b `exprClass`/
-       `cTypeInInstance` field-type-under-owner-instance hardening already covered the deepest A-nesting in the
-       codebase (`DynamicArray<Owned<BTreeNode<K,V,A>, A>, A>`, a self-referential triply-nested registration).
-       Fixtures `alloc_sorted_map_arena` (arena-backed map + set, splits/merges/root-growth, ASan-clean) +
-       `alloc_sorted_map_default`.
-     - **M11c — concrete `Shared<T, A>` + `Weak<T, A>`. ✅ DONE** (triple-green native/SAN/WASM 545/545/545).
-       Both the pointee AND the shared control block are drawn from `A`: a placement `new(allocator: a) T(...)`
-       yields `Shared<T, A>` whose `~dtor` releases both through the stored handle (`arena.reset()` reclaims the
-       whole ref-counted graph). **Design call: every handle carries its own `A alloc` value copy** (not a
-       type-erased ctrl-block deallocator) — `A` is monomorphized identically across the `Shared`/`Weak`/
-       `Optional<Shared>` family and copied through `copy()`/`downgrade()`/`tryUpgrade()`, so whichever handle
-       observes `strong == 0 && weak == 0` (even a `Weak` that outlived its `Shared`) frees the ctrl through an
-       `A` equal to the one that made it; a stateful `BumpAllocator`'s `deallocate` is a no-op, so it is
-       irrelevant *which* handle frees. Construction returns a fresh **ctor rvalue** (a bare `return <local>`
-       of a copy-only handle re-fires `copy()` → recursion); `adopt` (the bare-`new` path, needs no explicit
-       allocator) instead field-pokes + **`give`s** the handle out, sidestepping the default-allocator value.
-       **Two latent bugs surfaced + fixed:** (1) `mangleElem` never filled default type params (only `cType`
-       did) — dormant until `Shared` (the first *defaulted* generic) was nested in `Optional<Shared<…>>` via
-       `tryUpgrade`, where the `Optional` instance name diverged from its filled body → two incompatible C
-       structs; now `mangleElem` routes generic instances through `genericTypeMangle`. (2) the intrinsic
-       interface-`Weak` partner was named from only its element (`Weak_Shape`), diverging from the now-filled
-       `Weak<Shape>` refs (`Weak_Shape_GlobalAllocator`). Also a clean **allocator-type-mismatch diagnostic**
-       (a box `Shared<T>` with a `new(allocator: BumpAllocator)` handle — no inference axis; spell the box's
-       `A`). Fixtures `shared_arena`, `weak_arena` (Weak-outlives-Shared), `shared_arena_hoist` (arg/return),
-       `shared_arena_cycle` (refcount cycle). Also corrected the stale `!Movable` prelude comments (`Shared`/
-       `Weak` are movable — `give` moves the handle — per TYPE_MODEL/KEYWORDS).
-     - **M11d — `Owned/Shared/Weak<Interface, A>` (stateful-A through the intrinsic iface path). ✅ DONE**
-       (triple-green native/SAN/WASM 551/538/538). Completes the campaign — every box, concrete *and*
-       contract-erased, now honors a stateful allocator. The interface-element handle is type-erased intrinsic
-       C (`{obj, vtbl[, ctrl]}`, runtime `kama_ctrl`, `KAMA_*_IFACE_FUNCS` — hardcoded `kama_free`).
-       **Design call: mirror M11c rather than the original "type-erased dealloc fn-ptr in `kama_ctrl`" plan** —
-       `kama_ctrl` stays byte-identical; instead the fat handle grows a by-value `A alloc` + pointee `objsize`
-       (new `KAMA_*_IFACE_ALLOC_{TYPE,FUNCS}` macros), drawing the pointee + ctrl from `A` and freeing both
-       through it. This is consistent with the shipped concrete path, needs no shared-ABI change, and the
-       per-`(element, allocator)` monomorph naming M11c added already gives the distinct struct for free. Only a
-       *stateful* box (`allocType != GlobalAllocator`) selects the `_ALLOC_` macros → default-`GlobalAllocator`
-       interface boxes stay **byte-identical** (verified). The handle's by-value `A` field means its TYPE is laid
-       out in `unifiedStructOrder` (after the allocator struct, like `Fixed<T,N>`) and its FUNCS after class
-       prototypes (so `A__deallocate` is declared) — two new deferred-emission passes. `alloc`+`objsize` are
-       carried across the cross-struct transitions (Shared→Weak reseat, `downgrade`, concrete→iface upcast,
-       `__upgrade`). The **optimal** store-once design (allocator in a monomorphized/erased ctrl, thin handles —
-       Rust `Arc<T,A>`) is noted below as a deferred optimization (it can't unify `Owned`, which has no ctrl, and
-       would reopen shipped M11c). Fixtures `owned_arena_iface`, `shared_arena_iface`, `weak_arena_iface`
-       (Weak-outlives-Shared), `upcast_shared_arena_iface`, `new_arg_shared_arena_iface` (hoisted new-site) +
-       xfails `new_alloc_iface` (allocator-type mismatch) and `graph_alloc_iface` (the graph-edge reject below).
-     - **Zero-size-field elision — deferred optimization.** M11a carries a `GlobalAllocator alloc` field on the
-       default `Owned<T>` (mirroring the M10 collections), which pads the handle (the runtime call inlines to a
-       bare `free`, but the field is real). A general "drop any empty-struct field + synthesize a throwaway
-       receiver for method calls on it" pass would reclaim it on `Owned` *and* every collection at once — its
-       own tested change (touch-sites: struct decl, field read/assign, copy, serialize).
-     - **Store-once allocator / thin smart-ptr handles — deferred optimization (Rust `Arc<T,A>` model).** The
-       whole M11 family carries `A` **per handle** (a small copyable value handle over externally-owned arena
-       state — copying it duplicates pointers, not real allocator state). The memory-optimal alternative stores
-       the allocator **once** in a monomorphized control block and keeps handles thin (pointers), so `copy()`
-       just bumps a count. Not taken because (a) `Owned` has no control block, so it can't unify; (b) it would
-       reopen the shipped concrete M11c path for consistency; (c) the savings are small precisely *because* the
-       allocator handle is already lightweight — and the common default-`GlobalAllocator` handle fatness is
-       already covered by zero-size-field elision above. Revisit as a whole-family refactor gated on profiling,
-       bundled with that elision pass.
-     - **Fallible allocation — deferred with the embedded milestone.** `allocate -> Optional<Ptr>` (vs
-       today's panic-on-OOM) is what a no-heap embedded target needs; it colors the mutating APIs with
-       failure propagation. It rides this same `Allocator` seam non-breakingly. Fallible + M11 are the two
-       remaining gates for a true no-heap embedded build.
+- **Container / data-structure reach.** The core containers ship — `DynamicArray`/`FixedArray`/`InlineArray`/
+  `string`, `Map`/`Set`, `Deque`, `PriorityQueue`, `SlotMap`, `BitSet`, `SortedMap`/`SortedSet`, and the
+  `View<T>` slice/span (see [SPEC.md](SPEC.md) *Collections & strings*). Honest caveat on what is **not**
+  planned as stdlib: general **linked lists** are mostly a cache anti-pattern in data-oriented engines (the
+  useful form is an intrusive free-list / LRU); raw **BSTs** are subsumed by the sorted map; **spatial trees**
+  (quadtree/octree/BVH/k-d) are engine-specific.
+- **Collections revisit — remaining knobs & optimizations.** The parametric knobs themselves ship —
+  preallocation (`reserve`/`withCapacity`), a pluggable `Hasher`, and a custom `Allocator` type parameter on
+  every container and box, all defaulted so the plain API is unchanged (see [SPEC.md](SPEC.md) *Collections &
+  strings* / *Custom allocators* / *Allocator-aware new*). What remains is a security follow-on plus memory
+  optimizations:
+  - **HashDoS-resistant keyed hashing (deferred).** `DefaultHasher` is deterministic/*unseeded* — a strong
+    avalanche and the right default for trusted keys (Java `HashMap` / C++ `unordered_map` posture), but NOT
+    resistant to attacker-chosen keys. A seed at the `finish` stage can't fix this: it would defend integer
+    keys but leave string keys (unseeded FNV-1a content hash) fully exposed — two strings colliding under FNV
+    collide in every map regardless of the seed. Real resistance needs a **seeded, keyed hash over the key
+    bytes** (SipHash-class): the seed must enter the per-byte content accumulation, i.e. a keyed-hash protocol
+    + OS entropy + per-map seed storage. It **rides the pluggable `Hasher` seam non-breakingly** (no existing
+    `Map<K,V>` changes), so it's a clean future milestone — do NOT ship a finish-stage `SeededHasher`
+    (misleading safety for the case that matters).
+  - **Zero-size-field elision — deferred optimization.** The default `Owned<T>` carries a `GlobalAllocator
+    alloc` field (mirroring the collections), which pads the handle (the runtime call inlines to a bare
+    `free`, but the field is real). A general "drop any empty-struct field + synthesize a throwaway receiver
+    for method calls on it" pass would reclaim it on `Owned` *and* every collection at once — its own tested
+    change (touch-sites: struct decl, field read/assign, copy, serialize).
+  - **Store-once allocator / thin smart-ptr handles — deferred optimization (Rust `Arc<T,A>` model).** The
+    whole smart-pointer family carries `A` **per handle** (a small copyable value handle over externally-owned
+    arena state — copying it duplicates pointers, not real allocator state). The memory-optimal alternative
+    stores the allocator **once** in a monomorphized control block and keeps handles thin (pointers), so
+    `copy()` just bumps a count. Not taken because (a) `Owned` has no control block, so it can't unify; (b) it
+    would reopen the shipped concrete smart-pointer path for consistency; (c) the savings are small precisely
+    *because* the allocator handle is already lightweight — and the common default-`GlobalAllocator` handle
+    fatness is already covered by zero-size-field elision above. Revisit as a whole-family refactor gated on
+    profiling, bundled with that elision pass.
+  - **Fallible allocation — deferred with the embedded milestone.** `allocate -> Optional<Ptr>` (vs today's
+    panic-on-OOM) is what a no-heap embedded target needs; it colors the mutating APIs with failure
+    propagation. It rides the same `Allocator` seam non-breakingly, and is one of the two remaining gates
+    (with globals/statics) for a true no-heap embedded build.
 - **Browser networking transports** — native TCP ships (`std::net`); the browser has no raw sockets, so the
   wasm path needs **WebRTC DataChannels** (unreliable) / **WebSockets** (reliable) via a host FFI shim (a
   real wasm nuance). Native UDP/DNS and the rest of the stdlib reach are the §1 follow-ups.
@@ -541,13 +372,12 @@ serialization for scenes). See [ENGINE_READINESS.md](ENGINE_READINESS.md).
 - **Dev-loop hot-reload — a *library* on two small compiler primitives.** Live-reload of gameplay code
   (edit → rebuild → swap without restarting) splits cleanly by layer, and *most of it is not the
   compiler's job* — which answers "language or engine feature?": mostly library, on a thin compiler base.
-  - **Compiler (small — DONE; see [SPEC.md](SPEC.md)):** a `kama build --shared` mode emitting a
-    `.so`/`.dylib`/`.dll` (`-fPIC -shared -fvisibility=hidden`; `KAMA_EXPORT` decorates each `expose`d
-    symbol — `dllexport` on Windows), and the **`expose`** keyword giving reload entry points **C-ABI
-    linkage**. That is the
-    *same* kama→host boundary the **wasm exports** and the **scripting host** (§7) also use — so hot-reload
-    added **no new language surface**, it consumed planned surface. One boundary, three consumers. *(A
-    Windows copy-before-load, so the on-disk `.dll` can be rebuilt while loaded, is a library concern.)*
+  - **Compiler primitives (already ship — see [SPEC.md](SPEC.md) *Exposing to a host*):** the `kama build
+    --shared` `.so`/`.dylib`/`.dll` mode and the `expose` keyword's C-ABI linkage are the *same* kama→host
+    boundary the **wasm exports** and the **scripting host** (§7) use — so hot-reload needs **no new language
+    surface**, it consumes planned surface. One boundary, three consumers. So the remaining hot-reload work is
+    all library/engine: *(a Windows copy-before-load, so the on-disk `.dll` can be rebuilt while loaded, is a
+    library concern.)*
   - **Library:** the `dlopen`/`dlsym`/`dlclose` + file-watch + function-pointer rebind loop — pure FFI over
     `unsafe`/`Ptr`, **zero compiler changes**. This is the bulk of the feature and it lives in a module.
   - **Engine:** the *data-in-host, code-in-module* architecture (world state lives in the platform-layer
