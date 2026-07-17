@@ -774,6 +774,8 @@ public:
     SharedBlock body;
     bool isConst = false;   // `const fn …` — a non-mutating method
     bool isRef = false;     // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller
+    bool isCtor = false;    // `ctor name(…)` — a named constructor (static factory returning the enclosing
+                            // type / `Result<This,E>`); reuses the method pipeline. returnType null => infallible.
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     SharedIdentifierList whenParams;
     SharedIdentifierList whenBounds;

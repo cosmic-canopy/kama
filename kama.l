@@ -282,6 +282,7 @@ static struct name_value keywords [] = {
     {"const",       CONST},
     {"continue",    CONTINUE},
     {"copy",        COPY},
+    {"ctor",        CTOR},
     {"do",          DO},
     {"double",      DOUBLE},
     {"else",        ELSE},

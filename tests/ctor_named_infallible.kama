@@ -1,0 +1,16 @@
+// Construction-model M2: a NAMED infallible constructor `ctor name(…)` — sugar for a static factory
+// returning the enclosing type. Bodies `return` a value (constructing via the legacy ctor, which coexists
+// during migration) or chain to another named ctor. Called via `::` (the M2 bridge; M4 adds `Point.make`).
+type value Point {
+    public int32 x;
+    public int32 y;
+    public Point(int32 x, int32 y) { this.x = x; this.y = y; }        // legacy class-named ctor (coexists)
+    public ctor make(int32 x, int32 y) { return Point(x: x, y: y); }  // named factory
+    public ctor origin() { return Point::make(x: 0, y: 0); }          // chains to another named ctor
+    public fn int32 sum() { return this.x + this.y; }
+}
+fn int32 main() {
+    Point p = Point::make(x: 3, y: 4);
+    Point o = Point::origin();
+    return p.sum() + o.sum() + 35;   // 7 + 0 + 35 = 42
+}

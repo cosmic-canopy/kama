@@ -81,6 +81,8 @@ struct MethodInfo {
     Visibility                   visibility = Visibility::Private;
     bool                         isFinal = false;     // `final fn` — seals a virtual slot
     bool                         isStatic = false;    // `static fn` — no implicit `self`; called `Type::m(...)`
+    bool                         isCtor = false;      // a named constructor (`ctor name(…)`) — a static factory
+                                                      // returning the enclosing type (or `Result<This,E>`)
     bool                         isRetro = false;     // injected by a retroactive `implements C for T` block —
                                                       // emitted static-inline in the header, skipped by the
                                                       // per-class proto/body loops (avoids a dup for a user target)

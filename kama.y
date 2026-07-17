@@ -125,7 +125,7 @@ struct kamayystype {
 
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BREAK
-%token <string> CASE CAST CONST CONTINUE
+%token <string> CASE CAST CONST CONTINUE CTOR
 %token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH IF IN
@@ -1199,6 +1199,13 @@ overloadable_operator
   ;
 constructor_declaration
   : modifiers_opt constructor_declarator constructor_body   { $$ = std::make_shared<ClassConstructorDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
+    /* Construction-model: a NAMED constructor — sugar for a static factory returning the enclosing type
+       (infallible, no return type written) or `Result<This,E>` (fallible, leading type like `fn`). Lowered
+       through the static-method pipeline; the emitter fills the infallible return type = the enclosing type. */
+  | modifiers_opt CTOR method_name LPAREN parameter_list_opt RPAREN method_body
+    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, SharedIdentifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $7); m->isCtor = true; $$ = m; }
+  | modifiers_opt CTOR type method_name LPAREN parameter_list_opt RPAREN method_body
+    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); m->isCtor = true; $$ = m; }
   ;
 constructor_declarator
   : IDENTIFIER LPAREN parameter_list_opt RPAREN constructor_initializer_opt   { $$ = std::make_shared<ClassConstructorDeclaratorNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, $5); }

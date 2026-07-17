@@ -1,0 +1,11 @@
+// Construction-model M2: a fallible `ctor` must return `Result<T,E>` (carries *why*), never `Optional`.
+// A ctor returns its own type (infallible) or Result (fallible) — nothing else.
+type value Percent {
+    public int32 v;
+    public Percent(int32 v) { this.v = v; }
+    public ctor Optional<Percent> of(int32 v) {   // ERROR: fallible construction must be Result, not Optional
+        if (v < 0) { return Optional::None; }
+        return Optional::Some(value: Percent(v: v));
+    }
+}
+fn int32 main() { return 0; }

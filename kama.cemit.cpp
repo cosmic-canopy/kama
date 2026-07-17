@@ -2921,6 +2921,27 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (*mod->value == "volatile")
                                     unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", md->line);
                             }
+                        // Construction-model: a named constructor (`ctor name(…)`) is a static factory
+                        // returning the enclosing type (infallible — no return type written) or `Result<This,E>`
+                        // (fallible). Reuses the static-method pipeline; the ctors map records it for the
+                        // dot-on-type dispatch / completeness / enforcement of later milestones.
+                        if (md->isCtor) {
+                            mi.isStatic = true;
+                            mi.isCtor   = true;
+                            // Guarantee #1 (return-type correctness): an INFALLIBLE ctor omits the return type
+                            // (`ctor make(…)`) — it returns the enclosing type; a FALLIBLE ctor writes exactly
+                            // `Result<This, E>` (never `Optional`, never a bare type — a failure carries *why*).
+                            bool fallible = (bool)mi.returnType;   // a written return type => fallible
+                            if (fallible) {
+                                const std::string rt = (mi.returnType->value) ? *mi.returnType->value : "";
+                                if (rt != "Result")
+                                    unsupported(("a `ctor` with a return type must be `Result<…, E>` (fallible) — "
+                                                 "omit it for an infallible ctor; got `" + rt + "`").c_str(), md->line);
+                            } else {
+                                mi.returnType = cd->name;          // infallible => the enclosing type
+                            }
+                            ci.ctors[*md->name->value] = CtorInfo{ nullptr, mi.params, mi.visibility, fallible, mi.returnType };
+                        }
                         // a `static` method has no `this`: no vtable slot, must have a body.
                         if (mi.isStatic) {
                             if (mi.isVirtual)
