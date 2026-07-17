@@ -2960,6 +2960,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     ci.ctorNode  = cc;
                     ci.ctorVisibility = visibilityOf(cc->modifiers, Visibility::Private, cc->line);
                     if (cc->declarator) ci.ctorParams = paramSigsOf(cc->declarator->params);
+                    // Construction-model: also record it in the named-ctor map, keyed by the class name
+                    // (today's class-named ctor). Legacy fields above stay the source for existing readers.
+                    ci.ctors[ci.name] = CtorInfo{ cc, ci.ctorParams, ci.ctorVisibility };
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
                     // `~dtor` ⟺ `resource`. A `value` owns nothing, so a destructor makes it
                     // a resource; that disagreement is the lesson in the message. A `view` borrows and

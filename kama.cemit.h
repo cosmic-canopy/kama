@@ -130,6 +130,19 @@ struct RawFriendGrant {
     int                    line = 0;
 };
 
+// A constructor of a type. Today there is exactly one per type — the *class-named* ctor, keyed in the
+// `ClassInfo::ctors` map by the class name. The construction-model campaign (M2+) adds *named* ctors keyed
+// by their own name and the dot-on-type call form. `isFallible`/`returnType` are populated in M2 (a `-> T`
+// vs `-> Result<T,E>` return); in M1 the map is populated alongside the legacy single-ctor fields and read
+// only via the accessors below (readers migrate to it in later milestones).
+struct CtorInfo {
+    ClassConstructorDeclarationNode* node = nullptr;
+    std::vector<ParamSig>            params;
+    Visibility                       visibility = Visibility::Private;
+    bool                             isFallible = false;   // returns Result<T,E> (M2)
+    SharedIdentifier                 returnType;           // explicit `-> …` (M2); null => infallible `T`
+};
+
 struct ClassInfo {
     std::string                       name;       // struct name (== kama class name)
     TypeKind                          kind = TypeKind::Intrinsic;   // set to value/resource for user types
@@ -155,6 +168,13 @@ struct ClassInfo {
                                                               // the header (the prelude is otherwise collect-only)
     std::vector<ParamSig>             ctorParams;
     ClassConstructorDeclarationNode*  ctorNode = nullptr;
+    // Named-ctor map (construction-model campaign). Today it holds the single class-named ctor (keyed by
+    // `name`); M2+ adds named ctors. Populated alongside the legacy fields above; read via the accessors.
+    std::map<std::string, CtorInfo>   ctors;
+    CtorInfo*       ctorByName(const std::string& n)       { auto it = ctors.find(n); return it == ctors.end() ? nullptr : &it->second; }
+    const CtorInfo* ctorByName(const std::string& n) const { auto it = ctors.find(n); return it == ctors.end() ? nullptr : &it->second; }
+    CtorInfo*       primaryCtor()       { return ctorByName(name); }   // the class-named ctor (today's only ctor)
+    const CtorInfo* primaryCtor() const { return ctorByName(name); }
     ClassDeclarationNode*             node    = nullptr;
 
     // RAII

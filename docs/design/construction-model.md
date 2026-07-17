@@ -1,186 +1,149 @@
-# Construction Model — DESIGN DRAFT (not final)
+# Construction Model — DESIGN OF RECORD
 
-> **Status: DRAFT.** This is a pre-1.0 language-shape proposal under active design. It is **not**
-> implemented and its decisions must **not** leak into `SPEC.md` / `ROADMAP.md` / `KEYWORDS.md` / code
-> comments until this document is finalized. Origin: the 2026-07-16 design session (a move-tracker
-> "bug" surfaced the whole question — see [[kama-construction-model]] memory and the session plan
-> `~/.claude/plans/let-s-do-an-audit-fluffy-sketch.md`). Sequenced **after** the Items 1–6 hardening
-> pass.
+> **Status: FINAL design (converged 2026-07-17).** This is the agreed model for Kama's construction
+> campaign. It supersedes the earlier DRAFT explored in the 2026-07-16/17 sessions. Implementation is
+> sequenced as milestones M1–M8 (plan: `~/.claude/plans/let-s-start-the-construction-glistening-bentley.md`).
+> As each feature ships, `SPEC.md` / `GOALS.md` §3d / `KEYWORDS.md` / `grammar.bnf` are updated to match.
+> The "Explored and dropped" section at the end records ideas we deliberately rejected — do not resurrect
+> them without revisiting that reasoning.
 
 ## 1. Motivation
 
-Kama has two fixed hard stances: **no exceptions** and **no undefined behavior**. Consequence:
-**construction is the one place a caller cannot react to failure** — a plain constructor can only
-succeed or `panic` (fail-fast). Today a caller can handle a *fallible* construction only if the author
-was wise enough to provide a named factory returning `Result` — i.e. it relies on **convention, not
-enforcement**. Separately, the constructor is the only traditional single-name function (operators are
-the sanctioned multi-dispatch exception), which creates overloading pressure.
+Kama has two fixed stances: **no exceptions** and **no undefined behavior**. A consequence is that
+**construction is the one place a caller cannot react to failure** unless the author provides a named
+`static fn` factory returning `Result` — today that relies on **convention, not enforcement** (GOALS §3d).
 
-## 2. Enforceable goal (stated honestly — no over-promise)
+This campaign **codifies and enforces best practices around object construction**. It makes construction
+uniform (one kind of thing — the named constructor), makes failure a first-class value, and — the crux —
+makes **"a returned object is always fully initialized, never null"** a **compile-time-enforced** guarantee.
 
-- **NOT claimed** (unachievable): "a caller can always react to construction failure." Whether
-  construction *can* fail is invariant-knowledge that lives in the type; no language rule can hand a
-  caller a fallible path the author didn't model.
-- **IS the goal** (enforceable): no implicit/public raw constructor; all public construction is
-  **explicit + named** with a declared return type; a single **isolated shared initializer** runs on
-  **every** construction path; the type's invariant **cannot be bypassed**. This removes the implicit
-  panicking default, makes construction uniform/one-way, and **dissolves constructor overloading**
-  (named ctors disambiguate — consistent with the existing named-params-over-overloading non-goal).
+## 2. The model
 
-## 3. Prior art (verified)
+**A constructor is a named factory function that returns a fully-initialized object, or an error.** There
+is exactly one kind of constructor; *everything*, including deserialization, is one.
 
-- **Rust** has no constructors — struct literals + associated fns by convention. Its only enforcement
-  is **field privacy gates the struct literal**: a private field ⇒ outsiders must use the author's
-  associated fns. It does *not* bless/enforce the named-construction seam, its name, or fallibility —
-  those stay convention. Kama goes one step further: **bless the seam with real syntax + enforcement.**
-- **Swift** designated vs convenience initializers — the model kama adopts for DRY (§7).
+- **Named, factory-shaped.** Called `Type.name(...)` (dot-on-type). Returns **`T`** (infallible) or
+  **`Result<T, E>`** (fallible). A constructor is *not* the object — a fallible one returns `Err` and **no
+  object**, so no half-built / null-bearing value can escape. Fallible vs infallible is the author's declared
+  choice, encoded in the return type. Keyword: **`ctor`** (no `fn`, no `static` — implicitly type-associated).
+- **Call-site greppability (hard requirement).** Construction reads distinctly from a static call:
+  `Type.name(...)` is construction (dot-on-type), `Type::staticFn()` is a static fn, `Enum::Variant(...)`
+  is an enum variant (both keep `::`). There is **no** nameless `Type(...)` call shape.
+- **`decode` is just a constructor.** It receives a `Deserializer` and returns **`Result<This, E>`** — the
+  *same shape as every fallible ctor*, **not** a hardcoded `DeError`. Because `decode` can **chain** to
+  another ctor, the error may come from the ctor at the end of the chain, so `E` is a general error bounded
+  by **one base `Error`** (`DeError` is a specialization you derive for deserialize-specific behavior).
+  Synthesized by default (enumerate the serialized fields via the `Deserializer` — the proven per-field read,
+  yielding `DeError`); overridable to call the exposed **default-field-read primitive** + add logic, chain to
+  another ctor, or hand-roll a version-aware decode (whose `E` may then be any `Error`).
+- **DRY = visible chaining.** A ctor reuses another by **calling it** (`return Color.fromHsv(...)`). Shared
+  construction logic lives in the ctor others chain to (a private "base" ctor, by convention). `decode`
+  reuses the same way — it chains to that base ctor (after reading fields), so shared logic reaches the
+  deserialize path with **no separate hook**. There is **no `init`, no `final`, no `designated`, and no
+  mandatory funnel** — reuse is an ordinary, greppable call.
+- **`of` / `zero` are opt-in, bag-only conveniences.** A transparent `value` (all fields public) may opt in
+  to a synthesized memberwise `of(...)` and/or a zero-init `zero()`. These are sugar for data bags — **not**
+  a general designated/memberwise (a memberwise seam breaks on complex types, which is exactly why `decode`
+  enumerates fields). Complex types construct through named ctors that set fields directly. A single private
+  field removes `of` eligibility.
 
-## 4. Construction taxonomy — "it's all Named Construction"
+## 3. The two enforced guarantees (the point of the campaign)
 
-Every object comes from exactly one named constructor; the kinds differ only by input + keyword:
+1. **Correct return type.** Infallible ctor → `T`; fallible ctor → `Result<T, E>` (never `Optional` — a
+   failure carries *why*), where `E` satisfies one **base `Error`** (concrete errors like `DeError`/`IoError`
+   derive it, so a chained ctor's error propagates). `decode` returns `Result<This, E>` too.
+2. **Complete initialization — compile-time.** Every member is assigned (to zero or a value) and every
+   pointer is non-null **before the object is returned**. This is **definite-assignment analysis** over all
+   members (the generalization of today's `checkCtorNeverNull`, which already proves owning pointers get
+   set), checked at **compile time** for infallible ctors. It is **delegation-aware**: a ctor whose
+   terminating move is `return OtherCtor(...)` is *complete by delegation* — the callee guarantees full init,
+   so the caller isn't required to assign fields itself. This is what makes chaining clean without any
+   "final" concept. Trivial pass-through (`this.p = p`) is provably complete. A fallible ctor returns `Err`
+   before the object exists, so there is nothing more to check at runtime.
 
-| Kind | Input | Author writes? | Returns | Call site |
-|---|---|---|---|---|
-| **memberwise** | field values | compiler-synth (**transparent `value` only**) | `T` | `Vec2(x:, y:)` |
-| **`ctor`** (semantic) | semantic args | yes | `T` or `Result<T,E>` | `Color.rgb(...)` |
-| **`decode`** (deserialize) | `Deserializer` | compiler-synth; author may override | `Result<T, DeError>` | decode/graph path |
+## 4. Nothing is constructible by default
 
-- **`ctor` and `decode` are implicitly static** — no `static` keyword. Construction is a blessed
-  type-associated operation. `public ctor rgb(...) -> Result<Color, E>` (no `fn`, no `static`).
-- **Transparency earns a free ride.** A transparent `value` (all public fields, no invariant) gets a
-  **compiler-synthesized memberwise ctor**, spelled `Vec2(x:, y:)` — safe *because* transparency means
-  there is no invariant to bypass (same logic as Rust "public fields ⇒ open literal"). A `resource` /
-  private-field / invariant-bearing type gets **no** implicit ctor and writes explicit `ctor`(s).
-- **Value types may also add named ctors** (`Rect.square(side:)`, `Circle.unit()`); memberwise + named
-  **coexist**. To *suppress* the memberwise (force construction through named ctors), make a field
-  **private** → the type is no longer transparent → no memberwise synthesized.
+There is **no implicit default/zero constructor for any type — including `value` types.** A type with no
+ctor and no `of`/`zero` opt-in is unconstructable, and *using* it is a compile error. The diagnostic is
+**context-aware** (accurate, never dangles an unavailable option):
 
-## 5. Call-site greppability (HARD REQUIREMENT)
+- **always**: "type `X` has no constructor — define one (`ctor make(...) { … }`)";
+- **only when `X` is a transparent value (all fields public)**: append "…or opt into `of` / `zero`";
+- a value with a private field gets an optional one-line hint ("`of`/`zero` are available for value types
+  whose fields are all public");
+- a `resource` gets no `of`/`zero` mention.
 
-Construction must read distinctly from a plain static-method call at the call site. Marker: **dot-on-a-
-type** (unused today) for construction vs `::` for a static fn:
+The diagnostic is the teachable moment — the moment a designer meets the construction model. (This also
+removes today's vtable-only synthesized default ctor: a polymorphic type must declare a ctor.)
 
-```
-Color.rgb(r: 0.5, g: 0.2, b: 0.1)   // CONSTRUCTION (a ctor)
-Color::palette()                    // a regular static fn
-Vec2(x: 1.0, y: 2.0)                // memberwise ctor (transparent value)
-```
+## 5. `new` composes with construction
 
-OPEN: confirm dot-on-type vs a call-site keyword; wire `Type.name(...)` into the parser without
-ambiguity against instance `.` (enum variants and statics use `::`, so `Type.` is free).
+`new` = heap (→ an owning handle). `new Type.make(...)` → `Owned<T>` for an infallible ctor;
+`new File.open(...)` → **`Result<Owned<File>, E>`** for a fallible ctor (`new` boxes `Ok`, propagates
+`Err`). Fallible-`new` is the resource-acquisition idiom and is in scope (sequenced after infallible-`new`).
 
-## 6. Fallibility protocol
+## 6. Full enforcement (after migration)
 
-Two orthogonal axes:
+- The **class-named ctor *declaration*** (`public Rect(w, h) {}`) becomes an error → declare a named
+  `ctor make(...)`. The nameless `Type(...)` call form is gone entirely; all construction is `Type.name(...)`.
+- A `static fn` returning the enclosing type becomes an error → use a `ctor`. (Genuine static utilities that
+  return *other* types — `Vec3::dot` → `float` — stay `static fn`, called with `::`.)
+- A `resource` with owning (`Owned`/`Shared`) fields must construct through a ctor — definite-assignment
+  guarantees the never-null seal (closing a latent hole where a ctorless owning-field resource null-inits the
+  field).
 
-- **Semantic fallibility (`ctor`, opt-in, BINARY):** the only choice is fallible vs non-fallible.
-  Infallible `ctor` → `T`. Fallible `ctor` → **always `Result<T, E>`** (never `Optional` — a fallible
-  construction always carries *why*). The return type is the contract; a declared failure MUST be
-  handled (no exceptions). This is *not* convention-reliance: we killed the implicit panicking default,
-  and the author encodes real failure semantics into the signature.
-- **`decode` is ALWAYS fallible** — the one non-opt-in exception. It crosses the **serialization
-  boundary** (an external, untrusted byte stream that can always be malformed), so it always returns
-  `Result<T, DeError>`. Falls straight out of the `Deserializer` sticky-`failed()` model
-  (`prelude/global.kama:185`). Asymmetry by design: semantic construction *may* be total; deserializing
-  untrusted bytes never is.
-- **Allocation fallibility (OOM) — a whole-program MODE, off by default.** Hosted default = OOM panics
-  (fail-fast, too late to recover). It does NOT color ctor signatures (else every heap-bearing type
-  returns `Result`). The roadmapped **fallible allocation** (`allocate -> Optional<Ptr>`, ROADMAP §5)
-  is the separate opt-in seam for embedded/memory-budgeted builds. Mirrors Rust (`Vec::new` aborts vs
-  `try_reserve`).
+## 7. Carve-outs
 
-## 7. Initialization + DRY
+- **Enum variants stay `::`** (`Optional::Some(...)`).
+- **Contracts require `static fn`, not `ctor`** (a contract has no construction; e.g. `HeapOwner::adopt`).
+- **extern-`value` FFI stays outside this model** (the C-POD aggregate-init path is unchanged).
+- The **Equatable / Hashable / Copyable derive story** is designed alongside `of`/`zero` (one opt-in derive
+  surface) but shipped separately (see §9 and ROADMAP §2). Kama today rejects auto structural `==`
+  (`tests/xfail/operator_eq_missing.kama`), so a derive is a stance change designed with this family.
 
-- **One `init` (all-paths).** Runs after field-setup on **every** kind — memberwise, `ctor`, and
-  `decode`. Carries the "true no matter how I was built" invariant (derived caches, normalization).
-  **Infallible** (invariant setup only; validation-that-can-reject lives in the fallible `ctor` before
-  it). Does **not** run on copy (a copy of a valid instance is already valid). This is the
-  formalization of today's `onConstruction()`.
-- **Natural-only setup** lives in the `ctor` body (or a private shared helper); `decode` doesn't run
-  ctor bodies, so it's automatically bypassed. Rule: **`init` = "true on every path"; `ctor` body =
-  "how this path builds me."**
-- **DRY via designated/convenience (Swift).** One **primary** field-setter (the memberwise for a
-  transparent value; an author-designated `ctor` for an invariant type). **Convenience** ctors compute
-  args and **delegate** to the primary — they never set fields directly. `ctor square(side) => Rect(w:
-  side, h: side)`. Two anti-drift guarantees: field-setup lives in exactly two places (primary `ctor` +
-  `decode`), and the invariant lives in exactly one place (`init`).
-- **Deserialize reconciliation.** `decode` keeps the privileged from-fields path (today: zero-init
-  `(T){0}` + in-place wire field-set, `kama.cemit.cpp:2958`) then runs `init`. Today's enforced
-  `onConstruction()` / `@generate(Deserialize, noOnConstruction)` (`kama.cemit.cpp:2963`) becomes:
-  `onConstruction` ≡ `init`; `noOnConstruction` ≡ "no cross-path invariant." Keep the explicit
-  enforcement: a type where construction can be bypassed (participates in `decode`) MUST declare `init`
-  or explicitly opt out.
+## 8. Base `Error` (companion dependency)
 
-## 8. Locked decisions (2026-07-16)
+Because fallible ctors (incl. `decode`) return `Result<T, E>` and a ctor can **chain** to another, the error
+must compose: there is **one base `Error`** that concrete errors (`DeError`, `IoError`, …) derive, so a
+chained callee's error flows into the caller's `E`. To pin during implementation (M2/M5): how a chained `E2`
+flows into the caller's `E` — identity when equal, upcast to the base `Error`, or an explicit conversion.
+This is a small error-model addition the campaign depends on.
 
-1. Unify on named construction; transparent `value` earns a synthesized memberwise ctor `Vec2(x:, y:)`.
-2. Keyword **`ctor`** (named) + **`decode`** (deserialize); both implicitly static.
-3. Call-site greppability via **dot-on-type** `Color.rgb(...)` vs `Color::palette()`.
-4. Fallibility: `ctor` binary opt-in (`T` or `Result<T,E>`, never `Optional`); `decode` always
-   `Result<T, DeError>`; OOM = panic by default.
-5. One `init` (all-paths, infallible, not on copy); natural-only setup in the `ctor` body.
-6. DRY via designated (primary) + convenience (delegating) ctors.
-7. Value types may add named ctors; suppress memberwise via a private field.
+## 9. Interaction with prior deferrals
 
-## 8b. Interaction with the shadowing ban (hardening Session A, landed)
+- **Shadowing ban / param↔field discipline (from hardening Session A).** The strict "a field-shadowing param
+  may only be read in the RHS of its own field's assignment" rule was deferred here. It is **not** adopted as
+  a separate rule: with all construction in named ctors and complete-initialization enforced, a ctor freely
+  computes field values from its inputs (`this.area = w * h` is fine); the guarantee we enforce is
+  *completeness*, not *how* each field is computed.
+- **Opt-in `Equatable`/`Hashable`/`Copyable` derive (from hardening Phase E).** Folded into this campaign's
+  broader derive surface conceptually (same "opt-in, field-walked" shape as `of`/`zero`), but shipped as its
+  own follow-up, not on this campaign's critical path.
 
-The hardening pass (Session A, 2026-07-16) made **local variable shadowing** a compile error — a local
-may not shadow a parameter, an enclosing-scope local, or an in-scope field. Deliberately scoped to
-**locals only**: a **parameter** sharing a field's name (the `this.x = x` idiom) stays **allowed with no
-usage restriction**. The stricter rule once considered here — "a field-shadowing param may only be read
-inside the RHS of its own field's assignment" — was **deferred into this construction model** (user
-decision), because (a) this model reshapes constructors anyway, so the param/field relationship is about
-to change, and (b) the strict rule would reject legitimate patterns like `this.area = w * h`. When this
-model lands, revisit whether named ctors / the shared initializer need any param↔field discipline beyond
-today's "allowed." A static method/factory has no `this`, so the field case is moot there — consistent
-with §2's "no implicit raw ctor; construct through named seams."
+## 10. Explored and deliberately dropped (do not resurrect without revisiting)
 
-## 8c. Opt-in `Equatable` derive — deferred here from hardening Phase E (user decision, 2026-07-16)
+The design converged through a long dialogue; several richer mechanisms were considered and rejected as
+over-engineering. Recorded here so they are not re-proposed:
 
-Phase E's ergonomic triage surfaced the boilerplate of hand-writing `operator==` on every `value` type
-(`this.x == o.x && this.y == o.y …`, easy to forget a field). Kama today **explicitly rejects** auto
-structural `==` (`tests/xfail/operator_eq_missing.kama`), so adding a derive is a *stance change*, not a
-mere fix — and it overlaps this model's construction/derive surface. **Decision: fold it into this
-campaign's broader derive story**, not ship it in isolation.
+- **A nameless `Type(...)` call shape** and a **`primary` keyword** to bless one ctor as nameless-callable —
+  dropped: it reintroduces overloading-by-parameter-name pressure and a second way to spell construction,
+  against "one way to do a thing." All construction is named `Type.name(...)`.
+- **A pure-field-setter "primary"** (a ctor restricted to `this.f = f`) — dropped: too inflexible (real
+  constructors compute fields, take transient inputs like a file path that isn't stored).
+- **A compiler-synthesized memberwise as the *general* designated ctor** — dropped: a memberwise seam breaks
+  on complex types (this is *why* `decode` enumerates fields). `of` is a bag-only convenience, not a general
+  mechanism.
+- **A separate `init` / `onConstruction` hook** (input-blind, auto-run on every path) — dropped: it doesn't
+  prevent logic scattering ("ceremony for no gain"), and once `decode` is *just a constructor* that can
+  chain, shared logic reaches every path via ordinary chaining without a hidden hook.
+- **A mandatory "final" / "designated" constructor** every path must funnel through — dropped: the
+  completeness guarantee comes from *definite-assignment*, not from a mandatory funnel; delegation-aware
+  completeness makes chaining clean without one.
 
-- **Shape (leaning):** an **opt-in** `@generate(Equatable)` that synthesizes a memberwise `==` (and `!=`),
-  reusing the exact mechanism `@generate(Serialize, Deserialize)` already uses (attribute parse →
-  `ClassInfo` flag → field-walk → emit the body in C; ~80–150 LOC by that precedent). Opt-in keeps it
-  **explicit** (you ask per-type) — no implicit structural equality on every value, so it doesn't violate
-  "explicit over implicit."
-- **Design it alongside the sibling derives**, not alone: `Equatable`, `Hashable`, and `Copyable` share
-  the same "memberwise, opt-in, field-walked" shape and should get ONE consistent derive surface (spelling,
-  field opt-out `@skip`, generic-bound handling `when [T: Equatable]`) rather than three ad-hoc ones. This
-  model already blesses type-associated ops (`ctor`/`decode`); a derive block is the same family.
-- **Scope note:** only for `value` types by default (structural equality of a `resource`/identity type is
-  usually wrong). Interacts with the memberwise-ctor synthesis (§4) — both walk the public field set.
+## 11. Implementation
 
-Tracked as a **minor nicety** in ROADMAP §2 (post-1.0), pointing here as the home for the decision.
-
-## 9. Open questions (resolve before/while implementing)
-
-- **Delegation syntax** — `ctor square(side) => Rect(...)` (expression-delegate) vs an explicit
-  `this.primary(...)` call. Pin one.
-- **Primary designation** — marked (`primary ctor …`) or inferred (the one all others delegate to)?
-  Enforce a single primary?
-- **`new` / heap composition** — how dot-on-type composes with heap boxing (`new Color.rgb(...)` →
-  `Owned<Color>`?); today `new T(...)` boxes.
-- **Grammar** — wire `Type.name(...)` without ambiguity vs instance `.`.
-- **Interactions** — generics (a generic type's ctors/monomorphization); inheritance/derived types
-  (base-primary delegation — Swift two-phase init); contracts (a `ctor` in a contract?); enums/variants
-  (do `Optional::Some(...)` stay `::` or move under construction?); **extern-`value` FFI stays OUTSIDE
-  this model** (separate C-POD path).
-- **Confirm at finalize** — `init` not on copy; `init`/opt-out enforced only where `decode` can bypass.
-
-## 10. Implementation surface (touch-points)
-
-- **Grammar (`kama.y`/`kama.l`):** `ctor` + `decode` keywords; `.`-on-type call form; delegation
-  syntax; `init` block.
-- **Emitter (`kama.cemit.*`):** construction lowering — synthesized memberwise for transparent values;
-  named-ctor dispatch via dot-call; primary/convenience delegation; `init` invocation on every path;
-  the `decode` synth (reuse today's `deserialize` synth `kama.cemit.cpp:2958-2988`); reconcile the
-  `onConstruction`/`noOnConstruction` enforcement (`kama.cemit.cpp:2958-2966`).
-- **Prelude/stdlib migration:** all `static fn T` factories → `ctor`; `Deserializer`/`Deserialize`
-  (`prelude/global.kama:189-245`) → `decode`; every construction call site across `lib/`, `prelude/`,
-  `tests/`, `examples/`.
-- **Not part of this campaign:** fallible allocation (ROADMAP §5, the separate allocation axis).
+Milestones M1–M8 with `file:line` touch-points, fixtures, and per-milestone triple-green (native / SAN /
+WASM) acceptance live in the plan: `~/.claude/plans/let-s-start-the-construction-glistening-bentley.md`.
+Sugar-first coexistence — old and new spellings both compile until M8 removes the legacy surface and turns on
+enforcement — so the tree stays green at every commit across the ~60-factory / ~340-call-site stdlib
+migration.
