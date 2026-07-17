@@ -1,0 +1,21 @@
+import std::memory::{Owned};
+// Construction-model M3: complete-init is DELEGATION-AWARE. `make` returns a fresh object directly
+// (`return Holder(…)`); `zeroed` does no field work at all — it RETURNS the result of another ctor. Both
+// returned values are complete-by-delegation (the callee guarantees full init), so enforcement accepts them
+// with no "final"/"designated" concept — reuse is an ordinary, greppable call.
+type value Box {
+    int32 v;
+    public Box(int32 v) { this.v = v; }
+    public fn int32 get() { return this.v; }
+}
+type resource Holder {
+    Owned<Box> a;
+    public Holder(Owned<Box> a) { this.a = give a; }
+    public ctor make(int32 v) { Owned<Box> b = new Box(v: v); return Holder(a: give b); }  // return a construction
+    public ctor zeroed() { return Holder::make(v: 0); }                                     // ctor -> ctor delegation
+    public fn int32 get() { return this.a.get(); }
+}
+fn int32 main() {
+    Holder h = Holder::zeroed();
+    return h.get() + 42;           // 0 + 42 = 42
+}

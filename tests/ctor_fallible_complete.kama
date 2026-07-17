@@ -1,0 +1,27 @@
+import std::memory::{Owned};
+// Construction-model M3: complete-init is enforced on FALLIBLE ctors too. `make` returns `Result<Holder,E>`:
+// `Err` before the object exists (no completeness obligation), or `Ok(value: h)` where `h` must be fully
+// built — the checker unwraps the `Ok` and verifies the wrapped object's owning fields are all set.
+type value Box {
+    int32 v;
+    public Box(int32 v) { this.v = v; }
+    public fn int32 get() { return this.v; }
+}
+type resource Holder {
+    Owned<Box> a;
+    public ctor Result<Holder, int32> make(int32 v) {
+        if (v < 0) { return Result::Err(error: -1); }   // fail before the object exists
+        Owned<Box> b = new Box(v: v);
+        Holder h;
+        h.a = give b;                                    // complete before Ok-wrapping
+        return Result::Ok(value: h);
+    }
+    public fn int32 get() { return this.a.get(); }
+}
+fn int32 main() {
+    Result<Holder, int32> ok  = Holder::make(v: 42);
+    Result<Holder, int32> bad = Holder::make(v: -5);
+    int32 a = match (ok)  { case Ok(h): h.get(); case Err(e): e; };   // 42
+    int32 b = match (bad) { case Ok(h): 100;     case Err(e): e; };   // -1
+    return a + b + 1;   // 42 - 1 + 1 = 42
+}

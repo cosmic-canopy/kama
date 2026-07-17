@@ -1246,23 +1246,28 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // Collections zero-init so an unconstructed one frees safely; extern
                 // structs zero-init so unset descriptor fields are well-defined.
                 line(n->line); indent(depth);
-                bool zeroInit = _classes[ty].isIntrinsicColl || _classes[ty].isExternStruct;
+                bool hasDefaultCtor = !_classes[ty].isAbstractClass
+                    && ((_classes[ty].hasCtor && _classes[ty].ctorParams.empty()) || _classes[ty].synthCtor);
+                // A bare (uninitialized) local must be brought to a valid state so its scope-exit dtor — and
+                // any `f = …` that first RELEASES the old field — don't free stack garbage. Collections /
+                // extern structs zero-init (no kama ctor); a destructible `resource` WITHOUT a zero-arg ctor
+                // (e.g. a factory-built one) MUST zero-init too — else its `Owned`/`Shared` field is garbage
+                // and the first assignment's "drop old" frees a wild pointer (glibc tolerates it, macOS
+                // aborts). A type WITH a default ctor is brought up by that ctor (below) instead.
+                bool zeroInit = _classes[ty].isIntrinsicColl || _classes[ty].isExternStruct
+                    || (_classes[ty].destructible && !hasDefaultCtor && !d->initializer);
                 *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // track empty resources for move analysis
                 if (!d->initializer) {
-                    // No initializer: the scope-exit dtor recorded above WILL run, so the object must be
-                    // brought to a valid state now — not left as stack garbage (which frees fine on glibc
-                    // but aborts on macOS's malloc: "pointer being freed was not allocated"). If the class
-                    // has a zero-arg default ctor, call it (runs its field-init / vtable setup, exactly like
-                    // `= List()`); intrinsic collections / extern structs have no kama ctor — the `= {0}`
-                    // above is their default empty state.
-                    if (!zeroInit && !_classes[ty].isAbstractClass
-                        && ((_classes[ty].hasCtor && _classes[ty].ctorParams.empty()) || _classes[ty].synthCtor)) {
+                    // No initializer: the scope-exit dtor recorded above WILL run, so the object must be in a
+                    // valid state now. If the class has a zero-arg default ctor, call it (runs its field-init /
+                    // vtable setup, exactly like `= List()`); otherwise the `= {0}` above is the valid state.
+                    if (!zeroInit && hasDefaultCtor) {
                         line(n->line); indent(depth);
                         *_out << emitCtorCall(nm, _classes[ty], nullptr, n->line) << ";\n";
                     }
-                    return;   // otherwise declared-only (a non-destructible value; nothing to construct)
+                    return;   // otherwise declared-only (zero-inited empty, or a non-destructible value)
                 }
 
                 // unwrap a give/copy hand-off marker — the inner NAMED value drives
@@ -6789,6 +6794,106 @@ void CEmitter::checkCtorNeverNull(ClassInfo& owner, SharedBlock body)
                         owner.ctorNode ? owner.ctorNode->line : (owner.node ? owner.node->line : 0));
 }
 
+// Enforce complete-init on a NAMED ctor (`ctor make(…)`) — a static factory returning the enclosing type
+// (or `Result<This,E>`). Unlike a legacy instance ctor (which mutates `this`, sealed by checkCtorNeverNull),
+// a factory builds a value via a bare local + field assignments, or returns a fresh object by DELEGATION
+// (`return Other.make(…)`). The one hole to close: returning a bare zero-inited local whose owning
+// (`Owned`/`Shared`) field was never set — that would leak a null owning pointer past construction.
+//
+// The rule (delegation-aware, mirroring checkCtorNeverNull's sound top-level-only discipline): the returned
+// value is COMPLETE unless it is a local that was declared bare (no constructing initializer) and is missing
+// an unconditional assignment to some owning field. Any construction / factory call / param is trusted
+// complete — it came through something that itself satisfies the guarantee (a legacy `static fn` factory is
+// trusted during coexistence; that gap closes at M8 when self-returning `static fn` becomes an error).
+void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
+{
+    std::set<std::string> owning;
+    for (auto& f : owner.fields)
+        if (!heapOwnerTarget(cType(f.type)).empty()) owning.insert(f.name);   // Owned/Shared (not Weak)
+    if (owning.empty() || !body || !body->statements) return;                 // no owning fields => nothing to seal
+
+    std::set<std::string> ownerLocals;                       // locals whose declared type is this owner
+    std::set<std::string> completeByInit;                    // ownerLocals declared with a constructing initializer
+    std::map<std::string, std::set<std::string>> assigned;   // ownerLocal -> owning fields set (top-level only)
+
+    // `x.f` written as `local.field` — return {local, field} when x is a tracked owner-local; else {"",""}.
+    auto localFieldRef = [&](SharedExpression e) -> std::pair<std::string, std::string> {
+        auto* ma = dynamic_cast<MemberAccessNode*>(e.get());
+        if (!ma || !ma->identifier || !ma->identifier->value) return {"", ""};
+        auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get());
+        if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return {"", ""};
+        if (!ownerLocals.count(*id->value)) return {"", ""};
+        return {*id->value, *ma->identifier->value};
+    };
+
+    // Classify a RETURNED value expression: report the first missing owning field (via `bad`), or leave empty.
+    std::function<void(SharedExpression, std::string&, int&)> classify =
+        [&](SharedExpression e, std::string& bad, int& badLine) {
+        if (!e || !bad.empty()) return;
+        // `Result::Ok(value: V)` — check V; `Result::Err(…)` — no object exists, accept.
+        if (auto* iv = dynamic_cast<InvocationNode*>(e.get())) {
+            if (iv->identifier && iv->identifier->value && iv->identifier->qualifier
+                && !iv->identifier->qualifier->empty() && *iv->identifier->qualifier->back() == "Result") {
+                const std::string& v = *iv->identifier->value;
+                if (v == "Err") return;                                  // failure carries no object
+                if (v == "Ok" && iv->args) {
+                    SharedExpression inner;
+                    for (auto& a : *iv->args) if (a) {
+                        if (a->name && a->name->value && *a->name->value == "value") { inner = a->expression; break; }
+                        if (!inner) inner = a->expression;               // fallback: first positional arg
+                    }
+                    classify(inner, bad, badLine);
+                    return;
+                }
+            }
+        }
+        // A returned bare owner-local: require every owning field assigned (unless complete-by-init).
+        if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
+            if (id->value && (!id->qualifier || id->qualifier->empty()) && ownerLocals.count(*id->value)) {
+                if (completeByInit.count(*id->value)) return;
+                auto& done = assigned[*id->value];
+                for (auto& f : owner.fields)
+                    if (owning.count(f.name) && !done.count(f.name)) { bad = f.name; badLine = e->line; return; }
+            }
+        }
+        // else — a construction / delegating factory call / param: complete by delegation.
+    };
+
+    std::function<void(SharedStatement, bool)> walk = [&](SharedStatement st, bool topLevel) {
+        if (!st) return;
+        ASTNode* n = st.get();
+        if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
+            bool isOwnerTy = lv->type && lv->type->value
+                             && resolveUserName(*lv->type->value, lv->type->qualifier) == owner.name;
+            if (isOwnerTy && lv->variables)
+                for (auto& v : *lv->variables) if (v && v->name && v->name->value) {
+                    ownerLocals.insert(*v->name->value);
+                    if (v->initializer) completeByInit.insert(*v->name->value);   // built by delegation at decl
+                }
+        } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+            if (topLevel) {
+                std::pair<std::string, std::string> lf = localFieldRef(as->unaryExpression);
+                if (!lf.first.empty() && owning.count(lf.second)) assigned[lf.first].insert(lf.second);
+            }
+        } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
+            std::string bad; int line = 0;
+            classify(ret->expression, bad, line);
+            if (!bad.empty())
+                unsupported(("'" + bad + "' must be set before the constructor returns "
+                             "(`Owned`/`Shared` are never-null)").c_str(), line ? line : st->line);
+        } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
+            walk(iff->ifStatement, false);                    // branch bodies don't count as unconditional assigns
+            walk(iff->elseStatement, false);
+        } else if (auto* wh = dynamic_cast<WhileNode*>(n)) {
+            walk(wh->whileStatement, false);
+        } else if (auto* blk = dynamic_cast<BlockNode*>(n)) {
+            if (blk->statements) for (auto& s : *blk->statements) walk(s, topLevel);
+        }
+        // (for/foreach/match: not modeled — a returned bare-incomplete local through them stays conservative)
+    };
+    for (auto& st : *body->statements) walk(st, true);
+}
+
 // access control --------------------------------------------------------
 bool CEmitter::modHas(SharedModifierList mods, const char* name)
 {
@@ -8670,6 +8775,9 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // addresses the place (the ReturnNode path, gated on `_returnIsPlace`) — same as `operator[]`.
         std::string ret = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
         _returnIsPlace = mi.isPlaceReturn;
+        // Construction-model M3: a named `ctor` is a static factory — seal it so no returned object leaks a
+        // null owning pointer (a legacy instance ctor is sealed by checkCtorNeverNull inside the body emit).
+        if (mi.isCtor) checkNamedCtorComplete(ci, mi.node->body);
         emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false, mi.isConst, mi.isStatic);
         _returnIsPlace = false;
     }
