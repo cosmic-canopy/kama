@@ -76,17 +76,6 @@ remains here is genuinely later-track or opt-in.
   opt-in `@generate` surface, not three ad-hoc ones) — see `docs/design/construction-model.md` §8c. Kama today
   requires a hand-written `operator==` (auto structural `==` is a deliberate non-default); the derive would
   synthesize a memberwise `==` on request.
-- **Definite-assignment for locals (owning pointers) — safe-code use-before-init.** Complete-init is
-  enforced at the ctor boundary (construction-model M3: no named ctor returns an object with a null
-  `Owned`/`Shared`; `checkCtorNeverNull` seals `this`-fields inside instance ctors). What remains is the
-  **dual of the use-after-move check**, lifted from ctor `this`-fields to *arbitrary locals*: a bare local
-  of a destructible resource whose owning field is **read before it is assigned** (`Holder h; h.a.get();`)
-  is a null-deref in safe code. Bare destructible locals are now **zero-inited** (defense-in-depth — the
-  free/dtor is safe), but the *read* should be a **compile error**, symmetric with use-after-move
-  (`Unassigned → Assigned` per-local flow state, error on read-while-`Unassigned`, assigned-on-all-paths at
-  branch joins). Only owning pointers need it (Kama zero-inits everything else; a zero value is valid), so
-  it's a bounded extension of the existing owning-read analysis. Its own milestone + fixture matrix — kept
-  out of M3 to protect the triple-green.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by

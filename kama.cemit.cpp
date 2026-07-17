@@ -6894,6 +6894,186 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
     for (auto& st : *body->statements) walk(st, true);
 }
 
+// Definite-assignment for LOCALS — the whole-function dual of the use-after-move check. Reading an owning
+// (`Owned`/`Shared`) local, or an owning FIELD of a resource local, BEFORE it is assigned is a null-deref in
+// safe code (M3 zero-inits a bare destructible local, so an owning pointer starts null). Flag any such READ
+// that is not definitely (unconditionally, top-level) assigned at that point. Sound + conservative — a
+// branch-body assignment doesn't count (mirrors analyzeCtorStmt/checkNamedCtorComplete's discipline). Params
+// are trusted complete (only body-declared locals are tracked). `unsafe { }` is exempt (its raw init dance
+// owns the invariant). `Weak` and raw `Ptr` are never owning, so they are never tracked (box_basic stays legal).
+void CEmitter::checkDefiniteAssignment(SharedBlock body)
+{
+    if (!body || !body->statements) return;
+
+    std::set<std::string> bareOwning;                        // local whose OWN type is Owned/Shared
+    std::map<std::string, std::set<std::string>> resFields;  // resource local -> its owning field names
+    std::set<std::string> unassigned;                        // live keys: "x" (bare) or "x.f" (resource field)
+    bool inUnsafe = false;
+
+    // `x.f` where x is a tracked resource local and f one of its owning fields -> key "x.f"; else "".
+    auto fieldKey = [&](SharedExpression e) -> std::string {
+        auto* ma = dynamic_cast<MemberAccessNode*>(e.get());
+        if (!ma || !ma->identifier || !ma->identifier->value) return "";
+        auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get());
+        if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return "";
+        auto it = resFields.find(*id->value);
+        if (it == resFields.end() || !it->second.count(*ma->identifier->value)) return "";
+        return *id->value + "." + *ma->identifier->value;
+    };
+    // The owning value this LHS assigns (so we don't treat it as a read): "x.f", or a bare owning local "x".
+    // A field-write to a bare owning local (`b.p = raw` — how a HeapOwner's own factory builds it) CONSTRUCTS
+    // that local, so it counts as assigning "b" (matches box_basic / the Owned::adopt prelude idiom).
+    auto writeTargetKey = [&](SharedExpression e) -> std::string {
+        std::string fk = fieldKey(e);
+        if (!fk.empty()) return fk;
+        if (auto* id = dynamic_cast<IdentifierNode*>(e.get()))                     // whole `b = …`
+            if (id->value && (!id->qualifier || id->qualifier->empty()) && bareOwning.count(*id->value))
+                return *id->value;
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get()))                   // field write `b.f = …`
+            if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                if (id->value && (!id->qualifier || id->qualifier->empty()) && bareOwning.count(*id->value))
+                    return *id->value;
+        return "";
+    };
+    auto flag = [&](const std::string& key, int line) {
+        if (inUnsafe) return;                                // the escape hatch owns its invariants
+        unsupported(("'" + key + "' is used before it is assigned "
+                     "(`Owned`/`Shared` are never-null)").c_str(), line);
+    };
+    auto markAssigned = [&](const std::string& nm){
+        unassigned.erase(nm);
+        auto it = resFields.find(nm);
+        if (it != resFields.end()) for (auto& f : it->second) unassigned.erase(nm + "." + f);
+    };
+    // `addr(of: x)` on a tracked owning local — the raw slot-init dance (memmove into a zero-init local, then
+    // `give`) takes it under manual control; return its name so the caller marks it assigned.
+    auto addrOfLocal = [&](InvocationNode* inv) -> std::string {
+        if (!inv->identifier || !inv->identifier->value || *inv->identifier->value != "addr") return "";
+        if (inv->identifier->qualifier && !inv->identifier->qualifier->empty()) return "";
+        if (!inv->args || inv->args->size() != 1 || !(*inv->args)[0] || !(*inv->args)[0]->expression) return "";
+        auto* id = dynamic_cast<IdentifierNode*>((*inv->args)[0]->expression.get());
+        if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return "";
+        return (bareOwning.count(*id->value) || resFields.count(*id->value)) ? *id->value : "";
+    };
+
+    std::function<void(SharedExpression)> scan;
+    std::function<void(SharedStatement, bool)> walk;
+
+    // Recursively flag reads of still-unassigned owning values inside an expression.
+    scan = [&](SharedExpression e) {
+        if (!e) return;
+        ASTNode* n = e.get();
+        std::string fk = fieldKey(e);
+        if (!fk.empty()) { if (unassigned.count(fk)) flag(fk, e->line); return; }   // don't recurse into base
+        if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+            if (id->value && (!id->qualifier || id->qualifier->empty())
+                && bareOwning.count(*id->value) && unassigned.count(*id->value))
+                flag(*id->value, e->line);
+            return;
+        }
+        auto rec = [&](SharedExpression x){ scan(x); };
+        if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) {
+            if (oc->args) for (auto& a : *oc->args) if (a) rec(a->expression);
+        } else if (auto* c = dynamic_cast<CastNode*>(n)) { rec(c->unaryExpression);
+        } else if (auto* h = dynamic_cast<HandoffNode*>(n)) { rec(h->value);   // give/copy x
+        } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) { rec(b->LHS); rec(b->RHS);
+        } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) { rec(l->LHS); rec(l->RHS);
+        } else if (auto* tn = dynamic_cast<TernaryExpressionNode*>(n)) { rec(tn->condition); rec(tn->LHS); rec(tn->RHS);
+        } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+            if (writeTargetKey(as->unaryExpression).empty()) rec(as->unaryExpression);
+            rec(as->expression);
+        } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+            std::string ax = addrOfLocal(inv);
+            if (!ax.empty()) { markAssigned(ax); return; }   // addr(of: x) — manual control; x is now managed
+            rec(inv->expression);
+            if (inv->args) for (auto& a : *inv->args) if (a) rec(a->expression);
+        } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+            rec(ea->expression);
+            if (ea->expressionlist) for (auto& x : *ea->expressionlist) rec(x);
+        } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) { rec(ma->expression);
+        } else if (auto* pe = dynamic_cast<PreIncrDecrNode*>(n)) { rec(pe->expression);
+        } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) { rec(po->expression);
+        } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) { rec(su->expression);
+        } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
+            if (al->elements) for (auto& x : *al->elements) rec(x);
+            rec(al->fillValue);
+        } else if (auto* mt = dynamic_cast<MatchNode*>(n)) {
+            rec(mt->subject);
+            if (mt->arms) for (auto& arm : *mt->arms) if (arm) {
+                if (arm->body) rec(arm->body);
+                if (arm->block) walk(arm->block, false);
+            }
+        }
+    };
+
+    // Walk one statement: scan its reads, then record top-level owning-value assignments.
+    walk = [&](SharedStatement st, bool topLevel) {
+        if (!st) return;
+        ASTNode* n = st.get();
+        if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
+            std::string owned = (lv->type && lv->type->value) ? heapOwnerTarget(cType(lv->type)) : "";
+            std::string cls   = (lv->type && lv->type->value)
+                                ? resolveUserName(*lv->type->value, lv->type->qualifier) : "";
+            std::set<std::string> fs;                        // owning fields, if a resource type
+            if (owned.empty() && !cls.empty()) {
+                auto ci = _classes.find(cls);
+                if (ci != _classes.end())
+                    for (auto& f : ci->second.fields)
+                        if (!heapOwnerTarget(cType(f.type)).empty()) fs.insert(f.name);
+            }
+            if (lv->variables) for (auto& v : *lv->variables) if (v && v->name && v->name->value) {
+                const std::string& nm = *v->name->value;
+                if (v->initializer) scan(v->initializer);    // RHS read-scan happens before the local is "assigned"
+                if (!owned.empty()) {                        // a bare Owned/Shared local
+                    bareOwning.insert(nm);
+                    if (!v->initializer) unassigned.insert(nm);
+                } else if (!fs.empty()) {                     // a resource local with owning fields
+                    resFields[nm] = fs;
+                    if (!v->initializer) for (auto& f : fs) unassigned.insert(nm + "." + f);
+                }
+            }
+        } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+            std::string wk = writeTargetKey(as->unaryExpression);
+            if (wk.empty()) scan(as->unaryExpression);       // a write-through LHS may itself read
+            scan(as->expression);
+            if (topLevel) {
+                if (!wk.empty()) unassigned.erase(wk);
+                else if (auto* id = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))  // `h = …` reassigns whole
+                    if (id->value && (!id->qualifier || id->qualifier->empty()) && resFields.count(*id->value))
+                        for (auto& f : resFields[*id->value]) unassigned.erase(*id->value + "." + f);
+            }
+        } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
+            scan(iff->booleanExpression);
+            walk(iff->ifStatement, false);                   // branch bodies don't count as unconditional assigns
+            walk(iff->elseStatement, false);
+        } else if (auto* wh = dynamic_cast<WhileNode*>(n)) {
+            scan(wh->booleanExpression); walk(wh->whileStatement, false);
+        } else if (auto* dw = dynamic_cast<DoWhileNode*>(n)) {
+            walk(dw->doWhileStatement, false); scan(dw->booleanExpression);
+        } else if (auto* fr = dynamic_cast<ForNode*>(n)) {
+            if (fr->initializerStatements) for (auto& s : *fr->initializerStatements) walk(s, false);
+            scan(fr->booleanExpression);
+            if (fr->iteratorStatements) for (auto& s : *fr->iteratorStatements) walk(s, false);
+            walk(fr->body, false);
+        } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+            scan(fe->expression); walk(fe->body, false);
+        } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
+            scan(ret->expression);
+        } else if (auto* un = dynamic_cast<UnsafeNode*>(n)) {
+            bool save = inUnsafe; inUnsafe = true;
+            walk(un->body, topLevel);
+            inUnsafe = save;
+            if (topLevel) unassigned.clear();                // trust the unsafe dance initialized what it touched
+        } else if (auto* blk = dynamic_cast<BlockNode*>(n)) {
+            if (blk->statements) for (auto& s : *blk->statements) walk(s, topLevel);
+        } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
+            scan(std::dynamic_pointer_cast<ExpressionNode>(st));   // invocation / match / incr — scan its reads
+        }
+    };
+
+    for (auto& st : *body->statements) walk(st, true);
+}
+
 // access control --------------------------------------------------------
 bool CEmitter::modHas(SharedModifierList mods, const char* name)
 {
@@ -8217,6 +8397,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 
     _returnIsPlace = fn->isRef;
     if (fn->block) {
+        checkDefiniteAssignment(fn->block);   // owning LOCAL read-before-assign is a compile error (free fn)
         emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
     } else {
         *_out << "{\n}";
@@ -8718,6 +8899,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     }
     // Stage 1: never-null — every `Owned`/`Shared` field must be assigned by ctor-end and not read before.
     if (isCtor) checkCtorNeverNull(owner, body);
+    checkDefiniteAssignment(body);   // owning LOCAL read-before-assign is a compile error (any method/ctor)
     SharedStatement last;
     if (body && body->statements) {
         for (auto& st : *body->statements) { emitStatement(st, 1); last = st; }

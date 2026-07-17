@@ -1,0 +1,9 @@
+import std::memory::{Owned};
+// Definite-assignment is conservative (sound top-level-only, like the ctor checks): an owning local assigned
+// only inside a branch is NOT definitely assigned, so a later read is rejected. Assign unconditionally instead.
+type value Box { int32 v; public Box(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 main() {
+    Owned<Box> b;
+    if (true) { b = new Box(v: 1); }   // assigned only in the then-arm -> doesn't count
+    return b.get();                     // ERROR: 'b' not definitely assigned
+}

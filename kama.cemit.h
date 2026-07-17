@@ -949,6 +949,7 @@ private:
                                 std::set<std::string>& assigned, std::set<std::string>& locals, bool topLevel);
     void        checkCtorNeverNull(ClassInfo& owner, SharedBlock body);
     void        checkNamedCtorComplete(ClassInfo& owner, SharedBlock body);
+    void        checkDefiniteAssignment(SharedBlock body);   // owning read-before-assign is a compile error
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
     // BindableFunctionPtr<Sig> — construct/promote/invoke a bindable callable.

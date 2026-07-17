@@ -1,0 +1,15 @@
+import std::memory::{Owned};
+// An owning field of a resource local, assigned unconditionally, may then be read (inside the owner's own
+// method, where the private field is visible).
+type value Box { int32 v; public Box(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+type resource Holder {
+    Owned<Box> a;
+    public Holder(Owned<Box> a) { this.a = give a; }
+    public static fn int32 build(int32 v) {
+        Owned<Box> b = new Box(v: v);
+        Holder h;
+        h.a = give b;          // owning field assigned unconditionally
+        return h.a.get();      // then read -> ok. (42)
+    }
+}
+fn int32 main() { return Holder::build(v: 42); }
