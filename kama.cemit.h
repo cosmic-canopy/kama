@@ -855,6 +855,11 @@ private:
                               bool isStatic = false);
     std::string emitMemberAccess(MemberAccessNode* ma);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
+    bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
+    std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory
+    void        emitNewFactoryMove(const std::string& cls, const std::string& slotPtr,  // new Type.name(...) construct
+                                   ObjectCreationNode* oc, int lineNo, int depth);
+    std::string emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNode* recv, const std::string& typeName);
     // Does an invocation (a free-fn / method call) return a PLACE (`fn ref T` — a borrow), not a fresh
     // owned value? Used to gate materialize-and-drop of an owned rvalue receiver: a place must NOT be
     // dropped (dropping a copy of a borrow would double-free). isPlaceReturn is the discriminator.

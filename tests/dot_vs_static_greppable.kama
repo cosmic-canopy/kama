@@ -1,0 +1,15 @@
+// Construction-model M4: dot-on-type is STRICTLY the constructor spelling — greppably distinct from a
+// static function. `Vec2.make(...)` (a `ctor`) uses dot-on-type; `Vec2::dot(...)` (a `static fn` utility)
+// stays on `::`. Both compile; the two spellings never overlap, so `grep '\.make('` finds construction and
+// `grep '::dot('` finds the utility. (A static fn via dot is an error — see xfail/dot_on_type_not_ctor.)
+type value Vec2 {
+    int32 x;
+    int32 y;
+    public ctor make(int32 x, int32 y) { Vec2 v; v.x = x; v.y = y; return v; }
+    public static fn int32 dot(Vec2 a, Vec2 b) { return a.x * b.x + a.y * b.y; }
+}
+fn int32 main() {
+    Vec2 a = Vec2.make(x: 2, y: 3);      // construction — dot-on-type
+    Vec2 b = Vec2.make(x: 4, y: 5);
+    return Vec2::dot(a: a, b: b);         // utility — scope resolution, 8 + 15 = 23
+}

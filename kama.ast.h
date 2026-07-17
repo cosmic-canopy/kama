@@ -618,6 +618,7 @@ public:
     SharedIdentifier type;
     SharedArgumentList args;
     SharedArgumentList placement;   // null for bare `new`; carries the placement `allocator: expr` list
+    SharedIdentifier ctorName;      // null for `new Type(...)`; the named ctor for `new Type.name(...)` (M4)
     ObjectCreationNode(CodeGenContext& context, SharedIdentifier type, SharedArgumentList args,
                        SharedArgumentList placement = SharedArgumentList())
         : ASTNode(context),  ExpressionStatementNode(context)

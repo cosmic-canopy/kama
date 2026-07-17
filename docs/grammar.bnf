@@ -647,6 +647,8 @@ new_expression
 object_creation_expression
   : NEW type LPAREN argument_list_opt RPAREN
   | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN
+  | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
+  | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
   ;
 unary_expression
   : postfix_expression
@@ -900,6 +902,13 @@ overloadable_operator
   ;
 constructor_declaration
   : modifiers_opt constructor_declarator constructor_body
+    /* Construction-model: a NAMED constructor — sugar for a static factory returning the enclosing type
+       (infallible, no return type written) or `Result<This,E>` (fallible, leading type like `fn`). Lowered
+       through the static-method pipeline; the emitter fills the infallible return type = the enclosing type. */
+  | modifiers_opt CTOR method_name LPAREN parameter_list_opt RPAREN method_body
+
+  | modifiers_opt CTOR type method_name LPAREN parameter_list_opt RPAREN method_body
+
   ;
 constructor_declarator
   : IDENTIFIER LPAREN parameter_list_opt RPAREN constructor_initializer_opt

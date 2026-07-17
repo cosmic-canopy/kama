@@ -1340,7 +1340,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
                                 }
                                 indent(depth); *_out << "if (!" << nm << ".obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                                if (_classes[octy].hasCtor) {
+                                if (oc->ctorName) {
+                                    emitNewFactoryMove(octy, "(" + octy + "*)" + nm + ".obj", oc, n->line, depth);
+                                } else if (_classes[octy].hasCtor) {
                                     line(n->line);
                                     bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
                                     std::string cc = emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + nm + ".obj",
@@ -1372,7 +1374,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             line(n->line); indent(depth);
                             *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
                             indent(depth); *_out << "if (!" << nm << ".ptr) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                            if (isClass(T) && _classes[T].hasCtor) {
+                            if (oc->ctorName) {
+                                emitNewFactoryMove(T, nm + ".ptr", oc, n->line, depth);
+                            } else if (isClass(T) && _classes[T].hasCtor) {
                                 line(n->line);
                                 bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
                                 std::string cc = emitReorderedCall(T + "__ctor", nm + ".ptr",
@@ -1443,7 +1447,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 else
                                     *_out << C << "* " << hp << " = (" << C << "*)malloc(sizeof(" << C << "));\n";
                                 indent(depth); *_out << "if (!" << hp << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                                if (isClass(C) && _classes[C].hasCtor) {
+                                if (oc->ctorName) {
+                                    emitNewFactoryMove(C, hp, oc, n->line, depth);
+                                } else if (isClass(C) && _classes[C].hasCtor) {
                                     line(n->line);
                                     bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
                                     std::string cc = emitReorderedCall(C + "__ctor", hp, _classes[C].ctorParams, oc->args, n->line);
@@ -7860,7 +7866,10 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         if (placed) box  = pa.second + " " + ap + " = " + pa.first + "; "
                          + C + "* " + hp + " = (" + C + "*)" + pa.second + "__allocate(&" + ap + ", sizeof(" + C + "));";
         else        box  = C + "* " + hp + " = (" + C + "*)malloc(sizeof(" + C + "));";
-        if (isClass(C) && _classes[C].hasCtor)
+        if (oc->ctorName) {
+            std::string cc = newFactoryCall(C, oc, srcLine);   // move the factory result into the heap slot
+            if (!cc.empty()) box += " *(" + hp + ") = " + cc + ";";
+        } else if (isClass(C) && _classes[C].hasCtor)
             box += " " + emitReorderedCall(C + "__ctor", hp, _classes[C].ctorParams, oc->args, srcLine) + ";";
         std::string adoptArg = hp;                             // adopt the base subobject when widening (offset-0)
         if (upcastNew) {
@@ -7903,7 +7912,10 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         } else {
             box += " " + t + ".obj = malloc(sizeof(" + octy + "));";
         }
-        if (_classes[octy].hasCtor)
+        if (oc->ctorName) {
+            std::string cc = newFactoryCall(octy, oc, srcLine);
+            if (!cc.empty()) box += " *((" + octy + "*)" + t + ".obj) = " + cc + ";";
+        } else if (_classes[octy].hasCtor)
             box += " " + emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + t + ".obj",
                                            _classes[octy].ctorParams, oc->args, srcLine) + ";";
         box += " " + t + ".vtbl = &" + octy + "__as_" + T + ";";
@@ -7923,7 +7935,10 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         return reject("cannot instantiate abstract class '" + T + "'");
     std::string t = "__newarg" + std::to_string(_tempCounter++);
     std::string box = targetCType + " " + t + " = {0}; " + t + ".ptr = (" + T + "*)malloc(sizeof(" + T + "));";
-    if (isClass(T) && _classes[T].hasCtor)
+    if (oc->ctorName) {
+        std::string cc = newFactoryCall(T, oc, srcLine);
+        if (!cc.empty()) box += " *(" + t + ".ptr) = " + cc + ";";
+    } else if (isClass(T) && _classes[T].hasCtor)
         box += " " + emitReorderedCall(T + "__ctor", t + ".ptr", _classes[T].ctorParams, oc->args, srcLine) + ";";
     if (smartKind(targetCType) == CollKind::Shared) box += " " + t + ".ctrl = kama_ctrl_new();";
     _hoisted.push_back(box);
@@ -8098,8 +8113,16 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // Expression-form callee (this.method(...), base.method(...), parenthesized).
     if (!call->identifier || !call->identifier->value) {
         if (call->expression) {
-            if (auto* ma = dynamic_cast<MemberAccessNode*>(call->expression.get()))
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(call->expression.get())) {
+                // `Type.name(...)` — dot-on-type constructor call: the receiver names a TYPE, not an
+                // instance. An in-scope binding wins (instance `.method` first), so this fires only when
+                // the receiver is a bare type name with no live binding. Distinct from `Type::staticFn()`
+                // (a static fn stays `::`); the strict-ctor gate inside points a static-fn dot at `::`.
+                std::string dotType;
+                if (isTypeReceiver(ma, dotType))
+                    return emitDotOnTypeCtorCall(call, ma, dotType);
                 return emitMethodCall(call, ma);
+            }
             if (auto* ba = dynamic_cast<BaseAccessNode*>(call->expression.get())) {
                 // base.m(args) -> direct (non-virtual) call into the base.
                 if (!_currentClass || !_currentClass->base) {
@@ -10067,6 +10090,95 @@ bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
         return mi && mi->isPlaceReturn;
     }
     return false;
+}
+
+// `new Type.name(args)` — resolve+validate the named `ctor` and return the factory CALL expression
+// (`Type__name(reordered args)`, no `self` lead arg), or "" after emitting a diagnostic. A named `ctor` is
+// a FACTORY returning `Type` by value (unlike the legacy in-place `Type__ctor(ptr, args)`), so the caller
+// MOVES the result into the freshly-`malloc`'d heap slot. Shared by the local-decl path (emitNewFactoryMove)
+// and the hoist path (tryHoistInlineNew). M4a: infallible only — a fallible (`Result`) ctor is rejected
+// here (M4b threads `Result<Owned<T>,E>` through the box path).
+std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo)
+{
+    const std::string cn = (oc->ctorName && oc->ctorName->value) ? *oc->ctorName->value : "";
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = isClass(cls) ? findMethod(&_classes[cls], cn, &owner) : nullptr;
+    if (!mi || !mi->isCtor) {
+        unsupported(("`new " + cls + "." + cn + "(...)` — `" + cn + "` is not a constructor of `"
+                     + cls + "`").c_str(), lineNo);
+        return "";
+    }
+    if (mi->returnType && mi->returnType->value && *mi->returnType->value == "Result") {
+        unsupported(("fallible `new " + cls + "." + cn + "(...)` (a `Result`-returning ctor) is not yet "
+                     "supported — coming in M4b").c_str(), lineNo);
+        return "";
+    }
+    canAccess(owner, mi->visibility, cn, lineNo);
+    return emitReorderedCall(mi->cName, "", mi->params, oc->args, lineNo);
+}
+
+// The local-decl form of a named-ctor `new`: emit `*(slotPtr) = Type__name(args);` into `_out`. Written as
+// a RAW C assignment (NOT via emitAssignment): the slot is fresh malloc (garbage), so no drop-of-old is
+// inserted — that would free a wild pointer (the M3-bonus class of bug). The in-place `__ctor` path already
+// writes through the pointer with no drop; we mirror that discipline.
+void CEmitter::emitNewFactoryMove(const std::string& cls, const std::string& slotPtr,
+                                  ObjectCreationNode* oc, int lineNo, int depth)
+{
+    line(lineNo);
+    bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs, like the in-place ctor path
+    std::string cc = newFactoryCall(cls, oc, lineNo);
+    _hoistOK = ph; flushHoisted(depth);
+    if (cc.empty()) return;                            // rejected (unknown/fallible ctor) — diagnostic emitted
+    indent(depth); *_out << "*(" << slotPtr << ") = " << cc << ";\n";
+}
+
+// Does a member-access callee name a TYPE (so `X.name(...)` is a dot-on-type ctor call) rather than an
+// instance? True only for a bare identifier that resolves to a registered class AND has no live binding —
+// an in-scope local/field of the same spelling WINS (instance `.method` first). `outType` gets the
+// resolved (namespace-scoped) class name. (Enums live in `_enums`, not `_classes`, so `Enum.Variant`
+// stays on the `::` variant path.)
+bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
+{
+    if (!ma) return false;
+    if (ma->classType && ma->classType->value) {   // `string.foo` — the `string`-keyword class_type form
+        outType = resolveUserName(*ma->classType->value, nullptr);
+        return _classes.count(outType) != 0;
+    }
+    if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
+        if (id->value && exprClass(ma->expression).empty()) {   // empty => not a binding/field of a class
+            std::string t = resolveUserName(*id->value, nullptr);
+            if (_classes.count(t)) { outType = t; return true; }
+        }
+    }
+    return false;
+}
+
+// `Type.name(args)` — a dot-on-type constructor call (the receiver names a TYPE, per `isTypeReceiver`).
+// Distinct from `Type::staticFn()` (a static fn stays `::`) and `Enum::Variant` (stays `::`): dot-on-type
+// is the constructor spelling, so it resolves ONLY to a registered `ctor`. Reaches the SAME C as the M2
+// `Type::name` bridge — a `ctor` is a static factory, so the emitted call is byte-identical (mangled
+// `cName`, no `self` lead arg); infallible/fallible is just its return value.
+std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNode* recv, const std::string& typeName)
+{
+    std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
+    ClassInfo* stci = _classes.count(typeName) ? &_classes[typeName] : nullptr;
+    if (!stci) { unsupported(("unknown type in constructor call `" + typeName + "`").c_str(), call->line); return "0"; }
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = findMethod(stci, method, &owner);
+    if (!mi) {
+        unsupported(("type `" + stci->name + "` has no constructor `" + method + "` — define one "
+                     "(`ctor " + method + "(...) {…}`)").c_str(), call->line);
+        return "0";
+    }
+    if (!mi->isCtor) {
+        // `name` is a real static fn (or non-static method) — dot-on-type is for constructors only.
+        unsupported(("`" + stci->name + "." + method + "` — dot-on-type calls a constructor; `" + method
+                     + "` is a static function — call it with `" + stci->name + "::" + method + "(...)`").c_str(),
+                    call->line);
+        return "0";
+    }
+    canAccess(owner, mi->visibility, method, call->line);
+    return emitReorderedCall(mi->cName, "", mi->params, call->args, call->line);
 }
 
 std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* recv)

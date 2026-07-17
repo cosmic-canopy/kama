@@ -1,0 +1,23 @@
+// Construction-model M4: dot-on-type constructor calls — `Type.name(...)`. A named `ctor` is a static
+// factory, so `Point.make(...)` reaches the SAME C as the M2 bridge `Point::make(...)` (byte-identical).
+// Covers both fallibility modes through the dot spelling: an infallible ctor returns `T`, a fallible one
+// returns `Result<T,E>`. Distinct from `Type::staticFn()` (a static fn stays `::` — see
+// dot_vs_static_greppable) and `Enum::Variant` (stays `::`).
+type value Point {
+    int32 x;
+    int32 y;
+    public ctor make(int32 x, int32 y) { Point p; p.x = x; p.y = y; return p; }
+    public ctor Result<Point, int32> checked(int32 x, int32 y) {
+        if (x < 0) { return Result::Err(error: -1); }   // fail before the object exists
+        return Result::Ok(value: Point.make(x: x, y: y));   // delegate to the infallible ctor (dot chain)
+    }
+    public fn int32 sum() { return this.x + this.y; }
+}
+fn int32 main() {
+    Point p = Point.make(x: 10, y: 20);                    // infallible dot-on-type
+    Result<Point, int32> ok  = Point.checked(x: 5, y: 7);  // fallible dot-on-type
+    Result<Point, int32> bad = Point.checked(x: -1, y: 0);
+    int32 a = match (ok)  { case Ok(q): q.sum(); case Err(e): e; };   // 12
+    int32 b = match (bad) { case Ok(q): 999;     case Err(e): e; };   // -1
+    return p.sum() + a + b + 1;   // 30 + 12 - 1 + 1 = 42
+}

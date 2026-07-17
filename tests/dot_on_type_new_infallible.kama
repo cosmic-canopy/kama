@@ -1,0 +1,27 @@
+// Construction-model M4: `new Type.name(...)` composition (infallible). A named `ctor` is a FACTORY
+// returning `T` by value, so `new` allocates then MOVES the factory result into the heap slot. Exercises all
+// three heap paths: the intrinsic concrete `Owned<T>`, the intrinsic `Shared<T>`, and the type-erased
+// interface-element `Owned<Contract>` (the concrete is built via its named ctor, then boxed behind the vtable).
+import std::memory::{Owned, Shared};
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+
+type value Box {
+    int32 v;
+    public ctor make(int32 v) { Box b; b.v = v; return b; }
+    public fn int32 get() { return this.v; }
+}
+type contract Shape for both { fn int32 area(); }
+type resource Circle implements Shape {
+    Ptr<int32> buf;
+    public ctor make(int32 r) { Circle c; unsafe { c.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); c.buf[0] = r; } return c; }
+    public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
+    ~Circle() { unsafe { free(p: cast<Ptr>(this.buf)); } }
+}
+fn int32 main() {
+    Owned<Box>    o = new Box.make(v: 3);       // intrinsic concrete Owned
+    Shared<Box>   s = new Box.make(v: 4);       // intrinsic Shared (ctrl block)
+    Owned<Shape>  c = new Circle.make(r: 5);    // type-erased interface element (vtable + ~Circle via slot)
+    return o.get() + s.get() + c.area();        // 3 + 4 + 25 = 32
+}

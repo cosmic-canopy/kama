@@ -1,0 +1,11 @@
+// Construction-model M4: dot-on-type is the CONSTRUCTOR spelling only. Calling a plain `static fn` via dot
+// (`Type.util(...)`) is rejected — static functions stay on `::` (`Type::util(...)`). Keeps one way to spell
+// each: dot = construction, `::` = scope resolution.
+type value Vec2 {
+    int32 x;
+    public ctor make(int32 x) { Vec2 v; v.x = x; return v; }
+    public static fn int32 twice(int32 n) { return n + n; }
+}
+fn int32 main() {
+    return Vec2.twice(n: 3);   // ERROR: `twice` is a static fn — call it with `Vec2::twice(...)`
+}

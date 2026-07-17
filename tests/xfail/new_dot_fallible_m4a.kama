@@ -1,0 +1,15 @@
+// Construction-model M4a: `new Type.name(...)` supports INFALLIBLE named ctors this milestone; a fallible
+// (`Result`-returning) ctor via `new` is deferred to M4b (which threads `Result<Owned<T>,E>` through the box
+// path). Rejected with a "coming in M4b" diagnostic. (Converted to a passing fixture in M4b.)
+import std::memory::{Owned};
+type value Box {
+    int32 v;
+    public ctor Result<Box, int32> tryMake(int32 v) {
+        if (v < 0) { return Result::Err(error: -1); }
+        Box b; b.v = v; return Result::Ok(value: b);
+    }
+}
+fn int32 main() {
+    Owned<Box> p = new Box.tryMake(v: 7);   // ERROR (M4a): fallible `new` — coming in M4b
+    return 0;
+}

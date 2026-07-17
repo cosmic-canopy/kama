@@ -941,6 +941,8 @@ new_expression
 object_creation_expression
   : NEW type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $2, $4 ); }
   | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $5, $7, $3 ); }
+  | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $2, $6); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4); $$ = n; }
+  | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $5, $9, $3); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7); $$ = n; }
   ;
 unary_expression
   : postfix_expression
