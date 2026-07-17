@@ -10209,10 +10209,72 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     // A concrete `Owned`/`Shared` from `std::memory` is a LIBRARY `HeapOwner` (boxed via `adopt`, NOT the
     // intrinsic `.ptr`/`.ctrl` handle). The intrinsic smart-ptr representation (`isSmartPtrClass`) is the
     // type-erased INTERFACE-element fat handle — its fallible `new` is a follow-on milestone.
+    // ---- (1) INTERFACE-ELEMENT: box the concrete `cls` behind the type-erased fat handle `S`. ----
+    // Mirror the infallible interface boxing (emitLocalVariableDeclaration ~1321-1402), built as string
+    // fragments inside the Ok branch: malloc/allocate `.obj`, MOVE the Ok payload in, set `.vtbl`, and
+    // (Shared) the ctrl block. Allocate ONLY on Ok — the Err branch re-wraps with no allocation.
     if (isSmartPtrClass(S)) {
-        unsupported(("fallible `new` into an interface handle (`" + S + "`) is not yet supported — box a "
-                     "concrete `Owned`/`Shared` for now (a follow-on milestone)").c_str(), srcLine);
-        return "";
+        const std::string Tif = _classes[S].collElemClass;   // the interface the fat handle erases
+        if (!isInterface(Tif)) {
+            unsupported(("fallible `new` into `" + S + "` — not an interface-element handle").c_str(), srcLine);
+            return "";
+        }
+        bool implementsT = false;
+        auto cit = _classes.find(cls);
+        if (cit != _classes.end())
+            for (auto& i : cit->second.interfaces) if (i == Tif) { implementsT = true; break; }
+        if (!implementsT) {
+            unsupported(("`new " + disp + "." + cn + "(...)` builds `" + cls + "`, which does not implement `"
+                         + Tif + "`").c_str(), srcLine);
+            return "";
+        }
+        if (isClass(cls) && _classes[cls].isAbstractClass) {
+            unsupported(("cannot instantiate abstract class '" + cls + "'").c_str(), srcLine);
+            return "";
+        }
+        // Placement `new(allocator: a)` (M11d): draw the pointee AND (Shared) the ctrl from `a`, storing
+        // `a`+`objsize` in the fat handle so its dtor frees through it. Default GlobalAllocator keeps the
+        // libc malloc + `kama_ctrl_new()` path. `ifaceNewAllocator` validates the box/handle allocator match.
+        bool useAlloc = ifaceNewAllocator(S, oc, srcLine);
+        std::string RT  = cType(mi->returnType);
+        std::string cc  = emitReorderedCall(mi->cName, "", mi->params, oc->args, srcLine);
+        std::string tmp = "__fnew"   + std::to_string(_tempCounter++);
+        std::string box = "__fbox"   + std::to_string(_tempCounter++);
+        std::string ap  = "__falloc" + std::to_string(_tempCounter++);
+        const std::string okName  = okV->payload[0].name;
+        const std::string errName = errV->payload[0].name;
+        std::string s;
+        s  = RT + " " + tmp + " = " + cc + "; ";
+        s += "if (" + tmp + ".tag == " + RT + "_Err) { ";
+        s +=   lval + " = (" + target + "){ .tag = " + target + "_Err, .u.Err = { ." + errName + " = "
+                 + tmp + ".u.Err." + errName + " } }; ";
+        s += "} else { ";
+        s +=   S + " " + box + "; ";
+        if (useAlloc) {
+            auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
+            s += pa.second + " " + ap + " = " + pa.first + "; ";
+            s += box + ".obj = (void*)" + pa.second + "__allocate(&" + ap + ", sizeof(" + cls + ")); ";
+        } else {
+            s += box + ".obj = malloc(sizeof(" + cls + ")); ";
+        }
+        s += "if (!" + box + ".obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
+        s += "*(" + cls + "*)" + box + ".obj = " + tmp + ".u.Ok." + okName + "; ";
+        s += box + ".vtbl = &" + cls + "__as_" + Tif + "; ";
+        if (useAlloc) {
+            s += box + ".alloc = " + ap + "; ";
+            s += box + ".objsize = sizeof(" + cls + "); ";
+        }
+        if (smartKind(S) == CollKind::Shared) {
+            if (useAlloc)
+                s += box + ".ctrl = (kama_ctrl*)" + _collections[S].allocType + "__allocate(&" + ap
+                   + ", sizeof(kama_ctrl)); " + box + ".ctrl->strong = 1; " + box + ".ctrl->weak = 0; ";
+            else
+                s += box + ".ctrl = kama_ctrl_new(); ";
+        }
+        s +=   lval + " = (" + target + "){ .tag = " + target + "_Ok, .u.Ok = { ." + okName + " = "
+                 + box + " } }; ";
+        s += "}";
+        return s;
     }
     std::string T = heapOwnerTarget(S);               // the boxed element (an owning `HeapOwner` element)
     if (T.empty()) {
@@ -10224,17 +10286,34 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         unsupported(("`" + S + "` owns `" + T + "`, but `new " + disp + "` builds `" + cls + "`").c_str(), srcLine);
         return "";
     }
-    // Bare `new` only (default `GlobalAllocator`). A placement `new(allocator: …)` or a stateful-allocator
-    // box needs the `adoptIn` path — a follow-on (mirrors the infallible stateful-allocator gate at ~1416).
-    std::string ba = boxAllocatorArg(S);
-    if ((oc->placement && !oc->placement->empty())
-        || (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())) {
-        unsupported(("fallible `new(allocator: …)` / stateful-allocator `" + S + "` is not yet supported — a "
-                     "follow-on milestone (use a default-allocator `Owned`/`Shared` for now)").c_str(), srcLine);
+    // ---- (2) concrete library `HeapOwner`. Placement `new(allocator: a)` / stateful-allocator box: draw
+    // the block from `a` and adopt via `adoptIn` (mirror the infallible path ~1418-1478). A bare `new` keeps
+    // libc malloc + `adopt`. A bare `new` into a stateful-A box would leak on a no-op deallocate → require
+    // the placement form.
+    auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
+    bool placed = !pa.second.empty();
+    if (!placed) {
+        std::string ba = boxAllocatorArg(S);
+        if (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty()) {
+            unsupported(("this box's allocator `" + ba + "` is stateful — construct it with "
+                         "`new(allocator: …) T(...)`, not a bare `new`").c_str(), srcLine);
+            return "";
+        }
+    } else {
+        std::string boxA = boxAllocatorArg(S);   // no inference axis — the declared box-A must match the handle
+        if (!boxA.empty() && boxA != pa.second) {
+            unsupported(("the box's allocator type `" + boxA + "` does not match the `new(allocator: …)` "
+                         "handle `" + pa.second + "` — spell the box's allocator explicitly").c_str(), srcLine);
+            return "";
+        }
+    }
+    const char* adoptName = placed ? "adoptIn" : "adopt";
+    ClassInfo* ao = nullptr;
+    MethodInfo* adoptM = findMethod(&_classes[S], adoptName, &ao);
+    if (placed && !adoptM) {
+        unsupported(("allocator-aware `new(allocator: …)` needs an `adoptIn(raw, allocator)` on `" + S + "`").c_str(), srcLine);
         return "";
     }
-    ClassInfo* ao = nullptr;
-    MethodInfo* adoptM = findMethod(&_classes[S], "adopt", &ao);
     if (!adoptM) {
         unsupported(("`" + S + "` implements `HeapOwner` but has no `adopt` — cannot box a fallible `new`").c_str(), srcLine);
         return "";
@@ -10247,21 +10326,28 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     const std::string okName  = okV->payload[0].name;    // "value"
     const std::string errName = errV->payload[0].name;   // "error"
 
-    // Allocate ONLY on the Ok path: malloc the pointee, MOVE the payload in, `adopt` it into the owning
-    // handle, wrap in `Ok`. The `Err` path allocates nothing (leak-free by construction) and just re-wraps
-    // the error. `adopt` itself allocates the `Shared` ctrl block — so, unlike the intrinsic path, no
-    // `kama_ctrl_new()` here.
+    // Allocate ONLY on the Ok path: allocate the pointee (from `a` when placement, else libc malloc), MOVE
+    // the payload in, `adopt`/`adoptIn` it into the owning handle, wrap in `Ok`. The `Err` path allocates
+    // nothing (leak-free by construction) and just re-wraps the error. `adopt` itself allocates the `Shared`
+    // ctrl block — so, unlike the intrinsic path, no `kama_ctrl_new()` here.
+    std::string ap = placed ? "__falloc" + std::to_string(_tempCounter++) : "";
     std::string s;
     s  = RT + " " + tmp + " = " + cc + "; ";
     s += "if (" + tmp + ".tag == " + RT + "_Err) { ";
     s +=   lval + " = (" + target + "){ .tag = " + target + "_Err, .u.Err = { ." + errName + " = "
              + tmp + ".u.Err." + errName + " } }; ";
     s += "} else { ";
-    s +=   T + "* " + hp + " = (" + T + "*)malloc(sizeof(" + T + ")); ";
+    if (placed) {
+        s += pa.second + " " + ap + " = " + pa.first + "; ";
+        s += T + "* " + hp + " = (" + T + "*)" + pa.second + "__allocate(&" + ap + ", sizeof(" + T + ")); ";
+    } else {
+        s += T + "* " + hp + " = (" + T + "*)malloc(sizeof(" + T + ")); ";
+    }
     s +=   "if (!" + hp + ") kama_panic(kama_string_lit(\"out of memory\", 13)); ";
     s +=   "*(" + hp + ") = " + tmp + ".u.Ok." + okName + "; ";
+    std::string adoptCall = adoptM->cName + "(" + hp + (placed ? ", " + ap : "") + ")";
     s +=   lval + " = (" + target + "){ .tag = " + target + "_Ok, .u.Ok = { ." + okName + " = "
-             + adoptM->cName + "(" + hp + ") } }; ";
+             + adoptCall + " } }; ";
     s += "}";
     return s;
 }
