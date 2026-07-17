@@ -1301,6 +1301,17 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // keep the two in sync (esp. the Shared ctrl asymmetry: iface path emits
                     // kama_ctrl_new(), the library-adopt path lets `adopt` allocate it).
                     std::string octy = cType(oc->type);
+                    // M4b: a fallible (`Result`-returning) named ctor via `new` builds `Result<Owned<T>,E>` —
+                    // box the `Ok` payload, propagate `Err` with no allocation. `nm` (already declared +
+                    // RAII-tracked at the top of this declarator) is assigned by both branches.
+                    if (ctorIsFallible(oc)) {
+                        line(n->line);
+                        bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
+                        std::string s = emitFallibleNewBox(ty, nm, oc, n->line);
+                        _hoistOK = ph; flushHoisted(depth);
+                        if (!s.empty()) { indent(depth); *_out << s << "\n"; }
+                        return;
+                    }
                     // Allocator-aware `new(allocator: …)` threads a stateful allocator through BOTH the
                     // concrete-element library boxes (`Owned<T, A>` via `adoptIn`) AND the type-erased
                     // INTERFACE-element intrinsic path (`isSmartPtrClass`, M11d — each fat handle carries its
@@ -7820,6 +7831,15 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         _hoisted.push_back(targetCType + " " + t + " = {0};");
         return t;
     };
+    // M4b: a fallible `new Type.name(...)` in a value position (return/arg/payload) — `targetCType` is the
+    // `Result<Owned<T>,E>`. Hoist the box (factory into a temp, propagate `Err`, box `Ok`) into a fresh temp
+    // and hand it back as the value. `emitFallibleNewBox` pushes its arg hand-offs first (ordering preserved).
+    if (ctorIsFallible(oc)) {
+        std::string t = "__newarg" + std::to_string(_tempCounter++);
+        std::string s = emitFallibleNewBox(targetCType, t, oc, srcLine);
+        _hoisted.push_back(targetCType + " " + t + " = {0};" + (s.empty() ? "" : " " + s));
+        return t;
+    }
     // Allocator-aware placement threads a stateful allocator through the concrete-element library boxes
     // (`Owned<T, A>` via `adoptIn` below) AND the type-erased INTERFACE-element intrinsic path (M11d, in the
     // `isInterface(T)` block below — each fat handle carries its own `A alloc` value + `objsize`).
@@ -10111,8 +10131,11 @@ std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode*
         return "";
     }
     if (mi->returnType && mi->returnType->value && *mi->returnType->value == "Result") {
-        unsupported(("fallible `new " + disp + "." + cn + "(...)` (a `Result`-returning ctor) is not yet "
-                     "supported — coming in M4b").c_str(), lineNo);
+        // Reached only from an INFALLIBLE box path (concrete/interface/library smart-ptr target) — a fallible
+        // ctor there means the declared result type is wrong. Fallible `new` into a concrete `Owned`/`Shared`
+        // is routed to `emitFallibleNewBox` upstream; interface/library fallible `new` is a follow-on.
+        unsupported(("fallible `new " + disp + "." + cn + "(...)` returns `Result` — declare the result "
+                     "`Result<Owned<" + disp + ">, E>` (a fallible ctor yields `Err` or an owned value)").c_str(), lineNo);
         return "";
     }
     canAccess(owner, mi->visibility, cn, lineNo);
@@ -10132,6 +10155,115 @@ void CEmitter::emitNewFactoryMove(const std::string& cls, const std::string& slo
     _hoistOK = ph; flushHoisted(depth);
     if (cc.empty()) return;                            // rejected (unknown/fallible ctor) — diagnostic emitted
     indent(depth); *_out << "*(" << slotPtr << ") = " << cc << ";\n";
+}
+
+// Does `new Type.name(...)` name a FALLIBLE ctor (one returning `Result<T,E>`)? Drives M4b's fallible-`new`
+// routing (the box path threads `Result<Owned<T>,E>`) apart from the infallible factory-move.
+bool CEmitter::ctorIsFallible(ObjectCreationNode* oc)
+{
+    if (!oc || !oc->ctorName || !oc->ctorName->value) return false;
+    std::string cls = cType(oc->type);
+    if (!isClass(cls)) return false;
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = findMethod(&_classes[cls], *oc->ctorName->value, &owner);
+    return mi && mi->isCtor && mi->returnType && mi->returnType->value && *mi->returnType->value == "Result";
+}
+
+// M4b — `new Type.name(args)` over a FALLIBLE ctor (returns `Result<T,E>`) builds `Result<Owned<T>,E>`: call
+// the factory into a temp, propagate `Err` with NO allocation (leak-free by construction), else box the `Ok`
+// payload into a fresh owning handle (`adopt`) and wrap it in `Ok`. Returns a C statement sequence that
+// assigns the (already-declared) `lval`, or "" after emitting a diagnostic. Concrete `Owned`/`Shared` (the
+// `std::memory` library `HeapOwner`) only — the type-erased interface-element handle (`Owned<Contract>`,
+// `isSmartPtrClass`) and the `new(allocator: …)`/stateful-allocator form get a precise "not yet supported"
+// diagnostic (a follow-on milestone), never the old "coming in M4b" text.
+std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::string& lval,
+                                         ObjectCreationNode* oc, int srcLine)
+{
+    const std::string cls = cType(oc->type);
+    const std::string cn  = (oc->ctorName && oc->ctorName->value) ? *oc->ctorName->value : "";
+    std::string disp = (oc->type && oc->type->value) ? *oc->type->value : cls;
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = isClass(cls) ? findMethod(&_classes[cls], cn, &owner) : nullptr;
+    if (!mi || !mi->isCtor) {
+        unsupported(("`new " + disp + "." + cn + "(...)` — `" + cn + "` is not a constructor of `"
+                     + disp + "`").c_str(), srcLine);
+        return "";
+    }
+    canAccess(owner, mi->visibility, cn, srcLine);
+
+    // The declared result must be `Result<Owned<T>|Shared<T>, E>`. Pull the inner smart-ptr `S` and the
+    // error field straight off the monomorphized `Result` ClassInfo — its payload types are substituted-concrete.
+    ClassInfo* rc = _classes.count(target) ? &_classes[target] : nullptr;
+    VariantCase* okV = nullptr; VariantCase* errV = nullptr;
+    if (rc && rc->isVariant)
+        for (auto& v : rc->variants) { if (v.name == "Ok") okV = &v; else if (v.name == "Err") errV = &v; }
+    if (!okV || !errV || okV->payload.empty() || errV->payload.empty()) {
+        unsupported(("fallible `new " + disp + "." + cn + "(...)` must be assigned to a `Result<Owned<"
+                     + disp + ">, E>` — a fallible ctor yields `Err` or an owned value").c_str(), srcLine);
+        return "";
+    }
+    // Resolve the inner smart-ptr `S` under the `Result` INSTANCE's substitution (not the ambient context) —
+    // else a defaulted generic param (`Owned<T>`'s allocator) resolves wrong and `S` misses the registered
+    // `…Owned…GlobalAllocator` name. Mirrors emitVariantStruct's own field emission.
+    std::string S = cTypeInInstance(target, okV->payload[0].type);   // `std__memory__Owned…`/`…Shared…`
+    // A concrete `Owned`/`Shared` from `std::memory` is a LIBRARY `HeapOwner` (boxed via `adopt`, NOT the
+    // intrinsic `.ptr`/`.ctrl` handle). The intrinsic smart-ptr representation (`isSmartPtrClass`) is the
+    // type-erased INTERFACE-element fat handle — its fallible `new` is a follow-on milestone.
+    if (isSmartPtrClass(S)) {
+        unsupported(("fallible `new` into an interface handle (`" + S + "`) is not yet supported — box a "
+                     "concrete `Owned`/`Shared` for now (a follow-on milestone)").c_str(), srcLine);
+        return "";
+    }
+    std::string T = heapOwnerTarget(S);               // the boxed element (an owning `HeapOwner` element)
+    if (T.empty()) {
+        unsupported(("fallible `new " + disp + "." + cn + "(...)` must be assigned to a `Result<Owned<"
+                     + disp + ">, E>` (an owning handle over `" + disp + "`)").c_str(), srcLine);
+        return "";
+    }
+    if (T != cls) {
+        unsupported(("`" + S + "` owns `" + T + "`, but `new " + disp + "` builds `" + cls + "`").c_str(), srcLine);
+        return "";
+    }
+    // Bare `new` only (default `GlobalAllocator`). A placement `new(allocator: …)` or a stateful-allocator
+    // box needs the `adoptIn` path — a follow-on (mirrors the infallible stateful-allocator gate at ~1416).
+    std::string ba = boxAllocatorArg(S);
+    if ((oc->placement && !oc->placement->empty())
+        || (!ba.empty() && _classes.count(ba) && !_classes[ba].fields.empty())) {
+        unsupported(("fallible `new(allocator: …)` / stateful-allocator `" + S + "` is not yet supported — a "
+                     "follow-on milestone (use a default-allocator `Owned`/`Shared` for now)").c_str(), srcLine);
+        return "";
+    }
+    ClassInfo* ao = nullptr;
+    MethodInfo* adoptM = findMethod(&_classes[S], "adopt", &ao);
+    if (!adoptM) {
+        unsupported(("`" + S + "` implements `HeapOwner` but has no `adopt` — cannot box a fallible `new`").c_str(), srcLine);
+        return "";
+    }
+
+    std::string RT = cType(mi->returnType);           // the factory's `Result<T, E>`
+    std::string cc = emitReorderedCall(mi->cName, "", mi->params, oc->args, srcLine);   // pushes arg hand-offs
+    std::string tmp = "__fnew" + std::to_string(_tempCounter++);
+    std::string hp  = "__fheap" + std::to_string(_tempCounter++);
+    const std::string okName  = okV->payload[0].name;    // "value"
+    const std::string errName = errV->payload[0].name;   // "error"
+
+    // Allocate ONLY on the Ok path: malloc the pointee, MOVE the payload in, `adopt` it into the owning
+    // handle, wrap in `Ok`. The `Err` path allocates nothing (leak-free by construction) and just re-wraps
+    // the error. `adopt` itself allocates the `Shared` ctrl block — so, unlike the intrinsic path, no
+    // `kama_ctrl_new()` here.
+    std::string s;
+    s  = RT + " " + tmp + " = " + cc + "; ";
+    s += "if (" + tmp + ".tag == " + RT + "_Err) { ";
+    s +=   lval + " = (" + target + "){ .tag = " + target + "_Err, .u.Err = { ." + errName + " = "
+             + tmp + ".u.Err." + errName + " } }; ";
+    s += "} else { ";
+    s +=   T + "* " + hp + " = (" + T + "*)malloc(sizeof(" + T + ")); ";
+    s +=   "if (!" + hp + ") kama_panic(kama_string_lit(\"out of memory\", 13)); ";
+    s +=   "*(" + hp + ") = " + tmp + ".u.Ok." + okName + "; ";
+    s +=   lval + " = (" + target + "){ .tag = " + target + "_Ok, .u.Ok = { ." + okName + " = "
+             + adoptM->cName + "(" + hp + ") } }; ";
+    s += "}";
+    return s;
 }
 
 // Does a member-access callee name a TYPE (so `X.name(...)` is a dot-on-type ctor call) rather than an

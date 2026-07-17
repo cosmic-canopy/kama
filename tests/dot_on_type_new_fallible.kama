@@ -1,0 +1,33 @@
+// Construction-model M4b: fallible `new Type.name(...)` over a `Result`-returning ctor produces
+// `Result<Owned<T>, E>` — allocate only on `Ok`, box the payload, propagate `Err` with no leak. Exercises
+// the local-decl form (`Owned` + `Shared`) and the return position; the boxed handle is used then dropped
+// (SAN leak-clean on BOTH the Ok path — the box is freed by the `Result`'s dtor — and the Err path, where
+// nothing is allocated).
+import std::memory::{Owned, Shared};
+
+type resource Gauge {
+    int32 v;
+    public ctor Result<Gauge, int32> open(int32 v) {
+        if (v < 0) { return Result::Err(error: -1); }   // fail before the object exists (no allocation)
+        Gauge g; g.v = v; return Result::Ok(value: g);
+    }
+    public fn int32 get() { return this.v; }
+}
+
+// return-position fallible `new`: a resource-acquiring factory returns `Result<Owned<Gauge>, int32>`.
+fn Result<Owned<Gauge>, int32> acquire(int32 v) {
+    return new Gauge.open(v: v);
+}
+
+fn int32 main() {
+    Result<Owned<Gauge>, int32>  ok  = new Gauge.open(v: 10);   // Ok  -> boxed `Owned`
+    Result<Owned<Gauge>, int32>  bad = new Gauge.open(v: -5);   // Err -> propagated, nothing allocated
+    Result<Shared<Gauge>, int32> sh  = new Gauge.open(v: 20);   // Ok  -> `Shared` box (ctrl block)
+    Result<Owned<Gauge>, int32>  ret = acquire(v: 7);           // Ok  -> return-position `new`
+
+    int32 a = match (ok)  { case Ok(g): g.get(); case Err(e): e; };    // 10
+    int32 b = match (bad) { case Ok(g): 100;     case Err(e): e; };    // -1
+    int32 c = match (sh)  { case Ok(g): g.get(); case Err(e): e; };    // 20
+    int32 d = match (ret) { case Ok(g): g.get(); case Err(e): e; };    // 7
+    return a + b + c + d;   // 10 - 1 + 20 + 7 = 36
+}

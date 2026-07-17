@@ -1,0 +1,15 @@
+// Construction-model M4b: fallible `new Type.name(...)` yields `Result<Owned<T>, E>` — declaring the result
+// as a bare `Owned<T>` (dropping the fallibility) is a compile error. The diagnostic points at the correct
+// `Result<Owned<T>, E>` shape.
+import std::memory::{Owned};
+type value Box {
+    int32 v;
+    public ctor Result<Box, int32> tryMake(int32 v) {
+        if (v < 0) { return Result::Err(error: -1); }
+        Box b; b.v = v; return Result::Ok(value: b);
+    }
+}
+fn int32 main() {
+    Owned<Box> p = new Box.tryMake(v: 7);   // ERROR: declare `Result<Owned<Box>, int32>`
+    return 0;
+}

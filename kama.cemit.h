@@ -859,6 +859,9 @@ private:
     std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory
     void        emitNewFactoryMove(const std::string& cls, const std::string& slotPtr,  // new Type.name(...) construct
                                    ObjectCreationNode* oc, int lineNo, int depth);
+    bool        ctorIsFallible(ObjectCreationNode* oc);                                 // new Type.name(...) ctor returns Result?
+    std::string emitFallibleNewBox(const std::string& target, const std::string& lval, // M4b: fallible new -> Result<Owned<T>,E>
+                                   ObjectCreationNode* oc, int srcLine);
     std::string emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNode* recv, const std::string& typeName);
     // Does an invocation (a free-fn / method call) return a PLACE (`fn ref T` — a borrow), not a fresh
     // owned value? Used to gate materialize-and-drop of an owned rvalue receiver: a place must NOT be
