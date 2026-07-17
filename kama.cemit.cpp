@@ -10101,15 +10101,17 @@ bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
 std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo)
 {
     const std::string cn = (oc->ctorName && oc->ctorName->value) ? *oc->ctorName->value : "";
+    // Diagnostics use the SOURCE spelling the user wrote (`Box`), not the mangled `_classes` key.
+    std::string disp = (oc->type && oc->type->value) ? *oc->type->value : cls;
     ClassInfo* owner = nullptr;
     MethodInfo* mi = isClass(cls) ? findMethod(&_classes[cls], cn, &owner) : nullptr;
     if (!mi || !mi->isCtor) {
-        unsupported(("`new " + cls + "." + cn + "(...)` — `" + cn + "` is not a constructor of `"
-                     + cls + "`").c_str(), lineNo);
+        unsupported(("`new " + disp + "." + cn + "(...)` — `" + cn + "` is not a constructor of `"
+                     + disp + "`").c_str(), lineNo);
         return "";
     }
     if (mi->returnType && mi->returnType->value && *mi->returnType->value == "Result") {
-        unsupported(("fallible `new " + cls + "." + cn + "(...)` (a `Result`-returning ctor) is not yet "
+        unsupported(("fallible `new " + disp + "." + cn + "(...)` (a `Result`-returning ctor) is not yet "
                      "supported — coming in M4b").c_str(), lineNo);
         return "";
     }
@@ -10161,19 +10163,24 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
 std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNode* recv, const std::string& typeName)
 {
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
+    // Diagnostics use the SOURCE spelling the user wrote (`Point`), not the mangled `_classes` key.
+    std::string disp = (recv->classType && recv->classType->value) ? *recv->classType->value
+                     : (dynamic_cast<IdentifierNode*>(recv->expression.get()) && recv->expression
+                        && static_cast<IdentifierNode*>(recv->expression.get())->value)
+                        ? *static_cast<IdentifierNode*>(recv->expression.get())->value : typeName;
     ClassInfo* stci = _classes.count(typeName) ? &_classes[typeName] : nullptr;
-    if (!stci) { unsupported(("unknown type in constructor call `" + typeName + "`").c_str(), call->line); return "0"; }
+    if (!stci) { unsupported(("unknown type in constructor call `" + disp + "`").c_str(), call->line); return "0"; }
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(stci, method, &owner);
     if (!mi) {
-        unsupported(("type `" + stci->name + "` has no constructor `" + method + "` — define one "
+        unsupported(("type `" + disp + "` has no constructor `" + method + "` — define one "
                      "(`ctor " + method + "(...) {…}`)").c_str(), call->line);
         return "0";
     }
     if (!mi->isCtor) {
         // `name` is a real static fn (or non-static method) — dot-on-type is for constructors only.
-        unsupported(("`" + stci->name + "." + method + "` — dot-on-type calls a constructor; `" + method
-                     + "` is a static function — call it with `" + stci->name + "::" + method + "(...)`").c_str(),
+        unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; `" + method
+                     + "` is a static function — call it with `" + disp + "::" + method + "(...)`").c_str(),
                     call->line);
         return "0";
     }
