@@ -53,6 +53,13 @@ type contract Allocator for value {
     fn Ptr allocate(usize bytes);
     fn void deallocate(Ptr pointer, usize bytes);
 }
+// The base error contract (Model C — Kama's answer to exceptions). Every fallible constructor (eventually
+// every fallible fn) returns `Result<This, Error>`; a concrete error is an ordinary `enum` that retro-
+// `implements Error` and is BOXED into an `Owned<Error>` fat handle at the boundary (Swift's `enum X: Error`
+// model). `for both` — an error may be a value/enum or a resource. `message()` gives every error a uniform,
+// dynamically-dispatched description; branch on the specific kind by recovering the concrete enum with
+// `error.as<ConcreteError>()`. Language-level, so it lives in the prelude and survives `--no-std`.
+type contract Error for both { fn string message(); }
 // Primitive conformances (pure-kama retro-impls, NO compiler blessing) — hosted here so `string`/`int32`
 // satisfy the standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `DynamicArray<int32>.contains`, an int-keyed
 // `Map`) without importing `std::collections`. `hash()` returns a CHEAP CONTENT hash (identity for integers,

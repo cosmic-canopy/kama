@@ -1,0 +1,37 @@
+// P1 (Model C): an `enum` that retro-`implements` the base `Error` contract gains DYNAMIC dispatch.
+// Two independent error enums are passed through ONE `Error`-typed call site (`describe`); each
+// `e.message()` dispatches to the RIGHT impl at runtime through the emitted `<Enum>__as_Error` vtbl.
+// Distinct message lengths make the returned code prove which impl ran (not a static collapse).
+// (The result is kept < 256 so the process exit code isn't truncated; the interface-call result is
+// bound to a local because chaining `.length()` directly on it hits a separate exprClass limitation.)
+
+enum IoError { NotFound, Other(int32 code) }
+enum ParseError { BadToken, Eof }
+
+implements Error for IoError {
+    public fn string message() {
+        return match (this) {
+            case NotFound: "nf";       // 2
+            case Other(c): "other";    // 5
+        };
+    }
+}
+implements Error for ParseError {
+    public fn string message() {
+        return match (this) {
+            case BadToken: "bad";      // 3
+            case Eof:      "eof";      // 3
+        };
+    }
+}
+
+// A single monomorphic C function over the base contract — the vtbl makes `.message()` dynamic.
+fn int32 describe(Error e) { string m = e.message(); return cast<int32>(m.length()); }
+
+fn int32 main() {
+    IoError a    = IoError::NotFound;
+    ParseError b = ParseError::BadToken;
+    IoError c    = IoError::Other(code: 42);
+    // 2*100 + 3*10 + 5 = 235 — only correct if each dispatched to its own impl (< 256, no exit truncation).
+    return describe(e: a) * 100 + describe(e: b) * 10 + describe(e: c);
+}

@@ -420,6 +420,13 @@ private:
     // themselves are injected later in applyRetroactive, which also validates completeness/coherence.
     std::map<std::string, std::set<std::string>> _retroConformances;
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info
+    // Model C: a PLAIN (payload-less) enum's decl node + its declaring-unit ns context, captured at
+    // collectEnums. If such an enum later retro-implements a METHOD-CARRYING contract (e.g. base `Error`),
+    // it is PROMOTED to a tagged-union ClassInfo (an all-payload-less variant emits `struct{tag}`, no union)
+    // so it can carry a `<Enum>__as_C` vtbl + be boxed — reusing the tagged-enum machinery. Keyed by
+    // qualified name.
+    std::map<std::string, EnumDeclarationNode*> _enumDeclNodes;
+    std::map<std::string, NsCtx>                _enumNsCtx;
     std::map<std::string, CollectionInfo> _collections;      // cName -> info
     std::vector<std::string>              _collectionOrder;  // registration order (inner-first; a
                                                              // collection's dtor calls its element's,
@@ -771,6 +778,14 @@ private:
     std::vector<std::string> _graphNodeOrder;       // graphNodeTypes in a stable order (for driver dispatch chains)
     // Contracts used as a graph edge element (`Shared<Shape>`): each gets a runtime-dispatch resolver pair.
     std::set<std::string> _polyContracts;
+    // Poly-DISPATCH contracts (Model C, base `Error`): a contract that must support DYNAMIC dispatch +
+    // boxing even for RETRO impls — the enum→interface capability. Set when an enum retro-implements a
+    // contract (an enum can only implement via retro), and (P2+) when a contract is a `Result` E-arg or an
+    // `Owned/Shared/Weak<C>` element. Distinct from `_polyContracts` (serialization graph edges). For such
+    // a contract, `emitClassInterfaceVtables` emits `<Impl>__as_<C>` even for a retro impl (so an enum
+    // gets a fat-pointer vtbl), and `rejectStoredInterface` treats a bare `C` in an owning slot as sugar.
+    std::set<std::string> _polyDispatchContracts;
+    bool isPolyDispatchContract(const std::string& c) const { return _polyDispatchContracts.count(c) != 0; }
     // The prelude triad's generic-TEMPLATE keys (`std::memory::{Shared,Owned,Weak}`), captured at collection.
     // A concrete-element triad instance (`Shared<Leaf>`) is an ordinary library generic instance (NOT
     // isIntrinsicColl), so pointer detection goes by template identity via `_genericTypeInstOf`.

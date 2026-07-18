@@ -2608,6 +2608,9 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
         if (!ed || !ed->identifier || !ed->identifier->value) continue;
         std::string name = qualify(*ed->identifier->value);
+        // Remember the decl + declaring context for a possible Model-C promotion (see _enumDeclNodes).
+        _enumDeclNodes[name] = ed;
+        _enumNsCtx[name]     = _nsCtx;
 
         if (enumIsTagged(ed)) {
             // a payload/generic enum is a discriminated union backed by a ClassInfo.
@@ -7527,7 +7530,12 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // inside the first arm body (which would leave them undeclared at the point of use).
     std::string subjExpr = emitExpression(m->subject);
     flushHoisted(depth);
-    if (subjLvalue) {
+    if (dynamic_cast<ThisAccessNode*>(m->subject.get())) {
+        // `this` emits as `self`, which is ALREADY a `subjCls*` (the receiver pointer) — do NOT re-address
+        // it (`&self` would point at the parameter slot). Reachable only for `match (this)` in a retro-impl
+        // method on an enum (the only way `this` is a variant subject). (Model C: `enum … implements Error`.)
+        indent(depth); *_out << subjCls << "* " << sp << " = " << subjExpr << ";\n";
+    } else if (subjLvalue) {
         indent(depth); *_out << subjCls << "* " << sp << " = &(" << subjExpr << ");\n";
     } else {
         subjOwner = "__msubj" + std::to_string(_tempCounter++);
@@ -8654,9 +8662,11 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
 {
     for (auto& ifn : ci.interfaces) {
         // A retroactively-implemented contract dispatches statically (monomorphized) — no fat-pointer vtable.
+        // EXCEPTION (Model C): a poly-DISPATCH contract (base `Error`, an enum-implemented contract) DOES
+        // get a `<Impl>__as_<C>` vtbl even for a retro impl, so an enum can be dispatched dynamically + boxed.
         bool retro = false;
         for (auto& r : ci.retroInterfaces) if (r == ifn) { retro = true; break; }
-        if (retro) continue;
+        if (retro && !isPolyDispatchContract(ifn)) continue;
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end()) { unsupported("unknown contract in implements", ci.node->line); continue; }
         InterfaceInfo& ii = it->second;
@@ -10725,12 +10735,25 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 // "is this a user type?" test keys on `_classes`, so an entry there would break int
                 // operators/ownership. Hang the injected methods on a SEPARATE `_primConformances` registry
                 // (scalar-receiver: `this` is the value itself). Method calls + bound checks consult it.
+                const std::vector<InterfaceMethod>* cmeths = contractMethods(contract);
                 if (ri->target->builtInVal != 0) {
                     ClassInfo& pci = _primConformances[tkey];
                     pci.name = tkey;
                     pci.kind = TypeKind::Value;
                     pci.isScalarRecv = true;
                     ti = _primConformances.find(tkey);
+                } else if (_enums.count(tkey) && _enumDeclNodes.count(tkey) && cmeths && !cmeths->empty()) {
+                    // Model C: a PLAIN enum retro-implementing a METHOD-CARRYING contract (e.g. `Error`) is
+                    // PROMOTED to a tagged-union ClassInfo so it can carry the method, a `<Enum>__as_C` vtbl,
+                    // and be boxed — reusing the tagged machinery. A payload-less variant emits no union, so
+                    // the cost is just the tag. Build it under the ENUM's own ns context (not this retro-impl
+                    // unit's). A marker contract carries no methods → not promoted (stays a plain enum).
+                    NsCtx savedNs = _nsCtx;
+                    _nsCtx = _enumNsCtx[tkey];
+                    _classes[tkey] = buildVariantClassInfo(_enumDeclNodes[tkey], tkey);
+                    _nsCtx = savedNs;
+                    _enums.erase(tkey);          // now a tagged class: match/construction use the variant path
+                    ti = _classes.find(tkey);
                 } else {
                     unsupported(("`implements " + contract + " for " + *ri->target->value +
                                  "` — unknown target type").c_str(), ri->line);
@@ -10765,6 +10788,10 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 }
             tci.interfaces.push_back(contract);
             tci.retroInterfaces.push_back(contract);   // static dispatch only — no fat-pointer vtable
+            // Model C: an ENUM implementing a contract (only possible via retro) needs DYNAMIC dispatch —
+            // mark the contract poly-dispatch so `emitClassInterfaceVtables` emits `<Enum>__as_<C>` despite
+            // the retro skip below, enabling `C e = enumVal; e.method()` through a fat pointer + (P2) boxing.
+            if (tci.isVariant) _polyDispatchContracts.insert(contract);
             // Completeness: the impl must supply every method the contract requires.
             if (const std::vector<InterfaceMethod>* need = contractMethods(contract))
                 for (auto& nm : *need)
@@ -10942,7 +10969,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (auto& ifn : ci->interfaces) {
             bool retro = false;
             for (auto& r : ci->retroInterfaces) if (r == ifn) { retro = true; break; }
-            if (retro) continue;
+            if (retro && !isPolyDispatchContract(ifn)) continue;   // Model C: enum→poly-dispatch vtbl HAS a def
             auto it = _interfaces.find(ifn);
             if (it == _interfaces.end()) continue;
             *_out << "extern const " << it->second.name << "_vtbl " << ci->name << "__as_" << it->second.name << ";\n";
@@ -11148,6 +11175,10 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
                 if (it != _classes.end() && it->second.isVariant) {
                     ClassInfo& eci = it->second;
                     if (eci.destructible) emitDtorDefinition(eci);
+                    // Model C: emit the `<Enum>__as_<C>` vtbl DEFINITION for any poly-dispatch contract the
+                    // enum retro-implements (classOf skips enums, so the class-vtbl loop above missed it). The
+                    // header carries the matching `extern` decl. Enables dynamic dispatch + (P2) boxing.
+                    emitClassInterfaceVtables(eci);
                     // `@generate` enum serde — bodies land in the home module (protos are in the header via
                     // emitClassPrototypes; classOf skips enums, so emit here alongside the dtor). The unit's
                     // scope is already active (_nsCtx = _unitCtx above), so payload types resolve.
