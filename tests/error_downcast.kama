@@ -1,0 +1,25 @@
+// P3 (Model C): `error.as<T>()` recovers the concrete enum from a boxed `Owned<Error>` — a runtime vtbl
+// compare yielding `Optional<T>` (Some by value if it matches, else None). It BORROWS the box, so the
+// operand stays valid on the None branch (there we still call `e.message()`). Some pulls the payload out.
+enum IoError { NotFound, Other(int32 code) }
+implements Error for IoError { public fn string message() { return match (this) { case NotFound: "nf"; case Other(c): "io"; }; } }
+enum ParseError { Bad, Eof }
+implements Error for ParseError { public fn string message() { return match (this) { case Bad: "bad"; case Eof: "eof"; }; } }
+
+fn Result<int32, Owned<Error>> f(int32 w) {
+    if (w == 0) { return Result::Ok(value: 50); }
+    if (w == 1) { return Result::Err(error: IoError::Other(code: 9)); }
+    return Result::Err(error: ParseError::Bad);
+}
+fn int32 handle(Result<int32, Owned<Error>> r) {
+    return match (r) {
+        case Ok(v): v;
+        case Err(e): {
+            := match (e.as<IoError>()) {
+                case Some(io): match (io) { case Other(c): c; case NotFound: 0; };   // recovered payload
+                case None: { string m = e.message(); := cast<int32>(m.length()); }   // e survives the borrow
+            };
+        }
+    };
+}
+fn int32 main() { return handle(r: f(w: 0)) + handle(r: f(w: 1)) + handle(r: f(w: 2)); }  // 50 + 9 + 3 = 62

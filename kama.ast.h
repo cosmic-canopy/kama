@@ -548,6 +548,20 @@ public:
         , unaryExpression(unaryExpression) { }
 };
 
+// `expr.as<T>()` — Model C runtime downcast of a boxed poly-dispatch error (an `Owned<Error>` or a borrowing
+// `Error`) to a concrete implementing enum `T`. Yields `Optional<T>`: `Some(<the enum by value>)` if the
+// box's vtbl is `T`'s, else `None` (a vtbl-pointer compare — no type-id table). Borrows the operand (peek +
+// copy-out), so the operand stays valid on the `None` branch.
+class AsDowncastNode : public ExpressionNode {
+public:
+    SharedExpression operand;
+    SharedIdentifier type;
+    AsDowncastNode(CodeGenContext& context, SharedExpression operand, SharedIdentifier type)
+        : ASTNode(context),  ExpressionNode(context)
+        , operand(operand)
+        , type(type) { }
+};
+
 // `sizeof(T)` / `alignof(T)` — the compile-time byte size / alignment of a type, a `usize`
 // (lowers to C `sizeof(cType)` / `_Alignof(cType)`).
 class SizeofNode : public ExpressionNode {

@@ -923,6 +923,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return "((" + cType(v->type) + ")(" + emitExpression(v->unaryExpression) + "))";
     }
 
+    if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) return emitAsDowncast(ad);
+
     // `sizeof(T)`/`alignof(T)` -> C `sizeof(<cType>)`/`_Alignof(<cType>)` (a compile-time `size_t`/
     // `usize`). `cType` resolves a generic `T` under substitution, so `n * sizeof(T)` inside a
     // `Vec<T>` monomorphizes to the concrete size. `_Alignof` is C11 (kama emits strict ISO C11).
@@ -4155,6 +4157,11 @@ void CEmitter::scanExprForCollections(SharedExpression e)
     } else if (auto* c = dynamic_cast<CastNode*>(n)) {
         scanTypeForCollections(c->type);
         scanExprForCollections(c->unaryExpression);
+    } else if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) {
+        // Model C `.as<T>()` yields `Optional<T>` — register that instance so its struct + Some/None exist
+        // for the result / enclosing match (mirrors string.find's Optional<usize> registration).
+        scanExprForCollections(ad->operand);
+        scanTypeForCollections(optionalTypeNode(ad->type));
     } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
         scanExprForCollections(b->LHS); scanExprForCollections(b->RHS);
     } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) {
@@ -9323,6 +9330,18 @@ SharedIdentifier CEmitter::sharedTypeNode(SharedIdentifier elem)
     return node;
 }
 
+// Synthesize an `Optional<elem>` type node (the `.as<T>()` result). Resolves like a user-written
+// `Optional<T>` (empty qualifier), so cType mangles it to `Optional_<elem>`.
+SharedIdentifier CEmitter::optionalTypeNode(SharedIdentifier elem)
+{
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto node = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Optional"),
+                                                 std::make_shared<StringList>(), elem);
+    node->genericArgs = std::make_shared<IdentifierList>();
+    node->genericArgs->push_back(elem);
+    return node;
+}
+
 // Closure (post-computeReachesPointer): a graph node is a `@generate` root (`reachesPointer`) OR a pointee
 // reached via some node's Shared/Weak/Owned field (a tree type like `Leaf` that is only ever a `Shared<Leaf>`
 // target). Each node emits the node helpers + a `deserialize` returning `Shared<T>` (so `Shared<T>::deserialize`
@@ -9812,6 +9831,11 @@ std::string CEmitter::exprClass(SharedExpression e)
     ASTNode* n = e.get();
 
     if (dynamic_cast<StringNode*>(n)) return "kama_string";   // a string literal is the `string` primitive
+
+    if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) {        // `.as<T>()` -> Optional<T>
+        std::string oc = cType(optionalTypeNode(ad->type));
+        return isClass(oc) ? oc : "";
+    }
 
     if (dynamic_cast<ThisAccessNode*>(n))
         return _currentClass ? _currentClass->name : "";
@@ -10402,6 +10426,46 @@ std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, con
         s += " " + t + ".ctrl = kama_ctrl_new();";
     _hoisted.push_back(s);
     return t;
+}
+
+// Model C (P3): `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to a concrete enum `T`,
+// yielding `Optional<T>`. A vtbl-POINTER compare (`(op).vtbl == &T__as_C`), no type-id table. On a hit it
+// COPIES the enum value out (`*(T*)(op).obj`) — a borrow, so `op` stays valid on the `None` branch. `T` must
+// be a non-destructible enum implementing the contract (a value copy-out of an owned payload would alias).
+std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
+{
+    std::string opCls = exprClass(ad->operand);
+    std::string contract;
+    if (isSmartPtrClass(opCls))   contract = _classes[opCls].collElemClass;   // Owned<Error>/Shared<Error>
+    else if (isInterface(opCls))  contract = opCls;                            // a borrowing `Error`
+    if (contract.empty() || !isPolyDispatchContract(contract)) {
+        unsupported("`.as<T>()` applies to a boxed error (an `Owned<Error>`/`Shared<Error>` or a borrowed "
+                    "`Error`) — its static type isn't a poly-dispatch contract", ad->type ? ad->type->line : 0);
+        return "0";
+    }
+    std::string enumC = cType(ad->type);
+    std::string tname = (ad->type && ad->type->value) ? *ad->type->value : enumC;
+    if (!_classes.count(enumC) || !_classes[enumC].isVariant) {
+        unsupported(("`.as<" + tname + ">()` — `" + tname + "` is not an enum").c_str(), ad->type ? ad->type->line : 0);
+        return "0";
+    }
+    if (!implementsContractTemplate(&_classes[enumC], contract)) {
+        unsupported(("`.as<" + tname + ">()` — `" + tname + "` does not implement `" + contract + "`").c_str(),
+                    ad->type ? ad->type->line : 0);
+        return "0";
+    }
+    if (_classes[enumC].destructible) {
+        unsupported(("`.as<" + tname + ">()` recovers `" + tname + "` by copying it out of the box, but `"
+                     + tname + "` owns resources (it has an owning payload) — copying would alias them; "
+                     "handle it through the boxed `Error`'s methods instead").c_str(),
+                    ad->type ? ad->type->line : 0);
+        return "0";
+    }
+    std::string optC = cType(optionalTypeNode(ad->type));
+    std::string op = "(" + emitExpression(ad->operand) + ")";   // side-effect-free (a binding / field access)
+    return "((" + op + ".vtbl == &" + enumC + "__as_" + contract + ") ? "
+         + "(" + optC + "){ .tag = " + optC + "_Some, .u.Some = { .value = *(" + enumC + "*)" + op + ".obj } } : "
+         + "(" + optC + "){ .tag = " + optC + "_None })";
 }
 
 std::string CEmitter::variantExprEnumCType(SharedExpression e)

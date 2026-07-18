@@ -1,0 +1,11 @@
+// P3 guard: `.as<T>()` recovers T by COPYING it out of the box, so T must not own resources (a value copy
+// would alias an owning payload → double-free). An error enum that owns a `Shared<Probe>` is rejected.
+extern "<stdlib.h>";
+extern fn Ptr malloc(usize n);
+extern fn void free(Ptr p);
+type resource Probe { Ptr p; public Probe(){ unsafe { this.p = malloc(n: 8); } } ~Probe(){ unsafe { free(p: this.p); } } public fn int32 v(){return 1;} }
+enum LoadError { Missing, Wrapped(Shared<Probe> probe) }
+implements Error for LoadError { public fn string message(){ return "x"; } }
+fn Result<int32, Owned<Error>> mk() { Shared<Probe> sp = new Probe(); return Result::Err(error: LoadError::Wrapped(probe: give sp)); }
+fn int32 peek(Owned<Error> e) { return match (e.as<LoadError>()) { case Some(x): 1; case None: 0; }; }   // ERROR: LoadError owns resources
+fn int32 main() { return match (mk()) { case Ok(v): v; case Err(e): peek(e: e); }; }

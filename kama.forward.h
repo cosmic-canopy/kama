@@ -35,6 +35,7 @@ class ZeroValueNode;
 class ForEachNode;
 class ThisAccessNode;
 class ObjectCreationNode;
+class AsDowncastNode;
 class EnumMemberDeclarationNode;
 class EnumDeclarationNode;
 class MatchNode;

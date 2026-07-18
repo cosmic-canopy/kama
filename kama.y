@@ -185,6 +185,7 @@ struct kamayystype {
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
 %type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis array_literal
 %type <expression> postfix_expression cast_expression sizeof_expression member_access element_access this_access
+%type <expression> as_downcast_expression
 %type <expression> base_access primary_expression multiplicative_expression additive_expression
 %type <expression> shift_expression relational_expression equality_expression and_expression
 %type <expression> exclusive_or_expression inclusive_or_expression conditional_and_expression
@@ -857,6 +858,17 @@ primary_expression_no_parenthesis
   | new_expression   { $$ = $1; }
   | match_expression   { $$ = $1; }   /* value-producing `match` in expression position */
   | array_literal
+  | as_downcast_expression   { $$ = $1; }
+  ;
+
+/* Model C: `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to a concrete enum `T`, yielding
+   `Optional<T>`. Mirrors cast_expression's genericDepth mid-rules so the `<…>` parses without spaces and a
+   trailing `>>` stays a shift. `.as` (DOT AS) is distinct from `.member` (DOT IDENTIFIER) — no conflict. */
+as_downcast_expression
+  : primary_expression DOT AS LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN RPAREN
+    { $$ = std::make_shared<AsDowncastNode>(SCANNER_CODEGENCONTEXT, $1, $6); }
+  | qualified_identifier_no_generic DOT AS LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN RPAREN
+    { $$ = std::make_shared<AsDowncastNode>(SCANNER_CODEGENCONTEXT, std::static_pointer_cast<ExpressionNode>($1), $6); }
   ;
 
 /* fixed-array value literal initializing a `InlineArray<T,N>`: `[a, b, c]` (elements) or `[v; N]` (fill).

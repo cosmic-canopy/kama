@@ -76,6 +76,12 @@ remains here is genuinely later-track or opt-in.
   opt-in `@generate` surface, not three ad-hoc ones) — see `docs/design/construction-model.md` §8c. Kama today
   requires a hand-written `operator==` (auto structural `==` is a deliberate non-default); the derive would
   synthesize a memberwise `==` on request.
+- **Enum-variant payload-type registration gap (bug, small).** A type used *only* as an enum variant's
+  payload — where that variant is never constructed (the enum is exercised only via its other variants) —
+  is not registered/emitted, so the enum's C `struct` references an undeclared type (`unknown type name
+  'Shared_Probe'`). Reproduces with a plain `enum E { A, B(Shared<Probe>) }` constructed only via `A` —
+  independent of Model C / `.as<>` (found alongside M5/P3). Fix: scan **every** variant's payload types at
+  enum registration (like class fields via `scanTypeForCollections`), not lazily at construction.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by

@@ -566,6 +566,17 @@ primary_expression_no_parenthesis
   | new_expression
   | match_expression      /* value-producing `match` in expression position */
   | array_literal
+  | as_downcast_expression
+  ;
+
+/* Model C: `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to a concrete enum `T`, yielding
+   `Optional<T>`. Mirrors cast_expression's genericDepth mid-rules so the `<…>` parses without spaces and a
+   trailing `>>` stays a shift. `.as` (DOT AS) is distinct from `.member` (DOT IDENTIFIER) — no conflict. */
+as_downcast_expression
+  : primary_expression DOT AS LT  type GT  LPAREN RPAREN
+
+  | qualified_identifier_no_generic DOT AS LT  type GT  LPAREN RPAREN
+
   ;
 
 /* fixed-array value literal initializing a `InlineArray<T,N>`: `[a, b, c]` (elements) or `[v; N]` (fill).
