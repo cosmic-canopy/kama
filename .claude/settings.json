@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tools/cdev make)",
+      "Bash(tools/cdev make *)",
+      "Bash(tools/cdev test)",
+      "Bash(tools/cdev test *)"
+    ]
+  }
+}
