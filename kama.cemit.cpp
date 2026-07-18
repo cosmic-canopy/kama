@@ -8044,7 +8044,28 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             _matchTargetCType = pmt; _variantTargetType = pvt;
             std::string argCls = exprClass(argExpr);
             std::string field;
-            if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
+            // Model C (P2): an enum value into an `Owned<Error>`/`Shared<Error>` variant field (e.g.
+            // `Result::Err(error: IoError::NotFound)`) is BOXED + upcast — heap-copy the enum, attach its
+            // `<Enum>__as_Error` vtbl. Checked FIRST (before the move-only branches): if the field is a
+            // poly-dispatch-contract handle and the arg is an implementing enum, boxing is always right.
+            // `exprClass` is "" for a variant literal, so recover the source enum via variantExprEnumCType.
+            std::string boxEnum = (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isVariant)
+                                    ? argCls : variantExprEnumCType(argExpr);
+            if (isSmartPtrClass(fcls) && !boxEnum.empty() && _classes.count(boxEnum)
+                && _classes[boxEnum].isVariant
+                && isPolyDispatchContract(_classes[fcls].collElemClass)
+                && implementsContractTemplate(&_classes[boxEnum], _classes[fcls].collElemClass)) {
+                if (!_hoistOK)
+                    unsupported("boxing an error into a variant here needs a statement slot — bind the "
+                                "constructed value to a local first", srcLine);
+                if (isNamedValue(argExpr.get()) && _classes[boxEnum].destructible) {
+                    if (handoff != 1)
+                        unsupported(("moving `" + boxEnum + "` into an error box transfers ownership — say "
+                                     "`give`").c_str(), srcLine);
+                    std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv);
+                }
+                field = emitEnumBoxIntoContract(fcls, boxEnum, val, srcLine);
+            } else if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
                 // A named smart pointer MOVES/RETAINS into the union (which now owns it, dropped by the
                 // switch-on-tag dtor). Same hand-off as a by-value call arg, hoisted (ISO C).
                 CollKind k = smartKind(argCls);
@@ -10360,6 +10381,43 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
              + adoptCall + " } }; ";
     s += "}";
     return s;
+}
+
+// Model C (P2): box an enum VALUE into an `Owned<C>`/`Shared<C>` fat handle (C a poly-dispatch contract).
+// Heap-copies the enum in and attaches the `<Enum>__as_<C>` vtbl — mirrors the infallible interface boxing
+// (new-into-Owned, ~1350-1377) but the payload is an existing value, not a ctor call. The default
+// GlobalAllocator handle is the plain `{obj,vtbl}` (KAMA_OWNED_IFACE_TYPE); a Shared handle also gets a
+// fresh ctrl. Pushed as ONE hoisted statement (the caller must have a statement slot); returns the temp.
+std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, const std::string& enumCType,
+                                              const std::string& enumValExpr, int srcLine)
+{
+    const std::string& contract = _classes[ownedCType].collElemClass;
+    std::string t = "__kama_ebox" + std::to_string(_tempCounter++);
+    std::string s = ownedCType + " " + t + " = {0}; ";
+    s += t + ".obj = malloc(sizeof(" + enumCType + ")); ";
+    s += "if (!" + t + ".obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
+    s += "*(" + enumCType + "*)" + t + ".obj = (" + enumValExpr + "); ";
+    s += t + ".vtbl = &" + enumCType + "__as_" + contract + ";";
+    if (smartKind(ownedCType) == CollKind::Shared)
+        s += " " + t + ".ctrl = kama_ctrl_new();";
+    _hoisted.push_back(s);
+    return t;
+}
+
+std::string CEmitter::variantExprEnumCType(SharedExpression e)
+{
+    SharedStringList qual; std::string vname;
+    if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
+        qual = id->qualifier; vname = id->value ? *id->value : "";
+    } else if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
+        if (inv->identifier) { qual = inv->identifier->qualifier; vname = inv->identifier->value ? *inv->identifier->value : ""; }
+    }
+    if (!qual || qual->empty()) return "";
+    auto tq = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < qual->size(); ++i) tq->push_back((*qual)[i]);
+    if (ClassInfo* vt = resolveVariantType(resolveUserName(*qual->back(), tq)))
+        for (auto& v : vt->variants) if (v.name == vname) return vt->name;
+    return "";
 }
 
 // Does a member-access callee name a TYPE (so `X.name(...)` is a dot-on-type ctor call) rather than an

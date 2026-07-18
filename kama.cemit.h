@@ -877,6 +877,15 @@ private:
     bool        ctorIsFallible(ObjectCreationNode* oc);                                 // new Type.name(...) ctor returns Result?
     std::string emitFallibleNewBox(const std::string& target, const std::string& lval, // M4b: fallible new -> Result<Owned<T>,E>
                                    ObjectCreationNode* oc, int srcLine);
+    // Model C (P2): box an enum VALUE (`enumCType`, given by `enumValExpr`) into an `Owned<C>`/`Shared<C>`
+    // fat handle (`ownedCType`, C a poly-dispatch contract), heap-copying the enum in. Emits the
+    // malloc+move+vtbl[+ctrl] as a HOISTED statement (needs a statement slot) and returns the temp name.
+    std::string emitEnumBoxIntoContract(const std::string& ownedCType, const std::string& enumCType,
+                                        const std::string& enumValExpr, int srcLine);
+    // The enum cType a variant literal names (`IoError::NotFound` / `IoError::Other(...)`), or "" if `e`
+    // isn't a variant reference. `exprClass` returns "" for a variant literal (its type comes from context),
+    // so Model-C error boxing resolves the source enum through this.
+    std::string variantExprEnumCType(SharedExpression e);
     std::string emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNode* recv, const std::string& typeName);
     // Does an invocation (a free-fn / method call) return a PLACE (`fn ref T` — a borrow), not a fresh
     // owned value? Used to gate materialize-and-drop of an owned rvalue receiver: a place must NOT be
