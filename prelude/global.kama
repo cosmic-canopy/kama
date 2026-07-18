@@ -193,6 +193,21 @@ type contract Serialize for both { fn void serialize(ref Serializer w); }
 // `deserialize` needs no per-read branching; `tryParse` checks `failed()` once at the end). `Deserialize`
 // is the per-type capability the codegen synthesizes: a static factory `deserialize(ref Deserializer)`.
 enum DeError { Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId }
+// DeError is a first-class `Error`: it BOXES into `Owned<Error>` at a fallible-`deserialize` boundary and
+// is recovered with `err.as<DeError>()`. (Retro-implementing a method-carrying contract promotes this plain
+// enum to a tagged repr — transparent to its by-value uses.)
+implements Error for DeError {
+    public fn string message() {
+        return match (this) {
+            case Malformed:            "malformed input";
+            case UnexpectedEnd:        "unexpected end of input";
+            case TypeMismatch:         "type mismatch";
+            case MissingField:         "missing field";
+            case UnresolvedReference:  "unresolved reference";
+            case DuplicateId:          "duplicate id";
+        };
+    }
+}
 type contract Deserializer for resource {
     fn void beginObject(); fn bool moreFields(); fn string fieldName();
     fn void beginArray(); fn bool moreElems();
@@ -207,7 +222,7 @@ type contract Deserializer for resource {
     // envelope; `failWith` records a specific DeError (so a dangling ref surfaces `UnresolvedReference`, not the
     // generic `Malformed`). A non-graph backend can no-op these.
     fn uint64 beginGraph(); fn void rewindGraph(); fn uint64 entryKey(); fn uint64 readRef();
-    fn void endGraph(); fn void failWith(DeError e);
+    fn void endGraph(); fn void failWith(DeError e); fn DeError errorCode();
 }
 // A marker contract (like Movable): the `@generate(Deserialize)` codegen supplies the static factory
 // `deserialize(ref Deserializer) -> Result<This, DeError>` via a retro impl, and `tryParse<T: Deserialize>`

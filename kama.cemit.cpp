@@ -8799,6 +8799,10 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
+        // A retro-impl method on a VARIANT enum (e.g. `implements Error for DeError`) is emitted — proto AND
+        // body — by the dedicated retro passes (retroTargetInfo returns a variant enum), so skip it here.
+        // Otherwise a prelude enum gets a non-static proto that clashes with the static-inline retro body.
+        if (mi.isRetro && ci.isVariant) continue;
         if (mi.isSynthSer) { *_out << stat << "void " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         rejectStoredInterface(mi.returnType, "returned from a method",
@@ -9562,7 +9566,7 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
     auto wireInto = [&](const std::string& place, int dd) {
         if (e.elemIsContract) {
             indent(dd); *_out << "const struct " << X << "_vtbl* __vt = " << X << "__implVtbl(__t->type_id);\n";
-            indent(dd); *_out << "if (!__vt) { r.vtbl->failWith(r.obj, DeError_TypeMismatch); }\n";
+            indent(dd); *_out << "if (!__vt) { r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_TypeMismatch }); }\n";
             indent(dd); *_out << "else { " << place << ".obj = __t->ptr; " << place << ".vtbl = __vt; " << place
                               << ".ctrl = __t->ctrl; __t->ctrl->" << (e.kind == "Weak" ? "weak" : "strong") << "++; }\n";
         } else if (e.kind == "Shared") {
@@ -9577,14 +9581,14 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
     if (e.kind == "Owned") {   // give-once: exclusive transfer, claim-checked, no refcount
         std::string ownedNull = e.optional ? ("(" + cType(ty) + "){ .tag = " + cType(ty) + "_None }") : "";
         if (e.optional) { indent(d); *_out << "if (__rid == 0) { " << dst << " = " << ownedNull << "; }\n"; indent(d); *_out << "else "; }
-        else            { indent(d); *_out << "if (__rid == 0) { r.vtbl->failWith(r.obj, DeError_Malformed); }\n"; indent(d); *_out << "else "; }
-        *_out << "if (kama_de_graph_claim(__g, __rid)) { r.vtbl->failWith(r.obj, DeError_DuplicateId); }\n";
+        else            { indent(d); *_out << "if (__rid == 0) { r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_Malformed }); }\n"; indent(d); *_out << "else "; }
+        *_out << "if (kama_de_graph_claim(__g, __rid)) { r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_DuplicateId }); }\n";
         indent(d); *_out << "else {\n";
         indent(d + 1); *_out << "kama_de_box* __t = (kama_de_box*)kama_de_graph_lookup(__g, __rid);\n";
         indent(d + 1); *_out << "if (__t) {\n";
         if (e.elemIsContract) {   // fat move: recover the concrete vtable, then transfer the pointee (no refcount)
             indent(d + 2); *_out << "const struct " << X << "_vtbl* __vt = " << X << "__implVtbl(__t->type_id);\n";
-            indent(d + 2); *_out << "if (!__vt) { r.vtbl->failWith(r.obj, DeError_TypeMismatch); }\n";
+            indent(d + 2); *_out << "if (!__vt) { r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_TypeMismatch }); }\n";
             indent(d + 2); *_out << "else {\n";
             if (e.optional) {
                 indent(d + 3); *_out << innerC << " __v = {0}; __v.obj = __t->ptr; __v.vtbl = __vt;\n";
@@ -9606,7 +9610,7 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
             indent(d + 2); *_out << "if (__t->ctrl) { if (__t->ctrl->weak == 0) kama_free(__t->ctrl); __t->ctrl = NULL; }\n";
         }
         indent(d + 1); *_out << "}\n";
-        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, DeError_UnresolvedReference);\n";
+        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_UnresolvedReference });\n";
         indent(d); *_out << "}\n";
         return;
     }
@@ -9622,7 +9626,7 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
         wireInto("__v", d + 2);
         indent(d + 2); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = __v } };\n";
         indent(d + 1); *_out << "}\n";
-        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, DeError_UnresolvedReference);\n";
+        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_UnresolvedReference });\n";
         indent(d); *_out << "}\n";
     } else {
         // A bare Shared is never null; a bare Weak may be expired (id 0 → leave the zeroed handle).
@@ -9632,7 +9636,7 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
         indent(d + 1); *_out << "if (__t) {\n";
         wireInto(dst, d + 2);
         indent(d + 1); *_out << "}\n";
-        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, DeError_UnresolvedReference);\n";
+        indent(d + 1); *_out << "else r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_UnresolvedReference });\n";
         indent(d); *_out << "}\n";
     }
 }
@@ -9707,7 +9711,7 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << "kama_de_box* __rb = (kama_de_box*)kama_de_graph_lookup(&__g, __root);\n";
     indent(1); *_out << sharedT << " __ret = {0};\n";
     indent(1); *_out << "if (__rb) { __ret.p = (" << T << "*)__rb->ptr; __ret.c = (void*)__rb->ctrl; __rb->ctrl->strong++; }\n";
-    indent(1); *_out << "else { r.vtbl->failWith(r.obj, DeError_UnresolvedReference); }\n";   // dangling root -> empty Shared
+    indent(1); *_out << "else { r.vtbl->failWith(r.obj, (DeError){ .tag = DeError_UnresolvedReference }); }\n";   // dangling root -> empty Shared
     // CLEANUP — drop each shell's construction strong; free the boxes + arenas.
     for (auto& K : _graphNodeOrder) {
         bool kd = _classes.count(K) && _classes[K].destructible;
