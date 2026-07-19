@@ -249,22 +249,24 @@ implements Serialize for bool    { public fn void serialize(ref Serializer w) { 
 // primitive-conformance registry can't hold both. A `char` FIELD still serializes via the compiler's
 // `writeChar`/`readChar` fast path; a `char` in a collection rides `uint32`'s numeric conformance.
 implements Serialize for string  { public fn void serialize(ref Serializer w) { w.writeString(v: this); } }
-implements Deserialize for int8    { public static fn int8    deserialize(Deserializer r) { return r.readI8(); } }
-implements Deserialize for int16   { public static fn int16   deserialize(Deserializer r) { return r.readI16(); } }
-implements Deserialize for int32   { public static fn int32   deserialize(Deserializer r) { return r.readI32(); } }
-implements Deserialize for int64   { public static fn int64   deserialize(Deserializer r) { return r.readI64(); } }
-implements Deserialize for uint8   { public static fn uint8   deserialize(Deserializer r) { return r.readU8(); } }
-implements Deserialize for uint16  { public static fn uint16  deserialize(Deserializer r) { return r.readU16(); } }
-implements Deserialize for uint32  { public static fn uint32  deserialize(Deserializer r) { return r.readU32(); } }
-implements Deserialize for uint64  { public static fn uint64  deserialize(Deserializer r) { return r.readU64(); } }
-implements Deserialize for float32 { public static fn float32 deserialize(Deserializer r) { return r.readF32(); } }
-implements Deserialize for float64 { public static fn float64 deserialize(Deserializer r) { return r.readF64(); } }
-implements Deserialize for bool    { public static fn bool    deserialize(Deserializer r) { return r.readBool(); } }
-implements Deserialize for string  { public static fn string  deserialize(Deserializer r) { return r.readString(); } }
+// Each primitive `deserialize` is fallible: read (sticky), then wrap — a bad read surfaces as
+// `Err(DeError)` boxed into `Owned<Error>` (via `errorCode()`). Composition propagates the box.
+implements Deserialize for int8    { public static fn Result<int8, std::memory::Owned<Error>>    deserialize(Deserializer r) { int8    v = r.readI8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for int16   { public static fn Result<int16, std::memory::Owned<Error>>   deserialize(Deserializer r) { int16   v = r.readI16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for int32   { public static fn Result<int32, std::memory::Owned<Error>>   deserialize(Deserializer r) { int32   v = r.readI32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for int64   { public static fn Result<int64, std::memory::Owned<Error>>   deserialize(Deserializer r) { int64   v = r.readI64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for uint8   { public static fn Result<uint8, std::memory::Owned<Error>>   deserialize(Deserializer r) { uint8   v = r.readU8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for uint16  { public static fn Result<uint16, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint16  v = r.readU16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for uint32  { public static fn Result<uint32, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint32  v = r.readU32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for uint64  { public static fn Result<uint64, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint64  v = r.readU64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for float32 { public static fn Result<float32, std::memory::Owned<Error>> deserialize(Deserializer r) { float32 v = r.readF32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for float64 { public static fn Result<float64, std::memory::Owned<Error>> deserialize(Deserializer r) { float64 v = r.readF64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for bool    { public static fn Result<bool, std::memory::Owned<Error>>    deserialize(Deserializer r) { bool    v = r.readBool();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for string  { public static fn Result<string, std::memory::Owned<Error>>  deserialize(Deserializer r) { string  v = r.readString(); if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: give v); } }
 // Generic deserialize trampoline: the `@generate` codegen can't spell `DynamicArray<int32>::deserialize(r)` (a
 // static on a generic instance has no surface syntax), but a turbofish on THIS free fn does
 // (`__kamaDeserialize::<DynamicArray<int32>>(r)`), and inside it `T::deserialize` resolves per instantiation.
-fn T __kamaDeserialize<T: Deserialize>(Deserializer r) { return T::deserialize(r: r); }
+fn Result<T, std::memory::Owned<Error>> __kamaDeserialize<T: Deserialize>(Deserializer r) { return T::deserialize(r: r); }
 // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
 // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
 // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is

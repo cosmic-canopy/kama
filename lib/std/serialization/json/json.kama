@@ -203,6 +203,7 @@ type resource JsonReader implements Deserializer {
     public fn void beginObject() { this.expect(b: 123ui8); }   // {
     public fn void beginArray()  { this.expect(b: 91ui8); }    // [
     public fn bool moreFields() {
+        if (this.err) { return false; }   // sticky failure: stop iterating (else a malformed byte loops forever)
         this.skipWs();
         uint8 c = this.peek();
         if (c == 125ui8) { this.pos = this.pos + 1; return false; }             // }
@@ -210,6 +211,7 @@ type resource JsonReader implements Deserializer {
         return true;
     }
     public fn bool moreElems() {
+        if (this.err) { return false; }   // sticky failure: stop iterating
         this.skipWs();
         uint8 c = this.peek();
         if (c == 93ui8) { this.pos = this.pos + 1; return false; }              // ]
@@ -401,9 +403,7 @@ type resource JsonReader implements Deserializer {
 // `json::decode::<Point>(src)`. The generated `deserialize` returns the reconstructed `T` directly (bypass-
 // ctor: zero-init + field-set), carrying any parse failure in the reader's sticky error flag; this wraps that
 // into a `Result` after checking `failed()`.
-fn Result<T, DeError> decode<T: Deserialize>(string src) {
+fn Result<T, Owned<Error>> decode<T: Deserialize>(string src) {
     JsonReader r = JsonReader(src: give src);
-    T v = T::deserialize(r: r);
-    if (r.failed()) { return Result::Err(error: r.errorCode()); }
-    return Result::Ok(value: give v);
+    return T::deserialize(r: r);   // fallibility now lives inside the ctor (sticky check + boxed DeError)
 }

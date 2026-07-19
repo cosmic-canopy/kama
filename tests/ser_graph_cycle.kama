@@ -27,7 +27,7 @@ fn int main() {
     if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Node\",\"id\":1,\"next\":2,\"back\":0},\"2\":{\"__type\":\"Node\",\"id\":2,\"next\":0,\"back\":1}}}") {
         return cast<int32>(j.length());
     }
-    Result<Shared<Node>, DeError> res = decode::<Shared<Node>>(src: copy j);
+    Result<Shared<Node>, Owned<Error>> res = decode::<Shared<Node>>(src: copy j);
     match (res) {
         case Ok(sh): { string j2 = encode(v: sh); if (j2 == j) { return 0; } return 1; }
         case Err(e): { return 2; }

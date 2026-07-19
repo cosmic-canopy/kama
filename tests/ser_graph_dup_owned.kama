@@ -17,18 +17,20 @@ type resource Twin {
 fn int main() {
     // Both `a` and `b` reference id 2 — a single owned Child claimed twice.
     string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Twin\",\"a\":2,\"b\":2},\"2\":{\"__type\":\"Child\",\"v\":5}}}";
-    Result<Shared<Twin>, DeError> res = decode::<Shared<Twin>>(src: give j);
+    Result<Shared<Twin>, Owned<Error>> res = decode::<Shared<Twin>>(src: give j);
     match (res) {
         case Ok(sh): { return 1; }                          // must NOT succeed
         case Err(e): {
-            DeError ec = e;
-            match (ec) {
-                case DuplicateId: { return 0; }             // expected
-                case UnresolvedReference: { return 2; }
-                case Malformed: { return 3; }
-                case UnexpectedEnd: { return 4; }
-                case TypeMismatch: { return 5; }
-                case MissingField: { return 6; }
+            match (e.as<DeError>()) {                        // recover the concrete deserialize error
+                case Some(ec): { match (ec) {
+                    case DuplicateId: { return 0; }          // expected
+                    case UnresolvedReference: { return 2; }
+                    case Malformed: { return 3; }
+                    case UnexpectedEnd: { return 4; }
+                    case TypeMismatch: { return 5; }
+                    case MissingField: { return 6; }
+                }; }
+                case None: { return 8; }                     // not a DeError
             };
         }
     };

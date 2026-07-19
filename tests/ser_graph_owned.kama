@@ -22,7 +22,7 @@ fn int main() {
     if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Parent\",\"kid\":2},\"2\":{\"__type\":\"Child\",\"v\":7}}}") {
         return cast<int32>(j.length());
     }
-    Result<Shared<Parent>, DeError> res = decode::<Shared<Parent>>(src: copy j);
+    Result<Shared<Parent>, Owned<Error>> res = decode::<Shared<Parent>>(src: copy j);
     match (res) {
         case Ok(sh): { string j2 = encode(v: sh); if (j2 == j) { return 0; } return 1; }
         case Err(e): { return 2; }

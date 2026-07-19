@@ -1,0 +1,31 @@
+// Destructure-MOVE: `match (give x)` CONSUMES the subject so an OWNING payload can be moved out of a sum
+// type — `case Some(v): give v` / `:= give v`. Borrowing (`match (x)`) still can't give a payload out; this
+// is the consuming form the collections use to move an owning element out of `Result`/`Optional`.
+import std::collections::{DynamicArray};
+fn Optional<DynamicArray<int32>> takeIf(bool cond, DynamicArray<int32> xs) {
+    if (cond) { return Optional::Some(value: give xs); }
+    return Optional::None;
+}
+fn int main() {
+    DynamicArray<int32> a = DynamicArray();
+    a.add(item: 40); a.add(item: 2);
+
+    // move the array OUT of the Optional via a consuming match (statement form)
+    Optional<DynamicArray<int32>> opt = takeIf(cond: true, xs: give a);
+    DynamicArray<int32> got = DynamicArray();
+    match (give opt) {
+        case Some(v): { got = give v; }        // move the owning payload out
+        case None:    { }
+    };
+    int32 sum = 0; foreach (int32 x in got) { sum = sum + x; }   // 42
+
+    // value-producing form: `:= give payload` yields the moved value, the None arm diverges
+    DynamicArray<int32> b = DynamicArray(); b.add(item: 100);
+    Optional<DynamicArray<int32>> opt2 = takeIf(cond: true, xs: give b);
+    DynamicArray<int32> res2 = match (give opt2) {
+        case Some(v): { := give v; }
+        case None:    { return 0 - 1; }
+    };
+    int32 n = 0; foreach (int32 x in res2) { n = n + x; }        // 100
+    return sum + n;   // 42 + 100 = 142
+}

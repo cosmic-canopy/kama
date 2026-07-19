@@ -9,7 +9,7 @@ fn int main() {
     m.put(key: "banana", value: 2); m.put(key: "date", value: 4);
 
     string j = encode(v: m);
-    Result<SortedMap<string, int32>, DeError> res = decode::<SortedMap<string, int32>>(src: give j);
+    Result<SortedMap<string, int32>, Owned<Error>> res = decode::<SortedMap<string, int32>>(src: give j);
     int32 r = 0;
     match (res) {
         case Ok(m2): {

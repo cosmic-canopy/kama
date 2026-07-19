@@ -40,7 +40,7 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     // `N::deserialize` yields a `Shared<N>` — i.e. `N` is a graph type. Instantiating `Shared<X>::deserialize`
     // for a non-graph `X` (whose `X::deserialize` returns `X`) is a type error — decode a plain value as
     // `decode::<X>` instead.
-    public static fn Shared<T, A> deserialize(Deserializer r) when [T: Deserialize] {
+    public static fn Result<Shared<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
         return T::deserialize(r: r);
     }
     // HeapOwner: adopt a raw pointee into a box with the DEFAULT allocator (the bare-`new` path). The ctrl

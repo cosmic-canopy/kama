@@ -44,7 +44,7 @@ fn int main() {
     if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Scene\",\"a\":2,\"b\":3},\"2\":{\"__type\":\"Sq\",\"side\":4},\"3\":{\"__type\":\"Circle\",\"r\":2}}}") {
         return cast<int32>(j.length());
     }
-    Result<Shared<Scene>, DeError> res = decode::<Shared<Scene>>(src: copy j);
+    Result<Shared<Scene>, Owned<Error>> res = decode::<Shared<Scene>>(src: copy j);
     match (res) {
         case Ok(sh): {
             string j2 = encode(v: sh);

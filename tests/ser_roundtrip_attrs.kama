@@ -11,6 +11,6 @@ type resource User {
 fn int main() {
     User u = User(name: "kai", id: 39);
     string j = encode(v: u);                       // {"user_name":"kai","id":39}
-    Result<User, DeError> res = decode::<User>(src: give j);
+    Result<User, Owned<Error>> res = decode::<User>(src: give j);
     return match (res) { case Ok(q): q.tag(); case Err(e): 0 - 1; };   // 39 + 3 = 42
 }

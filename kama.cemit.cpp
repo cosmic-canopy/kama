@@ -2613,6 +2613,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         // Remember the decl + declaring context for a possible Model-C promotion (see _enumDeclNodes).
         _enumDeclNodes[name] = ed;
         _enumNsCtx[name]     = _nsCtx;
+        if (unit == _preludeUnit) _preludeEnums.insert(name);
 
         if (enumIsTagged(ed)) {
             // a payload/generic enum is a discriminated union backed by a ClassInfo.
@@ -2660,7 +2661,9 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                     ci.genDeserialize = true;
                     ci.interfaces.push_back("Deserialize"); ci.retroInterfaces.push_back("Deserialize");
                     MethodInfo mi; mi.cName = name + "__deserialize"; mi.visibility = Visibility::Public;
-                    mi.isStatic = true; mi.isSynthDe = true; mi.returnType = ed->identifier;
+                    mi.isStatic = true; mi.isSynthDe = true;   // P4: fallible `Result<This, Owned<Error>>`
+                    mi.returnType = resultOwnedErrorTypeNode(ed->identifier);
+                    scanTypeForCollections(mi.returnType);
                     ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
                     ci.methods["deserialize"] = mi;
                 }
@@ -3129,9 +3132,15 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             if (ci.genDeserialize && !ci.methods.count("deserialize")) {
                 ci.interfaces.push_back("Deserialize");
                 MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
-                mi.isStatic = true; mi.isSynthDe = true; mi.returnType = cd->name;   // returns the type itself
+                // P4: the synth deserialize is a FALLIBLE ctor `Result<This, Owned<Error>>` — reading crosses
+                // a trust boundary. (The graph two-pass returns `Result<Shared<This>, Owned<Error>>`; its
+                // return node is rebuilt in computeGraphNodeTypes.)
+                mi.isStatic = true; mi.isSynthDe = true; mi.isCtor = true;
+                mi.returnType = resultOwnedErrorTypeNode(cd->name);
+                scanTypeForCollections(mi.returnType);   // monomorphize Result<This, Owned<Error>>
                 ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
-                ci.methods["deserialize"] = mi;   // `static fn This deserialize(Deserializer r)`
+                ci.methods["deserialize"] = mi;   // `ctor Result<This, Owned<Error>> deserialize(Deserializer r)`
+                ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
             }
         }
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
@@ -3906,6 +3915,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                     SharedIdentifier rt = kv.second.returnType;
                     if (!rt || !rt->value || !rt->genericArg) continue;
                     std::string rn = resolveUserName(*rt->value, rt->qualifier);
+                    if (rn == "Result" || rn == "Optional") continue;   // a sum-type return (fallible `deserialize`, etc.) is never the Weak partner
                     if (rn != tmpl && _genericTypes.count(rn)) { downName = kv.first; weakTmpl = rn; break; }
                 }
                 if (!weakTmpl.empty()) {
@@ -7483,6 +7493,8 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
 void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int depth)
 {
     std::string subjCls = exprClass(m->subject);
+    // `match (give x)` — the consuming form (destructure-move): resolve through the hand-off to x's class.
+    if (subjCls.empty()) if (auto* h = dynamic_cast<HandoffNode*>(m->subject.get())) subjCls = exprClass(h->value);
     auto cit = _classes.find(subjCls);
     if (cit == _classes.end() || !cit->second.isVariant) {
         std::string enumTy = exprEnumType(m->subject);
@@ -7527,6 +7539,9 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // (a call / construction result) can't be `&`-taken, so materialize an OWNING temp
     // first and drop it after the switch (arm payload bindings borrow it, like a foreach element).
     std::string sp = "__msub" + std::to_string(_tempCounter++);
+    // `match (give x)` CONSUMES the subject: it materializes an owning temp (the non-lvalue path below), and
+    // an owning payload binding MOVES out of it (destructure-move) rather than borrowing.
+    bool subjConsumed = dynamic_cast<HandoffNode*>(m->subject.get()) != nullptr;
     bool subjLvalue = dynamic_cast<IdentifierNode*>(m->subject.get())
                    || dynamic_cast<MemberAccessNode*>(m->subject.get())
                    || dynamic_cast<ThisAccessNode*>(m->subject.get())
@@ -7535,6 +7550,18 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // Evaluate the subject FIRST, then flush any temps it hoisted (e.g. a `string` literal materialized for
     // a `ref string` param — `match (map.get("k"))`), so their decls land BEFORE the subject line, not
     // inside the first arm body (which would leave them undeclared at the point of use).
+    if (subjConsumed) {
+        // `match (give x)`: the subject is a hand-off. Emit the moved-from source, materialize an owning temp
+        // (bitwise handle copy), and mark the source moved (its own scope-drop then no-ops). Payload bindings
+        // MOVE out of this temp (destructure-move); the temp's post-switch drop no-ops the defused slots.
+        auto* h = dynamic_cast<HandoffNode*>(m->subject.get());
+        std::string subjExpr = emitExpression(h->value);
+        flushHoisted(depth);
+        subjOwner = "__msubj" + std::to_string(_tempCounter++);
+        indent(depth); *_out << subjCls << " " << subjOwner << " = " << subjExpr << ";\n";
+        indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
+        std::string mv = moveOnlySource(h->value, m->line); if (!mv.empty()) markMoved(mv);
+    } else {
     std::string subjExpr = emitExpression(m->subject);
     flushHoisted(depth);
     if (dynamic_cast<ThisAccessNode*>(m->subject.get())) {
@@ -7548,6 +7575,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         subjOwner = "__msubj" + std::to_string(_tempCounter++);
         indent(depth); *_out << subjCls << " " << subjOwner << " = " << subjExpr << ";\n";
         indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
+    }
     }
     indent(depth); *_out << "switch (" << sp << "->tag) {\n";
     auto beforeMove = _moveState;                            // each arm branches from the same pre-match state
@@ -7575,8 +7603,17 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 std::string bn = *(*a->bindings)[i];
                 const FieldInfo& pf = vc->payload[i];
                 std::string bcty = cType(pf.type);
+                std::string slot = std::string(sp) + "->u." + *a->variantName + "." + pf.name;
                 indent(depth + 2);
-                *_out << bcty << " " << bn << " = " << sp << "->u." << *a->variantName << "." << pf.name << ";\n";
+                *_out << bcty << " " << bn << " = " << slot << ";\n";
+                // Destructure-MOVE: when the subject is CONSUMED (`match (give x)`) and the payload is owning,
+                // the binding takes ownership — defuse the subject slot (so the subject's drop no-ops it) and
+                // register the binding as a movable owning local (RAII-dropped if not `give`n out, and giveable).
+                if (subjConsumed && ownsByValue(bcty)) {
+                    indent(depth + 2); *_out << slot << " = (" << bcty << "){0};\n";
+                    _scopes.back().locals.push_back({bn, bcty});
+                    _moveState[bn] = MoveState::NotMoved;
+                }
                 savedTypes.push_back({bn, (bool)_localTypes.count(bn), _localTypes.count(bn) ? _localTypes[bn] : std::string()});
                 _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
             }
@@ -7599,8 +7636,11 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 if (resultTemp && i + 1 == nstmt) {
                     // A value-producing arm's block states its value with `:= expr;` as the final statement.
                     // The value may be an owned hand-off (`:= give x`) or a bare generic ctor (`:= List()`).
+                    // A DIVERGING arm (`return`/`break`/`continue`) yields nothing — it's allowed (the value
+                    // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
                     if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2);
-                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;`", a->line);
+                    else if (stmtIsJump(st)) emitStatement(st, depth + 2);
+                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
                 } else {
                     emitStatement(st, depth + 2);
                 }
@@ -7772,8 +7812,11 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                 if (resultTemp && i + 1 == nstmt) {
                     // A value-producing arm's block states its value with `:= expr;` as the final statement.
                     // The value may be an owned hand-off (`:= give x`) or a bare generic ctor (`:= List()`).
+                    // A DIVERGING arm (`return`/`break`/`continue`) yields nothing — it's allowed (the value
+                    // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
                     if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2);
-                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;`", a->line);
+                    else if (stmtIsJump(st)) emitStatement(st, depth + 2);
+                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
                 } else {
                     emitStatement(st, depth + 2);
                 }
@@ -9148,22 +9191,66 @@ std::string CEmitter::deReadExpr(SharedIdentifier ty)
     return cType(ty) + "__deserialize(r)";
 }
 
-// Emit the read of one field into `dst` from the Deserializer `r` (a `Deserializer` value).
-void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth)
+// True for a serde SCALAR/string field: read directly (sticky), no Result/box — surfaced by the enclosing
+// deserialize's final `failed()` check. A composite (user type / collection) reads through its fallible
+// `deserialize` and its boxed `Err` is propagated.
+bool CEmitter::isScalarDeType(SharedIdentifier ty)
 {
+    if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL) return true;
+    return *serScalarSuffix(ty ? ty->builtInVal : 0) != 0;
+}
+
+// Emit the read of one field into `dst` from the Deserializer `r`. `resultCType` is the enclosing
+// deserialize's `Result<This, Owned<Error>>` C type; on a composite Err the read runs `cleanup` (a raw-C
+// stmt prefix, e.g. free the field-name string + drop the partial result) then returns the forwarded box.
+void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth,
+                               const std::string& resultCType, const std::string& cleanup)
+{
+    // Optional<T>: null → None; else read the inner value (fallible if composite) and wrap Some.
     if (ty && ty->value && *ty->value == "Optional" && ty->genericArg) {
         std::string oc = cType(ty);
         indent(depth); *_out << "if (r.vtbl->readNull(r.obj)) { " << dst << " = (" << oc << "){ .tag = " << oc << "_None }; }\n";
-        indent(depth); *_out << "else { " << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = "
-                             << deReadExpr(ty->genericArg) << " } }; }\n";
+        indent(depth); *_out << "else {\n";
+        if (isScalarDeType(ty->genericArg)) {
+            indent(depth+1); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = "
+                                   << deReadExpr(ty->genericArg) << " } };\n";
+        } else {
+            std::string tmp = "__ov" + std::to_string(_tempCounter++);
+            indent(depth+1); *_out << cType(ty->genericArg) << " " << tmp << ";\n";
+            emitDeFieldRead(ty->genericArg, tmp, depth+1, resultCType, cleanup);
+            indent(depth+1); *_out << dst << " = (" << oc << "){ .tag = " << oc << "_Some, .u.Some = { .value = " << tmp << " } };\n";
+        }
+        indent(depth); *_out << "}\n";
         return;
     }
-    indent(depth); *_out << dst << " = " << deReadExpr(ty) << ";\n";
+    // Scalar/string: bare sticky read (the enclosing `failed()` check wraps a failure into `Err`).
+    if (isScalarDeType(ty)) { indent(depth); *_out << dst << " = " << deReadExpr(ty) << ";\n"; return; }
+    // Composite (user type / collection): fallible read via its `deserialize`.
+    std::string innerRes = cType(resultOwnedErrorTypeNode(ty));
+    std::string t = "__dr" + std::to_string(_tempCounter++);
+    indent(depth); *_out << innerRes << " " << t << " = " << cType(ty) << "__deserialize(r);\n";
+    if (resultCType.empty()) {
+        // graph-shell context: no `Result` to return here, and the sticky flag already carries the failure to
+        // the graph boundary — so on Err just drop the redundant box (leak-clean), else take the value.
+        indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Err) { "
+                             << cType(ownedErrorTypeNode()) << "__dtor(&" << t << ".u.Err.error); }\n";
+        indent(depth); *_out << "else " << dst << " = " << t << ".u.Ok.value;\n";
+        return;
+    }
+    // propagate the boxed `Err` (drop the partial via `cleanup`).
+    indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Err) { " << cleanup
+                         << "return (" << resultCType << "){ .tag = " << resultCType << "_Err, .u.Err = { .error = "
+                         << t << ".u.Err.error } }; }\n";
+    indent(depth); *_out << dst << " = " << t << ".u.Ok.value;\n";
 }
 
 void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
 {
-    *_out << (_emitStaticClass ? "static inline " : "") << ci.name << " " << ci.name
+    // P4: fallible `Result<This, Owned<Error>> This__deserialize(...)`. Bypass assembly (zero-init +
+    // field-set) is kept (the M6 `This.of(...)` slot); a composite field's Err propagates its box, a scalar
+    // failure surfaces via the final `failed()` check. Either way: `Ok(complete)` or `Err(nothing)`.
+    std::string resC = cType(ci.methods["deserialize"].returnType);
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__deserialize(Deserializer r)\n{\n";
     indent(1); *_out << ci.name << " result = (" << ci.name << "){0};\n";   // bypass-ctor zero-init
     // Zero-init makes an Optional field `Some(zeroed)` (tag 0) — reset every one to None first.
@@ -9174,6 +9261,9 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
             indent(1); *_out << "result." << f.name << " = (" << oc << "){ .tag = " << oc << "_None };\n";
         }
     }
+    // On an early Err inside the loop: free the current field-name string, then drop the partial result.
+    std::string cleanup = std::string("kama_string__dtor(&__key); ")
+                        + (ci.destructible ? (ci.name + "__dtor(&result); ") : "");
     indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
     indent(1); *_out << "while (r.vtbl->moreFields(r.obj)) {\n";
     indent(2); *_out << "kama_string __key = r.vtbl->fieldName(r.obj);\n";
@@ -9182,17 +9272,23 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
         if (f.serSkip) continue;
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
         indent(2); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__key, " << kamaStrLit(wire) << ")) {\n";
-        emitDeFieldRead(f.type, "result." + f.name, 3);
+        emitDeFieldRead(f.type, "result." + f.name, 3, resC, cleanup);
         indent(2); *_out << "}\n";
         first = false;
     }
     indent(2); *_out << (first ? "" : "else ") << "{ r.vtbl->skipValue(r.obj); }\n";
     indent(2); *_out << "kama_string__dtor(&__key);\n";   // the field-name string is owned — free each iteration
     indent(1); *_out << "}\n";
+    // Boundary: a sticky failure (a scalar read / an explicit `fail`) → drop the partial + Err(boxed).
+    indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
+    if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&result);\n"; }
+    std::string box = emitStickyErrBox(2);
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "}\n";
     if (!ci.serNoOnConstruction && ci.methods.count("onConstruction")) {
-        indent(1); *_out << ci.name << "__onConstruction(&result);\n";   // hook runs after a bypass-ctor field-set
+        indent(1); *_out << ci.name << "__onConstruction(&result);\n";   // hook runs after a successful field-set
     }
-    indent(1); *_out << "return result;\n";   // by-value return moves a resource out (no dtor on `result`)
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = result } };\n";
     *_out << "}\n\n";
 }
 
@@ -9228,9 +9324,10 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
 // unknown tag flags the reader (`fail`) and returns a benign payload-less variant (the guaranteed fallback).
 void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
 {
+    std::string resC = cType(ci.methods["deserialize"].returnType);   // Result<This, Owned<Error>>
     std::string dflt;
     for (auto& v : ci.variants) if (v.payload.empty()) { dflt = v.name; break; }
-    *_out << ci.name << " " << ci.name << "__deserialize(Deserializer r)\n{\n";
+    *_out << resC << " " << ci.name << "__deserialize(Deserializer r)\n{\n";
     indent(1); *_out << ci.name << " __result = (" << ci.name << "){0};\n";
     indent(1); *_out << "r.vtbl->beginObject(r.obj);\n";
     indent(1); *_out << "r.vtbl->moreFields(r.obj);\n";
@@ -9243,12 +9340,17 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
             indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
             indent(2); *_out << "kama_string __kv = r.vtbl->fieldName(r.obj); kama_string__dtor(&__kv);\n";   // the "value" key
             indent(2); *_out << "r.vtbl->beginObject(r.obj);\n";
+            // an early Err while reading payload field i must free __tag + drop the already-read temps.
+            std::string cleanup = "kama_string__dtor(&__tag); ";
             for (size_t i = 0; i < v.payload.size(); ++i) {
                 const FieldInfo& f = v.payload[i];
                 std::string idx = std::to_string(i);
                 indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";
                 indent(2); *_out << "kama_string __pk" << idx << " = r.vtbl->fieldName(r.obj); kama_string__dtor(&__pk" << idx << ");\n";
-                indent(2); *_out << cType(f.type) << " __p_" << f.name << " = " << deReadExpr(f.type) << ";\n";
+                indent(2); *_out << cType(f.type) << " __p_" << f.name << ";\n";
+                emitDeFieldRead(f.type, "__p_" + f.name, 2, resC, cleanup);
+                if (_classes.count(cType(f.type)) && _classes[cType(f.type)].destructible)
+                    cleanup += cType(f.type) + "__dtor(&__p_" + f.name + "); ";
             }
             indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";   // close the value object
             indent(2); *_out << "r.vtbl->moreFields(r.obj);\n";   // close the outer object
@@ -9264,7 +9366,13 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     }
     indent(1); *_out << "else { r.vtbl->fail(r.obj); __result = (" << ci.name << "){ .tag = " << ci.name << "_" << dflt << " }; }\n";
     indent(1); *_out << "kama_string__dtor(&__tag);\n";
-    indent(1); *_out << "return __result;\n";
+    // Boundary: an unknown tag (`fail`) or a scalar payload failure → drop the partial + Err(boxed); else Ok.
+    indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
+    if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&__result);\n"; }
+    std::string ebox = emitStickyErrBox(2);
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << ebox << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = __result } };\n";
     *_out << "}\n\n";
 }
 
@@ -9334,6 +9442,49 @@ SharedIdentifier CEmitter::sharedTypeNode(SharedIdentifier elem)
     return node;
 }
 
+// Synthesize an `Owned<Error>` type node — the uniform boxed-error payload of a fallible serde Result.
+SharedIdentifier CEmitter::ownedErrorTypeNode()
+{
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto err   = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Error"),
+                                                  std::make_shared<StringList>());
+    // FULLY-QUALIFIED `std::memory::Owned` — bare `Owned` doesn't resolve from every context (e.g. the
+    // global prelude), and it must mangle to the SAME canonical `std__memory__Owned_Error_GlobalAllocator`
+    // as a user-written `Owned<Error>` (allocator default filled), else the Result monomorph diverges.
+    auto qual  = std::make_shared<StringList>();
+    qual->push_back(std::make_shared<std::string>("std"));
+    qual->push_back(std::make_shared<std::string>("memory"));
+    auto owned = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Owned"), qual, err);
+    owned->genericArgs = std::make_shared<IdentifierList>();
+    owned->genericArgs->push_back(err);
+    return owned;
+}
+
+// Synthesize a `Result<inner, Owned<Error>>` type node — the uniform fallible-deserialize return type.
+// Resolves like a user-written type (empty qualifier), so cType mangles it and registers the monomorph.
+SharedIdentifier CEmitter::resultOwnedErrorTypeNode(SharedIdentifier inner)
+{
+    auto res   = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Result"),
+                                                  std::make_shared<StringList>(), inner);
+    res->genericArgs = std::make_shared<IdentifierList>();
+    res->genericArgs->push_back(inner);
+    res->genericArgs->push_back(ownedErrorTypeNode());
+    return res;
+}
+
+// Emit (raw C) the boxing of the reader's sticky `DeError` into an `Owned<Error>`; returns the temp holding
+// it. Reuses the P2 boxing (emitEnumBoxIntoContract) — flushes its one hoisted statement here since the
+// synth deserialize bodies are hand-emitted C, not the expression/hoist path.
+std::string CEmitter::emitStickyErrBox(int depth)
+{
+    std::string ownedErr = cType(ownedErrorTypeNode());
+    size_t base = _hoisted.size();
+    std::string t = emitEnumBoxIntoContract(ownedErr, "DeError", "r.vtbl->errorCode(r.obj)", 0);
+    for (size_t i = base; i < _hoisted.size(); ++i) { indent(depth); *_out << _hoisted[i] << "\n"; }
+    _hoisted.resize(base);
+    return t;
+}
+
 // Synthesize an `Optional<elem>` type node (the `.as<T>()` result). Resolves like a user-written
 // `Optional<T>` (empty qualifier), so cType mangles it to `Optional_<elem>`.
 SharedIdentifier CEmitter::optionalTypeNode(SharedIdentifier elem)
@@ -9399,11 +9550,17 @@ void CEmitter::computeGraphNodeTypes()
         if (!ci.isGraphNode) continue;
         ci.graphTypeId = (int)_graphNodeOrder.size();
         _graphNodeOrder.push_back(kv.first);
-        auto it = ci.methods.find("deserialize");     // graph deserialize returns Shared<T> — but only when the
-        if (it != ci.methods.end() && it->second.isSynthDe) {   // Shared<T> instance exists (root / Shared/Weak
-            SharedIdentifier sh = sharedTypeNode(it->second.returnType);   // pointee). A pure Owned pointee has no
+        auto it = ci.methods.find("deserialize");     // graph deserialize returns Result<Shared<T>, Owned<Error>>
+        if (it != ci.methods.end() && it->second.isSynthDe && it->second.returnType   // — but only when the
+            && it->second.returnType->genericArgs && !it->second.returnType->genericArgs->empty()) {   // Shared<T>
+            SharedIdentifier inner = it->second.returnType->genericArgs->at(0);   // This (the fallible Result's Ok arm)
+            SharedIdentifier sh = sharedTypeNode(inner);   // Shared<This>; a pure-Owned pointee has no Shared instance
             _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
-            if (_classes.count(cType(sh))) { it->second.returnType = sh; ci.graphDeserialize = true; }   // Shared<T> — stays by-value
+            if (_classes.count(cType(sh))) {
+                it->second.returnType = resultOwnedErrorTypeNode(sh);   // Result<Shared<This>, Owned<Error>>
+                scanTypeForCollections(it->second.returnType);
+                ci.graphDeserialize = true;
+            }
             _nsCtx = saved;
         }
     }
@@ -9519,7 +9676,7 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         if (!graphEdgeOf(f.type).kind.empty()) continue;   // pointer edge — pass 2
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
         indent(2); *_out << (firstS ? "if" : "else if") << " (kama_string__equals(&__key, " << kamaStrLit(wire) << ")) {\n";
-        emitDeFieldRead(f.type, "self->" + f.name, 3);
+        emitDeFieldRead(f.type, "self->" + f.name, 3, "", "");   // graph-shell: sticky carries failure to the boundary
         indent(2); *_out << "}\n";
         firstS = false;
     }
@@ -9666,9 +9823,11 @@ void CEmitter::emitGraphSerializeDefinition(ClassInfo& ci)
 void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
 {
     std::string T = ci.name;
-    std::string sharedT = cType(ci.methods["deserialize"].returnType);   // Shared_T
+    SharedIdentifier retNode = ci.methods["deserialize"].returnType;     // Result<Shared<T>, Owned<Error>>
+    std::string resC = cType(retNode);
+    std::string sharedT = cType(retNode->genericArgs->at(0));            // Shared_T (the Ok arm)
     const char* stat = _emitStaticClass ? "static inline " : "";
-    *_out << stat << sharedT << " " << T << "__deserialize(Deserializer r)\n{\n";
+    *_out << stat << resC << " " << T << "__deserialize(Deserializer r)\n{\n";
     indent(1); *_out << "struct kama_de_graph __g; kama_de_graph_init(&__g);\n";
     for (auto& K : _graphNodeOrder) { indent(1); *_out << "struct kama_de_arena __arena_" << K << "; kama_de_arena_init(&__arena_" << K << ");\n"; }
     indent(1); *_out << "uint64_t __root = r.vtbl->beginGraph(r.obj);\n";
@@ -9726,7 +9885,14 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
         indent(1); *_out << "kama_de_arena_free(&__arena_" << K << ");\n";
     }
     indent(1); *_out << "kama_de_graph_free(&__g);\n";
-    indent(1); *_out << "return __ret;\n";
+    // Boundary: any sticky failure (dangling root, type mismatch, malformed) → drop the retained graph
+    // (the Shared dtor cascades through reachable nodes; null-safe on a dangling root) + Err(boxed).
+    indent(1); *_out << "if (r.vtbl->failed(r.obj)) {\n";
+    indent(2); *_out << sharedT << "__dtor(&__ret);\n";
+    std::string gbox = emitStickyErrBox(2);
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << gbox << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = __ret } };\n";
     *_out << "}\n\n";
 }
 
@@ -10910,6 +11076,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     mi.isStatic     = modHas(md->modifiers, "static");  // a static factory (no `self`) — e.g. `deserialize`
                     mi.visibility   = Visibility::Public;   // a contract's methods are public
                     mi.isRetro      = true;                 // emitted static-inline in the header (below)
+                    scanTypeForCollections(mi.returnType);  // register a monomorph named only in a retro sig (e.g. `Result<T, Owned<Error>>`)
                     tci.methods[mname] = mi;
                 }
             tci.interfaces.push_back(contract);
@@ -11092,6 +11259,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     for (ClassInfo* ci : classes) {
         if (ci->isIntrinsicColl || ci->isExternStruct) continue;
         if (ci->isGenericInst) continue;   // a generic instance's vtables are emitted `static` inline (below), no extern decl
+        if (_preludeEnums.count(ci->name)) continue;   // a promoted prelude enum's vtbl is header-static (emitted below), no extern
         for (auto& ifn : ci->interfaces) {
             bool retro = false;
             for (auto& r : ci->retroInterfaces) if (r == ifn) { retro = true; break; }
@@ -11210,6 +11378,25 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _emitStaticClass = true;
         emitClassPrototypes(kv.second);
         emitClassDefinitions(kv.second);
+        _emitStaticClass = false;
+    }
+
+    // A PROMOTED PRELUDE ENUM (e.g. `DeError implements Error`) has no home module, so — like the prelude
+    // types/retro-impls — emit its `<Enum>__as_C` vtbl (+ dtor / synth serde) `static inline` in the header
+    // (the module-content enum pass only covers user units; its `extern` decl is skipped above). Placed
+    // BEFORE the retro-impl bodies below, which reference the vtbl when boxing an error into `Owned<Error>`.
+    if (_preludeUnit) {
+        _emitStaticClass = true;
+        for (const std::string& name : _preludeEnums) {
+            auto it = _classes.find(name);
+            if (it == _classes.end() || !it->second.isVariant) continue;   // only a promoted enum reaches _classes
+            ClassInfo& eci = it->second;
+            scopeOf(eci.scope, eci.usings, eci.symbolAliases);
+            if (eci.destructible) emitDtorDefinition(eci);
+            emitClassInterfaceVtables(eci);
+            if (eci.methods.count("serialize")   && eci.methods["serialize"].isSynthSer)   emitEnumSerializeDefinition(eci);
+            if (eci.methods.count("deserialize") && eci.methods["deserialize"].isSynthDe)   emitEnumDeserializeDefinition(eci);
+        }
         _emitStaticClass = false;
     }
 

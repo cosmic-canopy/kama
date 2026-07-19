@@ -237,12 +237,19 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         while (i < this.len) { this.serElem(e: this[i], w: w); i = i + 1; }
         w.endArray();
     }
-    // Reconstruct from a JSON array — a fresh list, each element read via its own `deserialize` and moved in.
-    public static fn DynamicArray<T> deserialize(Deserializer r) when [T: Deserialize] {
+    // Reconstruct from a JSON array — a fresh list, each element read fallibly and moved in. A bad element
+    // read propagates its boxed error (dropping the partial list via RAII).
+    public static fn Result<DynamicArray<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
         DynamicArray<T> result = DynamicArray();
         r.beginArray();
-        while (r.moreElems()) { result.add(item: T::deserialize(r: r)); }
-        return give result;
+        while (r.moreElems()) {
+            Result<T, Owned<Error>> __er = T::deserialize(r: r);   // bind — a match needs a named enum subject
+            match (give __er) {                                     // consume it so an owning payload can be moved out
+                case Err(e): { return Result::Err(error: give e); }
+                case Ok(v):  { result.add(item: give v); }
+            };
+        }
+        return Result::Ok(value: give result);
     }
 
     ~DynamicArray() {   // drop each element (a no-op for a value), then release the buffer via the allocator

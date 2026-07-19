@@ -25,7 +25,7 @@ fn int main() {
         return cast<int32>(j.length());
     }
     // Round-trip: decode into a Shared<Pair>, re-encode, and require the exact same wire (id dedup survived).
-    Result<Shared<Pair>, DeError> res = decode::<Shared<Pair>>(src: copy j);
+    Result<Shared<Pair>, Owned<Error>> res = decode::<Shared<Pair>>(src: copy j);
     match (res) {
         case Ok(sh): { string j2 = encode(v: sh); if (j2 == j) { return 0; } return 1; }
         case Err(e): { return 2; }

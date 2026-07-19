@@ -10,6 +10,6 @@ fn int main() {
     Drawing d = Drawing(id: 3, shape: Geo::Rect(w: 4, h: 5));
     string j = encode(v: d);
     if (!j.equals(other: "{\"id\":3,\"shape\":{\"tag\":\"Rect\",\"value\":{\"w\":4,\"h\":5}}}")) { return 1; }
-    Result<Drawing, DeError> res = decode::<Drawing>(src: give j);
+    Result<Drawing, Owned<Error>> res = decode::<Drawing>(src: give j);
     return match (res) { case Ok(b): b.id + (match (b.shape) { case Rect(w,h): w*h; case Circle(r): r; case Empty: 0; }); case Err(e): 0 - 1; };  // 23
 }

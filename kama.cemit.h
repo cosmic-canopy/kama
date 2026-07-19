@@ -427,6 +427,7 @@ private:
     // qualified name.
     std::map<std::string, EnumDeclarationNode*> _enumDeclNodes;
     std::map<std::string, NsCtx>                _enumNsCtx;
+    std::set<std::string>                       _preludeEnums;   // enums declared in the prelude (a promoted one's vtbl/serde is header-static, no home module)
     std::map<std::string, CollectionInfo> _collections;      // cName -> info
     std::vector<std::string>              _collectionOrder;  // registration order (inner-first; a
                                                              // collection's dtor calls its element's,
@@ -758,8 +759,10 @@ private:
     void emitEnumSerializeDefinition(ClassInfo& ci);     // externally-tagged {"tag":…[,"value":{…}]}
     void emitEnumDeserializeDefinition(ClassInfo& ci);
     void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth);
-    void emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth);
+    void emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth,
+                         const std::string& resultCType, const std::string& cleanup);
     std::string deReadExpr(SharedIdentifier ty);   // the `Deserializer` read expression for a field type
+    bool isScalarDeType(SharedIdentifier ty);      // scalar/string field: bare sticky read (vs a fallible composite)
     // Graph (object-graph / pointer) serialization intrinsic — direct C emission (Phase D).
     void computeGraphNodeTypes();                   // closure over smart-ptr fields; sets isGraphNode + Shared<T> return
     void emitGraphNodeHelperProtos(ClassInfo& ci);  // T__serializeNode / T__allocShell / T__wireShell prototypes
@@ -776,6 +779,9 @@ private:
     void emitPolyContractResolvers();   // Phase E: per-contract nodeWriterFor / implVtbl dispatch helpers
     SharedIdentifier sharedTypeNode(SharedIdentifier elem);   // synth a `Shared<elem>` type node (for return types)
     SharedIdentifier optionalTypeNode(SharedIdentifier elem); // synth an `Optional<elem>` node (the `.as<T>()` result)
+    SharedIdentifier ownedErrorTypeNode();                    // synth `Owned<Error>` (the boxed-error payload)
+    SharedIdentifier resultOwnedErrorTypeNode(SharedIdentifier inner); // synth `Result<inner, Owned<Error>>` (the fallible-deserialize return type)
+    std::string emitStickyErrBox(int depth);                  // box the reader's sticky DeError into an Owned<Error> (raw C); returns the temp
     std::string emitAsDowncast(AsDowncastNode* ad);           // Model C `expr.as<T>()` -> Optional<T> (vtbl compare)
     std::vector<std::string> _graphNodeOrder;       // graphNodeTypes in a stable order (for driver dispatch chains)
     // Contracts used as a graph edge element (`Shared<Shape>`): each gets a runtime-dispatch resolver pair.

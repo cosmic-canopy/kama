@@ -52,10 +52,16 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
         foreach (K k in this.m) { this.serElem(k: k, w: w); }
         w.endArray();
     }
-    public static fn Set<K,H> deserialize(Deserializer r) when [K: Deserialize] {
+    public static fn Result<Set<K,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
         Set<K,H> result = Set();
         r.beginArray();
-        while (r.moreElems()) { result.add(key: K::deserialize(r: r)); }
-        return give result;
+        while (r.moreElems()) {
+            Result<K, Owned<Error>> __er = K::deserialize(r: r);   // bind — a match needs a named enum subject
+            match (give __er) {                                     // consume: destructure-move the owning element out
+                case Err(e): { return Result::Err(error: give e); }
+                case Ok(v):  { result.add(key: give v); }
+            };
+        }
+        return Result::Ok(value: give result);
     }
 }

@@ -28,18 +28,20 @@ type resource Scene {
 fn int main() {
     // `a` (a `Shared<Shape>`) wrongly points at id 2, whose `__type` is `Tag` (not a `Shape` implementor).
     string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Scene\",\"a\":2,\"t\":2},\"2\":{\"__type\":\"Tag\",\"n\":9}}}";
-    Result<Shared<Scene>, DeError> res = decode::<Shared<Scene>>(src: give j);
+    Result<Shared<Scene>, Owned<Error>> res = decode::<Shared<Scene>>(src: give j);
     match (res) {
         case Ok(sh): { return 1; }                          // must NOT succeed
         case Err(e): {
-            DeError ec = e;
-            match (ec) {
-                case TypeMismatch: { return 0; }            // expected
-                case Malformed: { return 2; }
-                case UnexpectedEnd: { return 3; }
-                case UnresolvedReference: { return 4; }
-                case MissingField: { return 5; }
-                case DuplicateId: { return 6; }
+            match (e.as<DeError>()) {                        // recover the concrete deserialize error
+                case Some(ec): { match (ec) {
+                    case TypeMismatch: { return 0; }         // expected
+                    case Malformed: { return 2; }
+                    case UnexpectedEnd: { return 3; }
+                    case UnresolvedReference: { return 4; }
+                    case MissingField: { return 5; }
+                    case DuplicateId: { return 6; }
+                }; }
+                case None: { return 8; }                     // not a DeError
             };
         }
     };

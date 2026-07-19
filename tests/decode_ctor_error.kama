@@ -1,0 +1,30 @@
+// P4: `decode` is a fallible ctor returning `Result<This, Owned<Error>>`. A malformed input surfaces as
+// `Err` (never a half-built object); the concrete error is recovered with `err.as<DeError>()`. A good
+// input round-trips to `Ok`. Mirrors the boundary guarantee "Ok(complete) or Err(nothing)".
+import std::serialization::json::{encode, decode};
+@generate(Serialize, Deserialize, noOnConstruction)
+type value Point {
+    @field int32 x;
+    @field int32 y;
+    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
+    public fn int32 sum() { return this.x + this.y; }
+}
+fn int main() {
+    // good input -> Ok
+    Point p = Point(x: 30, y: 12);
+    string j = encode(v: p);
+    Result<Point, Owned<Error>> good = decode::<Point>(src: give j);
+    int32 okv = match (good) { case Ok(q): q.sum(); case Err(e): 0 - 1; };   // 42
+
+    // malformed input (a letter where a number is expected) -> Err, recovered as a concrete DeError
+    string bad = "{\"x\":!,\"y\":2}";
+    Result<Point, Owned<Error>> fail = decode::<Point>(src: give bad);
+    int32 errv = match (fail) {
+        case Ok(q): 0 - 2;                                   // must NOT succeed
+        case Err(e): match (e.as<DeError>()) {               // recover the concrete deserialize error
+            case Some(de): 100;                              // some DeError variant surfaced
+            case None:     0 - 3;                            // not a DeError
+        };
+    };
+    return okv + errv;   // 42 + 100 = 142
+}

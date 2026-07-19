@@ -177,11 +177,17 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
         while (i < this.len) { this.serElem(e: this[i], w: w); i = i + 1; }
         w.endArray();
     }
-    public static fn Deque<T> deserialize(Deserializer r) when [T: Deserialize] {
+    public static fn Result<Deque<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
         Deque<T> result = Deque();
         r.beginArray();
-        while (r.moreElems()) { result.pushBack(item: T::deserialize(r: r)); }
-        return give result;
+        while (r.moreElems()) {
+            Result<T, Owned<Error>> __er = T::deserialize(r: r);   // bind — a match needs a named enum subject
+            match (give __er) {                                     // consume: destructure-move the owning element out
+                case Err(e): { return Result::Err(error: give e); }
+                case Ok(v):  { result.pushBack(item: give v); }
+            };
+        }
+        return Result::Ok(value: give result);
     }
 
     ~Deque() {   // drop each live element (a no-op for a value), then release the buffer via the allocator

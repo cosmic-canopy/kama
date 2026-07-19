@@ -41,6 +41,6 @@ fn int main() {
     Optional<Child> mb = Optional::Some(value: give mc);
     Parent p = Parent(id: 10, main: give mainC, maybe: give mb, kids: give ks);
     string j = encode(v: p);
-    Result<Parent, DeError> res = decode::<Parent>(src: give j);
+    Result<Parent, Owned<Error>> res = decode::<Parent>(src: give j);
     return match (res) { case Ok(q): q.total(); case Err(e): 0 - 1; };   // 10 + 8 + 5 + (2+4) = 29
 }
