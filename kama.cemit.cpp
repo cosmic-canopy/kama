@@ -2780,12 +2780,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     if (!at->args || at->args->empty())
                         unsupported("`@generate(...)` needs at least one of Serialize, Deserialize", cd->line);
                     else for (auto& a : *at->args) {
-                        // bare identifier args only (Serialize/Deserialize); a `key: value` form is invalid here
+                        // bare identifier args only (Serialize/Deserialize/of/zero); a `key: value` form is invalid here
                         std::string which = (a && a->name && a->name->value && !a->expression) ? *a->name->value : "";
                         if      (which == "Serialize")   ci.genSerialize = true;
                         else if (which == "Deserialize") ci.genDeserialize = true;
                         else if (which == "noOnConstruction") ci.serNoOnConstruction = true;   // opt out of the hook rule
-                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, noOnConstruction", cd->line);
+                        else if (which == "of")   ci.genOf = true;     // bag ctor — validated + registered after fields (below)
+                        else if (which == "zero") ci.genZero = true;
+                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, of, zero, noOnConstruction", cd->line);
                     }
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name + "` (expected `@generate`)").c_str(), cd->line);
@@ -3153,6 +3155,45 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
                 }
             }
+            // `@generate(of|zero)` bag ctors (M6) — BAG-ONLY: a transparent `value` (all public fields). `of`
+            // = a synthesized memberwise ctor `V.of(f1: …, …)`; `zero` = a zero-init ctor `V.zero()`. Both are
+            // infallible named ctors (returnType = the enclosing type), registered in `ctors`/`methods` and
+            // emitted by emitBagCtorBody. A hand-written `of`/`zero` wins via the `!methods.count` guard.
+            if (ci.genOf || ci.genZero) {
+                if (ci.kind != TypeKind::Value)
+                    unsupported("`@generate(of, zero)` applies only to a `value` whose fields are all public "
+                                "(a data bag) — not a `resource`, `view`, or `enum`", cd->line);
+                else if (!isTransparentValue(ci)) {
+                    std::string bad;
+                    for (auto& f : ci.fields) if (f.visibility != Visibility::Public) { bad = f.name; break; }
+                    unsupported(("`@generate(of, zero)` needs an all-public `value` (a data bag); field '"
+                                 + bad + "' is not public").c_str(), cd->line);
+                } else {
+                    if (ci.genOf && !ci.methods.count("of")) {
+                        MethodInfo mi; mi.cName = ci.name + "__of"; mi.visibility = Visibility::Public;
+                        mi.isStatic = true; mi.isCtor = true; mi.isSynthBag = true; mi.returnType = cd->name;
+                        for (auto& f : ci.fields) {
+                            ParamSig ps; ps.name = f.name; ps.byRef = false; ps.className = cType(f.type);
+                            mi.params.push_back(ps);
+                        }
+                        ci.methods["of"] = mi;
+                        ci.ctors["of"] = CtorInfo{ nullptr, mi.params, Visibility::Public, false, cd->name };
+                    }
+                    if (ci.genZero && !ci.methods.count("zero")) {
+                        // A `value` owns nothing (the "a value owns nothing" rule rejects an `Owned`/`Shared`
+                        // field before we get here), so zero-init is always a valid, never-null state.
+                        MethodInfo mi; mi.cName = ci.name + "__zero"; mi.visibility = Visibility::Public;
+                        mi.isStatic = true; mi.isCtor = true; mi.isSynthBag = true; mi.returnType = cd->name;
+                        ci.methods["zero"] = mi;
+                        ci.ctors["zero"] = CtorInfo{ nullptr, {}, Visibility::Public, false, cd->name };
+                    }
+                }
+            }
+        } else if (ci.genOf || ci.genZero) {
+            // A generic `value<T>` template or a variant: `of`/`zero` apply only to a plain (non-generic,
+            // non-variant) transparent `value`. Per-instance synthesis for generics is out of scope for M6.
+            unsupported("`@generate(of, zero)` applies only to a plain transparent `value` (all public fields) "
+                        "— not a generic or variant type; write a `ctor`", cd->line);
         }
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
@@ -6355,6 +6396,53 @@ std::string CEmitter::externAggregateInit(const std::string& nm, ClassInfo& ci,
     return out;
 }
 
+// ---- `@generate(of|zero)` bag ctors (construction-model M6) ---------------------------------------------
+// A transparent `value` (all public fields — a data bag) may derive `of`/`zero` named ctors instead of
+// hand-writing them. Both are infallible static factories returning the value by C-value; registered in
+// collectClasses and dispatched through the ordinary dot-on-type ctor path.
+
+bool CEmitter::isTransparentValue(const ClassInfo& ci) const
+{
+    if (ci.kind != TypeKind::Value) return false;
+    for (auto& f : ci.fields) if (f.visibility != Visibility::Public) return false;
+    return true;
+}
+
+// The shared C signature `V V__of(t1 f1, …)` / `V V__zero(void)` — no `static inline`, no trailing `;`/body.
+std::string CEmitter::bagCtorSig(const ClassInfo& ci, const std::string& which)
+{
+    std::string sig = ci.name + " " + ci.name + "__" + which + "(";
+    bool first = true;
+    if (which == "of")
+        for (auto& f : ci.fields) {
+            if (!first) sig += ", ";
+            first = false;
+            sig += cType(f.type) + " " + f.name;
+        }
+    if (first) sig += "void";   // `zero()`, or an (edge-case) field-less `of`
+    return sig + ")";
+}
+
+// `V V__of(…) { return (V){ .f1 = f1, … }; }` / `V V__zero(void) { return (V){0}; }`.
+void CEmitter::emitBagCtorBody(ClassInfo& ci, const std::string& which)
+{
+    *_out << (_emitStaticClass ? "static inline " : "") << bagCtorSig(ci, which) << "\n{\n";
+    indent(1);
+    if (which == "of" && !ci.fields.empty()) {
+        *_out << "return (" << ci.name << "){ ";
+        bool first = true;
+        for (auto& f : ci.fields) {
+            if (!first) *_out << ", ";
+            first = false;
+            *_out << "." << f.name << " = " << f.name;
+        }
+        *_out << " };\n";
+    } else {
+        *_out << "return (" << ci.name << "){0};\n";   // `zero`, or a field-less `of`
+    }
+    *_out << "}\n\n";
+}
+
 std::string CEmitter::emitReorderedCall(const std::string& cName, const std::string& leadArg,
                                         const std::vector<ParamSig>& params,
                                         SharedArgumentList args, int srcLine)
@@ -9022,6 +9110,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         if (mi.isRetro && ci.isVariant) continue;
         if (mi.isSynthSer) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }   // P4: Result<Unit, Owned<Error>>
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
+        if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
@@ -9242,6 +9331,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         if (mi.isAbstract) continue;   // pure: no body to emit
         if (mi.isSynthSer) { ci.reachesPointer   ? emitGraphSerializeDefinition(ci)   : emitSerializeDefinition(ci); continue; }
         if (mi.isSynthDe)  { ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci); continue; }
+        if (mi.isSynthBag) { emitBagCtorBody(ci, kv.first); continue; }   // M6: `@generate(of|zero)` bag ctor
         // an operator has no `node`; emit its body from `opDecl` (free form: no self).
         if (mi.isOperator) {
             auto* d = mi.opDecl->operatorDeclarator.get();

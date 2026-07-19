@@ -90,6 +90,9 @@ struct MethodInfo {
     // null: the proto/body loops skip these and emit via emitSerializeDefinition/emitDeserializeDefinition.
     bool                         isSynthSer = false;  // synthesized `serialize(ref Serializer)`
     bool                         isSynthDe  = false;  // synthesized static `deserialize(Deserializer) -> This`
+    // Compiler-synthesized `@generate(of|zero)` bag ctor (M6). `node` is null: the proto/body loops skip the
+    // ordinary path and emit via bagCtorSig/emitBagCtorBody, dispatching on the method key ("of"/"zero").
+    bool                         isSynthBag = false;
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
@@ -162,6 +165,12 @@ struct ClassInfo {
     // `@generate(Deserialize, noOnConstruction)` — the type explicitly declares it has no birth logic, so
     // it is exempt from the "must define `onConstruction()`" rule (deserialize bypasses the constructor).
     bool                              serNoOnConstruction = false;
+    // `@generate(of|zero)` — bag-only opt-in ctors on a TRANSPARENT value (all public fields, see
+    // isTransparentValue). `of` = a synthesized memberwise ctor `V.of(f1: …, …)`; `zero` = a zero-init ctor
+    // `V.zero()`. Both synthesize a named `ctor` (registered in `ctors`/`methods`) whose body is emitted by
+    // emitBagCtorDefinitions. See the construction-model campaign (M6).
+    bool                              genOf = false;
+    bool                              genZero = false;
     std::map<std::string, MethodInfo> methods;    // by kama method name
     bool                              hasCtor = false;
     bool                              synthCtor = false;  // default ctor synthesized (vtable init)
@@ -781,6 +790,12 @@ private:
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);
     void emitDeserializeDefinition(ClassInfo& ci);
+    // `@generate(of|zero)` bag ctors (M6): the C signature (`V V__of(f1…)` / `V V__zero(void)`) shared by the
+    // prototype and the definition, and the synthesized memberwise/zero-init body. `which` is "of" or "zero".
+    std::string bagCtorSig(const ClassInfo& ci, const std::string& which);
+    void        emitBagCtorBody(ClassInfo& ci, const std::string& which);
+    // A "bag" = a `value` whose every field is public — the only shape `of`/`zero` may be generated for.
+    bool        isTransparentValue(const ClassInfo& ci) const;
     void emitEnumSerializeDefinition(ClassInfo& ci);     // externally-tagged {"tag":…[,"value":{…}]}
     void emitEnumDeserializeDefinition(ClassInfo& ci);
     void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth,

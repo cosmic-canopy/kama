@@ -1,0 +1,14 @@
+// Construction-model M6: `@generate(zero)` synthesizes a zero-init ctor `V.zero()` on a transparent value.
+// A type may derive both `of` and `zero`.
+@generate(of, zero)
+type value Counters {
+    public int32 a;
+    public int32 b;
+    public int32 c;
+}
+
+fn int32 main() {
+    Counters z = Counters.zero();               // all fields zero
+    Counters v = Counters.of(a: 1, b: 2, c: 3);
+    return z.a + z.b + z.c + v.a + v.b + v.c;   // 0 + 6 = 6
+}

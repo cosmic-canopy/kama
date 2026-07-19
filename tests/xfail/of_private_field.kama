@@ -1,0 +1,7 @@
+// `@generate(of, zero)` is bag-only: a `value` with any private field is not a transparent bag.
+@generate(of)
+type value Bad {
+    public int32 x;
+    int32 y;   // private (value fields default private) — removes bag eligibility
+}
+fn int32 main() { return 0; }

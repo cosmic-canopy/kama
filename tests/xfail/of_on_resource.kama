@@ -1,0 +1,7 @@
+// `@generate(of, zero)` applies only to a `value` (a data bag), never a `resource`.
+@generate(of)
+type resource Bad {
+    int32 x;
+    public ctor make(int32 x) { Bad b; b.x = x; return b; }
+}
+fn int32 main() { return 0; }
