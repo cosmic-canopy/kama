@@ -4,6 +4,7 @@ namespace std::math;
 // (Hamilton), rotate a Vec3 with `rotate`, interpolate with slerp/nlerp, convert to a rotation matrix.
 export { Quat };
 
+@generate(of)
 type value Quat {
     public float32 x;
     public float32 y;
@@ -11,15 +12,15 @@ type value Quat {
     public float32 w;
     public Quat(float32 x, float32 y, float32 z, float32 w) { this.x = x; this.y = y; this.z = z; this.w = w; }
 
-    public static fn Quat identity() { return Quat(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32); }
+    public ctor identity() { return Quat(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32); }
     // axis assumed normalized; angle in radians
-    public static fn Quat fromAxisAngle(Vec3 axis, float32 rad) {
+    public ctor fromAxisAngle(Vec3 axis, float32 rad) {
         float32 h = rad * 0.5f32;
         float32 s = sinf(x: h);
         return Quat(x: axis.x*s, y: axis.y*s, z: axis.z*s, w: cosf(x: h));
     }
     // Euler compose (YXZ / yaw-pitch-roll), radians
-    public static fn Quat fromEuler(float32 pitch, float32 yaw, float32 roll) {
+    public ctor fromEuler(float32 pitch, float32 yaw, float32 roll) {
         Quat qy = Quat::fromAxisAngle(axis: Vec3(x: 0.0f32, y: 1.0f32, z: 0.0f32), rad: yaw);
         Quat qx = Quat::fromAxisAngle(axis: Vec3(x: 1.0f32, y: 0.0f32, z: 0.0f32), rad: pitch);
         Quat qz = Quat::fromAxisAngle(axis: Vec3(x: 0.0f32, y: 0.0f32, z: 1.0f32), rad: roll);
@@ -54,10 +55,10 @@ type value Quat {
                     z: v.z + uv.z*tw + uuv.z*2.0f32);
     }
 
-    public static fn Quat nlerp(Quat a, Quat b, float32 t) {
+    public ctor nlerp(Quat a, Quat b, float32 t) {
         return (a.scale(s: 1.0f32 - t) + b.scale(s: t)).normalized();
     }
-    public static fn Quat slerp(Quat a, Quat b, float32 t) {
+    public ctor slerp(Quat a, Quat b, float32 t) {
         float32 c = a.dot(r: b);
         float32 ac = c < 0.0f32 ? 0.0f32 - c : c;
         if (ac > 0.9995f32) { return Quat::nlerp(a: a, b: b, t: t); }   // near-parallel: linear

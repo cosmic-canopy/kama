@@ -5,11 +5,12 @@ namespace std::math;
 // compose); vector transform is a named method. (Mat2/Mat3 added after Mat4 is proven.)
 export { Mat2, Mat3, Mat4 };
 
+@generate(of)
 type value Mat2 {
     public InlineArray<Vec2, 2> cols;
     public Mat2(InlineArray<Vec2, 2> cols) { this.cols = cols; }
-    public static fn Mat2 fromCols(Vec2 c0, Vec2 c1) { InlineArray<Vec2, 2> cs = [c0, c1]; return Mat2(cols: cs); }
-    public static fn Mat2 identity() {
+    public ctor fromCols(Vec2 c0, Vec2 c1) { InlineArray<Vec2, 2> cs = [c0, c1]; return Mat2(cols: cs); }
+    public ctor identity() {
         return Mat2::fromCols(c0: Vec2(x: 1.0f32, y: 0.0f32), c1: Vec2(x: 0.0f32, y: 1.0f32));
     }
     public fn float32 get(int32 c, int32 r) { Vec2 col = this.cols[c]; return r == 0 ? col.x : col.y; }
@@ -34,11 +35,12 @@ type value Mat2 {
     }
 }
 
+@generate(of)
 type value Mat3 {
     public InlineArray<Vec3, 3> cols;
     public Mat3(InlineArray<Vec3, 3> cols) { this.cols = cols; }
-    public static fn Mat3 fromCols(Vec3 c0, Vec3 c1, Vec3 c2) { InlineArray<Vec3, 3> cs = [c0, c1, c2]; return Mat3(cols: cs); }
-    public static fn Mat3 identity() {
+    public ctor fromCols(Vec3 c0, Vec3 c1, Vec3 c2) { InlineArray<Vec3, 3> cs = [c0, c1, c2]; return Mat3(cols: cs); }
+    public ctor identity() {
         return Mat3::fromCols(c0: Vec3(x: 1.0f32, y: 0.0f32, z: 0.0f32),
                               c1: Vec3(x: 0.0f32, y: 1.0f32, z: 0.0f32),
                               c2: Vec3(x: 0.0f32, y: 0.0f32, z: 1.0f32));
@@ -80,29 +82,30 @@ type value Mat3 {
     }
 }
 
+@generate(of)
 type value Mat4 {
     public InlineArray<Vec4, 4> cols;
     public Mat4(InlineArray<Vec4, 4> cols) { this.cols = cols; }
 
-    public static fn Mat4 fromCols(Vec4 c0, Vec4 c1, Vec4 c2, Vec4 c3) {
+    public ctor fromCols(Vec4 c0, Vec4 c1, Vec4 c2, Vec4 c3) {
         InlineArray<Vec4, 4> cs = [c0, c1, c2, c3];
         return Mat4(cols: cs);
     }
-    public static fn Mat4 identity() {
+    public ctor identity() {
         Vec4 c0 = Vec4(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
         Vec4 c1 = Vec4(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
         Vec4 c2 = Vec4(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 0.0f32);
         Vec4 c3 = Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
-    public static fn Mat4 scale(Vec3 s) {
+    public ctor scale(Vec3 s) {
         Vec4 c0 = Vec4(x: s.x,    y: 0.0f32, z: 0.0f32, w: 0.0f32);
         Vec4 c1 = Vec4(x: 0.0f32, y: s.y,    z: 0.0f32, w: 0.0f32);
         Vec4 c2 = Vec4(x: 0.0f32, y: 0.0f32, z: s.z,    w: 0.0f32);
         Vec4 c3 = Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
-    public static fn Mat4 translation(Vec3 t) {
+    public ctor translation(Vec3 t) {
         Vec4 c0 = Vec4(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
         Vec4 c1 = Vec4(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
         Vec4 c2 = Vec4(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 0.0f32);
@@ -160,7 +163,7 @@ type value Mat4 {
     }
 
     // ---- rotations (right-handed, column-major) ----
-    public static fn Mat4 fromRotationX(float32 rad) {
+    public ctor fromRotationX(float32 rad) {
         float32 c = cosf(x: rad); float32 s = sinf(x: rad);
         Vec4 c0 = Vec4(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
         Vec4 c1 = Vec4(x: 0.0f32, y: c,      z: s,      w: 0.0f32);
@@ -168,7 +171,7 @@ type value Mat4 {
         Vec4 c3 = Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
-    public static fn Mat4 fromRotationY(float32 rad) {
+    public ctor fromRotationY(float32 rad) {
         float32 c = cosf(x: rad); float32 s = sinf(x: rad);
         Vec4 c0 = Vec4(x: c,      y: 0.0f32, z: -s,     w: 0.0f32);
         Vec4 c1 = Vec4(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
@@ -176,7 +179,7 @@ type value Mat4 {
         Vec4 c3 = Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
-    public static fn Mat4 fromRotationZ(float32 rad) {
+    public ctor fromRotationZ(float32 rad) {
         float32 c = cosf(x: rad); float32 s = sinf(x: rad);
         Vec4 c0 = Vec4(x: c,      y: s,      z: 0.0f32, w: 0.0f32);
         Vec4 c1 = Vec4(x: -s,     y: c,      z: 0.0f32, w: 0.0f32);
@@ -186,7 +189,7 @@ type value Mat4 {
     }
 
     // ---- projections / view (WebGPU 0..1 depth, right-handed) ----
-    public static fn Mat4 perspective(float32 fovyRad, float32 aspect, float32 near, float32 far) {
+    public ctor perspective(float32 fovyRad, float32 aspect, float32 near, float32 far) {
         float32 f = 1.0f32 / tanf(x: fovyRad * 0.5f32);
         float32 nf = 1.0f32 / (near - far);
         Vec4 c0 = Vec4(x: f / aspect, y: 0.0f32, z: 0.0f32,          w: 0.0f32);
@@ -195,7 +198,7 @@ type value Mat4 {
         Vec4 c3 = Vec4(x: 0.0f32,     y: 0.0f32, z: far * near * nf, w: 0.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
-    public static fn Mat4 orthographic(float32 l, float32 r, float32 b, float32 t, float32 near, float32 far) {
+    public ctor orthographic(float32 l, float32 r, float32 b, float32 t, float32 near, float32 far) {
         float32 nf = 1.0f32 / (near - far);
         Vec4 c0 = Vec4(x: 2.0f32/(r-l), y: 0.0f32,       z: 0.0f32,     w: 0.0f32);
         Vec4 c1 = Vec4(x: 0.0f32,       y: 2.0f32/(t-b), z: 0.0f32,     w: 0.0f32);
@@ -203,7 +206,7 @@ type value Mat4 {
         Vec4 c3 = Vec4(x: -(r+l)/(r-l), y: -(t+b)/(t-b), z: near * nf,  w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
-    public static fn Mat4 lookAt(Vec3 eye, Vec3 center, Vec3 up) {
+    public ctor lookAt(Vec3 eye, Vec3 center, Vec3 up) {
         Vec3 dir = center - eye;
         Vec3 f = dir.normalized();
         Vec3 sx = f.cross(r: up);
