@@ -17,6 +17,13 @@ trap 'rm -rf "$TMP"' EXIT
 pass=0
 fail=0
 
+# Report-only timing (never gates pass/fail): each fixture records its build+run wall-clock in ms so we can
+# watch the suite's cost trend as fixtures grow. `$EPOCHREALTIME` (bash 5, on the container + brew-bash) is
+# microseconds; the harness already needs bash >=4.3 for `wait -n`. Per-fixture wall-clock is NOISY under the
+# parallel fan-out (cores are saturated), so treat the slowest-N as a trend signal, not a per-fixture budget.
+now_ms() { local e="${EPOCHREALTIME:-0.0}"; echo $(( ${e%.*} * 1000 + 10#${e#*.} / 1000 )); }
+suite_start=$(now_ms)
+
 # Parallelism: each single-file fixture builds+runs independently into its own $TMP/$name.* files, so the
 # main loop fans out across cores (the dominant cost is one clang invocation per fixture). Override with
 # KAMA_JOBS. Results are collected per fixture then tallied in fixture order for stable output.
@@ -140,10 +147,12 @@ test_one() {
     # imported-module `.c` names key off the MODULE (e.g. dynamic_array_1.c), so two fixtures importing the
     # same stdlib module would collide in a shared dir under parallelism.
     local wd="$TMP/w_$name"; mkdir -p "$wd"; exe="$wd/$name"
+    local t0; t0=$(now_ms)
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     run_one "$exe" "$TMP/$name.san"
+    echo $(( $(now_ms) - t0 )) >"$TMP/$name.ms"   # report-only build+run wall-clock (ms)
     if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
         { echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"; return
     fi
@@ -154,13 +163,18 @@ test_one() {
     fi
 }
 
-# Fan out across NCPU cores, gating the number of concurrent jobs.
+# Fan out across NCPU cores, gating the number of concurrent jobs. Collect ONLY the fixture job PIDs and wait
+# on those explicitly: a bare `wait` also blocks on the long-lived echo servers (ws_echo/wt_echo/sig_relay,
+# started with `&` for the wasm net::web tests), which never exit — that hung the whole wasm leg after the
+# single-file phase. `wait -n` in the gate is fine (it returns as soon as ANY fixture finishes).
+fixture_pids=()
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
     test_one "$src" &
-    while [ "$(jobs -rp | wc -l)" -ge "$NCPU" ]; do wait -n 2>/dev/null || wait; done
+    fixture_pids+=($!)
+    while [ "$(jobs -rp | wc -l)" -ge "$NCPU" ]; do wait -n 2>/dev/null || break; done
 done
-wait
+wait "${fixture_pids[@]}" 2>/dev/null
 # Tally in fixture order (stable output regardless of completion order).
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
@@ -254,6 +268,18 @@ elif [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ] && [ "$TRAP_OK" = 0 ]; then
         [ -e "$src" ] || continue
         echo "SKIP $(basename "$src" .kama) (trap: POSIX signal-exit convention only)"
     done
+fi
+
+# Report-only timing summary (never affects pass/fail). Total suite wall-clock + the slowest fixtures, so a
+# creeping compile cost is visible as the suite grows. Skipped if EPOCHREALTIME was unavailable (all 0 ms).
+suite_ms=$(( $(now_ms) - suite_start ))
+timed=$(ls "$TMP"/*.ms 2>/dev/null | wc -l | tr -d ' ')
+if [ "$timed" -gt 0 ] && [ "$suite_ms" -gt 0 ]; then
+    echo "----"
+    printf 'timing: suite %d.%03ds wall, %d fixtures timed (build+run). slowest:\n' \
+        $((suite_ms/1000)) $((suite_ms%1000)) "$timed"
+    for f in "$TMP"/*.ms; do printf '%s %s\n' "$(cat "$f")" "$(basename "$f" .ms)"; done \
+        | sort -rn | head -15 | while read -r ms nm; do printf '  %6d ms  %s\n' "$ms" "$nm"; done
 fi
 
 echo "----"
