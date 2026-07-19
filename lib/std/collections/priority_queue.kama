@@ -27,13 +27,13 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
     // makes the LARGEST element come out first. They return the enclosing instance's own `A` (so `q` is the
     // SAME class — the private `maxOrder` write resolves); for a non-default `A` use `withAllocator` instead,
     // which supplies the allocator (the bare ctor here would leave a custom `A`'s handle uninitialized).
-    public static fn PriorityQueue<T, A> minHeap() { PriorityQueue<T, A> q = PriorityQueue(); return give q; }
-    public static fn PriorityQueue<T, A> maxHeap() { PriorityQueue<T, A> q = PriorityQueue(); q.maxOrder = true; return give q; }
+    public ctor minHeap() { PriorityQueue<T, A> q = PriorityQueue(); return give q; }
+    public ctor maxHeap() { PriorityQueue<T, A> q = PriorityQueue(); q.maxOrder = true; return give q; }
 
     // Back the heap's array with a caller-owned allocator (e.g. an `Arena`); `maxOrder` chooses direction
     // (private, so it can't be set post-hoc — this one factory covers both min and max in-arena). All
     // allocation rides the embedded `DynamicArray<T, A>`.
-    public static fn PriorityQueue<T, A> withAllocator(A allocator, bool maxOrder) {
+    public ctor withAllocator(A allocator, bool maxOrder) {
         PriorityQueue<T, A> q = PriorityQueue();
         q.data = DynamicArray::withAllocator(allocator: allocator);   // drops the empty default-built data (cap=0)
         q.maxOrder = maxOrder;

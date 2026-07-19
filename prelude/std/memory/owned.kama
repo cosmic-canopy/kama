@@ -15,10 +15,10 @@ type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, Heap
     A alloc;
     // HeapOwner: adopt a raw block into a box with the DEFAULT allocator (the bare-`new` path). `alloc`
     // is left as the zero-init default (`GlobalAllocator` carries no state, so its `deallocate` == `free`).
-    public static fn Owned<T, A> adopt(Ptr<T> raw) { Owned<T, A> b; b.p = raw; return b; }
+    public ctor adopt(Ptr<T> raw) { Owned<T, A> b; b.p = raw; return b; }
     // Placement adopt: a raw block that came FROM `allocator`, stored so the dtor releases it through the
     // same handle (the `new(allocator: a) T(...)` path).
-    public static fn Owned<T, A> adoptIn(Ptr<T> raw, A allocator) { Owned<T, A> b; b.p = raw; b.alloc = allocator; return b; }
+    public ctor adoptIn(Ptr<T> raw, A allocator) { Owned<T, A> b; b.p = raw; b.alloc = allocator; return b; }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     // run pointee dtor, then release through the allocator — guarding a null pointer (a
     // zero-initialized/moved-from handle).

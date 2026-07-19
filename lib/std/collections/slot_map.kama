@@ -79,9 +79,13 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
         this.slotCount = 0; this.freeLen = 0; this.len = 0; this.cap = 0; this.mods = 0;
     }
 
+    // Named empty constructor (M7): `SlotMap.empty()`, default `GlobalAllocator`. Delegates to the primary
+    // during coexistence; at M8 the primary's body moves here.
+    public ctor empty() { return SlotMap(); }
+
     // Draw the three parallel buffers from a caller-owned allocator (e.g. an `Arena`). The bare `SlotMap()`
     // uses the default zero-size `GlobalAllocator`; this sets the handle before any grow.
-    public static fn SlotMap<V, A> withAllocator(A allocator) {
+    public ctor withAllocator(A allocator) {
         SlotMap<V, A> result = SlotMap();
         result.alloc = allocator;
         return give result;

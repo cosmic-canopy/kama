@@ -477,10 +477,14 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
         this.root = give r; this.len = 0; this.mods = 0;
     }
 
+    // Named empty constructor (M7): `SortedMap.empty()`, default `GlobalAllocator`. Delegates to the primary
+    // during coexistence; at M8 the primary's body moves here.
+    public ctor empty() { return SortedMap(); }
+
     // Back the whole tree with a caller-owned allocator (e.g. an `Arena`). The bare ctor above built a
     // root whose arrays bound the zero-init `alloc`, so REPLACE it (dropping the default root) with one
     // built from the real handle — mirrors `PriorityQueue::withAllocator` replacing its embedded array.
-    public static fn SortedMap<K,V,A> withAllocator(A allocator) {
+    public ctor withAllocator(A allocator) {
         SortedMap<K,V,A> result = SortedMap();
         result.alloc = allocator;
         Owned<BTreeNode<K,V,A>> r = new BTreeNode<K,V,A>(leaf: true, allocator: allocator);

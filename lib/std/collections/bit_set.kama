@@ -39,10 +39,11 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     Ptr<uint64> words; int32 wordCount; int32 mods; A alloc;
 
     public BitSet() { unsafe { this.words = cast<Ptr<uint64>>(cast<usize>(0)); } this.wordCount = 0; this.mods = 0; }
+    public ctor empty() { return BitSet(); }   // named empty ctor (M7); delegates to the primary until M8
 
     // Preallocate room for at least `bits` bits (rounded up to a whole word). K,V-style target-type inference:
     // `BitSet s = BitSet::withCapacity(bits: 256);`.
-    public static fn BitSet<A> withCapacity(int32 bits) {
+    public ctor withCapacity(int32 bits) {
         BitSet<A> s = BitSet();
         if (bits > 0) { s.growTo(nc: (bits + 63) >> 6); }
         return give s;
@@ -50,7 +51,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
 
     // Draw the word buffer from a caller-owned allocator (e.g. an `Arena`). The bare `BitSet()` uses the
     // default zero-size `GlobalAllocator`; this sets the handle before any grow.
-    public static fn BitSet<A> withAllocator(A allocator) {
+    public ctor withAllocator(A allocator) {
         BitSet<A> result = BitSet();
         result.alloc = allocator;
         return give result;

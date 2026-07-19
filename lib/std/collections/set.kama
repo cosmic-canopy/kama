@@ -13,10 +13,11 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // `this.m = Map()` won't infer the map's type args from the field, so build it in a typed local
     // first, then move it in (the tracked bare-generic-ctor-in-a-non-local-init gap).
     public Set() { Map<K, Unit, H, A> inner = Map(); this.m = give inner; }
+    public ctor empty() { return Set(); }   // named empty ctor (M7); delegates to the primary until M8
 
     // Build an empty set whose backing map draws from `allocator` (e.g. an `Arena` bump handle). The
     // bare `Set()` builds an empty (cap-0) inner map that is dropped when replaced by the arena-backed one.
-    public static fn Set<K,H,A> withAllocator(A allocator) {
+    public ctor withAllocator(A allocator) {
         Set<K,H,A> result = Set();
         Map<K, Unit, H, A> inner = Map::withAllocator(allocator: allocator);
         result.m = give inner;
@@ -26,7 +27,10 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
     public fn void reserve(int32 n) { this.m.reserve(n: n); }   // preallocate for a known-size build
 
-    // Build an empty set already sized for `capacity` entries (K from the target type).
+    // Build an empty set already sized for `capacity` entries (K from the target type). NOT a `ctor` (M7):
+    // like `Map::withCapacity`, it takes no allocator and returns the DEFAULT-allocator `Set<K,H>`, a
+    // different specialization than the enclosing `Set<K,H,A>` — keeping it `static fn` preserves the
+    // compile error when misused on a custom-`A` target. (M8: exempt from the self-returning ban.)
     public static fn Set<K,H> withCapacity(int32 capacity) {
         Set<K,H> s = Set();
         s.reserve(n: capacity);

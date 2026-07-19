@@ -1,0 +1,24 @@
+// Construction-model M7.2: generic collections offer named ctors — `.empty()` (default GlobalAllocator)
+// and `.withAllocator(...)` — callable dot-on-type (generic receiver, args inferred from the LHS); the
+// `::` bridge stays green. PriorityQueue keeps `minHeap`/`maxHeap` as its named ctors. The nameless `Map()`
+// primary still compiles (coexistence until M8).
+import std::collections::{DynamicArray, Map, Set, Deque, PriorityQueue};
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.empty();     // dot-on-type generic empty ctor
+    a.add(item: 10); a.add(item: 20);
+    Map<int32, int32> m = Map.empty();                // defaulted H + A, inferred from the LHS
+    m.put(key: 1, value: 7);
+    Set<int32> s = Set.empty();
+    s.add(key: 3);
+    Deque<int32> d = Deque.empty();
+    d.pushBack(item: 5);
+    PriorityQueue<int32> pq = PriorityQueue.minHeap();   // named ctor (not `empty`)
+    pq.push(item: 99);
+    Map<int32, int32> viaBridge = Map::empty();          // :: bridge on the ctor still works
+    viaBridge.put(key: 2, value: 4);
+    int32 mv = match (m.get(key: 1)) { case Some(x): x; case None: 0; };        // 7
+    int32 pk = match (pq.peek()) { case Some(x): x; case None: 0; };            // 99
+    int32 sc = s.contains(key: 3) ? 1 : 0;                                      // 1
+    int32 bv = match (viaBridge.get(key: 2)) { case Some(x): x; case None: 0; };// 4
+    return a[0] + a[1] + mv + sc + pk + bv - 100;   // 10+20+7+1+99+4-100 = 41
+}

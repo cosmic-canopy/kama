@@ -50,14 +50,14 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     // box is rejected by the emitter), and `GlobalAllocator` is stateless — its `deallocate` == `free`
     // (matching the malloc) and never reads the handle, so an unset value is inert (same as the M10 bare
     // container ctors leaving `alloc` at its default).
-    public static fn Shared<T, A> adopt(Ptr<T> raw) {
+    public ctor adopt(Ptr<T> raw) {
         Ptr<Ctrl> ctrl;
         unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
         Shared<T, A> s; s.p = raw; s.c = ctrl; return give s;
     }
     // Placement adopt: a pointee that came FROM `allocator`; draw the ctrl block from the SAME `allocator`
     // and store the handle so the dtor releases both through it (the `new(allocator: a) T(...)` path).
-    public static fn Shared<T, A> adoptIn(Ptr<T> raw, A allocator) {
+    public ctor adoptIn(Ptr<T> raw, A allocator) {
         Ptr<Ctrl> ctrl;
         unsafe { ctrl = cast<Ptr<Ctrl>>(allocator.allocate(bytes: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
         return Shared(p: raw, c: ctrl, alloc: allocator);

@@ -54,7 +54,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(
 
     // Build an `size`-element array drawn from a caller-owned allocator (e.g. an `Arena`). Sets the handle
     // before allocating, via a no-op bare `FixedArray(size: 0)` (null buffer, no heap op).
-    public static fn FixedArray<T, A> withAllocator(A allocator, int32 size) {
+    public ctor withAllocator(A allocator, int32 size) {
         FixedArray<T, A> result = FixedArray(size: 0);
         result.alloc = allocator;
         result.allocBuffer(size: size);

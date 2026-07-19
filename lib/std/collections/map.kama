@@ -148,9 +148,13 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
         this.len = 0; this.cap = 0; this.tombs = 0; this.mods = 0;
     }
 
+    // Named empty constructor (M7): `Map.empty()`, default `GlobalAllocator`. Delegates to the nameless
+    // primary during coexistence; at M8 the primary's body moves here.
+    public ctor empty() { return Map(); }
+
     // Build an empty map whose three buffers are drawn from `allocator` (e.g. an `Arena` bump handle),
     // so all of this map's allocations route into that region. The handle is a cheap copyable value.
-    public static fn Map<K,V,H,A> withAllocator(A allocator) {
+    public ctor withAllocator(A allocator) {
         Map<K,V,H,A> result = Map();
         result.alloc = allocator;
         return give result;
@@ -332,6 +336,10 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
 
     // Build an empty map already sized for `capacity` entries — the self-documenting one-liner for the
     // common `Map(); reserve(n:)` build. K,V come from the target type (`Map<K,V> m = Map::withCapacity(...)`).
+    // NOT a `ctor` (M7): it takes no allocator, so it returns the DEFAULT-allocator `Map<K,V,H>`, a DIFFERENT
+    // specialization than the enclosing `Map<K,V,H,A>`. Keeping it a `static fn` preserves the compile error
+    // when misused on a custom-`A` target; a ctor would silently build a map with an unset allocator. (M8:
+    // exempt from the self-returning-`static fn` ban — the return type is a distinct specialization.)
     public static fn Map<K,V,H> withCapacity(int32 capacity) {
         Map<K,V,H> m = Map();
         m.reserve(n: capacity);
