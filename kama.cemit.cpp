@@ -5474,8 +5474,22 @@ void CEmitter::checkNotMoved(const std::string& cVar, int line)
 // The source of a move hand-off. A bare move-only local -> its name (caller marks it moved).
 // A field / element / base member -> reject: moving out would leave the owner holding a
 // moved-from value (use Optional<T> for the field-move case).
+// An owning payload binding of a BORROWING `match (x)` arm only aliases the box the subject still owns —
+// `give`ing it out moves the alias while the subject keeps ownership → both drop it → double free in safe
+// code. Reject it (hard error); the consuming `match (give x)` is the way to move a payload out.
+bool CEmitter::giveOfBorrowedBinding(SharedExpression e, int line)
+{
+    auto* id = dynamic_cast<IdentifierNode*>(e.get());
+    if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return false;
+    if (!_borrowedMatchBindings.count(*id->value)) return false;
+    unsupported("cannot `give` a borrowed `match` payload out of `match (x)` — it aliases the still-owned "
+                "subject; consume the subject with `match (give x)` instead", line);
+    return true;
+}
+
 std::string CEmitter::moveOnlySource(SharedExpression e, int line)
 {
+    if (giveOfBorrowedBinding(e, line)) return "";
     if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
         std::string nm = id->value ? *id->value : "";
         if ((!id->qualifier || id->qualifier->empty()) && _moveState.count(nm)) return nm;
@@ -6545,6 +6559,9 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 bool doGive = (handoff == 1) || (handoff == 0 && k == CollKind::Owned);
                 if (handoff == 2 && k == CollKind::Owned)
                     unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", srcLine);
+                // A give only invalidates the LOCAL copy — a borrowed `match` binding still aliases the
+                // subject's box → double free. Reject (this path bypasses moveOnlySource — explicit check).
+                if (doGive) giveOfBorrowedBinding(argExpr, srcLine);
                 std::string t = "__kama_arg" + std::to_string(_tempCounter++);
                 std::string side = doGive ? smartPtrInvalidate("(" + val + ")", k, isInterface(_classes[argCls].collElemClass))
                                           : ("(" + val + ").ctrl->" + (k == CollKind::Weak ? "weak" : "strong") + "++;");
@@ -7630,6 +7647,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         Scope sc; _scopes.push_back(sc);
         struct Saved { std::string name; bool had; std::string prev; };
         std::vector<Saved> savedTypes;
+        std::vector<std::string> borrowedHere;    // owning bindings marked non-giveable for this arm
         if (a->bindings && !a->bindings->empty()) {
             if (!vc || a->bindings->size() != vc->payload.size())
                 unsupported(("`match` arm for '" + (a->variantName ? *a->variantName : std::string("_"))
@@ -7649,6 +7667,12 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     indent(depth + 2); *_out << slot << " = (" << bcty << "){0};\n";
                     _scopes.back().locals.push_back({bn, bcty});
                     _moveState[bn] = MoveState::NotMoved;
+                } else if (!subjConsumed && (ownsByValue(bcty) || isSmartPtrClass(bcty))) {
+                    // BORROWING `match (x)`: this owning binding (a collection / move-only value / smart-ptr
+                    // handle — incl. the interface-element fat handle `Owned<Error>`) only aliases the box the
+                    // subject still owns. `give`ing it out double-frees. Mark it non-giveable for this arm.
+                    _borrowedMatchBindings.insert(bn);
+                    borrowedHere.push_back(bn);
                 }
                 savedTypes.push_back({bn, (bool)_localTypes.count(bn), _localTypes.count(bn) ? _localTypes[bn] : std::string()});
                 _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
@@ -7696,6 +7720,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth + 2); *_out << "break;\n";
 
         for (auto& sv : savedTypes) { if (sv.had) _localTypes[sv.name] = sv.prev; else _localTypes.erase(sv.name); }
+        for (auto& bn : borrowedHere) _borrowedMatchBindings.erase(bn);
         armEnds.push_back(_moveState);
         armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);
         popScope();
@@ -8158,6 +8183,10 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 bool doGive = (handoff == 1) || (handoff == 0 && k == CollKind::Owned);
                 if (handoff == 2 && k == CollKind::Owned)
                     unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", srcLine);
+                // A give here only invalidates the LOCAL copy — a borrowed `match` binding still aliases the
+                // subject's box (which the subject drops too) → double free. Reject it (this path bypasses
+                // moveOnlySource, so the check must be explicit).
+                if (doGive) giveOfBorrowedBinding(argExpr, srcLine);
                 if (!_hoistOK)
                     unsupported("moving a smart pointer into a variant here needs a statement slot — bind the "
                                 "constructed value to a local first", srcLine);
@@ -8186,6 +8215,9 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 // source so its scope-drop is a no-op (the union now owns it, dropped by the tag dtor).
                 // (`InlineArray` is excluded — it's a value that owns nothing, so it falls to the plain-value
                 // branch below; nulling its non-existent `.data`/`.len` would be wrong.)
+                // A give nulls only the LOCAL copy — a borrowed `match` binding still aliases the subject's
+                // buffer → double free. Reject (this path bypasses moveOnlySource — explicit check).
+                if (handoff == 1) giveOfBorrowedBinding(argExpr, srcLine);
                 if (handoff == 2) {                                  // copy = deep copy into the payload
                     auto ci = _collections.find(argCls);
                     if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)

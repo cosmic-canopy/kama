@@ -406,6 +406,10 @@ private:
     // scope exit is *rejected* (conditional-drop) — zero runtime drop-flags by construction.
     enum class MoveState { NotMoved, MaybeMoved, Moved };
     std::map<std::string, MoveState> _moveState;   // move-only local/param cVar -> state
+    // Owning payload bindings of a BORROWING `match (x)` arm — each aliases the box the subject still
+    // owns, so `give`ing one out double-frees. Non-giveable: a give of a name in here is a hard error
+    // (the consuming `match (give x)` is the way to move a payload out). Scoped per-arm.
+    std::set<std::string> _borrowedMatchBindings;
     ClassInfo*                         _currentClass = nullptr;  // when emitting a method/ctor
     std::string                        _currentFunc;             // C-name of the function/method being emitted (friend match)
     std::string                        _thisType;                // C name `This` resolves to (the class being emitted, or the contract type inside its vtbl slot)
@@ -747,6 +751,9 @@ private:
     // The source of a move hand-off: a bare move-only local -> its name (caller marks it moved);
     // a field/element/base member -> reject (moving out would leave the owner moved-from).
     std::string moveOnlySource(SharedExpression e, int line);
+    // Reject a `give` whose source is an owning binding of a BORROWING `match (x)` arm (it aliases the
+    // still-owned subject → double free). Returns true (and emits a hard error) when it fires.
+    bool giveOfBorrowedBinding(SharedExpression e, int line);
     // Dispatch `recv.method(args)` on a smart-pointer receiver: an intrinsic
     // (lock/expired/valid) on the pointer itself, else auto-deref to the pointee.
     std::string emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
