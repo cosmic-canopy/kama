@@ -17,6 +17,11 @@ trap 'rm -rf "$TMP"' EXIT
 pass=0
 fail=0
 
+# Parallelism: each single-file fixture builds+runs independently into its own $TMP/$name.* files, so the
+# main loop fans out across cores (the dominant cost is one clang invocation per fixture). Override with
+# KAMA_JOBS. Results are collected per fixture then tallied in fixture order for stable output.
+NCPU="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+
 # Opt-in memory-safety pass: KAMA_SAN=1 builds every positive (and multi-file) fixture with
 # ASan + UBSan and runs it, so a use-after-free / overflow / leak / UB fails the suite. Native
 # only; xfail fixtures never link so they're unaffected. Requires the compiler-rt runtime in the
@@ -103,51 +108,69 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-syn
     if sh tools/check-syntax-drift.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
-for src in "$TESTS_DIR"/*.kama; do
-    [ -e "$src" ] || continue
+# One fixture's build+run+compare, run in a background subshell. Buffers its status line(s) into
+# $TMP/$name.out and records PASS/FAIL/SKIP into $TMP/$name.res (tallied in fixture order afterward).
+test_one() {
+    local src="$1" name expect_file expected exe out res
     name="$(basename "$src" .kama)"
+    out="$TMP/$name.out"; res="$TMP/$name.res"
     expect_file="$TESTS_DIR/$name.expect"
-    if [ ! -f "$expect_file" ]; then
-        echo "SKIP $name (no .expect)"
-        continue
-    fi
+    if [ ! -f "$expect_file" ]; then echo "SKIP $name (no .expect)" >"$out"; echo SKIP >"$res"; return; fi
     expected="$(cat "$expect_file")"
 
-    # Net transports split by target. Native (TCP/UDP/Poller via raw sockets) can't run under the
-    # browser/emscripten sandbox; the web transports (std::net::web — WebSocket/WebTransport over the JS
-    # glue) can't run natively. Skip the half that doesn't apply to the active target.
-    uses_net_web=0; { grep -q 'std::net::web' "$src" || grep -q 'kama_net_web.h' "$src"; } && uses_net_web=1
-    uses_net=0;     grep -q 'std::net'      "$src" && uses_net=1
+    # Net transports split by target (see below); skip the half that doesn't apply to the active target.
+    local uses_net_web=0 uses_net=0 BROWSER=0
+    { grep -q 'std::net::web' "$src" || grep -q 'kama_net_web.h' "$src"; } && uses_net_web=1
+    grep -q 'std::net' "$src" && uses_net=1
     if [ "$WASM" = 1 ]; then
         if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then
-            echo "SKIP $name (native net: no raw sockets on wasm)"; continue
+            echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return
         fi
     else
         if [ "$uses_net_web" = 1 ]; then
-            echo "SKIP $name (web net: browser-only transport)"; continue
+            echo "SKIP $name (web net: browser-only transport)" >"$out"; echo SKIP >"$res"; return
         fi
     fi
-
-    # WebTransport + WebRTC are browser-only (no node) — run their wasm in headless Chromium via Playwright.
-    # Opt-in (slow): skipped unless KAMA_BROWSER=1.
-    BROWSER=0; grep -qE 'kama_wt_|kama_rtc_' "$src" && BROWSER=1
+    grep -qE 'kama_wt_|kama_rtc_' "$src" && BROWSER=1
     if [ "$BROWSER" = 1 ] && [ "$BROWSER_TESTS" = 0 ]; then
-        echo "SKIP $name (browser E2E — set KAMA_BROWSER=1 to run)"; continue
+        echo "SKIP $name (browser E2E — set KAMA_BROWSER=1 to run)" >"$out"; echo SKIP >"$res"; return
     fi
 
-    exe="$TMP/$name"
+    # Isolate each build in its own dir: the driver writes multi-unit intermediates to dirname(-o), and
+    # imported-module `.c` names key off the MODULE (e.g. dynamic_array_1.c), so two fixtures importing the
+    # same stdlib module would collide in a shared dir under parallelism.
+    local wd="$TMP/w_$name"; mkdir -p "$wd"; exe="$wd/$name"
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
-        echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue
+        { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     run_one "$exe" "$TMP/$name.san"
     if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
-        echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; fail=$((fail+1)); continue
+        { echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"; return
     fi
-
     if [ "$actual" = "$expected" ]; then
-        echo "PASS $name (exit $actual)"; pass=$((pass+1))
+        echo "PASS $name (exit $actual)" >"$out"; echo PASS >"$res"
     else
-        echo "FAIL $name (got $actual, expected $expected)"; fail=$((fail+1))
+        echo "FAIL $name (got $actual, expected $expected)" >"$out"; echo FAIL >"$res"
+    fi
+}
+
+# Fan out across NCPU cores, gating the number of concurrent jobs.
+for src in "$TESTS_DIR"/*.kama; do
+    [ -e "$src" ] || continue
+    test_one "$src" &
+    while [ "$(jobs -rp | wc -l)" -ge "$NCPU" ]; do wait -n 2>/dev/null || wait; done
+done
+wait
+# Tally in fixture order (stable output regardless of completion order).
+for src in "$TESTS_DIR"/*.kama; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src" .kama)"
+    [ -f "$TMP/$name.out" ] && cat "$TMP/$name.out"
+    if [ -f "$TMP/$name.res" ]; then
+        case "$(cat "$TMP/$name.res")" in
+            PASS) pass=$((pass+1));;
+            FAIL) fail=$((fail+1));;
+        esac
     fi
 done
 

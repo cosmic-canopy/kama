@@ -29,6 +29,17 @@ out/
 # generated C from `kama transpile`/`build` (keep generated .c out of the tree)
 tests/**/*.c
 !tests/webgpu/smoke.c
+# multi-unit build intermediates + the shared header a `kama build` emits next to -o
+tests/**/*.c.tmp
+tests/**/*.gen.h
+# Top-level tests/ is SOURCE ONLY — ignore every direct-child build artifact (compiled fixture binaries a
+# bare `kama build tests/x.kama` drops next to the source — a stem with NO extension — plus generated .c/
+# .gen.h). Subdirs (support/, webgpu/, xfail/, *.d/) are un-ignored so their own tracked files stay tracked.
+tests/*
+!tests/*.kama
+!tests/*.expect
+!tests/*.msg
+!tests/*/
 
 # benchmark build artifacts
 bench/build/
