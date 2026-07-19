@@ -21,6 +21,7 @@ enum Interest { Read, Write, ReadWrite }
 
 // A socket's readiness after wait(). `readable` also covers hangup/error (so a follow-up read sees EOF/err);
 // `writable` on a connecting socket means the non-blocking connect resolved (then call checkConnected()).
+@generate(of)
 type value Ready {
     public bool readable;
     public bool writable;
@@ -32,7 +33,7 @@ type resource Poller {
     Ptr state;
     private Poller(Ptr state) { this.state = state; }
 
-    public static fn Result<Poller, IoError> create() {
+    public ctor Result<Poller, IoError> create() {
         Ptr s = kama_poller_create();
         if (s == null) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Poller(state: s));

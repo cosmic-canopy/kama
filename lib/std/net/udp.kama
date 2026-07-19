@@ -47,7 +47,7 @@ type resource UdpSocket implements DatagramSocket {
 
     // Bind to a numeric host:port. host ""/"0.0.0.0" = all interfaces; port 0 = OS-assigned ephemeral
     // (read the actual port back with localAddr()). SO_REUSEADDR is set. The socket closes on drop.
-    public static fn Result<UdpSocket, IoError> bind(ref string host, uint16 port) {
+    public ctor Result<UdpSocket, IoError> bind(ref string host, uint16 port) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_udp();

@@ -13,6 +13,7 @@ enum IpAddr {
 // A host + port endpoint. This is the value the datagram layer hands BACK — `UdpSocket.recvFrom` (the
 // sender) and `localAddr()` (the OS-assigned ephemeral port). Callers still pass plain `host`+`port`
 // strings/scalars INTO connect/bind/sendTo; `SocketAddr` exists so returns have a first-class shape.
+@generate(of)
 type value SocketAddr {
     public IpAddr ip;
     public uint16 port;
@@ -20,7 +21,7 @@ type value SocketAddr {
 
     // Rebuild from the HOST-order IPv4 + host-order port the C layer returns (kama_os.h ntohl's `s_addr`),
     // so octet extraction is fixed-shift and endianness-independent.
-    public static fn SocketAddr fromHostIp(uint32 ip, uint16 port) {
+    public ctor fromHostIp(uint32 ip, uint16 port) {
         uint8 a = cast<uint8>((ip >> 24ui32) & 255ui32);
         uint8 b = cast<uint8>((ip >> 16ui32) & 255ui32);
         uint8 c = cast<uint8>((ip >> 8ui32) & 255ui32);
@@ -42,6 +43,7 @@ type value SocketAddr {
 }
 
 // The (count, sender) result of a datagram `recvFrom`: how many bytes landed + who sent them.
+@generate(of)
 type value RecvFrom {
     public usize count;
     public SocketAddr from;

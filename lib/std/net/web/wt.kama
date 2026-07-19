@@ -27,7 +27,7 @@ type resource WtConnection implements DatagramSocket {
     private WtConnection(int32 handle) { this.handle = handle; }
 
     // Open a session to an https:// URL (HTTP/3). Returns immediately; poll state() until Connected.
-    public static fn Result<WtConnection, IoError> connect(ref string url) {
+    public ctor Result<WtConnection, IoError> connect(ref string url) {
         int32 h = kama_wt_connect(url: url.cstr());
         if (h < 0) { return Result::Err(error: IoError::Other(code: 0 - 1)); }
         return Result::Ok(value: WtConnection(handle: h));
