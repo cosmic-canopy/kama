@@ -1,0 +1,60 @@
+// P4 Landing B: the reader-centric sugar `r.deserialize::<T>()`. A hand-written `ctor deserialize`
+// override reads each field through the sugar (which lowers to the `__kamaDeserialize<T>` trampoline ->
+// `T::deserialize`), composing with the flat destructure-move `match (give …)` — Ok binds the value,
+// Err propagates its boxed `Owned<Error>`. Proves: the override wins over the synth, the sugar reads a
+// nested composite, and a malformed field surfaces as `Err(nothing)` recovered via `.as<DeError>()`.
+import std::serialization::json::{encode, decode};
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type value Point {
+    @field int32 x;
+    @field int32 y;
+    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
+    public fn int32 sum() { return this.x + this.y; }
+}
+
+@generate(Serialize, Deserialize, noOnConstruction)
+type value Line {
+    @field Point start;
+    @field Point end;
+    public Line(Point start, Point end) { this.start = start; this.end = end; }
+    public fn int32 total() { return this.start.sum() + this.end.sum(); }
+
+    // Hand-written deserialize: reads both Point fields via the `r.deserialize::<Point>()` sugar.
+    public ctor Result<Line, Owned<Error>> deserialize(Deserializer r) {
+        Point s = Point(x: 0, y: 0);
+        Point e = Point(x: 0, y: 0);
+        r.beginObject();
+        while (r.moreFields()) {
+            string key = r.fieldName();
+            Result<Point, Owned<Error>> __pr = r.deserialize::<Point>();   // the Landing-B sugar
+            Point p = match (give __pr) {
+                case Ok(v):   { := give v; }                                // read succeeded -> bind the Point
+                case Err(er): { return Result::Err(error: give er); }       // propagate the boxed error
+            };
+            if (key.equals(other: "start")) { s = p; } else { e = p; }
+        }
+        Line ln = Line(start: s, end: e);
+        return Result::Ok(value: ln);
+    }
+}
+
+fn int main() {
+    // good input -> the override reads both Points, round-trips to Ok
+    Line ln = Line(start: Point(x: 30, y: 12), end: Point(x: 3, y: 5));
+    string j = encode(v: ln);
+    Result<Line, Owned<Error>> good = decode::<Line>(src: give j);
+    int32 okv = match (good) { case Ok(q): q.total(); case Err(e): 0 - 1; };   // 42 + 8 = 50
+
+    // malformed start.x -> the sugar's read fails, the override returns Err(nothing)
+    string bad = "{\"start\":{\"x\":!,\"y\":2},\"end\":{\"x\":3,\"y\":5}}";
+    Result<Line, Owned<Error>> fail = decode::<Line>(src: give bad);
+    int32 errv = match (fail) {
+        case Ok(q): 0 - 2;                                   // must NOT succeed
+        case Err(e): match (e.as<DeError>()) {               // recover the concrete deserialize error
+            case Some(de): 100;
+            case None:     0 - 3;
+        };
+    };
+    return okv + errv;   // 50 + 100 = 150
+}

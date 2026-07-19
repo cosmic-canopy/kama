@@ -3122,25 +3122,34 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         // Registers the conformance exactly like `implements Serialize` (interfaces + method) so the normal
         // vtable/dispatch machinery works; only the BODY is emitted specially (isSynthSer/isSynthDe).
         if (!(cd->typeParams && !cd->typeParams->empty()) && !ci.isVariant) {
-            if (ci.genSerialize && !ci.methods.count("serialize")) {
-                ci.interfaces.push_back("Serialize");
-                MethodInfo mi; mi.cName = ci.name + "__serialize"; mi.visibility = Visibility::Public;
-                mi.isSynthSer = true; mi.returnType = primTypeNode(IDENTIFIER_VOID_VAL);
-                ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
-                ci.methods["serialize"] = mi;   // `fn void serialize(ref Serializer w)`
+            // Register the nominal conformance whenever `@generate` opts in — INDEPENDENT of whether the
+            // body is synthesized. A hand-written `serialize`/`deserialize` (e.g. a user `ctor deserialize`)
+            // still lands the type in `ci.methods`, so the `!count` guard below skips only the BODY synth;
+            // the type must still satisfy the `Serialize`/`Deserialize` bound (`decode::<T>` checks it).
+            auto hasItf = [&](const char* n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
+            if (ci.genSerialize) {
+                if (!hasItf("Serialize")) ci.interfaces.push_back("Serialize");
+                if (!ci.methods.count("serialize")) {
+                    MethodInfo mi; mi.cName = ci.name + "__serialize"; mi.visibility = Visibility::Public;
+                    mi.isSynthSer = true; mi.returnType = primTypeNode(IDENTIFIER_VOID_VAL);
+                    ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
+                    ci.methods["serialize"] = mi;   // `fn void serialize(ref Serializer w)`
+                }
             }
-            if (ci.genDeserialize && !ci.methods.count("deserialize")) {
-                ci.interfaces.push_back("Deserialize");
-                MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
-                // P4: the synth deserialize is a FALLIBLE ctor `Result<This, Owned<Error>>` — reading crosses
-                // a trust boundary. (The graph two-pass returns `Result<Shared<This>, Owned<Error>>`; its
-                // return node is rebuilt in computeGraphNodeTypes.)
-                mi.isStatic = true; mi.isSynthDe = true; mi.isCtor = true;
-                mi.returnType = resultOwnedErrorTypeNode(cd->name);
-                scanTypeForCollections(mi.returnType);   // monomorphize Result<This, Owned<Error>>
-                ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
-                ci.methods["deserialize"] = mi;   // `ctor Result<This, Owned<Error>> deserialize(Deserializer r)`
-                ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
+            if (ci.genDeserialize) {
+                if (!hasItf("Deserialize")) ci.interfaces.push_back("Deserialize");
+                if (!ci.methods.count("deserialize")) {
+                    MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
+                    // P4: the synth deserialize is a FALLIBLE ctor `Result<This, Owned<Error>>` — reading crosses
+                    // a trust boundary. (The graph two-pass returns `Result<Shared<This>, Owned<Error>>`; its
+                    // return node is rebuilt in computeGraphNodeTypes.)
+                    mi.isStatic = true; mi.isSynthDe = true; mi.isCtor = true;
+                    mi.returnType = resultOwnedErrorTypeNode(cd->name);
+                    scanTypeForCollections(mi.returnType);   // monomorphize Result<This, Owned<Error>>
+                    ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
+                    ci.methods["deserialize"] = mi;   // `ctor Result<This, Owned<Error>> deserialize(Deserializer r)`
+                    ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
+                }
             }
         }
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
@@ -4536,6 +4545,25 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
             }
             // Turbofish on a non-generic function is rejected at emit (emitInvocation), where it is a
             // hard build error — a bare `::<…>` that resolves to no generic template.
+        } else if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
+            // Receiver turbofish `r.deserialize::<T>()` — the type args ride the method identifier's
+            // `genericArgs` (see kama.y). Lower it through the `__kamaDeserialize<T>` trampoline: register
+            // that generic instance here (reusing the free-fn path above) so emitInvocation routes the call
+            // to its specialized C name. Only `deserialize` is a generic member call today.
+            if (ma->identifier && ma->identifier->genericArgs && ma->identifier->value
+                && *ma->identifier->value == "deserialize") {
+                std::string k = resolveFunc("__kamaDeserialize", nullptr);
+                auto git = _generics.find(k);
+                if (git != _generics.end()) {
+                    SharedIdentifierList tfArgs = ma->identifier->genericArgs;
+                    for (auto& ta : *tfArgs) scanTypeForCollections(ta);   // monomorphize T + its deserialize
+                    GenericInst gi;
+                    if (explicitGenericInst(git->second, k, tfArgs, inv->line, gi)) {
+                        if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
+                        _callInst[inv] = gi.mangledName;
+                    }
+                }
+            }
         }
     } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
         scanExprForGenerics(ea->expression, localTys);
@@ -8219,6 +8247,15 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if (!call->identifier || !call->identifier->value) {
         if (call->expression) {
             if (auto* ma = dynamic_cast<MemberAccessNode*>(call->expression.get())) {
+                // Resolved receiver turbofish `r.deserialize::<T>()` -> the `__kamaDeserialize<T>` trampoline
+                // (registered in scanExprForGenerics), passing the receiver as its single `Deserializer` arg.
+                // Intercept BEFORE emitMethodCall: the receiver types as the `Deserializer` interface, so the
+                // method path would send it to emitInterfaceDispatch looking for a nonexistent `deserialize`.
+                auto ci = _callInst.find(call);
+                if (ci != _callInst.end()) {
+                    const GenericInst& gi = _genericInsts[ci->second];
+                    return gi.mangledName + "(" + emitExpression(ma->expression) + ")";
+                }
                 // `Type.name(...)` — dot-on-type constructor call: the receiver names a TYPE, not an
                 // instance. An in-scope binding wins (instance `.method` first), so this fires only when
                 // the receiver is a bare type name with no live binding. Distinct from `Type::staticFn()`
@@ -10718,6 +10755,14 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
 {
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
     SharedExpression receiver = recv->expression;
+    // A turbofish that reached here didn't resolve to a generic member call (only `r.deserialize::<T>()`
+    // does, and it is routed in emitInvocation before this point) — reject it, mirroring the free-fn
+    // turbofish reject in emitInvocation.
+    if (recv->identifier && recv->identifier->genericArgs) {
+        unsupported(("`." + method + "::<…>` — turbofish type arguments are only valid on `deserialize`").c_str(),
+                    call->line);
+        return "0";
+    }
     std::string cls = exprClass(receiver);
     // A `string` receiver that `exprClass` can't name — a bare literal (`"x".trim()`) or a `+` chain
     // (`(a + b).length()`) — still classes as the `string` primitive. Localizes string knowledge to

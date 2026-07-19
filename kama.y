@@ -898,6 +898,23 @@ invocation_expression
         id->genericArgs = $5;
         $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, id, $9);
     }
+    /* Receiver turbofish: `r.deserialize::<T>()` — explicit type args on a member call (only `deserialize`
+       is generic today). The `::` before `<` disambiguates from `<` as less-than (unlike `.as<T>()`, which
+       rides the `as` keyword — `deserialize` is a plain IDENTIFIER). The type args ride the method
+       IdentifierNode's `genericArgs`, mirroring the free-fn turbofish above; two receiver forms mirror the
+       `.as<T>()`/member_access pair (a bare ident reduces via qualified_identifier_no_generic). */
+  | primary_expression DOT IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN {
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, std::make_shared<StringList>(), (*$7)[0]);
+        id->genericArgs = $7;
+        auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, id, $1);
+        $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, ma, $11);
+    }
+  | qualified_identifier_no_generic DOT IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN {
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, std::make_shared<StringList>(), (*$7)[0]);
+        id->genericArgs = $7;
+        auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, id, std::static_pointer_cast<ExpressionNode>($1));
+        $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, ma, $11);
+    }
   ;
 argument_list_opt
   : /* Nothing */   { $$ = std::make_shared<ArgumentList>(); }

@@ -603,6 +603,15 @@ invocation_expression
        comparison-operator clash. The mid-rule bumps genericDepth so a nested `>>` close still splits. */
   | IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN
 
+    /* Receiver turbofish: `r.deserialize::<T>()` — explicit type args on a member call (only `deserialize`
+       is generic today). The `::` before `<` disambiguates from `<` as less-than (unlike `.as<T>()`, which
+       rides the `as` keyword — `deserialize` is a plain IDENTIFIER). The type args ride the method
+       IdentifierNode's `genericArgs`, mirroring the free-fn turbofish above; two receiver forms mirror the
+       `.as<T>()`/member_access pair (a bare ident reduces via qualified_identifier_no_generic). */
+  | primary_expression DOT IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN
+
+  | qualified_identifier_no_generic DOT IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN
+
   ;
 argument_list_opt
   : /* Nothing */
