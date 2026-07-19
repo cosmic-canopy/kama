@@ -14,7 +14,7 @@ type resource Payload {
 type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     Ptr<T> p; Ptr<Ctrl> c;
     public Rc(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
-    public static fn Rc<T> adopt(Ptr<T> raw) { Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc(p: raw, c: k); }
+    public ctor adopt(Ptr<T> raw) { Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc(p: raw, c: k); }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     public fn Rc<T> copy() { unsafe { this.c[0].strong = this.c[0].strong + 1; } return Rc(p: this.p, c: this.c); }
     ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } } }

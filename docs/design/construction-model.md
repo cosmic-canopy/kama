@@ -100,7 +100,11 @@ removes today's vtable-only synthesized default ctor: a polymorphic type must de
 ## 7. Carve-outs
 
 - **Enum variants stay `::`** (`Optional::Some(...)`).
-- **Contracts require `static fn`, not `ctor`** (a contract has no construction; e.g. `HeapOwner::adopt`).
+- **Contracts may require a `ctor`** *(M8)*. A construction-shaped contract declares a `ctor` requirement
+  (`type contract HeapOwner<T> for resource { ctor adopt(Ptr<T> raw); }`); conformance matches it by name
+  to a `ctor` (or, during coexistence, a self-returning `static fn`) impl. This is the one construction
+  capability a contract carries — a contract still holds no state and has no instance construction of its
+  own. (Storing a raw `Ptr` needs no `unsafe`; only dereferencing does.)
 - **extern-`value` FFI stays outside this model** (the C-POD aggregate-init path is unchanged).
 - **A default-parameter convenience factory that returns a *different specialization* stays `static fn`.**
   `Map::withCapacity` / `Set::withCapacity` take no allocator, so they return the DEFAULT-allocator

@@ -22,7 +22,9 @@ type contract Deref<T> for both { fn ref T deref(); }
 // Heap-owner opt-in: a type implementing HeapOwner<T> can be a `new T(args)` target. `new`
 // placement-constructs T on the heap (0 copies) and hands the raw Ptr<T> to `adopt`, which wraps it.
 // `new` stays valid ONLY into such an owner, so it can never leak a bare raw pointer.
-type contract HeapOwner<T> for resource { static fn This adopt(Ptr<T> raw); }
+// Construction-model (M8): `adopt` is a `ctor` — wrapping a raw block IS construction. Storing a `Ptr`
+// is safe (no `unsafe`); only dereferencing is (that lives in `~Owned`/`deref`).
+type contract HeapOwner<T> for resource { ctor adopt(Ptr<T> raw); }
 // Ownership capability markers (compiler-recognized). EVERY owning kind is movable — `give` moves it
 // (see TYPE_MODEL.md; there is no `!Movable`). `Copyable` = a public `copy()` returning `This`; a resource
 // that implements it is ALSO duplicable. A `Copyable(bare: copy)` resource = shared-ownership: a bare

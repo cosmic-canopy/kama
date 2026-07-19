@@ -1,0 +1,15 @@
+// Construction-model M8a: a contract may require a `ctor` (not just `static fn`). A conforming type
+// provides `ctor spawn(...)`; conformance matches the requirement to the ctor by name. The ctor is
+// callable dot-on-type (`Widget.spawn(...)`) and through the `::` coexistence bridge.
+type contract Factory for value { ctor spawn(int32 seed); }
+
+type value Widget implements Factory {
+    public int32 v;
+    public ctor spawn(int32 seed) { Widget w; w.v = seed + 1; return w; }
+}
+
+fn int32 main() {
+    Widget a = Widget.spawn(seed: 41);   // dot-on-type ctor call        -> v = 42
+    Widget b = Widget::spawn(seed: 7);    // `::` coexistence bridge       -> v = 8
+    return a.v + b.v;                      // 42 + 8 = 50
+}
