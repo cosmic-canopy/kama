@@ -5929,6 +5929,12 @@ bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
                                   const std::vector<SharedIdentifier>& concrete)
 {
     for (size_t c = 0; c < whenParams.size() && c < whenBounds.size(); ++c) {
+        // Serde gate: a `when [T: Serialize]` / `[T: Deserialize]` conditional (a collection's `serialize`/
+        // `deserialize`/`serKey`/… and its `Serialize`/`Deserialize` interface) is treated as UNSATISFIED when
+        // the program uses no serde — so none of that machinery is emitted, and it references no primitive
+        // serde impl (which is likewise gated off). A program that truly serializes has a Serializer backend
+        // or a `@generate` type, which sets `_usesSerde` (see collectProgram) and restores the normal check.
+        if (!_usesSerde && (whenBounds[c] == "Serialize" || whenBounds[c] == "Deserialize")) return false;
         bool held = false;
         for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
             if (params[i] == whenParams[c]) { held = satisfiesBound(cType(concrete[i]), whenBounds[c]); break; }
@@ -10975,6 +10981,41 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             }
         }
     }
+    // PERF: does the program use serde at all? A `@generate(Serialize|Deserialize)` type or a
+    // `Serializer`/`Deserializer` BACKEND implementer (JsonWriter/JsonReader) is the ONLY way to serialize or
+    // deserialize anything — you cannot even call a collection's `serialize` without a `Serializer` sink. When
+    // NEITHER is present we emit NONE of the serde machinery: not the prelude's primitive Serialize/Deserialize
+    // retro-impls, and not the conditional serde a collection would carry (the `when [T: Serialize]` bound is
+    // treated as unsatisfied under `!_usesSerde` in whenConditionsHold, so `serialize`/`serKey`/… all drop).
+    // Compile-time only (all of it is static-inline / dead-strippable). Computed HERE — before collectClasses,
+    // so every downstream decision (collection specialization included) sees the final flag. Both signals are
+    // TOP-LEVEL declarations, fully present in the AST now.
+    auto attrHasSerde = [](auto& attrs) {
+        if (attrs) for (auto& at : *attrs)
+            if (at && at->name && *at->name == "generate" && at->args)
+                for (auto& a : *at->args)
+                    if (a && a->name && a->name->value && !a->expression &&
+                        (*a->name->value == "Serialize" || *a->name->value == "Deserialize")) return true;
+        return false;
+    };
+    for (auto& u : units) {
+        if (_usesSerde || !u || !u->codeDeclarationList) break;
+        for (auto& decl : *u->codeDeclarationList) {
+            if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+                if (attrHasSerde(cd->attributes)) { _usesSerde = true; break; }
+                if (cd->baseTypes && cd->baseTypes->interfaces)
+                    for (auto& itf : *cd->baseTypes->interfaces)
+                        if (itf && itf->value && (*itf->value == "Serializer" || *itf->value == "Deserializer")) _usesSerde = true;
+            } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+                if (attrHasSerde(ed->attributes)) _usesSerde = true;
+            } else if (auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get())) {
+                if (ri->contract && ri->contract->value &&
+                    (*ri->contract->value == "Serializer" || *ri->contract->value == "Deserializer")) _usesSerde = true;
+            }
+            if (_usesSerde) break;
+        }
+    }
+
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
@@ -11076,7 +11117,11 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     mi.isStatic     = modHas(md->modifiers, "static");  // a static factory (no `self`) — e.g. `deserialize`
                     mi.visibility   = Visibility::Public;   // a contract's methods are public
                     mi.isRetro      = true;                 // emitted static-inline in the header (below)
-                    scanTypeForCollections(mi.returnType);  // register a monomorph named only in a retro sig (e.g. `Result<T, Owned<Error>>`)
+                    // A PRIMITIVE serde conformance's `Result<scalar, Owned<Error>>` return (the ~12 monomorphs)
+                    // only matters when the program uses serde — skip registering it otherwise (the impl itself
+                    // is likewise gated off in emitHeaderContent). Every other retro return scans normally.
+                    if (!((contract == "Serialize" || contract == "Deserialize") && ri->target->builtInVal != 0 && !_usesSerde))
+                        scanTypeForCollections(mi.returnType);  // register a monomorph named only in a retro sig (e.g. `Result<T, Owned<Error>>`)
                     tci.methods[mname] = mi;
                 }
             tci.interfaces.push_back(contract);
@@ -11310,6 +11355,12 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // (emitModuleContent). A USER-type target emits through the normal machinery (skipped here).
     // User-unit retro-impls: non-static prototype here; body lands in that unit's `.c` (below). The PRELUDE's
     // retro-impls (collect-only, no home module) are emitted `static inline` in a dedicated pass just after.
+    // Skip an ungated serde retro-impl: the prelude's primitive `Serialize`/`Deserialize` conformances are
+    // emitted only when `_usesSerde` (see the collect-time gate). All other retro-impls always emit.
+    auto skipUngatedSerde = [&](RetroactiveImplNode* ri) {
+        return !_usesSerde && ri->contract && ri->contract->value &&
+               (*ri->contract->value == "Serialize" || *ri->contract->value == "Deserialize");
+    };
     auto emitRetroProtos = [&](const std::vector<SharedCompilationUnit>& us, const char* stat) {
         for (auto& u : us) {
             if (!u || !u->codeDeclarationList) continue;
@@ -11317,6 +11368,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             for (auto& decl : *u->codeDeclarationList) {
                 auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
                 if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
+                if (skipUngatedSerde(ri)) continue;   // prelude primitive serde retro-impls, when serde is unused
                 ClassInfo* tcip = retroTargetInfo(cType(ri->target));   // collection ClassInfo OR primitive conformance
                 if (!tcip) continue;
                 ScopedStr _ts(_thisType, tcip->name);
@@ -11410,6 +11462,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (auto& decl : *_preludeUnit->codeDeclarationList) {
             auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
             if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
+            if (skipUngatedSerde(ri)) continue;   // prelude primitive serde retro-impls, when serde is unused
             ClassInfo* tcip = retroTargetInfo(cType(ri->target));
             if (!tcip) continue;
             ScopedStr _ts(_thisType, tcip->name);

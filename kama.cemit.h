@@ -366,6 +366,12 @@ private:
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only
     std::vector<SharedCompilationUnit> _preludeModuleUnits;  // namespaced built-ins (the triad), collect-only
+    // Does the program use serde at all? Set in collectProgram from a `@generate` type or a Serializer/
+    // Deserializer backend — the only ways to (de)serialize anything. When false we emit NONE of the serde
+    // machinery: the prelude's primitive Serialize/Deserialize retro-impls are skipped, and a collection's
+    // conditional `when [T: Serialize]` serde (serialize/serKey/…) is dropped via whenConditionsHold. Purely a
+    // compile-time saving — all of it is static-inline / dead-strippable.
+    bool                             _usesSerde = false;
     std::string   _sourcePath;       // absolute path, used in #line directives
     bool          _lines;            // whether to emit #line directives
     int           _unsupported;      // count of nodes we could not lower
