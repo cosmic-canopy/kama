@@ -30,28 +30,17 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
    has a clean workaround, so a "language-complete" 1.0 closes it but it doesn't block the stdlib/engine
    work. (Reserved later-track keyword `volatile`/`hardware` stays deferred — it hard-errors, never
    miscompiles.)
-   - **Target-typed rvalue as a `match` subject** *(one residual, clean "bind to a local first" workaround)*.
-     Target-typed inline construction already works in every other by-value position (initializer, `return`,
-     `operator[]` store, value-producing `match` arm, class-typed lvalue store, call-argument, variant
-     payload, string-rvalue indexing, inline `new`) — see [SPEC.md](SPEC.md). **Still open:** a value-producing
-     construct as a `match` **SUBJECT** (`match (Optional::Some(x)) { … }`). The instance must be inferred from
-     the payload during the *discovery* pass (so its struct is emitted), but that pass has no local-variable
-     types — only a literal payload could infer, which isn't worth a partial feature; the full fix needs
-     discovery-time local typing or lazy generic-struct emission. Documented RULES (not gaps): an inline
-     `new`/value **borrowed** by a `ref`/`out` or contract parameter (an rvalue has no lvalue to reseat), and
-     an inline construct in a `do/while` condition (ISO-C + `continue` semantics).
-2. **Soundness bug — `give` an owning payload out of a BORROWING `match` double-frees in safe code
-   (1.0 BLOCKER, fix ASAP).** `match (r) { case Err(e): give e; … }` (borrowing subject) lets an owning arm
-   binding `e` — which only *aliases* the box `r` still owns — be `give`n out; the caller then drops it too
-   → **double free, in plain safe code** (violates the core "only `unsafe` may be unsafe" invariant). The
-   intended, correct idiom is the destructure-move `match (give r)` (consumes + defuses the subject). Two
-   holes to close: (a) the existing "cannot `give` out of a field/element" guard is a non-fatal **warning**
-   ("not yet lowered") — must be a **hard error**; (b) it doesn't fire at all for an **interface-element
-   fat-handle** payload (`Owned<Contract>` — e.g. `Owned<Error>`), which compiles with **zero** diagnostics
-   and silently double-frees. Found during construction-model Landing D (a mis-written `encode`; verified with
-   probes on both the concrete-`Owned<Box>` and fat-handle reprs). Fix: in `emitMatchSwitch`, reject a `give`
-   of an owning arm binding when the subject was NOT consumed (`!subjConsumed`), covering both representations.
-3. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
+   - **Value-producing `match`/ternary as a `match` subject** *(rare residual, clean "bind to a local first"
+     workaround)*. Target-typed inline construction works in every by-value position (initializer, `return`,
+     `operator[]` store, value-producing `match` arm, class-typed lvalue store, call-argument, variant payload,
+     string-rvalue indexing, inline `new`) — see [SPEC.md](SPEC.md). A bare **variant-constructor** subject
+     (`match (Optional::Some(x)) { … }`, x a param/local/literal) now works too: a function-level pre-scan
+     supplies the discovery pass the local types, so the instance (`Optional<T>`) is inferred + registered
+     there and reused at emit. **Still open** (much rarer): a *nested* value-producing `match` or a
+     *variant-producing ternary* directly as a subject — bind to a typed local. Documented RULES (not gaps):
+     an inline `new`/value **borrowed** by a `ref`/`out` or contract parameter (an rvalue has no lvalue to
+     reseat), and an inline construct in a `do/while` condition (ISO-C + `continue` semantics).
+2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
    - **`std::fs` / `std::io`** — buffered readers, richer `Metadata` (mtime/perms), path helpers, `mkdir`.
@@ -60,14 +49,15 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
      and a concrete `f64` (`DVec`) family alongside the `float32` one. Rotors deferred.
    - **Windows CI** — the `windows-latest` leg now passes the full suite (the `kama_os.h` `_WIN32` branch is
      verified); promote the leg from best-effort to **required** so a Windows regression blocks a merge.
-4. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
+3. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
    (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`).
 
 ## 2. Deferred language bits (tracked)
 
-Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The one
-remaining §1 language-completeness residual is the value-producing `match` **subject** inference; what
-remains here is genuinely later-track or opt-in.
+Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The only
+§1 language-completeness residual left is a *nested* value-producing `match`/*variant-producing ternary*
+directly as a `match` subject (the common bare-variant-ctor subject now works); what remains here is
+genuinely later-track or opt-in.
 
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager

@@ -520,6 +520,12 @@ private:
     bool               _returnIsPlace = false;         // emitting a `ref T operator[]` body: `return e` -> `return &(place)`
     std::string        _matchTargetCType;              // result C type of a value-producing `match` (set by the liftable site)
     std::string        _variantTargetType;             // target union instance for a generic-variant construction (Optional<int32>)
+    // A1 — a value-producing variant ctor as a `match` SUBJECT (`match (Optional::Some(x))`). The instance
+    // must be inferred + registered at DISCOVERY (so its struct emits), but that pass has no local types;
+    // `_scanLocalTys` is a discovery-time name->type map (params + local decls of the fn being scanned) that
+    // feeds the inference. The resolved instance's mangled name is stashed per-match for reuse at emit.
+    std::map<std::string, SharedIdentifier> _scanLocalTys;
+    std::map<MatchNode*, std::string>       _matchSubjInst;
     int                _tempCounter = 0;
     // Temp-hoist buffer. An inline constructor in argument position materializes into an
     // ordinary local ("Cls __tmp; Cls__ctor(&__tmp, …);") pushed here and flushed by the enclosing
@@ -684,6 +690,12 @@ private:
     // The concrete type node of an argument expression ("" cases return null): literals map to
     // their builtin kind; identifiers resolve through `localTys` (declared types in scope).
     SharedIdentifier exprTypeNode(SharedExpression e, std::map<std::string, SharedIdentifier>& localTys);
+    // A1: infer the concrete generic-variant instance of a value-producing variant ctor used as a `match`
+    // subject (`Optional::Some(x)` -> the `Optional<int32>` instance node), binding each bare-type-param
+    // payload field via `exprTypeNode(arg, localTys)`. `reg` registers the instance (discovery only). Returns
+    // null when the callee isn't a `Type::Variant(args)` or a param can't be inferred (falls back to the error).
+    SharedIdentifier inferInlineVariantInstance(InvocationNode* inv,
+                                                std::map<std::string, SharedIdentifier>& localTys, bool reg);
     SharedIdentifier primTypeNode(int builtInVal);          // cached synthesized primitive type node
     bool isConcreteTypeArg(SharedIdentifier t);             // a primitive/class/enum/collection (not a bare type-param)
     // Unify a generic call's args against the template's params -> a deduped instantiation.

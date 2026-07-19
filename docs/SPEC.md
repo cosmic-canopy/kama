@@ -1258,9 +1258,10 @@ string label = match (reading) {
 };
 ```
 
-The `match` subject can be a variable, a method call, a static-method call, or a free-function call
-(`match (File::open(path: p, mode: OpenMode::Read)) { … }`). Arbitrary-integer branching (not on an enum)
-is done with `if` / `else if` — there is no `switch`.
+The `match` subject can be a variable, a method call, a static-method call, a free-function call
+(`match (File::open(path: p, mode: OpenMode::Read)) { … }`), or a value-producing variant constructor
+(`match (Optional::Some(x)) { … }` — the concrete instance is inferred from the payload). Arbitrary-integer
+branching (not on an enum) is done with `if` / `else if` — there is no `switch`.
 
 ## Error model — `Optional` / `Result` ✅
 
@@ -1463,12 +1464,12 @@ Everything below **hard-errors** (never miscompiles) and has a clean workaround.
   `continue` must reach; a portable (statement-expression-free) ISO-C lowering can't express it. Bind to a
   local.
 
-**Open (deferred inference)** — one residual; bind the subject to a typed local:
-- **A value-producing construct as a `match` SUBJECT** — `match (Optional::Some(x)) { … }` (a bare variant
-  ctor / value-producing match / variant-producing ternary as the subject). The instance (`Optional<T>`)
-  must be inferred from the payload during the *discovery* pass (so its struct is emitted), but that pass
-  has no local-variable types — so only a literal payload could infer, which isn't worth a partial feature.
-  Bind to a typed local (`Optional<int32> o = Optional::Some(x); match (o) …`).
+**Open (deferred inference)** — a rare residual; bind the subject to a typed local:
+- **A value-producing `match`/ternary as a `match` SUBJECT** — a bare variant constructor subject
+  (`match (Optional::Some(x)) { … }`) now works: the instance (`Optional<T>`) is inferred from the payload
+  during the discovery pass (a function-level pre-scan supplies the param/local types) and reused at emit.
+  The still-deferred forms are a *nested* value-producing `match` or a *variant-producing ternary* directly
+  as a subject; bind those to a typed local (`Optional<int32> o = …; match (o) …`).
 
 (Target-typed inline construction works in initializers, `return`, `operator[]` place-stores,
 value-producing `match` arms, class-typed lvalue stores, call arguments, variant payloads, and string-rvalue

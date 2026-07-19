@@ -4212,6 +4212,13 @@ void CEmitter::scanExprForCollections(SharedExpression e)
         // recurse into a `match` — the subject and each arm (a single expression OR a block),
         // so a type used ONLY inside an arm (e.g. a block-local `Shared<T>`) is still registered.
         scanExprForCollections(mm->subject);
+        // A1: a value-producing variant ctor as the SUBJECT (`match (Optional::Some(x))`) — infer + register
+        // the instance HERE (discovery has the local types via `_scanLocalTys`) and stash the mangled name
+        // for emitMatchSwitch (which has no way to re-infer it).
+        if (auto* iv = dynamic_cast<InvocationNode*>(mm->subject.get())) {
+            SharedIdentifier inst = inferInlineVariantInstance(iv, _scanLocalTys, /*reg=*/true);
+            if (inst) _matchSubjInst[mm] = cType(inst);
+        }
         if (mm->arms) for (auto& a : *mm->arms) if (a) {
             scanExprForCollections(a->body);
             scanStmtForCollections(a->block);
@@ -4227,6 +4234,11 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         if (b->statements) for (auto& st : *b->statements) scanStmtForCollections(st);
     } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
         scanTypeForCollections(d->type);
+        // A1: record each local's declared type (name->type node) so an inline variant-ctor `match` subject
+        // later in this body can infer its instance from a locally-typed payload (`match (Some(x))`).
+        if (d->type && d->variables)
+            for (auto& v : *d->variables) if (v && v->name && v->name->value)
+                _scanLocalTys[*v->name->value] = d->type;
         if (d->variables) for (auto& v : *d->variables) if (v) scanExprForCollections(v->initializer);
     } else if (auto* cd = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
         scanTypeForCollections(cd->type);
@@ -4259,10 +4271,18 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
 void CEmitter::collectCollections(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
+    // A1: reset the discovery-time local-type map and seed it with a body's parameters before scanning it,
+    // so an inline variant-ctor `match` subject (`match (Some(x))`) can infer its instance from `x`'s type.
+    auto seedParams = [&](SharedParameterList params) {
+        _scanLocalTys.clear();
+        if (params) for (auto& p : *params)
+            if (p && p->type && p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
+    };
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
             scanTypeForCollections(fn->returnType);
             if (fn->parameters) for (auto& p : *fn->parameters) if (p) scanTypeForCollections(p->type);
+            seedParams(fn->parameters);
             scanStmtForCollections(fn->block);
         } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // skip a generic TYPE template's members — their types name the raw type params
@@ -4283,12 +4303,15 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
                 } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
                     scanTypeForCollections(md->returnType);
                     if (md->params) for (auto& p : *md->params) if (p) scanTypeForCollections(p->type);
+                    seedParams(md->params);
                     scanStmtForCollections(md->body);
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
                     if (cc->declarator && cc->declarator->params)
                         for (auto& p : *cc->declarator->params) if (p) scanTypeForCollections(p->type);
+                    seedParams(cc->declarator ? cc->declarator->params : SharedParameterList());
                     scanStmtForCollections(cc->body);
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
+                    _scanLocalTys.clear();
                     scanStmtForCollections(dd->body);
                 }
             }
@@ -4347,6 +4370,67 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
         return l ? l : exprTypeNode(b->RHS, localTys);
     }
     return nullptr;
+}
+
+// A1: infer the concrete generic-variant instance of a value-producing variant constructor used as a `match`
+// SUBJECT — `match (Optional::Some(x))` -> the `Optional<int32>` instance node. The subject parses as an
+// InvocationNode whose callee is a `Type::Variant` qualified identifier (no receiver). Each BARE-type-param
+// payload field is bound by name from its argument's inferred type (via `exprTypeNode(arg, localTys)`); ALL
+// template params must bind (so `Result::Ok(42)` — E unbound — returns null and falls back to the "requires an
+// enum subject" error). `reg=true` (discovery) registers the instance so its C struct emits; `reg=false`
+// (emit) just rebuilds the node to recover the mangled name. Returns null for anything that isn't inferable.
+SharedIdentifier CEmitter::inferInlineVariantInstance(InvocationNode* inv,
+                                                      std::map<std::string, SharedIdentifier>& localTys, bool reg)
+{
+    if (!inv || !inv->identifier || inv->expression) return nullptr;   // a `recv.method(...)` is not this
+    SharedStringList qual = inv->identifier->qualifier;
+    if (!qual || qual->empty() || !inv->identifier->value) return nullptr;   // must be `Type::Variant(...)`
+    std::string variantName = *inv->identifier->value;
+
+    // The qualifier's last segment is the TYPE; earlier segments are its namespace.
+    auto tq = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < qual->size(); ++i) tq->push_back((*qual)[i]);
+    std::string tmpl = resolveUserName(*qual->back(), tq);
+    if (!_genericTypes.count(tmpl) || !_genericTypes[tmpl].isVariant) return nullptr;   // (the template lives here, NOT _classes)
+    const std::vector<std::string>& params = _genericTypeParams[tmpl];
+    if (params.empty()) return nullptr;
+
+    const VariantCase* vc = nullptr;
+    for (auto& v : _genericTypes[tmpl].variants) if (v.name == variantName) { vc = &v; break; }
+    if (!vc) return nullptr;
+
+    std::map<std::string, SharedExpression> byName;
+    if (inv->args) for (auto& a : *inv->args) if (a && a->name && a->name->value) byName[*a->name->value] = a->expression;
+
+    std::map<std::string, SharedIdentifier> bind;
+    for (auto& f : vc->payload) {
+        if (!f.type || !f.type->value || f.type->genericArg) continue;   // only a BARE type-param field infers
+        bool isParam = false;
+        for (auto& p : params) if (p == *f.type->value) { isParam = true; break; }
+        if (!isParam) continue;
+        auto ai = byName.find(f.name);
+        if (ai == byName.end()) return nullptr;
+        SharedIdentifier at = exprTypeNode(ai->second, localTys);
+        if (!isConcreteTypeArg(at)) return nullptr;                      // a variable with no discovery-time type, etc.
+        bind[*f.type->value] = at;
+    }
+    // Require EVERY template param bound — a return-only param (Result's E from an Ok(...)) can't be inferred.
+    SharedIdentifierList argList = std::make_shared<IdentifierList>();
+    for (auto& p : params) {
+        auto b = bind.find(p);
+        if (b == bind.end()) return nullptr;
+        argList->push_back(b->second);
+    }
+
+    if (reg) registerGenericTypeInst(tmpl, argList);   // ONLY at discovery — creates _classes[mangled] so the struct emits
+
+    // Build the instance node — BOTH genericArg (singular; mangling reads it) AND genericArgs (list).
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<a1>"));
+    auto inst = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(*qual->back()));
+    if (!tq->empty()) inst->qualifier = tq;
+    inst->genericArg  = argList->front();
+    inst->genericArgs = argList;
+    return inst;
 }
 
 // A type node usable as a generic type argument: a primitive, or a known
@@ -7548,6 +7632,15 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     std::string subjCls = exprClass(m->subject);
     // `match (give x)` — the consuming form (destructure-move): resolve through the hand-off to x's class.
     if (subjCls.empty()) if (auto* h = dynamic_cast<HandoffNode*>(m->subject.get())) subjCls = exprClass(h->value);
+    // A1: a value-producing variant ctor as the SUBJECT (`match (Optional::Some(x))`) — the concrete instance
+    // was inferred + registered at discovery, its mangled name stashed. Adopt it (so the switch + payload
+    // types resolve) and pin `_variantTargetType` while the subject is materialized (below) so the same
+    // instance is constructed.
+    bool inlineVariantSubj = false;
+    if (subjCls.empty()) {
+        auto it = _matchSubjInst.find(m);
+        if (it != _matchSubjInst.end() && _classes.count(it->second)) { subjCls = it->second; inlineVariantSubj = true; }
+    }
     auto cit = _classes.find(subjCls);
     if (cit == _classes.end() || !cit->second.isVariant) {
         std::string enumTy = exprEnumType(m->subject);
@@ -7615,7 +7708,11 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
         std::string mv = moveOnlySource(h->value, m->line); if (!mv.empty()) markMoved(mv);
     } else {
+    // A1: pin the concrete instance so the inline variant ctor constructs `Optional_int32`, not bare `Optional`.
+    std::string pvt = _variantTargetType, pmt = _matchTargetCType;
+    if (inlineVariantSubj) { _variantTargetType = subjCls; _matchTargetCType = subjCls; }
     std::string subjExpr = emitExpression(m->subject);
+    if (inlineVariantSubj) { _variantTargetType = pvt; _matchTargetCType = pmt; }
     flushHoisted(depth);
     if (dynamic_cast<ThisAccessNode*>(m->subject.get())) {
         // `this` emits as `self`, which is ALREADY a `subjCls*` (the receiver pointer) — do NOT re-address
