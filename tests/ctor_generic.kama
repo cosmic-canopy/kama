@@ -1,0 +1,23 @@
+// Construction-model M7 (emitter enablers E1/E2/E3): a NAMED `ctor` on a GENERIC type.
+//   E1: the ctor body is specialized PER-INSTANCE — the bare local `Pair<T> p` and the return slot emit the
+//       specialized C type (`_F4__Pair_int32`), not the raw template `_F4__Pair` (which fails to compile).
+//   E2: dot-on-type call with args INFERRED from the LHS annotation (`Pair<int32> q = Pair.make(...)`).
+//   E3: dot-on-type call with an EXPLICIT turbofish (`Pair.make::<int32>(...)`) — the args ride the ctor name.
+// The `::` static-factory bridge (M2 coexistence, removed at M8) stays green too.
+type value Pair<T> {
+    public T a;
+    public T b;
+    public ctor make(T a, T b) {
+        Pair<T> p;
+        p.a = a;
+        p.b = b;
+        return p;
+    }
+    public fn T sum() { return this.a + this.b; }
+}
+fn int32 main() {
+    Pair<int32> viaColon = Pair::make(a: 10, b: 20);       // :: bridge -> 30
+    Pair<int32> viaDot   = Pair.make(a: 3, b: 4);          // E2 dot, inferred from LHS -> 7
+    Pair<int32> viaTurbo = Pair.make::<int32>(a: 2, b: 3);  // E3 dot turbofish -> 5
+    return viaColon.sum() + viaDot.sum() + viaTurbo.sum();  // 30 + 7 + 5 = 42
+}

@@ -1,0 +1,13 @@
+// M7-E3: an explicit ctor turbofish must supply the right number of type arguments — `Pair<T>` has one
+// type parameter, so `Pair.make::<int32, int32>(...)` is rejected (the same arity check the type gets
+// anywhere it is instantiated).
+type value Pair<T> {
+    public T a;
+    public T b;
+    public ctor make(T a, T b) { Pair<T> p; p.a = a; p.b = b; return p; }
+    public fn T sum() { return this.a + this.b; }
+}
+fn int32 main() {
+    Pair<int32> q = Pair.make::<int32, int32>(a: 2, b: 3);
+    return q.sum();
+}

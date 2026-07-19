@@ -2970,6 +2970,20 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (rt != "Result")
                                     unsupported(("a `ctor` with a return type must be `Result<…, E>` (fallible) — "
                                                  "omit it for an infallible ctor; got `" + rt + "`").c_str(), md->line);
+                            } else if (cd->typeParams && !cd->typeParams->empty()) {
+                                // infallible ctor on a GENERIC type: the return type must carry the type
+                                // parameters (`Pair<T>`, not the bare template `_F4__Pair`) so per-instance
+                                // emission substitutes them — exactly as a `static fn Pair<T> make` return type
+                                // would. Without this the ctor's return type + return-slot stay unspecialized
+                                // (clang: `unknown type name '_F4__Pair'`). #M7-E1
+                                if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic-ctor>"));
+                                auto rt = std::make_shared<IdentifierNode>(*cd->name);   // copy name + qualifier
+                                rt->genericArgs = std::make_shared<IdentifierList>();
+                                for (auto& p : *cd->typeParams)
+                                    if (p) rt->genericArgs->push_back(
+                                        std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(*p)));
+                                if (!rt->genericArgs->empty()) rt->genericArg = (*rt->genericArgs)[0];
+                                mi.returnType = rt;
                             } else {
                                 mi.returnType = cd->name;          // infallible => the enclosing type
                             }
@@ -4688,6 +4702,20 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                     if (explicitGenericInst(git->second, k, tfArgs, inv->line, gi)) {
                         if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
                         _callInst[inv] = gi.mangledName;
+                    }
+                }
+            }
+            // Dot-on-type ctor turbofish `Type.ctor::<T>(...)` on a GENERIC type — register the concrete
+            // instance so its specialized struct + ctor body get emitted (the inferred form rides the LHS
+            // annotation's scan instead; the turbofish is for sites where inference can't supply the args). #M7-E3
+            else if (ma->identifier && ma->identifier->genericArgs) {
+                if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
+                    if (rid->value) {
+                        std::string tn = resolveUserName(*rid->value, rid->qualifier);
+                        if (_genericTypeParams.count(tn)) {
+                            for (auto& ta : *ma->identifier->genericArgs) scanTypeForCollections(ta);
+                            registerGenericTypeInst(tn, ma->identifier->genericArgs);
+                        }
                     }
                 }
             }
@@ -10983,7 +11011,10 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
     if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
         if (id->value && exprClass(ma->expression).empty()) {   // empty => not a binding/field of a class
             std::string t = resolveUserName(*id->value, nullptr);
-            if (_classes.count(t)) { outType = t; return true; }
+            // A concrete type is in `_classes`; a GENERIC type's template is in `_genericTypeParams` (its
+            // concrete instances live in `_classes` under mangled names). `Pair.make(...)` names the template,
+            // so route it here — emitDotOnTypeCtorCall resolves the instance (turbofish or LHS inference). #M7-E2
+            if (_classes.count(t) || _genericTypeParams.count(t)) { outType = t; return true; }
         }
     }
     return false;
@@ -11002,7 +11033,21 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                      : (dynamic_cast<IdentifierNode*>(recv->expression.get()) && recv->expression
                         && static_cast<IdentifierNode*>(recv->expression.get())->value)
                         ? *static_cast<IdentifierNode*>(recv->expression.get())->value : typeName;
-    ClassInfo* stci = _classes.count(typeName) ? &_classes[typeName] : nullptr;
+    // A GENERIC type: `typeName` names the bare template (not in `_classes`; its specialized instances are).
+    // Resolve the concrete instance the same two ways the `::` static-factory path does — from an explicit
+    // turbofish (`Pair.make::<int32>()`) or by inference from the enclosing typed position
+    // (`Pair<int32> q = Pair.make(...)`, via `_variantTargetType` + `_genericTypeInstOf`). #M7-E2/E3
+    std::string tn = typeName;
+    if (!_classes.count(tn) && _genericTypeParams.count(tn)) {
+        if (recv->identifier && recv->identifier->genericArgs)
+            tn = genericTypeMangle(tn, recv->identifier->genericArgs);
+        else if (!_variantTargetType.empty()) {
+            auto of = _genericTypeInstOf.find(_variantTargetType);
+            if (of != _genericTypeInstOf.end() && of->second == tn)
+                tn = _variantTargetType;
+        }
+    }
+    ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : nullptr;
     if (!stci) { unsupported(("unknown type in constructor call `" + disp + "`").c_str(), call->line); return "0"; }
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(stci, method, &owner);
