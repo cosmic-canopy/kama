@@ -29,13 +29,16 @@ is exactly one kind of constructor; *everything*, including deserialization, is 
 - **Call-site greppability (hard requirement).** Construction reads distinctly from a static call:
   `Type.name(...)` is construction (dot-on-type), `Type::staticFn()` is a static fn, `Enum::Variant(...)`
   is an enum variant (both keep `::`). There is **no** nameless `Type(...)` call shape.
-- **`decode` is just a constructor.** It receives a `Deserializer` and returns **`Result<This, E>`** — the
-  *same shape as every fallible ctor*, **not** a hardcoded `DeError`. Because `decode` can **chain** to
-  another ctor, the error may come from the ctor at the end of the chain, so `E` is a general error bounded
-  by **one base `Error`** (`DeError` is a specialization you derive for deserialize-specific behavior).
-  Synthesized by default (enumerate the serialized fields via the `Deserializer` — the proven per-field read,
-  yielding `DeError`); overridable to call the exposed **default-field-read primitive** + add logic, chain to
-  another ctor, or hand-roll a version-aware decode (whose `E` may then be any `Error`).
+- **Deserialization is just a constructor.** *(Shipped as P4 — this is how the "`decode` is a ctor" idea
+  landed; there is no `decode` keyword.)* A deserializable type is produced by one fallible ctor
+  **`deserialize`** that receives a `Deserializer` and returns **`Result<This, Owned<Error>>`** — the *same
+  shape as every fallible ctor*. The write mirror is a fallible **method** `serialize` →
+  `Result<Unit, Owned<Error>>` (the one principled asymmetry: read constructs a `T`, write projects `self`).
+  The error is the **boxed polymorphic `Owned<Error>`** (see §8): a concrete error enum (`DeError`/`SerError`)
+  boxes into a fat `Owned<Error>`, recovered via `error.as<DeError>()`. Synthesized by default (enumerate the
+  serialized fields via the `Deserializer` — the proven per-field read); overridable by hand (a user
+  `ctor deserialize` reading fields via `r.deserialize::<T>()` + a flat `match`), which can chain to another
+  ctor so shared logic reaches the deserialize path with no separate hook.
 - **DRY = visible chaining.** A ctor reuses another by **calling it** (`return Color.fromHsv(...)`). Shared
   construction logic lives in the ctor others chain to (a private "base" ctor, by convention). `decode`
   reuses the same way — it chains to that base ctor (after reading fields), so shared logic reaches the
@@ -50,8 +53,10 @@ is exactly one kind of constructor; *everything*, including deserialization, is 
 ## 3. The two enforced guarantees (the point of the campaign)
 
 1. **Correct return type.** Infallible ctor → `T`; fallible ctor → `Result<T, E>` (never `Optional` — a
-   failure carries *why*), where `E` satisfies one **base `Error`** (concrete errors like `DeError`/`IoError`
-   derive it, so a chained ctor's error propagates). `decode` returns `Result<This, E>` too.
+   failure carries *why*), where `E` satisfies one **base `Error`**. *(Shipped: `E` is the boxed polymorphic
+   `Owned<Error>` — §8, Model C. A concrete error enum derives `Error` and boxes in; the uniform `E: Error`
+   bound on `Result` is deferred to M8, since ~17 `Result<_, int32>` sites still exist.)* `deserialize`
+   returns `Result<This, Owned<Error>>` too.
 2. **Complete initialization — compile-time.** Every member is assigned (to zero or a value) and every
    pointer is non-null **before the object is returned**. This is **definite-assignment analysis** over all
    members (the generalization of today's `checkCtorNeverNull`, which already proves owning pointers get
@@ -97,17 +102,25 @@ removes today's vtable-only synthesized default ctor: a polymorphic type must de
 - **Enum variants stay `::`** (`Optional::Some(...)`).
 - **Contracts require `static fn`, not `ctor`** (a contract has no construction; e.g. `HeapOwner::adopt`).
 - **extern-`value` FFI stays outside this model** (the C-POD aggregate-init path is unchanged).
+- **A default-parameter convenience factory that returns a *different specialization* stays `static fn`.**
+  `Map::withCapacity` / `Set::withCapacity` take no allocator, so they return the DEFAULT-allocator
+  `Map<K,V,H>` — a different type than the enclosing `Map<K,V,H,A>`. A `ctor` would force the enclosing
+  `A` and silently build a map with an unset custom allocator; `static fn` keeps the compile error on misuse.
+  Exempt from §6's self-returning ban (the return type is a distinct specialization).
 - The **Equatable / Hashable / Copyable derive story** is designed alongside `of`/`zero` (one opt-in derive
   surface) but shipped separately (see §9 and ROADMAP §2). Kama today rejects auto structural `==`
   (`tests/xfail/operator_eq_missing.kama`), so a derive is a stance change designed with this family.
 
-## 8. Base `Error` (companion dependency)
+## 8. Base `Error` (companion dependency) — *shipped as Model C*
 
-Because fallible ctors (incl. `decode`) return `Result<T, E>` and a ctor can **chain** to another, the error
-must compose: there is **one base `Error`** that concrete errors (`DeError`, `IoError`, …) derive, so a
-chained callee's error flows into the caller's `E`. To pin during implementation (M2/M5): how a chained `E2`
-flows into the caller's `E` — identity when equal, upcast to the base `Error`, or an explicit conversion.
-This is a small error-model addition the campaign depends on.
+Because fallible ctors (incl. `deserialize`) return `Result<T, E>` and a ctor can **chain** to another, the
+error must compose: there is **one base `Error`** that concrete errors (`DeError`, `SerError`, `IoError`, …)
+derive. **Shipped (P1–P4) as the uniform polymorphic `Owned<Error>`:** `Error` is a base *contract*; a
+concrete error stays an ergonomic Kama `enum` (matchable, payload-carrying) but gains the ability to be
+**boxed** into a fat `Owned<Error>` handle and dynamically dispatched (`.message()`), and recovered with
+`error.as<DeError>()` (a vtbl-pointer downcast → `Optional<DeError>`). A chained callee's `Owned<Error>` flows
+into the caller's `Owned<Error>` by identity (already boxed). The remaining tail — a uniform `E: Error` **bound
+on `Result`** + migrating the ~17 `Result<_, int32>` sites + dropping `onConstruction` — is deferred to **M8**.
 
 ## 9. Interaction with prior deferrals
 
@@ -147,3 +160,14 @@ WASM) acceptance live in the plan: `~/.claude/plans/let-s-start-the-construction
 Sugar-first coexistence — old and new spellings both compile until M8 removes the legacy surface and turns on
 enforcement — so the tree stays green at every commit across the ~60-factory / ~340-call-site stdlib
 migration.
+
+**Status.** M1–M6 done (the `ctor` keyword, dot-on-type calls, complete-init enforcement, `new` composition,
+single-layer fallible serde, `@generate(of, zero)`). **M7 (stdlib migration) done for the non-generic families
+(math, net) and the generic collections + smart pointers:** self-returning `static fn` factories are `ctor`s,
+transparent values carry `@generate(of)`, and each container has a named `empty()` — all callable dot-on-type
+or via the coexistence `::` bridge, triple-green. **M7 also required three emitter enablers (M7.0):** a generic
+`ctor`'s body/return-type now specialize per instance, and a dot-on-type ctor call resolves a generic receiver
+both by LHS inference and via an explicit turbofish `Type.ctor::<T>(...)`. Deferred to **M8** (coupled with the
+enforcement flip): the resource instance-ctors that build in place (`Arena`, `TcpStream(fd)`, `JsonWriter`/
+`JsonReader`, FixedArray's sized primary), removing the nameless `Type(...)` primaries, the ~340-site call
+sweep to `Type.name(...)`, and the error-model tail (§8).
