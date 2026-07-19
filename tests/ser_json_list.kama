@@ -16,7 +16,8 @@ fn int main() {
     DynamicArray<int32> ids = DynamicArray(); ids.add(item: 7); ids.add(item: 8);
     DynamicArray<Pt> pts = DynamicArray(); pts.add(item: Pt(x: 1, y: 2)); pts.add(item: Pt(x: 3, y: 4));
     Scene s = Scene(name: "lvl1", ids: give ids, pts: give pts);
-    string j = encode(v: s);
+    Result<string, Owned<Error>> j_r = encode(v: s);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (j == "{\"name\":\"lvl1\",\"ids\":[7,8],\"pts\":[{\"x\":1,\"y\":2},{\"x\":3,\"y\":4}]}") { return 0; }
     int32 n = cast<int32>(j.length());
     if (n == 0) { return 255; }

@@ -11,7 +11,8 @@ type value Config {
 }
 fn int main() {
     Config c = Config(maxRetries: 5, internalCounter: 999, enabled: true);
-    string j = encode(v: c);
+    Result<string, Owned<Error>> j_r = encode(v: c);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (j == "{\"max_retries\":5,\"enabled\":true}") { return 0; }   // internalCounter skipped
     int32 n = cast<int32>(j.length());
     if (n == 0) { return 255; }

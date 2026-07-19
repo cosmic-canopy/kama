@@ -22,14 +22,15 @@ fn int main() {
     Shared<Node> b = new Node(id: 2);
     b.setBack(w: a.downgrade());          // b -> a (weak)
     a.setNext(n: give b);                 // a -> b (owns); a is the root
-    string j = encode(v: a);
+    Result<string, Owned<Error>> j_r = encode(v: a);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     // root a = id 1 (next -> 2, no back); b = id 2 (no next, back -> 1). 0 = absent/expired.
     if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Node\",\"id\":1,\"next\":2,\"back\":0},\"2\":{\"__type\":\"Node\",\"id\":2,\"next\":0,\"back\":1}}}") {
         return cast<int32>(j.length());
     }
     Result<Shared<Node>, Owned<Error>> res = decode::<Shared<Node>>(src: copy j);
     match (res) {
-        case Ok(sh): { string j2 = encode(v: sh); if (j2 == j) { return 0; } return 1; }
+        case Ok(sh): { Result<string, Owned<Error>> j2_r = encode(v: sh); string j2 = match (give j2_r) { case Ok(__ok): give __ok; case Err(__e): { return 1; } }; if (j2 == j) { return 0; } return 1; }
         case Err(e): { return 2; }
     };
     return 3;

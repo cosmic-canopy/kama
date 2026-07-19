@@ -42,7 +42,8 @@ type value Line {
 fn int main() {
     // good input -> the override reads both Points, round-trips to Ok
     Line ln = Line(start: Point(x: 30, y: 12), end: Point(x: 3, y: 5));
-    string j = encode(v: ln);
+    Result<string, Owned<Error>> j_r = encode(v: ln);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<Line, Owned<Error>> good = decode::<Line>(src: give j);
     int32 okv = match (good) { case Ok(q): q.total(); case Err(e): 0 - 1; };   // 42 + 8 = 50
 

@@ -764,7 +764,8 @@ private:
     void emitDeserializeDefinition(ClassInfo& ci);
     void emitEnumSerializeDefinition(ClassInfo& ci);     // externally-tagged {"tag":…[,"value":{…}]}
     void emitEnumDeserializeDefinition(ClassInfo& ci);
-    void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth);
+    void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth,
+                           const std::string& resultCType);   // resultCType empty => graph-node/void context (sticky only)
     void emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth,
                          const std::string& resultCType, const std::string& cleanup);
     std::string deReadExpr(SharedIdentifier ty);   // the `Deserializer` read expression for a field type
@@ -787,7 +788,10 @@ private:
     SharedIdentifier optionalTypeNode(SharedIdentifier elem); // synth an `Optional<elem>` node (the `.as<T>()` result)
     SharedIdentifier ownedErrorTypeNode();                    // synth `Owned<Error>` (the boxed-error payload)
     SharedIdentifier resultOwnedErrorTypeNode(SharedIdentifier inner); // synth `Result<inner, Owned<Error>>` (the fallible-deserialize return type)
-    std::string emitStickyErrBox(int depth);                  // box the reader's sticky DeError into an Owned<Error> (raw C); returns the temp
+    SharedIdentifier resultUnitOwnedErrorTypeNode();          // synth `Result<Unit, Owned<Error>>` (the fallible-serialize return type)
+    // box a sticky enum error (`DeError`/`SerError`) drawn from `errExpr` into an Owned<Error> (raw C); returns the temp.
+    std::string emitStickyErrBox(int depth, const std::string& enumType = "DeError",
+                                 const std::string& errExpr = "r.vtbl->errorCode(r.obj)");
     std::string emitAsDowncast(AsDowncastNode* ad);           // Model C `expr.as<T>()` -> Optional<T> (vtbl compare)
     std::vector<std::string> _graphNodeOrder;       // graphNodeTypes in a stable order (for driver dispatch chains)
     // Contracts used as a graph edge element (`Shared<Shape>`): each gets a runtime-dispatch resolver pair.

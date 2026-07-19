@@ -186,8 +186,25 @@ type contract Serializer for resource {
     fn void writeRef(uint64 id);
     fn void beginGraph(uint64 rootId); fn void beginTableEntry(uint64 id, string ty);
     fn void endTableEntry(); fn void endGraph();
+    // STICKY error model (mirror of Deserializer): a write that can't proceed — an I/O sink error, or a
+    // value the format can't represent (`NaN`/`Inf` in JSON) — sets `failed()` and records a `SerError`.
+    // A fallible `serialize` writes bare (no per-write branching) and checks `failed()` once at the end.
+    fn bool failed(); fn void fail(); fn void failWith(SerError e); fn SerError errorCode();
 }
-type contract Serialize for both { fn void serialize(ref Serializer w); }
+// SerError is the write-side twin of DeError: a first-class `Error` that BOXES into `Owned<Error>` at a
+// fallible-`serialize` boundary and is recovered with `err.as<SerError>()`.
+enum SerError { NotRepresentable, IoError }
+implements Error for SerError {
+    public fn string message() {
+        return match (this) {
+            case NotRepresentable:  "value not representable in this format";
+            case IoError:           "serialization i/o error";
+        };
+    }
+}
+// A fallible METHOD (not a ctor — write produces nothing, so `Result<Unit, …>`; read constructs a `T`, so
+// `Result<This, …>`). The ONE principled read/write asymmetry. Boxed `Owned<Error>` currency, same as read.
+type contract Serialize for both { fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w); }
 // Deserialization: `Deserializer` is the pluggable input source (a backend's reader implements it, using
 // a STICKY error flag — a read on malformed input sets `failed()` and returns a default, so the generated
 // `deserialize` needs no per-read branching; `tryParse` checks `failed()` once at the end). `Deserialize`
@@ -234,21 +251,23 @@ type contract Deserialize for both { }
 // (`this[i].serialize(w)`) / read (`T::deserialize(r)`) composes for a scalar element with no compiler
 // special-casing. `serialize` writes the width-appropriate scalar; the static `deserialize` factory reads
 // it back (the retro-impl static path — see the `_primConformances` branch in the `Type::method` resolver).
-implements Serialize for int8    { public fn void serialize(ref Serializer w) { w.writeI8(v: this); } }
-implements Serialize for int16   { public fn void serialize(ref Serializer w) { w.writeI16(v: this); } }
-implements Serialize for int32   { public fn void serialize(ref Serializer w) { w.writeI32(v: this); } }
-implements Serialize for int64   { public fn void serialize(ref Serializer w) { w.writeI64(v: this); } }
-implements Serialize for uint8   { public fn void serialize(ref Serializer w) { w.writeU8(v: this); } }
-implements Serialize for uint16  { public fn void serialize(ref Serializer w) { w.writeU16(v: this); } }
-implements Serialize for uint32  { public fn void serialize(ref Serializer w) { w.writeU32(v: this); } }
-implements Serialize for uint64  { public fn void serialize(ref Serializer w) { w.writeU64(v: this); } }
-implements Serialize for float32 { public fn void serialize(ref Serializer w) { w.writeF32(v: this); } }
-implements Serialize for float64 { public fn void serialize(ref Serializer w) { w.writeF64(v: this); } }
-implements Serialize for bool    { public fn void serialize(ref Serializer w) { w.writeBool(v: this); } }
+// Each primitive `serialize` is fallible: write (sticky), then wrap — a sink/format failure surfaces as
+// `Err(SerError)` boxed into `Owned<Error>` (via `errorCode()`). Composition propagates the box.
+implements Serialize for int8    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for int16   { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for int32   { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for int64   { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for uint8   { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for uint16  { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for uint32  { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for uint64  { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for float32 { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for float64 { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+implements Serialize for bool    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeBool(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 // NOTE: no `char` conformance — `char` and `uint32` share the C type `uint32_t`, so the cType-keyed
 // primitive-conformance registry can't hold both. A `char` FIELD still serializes via the compiler's
 // `writeChar`/`readChar` fast path; a `char` in a collection rides `uint32`'s numeric conformance.
-implements Serialize for string  { public fn void serialize(ref Serializer w) { w.writeString(v: this); } }
+implements Serialize for string  { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeString(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 // Each primitive `deserialize` is fallible: read (sticky), then wrap — a bad read surfaces as
 // `Err(DeError)` boxed into `Owned<Error>` (via `errorCode()`). Composition propagates the box.
 implements Deserialize for int8    { public static fn Result<int8, std::memory::Owned<Error>>    deserialize(Deserializer r) { int8    v = r.readI8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }

@@ -10,7 +10,8 @@ type value Vec {
 }
 fn int main() {
     Vec v = Vec(x: 10, y: 20, z: 12);
-    string j = encode(v: v);
+    Result<string, Owned<Error>> j_r = encode(v: v);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<Vec, Owned<Error>> res = decode::<Vec>(src: give j);
     return match (res) { case Ok(q): q.dot(); case Err(e): 0 - 1; };   // 42
 }

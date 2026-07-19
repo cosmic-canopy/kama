@@ -3,8 +3,12 @@ import std::serialization::json::{encode, decode};
 import std::collections::{DynamicArray};
 fn int main() {
     DynamicArray<bool> bs = DynamicArray(); bs.add(item: true); bs.add(item: false); bs.add(item: true);
-    if (!encode(v: bs).equals(other: "[true,false,true]")) { return 1; }
+    Result<string, Owned<Error>> __encB = encode(v: bs);
+    string __bsj = match (give __encB) { case Ok(__ok): give __ok; case Err(__e): { return 1; } };
+    if (!__bsj.equals(other: "[true,false,true]")) { return 1; }
     DynamicArray<float64> fs = DynamicArray(); fs.add(item: 1.5); fs.add(item: 2.5);
-    Result<DynamicArray<float64>, Owned<Error>> res = decode::<DynamicArray<float64>>(src: give encode(v: fs));
+    Result<string, Owned<Error>> __encF = encode(v: fs);
+    string __fsStr = match (give __encF) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
+    Result<DynamicArray<float64>, Owned<Error>> res = decode::<DynamicArray<float64>>(src: give __fsStr);
     return match (res) { case Ok(b): cast<int32>(b[0] + b[1]); case Err(e): 0 - 1; };  // 4
 }

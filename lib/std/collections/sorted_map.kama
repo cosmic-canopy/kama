@@ -430,19 +430,30 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
 
     // In-order emit of each entry as a `{"key":k,"value":v}` object (key/value through a `ref` helper so a
     // primitive element's retro-impl `serialize` resolves) — the map serializes to a SORTED pair array.
-    fn void serKey(ref K k, ref Serializer w) when [K: Serialize] { k.serialize(w: w); }
-    fn void serVal(ref V v, ref Serializer w) when [V: Serialize] { v.serialize(w: w); }
-    public fn void serializeInto(ref Serializer w) when [K: Serialize, V: Serialize] {
+    fn Result<Unit, Owned<Error>> serKey(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
+    fn Result<Unit, Owned<Error>> serVal(ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
+    public fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serialize, V: Serialize] {
         int32 i = 0; int32 n = this.keys.length();
         while (i < n) {
-            if (!this.leaf) { this.kids[i].serializeInto(w: w); }
+            if (!this.leaf) {
+                Result<Unit, Owned<Error>> __sc = this.kids[i].serializeInto(w: w);
+                match (give __sc) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            }
             w.beginObject();
-            w.fieldName(name: "key");   this.serKey(k: this.keys[i], w: w);
-            w.fieldName(name: "value"); this.serVal(v: this.vals[i], w: w);
+            w.fieldName(name: "key");
+            Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
+            match (give __sk) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            w.fieldName(name: "value");
+            Result<Unit, Owned<Error>> __sv = this.serVal(v: this.vals[i], w: w);
+            match (give __sv) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
             w.endObject();
             i = i + 1;
         }
-        if (!this.leaf) { this.kids[n].serializeInto(w: w); }
+        if (!this.leaf) {
+            Result<Unit, Owned<Error>> __sl = this.kids[n].serializeInto(w: w);
+            match (give __sl) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+        }
+        return Result::Ok(value: Unit::Unit);
     }
 }
 
@@ -547,10 +558,12 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
 
     // Serialize as a JSON array of `{"key":k,"value":v}` objects in ASCENDING key order (unlike `Map`, whose
     // order is hash-arbitrary). Deserialize `put`s each pair back (the tree re-sorts).
-    public fn void serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
+    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
-        this.root.serializeInto(w: w);
+        Result<Unit, Owned<Error>> __sr = this.root.serializeInto(w: w);
+        match (give __sr) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
         w.endArray();
+        return Result::Ok(value: Unit::Unit);
     }
     // Deserialize is GlobalAllocator-only: the wire format carries no allocator handle, so it builds a
     // default `SortedMap<K,V>` (a stateful-A instance would bare-ctor a zero-init handle and crash on the

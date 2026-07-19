@@ -39,7 +39,8 @@ fn int main() {
     Shared<Circle> ci = new Circle(r: 2);
     Shared<Shape> sb = ci;
     Scene sc = Scene(a: give sa, b: give sb);
-    string j = encode(v: sc);
+    Result<string, Owned<Error>> j_r = encode(v: sc);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     // root Scene=1; a -> Sq=2, b -> Circle=3; each concrete carries its own `__type`.
     if (j != "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Scene\",\"a\":2,\"b\":3},\"2\":{\"__type\":\"Sq\",\"side\":4},\"3\":{\"__type\":\"Circle\",\"r\":2}}}") {
         return cast<int32>(j.length());
@@ -47,7 +48,8 @@ fn int main() {
     Result<Shared<Scene>, Owned<Error>> res = decode::<Shared<Scene>>(src: copy j);
     match (res) {
         case Ok(sh): {
-            string j2 = encode(v: sh);
+            Result<string, Owned<Error>> j2_r = encode(v: sh);
+            string j2 = match (give j2_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
             if (j2 != j) { return 1; }
             if (sh.areaA() != 16) { return 2; }   // Sq: 4*4
             if (sh.areaB() != 12) { return 3; }   // Circle: 3*2*2

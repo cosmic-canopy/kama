@@ -3,7 +3,8 @@ import std::serialization::json::{encode, decode};
 import std::collections::{Set};
 fn int main() {
     Set<int32> s = Set(); s.add(key: 10); s.add(key: 20);
-    string j = encode(v: s);
+    Result<string, Owned<Error>> j_r = encode(v: s);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<Set<int32>, Owned<Error>> res = decode::<Set<int32>>(src: give j);
     return match (res) { case Ok(b): (b.contains(key: 10) && b.contains(key: 20)) ? b.length() : 0; case Err(e): 0 - 1; };  // 2
 }

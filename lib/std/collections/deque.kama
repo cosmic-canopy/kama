@@ -170,12 +170,17 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
 
     // --- Serialization (present only when the element is Serialize/Deserialize) --- a JSON array in
     // front-to-back order. The `serElem` helper gives the element a nameable `ref T` receiver.
-    fn void serElem(ref T e, ref Serializer w) when [T: Serialize] { e.serialize(w: w); }
-    public fn void serialize(ref Serializer w) when [T: Serialize] {
+    fn Result<Unit, Owned<Error>> serElem(ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
+    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
         int32 i = 0;
-        while (i < this.len) { this.serElem(e: this[i], w: w); i = i + 1; }
+        while (i < this.len) {
+            Result<Unit, Owned<Error>> __sr = this.serElem(e: this[i], w: w);
+            match (give __sr) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            i = i + 1;
+        }
         w.endArray();
+        return Result::Ok(value: Unit::Unit);
     }
     public static fn Result<Deque<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
         Deque<T> result = Deque();

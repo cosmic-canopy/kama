@@ -2650,7 +2650,8 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                     ci.genSerialize = true;
                     ci.interfaces.push_back("Serialize"); ci.retroInterfaces.push_back("Serialize");
                     MethodInfo mi; mi.cName = name + "__serialize"; mi.visibility = Visibility::Public;
-                    mi.isSynthSer = true; mi.returnType = primTypeNode(IDENTIFIER_VOID_VAL);
+                    mi.isSynthSer = true; mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
+                    scanTypeForCollections(mi.returnType);
                     ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
                     ci.methods["serialize"] = mi;
                 }
@@ -3131,9 +3132,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (!hasItf("Serialize")) ci.interfaces.push_back("Serialize");
                 if (!ci.methods.count("serialize")) {
                     MethodInfo mi; mi.cName = ci.name + "__serialize"; mi.visibility = Visibility::Public;
-                    mi.isSynthSer = true; mi.returnType = primTypeNode(IDENTIFIER_VOID_VAL);
+                    mi.isSynthSer = true; mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
+                    scanTypeForCollections(mi.returnType);   // monomorphize Result<Unit, Owned<Error>>
                     ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
-                    ci.methods["serialize"] = mi;   // `fn void serialize(ref Serializer w)`
+                    ci.methods["serialize"] = mi;   // `fn Result<Unit, Owned<Error>> serialize(ref Serializer w)`
                 }
             }
             if (ci.genDeserialize) {
@@ -8889,7 +8891,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         // body — by the dedicated retro passes (retroTargetInfo returns a variant enum), so skip it here.
         // Otherwise a prelude enum gets a non-static proto that clashes with the static-inline retro body.
         if (mi.isRetro && ci.isVariant) continue;
-        if (mi.isSynthSer) { *_out << stat << "void " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }
+        if (mi.isSynthSer) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }   // P4: Result<Unit, Owned<Error>>
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
@@ -9183,13 +9185,18 @@ static const char* serScalarSuffix(int builtInVal)
 }
 
 // Emit the write for one field value (`access`) into the Serializer `w` (a `Serializer*`).
-void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth)
+// Emit the write of one field to the Serializer `w`. `resultCType` is the enclosing serialize's
+// `Result<Unit, Owned<Error>>` C type; on a composite Err it returns the forwarded box (self is borrowed —
+// nothing partial to drop, unlike the read side). Empty `resultCType` = graph-node/void context: the sticky
+// flag carries the failure to the graph boundary, so just drop the redundant box (leak-clean).
+void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth,
+                                 const std::string& resultCType)
 {
     if (ty && ty->value && *ty->value == "Optional" && ty->genericArg) {   // Some -> inner value, None -> null
         std::string oc = cType(ty);
         indent(depth); *_out << "switch ((" << access << ").tag) {\n";
         indent(depth); *_out << "case " << oc << "_Some: {\n";
-        emitSerFieldWrite(ty->genericArg, "(" + access + ").u.Some.value", depth + 1);
+        emitSerFieldWrite(ty->genericArg, "(" + access + ").u.Some.value", depth + 1, resultCType);
         indent(depth + 1); *_out << "break;\n";
         indent(depth); *_out << "}\n";
         indent(depth); *_out << "case " << oc << "_None: { w->vtbl->writeNull(w->obj); break; }\n";
@@ -9206,22 +9213,42 @@ void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access,
         indent(depth); *_out << "w->vtbl->write" << suf << "(w->obj, " << access << ");\n";
         return;
     }
-    // enum / nested struct / collection -> its own serialize (self by pointer, Serializer* through).
-    indent(depth); *_out << cType(ty) << "__serialize(&(" << access << "), w);\n";
+    // enum / nested struct / collection -> its own FALLIBLE serialize (self by pointer, Serializer* through).
+    std::string innerRes = cType(resultUnitOwnedErrorTypeNode());
+    std::string t = "__sw" + std::to_string(_tempCounter++);
+    indent(depth); *_out << innerRes << " " << t << " = " << cType(ty) << "__serialize(&(" << access << "), w);\n";
+    if (resultCType.empty()) {
+        // graph-node/void context: sticky flag carries the failure to the boundary — drop the redundant box.
+        indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Err) { "
+                             << cType(ownedErrorTypeNode()) << "__dtor(&" << t << ".u.Err.error); }\n";
+        return;
+    }
+    // propagate the boxed Err (self is borrowed — no partial to clean up).
+    indent(depth); *_out << "if (" << t << ".tag == " << innerRes << "_Err) { return (" << resultCType
+                         << "){ .tag = " << resultCType << "_Err, .u.Err = { .error = " << t << ".u.Err.error } }; }\n";
 }
 
 void CEmitter::emitSerializeDefinition(ClassInfo& ci)
 {
-    *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name
+    // P4: fallible `Result<Unit, Owned<Error>> This__serialize(...)`. A composite field's Err propagates its
+    // box; a scalar failure (a value the format can't represent) surfaces via the final `failed()` check.
+    std::string resC = cType(ci.methods["serialize"].returnType);
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
     indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
     for (auto& f : ci.fields) {
         if (f.serSkip) continue;
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
         indent(1); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(wire) << ");\n";
-        emitSerFieldWrite(f.type, "self->" + f.name, 1);
+        emitSerFieldWrite(f.type, "self->" + f.name, 1, resC);
     }
     indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    // Boundary: a sticky failure (a scalar value the format can't represent) -> Err(boxed).
+    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
+    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
     *_out << "}\n\n";
 }
 
@@ -9338,7 +9365,8 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
 // Externally-tagged enum serialize: `{"tag":"V"}` (unit) / `{"tag":"V","value":{fields…}}` (payload).
 void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
 {
-    *_out << "void " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+    std::string resC = cType(ci.methods["serialize"].returnType);   // Result<Unit, Owned<Error>>
+    *_out << resC << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
     indent(1); *_out << "w->vtbl->beginObject(w->obj);\n";
     indent(1); *_out << "switch (self->tag) {\n";
     for (auto& v : ci.variants) {
@@ -9350,7 +9378,7 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
             indent(2); *_out << "w->vtbl->beginObject(w->obj);\n";
             for (auto& f : v.payload) {
                 indent(2); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(f.name) << ");\n";
-                emitSerFieldWrite(f.type, "self->u." + v.name + "." + f.name, 2);
+                emitSerFieldWrite(f.type, "self->u." + v.name + "." + f.name, 2, resC);
             }
             indent(2); *_out << "w->vtbl->endObject(w->obj);\n";
         }
@@ -9360,6 +9388,11 @@ void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
     indent(1); *_out << "default: break;\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "w->vtbl->endObject(w->obj);\n";
+    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
+    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
     *_out << "}\n\n";
 }
 
@@ -9515,14 +9548,25 @@ SharedIdentifier CEmitter::resultOwnedErrorTypeNode(SharedIdentifier inner)
     return res;
 }
 
-// Emit (raw C) the boxing of the reader's sticky `DeError` into an `Owned<Error>`; returns the temp holding
-// it. Reuses the P2 boxing (emitEnumBoxIntoContract) — flushes its one hoisted statement here since the
-// synth deserialize bodies are hand-emitted C, not the expression/hoist path.
-std::string CEmitter::emitStickyErrBox(int depth)
+// Synthesize a `Result<Unit, Owned<Error>>` type node — the uniform fallible-serialize return type (a write
+// produces nothing, so `Unit`; the read twin returns `Result<This, …>`). Mirrors resultOwnedErrorTypeNode.
+SharedIdentifier CEmitter::resultUnitOwnedErrorTypeNode()
+{
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto unit = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Unit"),
+                                                 std::make_shared<StringList>());
+    return resultOwnedErrorTypeNode(unit);
+}
+
+// Emit (raw C) the boxing of a sticky enum error (`DeError` for read, `SerError` for write) drawn from
+// `errExpr` into an `Owned<Error>`; returns the temp holding it. Reuses the P2 boxing
+// (emitEnumBoxIntoContract) — flushes its one hoisted statement here since the synth serde bodies are
+// hand-emitted C, not the expression/hoist path.
+std::string CEmitter::emitStickyErrBox(int depth, const std::string& enumType, const std::string& errExpr)
 {
     std::string ownedErr = cType(ownedErrorTypeNode());
     size_t base = _hoisted.size();
-    std::string t = emitEnumBoxIntoContract(ownedErr, "DeError", "r.vtbl->errorCode(r.obj)", 0);
+    std::string t = emitEnumBoxIntoContract(ownedErr, enumType, errExpr, 0);
     for (size_t i = base; i < _hoisted.size(); ++i) { indent(depth); *_out << _hoisted[i] << "\n"; }
     _hoisted.resize(base);
     return t;
@@ -9678,7 +9722,7 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
         GraphEdge e = graphEdgeOf(f.type);
         indent(1); *_out << "w->vtbl->fieldName(w->obj, " << kamaStrLit(wire) << ");\n";
-        if (e.kind.empty()) { emitSerFieldWrite(f.type, "self->" + f.name, 1); continue; }
+        if (e.kind.empty()) { emitSerFieldWrite(f.type, "self->" + f.name, 1, ""); continue; }   // void node context — sticky only
         std::string acc = "self->" + f.name;
         if (e.optional) {
             std::string oc = cType(f.type);
@@ -9846,8 +9890,11 @@ void CEmitter::emitGraphRefRead(SharedIdentifier ty, const GraphEdge& e, const s
 // by-value root or a `Shared<T>` auto-deref'd to the pointee).
 void CEmitter::emitGraphSerializeDefinition(ClassInfo& ci)
 {
+    // P4: fallible at the BOUNDARY only. The per-node writer fn-ptr loop stays `void` + internal (its writers
+    // set the sticky flag on a bad scalar write); a single `failed()` check after the drain wraps Ok/Err.
+    std::string resC = cType(ci.methods["serialize"].returnType);
     const char* stat = _emitStaticClass ? "static inline " : "";
-    *_out << stat << "void " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
+    *_out << stat << resC << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w)\n{\n";
     indent(1); *_out << "struct kama_ser_graph __g; kama_ser_graph_init(&__g);\n";
     indent(1); *_out << "uint64_t __root = kama_ser_graph_reserve(&__g, (uint64_t)(uintptr_t)self);\n";
     indent(1); *_out << "w->vtbl->beginGraph(w->obj, __root);\n";
@@ -9856,6 +9903,11 @@ void CEmitter::emitGraphSerializeDefinition(ClassInfo& ci)
     indent(2); *_out << "kama_ser_graph_writer(&__g, __i)(kama_ser_graph_node(&__g, __i), (void*)w, &__g, kama_ser_graph_node_id(&__g, __i));\n";
     indent(1); *_out << "w->vtbl->endGraph(w->obj);\n";
     indent(1); *_out << "kama_ser_graph_free(&__g);\n";
+    indent(1); *_out << "if (w->vtbl->failed(w->obj)) {\n";
+    std::string box = emitStickyErrBox(2, "SerError", "w->vtbl->errorCode(w->obj)");
+    indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
     *_out << "}\n\n";
 }
 

@@ -19,7 +19,8 @@ type resource Person {
 fn int main() {
     Address a = Address(city: "New \"York\"", zip: 10001);
     Person p = Person(name: "Sam", age: 30, addr: give a);
-    string j = encode(v: p);
+    Result<string, Owned<Error>> j_r = encode(v: p);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (j == "{\"name\":\"Sam\",\"age\":30,\"addr\":{\"city\":\"New \\\"York\\\"\",\"zip\":10001}}") { return 0; }
     int32 n = cast<int32>(j.length());
     if (n == 0) { return 255; }

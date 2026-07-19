@@ -12,7 +12,8 @@ type value Vitals {
 }
 fn int main() {
     Vitals v = Vitals(hp: 100, mp: 0i32 - 5i32, ratio: 0.5, alive: true);
-    string j = encode(v: v);
+    Result<string, Owned<Error>> j_r = encode(v: v);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (j == "{\"hp\":100,\"mp\":-5,\"ratio\":0.5,\"alive\":true}") { return 0; }
     int32 n = cast<int32>(j.length());
     if (n == 0) { return 255; }

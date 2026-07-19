@@ -40,7 +40,8 @@ fn int main() {
     Child mc = Child(v: 3, tag: "qq");                // weight 5
     Optional<Child> mb = Optional::Some(value: give mc);
     Parent p = Parent(id: 10, main: give mainC, maybe: give mb, kids: give ks);
-    string j = encode(v: p);
+    Result<string, Owned<Error>> j_r = encode(v: p);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<Parent, Owned<Error>> res = decode::<Parent>(src: give j);
     return match (res) { case Ok(q): q.total(); case Err(e): 0 - 1; };   // 10 + 8 + 5 + (2+4) = 29
 }

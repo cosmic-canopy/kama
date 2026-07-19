@@ -6,7 +6,9 @@ enum Tok { Word(string s), Num(int32 n), End }
 fn int main() {
     DynamicArray<Tok> ts = DynamicArray(); string w = "hi";
     ts.add(item: Tok::Word(s: give w)); ts.add(item: Tok::Num(n: 42)); ts.add(item: Tok::End);
-    Result<DynamicArray<Tok>, Owned<Error>> res = decode::<DynamicArray<Tok>>(src: give encode(v: ts));
+    Result<string, Owned<Error>> __enc = encode(v: ts);
+    string __encStr = match (give __enc) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
+    Result<DynamicArray<Tok>, Owned<Error>> res = decode::<DynamicArray<Tok>>(src: give __encStr);
     return match (res) { case Ok(b):
         (match (b[0]) { case Word(s): cast<int32>(s.length()); case Num(n): 0; case End: 0; })
         + (match (b[1]) { case Num(n): n; case Word(s): 0; case End: 0; })

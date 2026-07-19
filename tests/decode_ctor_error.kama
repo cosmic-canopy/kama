@@ -12,7 +12,8 @@ type value Point {
 fn int main() {
     // good input -> Ok
     Point p = Point(x: 30, y: 12);
-    string j = encode(v: p);
+    Result<string, Owned<Error>> j_r = encode(v: p);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<Point, Owned<Error>> good = decode::<Point>(src: give j);
     int32 okv = match (good) { case Ok(q): q.sum(); case Err(e): 0 - 1; };   // 42
 

@@ -24,7 +24,8 @@ fn int main() {
     Optional<int32> par = Optional::Some(value: 3);
     Optional<int32> nx = Optional::None;
     Rec r = Rec(id: 10, parent: par, next: nx, tags: give tg);
-    string j = encode(v: r);        // {"id":10,"parent":3,"next":null,"tags":[5,6]}
+    Result<string, Owned<Error>> j_r = encode(v: r);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };        // {"id":10,"parent":3,"next":null,"tags":[5,6]}
     Result<Rec, Owned<Error>> res = decode::<Rec>(src: give j);
     return match (res) { case Ok(q): q.score(); case Err(e): 0 - 1; };   // 10+3+7+5+6 = 31
 }

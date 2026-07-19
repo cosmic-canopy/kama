@@ -56,7 +56,9 @@ fn int32 main() {
     // Serialize round-trip through JSON (front-to-back array).
     Deque<int32> s = Deque();
     s.pushBack(item: 7); s.pushBack(item: 8); s.pushBack(item: 9);
-    Result<Deque<int32>, Owned<Error>> res = decode::<Deque<int32>>(src: give encode(v: s));
+    Result<string, Owned<Error>> __enc = encode(v: s);
+    string __encStr = match (give __enc) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
+    Result<Deque<int32>, Owned<Error>> res = decode::<Deque<int32>>(src: give __encStr);
     int32 okc = match (res) { case Ok(b): (b[0] + b[2] + b.length()); case Err(e): 0 - 1; };
     if (okc == 7 + 9 + 3) { r = r + 10; }   // 19
 

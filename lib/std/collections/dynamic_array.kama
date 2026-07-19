@@ -229,13 +229,18 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // The element method must be called through a NAMEABLE `ref T` (like `indexOf`'s `equals`), so a
     // primitive element's retro-impl `serialize`/`deserialize` resolves — a raw buffer element `this[i]`
     // isn't a nameable receiver. Hence the `serElem` helper.
-    fn void serElem(ref T e, ref Serializer w) when [T: Serialize] { e.serialize(w: w); }
-    // A JSON array: each element serialized in order.
-    public fn void serialize(ref Serializer w) when [T: Serialize] {
+    fn Result<Unit, Owned<Error>> serElem(ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
+    // A JSON array: each element serialized in order — a bad element write propagates its boxed error.
+    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
         int32 i = 0;
-        while (i < this.len) { this.serElem(e: this[i], w: w); i = i + 1; }
+        while (i < this.len) {
+            Result<Unit, Owned<Error>> __sr = this.serElem(e: this[i], w: w);
+            match (give __sr) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            i = i + 1;
+        }
         w.endArray();
+        return Result::Ok(value: Unit::Unit);
     }
     // Reconstruct from a JSON array — a fresh list, each element read fallibly and moved in. A bad element
     // read propagates its boxed error (dropping the partial list via RAII).

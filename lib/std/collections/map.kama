@@ -380,22 +380,31 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // A generic `Map<K,V>` can't emit a JSON object (`fieldName` needs a `string`, `K` is generic), so it
     // serializes as an ARRAY of `{"key":k,"value":v}` objects. Key/value go through a `ref K`/`ref V` helper
     // (like `cloneKey`/`cloneVal`) so a primitive element's retro-impl `serialize` resolves.
-    fn void serKey(ref K k, ref Serializer w) when [K: Serialize] { k.serialize(w: w); }
-    fn void serVal(ref V v, ref Serializer w) when [V: Serialize] { v.serialize(w: w); }
-    public fn void serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
+    fn Result<Unit, Owned<Error>> serKey(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
+    fn Result<Unit, Owned<Error>> serVal(ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
+    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
         int32 i = 0;
         while (i < this.cap) {
             uint8 s = 0ui8; unsafe { s = this.state[i]; }
             if (s == 1ui8) {
                 w.beginObject();
-                w.fieldName(name: "key");   unsafe { this.serKey(k: this.keys[i], w: w); }
-                w.fieldName(name: "value"); unsafe { this.serVal(v: this.vals[i], w: w); }
+                w.fieldName(name: "key");
+                unsafe {
+                    Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
+                    match (give __sk) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+                }
+                w.fieldName(name: "value");
+                unsafe {
+                    Result<Unit, Owned<Error>> __sv = this.serVal(v: this.vals[i], w: w);
+                    match (give __sv) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+                }
                 w.endObject();
             }
             i = i + 1;
         }
         w.endArray();
+        return Result::Ok(value: Unit::Unit);
     }
     // Reconstruct from the pair array: each entry is `{"key":k,"value":v}` (key before value on the wire),
     // read positionally — `moreFields()` consumes the object structure (commas + closing brace).

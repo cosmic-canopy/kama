@@ -46,11 +46,15 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // Serialize as a JSON array of the members. Serialize needs a `Copyable` key (the key iterator yields
     // copies); deserialize just `add`s each key (no copy). A yielded `k` is a nameable local, so `k.serialize`
     // resolves for a primitive key directly.
-    fn void serElem(ref K k, ref Serializer w) when [K: Serialize] { k.serialize(w: w); }
-    public fn void serialize(ref Serializer w) when [K: Serialize, K: Copyable] {
+    fn Result<Unit, Owned<Error>> serElem(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
+    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, K: Copyable] {
         w.beginArray(count: cast<usize>(this.m.length()));
-        foreach (K k in this.m) { this.serElem(k: k, w: w); }
+        foreach (K k in this.m) {
+            Result<Unit, Owned<Error>> __sr = this.serElem(k: k, w: w);
+            match (give __sr) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+        }
         w.endArray();
+        return Result::Ok(value: Unit::Unit);
     }
     public static fn Result<Set<K,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
         Set<K,H> result = Set();

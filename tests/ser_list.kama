@@ -4,7 +4,8 @@ import std::collections::{DynamicArray};
 fn int main() {
     DynamicArray<int32> xs = DynamicArray();
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 30);
-    string j = encode(v: xs);
+    Result<string, Owned<Error>> j_r = encode(v: xs);
+    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (!j.equals(other: "[10,20,30]")) { return 1; }
     Result<DynamicArray<int32>, Owned<Error>> res = decode::<DynamicArray<int32>>(src: give j);
     return match (res) { case Ok(b): b[0] + b[1] + b[2]; case Err(e): 0 - 1; };   // 60
