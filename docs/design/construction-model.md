@@ -125,12 +125,17 @@ removes today's vtable-only synthesized default ctor: a polymorphic type must de
   `withAllocator`/`withCapacityAndAllocator`. This re-earns the compile-time protection the old `static fn`
   `Map/Set::withCapacity` had, and — because a gated ctor is dropped from the monomorph — removes the
   force-emit false-positive that blocked the completeness gate.
-  **Remaining (→ M8d.1, the automatic seal):** the gate is currently *author-declared*. The completeness
-  guarantee is only truly automatic once `checkCtorNeverNull`/`checkNamedCtorComplete` are widened to reject
-  **any** ctor that leaves a non-default-fillable value field (e.g. `alloc: A`) unassigned — turning a
-  *forgotten* `when [A: default]` (or the coexistence nameless primary, which still zero-inits `alloc`) into
-  a hard compile error rather than a silent incomplete build. That is a pre-1.0 requirement (ROADMAP §2):
-  never-null must be **compiler-enforced on the null field**, not left to author discipline.
+  **The automatic seal (M8d.1, DONE):** `checkNamedCtorComplete` now FIRES for generic factories (it was inert
+  — a monomorph-name mismatch + a missing `give` unwrap), so a named ctor that returns a bare local leaving a
+  non-default-fillable field unassigned is a **hard compile error** — a forgotten `when [A: default]` is
+  compiler-caught, not silently shipped. `isDefaultFillable` scans the gate-pruned `ci.methods`, so a gated-away
+  `empty()` no longer counts. The smart-pointer `adopt` (same default-alloc pattern) is gated `when [A: default]`
+  too; because `HeapOwner` must stay conformed for a custom-`A` `Owned` (owning-field detection), a
+  contract-required **ctor** is a compile-time guarantee, not a vtbl slot. A non-zero `default` (a `SortedMap`
+  field) is filled by calling its ctor, not zero-inited. **Still open (→ M8d.2):** the coexistence nameless
+  primary (`DynamicArray()`) leaves `alloc` unassigned for a custom `A` without rejection (`checkCtorNeverNull`
+  guards only owning pointers) and the nameless `Type()` call form persists — both close when the primaries are
+  removed (unblocking the `checkCtorNeverNull` widen) + the ~160-site call sweep lands.
 - The **Equatable / Hashable / Copyable derive story** is designed alongside `of`/`zero` (one opt-in derive
   surface) but shipped separately (see §9 and ROADMAP §2). Kama today rejects auto structural `==`
   (`tests/xfail/operator_eq_missing.kama`), so a derive is a stance change designed with this family.

@@ -91,16 +91,19 @@ genuinely later-track or opt-in.
   a `default` bound in `whenConditionsHold` → `isDefaultFillable`, no nominal `Default` contract. This also
   kills the force-emit false-positive (a gated ctor is dropped from the monomorph, so it is neither emitted
   nor completeness-checked) and re-earns the protection `Map/Set::withCapacity` had as a `static fn`.
-  **STILL OPEN → M8d.1 (the automatic seal):** the annotation is currently *author-supplied* — a collection
-  author who forgets `when [A: default]` on a convenience that leaves `alloc: A` unassigned still ships a
-  silent zero-allocator build, and the coexistence-era nameless primary (`DynamicArray()`) leaves `alloc`
-  unassigned for a custom `A` without rejection (`checkCtorNeverNull` guards only owning pointers, not value
-  fields). **Requirement for M8d.1: the completeness gate must FORCE the declaration** — a named/instance
-  ctor that leaves a non-default-fillable field unassigned must be a *hard compile error* directing the
-  author to assign it or gate the ctor on `[A: default]`. That makes never-null **automatic** (compiler-
-  detected on the primary's null field, exactly as expected), not author-discipline. Delivered by widening
-  `checkCtorNeverNull`/`checkNamedCtorComplete` to value fields + removing the nameless primary (M8d.1) +
-  removing the nameless `Type()` call form (M8d.2). Must land before tag 1.0.
+  **✅ M8d.1 DONE (the automatic seal):** the completeness gate `checkNamedCtorComplete` was INERT for every
+  generic factory (a monomorph-name mismatch + a missing `give` unwrap); both fixed, so a generic ctor that
+  leaves a non-default-fillable field unassigned is now a **hard compile error** (author-discipline →
+  compiler-enforced). `isDefaultFillable` is now gate-accurate (scans the pruned `ci.methods`, not `ci.ctors`).
+  The now-firing gate surfaced that the smart-pointer `adopt` relies on the same default-alloc pattern → gated
+  `when [A: default]` (custom-`A` boxes use `adoptIn`); to keep `HeapOwner` conformance (heapOwnerTarget /
+  owning-field detection) working, a contract-required `ctor` is now a compile-time guarantee, **not** a runtime
+  vtbl slot. And the M8b-deferred **non-zero `default` fill** landed (a field whose `default` allocates is
+  filled by calling its ctor, not zero-inited). **STILL OPEN → M8d.2:** the coexistence-era nameless primary
+  (`DynamicArray()`) still leaves `alloc` unassigned for a custom `A` without rejection (`checkCtorNeverNull`
+  guards only owning pointers), and the nameless `Type()` call form persists — both closed by removing the
+  nameless primaries (unblocking a `checkCtorNeverNull` widen) + the ~160-site call sweep + the enforcement
+  flip. Must land before tag 1.0.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by
