@@ -11015,6 +11015,16 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
             // concrete instances live in `_classes` under mangled names). `Pair.make(...)` names the template,
             // so route it here — emitDotOnTypeCtorCall resolves the instance (turbofish or LHS inference). #M7-E2
             if (_classes.count(t) || _genericTypeParams.count(t)) { outType = t; return true; }
+            // A generic TYPE PARAMETER bound to a ctor-requiring contract (`fn T fresh<T: Something>() {
+            // return T.something(0); }`): during monomorphized emission `T` is substituted to a concrete
+            // type, so resolve it through _typeSubst and route the ctor call to the concrete instance. #M8a.2
+            if (!_typeSubst.empty()) {
+                auto s = _typeSubst.find(*id->value);
+                if (s != _typeSubst.end()) {
+                    std::string ct = cType(s->second);
+                    if (_classes.count(ct)) { outType = ct; return true; }
+                }
+            }
         }
     }
     return false;
