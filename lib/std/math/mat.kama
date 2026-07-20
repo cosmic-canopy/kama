@@ -8,15 +8,14 @@ export { Mat2, Mat3, Mat4 };
 @generate(of)
 type value Mat2 {
     public InlineArray<Vec2, 2> cols;
-    public Mat2(InlineArray<Vec2, 2> cols) { this.cols = cols; }
-    public ctor fromCols(Vec2 c0, Vec2 c1) { InlineArray<Vec2, 2> cs = [c0, c1]; return Mat2(cols: cs); }
+    public ctor fromCols(Vec2 c0, Vec2 c1) { InlineArray<Vec2, 2> cs = [c0, c1]; return Mat2.of(cols: cs); }
     public ctor identity() {
-        return Mat2::fromCols(c0: Vec2(x: 1.0f32, y: 0.0f32), c1: Vec2(x: 0.0f32, y: 1.0f32));
+        return Mat2::fromCols(c0: Vec2.of(x: 1.0f32, y: 0.0f32), c1: Vec2.of(x: 0.0f32, y: 1.0f32));
     }
     public fn float32 get(int32 c, int32 r) { Vec2 col = this.cols[c]; return r == 0 ? col.x : col.y; }
     public fn Vec2 transform(Vec2 v) {
         Vec2 c0 = this.cols[0]; Vec2 c1 = this.cols[1];
-        return Vec2(x: c0.x*v.x + c1.x*v.y, y: c0.y*v.x + c1.y*v.y);
+        return Vec2.of(x: c0.x*v.x + c1.x*v.y, y: c0.y*v.x + c1.y*v.y);
     }
     public Mat2 operator*(Mat2 r) {
         Vec2 r0 = this.transform(v: r.cols[0]); Vec2 r1 = this.transform(v: r.cols[1]);
@@ -24,31 +23,30 @@ type value Mat2 {
     }
     public fn Mat2 transpose() {
         Vec2 c0 = this.cols[0]; Vec2 c1 = this.cols[1];
-        return Mat2::fromCols(c0: Vec2(x: c0.x, y: c1.x), c1: Vec2(x: c0.y, y: c1.y));
+        return Mat2::fromCols(c0: Vec2.of(x: c0.x, y: c1.x), c1: Vec2.of(x: c0.y, y: c1.y));
     }
     public fn float32 determinant() { Vec2 c0 = this.cols[0]; Vec2 c1 = this.cols[1]; return c0.x*c1.y - c1.x*c0.y; }
     public fn Mat2 inverse() {
         Vec2 c0 = this.cols[0]; Vec2 c1 = this.cols[1];
         float32 k = 1.0f32 / (c0.x*c1.y - c1.x*c0.y);
-        return Mat2::fromCols(c0: Vec2(x: c1.y*k, y: 0.0f32 - c0.y*k),
-                              c1: Vec2(x: 0.0f32 - c1.x*k, y: c0.x*k));
+        return Mat2::fromCols(c0: Vec2.of(x: c1.y*k, y: 0.0f32 - c0.y*k),
+                              c1: Vec2.of(x: 0.0f32 - c1.x*k, y: c0.x*k));
     }
 }
 
 @generate(of)
 type value Mat3 {
     public InlineArray<Vec3, 3> cols;
-    public Mat3(InlineArray<Vec3, 3> cols) { this.cols = cols; }
-    public ctor fromCols(Vec3 c0, Vec3 c1, Vec3 c2) { InlineArray<Vec3, 3> cs = [c0, c1, c2]; return Mat3(cols: cs); }
+    public ctor fromCols(Vec3 c0, Vec3 c1, Vec3 c2) { InlineArray<Vec3, 3> cs = [c0, c1, c2]; return Mat3.of(cols: cs); }
     public ctor identity() {
-        return Mat3::fromCols(c0: Vec3(x: 1.0f32, y: 0.0f32, z: 0.0f32),
-                              c1: Vec3(x: 0.0f32, y: 1.0f32, z: 0.0f32),
-                              c2: Vec3(x: 0.0f32, y: 0.0f32, z: 1.0f32));
+        return Mat3::fromCols(c0: Vec3.of(x: 1.0f32, y: 0.0f32, z: 0.0f32),
+                              c1: Vec3.of(x: 0.0f32, y: 1.0f32, z: 0.0f32),
+                              c2: Vec3.of(x: 0.0f32, y: 0.0f32, z: 1.0f32));
     }
     public fn float32 get(int32 c, int32 r) { Vec3 col = this.cols[c]; return r == 0 ? col.x : (r == 1 ? col.y : col.z); }
     public fn Vec3 transform(Vec3 v) {
         Vec3 c0 = this.cols[0]; Vec3 c1 = this.cols[1]; Vec3 c2 = this.cols[2];
-        return Vec3(x: c0.x*v.x + c1.x*v.y + c2.x*v.z,
+        return Vec3.of(x: c0.x*v.x + c1.x*v.y + c2.x*v.z,
                     y: c0.y*v.x + c1.y*v.y + c2.y*v.z,
                     z: c0.z*v.x + c1.z*v.y + c2.z*v.z);
     }
@@ -58,9 +56,9 @@ type value Mat3 {
     }
     public fn Mat3 transpose() {
         Vec3 c0 = this.cols[0]; Vec3 c1 = this.cols[1]; Vec3 c2 = this.cols[2];
-        return Mat3::fromCols(c0: Vec3(x: c0.x, y: c1.x, z: c2.x),
-                              c1: Vec3(x: c0.y, y: c1.y, z: c2.y),
-                              c2: Vec3(x: c0.z, y: c1.z, z: c2.z));
+        return Mat3::fromCols(c0: Vec3.of(x: c0.x, y: c1.x, z: c2.x),
+                              c1: Vec3.of(x: c0.y, y: c1.y, z: c2.y),
+                              c2: Vec3.of(x: c0.z, y: c1.z, z: c2.z));
     }
     public fn float32 determinant() {
         Vec3 c0 = this.cols[0]; Vec3 c1 = this.cols[1]; Vec3 c2 = this.cols[2];
@@ -76,40 +74,39 @@ type value Mat3 {
         float32 A20 =  (m01*m12 - m02*m11); float32 A21 = 0.0f32-(m00*m12 - m02*m10); float32 A22 =  (m00*m11 - m01*m10);
         float32 k = 1.0f32 / (m00*A00 + m01*A01 + m02*A02);
         // inverse column c = (cofactor[c][0], [c][1], [c][2]) * k   (adjugate = cofactorᵀ)
-        return Mat3::fromCols(c0: Vec3(x: A00*k, y: A01*k, z: A02*k),
-                              c1: Vec3(x: A10*k, y: A11*k, z: A12*k),
-                              c2: Vec3(x: A20*k, y: A21*k, z: A22*k));
+        return Mat3::fromCols(c0: Vec3.of(x: A00*k, y: A01*k, z: A02*k),
+                              c1: Vec3.of(x: A10*k, y: A11*k, z: A12*k),
+                              c2: Vec3.of(x: A20*k, y: A21*k, z: A22*k));
     }
 }
 
 @generate(of)
 type value Mat4 {
     public InlineArray<Vec4, 4> cols;
-    public Mat4(InlineArray<Vec4, 4> cols) { this.cols = cols; }
 
     public ctor fromCols(Vec4 c0, Vec4 c1, Vec4 c2, Vec4 c3) {
         InlineArray<Vec4, 4> cs = [c0, c1, c2, c3];
-        return Mat4(cols: cs);
+        return Mat4.of(cols: cs);
     }
     public ctor identity() {
-        Vec4 c0 = Vec4(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
-        Vec4 c1 = Vec4(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
-        Vec4 c2 = Vec4(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 0.0f32);
-        Vec4 c3 = Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
+        Vec4 c0 = Vec4.of(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 0.0f32);
+        Vec4 c3 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
     public ctor scale(Vec3 s) {
-        Vec4 c0 = Vec4(x: s.x,    y: 0.0f32, z: 0.0f32, w: 0.0f32);
-        Vec4 c1 = Vec4(x: 0.0f32, y: s.y,    z: 0.0f32, w: 0.0f32);
-        Vec4 c2 = Vec4(x: 0.0f32, y: 0.0f32, z: s.z,    w: 0.0f32);
-        Vec4 c3 = Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
+        Vec4 c0 = Vec4.of(x: s.x,    y: 0.0f32, z: 0.0f32, w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: 0.0f32, y: s.y,    z: 0.0f32, w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: 0.0f32, y: 0.0f32, z: s.z,    w: 0.0f32);
+        Vec4 c3 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
     public ctor translation(Vec3 t) {
-        Vec4 c0 = Vec4(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
-        Vec4 c1 = Vec4(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
-        Vec4 c2 = Vec4(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 0.0f32);
-        Vec4 c3 = Vec4(x: t.x,    y: t.y,    z: t.z,    w: 1.0f32);
+        Vec4 c0 = Vec4.of(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 0.0f32);
+        Vec4 c3 = Vec4.of(x: t.x,    y: t.y,    z: t.z,    w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
 
@@ -125,21 +122,21 @@ type value Mat4 {
         Vec4 c1 = this.cols[1];
         Vec4 c2 = this.cols[2];
         Vec4 c3 = this.cols[3];
-        return Vec4(
+        return Vec4.of(
             x: c0.x*v.x + c1.x*v.y + c2.x*v.z + c3.x*v.w,
             y: c0.y*v.x + c1.y*v.y + c2.y*v.z + c3.y*v.w,
             z: c0.z*v.x + c1.z*v.y + c2.z*v.z + c3.z*v.w,
             w: c0.w*v.x + c1.w*v.y + c2.w*v.z + c3.w*v.w);
     }
     public fn Vec3 transformPoint(Vec3 p) {
-        Vec4 pv = Vec4(x: p.x, y: p.y, z: p.z, w: 1.0f32);
+        Vec4 pv = Vec4.of(x: p.x, y: p.y, z: p.z, w: 1.0f32);
         Vec4 r = this.transform(v: pv);
-        return Vec3(x: r.x / r.w, y: r.y / r.w, z: r.z / r.w);
+        return Vec3.of(x: r.x / r.w, y: r.y / r.w, z: r.z / r.w);
     }
     public fn Vec3 transformDir(Vec3 d) {
-        Vec4 dv = Vec4(x: d.x, y: d.y, z: d.z, w: 0.0f32);
+        Vec4 dv = Vec4.of(x: d.x, y: d.y, z: d.z, w: 0.0f32);
         Vec4 r = this.transform(v: dv);
-        return Vec3(x: r.x, y: r.y, z: r.z);
+        return Vec3.of(x: r.x, y: r.y, z: r.z);
     }
 
     // matrix compose: (A*B).col_j = A * B.col_j
@@ -155,36 +152,36 @@ type value Mat4 {
         Vec4 c1 = this.cols[1];
         Vec4 c2 = this.cols[2];
         Vec4 c3 = this.cols[3];
-        Vec4 t0 = Vec4(x: c0.x, y: c1.x, z: c2.x, w: c3.x);
-        Vec4 t1 = Vec4(x: c0.y, y: c1.y, z: c2.y, w: c3.y);
-        Vec4 t2 = Vec4(x: c0.z, y: c1.z, z: c2.z, w: c3.z);
-        Vec4 t3 = Vec4(x: c0.w, y: c1.w, z: c2.w, w: c3.w);
+        Vec4 t0 = Vec4.of(x: c0.x, y: c1.x, z: c2.x, w: c3.x);
+        Vec4 t1 = Vec4.of(x: c0.y, y: c1.y, z: c2.y, w: c3.y);
+        Vec4 t2 = Vec4.of(x: c0.z, y: c1.z, z: c2.z, w: c3.z);
+        Vec4 t3 = Vec4.of(x: c0.w, y: c1.w, z: c2.w, w: c3.w);
         return Mat4::fromCols(c0: t0, c1: t1, c2: t2, c3: t3);
     }
 
     // ---- rotations (right-handed, column-major) ----
     public ctor fromRotationX(float32 rad) {
         float32 c = cosf(x: rad); float32 s = sinf(x: rad);
-        Vec4 c0 = Vec4(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
-        Vec4 c1 = Vec4(x: 0.0f32, y: c,      z: s,      w: 0.0f32);
-        Vec4 c2 = Vec4(x: 0.0f32, y: -s,     z: c,      w: 0.0f32);
-        Vec4 c3 = Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
+        Vec4 c0 = Vec4.of(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: 0.0f32, y: c,      z: s,      w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: 0.0f32, y: -s,     z: c,      w: 0.0f32);
+        Vec4 c3 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
     public ctor fromRotationY(float32 rad) {
         float32 c = cosf(x: rad); float32 s = sinf(x: rad);
-        Vec4 c0 = Vec4(x: c,      y: 0.0f32, z: -s,     w: 0.0f32);
-        Vec4 c1 = Vec4(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
-        Vec4 c2 = Vec4(x: s,      y: 0.0f32, z: c,      w: 0.0f32);
-        Vec4 c3 = Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
+        Vec4 c0 = Vec4.of(x: c,      y: 0.0f32, z: -s,     w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: s,      y: 0.0f32, z: c,      w: 0.0f32);
+        Vec4 c3 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
     public ctor fromRotationZ(float32 rad) {
         float32 c = cosf(x: rad); float32 s = sinf(x: rad);
-        Vec4 c0 = Vec4(x: c,      y: s,      z: 0.0f32, w: 0.0f32);
-        Vec4 c1 = Vec4(x: -s,     y: c,      z: 0.0f32, w: 0.0f32);
-        Vec4 c2 = Vec4(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 0.0f32);
-        Vec4 c3 = Vec4(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
+        Vec4 c0 = Vec4.of(x: c,      y: s,      z: 0.0f32, w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: -s,     y: c,      z: 0.0f32, w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 0.0f32);
+        Vec4 c3 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
 
@@ -192,18 +189,18 @@ type value Mat4 {
     public ctor perspective(float32 fovyRad, float32 aspect, float32 near, float32 far) {
         float32 f = 1.0f32 / tanf(x: fovyRad * 0.5f32);
         float32 nf = 1.0f32 / (near - far);
-        Vec4 c0 = Vec4(x: f / aspect, y: 0.0f32, z: 0.0f32,          w: 0.0f32);
-        Vec4 c1 = Vec4(x: 0.0f32,     y: f,      z: 0.0f32,          w: 0.0f32);
-        Vec4 c2 = Vec4(x: 0.0f32,     y: 0.0f32, z: far * nf,        w: -1.0f32);
-        Vec4 c3 = Vec4(x: 0.0f32,     y: 0.0f32, z: far * near * nf, w: 0.0f32);
+        Vec4 c0 = Vec4.of(x: f / aspect, y: 0.0f32, z: 0.0f32,          w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: 0.0f32,     y: f,      z: 0.0f32,          w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: 0.0f32,     y: 0.0f32, z: far * nf,        w: -1.0f32);
+        Vec4 c3 = Vec4.of(x: 0.0f32,     y: 0.0f32, z: far * near * nf, w: 0.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
     public ctor orthographic(float32 l, float32 r, float32 b, float32 t, float32 near, float32 far) {
         float32 nf = 1.0f32 / (near - far);
-        Vec4 c0 = Vec4(x: 2.0f32/(r-l), y: 0.0f32,       z: 0.0f32,     w: 0.0f32);
-        Vec4 c1 = Vec4(x: 0.0f32,       y: 2.0f32/(t-b), z: 0.0f32,     w: 0.0f32);
-        Vec4 c2 = Vec4(x: 0.0f32,       y: 0.0f32,       z: nf,         w: 0.0f32);
-        Vec4 c3 = Vec4(x: -(r+l)/(r-l), y: -(t+b)/(t-b), z: near * nf,  w: 1.0f32);
+        Vec4 c0 = Vec4.of(x: 2.0f32/(r-l), y: 0.0f32,       z: 0.0f32,     w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: 0.0f32,       y: 2.0f32/(t-b), z: 0.0f32,     w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: 0.0f32,       y: 0.0f32,       z: nf,         w: 0.0f32);
+        Vec4 c3 = Vec4.of(x: -(r+l)/(r-l), y: -(t+b)/(t-b), z: near * nf,  w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
     public ctor lookAt(Vec3 eye, Vec3 center, Vec3 up) {
@@ -212,10 +209,10 @@ type value Mat4 {
         Vec3 sx = f.cross(r: up);
         Vec3 s = sx.normalized();
         Vec3 u = s.cross(r: f);
-        Vec4 c0 = Vec4(x: s.x, y: u.x, z: -f.x, w: 0.0f32);
-        Vec4 c1 = Vec4(x: s.y, y: u.y, z: -f.y, w: 0.0f32);
-        Vec4 c2 = Vec4(x: s.z, y: u.z, z: -f.z, w: 0.0f32);
-        Vec4 c3 = Vec4(x: -s.dot(r: eye), y: -u.dot(r: eye), z: f.dot(r: eye), w: 1.0f32);
+        Vec4 c0 = Vec4.of(x: s.x, y: u.x, z: -f.x, w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: s.y, y: u.y, z: -f.y, w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: s.z, y: u.z, z: -f.z, w: 0.0f32);
+        Vec4 c3 = Vec4.of(x: -s.dot(r: eye), y: -u.dot(r: eye), z: f.dot(r: eye), w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
 
@@ -258,10 +255,10 @@ type value Mat4 {
         float32 det = m0*i0 + m1*i4 + m2*i8 + m3*i12;
         float32 k = 1.0f32 / det;
         // inv element (row r, col c) = i[r*4+c]*k; store column-major: invCol_c = (row0,row1,row2,row3)
-        Vec4 ic0 = Vec4(x: i0*k,  y: i4*k,  z: i8*k,  w: i12*k);
-        Vec4 ic1 = Vec4(x: i1*k,  y: i5*k,  z: i9*k,  w: i13*k);
-        Vec4 ic2 = Vec4(x: i2*k,  y: i6*k,  z: i10*k, w: i14*k);
-        Vec4 ic3 = Vec4(x: i3*k,  y: i7*k,  z: i11*k, w: i15*k);
+        Vec4 ic0 = Vec4.of(x: i0*k,  y: i4*k,  z: i8*k,  w: i12*k);
+        Vec4 ic1 = Vec4.of(x: i1*k,  y: i5*k,  z: i9*k,  w: i13*k);
+        Vec4 ic2 = Vec4.of(x: i2*k,  y: i6*k,  z: i10*k, w: i14*k);
+        Vec4 ic3 = Vec4.of(x: i3*k,  y: i7*k,  z: i11*k, w: i15*k);
         return Mat4::fromCols(c0: ic0, c1: ic1, c2: ic2, c3: ic3);
     }
 }

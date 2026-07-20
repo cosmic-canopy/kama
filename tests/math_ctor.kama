@@ -1,6 +1,6 @@
 // Construction-model M7.1: the migrated stdlib math types offer named ctors — the dot-on-type spelling
 // (`Vec3.zero()`, `Mat4.identity()`, `Quat.identity()`) and the `@generate(of)` memberwise (`Vec3.of(...)`).
-// The `::` bridge and the nameless `Vec3(...)` primary still compile too (coexistence until M8).
+// The `::` bridge to named ctors still compiles (the nameless primary was removed at M8d.2).
 import std::math::{Vec2, Vec3, Vec4, Quat, Mat4};
 fn int32 main() {
     Vec3 a = Vec3.of(x: 3.0f32, y: 4.0f32, z: 0.0f32);   // @generate(of) memberwise

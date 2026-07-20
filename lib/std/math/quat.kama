@@ -10,34 +10,32 @@ type value Quat {
     public float32 y;
     public float32 z;
     public float32 w;
-    public Quat(float32 x, float32 y, float32 z, float32 w) { this.x = x; this.y = y; this.z = z; this.w = w; }
-
-    public ctor identity() { return Quat(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32); }
+    public ctor identity() { return Quat.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32); }
     // axis assumed normalized; angle in radians
     public ctor fromAxisAngle(Vec3 axis, float32 rad) {
         float32 h = rad * 0.5f32;
         float32 s = sinf(x: h);
-        return Quat(x: axis.x*s, y: axis.y*s, z: axis.z*s, w: cosf(x: h));
+        return Quat.of(x: axis.x*s, y: axis.y*s, z: axis.z*s, w: cosf(x: h));
     }
     // Euler compose (YXZ / yaw-pitch-roll), radians
     public ctor fromEuler(float32 pitch, float32 yaw, float32 roll) {
-        Quat qy = Quat::fromAxisAngle(axis: Vec3(x: 0.0f32, y: 1.0f32, z: 0.0f32), rad: yaw);
-        Quat qx = Quat::fromAxisAngle(axis: Vec3(x: 1.0f32, y: 0.0f32, z: 0.0f32), rad: pitch);
-        Quat qz = Quat::fromAxisAngle(axis: Vec3(x: 0.0f32, y: 0.0f32, z: 1.0f32), rad: roll);
+        Quat qy = Quat::fromAxisAngle(axis: Vec3.of(x: 0.0f32, y: 1.0f32, z: 0.0f32), rad: yaw);
+        Quat qx = Quat::fromAxisAngle(axis: Vec3.of(x: 1.0f32, y: 0.0f32, z: 0.0f32), rad: pitch);
+        Quat qz = Quat::fromAxisAngle(axis: Vec3.of(x: 0.0f32, y: 0.0f32, z: 1.0f32), rad: roll);
         return qy * qx * qz;
     }
 
     public Quat operator*(Quat r) {   // Hamilton product (this then r? — this * r composes rotations)
-        return Quat(
+        return Quat.of(
             x: this.w*r.x + this.x*r.w + this.y*r.z - this.z*r.y,
             y: this.w*r.y - this.x*r.z + this.y*r.w + this.z*r.x,
             z: this.w*r.z + this.x*r.y - this.y*r.x + this.z*r.w,
             w: this.w*r.w - this.x*r.x - this.y*r.y - this.z*r.z);
     }
-    public Quat operator+(Quat r) { return Quat(x: this.x+r.x, y: this.y+r.y, z: this.z+r.z, w: this.w+r.w); }
+    public Quat operator+(Quat r) { return Quat.of(x: this.x+r.x, y: this.y+r.y, z: this.z+r.z, w: this.w+r.w); }
 
-    public fn Quat scale(float32 s)  { return Quat(x: this.x*s, y: this.y*s, z: this.z*s, w: this.w*s); }
-    public fn Quat conjugate()       { return Quat(x: 0.0f32-this.x, y: 0.0f32-this.y, z: 0.0f32-this.z, w: this.w); }
+    public fn Quat scale(float32 s)  { return Quat.of(x: this.x*s, y: this.y*s, z: this.z*s, w: this.w*s); }
+    public fn Quat conjugate()       { return Quat.of(x: 0.0f32-this.x, y: 0.0f32-this.y, z: 0.0f32-this.z, w: this.w); }
     public fn float32 dot(Quat r)    { return this.x*r.x + this.y*r.y + this.z*r.z + this.w*r.w; }
     public fn float32 lengthSq()     { return this.dot(r: this); }
     public fn float32 length()       { return sqrt(x: this.lengthSq()); }
@@ -46,11 +44,11 @@ type value Quat {
 
     // rotate a vector: v + 2w(u×v) + 2(u×(u×v)), u = (x,y,z)
     public fn Vec3 rotate(Vec3 v) {
-        Vec3 u = Vec3(x: this.x, y: this.y, z: this.z);
+        Vec3 u = Vec3.of(x: this.x, y: this.y, z: this.z);
         Vec3 uv = u.cross(r: v);
         Vec3 uuv = u.cross(r: uv);
         float32 tw = 2.0f32 * this.w;
-        return Vec3(x: v.x + uv.x*tw + uuv.x*2.0f32,
+        return Vec3.of(x: v.x + uv.x*tw + uuv.x*2.0f32,
                     y: v.y + uv.y*tw + uuv.y*2.0f32,
                     z: v.z + uv.z*tw + uuv.z*2.0f32);
     }
@@ -74,19 +72,19 @@ type value Quat {
         float32 xx=this.x*this.x; float32 yy=this.y*this.y; float32 zz=this.z*this.z;
         float32 xy=this.x*this.y; float32 xz=this.x*this.z; float32 yz=this.y*this.z;
         float32 wx=this.w*this.x; float32 wy=this.w*this.y; float32 wz=this.w*this.z;
-        Vec3 c0 = Vec3(x: 1.0f32-2.0f32*(yy+zz), y: 2.0f32*(xy+wz),        z: 2.0f32*(xz-wy));
-        Vec3 c1 = Vec3(x: 2.0f32*(xy-wz),        y: 1.0f32-2.0f32*(xx+zz), z: 2.0f32*(yz+wx));
-        Vec3 c2 = Vec3(x: 2.0f32*(xz+wy),        y: 2.0f32*(yz-wx),        z: 1.0f32-2.0f32*(xx+yy));
+        Vec3 c0 = Vec3.of(x: 1.0f32-2.0f32*(yy+zz), y: 2.0f32*(xy+wz),        z: 2.0f32*(xz-wy));
+        Vec3 c1 = Vec3.of(x: 2.0f32*(xy-wz),        y: 1.0f32-2.0f32*(xx+zz), z: 2.0f32*(yz+wx));
+        Vec3 c2 = Vec3.of(x: 2.0f32*(xz+wy),        y: 2.0f32*(yz-wx),        z: 1.0f32-2.0f32*(xx+yy));
         return Mat3::fromCols(c0: c0, c1: c1, c2: c2);
     }
     public fn Mat4 toMat4() {
         float32 xx=this.x*this.x; float32 yy=this.y*this.y; float32 zz=this.z*this.z;
         float32 xy=this.x*this.y; float32 xz=this.x*this.z; float32 yz=this.y*this.z;
         float32 wx=this.w*this.x; float32 wy=this.w*this.y; float32 wz=this.w*this.z;
-        Vec4 c0 = Vec4(x: 1.0f32-2.0f32*(yy+zz), y: 2.0f32*(xy+wz),        z: 2.0f32*(xz-wy),        w: 0.0f32);
-        Vec4 c1 = Vec4(x: 2.0f32*(xy-wz),        y: 1.0f32-2.0f32*(xx+zz), z: 2.0f32*(yz+wx),        w: 0.0f32);
-        Vec4 c2 = Vec4(x: 2.0f32*(xz+wy),        y: 2.0f32*(yz-wx),        z: 1.0f32-2.0f32*(xx+yy), w: 0.0f32);
-        Vec4 c3 = Vec4(x: 0.0f32,                y: 0.0f32,                z: 0.0f32,                w: 1.0f32);
+        Vec4 c0 = Vec4.of(x: 1.0f32-2.0f32*(yy+zz), y: 2.0f32*(xy+wz),        z: 2.0f32*(xz-wy),        w: 0.0f32);
+        Vec4 c1 = Vec4.of(x: 2.0f32*(xy-wz),        y: 1.0f32-2.0f32*(xx+zz), z: 2.0f32*(yz+wx),        w: 0.0f32);
+        Vec4 c2 = Vec4.of(x: 2.0f32*(xz+wy),        y: 2.0f32*(yz-wx),        z: 1.0f32-2.0f32*(xx+yy), w: 0.0f32);
+        Vec4 c3 = Vec4.of(x: 0.0f32,                y: 0.0f32,                z: 0.0f32,                w: 1.0f32);
         return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
 }
