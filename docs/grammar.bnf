@@ -259,6 +259,7 @@ modifier
   | PUBLIC
   | FINAL
   | STATIC
+  | DEFAULT      /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL
   | VOLATILE
   ;

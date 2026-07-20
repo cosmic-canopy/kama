@@ -125,7 +125,7 @@ struct kamayystype {
 
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BREAK
-%token <string> CASE CAST CONST CONTINUE CTOR
+%token <string> CASE CAST CONST CONTINUE CTOR DEFAULT
 %token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH IF IN
@@ -517,6 +517,7 @@ modifier
   | PUBLIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | FINAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | STATIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | DEFAULT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | VOLATILE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   ;

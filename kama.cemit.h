@@ -83,6 +83,8 @@ struct MethodInfo {
     bool                         isStatic = false;    // `static fn` — no implicit `self`; called `Type::m(...)`
     bool                         isCtor = false;      // a named constructor (`ctor name(…)`) — a static factory
                                                       // returning the enclosing type (or `Result<This,E>`)
+    bool                         isDefaultCtor = false; // `default ctor …()` — the canonical zero-arg ctor (M8b);
+                                                        // the field-fill target for complete-init (Part 2). Explicit only.
     bool                         isRetro = false;     // injected by a retroactive `implements C for T` block —
                                                       // emitted static-inline in the header, skipped by the
                                                       // per-class proto/body loops (avoids a dup for a user target)
@@ -146,6 +148,7 @@ struct CtorInfo {
     Visibility                       visibility = Visibility::Private;
     bool                             isFallible = false;   // returns Result<T,E> (M2)
     SharedIdentifier                 returnType;           // explicit `-> …` (M2); null => infallible `T`
+    bool                             isDefaultCtor = false; // `default ctor …()` — the canonical zero-arg ctor (M8b)
 };
 
 struct ClassInfo {

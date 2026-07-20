@@ -1,0 +1,17 @@
+// Construction-model M8b Part 1: the `default` modifier designates the ONE canonical zero-arg ctor
+// (Kama allows N zero-arg ctors — `empty`/`zero`/… — so "the default" needs an explicit marker).
+// Part 1 lands only the keyword + registration + validation; there is no consumer yet (Part 2, the
+// completeness generalization, is the field-fill consumer). So this fixture just proves a `default ctor`
+// parses, registers, and dispatches exactly like any ordinary zero-arg ctor — plus a non-default named
+// ctor coexists on the same type.
+type value Counter {
+    public int32 n;
+    public default ctor empty() { Counter c; c.n = 0; return c; }   // the canonical zero-arg ctor
+    public ctor of(int32 n) { Counter c; c.n = n; return c; }        // a non-default named ctor
+}
+
+fn int32 main() {
+    Counter a = Counter.empty();
+    Counter b = Counter.of(n: 42);
+    return a.n + b.n;   // 0 + 42 = 42
+}

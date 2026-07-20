@@ -2987,8 +2987,24 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             } else {
                                 mi.returnType = cd->name;          // infallible => the enclosing type
                             }
-                            ci.ctors[*md->name->value] = CtorInfo{ nullptr, mi.params, mi.visibility, fallible, mi.returnType };
+                            // `default ctor …()` (M8b): explicitly designate the ONE canonical zero-arg ctor
+                            // (Kama allows N zero-arg ctors — `empty`/`zero`/… — so "the default" needs a marker).
+                            // Never inferred: `@generate(zero)` yields a callable `zero()` but does NOT elect it.
+                            bool isDefaultCtor = modHas(md->modifiers, "default");
+                            if (isDefaultCtor) {
+                                if (!mi.params.empty())
+                                    unsupported("`default` marks a zero-arg ctor — remove its parameters", md->line);
+                                for (auto& kv : ci.ctors)
+                                    if (kv.second.isDefaultCtor)
+                                        unsupported(("a type may mark at most one `default` ctor — `"
+                                                     + kv.first + "` is already the default").c_str(), md->line);
+                            }
+                            mi.isDefaultCtor = isDefaultCtor;
+                            ci.ctors[*md->name->value] = CtorInfo{ nullptr, mi.params, mi.visibility, fallible, mi.returnType, isDefaultCtor };
                         }
+                        // `default` is a ctor-only modifier — reject it silently no-op'ing on a plain method.
+                        if (!md->isCtor && modHas(md->modifiers, "default"))
+                            unsupported("`default` applies only to a zero-arg `ctor`", md->line);
                         // a `static` method has no `this`: no vtable slot, must have a body.
                         if (mi.isStatic) {
                             if (mi.isVirtual)

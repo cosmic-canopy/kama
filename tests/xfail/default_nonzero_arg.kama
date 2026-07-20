@@ -1,0 +1,7 @@
+// `default` marks a ZERO-arg ctor — it designates the canonical zero-argument construction, so a
+// parameterized ctor cannot be the default.
+type value T {
+    public int32 n;
+    public default ctor of(int32 n) { T t; t.n = n; return t; }
+}
+fn int32 main() { return 0; }
