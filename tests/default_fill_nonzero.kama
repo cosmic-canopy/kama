@@ -1,0 +1,20 @@
+// M8d.1 — non-zero `default` FILL. `Counter` has a NON-ZERO `default` ctor (`start()` sets n=7). `Holder`
+// leaves its `Counter` field unassigned; the completeness gate accepts it (Counter is default-fillable) and
+// the compiler FILLS the field by CALLING `Counter.start()` — not a plain `= {0}` zero-init (which would read
+// 0). Proves "default-fillable" actually fills correctly for a non-zero default (the M8b-deferred codegen).
+type value Counter {
+    int32 n;
+    public default ctor start() { Counter c; c.n = 7; return give c; }
+    public fn int32 value() { return this.n; }
+}
+
+type resource Holder {
+    Counter c;
+    public ctor make() { Holder h; return give h; }   // leaves `c` — filled via Counter.start()
+    public fn int32 read() { return this.c.value(); }
+}
+
+fn int32 main() {
+    Holder h = Holder.make();
+    return h.read();   // 7 (filled), NOT 0 (zero-init)
+}

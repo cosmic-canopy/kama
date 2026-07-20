@@ -1272,6 +1272,24 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (!zeroInit && hasDefaultCtor) {
                         line(n->line); indent(depth);
                         *_out << emitCtorCall(nm, _classes[ty], nullptr, n->line) << ";\n";
+                    } else if (zeroInit && !_classes[ty].isIntrinsicColl && !_classes[ty].isExternStruct) {
+                        // Construction-model M8d.1: a zero-inited bare aggregate FILLS each field whose type has
+                        // an explicit `default` ctor by CALLING it — `= {0}` is valid only for a PROVABLY-ZERO
+                        // default (a primitive, raw `Ptr`, or intrinsic collection). A field whose `default`
+                        // ALLOCATES (e.g. a `SortedMap` building a B-tree root) would otherwise zero-init to a
+                        // broken (null-root) value; this makes `isDefaultFillable` actually FILL correctly. A
+                        // gated-away default (a custom-`A` collection) has no `isDefaultCtor` method → not filled
+                        // (it is `mustAssign`, so the completeness gate already forces an explicit assignment).
+                        for (auto& f : _classes[ty].fields) {
+                            auto cit = _classes.find(cTypeInInstance(ty, f.type));
+                            if (cit == _classes.end()) continue;
+                            for (auto& kv : cit->second.methods)
+                                if (kv.second.isDefaultCtor) {
+                                    line(n->line); indent(depth);
+                                    *_out << nm << "." << f.name << " = " << kv.second.cName << "();\n";
+                                    break;
+                                }
+                        }
                     }
                     return;   // otherwise declared-only (zero-inited empty, or a non-destructible value)
                 }
