@@ -9,13 +9,13 @@ type contract Shape for both { fn int64 area(); }
 type resource Circle implements Shape
 {
     int64 r;
-    public Circle(int64 r) { this.r = r; }
+    public ctor make(int64 r) { Circle self; self.r = r; return give self; }
     public fn int64 area() { return this.r * this.r; }
 }
 type resource Square implements Shape
 {
     int64 s;
-    public Square(int64 s) { this.s = s; }
+    public ctor make(int64 s) { Square self; self.s = s; return give self; }
     public fn int64 area() { return this.s * this.s; }
 }
 fn int main()
@@ -23,8 +23,8 @@ fn int main()
     DynamicArray<Owned<Shape>> shapes = DynamicArray.empty();
     for (int32 j = 0; j < 512; j++)
     {
-        if ((j % 2) == 0) { Owned<Shape> sh = new Circle(r: 3); shapes.add(item: give sh); }
-        else              { Owned<Shape> sh = new Square(s: 4); shapes.add(item: give sh); }
+        if ((j % 2) == 0) { Owned<Shape> sh = new Circle.make(r: 3); shapes.add(item: give sh); }
+        else              { Owned<Shape> sh = new Square.make(s: 4); shapes.add(item: give sh); }
     }
     uint64 sum = 0;
     for (uint64 i = 0; i < 8000000; i++)
