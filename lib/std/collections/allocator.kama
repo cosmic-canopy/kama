@@ -19,10 +19,12 @@ extern fn void free(Ptr p);
 type resource Arena {
     Ptr<uint8> buffer; int32 capacity; int32 offset;
 
-    public Arena(int32 capacity) {
-        unsafe { this.buffer = cast<Ptr<uint8>>(malloc(n: cast<usize>(capacity))); }
-        if (cast<usize>(this.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
-        this.capacity = capacity; this.offset = 0;
+    public ctor make(int32 capacity) {
+        Arena r;
+        unsafe { r.buffer = cast<Ptr<uint8>>(malloc(n: cast<usize>(capacity))); }
+        if (cast<usize>(r.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
+        r.capacity = capacity; r.offset = 0;
+        return give r;
     }
 
     // Hand out a copyable allocator handle that bumps THIS arena. It captures the buffer base (stable
@@ -30,7 +32,7 @@ type resource Arena {
     // same field-address idiom the iterators use for `mods`), so every by-value copy of the handle
     // mutates the same bump pointer.
     public fn BumpAllocator handle() {
-        return BumpAllocator(buffer: this.buffer, offset: addr(of: this.offset), capacity: this.capacity);
+        return BumpAllocator.make(buffer: this.buffer, offset: addr(of: this.offset), capacity: this.capacity);
     }
 
     // Bulk-free: rewind the bump pointer so the whole region is reusable (O(1)). Does NOT drop the
@@ -47,8 +49,8 @@ type resource Arena {
 type value BumpAllocator implements Allocator {
     Ptr<uint8> buffer; Ptr<int32> offset; int32 capacity;
 
-    public BumpAllocator(Ptr<uint8> buffer, Ptr<int32> offset, int32 capacity) {
-        this.buffer = buffer; this.offset = offset; this.capacity = capacity;
+    public ctor make(Ptr<uint8> buffer, Ptr<int32> offset, int32 capacity) {
+        BumpAllocator r; r.buffer = buffer; r.offset = offset; r.capacity = capacity; return give r;
     }
 
     public fn Ptr allocate(usize bytes) {

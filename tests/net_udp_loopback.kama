@@ -44,7 +44,7 @@ fn int32 exchange(ref UdpSocket a, ref UdpSocket b, int32 n) {
     int32 sent = match (a.sendTo(bytes: msg, to: bAddr)) { case Ok(w): cast<int32>(w); case Err(e): -1; };
     if (sent != n) { return 83; }
 
-    FixedArray<uint8> buf = FixedArray(size: 2048);
+    FixedArray<uint8> buf = FixedArray.make(size: 2048);
     int32 got = -1;
     int32 fromPort = -1;
     Result<RecvFrom, IoError> rr = b.recvFrom(into: buf);

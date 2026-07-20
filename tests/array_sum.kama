@@ -2,7 +2,7 @@
 import std::collections::{FixedArray};
 fn int main()
 {
-    FixedArray<int32> a = FixedArray(size: 5);
+    FixedArray<int32> a = FixedArray.make(size: 5);
     a[0] = 10;
     a[1] = 8;
     a[2] = 7;

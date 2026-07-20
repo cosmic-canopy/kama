@@ -58,7 +58,7 @@ type resource File {
     // Read the whole file to EOF into an owning byte buffer.
     public fn Result<DynamicArray<uint8>, IoError> readAll() {
         DynamicArray<uint8> buf = DynamicArray.empty();
-        FixedArray<uint8> scratch = FixedArray(size: 65536);
+        FixedArray<uint8> scratch = FixedArray.make(size: 65536);
         bool eof = false;
         while (!eof) {
             isize n = kama_read(fd: this.fd, buf: addr(of: scratch[0]), n: cast<usize>(scratch.length()));

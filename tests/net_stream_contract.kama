@@ -29,7 +29,7 @@ fn int32 clientSend(uint16 port) {
 }
 
 fn int32 serverRecv(ref TcpStream srv) {
-    FixedArray<uint8> buf = FixedArray(size: 256);
+    FixedArray<uint8> buf = FixedArray.make(size: 256);
     int32 total = 0;
     int32 sum = 0;
     bool done = false;

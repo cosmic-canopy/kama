@@ -14,7 +14,7 @@ type value Counter {
 }
 
 fn int main() {
-    Arena arena = Arena(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
+    Arena arena = Arena.make(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
 
     Shared<Counter, BumpAllocator> c = new(allocator: arena.handle()) Counter.make(start: 40);
     Shared<Counter, BumpAllocator> d = c;                // copy → strong=2, shares the arena-backed ctrl

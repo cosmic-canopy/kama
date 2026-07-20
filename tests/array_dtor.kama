@@ -14,7 +14,7 @@ type resource Probe
 
 fn int build()
 {
-    FixedArray<Probe> a = FixedArray(size: 3);
+    FixedArray<Probe> a = FixedArray.make(size: 3);
     return 0;   // `a` drops here -> Array_Probe__dtor -> 3x Probe__dtor
 }
 

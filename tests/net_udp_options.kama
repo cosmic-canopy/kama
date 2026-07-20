@@ -18,7 +18,7 @@ fn int32 check(ref UdpSocket s) {
     if (port <= 0) { return 74; }
 
     // Non-blocking recvFrom on an idle socket must not stall — it returns WouldBlock.
-    FixedArray<uint8> buf = FixedArray(size: 64);
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
     Result<RecvFrom, IoError> rr = s.recvFrom(into: buf);
     bool wb = match (rr) { case Ok(rf): false; case Err(e): isWouldBlock(e: e); };
     if (!wb) { return 75; }

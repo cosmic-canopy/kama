@@ -30,7 +30,7 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b) {
     int32 sent = sendVia(d: a, msg: msg, to: bAddr);   // dynamic dispatch through DatagramSocket
     if (sent != 2) { return 72; }
 
-    FixedArray<uint8> buf = FixedArray(size: 64);
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
     int32 got = recvVia(d: b, into: buf);              // dynamic dispatch through DatagramSocket
     if (got != 2) { return 73; }
     if (cast<int32>(buf[0]) != 42) { return 74; }

@@ -20,7 +20,7 @@ fn int32 main() {
     lb[0] = give b;                        // move a RESOURCE into the place (old Box freed)
     r = r + lb[0].val();                   // + 9 = 16
 
-    FixedArray<string> arr = FixedArray(size: 2); arr[0] = "z"; arr[1] = "zz";   // fresh literals into FixedArray places
+    FixedArray<string> arr = FixedArray.make(size: 2); arr[0] = "z"; arr[1] = "zz";   // fresh literals into FixedArray places
     r = r + cast<int32>(arr[1].length()); // + 2 = 18
 
     lb[0] = Box.make(x: 4);                     // inline resource CTOR into the place (materialized, old freed)

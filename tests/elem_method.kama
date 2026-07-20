@@ -25,7 +25,7 @@ fn int32 main()
     sum = sum + xs[1].get();                      // 30 + 25 = 55
 
     // same for a fixed FixedArray
-    FixedArray<Counter> ar = FixedArray(size: 2);
+    FixedArray<Counter> ar = FixedArray.make(size: 2);
     Counter z = Counter.make(start: 3);
     ar[0] = z;
     ar[0].bump(by: 4);                            // 3 -> 7

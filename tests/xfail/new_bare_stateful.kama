@@ -2,7 +2,7 @@ import std::memory::{Owned};
 import std::collections::{Arena, BumpAllocator};
 type value Node { int32 v; public Node(int32 v){ this.v=v; } public fn int32 get(){ return this.v; } }
 fn int32 main() {
-    Arena arena = Arena(capacity: 1 << 10);
+    Arena arena = Arena.make(capacity: 1 << 10);
     Owned<Node, BumpAllocator> x = new Node(v: 1);   // ERROR: stateful allocator needs new(allocator: …)
     return x.get();
 }

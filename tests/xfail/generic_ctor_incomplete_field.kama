@@ -13,7 +13,7 @@ type resource Widget<A: Allocator = GlobalAllocator> {
 }
 
 fn int32 main() {
-    Arena arena = Arena(capacity: 1 << 12);
+    Arena arena = Arena.make(capacity: 1 << 12);
     Widget<BumpAllocator> w = Widget.bad();   // custom `A` → `bad()` force-emitted → gate rejects it
     return w.get();
 }

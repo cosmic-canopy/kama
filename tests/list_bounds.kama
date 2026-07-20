@@ -24,7 +24,7 @@ fn int main() {
     xs.clear();
     if (xs.length() == 0)             { r = r + 2; }
 
-    FixedArray<int32> a = FixedArray(size: 3);                  // zero-initialized, all slots live
+    FixedArray<int32> a = FixedArray.make(size: 3);                  // zero-initialized, all slots live
     if (a[0] == 0 && a[2] == 0)       { r = r + 2; }   // zeroed
     a[0] = 5; a[2] = 9;
     if (a[0] == 5 && a[2] == 9)       { r = r + 2; }   // first/last write

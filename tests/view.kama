@@ -44,7 +44,7 @@ fn int32 main() {
     View<int32> sub = all.slice(from: 2, count: 2);                        // {60, 40} (aliases a's buffer)
     if (sub.length() == 2 && sub[0] == 60 && sub[1] == 40) { r = r + 1; }  // 7
 
-    FixedArray<int32> f = FixedArray(size: 3);
+    FixedArray<int32> f = FixedArray.make(size: 3);
     f[0] = 5; f[1] = 6; f[2] = 7;
     if (sumView(v: f.view()) == 18) { r = r + 1; }                         // 8
 

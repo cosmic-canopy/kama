@@ -14,7 +14,7 @@ type value Circle implements Shape {
 }
 
 fn int main() {
-    Arena arena = Arena(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
+    Arena arena = Arena.make(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
 
     Shared<Shape, BumpAllocator> c = new(allocator: arena.handle()) Circle.make(r: 6);   // area 36
     Shared<Shape, BumpAllocator> d = c;                  // retain → strong=2, shares the arena-backed ctrl

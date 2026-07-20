@@ -10,7 +10,7 @@ type value Tag implements Equatable {
 }
 
 fn int main() {
-    FixedArray<Tag> a = FixedArray(size: 3);
+    FixedArray<Tag> a = FixedArray.make(size: 3);
     Tag t0 = Tag.make(id: 10); Tag t1 = Tag.make(id: 20); Tag t2 = Tag.make(id: 30);
     a[0] = t0; a[1] = t1; a[2] = t2;
     int32 r = 0;

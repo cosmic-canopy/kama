@@ -14,7 +14,7 @@ type value Circle implements Shape {
 }
 
 fn int32 main() {
-    Arena arena = Arena(capacity: 1 << 12);
+    Arena arena = Arena.make(capacity: 1 << 12);
 
     Shared<Circle, BumpAllocator> a = new(allocator: arena.handle()) Circle.make(r: 5);   // concrete, area 25
     Shared<Shape, BumpAllocator> s = a;              // UPCAST: retain into the fat handle (strong=2)

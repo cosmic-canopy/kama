@@ -33,9 +33,9 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(
 
     // Allocation is EAGER (a FixedArray has all `size` elements live from construction), so unlike the
     // growable containers the allocator can't be post-assigned after a bare ctor. The ctor allocates through
-    // `this.alloc` — the default zero-size `GlobalAllocator` for the bare `FixedArray(size:)` path — and the
-    // arena path goes through `withAllocator`, which sets the handle FIRST via a no-op `FixedArray(size: 0)`.
-    public FixedArray(int32 size) { this.allocBuffer(size: size); }
+    // `this.alloc` — the default zero-size `GlobalAllocator` for the bare `FixedArray.make(size:)` path (gated
+    // `when [A: default]`) — and the arena path goes through `withAllocator`, which sets the handle FIRST.
+    public ctor make(int32 size) when [A: default] { FixedArray<T, A> r; r.allocBuffer(size: size); return give r; }
 
     // Zero-initialized buffer from `this.alloc` (`allocate` returns UNINITIALIZED bytes, so `memset` restores
     // the documented zero-init semantics — a bump allocator also hands back dirty reused memory). `size <= 0`
@@ -53,9 +53,10 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(
     }
 
     // Build an `size`-element array drawn from a caller-owned allocator (e.g. an `Arena`). Sets the handle
-    // before allocating, via a no-op bare `FixedArray(size: 0)` (null buffer, no heap op).
+    // on a bare (zero-init) local FIRST, then allocates through it — the eager-ctor analogue of
+    // DynamicArray.withCapacityAndAllocator (no nameless-primary detour).
     public ctor withAllocator(A allocator, int32 size) {
-        FixedArray<T, A> result = FixedArray(size: 0);
+        FixedArray<T, A> result;
         result.alloc = allocator;
         result.allocBuffer(size: size);
         return give result;

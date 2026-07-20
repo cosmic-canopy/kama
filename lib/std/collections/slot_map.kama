@@ -5,10 +5,10 @@ export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut };
 // occupancy stamp captured at insert time. A get/remove succeeds only if the slot STILL carries that same
 // generation — so a handle to a slot that was removed (and possibly reused for a different value) is rejected
 // rather than silently aliasing the new occupant. A plain Copyable value: keep it, copy it, pass it around.
+@generate(of)
 type value Handle {
     public int32 index;
     public uint32 generation;
-    public Handle(int32 index, uint32 generation) { this.index = index; this.generation = generation; }
 }
 
 // A by-value iterator over a slot map's live VALUES (`foreach (V v in sm.values())`), present only for a
@@ -116,7 +116,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
         unsafe { g = this.gens[idx] + 1ui32; this.gens[idx] = g; }   // even -> odd: occupy
         unsafe { this.values[idx] = give value; }                // raw store into the (empty/stale) slot
         this.len = this.len + 1; this.mods = this.mods + 1;
-        return Handle(index: idx, generation: g);
+        return Handle.of(index: idx, generation: g);
     }
 
     // True iff `h` still points at its original occupant — index in range AND the slot's generation unchanged.

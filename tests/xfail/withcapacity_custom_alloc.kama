@@ -4,7 +4,7 @@
 import std::collections::{Map, Arena, BumpAllocator};
 
 fn int32 main() {
-    Arena arena = Arena(capacity: 1 << 16);
+    Arena arena = Arena.make(capacity: 1 << 16);
     // Instantiate the custom-`A` Map (the correct, complete build).
     Map<int32, int32, A: BumpAllocator> ok = Map::withAllocator(allocator: arena.handle());
     ok.put(key: 1, value: 2);

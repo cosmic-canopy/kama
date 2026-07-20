@@ -61,7 +61,7 @@ fn void appendStr(ref DynamicArray<uint8> dst, string s) {
 // Append the decimal digits of `n` (>= 0) to `dst`.
 fn void appendDec(ref DynamicArray<uint8> dst, int32 n) {
     if (n == 0) { dst.add(item: cast<uint8>(48)); return; }
-    FixedArray<uint8> tmp = FixedArray(size: 20);
+    FixedArray<uint8> tmp = FixedArray.make(size: 20);
     int32 count = 0;
     int32 v = n;
     while (v > 0) {
@@ -147,7 +147,7 @@ fn int32 respondText(ref TcpStream client, string status, string text) {
 
 // Handle one connection: read the request, resolve a file under `root`, send it (or an error).
 fn int32 handle(ref TcpStream client, ref string root) {
-    FixedArray<uint8> buf = FixedArray(size: 8192);
+    FixedArray<uint8> buf = FixedArray.make(size: 8192);
     Result<usize, IoError> rr = client.read(into: buf);
     int32 got = match (rr) { case Ok(c): cast<int32>(c); case Err(e): 0 - 1; };
     if (got <= 0) { return 0; }                                   // empty / failed read: drop the connection

@@ -3,7 +3,7 @@
 import std::collections::{FixedArray};
 import std::num::{int32Max};
 fn int main() {
-    FixedArray<int32> a = FixedArray(size: 3);
+    FixedArray<int32> a = FixedArray.make(size: 3);
     int32 i = int32Max() - int32Max() + 9;   // 9, opaque; past size 3
     return a[i];                              // out-of-bounds -> bounds trap
 }

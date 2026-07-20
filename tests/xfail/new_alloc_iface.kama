@@ -3,7 +3,7 @@ import std::collections::{Arena, BumpAllocator};
 type contract Shape for resource { fn int32 area(); }
 type resource Circle implements Shape { int32 r; public Circle(int32 r){ this.r=r; } public fn int32 area(){ return this.r * this.r; } }
 fn int32 main() {
-    Arena arena = Arena(capacity: 1 << 10);
+    Arena arena = Arena.make(capacity: 1 << 10);
     // ERROR: the box is `Owned<Shape>` (default GlobalAllocator) but the handle is a BumpAllocator — no
     // inference axis, so the box's allocator must be spelled `Owned<Shape, BumpAllocator>`.
     Owned<Shape> s = new(allocator: arena.handle()) Circle(r: 3);

@@ -9,7 +9,7 @@ fn int32 main() {
     Deque<int32> d = Deque.empty(); d.pushBack(item: 7);
     if (d.length() == 1 && d[0] == 7) { r = r + 5; }
 
-    FixedArray<int32> fa = FixedArray(size: 4); fa[2] = 3;
+    FixedArray<int32> fa = FixedArray.make(size: 4); fa[2] = 3;
     if (fa[2] == 3 && fa[0] == 0) { r = r + 5; }
 
     BitSet bs = BitSet.empty(); bs.set(index: 5);

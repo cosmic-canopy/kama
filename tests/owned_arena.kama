@@ -14,7 +14,7 @@ type value Node {
 }
 
 fn int32 main() {
-    Arena arena = Arena(capacity: 1 << 12);         // declared FIRST → drops LAST (outlives the box)
+    Arena arena = Arena.make(capacity: 1 << 12);         // declared FIRST → drops LAST (outlives the box)
 
     Owned<Node, BumpAllocator> n = new(allocator: arena.handle()) Node.make(v: 40);
     n.bump();

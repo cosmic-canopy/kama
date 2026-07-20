@@ -5,7 +5,7 @@ import std::collections::{Deque, Arena, BumpAllocator};
 
 fn int32 main() {
     int32 r = 0;
-    Arena arena = Arena(capacity: 1 << 16);
+    Arena arena = Arena.make(capacity: 1 << 16);
 
     Deque<int32, BumpAllocator> d = Deque::withAllocator(allocator: arena.handle());
     int32 i = 0; while (i < 100) { d.pushBack(item: i); i = i + 1; }   // grows the ring several times

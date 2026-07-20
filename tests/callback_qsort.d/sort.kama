@@ -15,7 +15,7 @@ fn int32 cmp(Ptr<int32> a, Ptr<int32> b) { int32 r = 0; unsafe { r = a[0] - b[0]
 
 fn int main()
 {
-    FixedArray<int32> a = FixedArray(size: 4);
+    FixedArray<int32> a = FixedArray.make(size: 4);
     a[0] = 30; a[1] = 10; a[2] = 2; a[3] = 99;
     Comparator c = cmp;                                                    // bind, zero-cost
     qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));// hand the fn ptr to C

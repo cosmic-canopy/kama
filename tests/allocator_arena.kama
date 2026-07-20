@@ -7,7 +7,7 @@ import std::collections::{DynamicArray, Map, Arena, BumpAllocator};
 
 fn int32 main() {
     int32 r = 0;
-    Arena arena = Arena(capacity: 1 << 16);                              // 64 KiB caller-owned region
+    Arena arena = Arena.make(capacity: 1 << 16);                              // 64 KiB caller-owned region
 
     // A DynamicArray drawing from the arena — force several grows (all in-arena).
     DynamicArray<int32, BumpAllocator> xs = DynamicArray::withAllocator(allocator: arena.handle());

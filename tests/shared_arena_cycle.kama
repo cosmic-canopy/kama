@@ -18,7 +18,7 @@ type resource Node {
 }
 
 fn int main() {
-    Arena arena = Arena(capacity: 1 << 16);                        // outlives both nodes
+    Arena arena = Arena.make(capacity: 1 << 16);                        // outlives both nodes
     Shared<Node, BumpAllocator> a = new(allocator: arena.handle()) Node.make(v: 10);
     Shared<Node, BumpAllocator> b = new(allocator: arena.handle()) Node.make(v: 20);
     b.setBack(w: a.downgrade());                                   // b → a (weak back-edge)
