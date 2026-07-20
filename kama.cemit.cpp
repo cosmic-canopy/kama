@@ -4794,6 +4794,20 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                     }
                 }
             }
+            // Dot-on-type ctor RECEIVER turbofish `Type::<T>.ctor(...)` — the CANONICAL generic-constructor
+            // spelling: the enclosing type's args ride the RECEIVER type identifier (`ma->expression`), not
+            // the method. Register the concrete instance so its specialized struct + ctor body emit (mirrors
+            // the method-turbofish form above; the two are mutually exclusive — grammar puts genericArgs on
+            // exactly one). #M8-PhaseE
+            if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
+                if (rid->value && rid->genericArgs) {
+                    std::string tn = resolveUserName(*rid->value, rid->qualifier);
+                    if (_genericTypeParams.count(tn)) {
+                        for (auto& ta : *rid->genericArgs) scanTypeForCollections(ta);
+                        registerGenericTypeInst(tn, rid->genericArgs);
+                    }
+                }
+            }
         }
     } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
         scanExprForGenerics(ea->expression, localTys);
@@ -11309,7 +11323,10 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // (`Pair<int32> q = Pair.make(...)`, via `_variantTargetType` + `_genericTypeInstOf`). #M7-E2/E3
     std::string tn = typeName;
     if (!_classes.count(tn) && _genericTypeParams.count(tn)) {
-        if (recv->identifier && recv->identifier->genericArgs)
+        IdentifierNode* rid = dynamic_cast<IdentifierNode*>(recv->expression.get());
+        if (rid && rid->genericArgs)                              // receiver turbofish `Type::<T>.make` (canonical)
+            tn = genericTypeMangle(tn, rid->genericArgs);
+        else if (recv->identifier && recv->identifier->genericArgs)  // method turbofish `Type.make::<T>` (ctor-own generics)
             tn = genericTypeMangle(tn, recv->identifier->genericArgs);
         else if (!_variantTargetType.empty()) {
             auto of = _genericTypeInstOf.find(_variantTargetType);
@@ -11349,6 +11366,15 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; `" + method
                      + "` is a static function — call it with `" + disp + "::" + method + "(...)`").c_str(),
                     call->line);
+        return "0";
+    }
+    // One-way construction (M8 Phase E): the enclosing type's args ride the TYPE (`Type::<A>.make(...)`),
+    // NOT the ctor name. A turbofish on the ctor (`Type.make::<A>`) is reserved for a ctor's OWN generic
+    // params — none exist yet — so redirect to the canonical on-type spelling. (`mi` resolved above via the
+    // method-turbofish fallback so this can name the exact fix.)
+    if (recv->identifier && recv->identifier->genericArgs) {
+        unsupported(("type arguments belong on the type — write `" + disp + "::<...>." + method
+                     + "(...)`, not `" + disp + "." + method + "::<...>(...)`").c_str(), call->line);
         return "0";
     }
     canAccess(owner, mi->visibility, method, call->line);

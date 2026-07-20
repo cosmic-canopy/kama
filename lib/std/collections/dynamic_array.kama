@@ -109,13 +109,13 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // transfer. The view may be passed DOWN the call stack (a `const View<T>` param = read-only) but
     // never stored (the `view` kind's escape check enforces that). Valid only while the array isn't
     // resized. Mutating through the view writes back to this array's buffer.
-    public fn View<T> view() { return View.make::<T>(data: this.data, len: this.len); }
+    public fn View<T> view() { return View::<T>.make(data: this.data, len: this.len); }
 
     // Borrow the sub-range `[from, from+count)` as a `View<T>`, bounds-checked (panics on overrun).
     public fn View<T> slice(int32 from, int32 count) {
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "DynamicArray.slice out of bounds"); }
-        if (count == 0) { return View.make::<T>(data: this.data, len: 0); }
-        unsafe { return View.make::<T>(data: addr(of: this.data[from]), len: count); }
+        if (count == 0) { return View::<T>.make(data: this.data, len: 0); }
+        unsafe { return View::<T>.make(data: addr(of: this.data[from]), len: count); }
     }
 
     // Insert `item` at `index` (0..len), shifting the elements at `index..len` up one slot; `index == len`
@@ -146,10 +146,10 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // (Move-only elements — `DynamicArray<Owned>` — borrow instead: `foreach (ref T x in list)`.)
     // Each iterator gets a live pointer to `mods` (its own address) + the current value (a snapshot).
     public fn DynamicArrayIter<T> iterator() when [T: Copyable] {
-        return DynamicArrayIter.make::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
+        return DynamicArrayIter::<T>.make(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
     public fn DynamicArrayIterMut<T> iterMut() {
-        return DynamicArrayIterMut.make::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
+        return DynamicArrayIterMut::<T>.make(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied). The copy

@@ -1,0 +1,1 @@
+type arguments belong on the type

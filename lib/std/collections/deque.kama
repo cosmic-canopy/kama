@@ -141,11 +141,11 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
 
     // The by-value `foreach (T x in deque)` yields COPIES, so it exists only for a Copyable element.
     public fn DequeIter<T> iterator() when [T: Copyable] {
-        return DequeIter.make::<T>(data: this.data, head: this.head, cap: this.cap, len: this.len,
+        return DequeIter::<T>.make(data: this.data, head: this.head, cap: this.cap, len: this.len,
                                    modsp: addr(of: this.mods), modsAt: this.mods);
     }
     public fn DequeIterMut<T> iterMut() {
-        return DequeIterMut.make::<T>(data: this.data, head: this.head, cap: this.cap, len: this.len,
+        return DequeIterMut::<T>.make(data: this.data, head: this.head, cap: this.cap, len: this.len,
                                       modsp: addr(of: this.mods), modsAt: this.mods);
     }
 

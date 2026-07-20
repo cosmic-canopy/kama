@@ -171,7 +171,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // `foreach (K k in map)` — a by-value key iterator (present only for a `Copyable` key). It borrows the
     // key + state buffers and a live pointer to `mods` so a mid-iteration structural change is caught.
     public fn MapKeyIter<K> iterator() when [K: Copyable] {
-        return MapKeyIter.make::<K>(keys: this.keys, state: this.state, cap: this.cap,
+        return MapKeyIter::<K>.make(keys: this.keys, state: this.state, cap: this.cap,
                                modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
@@ -246,11 +246,11 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // `foreach (V v in map.values())` — a by-value value iterator (present only for a Copyable value), the
     // value analogue of `iterator()`. `valuesMut()` borrows instead, for any value type.
     public fn MapValueIter<V> values() when [V: Copyable] {
-        return MapValueIter.make::<V>(vals: this.vals, state: this.state, cap: this.cap,
+        return MapValueIter::<V>.make(vals: this.vals, state: this.state, cap: this.cap,
                                       modsp: addr(of: this.mods), modsAt: this.mods);
     }
     public fn MapValueIterMut<V> valuesMut() {
-        return MapValueIterMut.make::<V>(vals: this.vals, state: this.state, cap: this.cap,
+        return MapValueIterMut::<V>.make(vals: this.vals, state: this.state, cap: this.cap,
                                          modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
@@ -259,7 +259,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // (keys) and `values()`. Keys are never mutated in place, so there is no `entriesMut()`; mutate values via
     // `valuesMut()` / `getRef`.
     public fn MapEntryIter<K,V> entries() when [K: Copyable, V: Copyable] {
-        return MapEntryIter.make::<K,V>(keys: this.keys, vals: this.vals, state: this.state, cap: this.cap,
+        return MapEntryIter::<K,V>.make(keys: this.keys, vals: this.vals, state: this.state, cap: this.cap,
                                         modsp: addr(of: this.mods), modsAt: this.mods);
     }
 

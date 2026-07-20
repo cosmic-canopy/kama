@@ -171,11 +171,11 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     // `foreach (V v in sm.values())` — a by-value iterator over the live values (Copyable value). `valuesMut()`
     // borrows instead, for any value type. (Slot order, which is insertion order with reused gaps — not sorted.)
     public fn SlotMapValueIter<V> values() when [V: Copyable] {
-        return SlotMapValueIter.make::<V>(values: this.values, gens: this.gens, slotCount: this.slotCount,
+        return SlotMapValueIter::<V>.make(values: this.values, gens: this.gens, slotCount: this.slotCount,
                                           modsp: addr(of: this.mods), modsAt: this.mods);
     }
     public fn SlotMapValueIterMut<V> valuesMut() {
-        return SlotMapValueIterMut.make::<V>(values: this.values, gens: this.gens, slotCount: this.slotCount,
+        return SlotMapValueIterMut::<V>.make(values: this.values, gens: this.gens, slotCount: this.slotCount,
                                              modsp: addr(of: this.mods), modsAt: this.mods);
     }
 

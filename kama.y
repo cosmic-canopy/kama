@@ -205,7 +205,7 @@ struct kamayystype {
 %type <importdeclaration> import_directive
 %type <importdeclarationlist> import_directives_opt import_directives
 %type <strings> import_path export_manifest_opt export_name_list for_kinds_opt kind_name_list
-%type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg
+%type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg generic_turbofish_name
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
 %type <identifier> type_param type_param_default_opt type_decl_head enum_underlying_opt implements_entry method_when_opt when_clause when_cond_list
 %type <identifierlist> friend_member_list interface_type_list type_arg_list type_param_list bound_list type_params_opt
@@ -893,11 +893,11 @@ invocation_expression
   | qualified_identifier_no_generic LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
     /* Turbofish: explicit type arguments on a generic function call — `make::<int32>()`. The `::`
        before `<` is unambiguous (a qualifier is always followed by an identifier, never `<`), so no
-       comparison-operator clash. The mid-rule bumps genericDepth so a nested `>>` close still splits. */
-  | IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN {
-        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$5)[0]);
-        id->genericArgs = $5;
-        $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, id, $9);
+       comparison-operator clash. The `IDENTIFIER::<…>` prefix is factored into `generic_turbofish_name`
+       (shared with the on-type ctor form below) so the genericDepth mid-rule actions aren't duplicated —
+       duplicated mid-rule actions become distinct empty nonterminals and reduce/reduce-conflict. */
+  | generic_turbofish_name LPAREN argument_list_opt RPAREN {
+        $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3);
     }
     /* Receiver turbofish: `r.deserialize::<T>()` — explicit type args on a member call (only `deserialize`
        is generic today). The `::` before `<` disambiguates from `<` as less-than (unlike `.as<T>()`, which
@@ -915,6 +915,24 @@ invocation_expression
         id->genericArgs = $7;
         auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, id, std::static_pointer_cast<ExpressionNode>($1));
         $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, ma, $11);
+    }
+    /* On-type turbofish `Map::<int32,int32>.empty()` — the CANONICAL generic-constructor spelling: the
+       enclosing type's args ride the RECEIVER (`::<…>` on the type), not the ctor. Reuses the shared
+       `generic_turbofish_name` prefix; differs from the free-fn form only in the trailing `DOT IDENTIFIER`.
+       The ctor's own turbofish slot (`.make::<…>` above) stays free for a ctor with its OWN generics. */
+  | generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN {
+        auto method = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3);
+        auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, method, std::static_pointer_cast<ExpressionNode>($1));
+        $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, ma, $5);
+    }
+  ;
+/* Shared `IDENTIFIER::<type_args>` prefix — a type name (or generic free-fn name) carrying explicit type
+   args in turbofish form. Factored out so the genericDepth mid-rule actions live in exactly one place. */
+generic_turbofish_name
+  : IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } {
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$5)[0]);
+        id->genericArgs = $5;
+        $$ = id;
     }
   ;
 argument_list_opt
@@ -973,6 +991,14 @@ object_creation_expression
   | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $5, $7, $3 ); }
   | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $2, $6); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4); $$ = n; }
   | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $5, $9, $3); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7); $$ = n; }
+    /* On-type turbofish through `new`: `new BTreeNode::<K,V,A>.make(...)` — the uniform construction spelling
+       (explicit type args always ride the type as `::<…>`). Reuses `generic_turbofish_name` (the type carries
+       its args), mirroring the plain-call on-type turbofish in invocation_expression. */
+  | NEW generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN {
+        auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $2, $6);
+        n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4);
+        $$ = n;
+    }
   ;
 unary_expression
   : postfix_expression

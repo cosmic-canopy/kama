@@ -601,8 +601,10 @@ invocation_expression
   | qualified_identifier_no_generic LPAREN argument_list_opt RPAREN
     /* Turbofish: explicit type arguments on a generic function call — `make::<int32>()`. The `::`
        before `<` is unambiguous (a qualifier is always followed by an identifier, never `<`), so no
-       comparison-operator clash. The mid-rule bumps genericDepth so a nested `>>` close still splits. */
-  | IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN
+       comparison-operator clash. The `IDENTIFIER::<…>` prefix is factored into `generic_turbofish_name`
+       (shared with the on-type ctor form below) so the genericDepth mid-rule actions aren't duplicated —
+       duplicated mid-rule actions become distinct empty nonterminals and reduce/reduce-conflict. */
+  | generic_turbofish_name LPAREN argument_list_opt RPAREN
 
     /* Receiver turbofish: `r.deserialize::<T>()` — explicit type args on a member call (only `deserialize`
        is generic today). The `::` before `<` disambiguates from `<` as less-than (unlike `.as<T>()`, which
@@ -612,6 +614,18 @@ invocation_expression
   | primary_expression DOT IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN
 
   | qualified_identifier_no_generic DOT IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN
+
+    /* On-type turbofish `Map::<int32,int32>.empty()` — the CANONICAL generic-constructor spelling: the
+       enclosing type's args ride the RECEIVER (`::<…>` on the type), not the ctor. Reuses the shared
+       `generic_turbofish_name` prefix; differs from the free-fn form only in the trailing `DOT IDENTIFIER`.
+       The ctor's own turbofish slot (`.make::<…>` above) stays free for a ctor with its OWN generics. */
+  | generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN
+
+  ;
+/* Shared `IDENTIFIER::<type_args>` prefix — a type name (or generic free-fn name) carrying explicit type
+   args in turbofish form. Factored out so the genericDepth mid-rule actions live in exactly one place. */
+generic_turbofish_name
+  : IDENTIFIER COLONCOLON LT  type_arg_list GT
 
   ;
 argument_list_opt
@@ -670,6 +684,11 @@ object_creation_expression
   | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN
   | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
   | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
+    /* On-type turbofish through `new`: `new BTreeNode::<K,V,A>.make(...)` — the uniform construction spelling
+       (explicit type args always ride the type as `::<…>`). Reuses `generic_turbofish_name` (the type carries
+       its args), mirroring the plain-call on-type turbofish in invocation_expression. */
+  | NEW generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN
+
   ;
 unary_expression
   : postfix_expression

@@ -480,7 +480,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // M8d.1 completeness gate REQUIRES `root` be set before return, which building it satisfies.
     public default ctor empty() when [A: default] {
         SortedMap<K,V,A> result;
-        Owned<BTreeNode<K,V,A>> r = new BTreeNode<K,V,A>.make(leaf: true, allocator: result.alloc);
+        Owned<BTreeNode<K,V,A>> r = new BTreeNode::<K,V,A>.make(leaf: true, allocator: result.alloc);
         result.root = give r;
         return give result;
     }
@@ -490,7 +490,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     public ctor withAllocator(A allocator) {
         SortedMap<K,V,A> result;
         result.alloc = allocator;
-        Owned<BTreeNode<K,V,A>> r = new BTreeNode<K,V,A>.make(leaf: true, allocator: allocator);
+        Owned<BTreeNode<K,V,A>> r = new BTreeNode::<K,V,A>.make(leaf: true, allocator: allocator);
         result.root = give r;
         return give result;
     }

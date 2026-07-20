@@ -1,0 +1,14 @@
+// M8 Phase E — one-way construction: the enclosing type's args ride the TYPE (`Pair::<int32>.make(...)`),
+// not the constructor name. The retired `Pair.make::<int32>(...)` form (type args on the ctor) is now a
+// hard error redirecting to the canonical spelling. (`::<…>` after a ctor is reserved for a ctor's OWN
+// generic params, of which there are none today.)
+type value Pair<T> {
+    public T a;
+    public T b;
+    public ctor make(T a, T b) { Pair<T> p; p.a = a; p.b = b; return p; }
+    public fn T sum() { return this.a + this.b; }
+}
+fn int32 main() {
+    Pair<int32> q = Pair.make::<int32>(a: 2, b: 3);   // ERROR: write `Pair::<int32>.make(...)`
+    return q.sum();
+}

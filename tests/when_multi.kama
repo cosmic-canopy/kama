@@ -4,7 +4,7 @@
 type resource Box2<A, B> implements Copyable(bare: give) when [A: Copyable, B: Copyable] {
     A a; B b;
     public ctor make(A a, B b) { Box2<A, B> r; r.a = give a; r.b = give b; return give r; }
-    public fn Box2<A,B> copy() when [A: Copyable, B: Copyable] { return Box2.make::<A,B>(a: copy this.a, b: copy this.b); }
+    public fn Box2<A,B> copy() when [A: Copyable, B: Copyable] { return Box2::<A,B>.make(a: copy this.a, b: copy this.b); }
     public fn int32 tag() { return 42; }
 }
 
