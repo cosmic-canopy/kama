@@ -7,9 +7,9 @@ export { Deque };
 // logical position `pos` maps to the physical slot `(head + pos) % cap` — the ring wraps.
 type value DequeIter<T> implements Iterator<T> {
     Ptr<T> data; int32 head; int32 cap; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public DequeIter(Ptr<T> data, int32 head, int32 cap, int32 len, Ptr<int32> modsp, int32 modsAt) {
-        this.data = data; this.head = head; this.cap = cap; this.pos = 0; this.len = len;
-        this.modsp = modsp; this.modsAt = modsAt;
+    public ctor make(Ptr<T> data, int32 head, int32 cap, int32 len, Ptr<int32> modsp, int32 modsAt) {
+        DequeIter<T> r; r.data = data; r.head = head; r.cap = cap; r.pos = 0; r.len = len;
+        r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn Optional<T> next() {
         unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Deque modified during iteration"); } }
@@ -22,9 +22,9 @@ type value DequeIter<T> implements Iterator<T> {
 // A mutable iterator (the `foreach (ref T x in deque)` protocol): hasNext() + a place-returning next().
 type value DequeIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 head; int32 cap; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public DequeIterMut(Ptr<T> data, int32 head, int32 cap, int32 len, Ptr<int32> modsp, int32 modsAt) {
-        this.data = data; this.head = head; this.cap = cap; this.pos = 0; this.len = len;
-        this.modsp = modsp; this.modsAt = modsAt;
+    public ctor make(Ptr<T> data, int32 head, int32 cap, int32 len, Ptr<int32> modsp, int32 modsAt) {
+        DequeIterMut<T> r; r.data = data; r.head = head; r.cap = cap; r.pos = 0; r.len = len;
+        r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn bool hasNext() {
         unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Deque modified during iteration"); } }
@@ -141,12 +141,12 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
 
     // The by-value `foreach (T x in deque)` yields COPIES, so it exists only for a Copyable element.
     public fn DequeIter<T> iterator() when [T: Copyable] {
-        return DequeIter::<T>(data: this.data, head: this.head, cap: this.cap, len: this.len,
-                              modsp: addr(of: this.mods), modsAt: this.mods);
+        return DequeIter.make::<T>(data: this.data, head: this.head, cap: this.cap, len: this.len,
+                                   modsp: addr(of: this.mods), modsAt: this.mods);
     }
     public fn DequeIterMut<T> iterMut() {
-        return DequeIterMut::<T>(data: this.data, head: this.head, cap: this.cap, len: this.len,
-                                 modsp: addr(of: this.mods), modsAt: this.mods);
+        return DequeIterMut.make::<T>(data: this.data, head: this.head, cap: this.cap, len: this.len,
+                                      modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied in order).

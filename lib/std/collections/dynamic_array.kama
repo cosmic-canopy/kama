@@ -7,8 +7,8 @@ export { DynamicArray };
 // change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
 type value DynamicArrayIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public DynamicArrayIter(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
-        this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
+    public ctor make(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
+        DynamicArrayIter<T> r; r.data = data; r.pos = 0; r.len = len; r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn Optional<T> next() {
         unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "DynamicArray modified during iteration"); } }
@@ -22,8 +22,8 @@ type value DynamicArrayIter<T> implements Iterator<T> {
 // The invalidation check lives in hasNext() (it runs before each next()).
 type value DynamicArrayIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public DynamicArrayIterMut(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
-        this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
+    public ctor make(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
+        DynamicArrayIterMut<T> r; r.data = data; r.pos = 0; r.len = len; r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn bool hasNext() {
         unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "DynamicArray modified during iteration"); } }
@@ -146,10 +146,10 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // (Move-only elements — `DynamicArray<Owned>` — borrow instead: `foreach (ref T x in list)`.)
     // Each iterator gets a live pointer to `mods` (its own address) + the current value (a snapshot).
     public fn DynamicArrayIter<T> iterator() when [T: Copyable] {
-        return DynamicArrayIter::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
+        return DynamicArrayIter.make::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
     public fn DynamicArrayIterMut<T> iterMut() {
-        return DynamicArrayIterMut::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
+        return DynamicArrayIterMut.make::<T>(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied). The copy

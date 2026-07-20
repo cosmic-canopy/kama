@@ -11,8 +11,8 @@ extern fn Ptr memset(Ptr p, int32 value, usize n);
 // skips an all-zero word remainder in one jump (`pos -> (word+1) << 6`) so it visits set bits, not empty gaps.
 type value BitSetIter implements Iterator<int32> {
     Ptr<uint64> words; int32 wordCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
-    public BitSetIter(Ptr<uint64> words, int32 wordCount, Ptr<int32> modsp, int32 modsAt) {
-        this.words = words; this.wordCount = wordCount; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
+    public ctor make(Ptr<uint64> words, int32 wordCount, Ptr<int32> modsp, int32 modsAt) {
+        BitSetIter r; r.words = words; r.wordCount = wordCount; r.pos = 0; r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn Optional<int32> next() {
         unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "BitSet modified during iteration"); } }
@@ -162,7 +162,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     // separate import. (Only explicitly naming the type — `BitSetIter it = bs.setBits()` — requires
     // `import std::collections::{BitSetIter}`, like naming any type.)
     public fn BitSetIter setBits() {
-        return BitSetIter(words: this.words, wordCount: this.wordCount, modsp: addr(of: this.mods), modsAt: this.mods);
+        return BitSetIter.make(words: this.words, wordCount: this.wordCount, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // Deep-copy into an independent buffer (bare `give` still MOVES). uint64 is always Copyable, so a BitSet
