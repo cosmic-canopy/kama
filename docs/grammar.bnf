@@ -815,7 +815,13 @@ when_clause
 when_cond_list
   : IDENTIFIER COLON type_name
 
+    /* `when [A: default]` — a STRUCTURAL bound: the arg bound to A must have a `default` ctor
+       (checked via isDefaultFillable). `default` is a keyword, so it can't reduce as a type_name. */
+  | IDENTIFIER COLON DEFAULT
+
   | when_cond_list COMMA IDENTIFIER COLON type_name
+
+  | when_cond_list COMMA IDENTIFIER COLON DEFAULT
 
   ;
 handoff_default
@@ -926,9 +932,9 @@ constructor_declaration
     /* Construction-model: a NAMED constructor — sugar for a static factory returning the enclosing type
        (infallible, no return type written) or `Result<This,E>` (fallible, leading type like `fn`). Lowered
        through the static-method pipeline; the emitter fills the infallible return type = the enclosing type. */
-  | modifiers_opt CTOR method_name LPAREN parameter_list_opt RPAREN method_body
+  | modifiers_opt CTOR method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
 
-  | modifiers_opt CTOR type method_name LPAREN parameter_list_opt RPAREN method_body
+  | modifiers_opt CTOR type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
 
   ;
 constructor_declarator

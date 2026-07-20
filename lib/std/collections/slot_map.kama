@@ -81,8 +81,8 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
 
     // The four-ctor matrix (M8c). `empty()` is the `default` zero-arg build; `empty`/`withCapacity` are the
     // default-allocator conveniences (custom `A` uses the allocator-taking ctors).
-    public default ctor empty() { return SlotMap(); }
-    public ctor withCapacity(int32 capacity) { SlotMap<V, A> m = SlotMap(); m.reserve(n: capacity); return give m; }
+    public default ctor empty() when [A: default] { return SlotMap(); }
+    public ctor withCapacity(int32 capacity) when [A: default] { SlotMap<V, A> m = SlotMap(); m.reserve(n: capacity); return give m; }
 
     // Draw the three parallel buffers from a caller-owned allocator (e.g. an `Arena`). The bare `SlotMap()`
     // uses the default zero-size `GlobalAllocator`; this sets the handle before any grow.

@@ -1,0 +1,14 @@
+// M8d.0 — the `when [A: default]` structural gate. Like `empty()`, the default-allocator `withCapacity(n)`
+// convenience must NOT exist for a custom `A: BumpAllocator` (no `default` ctor) — it would build a
+// zero-allocator, incomplete map. `withCapacityAndAllocator` is the correct custom-`A` presize path.
+import std::collections::{Map, Arena, BumpAllocator};
+
+fn int32 main() {
+    Arena arena = Arena(capacity: 1 << 16);
+    // Instantiate the custom-`A` Map (the correct, complete build).
+    Map<int32, int32, A: BumpAllocator> ok = Map::withAllocator(allocator: arena.handle());
+    ok.put(key: 1, value: 2);
+    // ERROR: `withCapacity()` does not exist for `A: BumpAllocator` (no `default` ctor).
+    Map<int32, int32, A: BumpAllocator> bad = Map.withCapacity(capacity: 4);
+    return 0;
+}

@@ -27,18 +27,18 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
     // makes the LARGEST element come out first. They return the enclosing instance's own `A` (so `q` is the
     // SAME class — the private `maxOrder` write resolves); for a non-default `A` use `withAllocator` instead,
     // which supplies the allocator (the bare ctor here would leave a custom `A`'s handle uninitialized).
-    public default ctor minHeap() { PriorityQueue<T, A> q = PriorityQueue(); return give q; }
-    public ctor maxHeap() { PriorityQueue<T, A> q = PriorityQueue(); q.maxOrder = true; return give q; }
+    public default ctor minHeap() when [A: default] { PriorityQueue<T, A> q = PriorityQueue(); return give q; }
+    public ctor maxHeap() when [A: default] { PriorityQueue<T, A> q = PriorityQueue(); q.maxOrder = true; return give q; }
 
     // Capacity presizing (M8c) rides the backing `DynamicArray` — like C++/Java/Rust priority queues taking a
     // reserve size. Direction stays explicit (min/max); `data` is built via `DynamicArray::withCapacity`.
-    public ctor minHeapWithCapacity(int32 capacity) {
+    public ctor minHeapWithCapacity(int32 capacity) when [A: default] {
         PriorityQueue<T, A> q = PriorityQueue();
         q.data = DynamicArray::withCapacity(capacity: capacity);
         q.maxOrder = false;
         return give q;
     }
-    public ctor maxHeapWithCapacity(int32 capacity) {
+    public ctor maxHeapWithCapacity(int32 capacity) when [A: default] {
         PriorityQueue<T, A> q = PriorityQueue();
         q.data = DynamicArray::withCapacity(capacity: capacity);
         q.maxOrder = true;

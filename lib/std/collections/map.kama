@@ -148,12 +148,13 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
         this.len = 0; this.cap = 0; this.tombs = 0; this.mods = 0;
     }
 
-    // The four-ctor matrix (M8c). `empty()` is the `default` zero-arg build; `empty`/`withCapacity` are the
-    // default-allocator conveniences (custom `A` uses the allocator-taking ctors).
-    public default ctor empty() { return Map(); }
+    // The four-ctor matrix (M8c). `empty`/`withCapacity` are the default-allocator conveniences, gated
+    // `when [A: default]` (M8d.0) so they don't exist for a custom `A` without a `default` (which would
+    // otherwise build a zero-allocator, incomplete map). Custom `A` uses the allocator-taking ctors below.
+    public default ctor empty() when [A: default] { return Map(); }
 
     // Empty, but pre-sized so `capacity` entries fit without a rehash. Returns the enclosing `Map<K,V,H,A>`.
-    public ctor withCapacity(int32 capacity) { Map<K,V,H,A> m = Map(); m.reserve(n: capacity); return give m; }
+    public ctor withCapacity(int32 capacity) when [A: default] { Map<K,V,H,A> m = Map(); m.reserve(n: capacity); return give m; }
 
     // Build an empty map whose three buffers are drawn from `allocator` (e.g. an `Arena` bump handle),
     // so all of this map's allocations route into that region. The handle is a cheap copyable value.

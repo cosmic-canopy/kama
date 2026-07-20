@@ -49,8 +49,8 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
 
     // The four-ctor matrix (M8c) — see DynamicArray. `empty()` is the `default` zero-arg build; `empty`/
     // `withCapacity` are default-allocator conveniences (custom `A` uses the allocator-taking ctors).
-    public default ctor empty() { return Deque(); }
-    public ctor withCapacity(int32 capacity) { Deque<T, A> m = Deque(); m.reserve(n: capacity); return give m; }
+    public default ctor empty() when [A: default] { return Deque(); }
+    public ctor withCapacity(int32 capacity) when [A: default] { Deque<T, A> m = Deque(); m.reserve(n: capacity); return give m; }
 
     // Draw the ring buffer from a caller-owned allocator (e.g. an `Arena`). The bare `Deque()` uses the
     // default zero-size `GlobalAllocator`; this sets the handle before any grow. See DynamicArray.withAllocator.

@@ -1,0 +1,15 @@
+// M8d.0 — the `when [A: default]` structural gate. A default-allocator convenience (`empty()`) must NOT
+// exist for a custom `A: BumpAllocator` (which has no `default` ctor), else it would build a zero-allocator,
+// incomplete map. `withAllocator` is the correct path for a custom `A`. Calling `.empty()` on the custom-`A`
+// type is a clean "no such ctor" compile error (re-earns the protection `Map::withCapacity` had as a static fn).
+import std::collections::{Map, Arena, BumpAllocator};
+
+fn int32 main() {
+    Arena arena = Arena(capacity: 1 << 16);
+    // Instantiate the custom-`A` Map (the correct, complete build).
+    Map<int32, int32, A: BumpAllocator> ok = Map::withAllocator(allocator: arena.handle());
+    ok.put(key: 1, value: 2);
+    // ERROR: `empty()` does not exist for `A: BumpAllocator` (no `default` ctor).
+    Map<int32, int32, A: BumpAllocator> bad = Map.empty();
+    return 0;
+}

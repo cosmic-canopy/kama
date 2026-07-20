@@ -480,7 +480,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // The canonical zero-arg build (M8c `default`) — a NON-zero default (the primary builds a live B-tree
     // root). A B-tree has no backing buffer to presize, so SortedMap has no `withCapacity`. Keeps delegation
     // (a bare local would trip the completeness gate on the owning `root`, which the primary builds).
-    public default ctor empty() { return SortedMap(); }
+    public default ctor empty() when [A: default] { return SortedMap(); }
 
     // Back the whole tree with a caller-owned allocator (e.g. an `Arena`). The bare ctor above built a
     // root whose arrays bound the zero-init `alloc`, so REPLACE it (dropping the default root) with one

@@ -12,7 +12,7 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
 
     // Build the inner map in a typed local, then move it in (the field-init can't infer its type args).
     public SortedSet() { SortedMap<K, Unit, A> inner = SortedMap(); this.m = give inner; }
-    public default ctor empty() { return SortedSet(); }   // M8c `default` (wraps SortedMap; no capacity concept)
+    public default ctor empty() when [A: default] { return SortedSet(); }   // M8c/M8d.0: default-alloc only (custom `A` → withAllocator)
 
     // Back the set with a caller-owned allocator (e.g. an `Arena`) — forwards to the inner map's factory.
     public ctor withAllocator(A allocator) {

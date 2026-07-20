@@ -50,12 +50,13 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // `withAllocator` / `withCapacityAndAllocator` (caller-owned `A`). `empty()` is the canonical zero-arg
     // build — marked `default`, so a `DynamicArray<T,A>` field elsewhere is default-fillable. `empty`/
     // `withCapacity` are the DEFAULT-allocator conveniences; for a custom `A` use the allocator-taking ctors.
-    // (Making a custom-`A` `empty`/`withCapacity` a COMPILE ERROR is a tracked pre-1.0 item — it needs a
-    // structural `when [A: default]` gate the completeness check can't provide today; see ROADMAP.)
-    public default ctor empty() { return DynamicArray(); }
+    // `when [A: default]` — these default-allocator conveniences EXIST only when `A` is default-constructible
+    // (a custom `A: BumpAllocator` has no `default`, so `.empty()`/`.withCapacity()` don't exist for it → a
+    // clean "no such ctor" error, not a zero-allocator collection). Use `withAllocator` for a custom `A`.
+    public default ctor empty() when [A: default] { return DynamicArray(); }
 
     // Empty, but pre-grown so at least `capacity` elements fit without a later reallocation.
-    public ctor withCapacity(int32 capacity) { DynamicArray<T, A> m = DynamicArray(); m.reserve(n: capacity); return give m; }
+    public ctor withCapacity(int32 capacity) when [A: default] { DynamicArray<T, A> m = DynamicArray(); m.reserve(n: capacity); return give m; }
 
     // Build an empty list whose buffer is drawn from `allocator` (e.g. an `Arena` bump handle), so all
     // of this list's allocations route into that region. The handle is a cheap copyable value stored

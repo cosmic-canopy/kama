@@ -17,7 +17,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // The four-ctor matrix (M8c). `Set` carries no `alloc` field (it wraps `Map<K,Unit,H,A> m`); the
     // capacity ctors build the inner map via the matching `Map` ctor. `empty`/`withCapacity` are the
     // default-allocator conveniences (custom `A` uses the allocator-taking ctors).
-    public default ctor empty() { return Set(); }
+    public default ctor empty() when [A: default] { return Set(); }
 
     // Build an empty set whose backing map draws from `allocator` (e.g. an `Arena` bump handle). The
     // bare `Set()` builds an empty (cap-0) inner map that is dropped when replaced by the arena-backed one.
@@ -33,7 +33,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
 
     // Build an empty set already sized for `capacity` entries. M8c: now a `ctor` returning the enclosing
     // `Set<K,H,A>` (was a `static fn`), building the inner map via `Map::withCapacity`.
-    public ctor withCapacity(int32 capacity) {
+    public ctor withCapacity(int32 capacity) when [A: default] {
         Set<K,H,A> s = Set();
         Map<K, Unit, H, A> inner = Map::withCapacity(capacity: capacity);
         s.m = give inner;

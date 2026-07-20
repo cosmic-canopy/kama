@@ -118,12 +118,19 @@ removes today's vtable-only synthesized default ctor: a polymorphic type must de
   `Map/Set::withCapacity` `static fn` exception is gone). `PriorityQueue` carries the capacity on its
   backing array (`minHeap/maxHeapWithCapacity`); B-tree `SortedMap`/`SortedSet` (no backing buffer) and the
   always-sized `FixedArray` keep their distinct shapes. The canonical zero-arg build is marked `default`.
-  **Known gap (tracked, ROADMAP §2):** calling a *default*-allocator convenience on a *custom*-`A` type
-  (`DynamicArray<T, BumpAllocator>.empty()`) compiles into an incomplete (zero-allocator) collection — the
-  completeness gate can't reject it (it runs at ctor-definition emit, and every ctor of a monomorph is
-  emitted, so a custom-`A` monomorph would falsely reject its uncalled default-alloc ctors). The pre-1.0 fix
-  is a structural `when [A: default]` gate so those ctors don't exist for a non-default-fillable `A`; that
-  also re-earns the compile-time protection the old `static fn` had.
+  The default-allocator conveniences are gated **`when [A: default]`** *(M8d.0)* — a structural bound (the
+  arg bound to `A` must itself have a `default` ctor, checked via `isDefaultFillable`; **no nominal `Default`
+  contract**). So `DynamicArray<T, BumpAllocator>.empty()` *does not exist* (a clean "not available for this
+  instantiation — requires `when [A: default]`" error, not a zero-allocator collection); a custom `A` uses
+  `withAllocator`/`withCapacityAndAllocator`. This re-earns the compile-time protection the old `static fn`
+  `Map/Set::withCapacity` had, and — because a gated ctor is dropped from the monomorph — removes the
+  force-emit false-positive that blocked the completeness gate.
+  **Remaining (→ M8d.1, the automatic seal):** the gate is currently *author-declared*. The completeness
+  guarantee is only truly automatic once `checkCtorNeverNull`/`checkNamedCtorComplete` are widened to reject
+  **any** ctor that leaves a non-default-fillable value field (e.g. `alloc: A`) unassigned — turning a
+  *forgotten* `when [A: default]` (or the coexistence nameless primary, which still zero-inits `alloc`) into
+  a hard compile error rather than a silent incomplete build. That is a pre-1.0 requirement (ROADMAP §2):
+  never-null must be **compiler-enforced on the null field**, not left to author discipline.
 - The **Equatable / Hashable / Copyable derive story** is designed alongside `of`/`zero` (one opt-in derive
   surface) but shipped separately (see §9 and ROADMAP §2). Kama today rejects auto structural `==`
   (`tests/xfail/operator_eq_missing.kama`), so a derive is a stance change designed with this family.

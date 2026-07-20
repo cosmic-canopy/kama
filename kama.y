@@ -1122,9 +1122,20 @@ when_cond_list
         h->whenBounds = std::make_shared<IdentifierList>();
         h->whenParams->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1));
         h->whenBounds->push_back($3); $$ = h; }
+    /* `when [A: default]` — a STRUCTURAL bound: the arg bound to A must have a `default` ctor
+       (checked via isDefaultFillable). `default` is a keyword, so it can't reduce as a type_name. */
+  | IDENTIFIER COLON DEFAULT
+      { auto h = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, SharedString());
+        h->whenParams = std::make_shared<IdentifierList>();
+        h->whenBounds = std::make_shared<IdentifierList>();
+        h->whenParams->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1));
+        h->whenBounds->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); $$ = h; }
   | when_cond_list COMMA IDENTIFIER COLON type_name
       { $1->whenParams->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3));
         $1->whenBounds->push_back($5); $$ = $1; }
+  | when_cond_list COMMA IDENTIFIER COLON DEFAULT
+      { $1->whenParams->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3));
+        $1->whenBounds->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); $$ = $1; }
   ;
 handoff_default
   : GIVE   { $$ = GIVE; }
@@ -1234,10 +1245,10 @@ constructor_declaration
     /* Construction-model: a NAMED constructor — sugar for a static factory returning the enclosing type
        (infallible, no return type written) or `Result<This,E>` (fallible, leading type like `fn`). Lowered
        through the static-method pipeline; the emitter fills the infallible return type = the enclosing type. */
-  | modifiers_opt CTOR method_name LPAREN parameter_list_opt RPAREN method_body
-    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, SharedIdentifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $7); m->isCtor = true; $$ = m; }
-  | modifiers_opt CTOR type method_name LPAREN parameter_list_opt RPAREN method_body
-    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); m->isCtor = true; $$ = m; }
+  | modifiers_opt CTOR method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
+    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, SharedIdentifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $8); m->isCtor = true; if ($7) { m->whenParams = $7->whenParams; m->whenBounds = $7->whenBounds; } $$ = m; }
+  | modifiers_opt CTOR type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
+    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $9); m->isCtor = true; if ($8) { m->whenParams = $8->whenParams; m->whenBounds = $8->whenBounds; } $$ = m; }
   ;
 constructor_declarator
   : IDENTIFIER LPAREN parameter_list_opt RPAREN constructor_initializer_opt   { $$ = std::make_shared<ClassConstructorDeclaratorNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, $5); }

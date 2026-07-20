@@ -83,18 +83,24 @@ genuinely later-track or opt-in.
   'Shared_Probe'`). Reproduces with a plain `enum E { A, B(Shared<Probe>) }` constructed only via `A` —
   independent of Model C / `.as<>` (found alongside M5/P3). Fix: scan **every** variant's payload types at
   enum registration (like class fields via `scanTypeForCollections`), not lazily at construction.
-- **Custom-allocator default-convenience enforcement (construction-model, pre-1.0 safety).** The M8c
-  collections four-ctor matrix ships `empty()`/`withCapacity(n)` (default `GlobalAllocator`) as `ctor`s
-  alongside `withAllocator`/`withCapacityAndAllocator` (custom `A`). Calling a *default*-allocator
-  convenience on a *custom*-`A` type (`DynamicArray<T, BumpAllocator>.empty()`) currently compiles into an
-  incomplete (zero-allocator) collection — low-reachability (contradictory intent) but a real hole in
-  "nothing incomplete is constructible." The M8b completeness gate **cannot** reject it: the gate runs at
-  ctor-definition emit and the compiler emits *every* ctor of a monomorph, so a custom-`A` monomorph built
-  via `withAllocator` force-emits (and would falsely reject) its uncalled `empty()`/`withCapacity()`. The
-  true fix is a **structural `when [A: default]` gate** so those two ctors simply *do not exist* for a
-  non-default-fillable `A` (or lazy per-ctor monomorph emission). Must land before tag 1.0. Also re-earns
-  the compile-time protection `Map/Set::withCapacity` had as a `static fn` (design doc §7 carve-out) before
-  M8c unified them into `ctor`s.
+- **Custom-allocator default-convenience — the automatic never-null seal (construction-model, pre-1.0).**
+  **✅ M8d.0 DONE:** the structural `when [A: default]` gate shipped — `empty()`/`withCapacity()` (and the PQ
+  heaps, wrapper `Set`/`Sorted*` conveniences) simply *do not exist* for a non-default-fillable `A`, so
+  `DynamicArray<T, BumpAllocator>.empty()` is a clean "not available for this instantiation — requires
+  `when [A: default]`" compile error instead of an incomplete (zero-allocator) collection. Generic feature:
+  a `default` bound in `whenConditionsHold` → `isDefaultFillable`, no nominal `Default` contract. This also
+  kills the force-emit false-positive (a gated ctor is dropped from the monomorph, so it is neither emitted
+  nor completeness-checked) and re-earns the protection `Map/Set::withCapacity` had as a `static fn`.
+  **STILL OPEN → M8d.1 (the automatic seal):** the annotation is currently *author-supplied* — a collection
+  author who forgets `when [A: default]` on a convenience that leaves `alloc: A` unassigned still ships a
+  silent zero-allocator build, and the coexistence-era nameless primary (`DynamicArray()`) leaves `alloc`
+  unassigned for a custom `A` without rejection (`checkCtorNeverNull` guards only owning pointers, not value
+  fields). **Requirement for M8d.1: the completeness gate must FORCE the declaration** — a named/instance
+  ctor that leaves a non-default-fillable field unassigned must be a *hard compile error* directing the
+  author to assign it or gate the ctor on `[A: default]`. That makes never-null **automatic** (compiler-
+  detected on the primary's null field, exactly as expected), not author-discipline. Delivered by widening
+  `checkCtorNeverNull`/`checkNamedCtorComplete` to value fields + removing the nameless primary (M8d.1) +
+  removing the nameless `Type()` call form (M8d.2). Must land before tag 1.0.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by

@@ -6154,7 +6154,16 @@ bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
         if (!_usesSerde && (whenBounds[c] == "Serialize" || whenBounds[c] == "Deserialize")) return false;
         bool held = false;
         for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
-            if (params[i] == whenParams[c]) { held = satisfiesBound(cType(concrete[i]), whenBounds[c]); break; }
+            if (params[i] == whenParams[c]) {
+                // `when [A: default]` — a STRUCTURAL gate (no nominal `Default` contract): the arg bound to A
+                // must itself be default-constructible. Reuse isDefaultFillable (the completeness predicate),
+                // so a custom-allocator collection's `empty()`/`withCapacity()` simply don't exist for an `A`
+                // without a `default` ctor (closes the M8c zero-allocator hole; killing the force-emit too).
+                held = (whenBounds[c] == "default")
+                     ? isDefaultFillable(cType(concrete[i]))
+                     : satisfiesBound(cType(concrete[i]), whenBounds[c]);
+                break;
+            }
         if (!held) return false;
     }
     return true;
@@ -11109,6 +11118,24 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(stci, method, &owner);
     if (!mi) {
+        // A generic type's ctor may be DEFINED on the template but GATED AWAY for this instantiation
+        // (`empty() when [A: default]` — dropped when the concrete `A` has no `default` ctor). Say exactly
+        // that, naming the unmet bound, rather than the misleading "define one" (the ctor IS defined; it
+        // just doesn't apply to these type arguments — use an allocator-taking ctor for a custom `A`).
+        auto gt = _genericTypes.find(typeName);
+        if (gt != _genericTypes.end()) {
+            auto mit = gt->second.methods.find(method);
+            if (mit != gt->second.methods.end() && mit->second.isCtor && !mit->second.whenParams.empty()) {
+                std::string cond;
+                for (size_t i = 0; i < mit->second.whenParams.size(); ++i)
+                    cond += (i ? ", " : "") + mit->second.whenParams[i] + ": " + mit->second.whenBounds[i];
+                unsupported(("constructor `" + disp + "." + method + "` is not available for this "
+                             "instantiation — it requires `when [" + cond + "]` (e.g. a custom allocator "
+                             "has no `default`); use an allocator-taking constructor instead").c_str(),
+                            call->line);
+                return "0";
+            }
+        }
         unsupported(("type `" + disp + "` has no constructor `" + method + "` — define one "
                      "(`ctor " + method + "(...) {…}`)").c_str(), call->line);
         return "0";
