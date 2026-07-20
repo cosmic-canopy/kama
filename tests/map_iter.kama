@@ -3,7 +3,7 @@
 import std::collections::{Map, Set};
 
 fn int main() {
-    Map<int32, int32> m = Map();
+    Map<int32, int32> m = Map.empty();
     int32 i = 0;
     while (i < 10) { m.put(key: i, value: i * i); i = i + 1; }
 
@@ -17,7 +17,7 @@ fn int main() {
     if (ksum == 45)  { r = r + 10; }                  // 0+1+…+9
     if (vsum == 285) { r = r + 10; }                  // 0+1+4+…+81
 
-    Set<string> s = Set();
+    Set<string> s = Set.empty();
     s.add(key: "aa"); s.add(key: "bbb"); s.add(key: "c"); s.add(key: "bbb");  // dup ignored
     int32 lensum = 0; int32 count = 0;
     foreach (string x in s) { lensum = lensum + cast<int32>(x.length()); count = count + 1; }

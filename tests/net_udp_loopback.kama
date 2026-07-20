@@ -7,7 +7,7 @@ import std::io::{IoError};
 import std::collections::{DynamicArray, FixedArray};
 
 fn DynamicArray<uint8> pattern(int32 n) {
-    DynamicArray<uint8> data = DynamicArray();
+    DynamicArray<uint8> data = DynamicArray.empty();
     int32 i = 0;
     while (i < n) { data.add(item: cast<uint8>((i * 37 + 11) % 251)); i = i + 1; }
     return give data;

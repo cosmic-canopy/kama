@@ -4,14 +4,14 @@ import std::collections::{DynamicArray};
 @generate(Serialize, Deserialize, noOnConstruction)
 type value Point { @field public int32 x; @field public int32 y; public Point(int32 x, int32 y) { this.x = x; this.y = y; } }
 fn int main() {
-    DynamicArray<Point> ps = DynamicArray(); ps.add(item: Point(x: 1, y: 2)); ps.add(item: Point(x: 3, y: 4));
+    DynamicArray<Point> ps = DynamicArray.empty(); ps.add(item: Point(x: 1, y: 2)); ps.add(item: Point(x: 3, y: 4));
     Result<string, Owned<Error>> __enc1 = encode(v: ps);
     string __encStr1 = match (give __enc1) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<DynamicArray<Point>, Owned<Error>> r1 = decode::<DynamicArray<Point>>(src: give __encStr1);
     int32 a = match (r1) { case Ok(b): b[1].x + b[1].y; case Err(e): 0 - 1; };   // 7
 
-    DynamicArray<DynamicArray<int32>> nested = DynamicArray();
-    DynamicArray<int32> inner = DynamicArray(); inner.add(item: 5); inner.add(item: 6); nested.add(item: give inner);
+    DynamicArray<DynamicArray<int32>> nested = DynamicArray.empty();
+    DynamicArray<int32> inner = DynamicArray.empty(); inner.add(item: 5); inner.add(item: 6); nested.add(item: give inner);
     Result<string, Owned<Error>> __enc2 = encode(v: nested);
     string __encStr2 = match (give __enc2) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<DynamicArray<DynamicArray<int32>>, Owned<Error>> r2 = decode::<DynamicArray<DynamicArray<int32>>>(src: give __encStr2);

@@ -4,7 +4,7 @@
 import std::collections::{DynamicArray};
 type resource Res { DynamicArray<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} }
 fn int32 main() {
-    DynamicArray<Res> a = DynamicArray();
+    DynamicArray<Res> a = DynamicArray.empty();
     DynamicArray<Res> b = copy a;   // ERROR: elements own resources but aren't Copyable
     return 0;
 }

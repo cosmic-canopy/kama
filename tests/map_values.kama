@@ -12,14 +12,14 @@ type resource Counter {
 
 fn int main() {
     // (a) valuesMut over a MOVE-ONLY value map, read back via getRef (values() is unavailable for non-Copyable).
-    Map<int32, Counter> cm = Map();
+    Map<int32, Counter> cm = Map.empty();
     cm.put(key: 1, value: Counter(n: 10));
     cm.put(key: 2, value: Counter(n: 20));
     foreach (ref Counter c in cm.valuesMut()) { c.bump(); }   // -> 11, 21
     int32 a = cm.getRef(key: 1).get() + cm.getRef(key: 2).get();   // 32
 
     // (b) values() copy-iteration over a Copyable-value map.
-    Map<int32, int32> im = Map();
+    Map<int32, int32> im = Map.empty();
     im.put(key: 1, value: 70);
     im.put(key: 2, value: 80);
     int32 b = 0;

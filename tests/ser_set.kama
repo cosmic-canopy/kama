@@ -2,7 +2,7 @@
 import std::serialization::json::{encode, decode};
 import std::collections::{Set};
 fn int main() {
-    Set<int32> s = Set(); s.add(key: 10); s.add(key: 20);
+    Set<int32> s = Set.empty(); s.add(key: 10); s.add(key: 20);
     Result<string, Owned<Error>> j_r = encode(v: s);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<Set<int32>, Owned<Error>> res = decode::<Set<int32>>(src: give j);

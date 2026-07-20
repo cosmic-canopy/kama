@@ -18,7 +18,7 @@ fn int32 main() {
     int32 r = 0;
 
     // (a) min-heap: push out of order, drain in ascending order.
-    PriorityQueue<int32> mn = PriorityQueue();          // bare ctor == minHeap()
+    PriorityQueue<int32> mn = PriorityQueue.minHeap();          // bare ctor == minHeap()
     mn.push(item: 5); mn.push(item: 3); mn.push(item: 8);
     mn.push(item: 1); mn.push(item: 9); mn.push(item: 2);
     if (mn.length() == 6) { r = r + 5; }
@@ -44,7 +44,7 @@ fn int32 main() {
     if (second == 5) { r = r + 5; }
 
     // (c) move-only element: reclaim in priority order, borrow the next, drop the rest at scope exit.
-    PriorityQueue<Task> pq = PriorityQueue();
+    PriorityQueue<Task> pq = PriorityQueue.minHeap();
     pq.push(item: Task(prio: 30));
     pq.push(item: Task(prio: 10));
     pq.push(item: Task(prio: 20));

@@ -6,7 +6,7 @@ import std::collections::{SortedMap, SortedSet, DynamicArray};
 fn int32 main() {
     int32 r = 0;
 
-    SortedMap<int32, int32> sm = SortedMap();
+    SortedMap<int32, int32> sm = SortedMap.empty();
     int32 i = 0;
     while (i < 20) { sm.put(key: (i * 13) % 20, value: (i * 13) % 20); i = i + 1; }
     if (sm.length() == 20) { r = r + 10; }
@@ -19,7 +19,7 @@ fn int32 main() {
     sm.clear();
     if (cp.length() == 20 && sm.length() == 0) { r = r + 10; }
 
-    SortedSet<int32> ss = SortedSet();
+    SortedSet<int32> ss = SortedSet.empty();
     i = 0;
     while (i < 15) { ss.add(key: i); i = i + 1; }
     DynamicArray<int32> es = ss.elements();

@@ -1,4 +1,4 @@
-// Milestone B1 — a bare in-place ctor assigned to a class-typed lvalue (`this.m = Map()`, `x = Point(...)`)
+// Milestone B1 — a bare in-place ctor assigned to a class-typed lvalue (`this.m = Map.empty()`, `x = Point(...)`)
 // constructs directly into the place, like a local-init stackCtor. Covers: a generic ctor into a field
 // (Map/DynamicArray), a reassignment that re-inits (drops the old value — ASan-checked), and a non-generic ctor
 // with args into a field + a local reassignment. Previously each required "bind to a local first".
@@ -14,9 +14,9 @@ type resource Registry {
     Map<int32, int32> m;
     DynamicArray<int32> log;
     Point origin;
-    public Registry() { this.m = Map(); this.log = DynamicArray(); this.origin = Point(x: 1, y: 2); }
+    public Registry() { this.m = Map.empty(); this.log = DynamicArray.empty(); this.origin = Point(x: 1, y: 2); }
     public fn void put(int32 k, int32 v) { this.m.put(key: k, value: v); this.log.add(item: k); }
-    public fn void reset() { this.m = Map(); }                 // re-init: drops the old map, builds a fresh one
+    public fn void reset() { this.m = Map.empty(); }                 // re-init: drops the old map, builds a fresh one
     public fn void moveOrigin(int32 x, int32 y) { this.origin = Point(x: x, y: y); }
     public fn int32 score() { return this.m.length() + this.log.length() + this.origin.sum(); }
 }
@@ -29,9 +29,9 @@ fn int32 main() {
     r.moveOrigin(x: 3, y: 4);                                      // origin sum 7
 
     // a local reassignment to a fresh generic ctor, too
-    Map<int32, int32> local = Map();
+    Map<int32, int32> local = Map.empty();
     local.put(key: 9, value: 9);
-    local = Map();                                                 // re-init the local
+    local = Map.empty();                                                 // re-init the local
     local.put(key: 8, value: 8); local.put(key: 7, value: 7);
 
     return r.score() + local.length();   // (1 + 4 + 7) + 2 = 14

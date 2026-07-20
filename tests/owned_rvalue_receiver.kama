@@ -9,10 +9,10 @@ import std::collections::{DynamicArray};
 
 type resource R {
     DynamicArray<int32> xs;
-    public R() { this.xs = DynamicArray(); this.xs.add(item: 1); this.xs.add(item: 2); }
+    public R() { this.xs = DynamicArray.empty(); this.xs.add(item: 1); this.xs.add(item: 2); }
     public fn int32 n() { return this.xs.length(); }
 }
-fn DynamicArray<int32> make(int32 n) { DynamicArray<int32> xs = DynamicArray(); xs.add(item: n); xs.add(item: n + 1); return give xs; }
+fn DynamicArray<int32> make(int32 n) { DynamicArray<int32> xs = DynamicArray.empty(); xs.add(item: n); xs.add(item: n + 1); return give xs; }
 fn int32 sumLen(DynamicArray<int32> a, DynamicArray<int32> b) { return a.length() + b.length(); }
 
 fn int32 main() {

@@ -4,7 +4,7 @@
 import std::collections::{Map, Set};
 
 fn int main() {
-    Map<int32, int32> sq = Map();
+    Map<int32, int32> sq = Map.empty();
     int32 i = 0;
     while (i < 100) { sq.put(key: i, value: i * i); i = i + 1; }  // forces grows; splitmix hash spreads
     sq.put(key: 7, value: 999);                                   // overwrite
@@ -18,7 +18,7 @@ fn int main() {
     if (w == 2500) { r = r + 5; }
     if (!sq.contains(key: miss)) { r = r + 5; }   // absent
 
-    Set<int32> s = Set();
+    Set<int32> s = Set.empty();
     s.add(key: 1); s.add(key: 2); s.add(key: 2); // idempotent
     r = r + s.length();                           // 2
     int32 one = 1;

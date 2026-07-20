@@ -12,7 +12,7 @@ fn void touch(const ref DynamicArray<Counter> xs) {
     xs[0].bump(by: 1);          // non-const method on a const-borrowed element -> REJECT
 }
 fn int32 main() {
-    DynamicArray<Counter> xs = DynamicArray();
+    DynamicArray<Counter> xs = DynamicArray.empty();
     Counter a = Counter(start: 1);
     xs.add(item: a);
     touch(xs: ref xs);

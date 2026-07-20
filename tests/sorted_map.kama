@@ -6,7 +6,7 @@ import std::collections::{SortedMap, DynamicArray};
 
 fn int32 main() {
     int32 r = 0;
-    SortedMap<int32, int32> m = SortedMap();
+    SortedMap<int32, int32> m = SortedMap.empty();
 
     // insert 0..199 in a scrambled order (37 coprime with 200) -> many splits
     int32 i = 0;

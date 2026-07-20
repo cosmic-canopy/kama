@@ -13,8 +13,8 @@ type resource Scene {
     }
 }
 fn int main() {
-    DynamicArray<int32> ids = DynamicArray(); ids.add(item: 7); ids.add(item: 8);
-    DynamicArray<Pt> pts = DynamicArray(); pts.add(item: Pt(x: 1, y: 2)); pts.add(item: Pt(x: 3, y: 4));
+    DynamicArray<int32> ids = DynamicArray.empty(); ids.add(item: 7); ids.add(item: 8);
+    DynamicArray<Pt> pts = DynamicArray.empty(); pts.add(item: Pt(x: 1, y: 2)); pts.add(item: Pt(x: 3, y: 4));
     Scene s = Scene(name: "lvl1", ids: give ids, pts: give pts);
     Result<string, Owned<Error>> j_r = encode(v: s);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };

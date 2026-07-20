@@ -7,7 +7,7 @@ fn int32 main() {
     int32 r = 0;
 
     // int64 keys — large values that would collide if truncated to int32
-    Map<int64, int64> big = Map();
+    Map<int64, int64> big = Map.empty();
     int64 i = 0i64;
     while (i < 50i64) { big.put(key: i * 1000000000i64, value: i); i = i + 1i64; }
     int64 k = 7i64 * 1000000000i64;
@@ -16,13 +16,13 @@ fn int32 main() {
     if (big.length() == 50) { r = r + 5; }
 
     // uint32 Set — idempotent add + membership
-    Set<uint32> s = Set();
+    Set<uint32> s = Set.empty();
     s.add(key: 4000000000ui32); s.add(key: 4000000000ui32); s.add(key: 1ui32);
     if (s.length() == 2) { r = r + 5; }
     if (s.contains(key: 4000000000ui32)) { r = r + 5; }
 
     // float32 Equatable via DynamicArray.contains (exact ==, no hashing)
-    DynamicArray<float32> fs = DynamicArray();
+    DynamicArray<float32> fs = DynamicArray.empty();
     fs.add(item: 1.5f32); fs.add(item: 2.5f32);
     if (fs.contains(item: 2.5f32)) { r = r + 5; }
     if (!fs.contains(item: 9.9f32)) { r = r + 5; }

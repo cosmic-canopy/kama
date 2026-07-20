@@ -5,13 +5,13 @@
 import std::collections::{Map, DynamicArray};
 
 fn DynamicArray<string> mk(string a, string b) {
-    DynamicArray<string> xs = DynamicArray();
+    DynamicArray<string> xs = DynamicArray.empty();
     xs.add(item: give a); xs.add(item: give b);
     return xs;
 }
 
 fn int main() {
-    Map<string, DynamicArray<string>> m = Map();
+    Map<string, DynamicArray<string>> m = Map.empty();
     m.put(key: "fruits",  value: mk(a: "apple", b: "pear"));
     m.put(key: "veggies", value: mk(a: "kale",  b: "corn"));
     m.put(key: "fruits",  value: mk(a: "mango", b: "fig"));   // overwrite: old key + old DynamicArray dropped

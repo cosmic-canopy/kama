@@ -14,7 +14,7 @@ fn int32 main() {
     int32 r = 0;
 
     // (a) core: stable handles; get/contains/remove; stale-handle + slot-reuse detection.
-    SlotMap<int32> sm = SlotMap();
+    SlotMap<int32> sm = SlotMap.empty();
     Handle a = sm.insert(value: 10);
     Handle b = sm.insert(value: 20);
     Handle c = sm.insert(value: 30);
@@ -44,7 +44,7 @@ fn int32 main() {
     if (cnt == 3) { r = r + 5; }
 
     // (c) move-only value: getRef mutates in place; remove reclaims ownership; the rest drop at scope exit.
-    SlotMap<Counter> cm = SlotMap();
+    SlotMap<Counter> cm = SlotMap.empty();
     Handle h1 = cm.insert(value: Counter(n: 100));
     Handle h2 = cm.insert(value: Counter(n: 200));
     cm.getRef(handle: h1).bump();                      // 100 -> 101, through the borrow

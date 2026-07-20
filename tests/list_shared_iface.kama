@@ -13,7 +13,7 @@ type resource Sq implements Shape {
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 fn int32 main() {
-    DynamicArray<Shared<Shape>> xs = DynamicArray();
+    DynamicArray<Shared<Shape>> xs = DynamicArray.empty();
     Shared<Shape> a = new Sq(s: 3);
     Shared<Shape> b = new Sq(s: 4);
     Shared<Shape> c = new Sq(s: 5);

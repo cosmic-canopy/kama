@@ -11,7 +11,7 @@ type resource Counter {
 }
 
 fn int main() {
-    Map<int32, Counter> m = Map();
+    Map<int32, Counter> m = Map.empty();
     m.put(key: 1, value: Counter(n: 10));
     m.put(key: 2, value: Counter(n: 20));
 

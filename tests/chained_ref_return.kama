@@ -12,7 +12,7 @@ type resource Node {
     DynamicArray<Owned<Node>> kids;
     bool leaf;
     public Node(bool leaf) {
-        DynamicArray<int32> v = DynamicArray(); DynamicArray<Owned<Node>> c = DynamicArray();
+        DynamicArray<int32> v = DynamicArray.empty(); DynamicArray<Owned<Node>> c = DynamicArray.empty();
         this.vals = give v; this.kids = give c; this.leaf = leaf;
     }
     public fn void add(int32 x) { this.vals.add(item: x); }

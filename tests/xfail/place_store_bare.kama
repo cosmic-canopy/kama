@@ -1,7 +1,7 @@
 import std::collections::{DynamicArray};
 // A bare NAMED owned source into a place-store must require a give/copy marker (like any owning hand-off).
 fn int32 main() {
-    DynamicArray<string> a = DynamicArray(); a.add(item: give "x");
+    DynamicArray<string> a = DynamicArray.empty(); a.add(item: give "x");
     string s = "y";
     a[0] = s;                              // bare named owned -> clean error (say give/copy)
     return 0;

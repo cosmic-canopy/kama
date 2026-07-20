@@ -9,7 +9,7 @@ import std::collections::{DynamicArray};
 
 type resource Store<V> {
     DynamicArray<V> d;
-    public Store() { this.d = DynamicArray(); }
+    public Store() { this.d = DynamicArray.empty(); }
     public fn void add(V x) { this.d.add(item: give x); }
     fn V clone(ref V v) when [V: Copyable] { return copy v; }
 

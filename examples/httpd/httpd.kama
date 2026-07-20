@@ -125,7 +125,7 @@ fn string toRelPath(ref string path) {
 
 // Send a full response (status line + headers + body). Returns 0 (fire-and-forget).
 fn int32 respond(ref TcpStream client, string status, string contentType, ref DynamicArray<uint8> body) {
-    DynamicArray<uint8> resp = DynamicArray();
+    DynamicArray<uint8> resp = DynamicArray.empty();
     appendStr(dst: resp, s: "HTTP/1.1 ");
     appendStr(dst: resp, s: give status);
     appendStr(dst: resp, s: "\r\nContent-Type: ");
@@ -140,7 +140,7 @@ fn int32 respond(ref TcpStream client, string status, string contentType, ref Dy
 
 // A tiny text/plain error page (404 / 400 / 405).
 fn int32 respondText(ref TcpStream client, string status, string text) {
-    DynamicArray<uint8> body = DynamicArray();
+    DynamicArray<uint8> body = DynamicArray.empty();
     appendStr(dst: body, s: give text);
     return respond(client: client, status: give status, contentType: "text/plain; charset=utf-8", body: body);
 }
@@ -184,7 +184,7 @@ fn int32 serve(ref TcpListener listener, ref string root) {
 }
 
 fn int32 run(ref TcpListener listener, ref string host, ref string root, uint16 port) {
-    DynamicArray<uint8> banner = DynamicArray();
+    DynamicArray<uint8> banner = DynamicArray.empty();
     appendStr(dst: banner, s: "kama httpd: serving '");
     appendStr(dst: banner, s: copy root);
     appendStr(dst: banner, s: "' on http://");
@@ -196,7 +196,7 @@ fn int32 run(ref TcpListener listener, ref string host, ref string root, uint16 
 }
 
 fn int32 fail(ref string host, uint16 port) {
-    DynamicArray<uint8> msg = DynamicArray();
+    DynamicArray<uint8> msg = DynamicArray.empty();
     appendStr(dst: msg, s: "kama httpd: could not bind ");
     appendStr(dst: msg, s: copy host);
     appendStr(dst: msg, s: ":");

@@ -10,7 +10,7 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b, int32 bport) {
     int32 c = match (rc) { case Ok(u): 0; case Err(e): -1; };
     if (c != 0) { return 61; }
 
-    DynamicArray<uint8> msg = DynamicArray();
+    DynamicArray<uint8> msg = DynamicArray.empty();
     msg.add(item: cast<uint8>(7)); msg.add(item: cast<uint8>(9)); msg.add(item: cast<uint8>(11));
     Result<usize, IoError> rs = a.send(bytes: msg);
     int32 sent = match (rs) { case Ok(w): cast<int32>(w); case Err(e): -1; };

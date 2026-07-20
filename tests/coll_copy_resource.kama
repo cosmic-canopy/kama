@@ -16,7 +16,7 @@ fn int32 sumHeads(ref DynamicArray<Res> xs) {
     return s;
 }
 fn int32 main() {
-    DynamicArray<Res> a = DynamicArray();
+    DynamicArray<Res> a = DynamicArray.empty();
     Res r1 = Res(v: 10);  a.add(item: give r1);
     Res r2 = Res(v: 20);  a.add(item: give r2);
     DynamicArray<Res> b = copy a;                                  // deep copy — each Res gets its own buffer

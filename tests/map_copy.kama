@@ -3,7 +3,7 @@
 import std::collections::{Map};
 
 fn int main() {
-    Map<int32, int32> m = Map();
+    Map<int32, int32> m = Map.empty();
     int32 i = 0;
     while (i < 20) { m.put(key: i, value: i * 10); i = i + 1; }
     Map<int32, int32> c = copy m;
@@ -16,7 +16,7 @@ fn int main() {
     if (c5 == 999) { r = r + 10; }
     if (m5 == 50)  { r = r + 10; }
 
-    Map<string, int32> s = Map();                                       // owning (string) keys
+    Map<string, int32> s = Map.empty();                                       // owning (string) keys
     s.put(key: "a", value: 1); s.put(key: "b", value: 2);
     Map<string, int32> sc = copy s;
     sc.put(key: "a", value: 100);                                       // mutate the copy only

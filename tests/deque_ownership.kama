@@ -11,13 +11,13 @@ fn int32 main() {
 
     // (1) VALUE elements stored inline; `operator[]` returns `ref Cell`, so a write goes THROUGH the borrow
     // (no move, no copy — the stack/in-place path).
-    Deque<Cell> vals = Deque();
+    Deque<Cell> vals = Deque.empty();
     vals.pushBack(item: Cell(v: 1)); vals.pushBack(item: Cell(v: 2));
     vals[0].v = 40;
     if (vals[0].v == 40) { r = r + 10; }
 
     // (2) OWNED elements: pop moves the `Owned<Cell>` OUT intact; the remainder drop in ~Deque (ASan gate).
-    Deque<Owned<Cell>> owned = Deque();
+    Deque<Owned<Cell>> owned = Deque.empty();
     owned.pushBack(item: new Cell(v: 7)); owned.pushBack(item: new Cell(v: 8));
     Optional<Owned<Cell>> po = owned.popFront();
     int32 ov = match (po) { case Some(p): p.v; case None: 0 - 1; };   // Deref forwards `.v` on the moved-out Owned
@@ -25,7 +25,7 @@ fn int32 main() {
 
     // (3) SHARED elements: a bare `copy` retains (refcount) into the deque, move transfers the handle out;
     // the original handle is still valid after the pop (shared ownership).
-    Deque<Shared<Cell>> shared = Deque();
+    Deque<Shared<Cell>> shared = Deque.empty();
     Shared<Cell> sc = new Cell(v: 5);
     shared.pushBack(item: copy sc);
     shared.pushBack(item: new Cell(v: 6));
@@ -35,7 +35,7 @@ fn int32 main() {
 
     // (4) WEAK elements: a deque of weak handles upgrades while the owning Shared is alive.
     Shared<Cell> keep = new Cell(v: 9);
-    Deque<Weak<Cell>> weaks = Deque();
+    Deque<Weak<Cell>> weaks = Deque.empty();
     weaks.pushBack(item: keep.downgrade());
     int32 wv = match (weaks[0].tryUpgrade()) { case Some(s): s.v; case None: 0 - 1; };
     if (wv == 9) { r = r + 10; }

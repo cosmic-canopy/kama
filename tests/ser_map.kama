@@ -2,7 +2,7 @@
 import std::serialization::json::{encode, decode};
 import std::collections::{Map};
 fn int main() {
-    Map<string, int32> m = Map();
+    Map<string, int32> m = Map.empty();
     m.put(key: "a", value: 1); m.put(key: "b", value: 2);
     Result<string, Owned<Error>> j_r = encode(v: m);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };

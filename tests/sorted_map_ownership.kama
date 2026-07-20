@@ -16,7 +16,7 @@ fn int32 main() {
     int32 r = 0;
 
     // (a) owning string keys, lexicographic order, enough to split.
-    SortedMap<string, int32> sm = SortedMap();
+    SortedMap<string, int32> sm = SortedMap.empty();
     sm.put(key: "delta", value: 4); sm.put(key: "alpha", value: 1); sm.put(key: "echo", value: 5);
     sm.put(key: "bravo", value: 2); sm.put(key: "golf", value: 7); sm.put(key: "charlie", value: 3);
     sm.put(key: "foxtrot", value: 6); sm.put(key: "hotel", value: 8); sm.put(key: "india", value: 9);
@@ -43,7 +43,7 @@ fn int32 main() {
     if (sm.length() == 9 && !sm.contains(key: rd)) { r = r + 5; }
 
     // (b) MOVE-ONLY values: insert 40 (forces splits), mutate one in place via getRef, reclaim one on remove.
-    SortedMap<int32, Counter> cm = SortedMap();
+    SortedMap<int32, Counter> cm = SortedMap.empty();
     int32 i = 0;
     while (i < 40) { int32 kk = (i * 17) % 40; cm.put(key: kk, value: Counter(n: kk)); i = i + 1; }
     if (cm.length() == 40) { r = r + 5; }

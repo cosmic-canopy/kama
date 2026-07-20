@@ -6,7 +6,7 @@ import std::collections::{DynamicArray};
 
 fn int main() {
     string self = "_fs_raii.tmp";
-    DynamicArray<uint8> data = DynamicArray();
+    DynamicArray<uint8> data = DynamicArray.empty();
     data.add(item: cast<uint8>(65));
     int32 w = match (writeFile(path: self, bytes: data)) { case Ok(x): 0; case Err(e): 40; };
     if (w != 0) { return w; }

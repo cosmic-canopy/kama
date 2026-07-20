@@ -6,7 +6,7 @@ fn int main()
     uint64 total = 0;
     for (int32 iter = 0; iter < 2000; iter++)
     {
-        DynamicArray<int32> xs = DynamicArray();
+        DynamicArray<int32> xs = DynamicArray.empty();
         for (int32 j = 1; j <= 1000; j++)
         {
             xs.add(item: j);

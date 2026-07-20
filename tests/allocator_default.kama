@@ -5,12 +5,12 @@ import std::collections::{DynamicArray, Map};
 
 fn int32 main() {
     int32 r = 0;
-    DynamicArray<int32> a = DynamicArray();                                         // A = GlobalAllocator (default)
+    DynamicArray<int32> a = DynamicArray.empty();                                         // A = GlobalAllocator (default)
     DynamicArray<int32, GlobalAllocator> b = DynamicArray::withAllocator(allocator: GlobalAllocator());
     int32 i = 0; while (i < 50) { a.add(item: i); b.add(item: i); i = i + 1; }
     if (a.length() == 50 && b.length() == 50 && a[49] == 49) { r = r + 25; }
 
-    Map<int32, int32> mm = Map(); mm.put(key: 1, value: 2);
+    Map<int32, int32> mm = Map.empty(); mm.put(key: 1, value: 2);
     Optional<int32> o = mm.get(key: 1);
     int32 v = match (o) { case Some(x): x; case None: 0 - 1; };
     if (v == 2) { r = r + 25; }

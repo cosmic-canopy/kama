@@ -3,7 +3,7 @@
 import std::collections::{DynamicArray};
 
 fn int main() {
-    DynamicArray<string> xs = DynamicArray();
+    DynamicArray<string> xs = DynamicArray.empty();
     xs.reserve(n: 8);                       // preallocate — no reallocation across the adds
     xs.add(item: "a"); xs.add(item: "b"); xs.add(item: "c"); xs.add(item: "d");
 

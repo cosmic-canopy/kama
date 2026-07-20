@@ -57,7 +57,7 @@ type resource File {
 
     // Read the whole file to EOF into an owning byte buffer.
     public fn Result<DynamicArray<uint8>, IoError> readAll() {
-        DynamicArray<uint8> buf = DynamicArray();
+        DynamicArray<uint8> buf = DynamicArray.empty();
         FixedArray<uint8> scratch = FixedArray(size: 65536);
         bool eof = false;
         while (!eof) {
@@ -133,7 +133,7 @@ fn Result<Unit, IoError> remove(ref string path) {
 fn Result<DynamicArray<string>, IoError> readDir(ref string path) {
     Ptr dirp = kama_diropen(path: path.cstr());
     if (dirp == null) { return Result::Err(error: lastError()); }
-    DynamicArray<string> names = DynamicArray();
+    DynamicArray<string> names = DynamicArray.empty();
     while (true) {
         string name = kama_dirnext(dirp: dirp);
         if (name.isEmpty()) { break; }              // end of directory

@@ -19,7 +19,7 @@ fn int32 clientSend(uint16 port) {
     Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
     return match (rc) {
         case Ok(c): {
-            DynamicArray<uint8> data = DynamicArray();
+            DynamicArray<uint8> data = DynamicArray.empty();
             data.add(item: cast<uint8>(10)); data.add(item: cast<uint8>(20));
             data.add(item: cast<uint8>(30)); data.add(item: cast<uint8>(40));
             := writeVia(s: c, bytes: data);            // dynamic dispatch through ReliableStream

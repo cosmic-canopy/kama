@@ -11,14 +11,14 @@ type value Point implements Hashable, Equatable {
 }
 
 fn int main() {
-    Map<int32, int32> m = Map();
+    Map<int32, int32> m = Map.empty();
     m.put(key: 5, value: 50);
     int32 r = 0;
     int32 v = match (m.get(key: 5)) { case Some(x): x; case None: 0; };   // inline int literal key
     if (v == 50)            { r = r + 10; }
     if (m.contains(key: 5)) { r = r + 10; }                              // inline literal again
 
-    Map<Point, int32> pm = Map();
+    Map<Point, int32> pm = Map.empty();
     Point origin = Point(x: 1, y: 2);
     pm.put(key: origin, value: 99);
     int32 pv = match (pm.get(key: Point(x: 1, y: 2))) { case Some(x): x; case None: 0; };  // inline ctor key

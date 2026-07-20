@@ -3,7 +3,7 @@
 import std::collections::{Map};
 fn int main() {
     int32 r = 0;
-    Map<int32, int32> m = Map();
+    Map<int32, int32> m = Map.empty();
     if (m.length() == 0)              { r = r + 3; }               // empty
     if (!m.contains(key: 1))          { r = r + 3; }               // absent in empty
     bool rm1 = match (m.remove(key: 1)) { case Some(x): true; case None: false; };

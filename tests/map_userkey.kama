@@ -11,7 +11,7 @@ type value Point implements Hashable, Equatable {
 }
 
 fn int main() {
-    Map<Point, int32> m = Map();
+    Map<Point, int32> m = Map.empty();
     m.put(key: Point(x: 1, y: 2), value: 10);
     m.put(key: Point(x: 3, y: 4), value: 20);
     m.put(key: Point(x: 1, y: 2), value: 99);       // overwrite (equal key)

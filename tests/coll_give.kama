@@ -4,7 +4,7 @@ import std::collections::{DynamicArray};
 // ASan-clean proves the single ownership (a bare copy of the struct would double-free the buffer).
 fn int32 sum(ref DynamicArray<int32> xs) { int32 s = 0; foreach (int32 v in xs) { s = s + v; } return s; }
 fn int32 main() {
-    DynamicArray<int32> a = DynamicArray();
+    DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 20); a.add(item: 22);
     DynamicArray<int32> b = give a;     // move the buffer into b; a is emptied
     return sum(xs: ref b);      // 42;  only b frees the buffer

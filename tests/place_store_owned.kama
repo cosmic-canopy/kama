@@ -8,14 +8,14 @@ type resource Box {
     public fn int32 val() { return this.v[0]; }
 }
 fn int32 main() {
-    DynamicArray<string> ls = DynamicArray(); ls.add(item: give "aa"); ls.add(item: give "bb");
+    DynamicArray<string> ls = DynamicArray.empty(); ls.add(item: give "aa"); ls.add(item: give "bb");
     string s = "ccc";
     ls[0] = give s;                        // move a string into the place (old released, s consumed)
     ls[1] = copy ls[0];                    // deep-copy into the place (ls[1] = "ccc")
     ls[0] = ls[0].concat(other: "!");      // fresh rvalue reading the old element (ls[0] = "ccc!")
     int32 r = cast<int32>(ls[0].length()) + cast<int32>(ls[1].length());   // 4 + 3 = 7
 
-    DynamicArray<Box> lb = DynamicArray(); Box b0 = Box(x: 1); lb.add(item: give b0);
+    DynamicArray<Box> lb = DynamicArray.empty(); Box b0 = Box(x: 1); lb.add(item: give b0);
     Box b = Box(x: 9);
     lb[0] = give b;                        // move a RESOURCE into the place (old Box freed)
     r = r + lb[0].val();                   // + 9 = 16

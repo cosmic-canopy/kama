@@ -34,7 +34,7 @@ fn int main() {
     Child mainC = Child(v: 5, tag: "xyz");            // weight 8
     Child kid1  = Child(v: 1, tag: "a");              // weight 2
     Child kid2  = Child(v: 2, tag: "bb");             // weight 4
-    DynamicArray<Child> ks = DynamicArray();
+    DynamicArray<Child> ks = DynamicArray.empty();
     ks.add(item: give kid1);
     ks.add(item: give kid2);
     Child mc = Child(v: 3, tag: "qq");                // weight 5

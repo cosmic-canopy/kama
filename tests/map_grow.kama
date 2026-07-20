@@ -10,7 +10,7 @@ fn string keyN(int32 n) {
 }
 
 fn int main() {
-    Map<string, int32> m = Map();
+    Map<string, int32> m = Map.empty();
     int32 i = 0;
     while (i < 50) { m.put(key: keyN(n: i), value: i * 2); i = i + 1; }   // forces several grows
 

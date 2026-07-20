@@ -18,7 +18,7 @@ type resource Probe
 
 fn int build()
 {
-    DynamicArray<Probe> xs = DynamicArray();
+    DynamicArray<Probe> xs = DynamicArray.empty();
     Probe a = Probe(id: 1);
     Probe b = Probe(id: 2);
     Probe c = Probe(id: 4);

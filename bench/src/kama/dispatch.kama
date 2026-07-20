@@ -20,7 +20,7 @@ type resource Square implements Shape
 }
 fn int main()
 {
-    DynamicArray<Owned<Shape>> shapes = DynamicArray();
+    DynamicArray<Owned<Shape>> shapes = DynamicArray.empty();
     for (int32 j = 0; j < 512; j++)
     {
         if ((j % 2) == 0) { Owned<Shape> sh = new Circle(r: 3); shapes.add(item: give sh); }

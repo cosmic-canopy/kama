@@ -2,7 +2,7 @@
 // paths most likely to corrupt an open-addressing table. Verifies correctness throughout; ASan-clean.
 import std::collections::{Map};
 fn int main() {
-    Map<int32, int32> m = Map();
+    Map<int32, int32> m = Map.empty();
     int32 i = 0;
     while (i < 1000) { m.put(key: i, value: i * 3); i = i + 1; }   // ~7 grows
 

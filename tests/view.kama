@@ -21,7 +21,7 @@ fn void doubleAll(View<int32> v) {
 fn int32 main() {
     int32 r = 0;
 
-    DynamicArray<int32> a = DynamicArray();
+    DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 10); a.add(item: 20); a.add(item: 30); a.add(item: 40);
 
     View<int32> all = a.view();

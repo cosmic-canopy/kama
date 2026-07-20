@@ -10,7 +10,7 @@ type resource Box {
 }
 
 fn int main() {
-    DynamicArray<Box> xs = DynamicArray();
+    DynamicArray<Box> xs = DynamicArray.empty();
     xs.add(item: Box(v: 1)); xs.add(item: Box(v: 2)); xs.add(item: Box(v: 3)); xs.add(item: Box(v: 4));
 
     int32 r = 0;

@@ -6,7 +6,7 @@ import std::collections::{Map, Entry};
 
 fn int main() {
     // (a) int32 -> int32: sum key+value across every entry.
-    Map<int32, int32> m = Map();
+    Map<int32, int32> m = Map.empty();
     m.put(key: 1, value: 10);
     m.put(key: 2, value: 20);
     m.put(key: 3, value: 30);
@@ -14,7 +14,7 @@ fn int main() {
     foreach (Entry<int32, int32> e in m.entries()) { a = a + e.key() + e.value(); }   // 11 + 22 + 33 = 66
 
     // (b) int32 -> string: the value is OWNING, so each Entry deep-copies the string and drops it cleanly.
-    Map<int32, string> sm = Map();
+    Map<int32, string> sm = Map.empty();
     sm.put(key: 1, value: "ab");
     sm.put(key: 2, value: "cde");
     int32 b = 0;

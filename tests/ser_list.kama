@@ -2,7 +2,7 @@
 import std::serialization::json::{encode, decode};
 import std::collections::{DynamicArray};
 fn int main() {
-    DynamicArray<int32> xs = DynamicArray();
+    DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 30);
     Result<string, Owned<Error>> j_r = encode(v: xs);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };

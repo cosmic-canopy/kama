@@ -5,7 +5,7 @@
 import std::collections::{DynamicArray, FixedArray};
 fn int main() {
     int32 r = 0;
-    DynamicArray<string> xs = DynamicArray();
+    DynamicArray<string> xs = DynamicArray.empty();
     if (xs.length() == 0)             { r = r + 2; }   // empty
     if (!xs.contains(item: "z"))      { r = r + 2; }   // absent in empty
     if (xs.indexOf(item: "z") == 0 - 1) { r = r + 2; }

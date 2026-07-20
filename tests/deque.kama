@@ -10,18 +10,18 @@ fn int32 main() {
     int32 r = 0;
 
     // pushBack then popFront == FIFO order.
-    Deque<int32> q = Deque();
+    Deque<int32> q = Deque.empty();
     q.pushBack(item: 1); q.pushBack(item: 2); q.pushBack(item: 3);
     if (q.length() == 3 && unwrap(o: q.popFront()) == 1 && unwrap(o: q.popFront()) == 2) { r = r + 10; }
 
     // pushFront then popFront == LIFO on the front; popBack takes the tail.
-    Deque<int32> d = Deque();
+    Deque<int32> d = Deque.empty();
     d.pushFront(item: 10); d.pushFront(item: 20); d.pushBack(item: 5);   // logical: [20, 10, 5]
     if (d[0] == 20 && d[1] == 10 && d[2] == 5) { r = r + 10; }
     if (unwrap(o: d.popFront()) == 20 && unwrap(o: d.popBack()) == 5 && d.length() == 1) { r = r + 10; }
 
     // Wraparound: on a small cap, alternate pop-front / push-back so the live window straddles the buffer end.
-    Deque<int32> w = Deque();
+    Deque<int32> w = Deque.empty();
     w.reserve(n: 4);
     int32 i = 0; while (i < 4) { w.pushBack(item: i); i = i + 1; }        // [0,1,2,3], full
     if (unwrap(o: w.popFront()) == 0 && unwrap(o: w.popFront()) == 1) { r = r + 5; }   // free two front slots
@@ -47,14 +47,14 @@ fn int32 main() {
 
     // RAII: a deque of OWNED elements drops the un-popped ones on scope exit (ASan-verified). Pop some,
     // leave the rest for the destructor.
-    Deque<DynamicArray<int32>> owned = Deque();
+    Deque<DynamicArray<int32>> owned = Deque.empty();
     int32 j = 0;
-    while (j < 3) { DynamicArray<int32> row = DynamicArray(); row.add(item: j); owned.pushBack(item: give row); j = j + 1; }
+    while (j < 3) { DynamicArray<int32> row = DynamicArray.empty(); row.add(item: j); owned.pushBack(item: give row); j = j + 1; }
     Optional<DynamicArray<int32>> first = owned.popFront();   // moved out + dropped here
     if (owned.length() == 2) { r = r + 10; }                 // two remain for ~Deque to drop
 
     // Serialize round-trip through JSON (front-to-back array).
-    Deque<int32> s = Deque();
+    Deque<int32> s = Deque.empty();
     s.pushBack(item: 7); s.pushBack(item: 8); s.pushBack(item: 9);
     Result<string, Owned<Error>> __enc = encode(v: s);
     string __encStr = match (give __enc) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };

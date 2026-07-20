@@ -6,16 +6,16 @@ import std::collections::{Deque, FixedArray, BitSet, SlotMap, Handle, PriorityQu
 fn int32 main() {
     int32 r = 0;
 
-    Deque<int32> d = Deque(); d.pushBack(item: 7);
+    Deque<int32> d = Deque.empty(); d.pushBack(item: 7);
     if (d.length() == 1 && d[0] == 7) { r = r + 5; }
 
     FixedArray<int32> fa = FixedArray(size: 4); fa[2] = 3;
     if (fa[2] == 3 && fa[0] == 0) { r = r + 5; }
 
-    BitSet bs = BitSet(); bs.set(index: 5);
+    BitSet bs = BitSet.empty(); bs.set(index: 5);
     if (bs.test(index: 5) && bs.count() == 1) { r = r + 5; }
 
-    SlotMap<int32> sm = SlotMap(); Handle h = sm.insert(value: 9);
+    SlotMap<int32> sm = SlotMap.empty(); Handle h = sm.insert(value: 9);
     if (sm.contains(handle: h) && sm.length() == 1) { r = r + 5; }
 
     PriorityQueue<int32> pq = PriorityQueue::minHeap(); pq.push(item: 2); pq.push(item: 1);

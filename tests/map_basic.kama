@@ -4,7 +4,7 @@
 import std::collections::{Map};
 
 fn int main() {
-    Map<string, int32> m = Map();
+    Map<string, int32> m = Map.empty();
     m.put(key: "one", value: 1);
     m.put(key: "two", value: 2);
     m.put(key: "three", value: 3);

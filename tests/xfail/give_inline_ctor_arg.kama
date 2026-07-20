@@ -3,7 +3,7 @@ import std::collections::{DynamicArray};
 // clean "needs no marker" error, matching init/assignment positions (not a confusing "unknown function").
 type resource Box { DynamicArray<int32> v; public Box(int32 x) { this.v.add(item: x); } }
 fn int32 main() {
-    DynamicArray<Box> lb = DynamicArray();
+    DynamicArray<Box> lb = DynamicArray.empty();
     lb.add(item: give Box(x: 1));           // give on a fresh ctor -> clean error (drop the marker)
     return 0;
 }

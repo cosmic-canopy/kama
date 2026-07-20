@@ -2,7 +2,7 @@
 import std::collections::{Set};
 
 fn int main() {
-    Set<string> s = Set();
+    Set<string> s = Set.empty();
     s.add(key: "a");
     s.add(key: "b");
     s.add(key: "c");

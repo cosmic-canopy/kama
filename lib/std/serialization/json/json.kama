@@ -18,7 +18,7 @@ type resource JsonWriter implements Serializer {
     SerError code;         // the recorded write error
 
     public JsonWriter() {
-        DynamicArray<uint8> b = DynamicArray();
+        DynamicArray<uint8> b = DynamicArray.empty();
         this.buf = give b;
         this.needComma = false;
         this.err = false;
@@ -317,7 +317,7 @@ type resource JsonReader implements Deserializer {
         this.skipWs();
         if (this.peek() != 34ui8) { this.err = true; return ""; }   // opening "
         this.pos = this.pos + 1;
-        DynamicArray<uint8> acc = DynamicArray();
+        DynamicArray<uint8> acc = DynamicArray.empty();
         while (this.pos < this.len) {
             uint8 c = this.src[this.pos];
             if (c == 34ui8) { this.pos = this.pos + 1; return this.bytesToString(b: acc); }   // closing "

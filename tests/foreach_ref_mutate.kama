@@ -5,7 +5,7 @@ type value P { public int32 x; public int32 y; public P(int32 x, int32 y){ this.
 fn int32 main() {
     InlineArray<int32, 4> a = [1, 2, 3, 4];
     foreach (ref int32 e in a) { e = e * 10; }        // [10,20,30,40]
-    DynamicArray<P> ps = DynamicArray();
+    DynamicArray<P> ps = DynamicArray.empty();
     ps.add(item: P(x: 1, y: 0));
     ps.add(item: P(x: 2, y: 0));
     foreach (ref P p in ps) { p.x = p.x + 5; }        // x -> 6, 7

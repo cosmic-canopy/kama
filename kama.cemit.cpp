@@ -2274,9 +2274,19 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // type threaded so the compound literal / `__fill` names the right struct.
             bool isArrayLit = dynamic_cast<ArrayLiteralNode*>(r) != nullptr;
             bool isVariantCtor = false;
+            // A dot-on-type ctor call on a GENERIC template (`x = Map.empty()`) is value-producing and needs
+            // the LHS instance threaded so emitDotOnTypeCtorCall can resolve `Map` -> `Map_int32_int32` by LHS
+            // inference — the same channel a local-decl uses. (A concrete-type ctor needs no threading.) #M8d.2
+            bool isDotCtor = false;
             if (!isMatch && !isArrayLit) {
                 SharedStringList qual;
-                if (auto* iv = dynamic_cast<InvocationNode*>(r)) { if (iv->identifier) qual = iv->identifier->qualifier; }
+                if (auto* iv = dynamic_cast<InvocationNode*>(r)) {
+                    if (iv->identifier) qual = iv->identifier->qualifier;
+                    if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) {
+                        std::string dt;
+                        if (isTypeReceiver(ma, dt) && _genericTypeParams.count(dt)) isDotCtor = true;
+                    }
+                }
                 else if (auto* id = dynamic_cast<IdentifierNode*>(r)) qual = id->qualifier;
                 if (qual && !qual->empty()) {
                     auto q = std::make_shared<StringList>();
@@ -2285,7 +2295,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     isVariantCtor = (_classes.count(en) && _classes[en].isVariant) || _genericTypeParams.count(en);
                 }
             }
-            if (isMatch || isVariantCtor || isArrayLit) {
+            if (isMatch || isVariantCtor || isArrayLit || isDotCtor) {
                 std::string lhsCType = exprClass(as->unaryExpression);      // class/union name
                 std::string lname;
                 if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))

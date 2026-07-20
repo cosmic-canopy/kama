@@ -11,7 +11,7 @@ type value Counter {
 
 fn int32 main()
 {
-    DynamicArray<Counter> xs = DynamicArray();
+    DynamicArray<Counter> xs = DynamicArray.empty();
     Counter a = Counter(start: 10);
     Counter b = Counter(start: 20);
     xs.add(item: a);

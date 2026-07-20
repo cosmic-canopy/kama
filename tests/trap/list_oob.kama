@@ -2,7 +2,7 @@
 // derived from the live length (runtime-opaque) so it can't fold. (list_bounds covers the valid edges.)
 import std::collections::{DynamicArray};
 fn int main() {
-    DynamicArray<int32> xs = DynamicArray();
+    DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 10);
     xs.add(item: 20);
     int32 i = cast<int32>(xs.length()) + 5;   // 7, past the end

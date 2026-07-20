@@ -7,7 +7,7 @@ fn int32 main() {
     int32 r = 0;
 
     // reserve() up front, then a bulk insert with no incremental rehash.
-    Map<int32, int32> m = Map();
+    Map<int32, int32> m = Map.empty();
     m.reserve(n: 100);
     int32 i = 0;
     while (i < 100) { m.put(key: i, value: i * 2); i = i + 1; }
@@ -29,7 +29,7 @@ fn int32 main() {
     if (m.length() == 100) { r = r + 5; }
 
     // reserve() on an ALREADY-POPULATED map resizes + rehashes the live entries cleanly.
-    Map<int32, int32> m2 = Map();
+    Map<int32, int32> m2 = Map.empty();
     i = 0; while (i < 10) { m2.put(key: i, value: i); i = i + 1; }
     m2.reserve(n: 500);                     // forces a rehome of the 10 live entries into bigger buffers
     i = 10; while (i < 60) { m2.put(key: i, value: i); i = i + 1; }
@@ -38,7 +38,7 @@ fn int32 main() {
     if (m2.length() == 60 && lost == 0) { r = r + 10; }
 
     // Set.reserve — idempotent adds, membership intact.
-    Set<int32> s = Set();
+    Set<int32> s = Set.empty();
     s.reserve(n: 64);
     i = 0; while (i < 64) { s.add(key: i); s.add(key: i); i = i + 1; }   // duplicate adds
     if (s.length() == 64 && s.contains(key: 7) && !s.contains(key: 64)) { r = r + 10; }

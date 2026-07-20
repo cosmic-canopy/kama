@@ -8,8 +8,8 @@ import std::collections::{Map, Set, FastHasher};
 fn int32 main() {
     int32 r = 0;
 
-    Map<int32, int32> strong = Map();                 // DefaultHasher (filled by the default)
-    Map<int32, int32, FastHasher> fast = Map();        // explicit FastHasher override — a distinct monomorph
+    Map<int32, int32> strong = Map.empty();                 // DefaultHasher (filled by the default)
+    Map<int32, int32, FastHasher> fast = Map.empty();        // explicit FastHasher override — a distinct monomorph
     int32 i = 0;
     while (i < 100) { strong.put(key: i, value: i * i); fast.put(key: i, value: i * i); i = i + 1; }  // forces grows
     strong.put(key: 7, value: 999); fast.put(key: 7, value: 999);   // overwrite in both
@@ -35,7 +35,7 @@ fn int32 main() {
     if (!fast.contains(key: 500)) { r = r + 5; }      // absent key
 
     // FastHasher over STRING keys (FNV content hash + fibonacci finish) round-trips too.
-    Map<string, int32, FastHasher> byName = Map();
+    Map<string, int32, FastHasher> byName = Map.empty();
     byName.put(key: "one", value: 1); byName.put(key: "two", value: 2); byName.put(key: "three", value: 3);
     Optional<int32> s1 = byName.get(key: "one");
     Optional<int32> s2 = byName.get(key: "two");
@@ -46,7 +46,7 @@ fn int32 main() {
     if (v1 + v2 + v3 == 6 && byName.length() == 3) { r = r + 10; }
 
     // Set threads H through its backing Map<K,Unit,H>.
-    Set<int32, FastHasher> s = Set();
+    Set<int32, FastHasher> s = Set.empty();
     i = 0; while (i < 64) { s.add(key: i); s.add(key: i); i = i + 1; }   // duplicate adds are idempotent
     if (s.length() == 64 && s.contains(key: 7) && !s.contains(key: 64)) { r = r + 10; }
 

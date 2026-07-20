@@ -9,7 +9,7 @@ type value Vec2
 }
 fn int main()
 {
-    DynamicArray<Vec2> vs = DynamicArray();
+    DynamicArray<Vec2> vs = DynamicArray.empty();
     vs.add(item: Vec2(x: 1, y: 2));
     vs.add(item: Vec2(x: 3, y: 4));
     vs.add(item: Vec2(x: 5, y: 6));
