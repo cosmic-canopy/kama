@@ -83,6 +83,18 @@ genuinely later-track or opt-in.
   'Shared_Probe'`). Reproduces with a plain `enum E { A, B(Shared<Probe>) }` constructed only via `A` —
   independent of Model C / `.as<>` (found alongside M5/P3). Fix: scan **every** variant's payload types at
   enum registration (like class fields via `scanTypeForCollections`), not lazily at construction.
+- **Custom-allocator default-convenience enforcement (construction-model, pre-1.0 safety).** The M8c
+  collections four-ctor matrix ships `empty()`/`withCapacity(n)` (default `GlobalAllocator`) as `ctor`s
+  alongside `withAllocator`/`withCapacityAndAllocator` (custom `A`). Calling a *default*-allocator
+  convenience on a *custom*-`A` type (`DynamicArray<T, BumpAllocator>.empty()`) currently compiles into an
+  incomplete (zero-allocator) collection — low-reachability (contradictory intent) but a real hole in
+  "nothing incomplete is constructible." The M8b completeness gate **cannot** reject it: the gate runs at
+  ctor-definition emit and the compiler emits *every* ctor of a monomorph, so a custom-`A` monomorph built
+  via `withAllocator` force-emits (and would falsely reject) its uncalled `empty()`/`withCapacity()`. The
+  true fix is a **structural `when [A: default]` gate** so those two ctors simply *do not exist* for a
+  non-default-fillable `A` (or lazy per-ctor monomorph emission). Must land before tag 1.0. Also re-earns
+  the compile-time protection `Map/Set::withCapacity` had as a `static fn` (design doc §7 carve-out) before
+  M8c unified them into `ctor`s.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by

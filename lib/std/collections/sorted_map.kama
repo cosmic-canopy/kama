@@ -477,9 +477,10 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
         this.root = give r; this.len = 0; this.mods = 0;
     }
 
-    // Named empty constructor (M7): `SortedMap.empty()`, default `GlobalAllocator`. Delegates to the primary
-    // during coexistence; at M8 the primary's body moves here.
-    public ctor empty() { return SortedMap(); }
+    // The canonical zero-arg build (M8c `default`) — a NON-zero default (the primary builds a live B-tree
+    // root). A B-tree has no backing buffer to presize, so SortedMap has no `withCapacity`. Keeps delegation
+    // (a bare local would trip the completeness gate on the owning `root`, which the primary builds).
+    public default ctor empty() { return SortedMap(); }
 
     // Back the whole tree with a caller-owned allocator (e.g. an `Arena`). The bare ctor above built a
     // root whose arrays bound the zero-init `alloc`, so REPLACE it (dropping the default root) with one

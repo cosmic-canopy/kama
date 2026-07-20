@@ -112,11 +112,18 @@ removes today's vtable-only synthesized default ctor: a polymorphic type must de
   construction" is simply a contract that requires a zero-arg ctor; a designer defines whatever
   construction contract they need and bounds on it.
 - **extern-`value` FFI stays outside this model** (the C-POD aggregate-init path is unchanged).
-- **A default-parameter convenience factory that returns a *different specialization* stays `static fn`.**
-  `Map::withCapacity` / `Set::withCapacity` take no allocator, so they return the DEFAULT-allocator
-  `Map<K,V,H>` — a different type than the enclosing `Map<K,V,H,A>`. A `ctor` would force the enclosing
-  `A` and silently build a map with an unset custom allocator; `static fn` keeps the compile error on misuse.
-  Exempt from §6's self-returning ban (the return type is a distinct specialization).
+- **Collections — the four-ctor matrix** *(M8c)*. Every growable collection (`DynamicArray`, `Deque`,
+  `Map`, `Set`, `SlotMap`, `BitSet`) offers `empty()` / `withCapacity(n)` (default `GlobalAllocator`) and
+  `withAllocator(a)` / `withCapacityAndAllocator(a, n)` (caller-owned `A`) — all `ctor`s (the M7.2
+  `Map/Set::withCapacity` `static fn` exception is gone). `PriorityQueue` carries the capacity on its
+  backing array (`minHeap/maxHeapWithCapacity`); B-tree `SortedMap`/`SortedSet` (no backing buffer) and the
+  always-sized `FixedArray` keep their distinct shapes. The canonical zero-arg build is marked `default`.
+  **Known gap (tracked, ROADMAP §2):** calling a *default*-allocator convenience on a *custom*-`A` type
+  (`DynamicArray<T, BumpAllocator>.empty()`) compiles into an incomplete (zero-allocator) collection — the
+  completeness gate can't reject it (it runs at ctor-definition emit, and every ctor of a monomorph is
+  emitted, so a custom-`A` monomorph would falsely reject its uncalled default-alloc ctors). The pre-1.0 fix
+  is a structural `when [A: default]` gate so those ctors don't exist for a non-default-fillable `A`; that
+  also re-earns the compile-time protection the old `static fn` had.
 - The **Equatable / Hashable / Copyable derive story** is designed alongside `of`/`zero` (one opt-in derive
   surface) but shipped separately (see §9 and ROADMAP §2). Kama today rejects auto structural `==`
   (`tests/xfail/operator_eq_missing.kama`), so a derive is a stance change designed with this family.

@@ -13,7 +13,11 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // `this.m = Map()` won't infer the map's type args from the field, so build it in a typed local
     // first, then move it in (the tracked bare-generic-ctor-in-a-non-local-init gap).
     public Set() { Map<K, Unit, H, A> inner = Map(); this.m = give inner; }
-    public ctor empty() { return Set(); }   // named empty ctor (M7); delegates to the primary until M8
+
+    // The four-ctor matrix (M8c). `Set` carries no `alloc` field (it wraps `Map<K,Unit,H,A> m`); the
+    // capacity ctors build the inner map via the matching `Map` ctor. `empty`/`withCapacity` are the
+    // default-allocator conveniences (custom `A` uses the allocator-taking ctors).
+    public default ctor empty() { return Set(); }
 
     // Build an empty set whose backing map draws from `allocator` (e.g. an `Arena` bump handle). The
     // bare `Set()` builds an empty (cap-0) inner map that is dropped when replaced by the arena-backed one.
@@ -27,13 +31,20 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
     public fn void reserve(int32 n) { this.m.reserve(n: n); }   // preallocate for a known-size build
 
-    // Build an empty set already sized for `capacity` entries (K from the target type). NOT a `ctor` (M7):
-    // like `Map::withCapacity`, it takes no allocator and returns the DEFAULT-allocator `Set<K,H>`, a
-    // different specialization than the enclosing `Set<K,H,A>` — keeping it `static fn` preserves the
-    // compile error when misused on a custom-`A` target. (M8: exempt from the self-returning ban.)
-    public static fn Set<K,H> withCapacity(int32 capacity) {
-        Set<K,H> s = Set();
-        s.reserve(n: capacity);
+    // Build an empty set already sized for `capacity` entries. M8c: now a `ctor` returning the enclosing
+    // `Set<K,H,A>` (was a `static fn`), building the inner map via `Map::withCapacity`.
+    public ctor withCapacity(int32 capacity) {
+        Set<K,H,A> s = Set();
+        Map<K, Unit, H, A> inner = Map::withCapacity(capacity: capacity);
+        s.m = give inner;
+        return give s;
+    }
+
+    // Caller-owned allocator AND pre-sized — builds the inner map via `Map::withCapacityAndAllocator`.
+    public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
+        Set<K,H,A> s = Set();
+        Map<K, Unit, H, A> inner = Map::withCapacityAndAllocator(allocator: allocator, capacity: capacity);
+        s.m = give inner;
         return give s;
     }
     public fn bool contains(ref K key) { return this.m.contains(key: key); }

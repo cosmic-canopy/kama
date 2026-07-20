@@ -46,9 +46,16 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // (Kama has no ctor overloading, so there is one ctor and the allocator arrives via the factory).
     public DynamicArray() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; this.mods = 0; }
 
-    // Named empty constructor (construction-model M7): `DynamicArray.empty()`, the default-`GlobalAllocator`
-    // list. Delegates to the nameless primary during coexistence; at M8 the primary's body moves here.
-    public ctor empty() { return DynamicArray(); }
+    // The four-ctor matrix (construction-model M8c): `empty` / `withCapacity` (default `GlobalAllocator`),
+    // `withAllocator` / `withCapacityAndAllocator` (caller-owned `A`). `empty()` is the canonical zero-arg
+    // build — marked `default`, so a `DynamicArray<T,A>` field elsewhere is default-fillable. `empty`/
+    // `withCapacity` are the DEFAULT-allocator conveniences; for a custom `A` use the allocator-taking ctors.
+    // (Making a custom-`A` `empty`/`withCapacity` a COMPILE ERROR is a tracked pre-1.0 item — it needs a
+    // structural `when [A: default]` gate the completeness check can't provide today; see ROADMAP.)
+    public default ctor empty() { return DynamicArray(); }
+
+    // Empty, but pre-grown so at least `capacity` elements fit without a later reallocation.
+    public ctor withCapacity(int32 capacity) { DynamicArray<T, A> m = DynamicArray(); m.reserve(n: capacity); return give m; }
 
     // Build an empty list whose buffer is drawn from `allocator` (e.g. an `Arena` bump handle), so all
     // of this list's allocations route into that region. The handle is a cheap copyable value stored
@@ -56,6 +63,15 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     public ctor withAllocator(A allocator) {
         DynamicArray<T, A> result = DynamicArray();
         result.alloc = allocator;
+        return give result;
+    }
+
+    // Caller-owned allocator AND pre-grown for `capacity` — `alloc` set before `reserve` (grow routes
+    // through `this.alloc`).
+    public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
+        DynamicArray<T, A> result = DynamicArray();
+        result.alloc = allocator;
+        result.reserve(n: capacity);
         return give result;
     }
 

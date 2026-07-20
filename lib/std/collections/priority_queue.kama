@@ -27,8 +27,23 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
     // makes the LARGEST element come out first. They return the enclosing instance's own `A` (so `q` is the
     // SAME class — the private `maxOrder` write resolves); for a non-default `A` use `withAllocator` instead,
     // which supplies the allocator (the bare ctor here would leave a custom `A`'s handle uninitialized).
-    public ctor minHeap() { PriorityQueue<T, A> q = PriorityQueue(); return give q; }
+    public default ctor minHeap() { PriorityQueue<T, A> q = PriorityQueue(); return give q; }
     public ctor maxHeap() { PriorityQueue<T, A> q = PriorityQueue(); q.maxOrder = true; return give q; }
+
+    // Capacity presizing (M8c) rides the backing `DynamicArray` — like C++/Java/Rust priority queues taking a
+    // reserve size. Direction stays explicit (min/max); `data` is built via `DynamicArray::withCapacity`.
+    public ctor minHeapWithCapacity(int32 capacity) {
+        PriorityQueue<T, A> q = PriorityQueue();
+        q.data = DynamicArray::withCapacity(capacity: capacity);
+        q.maxOrder = false;
+        return give q;
+    }
+    public ctor maxHeapWithCapacity(int32 capacity) {
+        PriorityQueue<T, A> q = PriorityQueue();
+        q.data = DynamicArray::withCapacity(capacity: capacity);
+        q.maxOrder = true;
+        return give q;
+    }
 
     // Back the heap's array with a caller-owned allocator (e.g. an `Arena`); `maxOrder` chooses direction
     // (private, so it can't be set post-hoc — this one factory covers both min and max in-arena). All
@@ -36,6 +51,14 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
     public ctor withAllocator(A allocator, bool maxOrder) {
         PriorityQueue<T, A> q = PriorityQueue();
         q.data = DynamicArray::withAllocator(allocator: allocator);   // drops the empty default-built data (cap=0)
+        q.maxOrder = maxOrder;
+        return give q;
+    }
+
+    // Caller-owned allocator AND presized — both direction and capacity in one arena-backed factory.
+    public ctor withCapacityAndAllocator(A allocator, int32 capacity, bool maxOrder) {
+        PriorityQueue<T, A> q = PriorityQueue();
+        q.data = DynamicArray::withCapacityAndAllocator(allocator: allocator, capacity: capacity);
         q.maxOrder = maxOrder;
         return give q;
     }

@@ -79,9 +79,10 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
         this.slotCount = 0; this.freeLen = 0; this.len = 0; this.cap = 0; this.mods = 0;
     }
 
-    // Named empty constructor (M7): `SlotMap.empty()`, default `GlobalAllocator`. Delegates to the primary
-    // during coexistence; at M8 the primary's body moves here.
-    public ctor empty() { return SlotMap(); }
+    // The four-ctor matrix (M8c). `empty()` is the `default` zero-arg build; `empty`/`withCapacity` are the
+    // default-allocator conveniences (custom `A` uses the allocator-taking ctors).
+    public default ctor empty() { return SlotMap(); }
+    public ctor withCapacity(int32 capacity) { SlotMap<V, A> m = SlotMap(); m.reserve(n: capacity); return give m; }
 
     // Draw the three parallel buffers from a caller-owned allocator (e.g. an `Arena`). The bare `SlotMap()`
     // uses the default zero-size `GlobalAllocator`; this sets the handle before any grow.
@@ -91,8 +92,20 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
         return give result;
     }
 
+    // Caller-owned allocator AND pre-grown for `capacity` slots — `alloc` set before `reserve`.
+    public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
+        SlotMap<V, A> result = SlotMap();
+        result.alloc = allocator;
+        result.reserve(n: capacity);
+        return give result;
+    }
+
     public fn int32 length() { return this.len; }
     public fn bool isEmpty() { return this.len == 0; }
+
+    // Grow the three parallel buffers so at least `n` slots fit without a later reallocation (a no-op if
+    // already big enough). Lets a caller who knows the size up front skip the incremental doublings.
+    public fn void reserve(int32 n) { if (n > this.cap) { this.growTo(nc: n); } }
 
     // Insert `value` (consumes it) and return a fresh handle. Reuses a vacated slot from the free list when
     // one exists, else appends a new slot (growing the buffers first). The chosen slot's generation goes

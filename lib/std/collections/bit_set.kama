@@ -39,10 +39,12 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     Ptr<uint64> words; int32 wordCount; int32 mods; A alloc;
 
     public BitSet() { unsafe { this.words = cast<Ptr<uint64>>(cast<usize>(0)); } this.wordCount = 0; this.mods = 0; }
-    public ctor empty() { return BitSet(); }   // named empty ctor (M7); delegates to the primary until M8
+
+    // The four-ctor matrix (M8c) — `withCapacity` is sized in BITS. `empty()` is the `default` zero-arg build.
+    public default ctor empty() { return BitSet(); }
 
     // Preallocate room for at least `bits` bits (rounded up to a whole word). K,V-style target-type inference:
-    // `BitSet s = BitSet::withCapacity(bits: 256);`.
+    // `BitSet s = BitSet.withCapacity(bits: 256);`.
     public ctor withCapacity(int32 bits) {
         BitSet<A> s = BitSet();
         if (bits > 0) { s.growTo(nc: (bits + 63) >> 6); }
@@ -54,6 +56,14 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     public ctor withAllocator(A allocator) {
         BitSet<A> result = BitSet();
         result.alloc = allocator;
+        return give result;
+    }
+
+    // Caller-owned allocator AND preallocated for `bits` bits — `alloc` set before `growTo`.
+    public ctor withCapacityAndAllocator(A allocator, int32 bits) {
+        BitSet<A> result = BitSet();
+        result.alloc = allocator;
+        if (bits > 0) { result.growTo(nc: (bits + 63) >> 6); }
         return give result;
     }
 

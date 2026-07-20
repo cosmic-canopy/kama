@@ -46,13 +46,25 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
     Ptr<T> data; int32 head; int32 len; int32 cap; int32 mods; A alloc;
 
     public Deque() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.head = 0; this.len = 0; this.cap = 0; this.mods = 0; }
-    public ctor empty() { return Deque(); }   // named empty ctor (M7); delegates to the primary until M8
+
+    // The four-ctor matrix (M8c) — see DynamicArray. `empty()` is the `default` zero-arg build; `empty`/
+    // `withCapacity` are default-allocator conveniences (custom `A` uses the allocator-taking ctors).
+    public default ctor empty() { return Deque(); }
+    public ctor withCapacity(int32 capacity) { Deque<T, A> m = Deque(); m.reserve(n: capacity); return give m; }
 
     // Draw the ring buffer from a caller-owned allocator (e.g. an `Arena`). The bare `Deque()` uses the
     // default zero-size `GlobalAllocator`; this sets the handle before any grow. See DynamicArray.withAllocator.
     public ctor withAllocator(A allocator) {
         Deque<T, A> result = Deque();
         result.alloc = allocator;
+        return give result;
+    }
+
+    // Caller-owned allocator AND pre-grown for `capacity` — `alloc` set before `reserve`.
+    public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
+        Deque<T, A> result = Deque();
+        result.alloc = allocator;
+        result.reserve(n: capacity);
         return give result;
     }
 
