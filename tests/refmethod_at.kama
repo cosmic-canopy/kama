@@ -2,12 +2,12 @@
 // a `ref` argument. Composes with the place machinery.
 type value Buf {
     InlineArray<int32, 4> d;
-    public Buf() { this.d = [0; 4]; }
+    public ctor make() { Buf r; r.d = [0; 4]; return give r; }
     public fn ref int32 at(usize i) { return this.d[i]; }
 }
 fn void bump(ref int32 v) { v = v + 100; }
 fn int32 main() {
-    Buf b = Buf();
+    Buf b = Buf.make();
     b.at(i: 0) = 5;
     b.at(i: 1) = 10;
     b.at(i: 0) += 1;              // 6

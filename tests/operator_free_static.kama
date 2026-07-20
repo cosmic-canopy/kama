@@ -1,13 +1,13 @@
 // M31b — the FREE/static operator form (2 params, both operands explicit, no `this`). It handles the
 // mixed-type case a method form can't: a primitive on the LEFT, `s * v`. Lowers to `Vec2__op_mul(s, v)`.
+@generate(of)
 type value Vec2 {
     public int32 x;
     public int32 y;
-    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
-    public Vec2 operator*(int32 s, Vec2 v) { return Vec2(x: s * v.x, y: s * v.y); }   // free form
+    public Vec2 operator*(int32 s, Vec2 v) { return Vec2.of(x: s * v.x, y: s * v.y); }   // free form
 }
 fn int32 main() {
-    Vec2 a = Vec2(x: 3, y: 4);
+    Vec2 a = Vec2.of(x: 3, y: 4);
     int32 s = 2;
     Vec2 r = s * a;      // scalar on the left — resolves to the free operator on Vec2
     return r.x + r.y;    // 6 + 8 = 14

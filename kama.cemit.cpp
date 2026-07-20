@@ -452,6 +452,22 @@ std::string CEmitter::bareCtorClass(SharedExpression e)
     return (isClass(rn) && _classes.count(rn) && !_classes[rn].isIntrinsicColl) ? rn : "";
 }
 
+// The concrete type constructed by a DOT-ON-TYPE ctor call `Point.make(…)` (infallible, concrete receiver),
+// else "". Distinct from bareCtorClass (nameless inline ctor) because a factory result materializes by MOVE,
+// and only the call-ARGUMENT path wants this — the operator-operand path already handles it via exprClass +
+// the compound-literal fallback, and must NOT be routed through inline-ctor hoisting. #M8d.2
+std::string CEmitter::dotCtorFactoryClass(SharedExpression e)
+{
+    auto* iv = dynamic_cast<InvocationNode*>(e.get());
+    if (!iv) return "";
+    auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get());
+    if (!ma) return "";
+    std::string dt, m = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+    if (m.empty() || !isTypeReceiver(ma, dt) || !_classes.count(dt) || _classes[dt].isIntrinsicColl) return "";
+    auto cit = _classes[dt].ctors.find(m);
+    return (cit != _classes[dt].ctors.end() && !cit->second.isFallible) ? dt : "";
+}
+
 // an inline constructor operand, hoisted into a temp (needs a statement slot); "" otherwise.
 std::string CEmitter::hoistCtorIfInline(SharedExpression e)
 {
@@ -1281,6 +1297,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // gated-away default (a custom-`A` collection) has no `isDefaultCtor` method → not filled
                         // (it is `mustAssign`, so the completeness gate already forces an explicit assignment).
                         for (auto& f : _classes[ty].fields) {
+                            // An inline field initializer (`const int32 kind = 7;`) applies to a bare local too,
+                            // exactly as the instance-ctor path applies it (kama.cemit.cpp ~9405) — else a
+                            // factory-built value loses it (zero instead of 7). #M8d.2
+                            if (f.initializer) {
+                                line(n->line); indent(depth);
+                                *_out << nm << "." << f.name << " = " << emitExpression(f.initializer) << ";\n";
+                                continue;
+                            }
                             auto cit = _classes.find(cTypeInInstance(ty, f.type));
                             if (cit == _classes.end()) continue;
                             for (auto& kv : cit->second.methods)
@@ -6580,6 +6604,12 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             else { auto g = _genericTypeInstOf.find(p.className);
                    if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = p.className; }
         }
+        // A dot-on-type ctor call arg (`f(a: Cell.make(…))`) constructs its type just like a nameless inline
+        // ctor, so it must materialize the same way (by-value contract upcast, `ref` borrow). But it's a
+        // FACTORY returning by value, so it emits a MOVE (`T t = T__make(…)`), not `T__ctor(&t,…)`. #M8d.2
+        bool ctorIsFactory = false;
+        if (ctorCls.empty()) { std::string dt = dotCtorFactoryClass(argExpr);
+            if (!dt.empty()) { ctorCls = dt; ctorIsFactory = true; } }
         // A value-producing RHS in argument position that needs its type from context: an inline variant
         // construction (`f(o: Optional::Some(…))` / `…::None`) or a value-producing `match` (`f(x: match(…))`).
         // Thread the PARAM's C type as the target so the union instance / match result resolves, exactly as
@@ -6617,7 +6647,12 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         if (_hoistOK && handoff == 0 && !ctorCls.empty() && ctorCls == p.className
             && !isInterface(p.className) && !_classes[ctorCls].isIntrinsicColl) {
             std::string t = "__ctorarg" + std::to_string(_tempCounter++);
-            if (_classes[ctorCls].isExternStruct) {
+            if (ctorIsFactory) {
+                // A named `ctor` factory returns by value — MOVE it into the temp (`T t = T__make(…)`).
+                _hoisted.push_back(ctorCls + " " + t + " = " + emitExpression(argExpr) + ";");
+                if (p.byRef && _classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
+                val = t;
+            } else if (_classes[ctorCls].isExternStruct) {
                 // extern (C-POD) struct inline in arg position (`f(color: WGPUColor(r: 1.0))`):
                 // aggregate-init a zeroed temp; no kama ctor / dtor.
                 std::string fi = externAggregateInit(t, _classes[ctorCls], ctorIv->args, srcLine);
@@ -6640,8 +6675,12 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // path below wraps `val` as the fat pointer. (`new` into a contract borrow stays a rule — it
             // would leak; `ref`/`out` needs a real interface lvalue to reseat — both handled elsewhere.)
             std::string t = "__ctorarg" + std::to_string(_tempCounter++);
-            std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
-            _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
+            if (ctorIsFactory)   // a named `ctor` factory returns by value — MOVE it into the temp
+                _hoisted.push_back(ctorCls + " " + t + " = " + emitExpression(argExpr) + ";");
+            else {
+                std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
+                _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
+            }
             if (_classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
             val = t;
             valHoisted = true;
@@ -7013,7 +7052,7 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
     if (rootIsConst(root))
         unsupported(("cannot write to `const " + root + "` (const is deep — neither the "
                      "binding nor anything reached through it may be mutated)").c_str(), srcLine);
-    else if (!_inCtor && isConstFieldWrite(target))
+    else if (!_inCtor && !_inNamedCtorBody && isConstFieldWrite(target))
         unsupported("cannot assign to a `const` field outside the constructor", srcLine);
 }
 
@@ -9492,7 +9531,12 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // Construction-model M3: a named `ctor` is a static factory — seal it so no returned object leaks a
         // null owning pointer (a legacy instance ctor is sealed by checkCtorNeverNull inside the body emit).
         if (mi.isCtor) checkNamedCtorComplete(ci, mi.node->body);
+        // A named `ctor` is a static factory (no `self`), so it can't pass isCtor=true (that emits a
+        // `self->__vptr` store). But it DOES construct — its bare local of the return type is the object
+        // being built, so const fields written on it (`r.id = id`) must be allowed. Flag it. #M8d.2
+        _inNamedCtorBody = mi.isCtor;
         emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false, mi.isConst, mi.isStatic);
+        _inNamedCtorBody = false;
         _returnIsPlace = false;
     }
     if (ci.destructible)
@@ -10584,6 +10628,17 @@ std::string CEmitter::exprClass(SharedExpression e)
                     _typeSubst = savedSubst; _nsCtx = savedCtx;
                     return isClass(rc) ? rc : "";
                 }
+            }
+            // A dot-on-type ctor call `V.of(x:…)` / `Vec3.make(…)`: the receiver NAMES a type, so `cls`
+            // (exprClass of the receiver) is empty and the method-resolution above missed it. Recover the
+            // constructed type — an infallible ctor returns the enclosing type by value — so an of/make
+            // result is first-class in operand position (operators, ref-arg hoist, arg upcast), exactly like
+            // the nameless inline ctor (Q3 below) it replaces. Concrete receiver only (a generic template
+            // needs an instance, which operand position lacks). #M8d.2
+            std::string dotTy;
+            if (isTypeReceiver(ma, dotTy) && _classes.count(dotTy)) {
+                auto cit = _classes[dotTy].ctors.find(method);
+                if (cit != _classes[dotTy].ctors.end() && !cit->second.isFallible) return dotTy;
             }
             return "";
         }

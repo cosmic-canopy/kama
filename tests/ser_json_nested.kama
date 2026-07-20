@@ -5,20 +5,21 @@ import std::serialization::json::{encode};
 type resource Address {
     @field string city;
     @field int32 zip;
-    public Address(string city, int32 zip) { this.city = give city; this.zip = zip; }
+    public ctor make(string city, int32 zip) { Address r; r.city = give city; r.zip = zip; return give r; }
 }
 @generate(Serialize)
 type resource Person {
     @field string name;
     @field int32 age;
     @field Address addr;
-    public Person(string name, int32 age, Address addr) {
-        this.name = give name; this.age = age; this.addr = give addr;
+    public ctor make(string name, int32 age, Address addr) {
+        Person r; r.name = give name; r.age = age; r.addr = give addr;
+        return give r;
     }
 }
 fn int main() {
-    Address a = Address(city: "New \"York\"", zip: 10001);
-    Person p = Person(name: "Sam", age: 30, addr: give a);
+    Address a = Address.make(city: "New \"York\"", zip: 10001);
+    Person p = Person.make(name: "Sam", age: 30, addr: give a);
     Result<string, Owned<Error>> j_r = encode(v: p);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (j == "{\"name\":\"Sam\",\"age\":30,\"addr\":{\"city\":\"New \\\"York\\\"\",\"zip\":10001}}") { return 0; }

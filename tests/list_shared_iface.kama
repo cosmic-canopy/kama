@@ -9,14 +9,14 @@ import std::memory::{Shared};
 type contract Shape for both { fn int32 area(); }
 type resource Sq implements Shape {
     DynamicArray<int32> side;                                          // owns heap -> destructible impl
-    public Sq(int32 s) { this.side.add(item: s); }
+    public ctor make(int32 s) { Sq r; r.side.add(item: s); return give r; }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 fn int32 main() {
     DynamicArray<Shared<Shape>> xs = DynamicArray.empty();
-    Shared<Shape> a = new Sq(s: 3);
-    Shared<Shape> b = new Sq(s: 4);
-    Shared<Shape> c = new Sq(s: 5);
+    Shared<Shape> a = new Sq.make(s: 3);
+    Shared<Shape> b = new Sq.make(s: 4);
+    Shared<Shape> c = new Sq.make(s: 5);
     xs.add(item: give a);                                      // move each shared into the list
     xs.add(item: give b);
     xs.add(item: give c);

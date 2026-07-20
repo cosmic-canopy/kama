@@ -5,20 +5,20 @@ type value Pair<A, B>
 {
     public A a;
     public B b;
-    public Pair(A x, B y) { this.a = x; this.b = y; }
+    public ctor make(A x, B y) { Pair<A, B> r; r.a = x; r.b = y; return give r; }
     public fn A first() { return this.a; }
 }
 type value Box<T>
 {
     public T value;
-    public Box(T v) { this.value = v; }
+    public ctor make(T v) { Box<T> r; r.value = v; return give r; }
     public fn T unbox() { return this.value; }
 }
 fn int32 main()
 {
-    Pair<int32, int32> p = Pair(x: 30, y: 4);
-    Box<Pair<int32, int32>> b1 = Box(v: p);
-    Box<Box<Pair<int32, int32>>> b2 = Box(v: b1);      // triple close `>>>`, no spaces
+    Pair<int32, int32> p = Pair.make(x: 30, y: 4);
+    Box<Pair<int32, int32>> b1 = Box.make(v: p);
+    Box<Box<Pair<int32, int32>>> b2 = Box.make(v: b1);      // triple close `>>>`, no spaces
     Box<Pair<int32, int32>> mid = b2.unbox();
     Pair<int32, int32> q = mid.unbox();
     return q.first() + 12;                              // 30 + 12 = 42

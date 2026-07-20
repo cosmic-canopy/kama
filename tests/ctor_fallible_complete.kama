@@ -4,14 +4,14 @@ import std::memory::{Owned};
 // built — the checker unwraps the `Ok` and verifies the wrapped object's owning fields are all set.
 type value Box {
     int32 v;
-    public Box(int32 v) { this.v = v; }
+    public ctor make(int32 v) { Box r; r.v = v; return give r; }
     public fn int32 get() { return this.v; }
 }
 type resource Holder {
     Owned<Box> a;
     public ctor Result<Holder, int32> make(int32 v) {
         if (v < 0) { return Result::Err(error: -1); }   // fail before the object exists
-        Owned<Box> b = new Box(v: v);
+        Owned<Box> b = new Box.make(v: v);
         Holder h;
         h.a = give b;                                    // complete before Ok-wrapping
         return Result::Ok(value: h);

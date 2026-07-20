@@ -5,19 +5,19 @@ type value Pair<A, B>
 {
     public A a;
     public B b;
-    public Pair(A x, B y) { this.a = x; this.b = y; }
+    public ctor make(A x, B y) { Pair<A, B> r; r.a = x; r.b = y; return give r; }
     public fn A first() { return this.a; }
 }
 type value Box<T>
 {
     public T value;
-    public Box(T v) { this.value = v; }
+    public ctor make(T v) { Box<T> r; r.value = v; return give r; }
     public fn T unbox() { return this.value; }
 }
 fn int main()
 {
-    Pair<int32, int32> p = Pair(x: 3, y: 4);
-    Box<Pair<int32, int32>> b = Box(v: p);    // nested arg, no space — `>>` splits into two closes
+    Pair<int32, int32> p = Pair.make(x: 3, y: 4);
+    Box<Pair<int32, int32>> b = Box.make(v: p);    // nested arg, no space — `>>` splits into two closes
     Pair<int32, int32> q = b.unbox();
     return q.first() + 5;                      // 3 + 5 = 8
 }

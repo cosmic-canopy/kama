@@ -2,10 +2,10 @@
 // the Ok payload is a move-only resource. Returns 6.
 type resource Widget {
     int32 id;
-    private Widget(int32 id) { this.id = id; }
+    private ctor fromId(int32 id) { Widget r; r.id = id; return give r; }
     public static fn Result<Widget, int32> make(int32 n) {
         if (n < 0) { return Result::Err(error: 0 - 1); }
-        return Result::Ok(value: Widget(id: n));
+        return Result::Ok(value: Widget.fromId(id: n));
     }
     public fn int32 value() { return this.id; }
     ~Widget() {}

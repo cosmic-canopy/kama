@@ -5,7 +5,7 @@ import std::collections::{DynamicArray};
 // virtual destructor makes destruction through the base handle reach the derived dtor (no leak).
 type virtual resource Shape {
     DynamicArray<int32> tag;                                   // owns heap -> destructible; proves no slicing
-    public Shape() { this.tag.add(item: 0); }
+    public ctor make() { Shape r; r.tag.add(item: 0); return give r; }
     ~Shape() { }
     public fn int32 area() { return this.compute(); }  // public, non-virtual
     protected virtual fn int32 compute() { return 1; }
@@ -13,13 +13,13 @@ type virtual resource Shape {
 type final resource Square extends Shape {
     int32 s;
     DynamicArray<int32> parts;                                 // DERIVED owns heap — a sliced Base__dtor would leak it
-    public Square(int32 s) { this.s = s; this.parts.add(item: s); }
+    public ctor make(int32 s) { Square r; r.s = s; r.parts.add(item: s); return give r; }
     ~Square() { }
     protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }
 }
 
 fn int32 shared_case() {
-    Shared<Square> sq = new Square(s: 6);
+    Shared<Square> sq = new Square.make(s: 6);
     Shared<Shape> shp = sq;                            // UPCAST: retain into a base handle
     int32 viaShp = shp.area();                          // 36 — dispatches to Square::compute
     int32 viaDerived = sq.area();                        // 36 — sq still valid
@@ -27,7 +27,7 @@ fn int32 shared_case() {
 }
 
 fn int32 owned_case() {
-    Owned<Square> sq = new Square(s: 5);
+    Owned<Square> sq = new Square.make(s: 5);
     Owned<Shape> shp = sq;                             // UPCAST: MOVE (sq consumed)
     return shp.area();                                   // 25 — destroyed through base handle (virtual dtor)
 }

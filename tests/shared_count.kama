@@ -4,14 +4,14 @@ import std::memory::{Shared};
 type value Counter
 {
     int32 value;
-    Counter(int32 start) { this.value = start; }
+    public ctor make(int32 start) { Counter r; r.value = start; return give r; }
     public fn void bump() { this.value = this.value + 1; }
     public fn int32 get() { return this.value; }
 }
 
 fn int main()
 {
-    Shared<Counter> a = new Counter(start: 40);
+    Shared<Counter> a = new Counter.make(start: 40);
     {
         Shared<Counter> b = a;   // retain (strong=2); shared state
         b.bump();                // a sees it too -> 41

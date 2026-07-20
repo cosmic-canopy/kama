@@ -8,14 +8,14 @@ import std::collections::{Arena, BumpAllocator};
 
 type value Counter {
     int32 value;
-    Counter(int32 start) { this.value = start; }
+    public ctor make(int32 start) { Counter r; r.value = start; return give r; }
     public fn int32 get() { return this.value; }
 }
 
 // The Shared lives only for this fn; its Weak is returned. `s` drops at fn-end (strong 1→0, pointee
 // released — an arena no-op), the ctrl stays (weak=1) inside the still-live arena.
 fn Weak<Counter, BumpAllocator> orphan(BumpAllocator alloc) {
-    Shared<Counter, BumpAllocator> s = new(allocator: alloc) Counter(start: 7);
+    Shared<Counter, BumpAllocator> s = new(allocator: alloc) Counter.make(start: 7);
     return s.downgrade();
 }
 

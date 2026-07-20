@@ -4,7 +4,7 @@ import std::collections::{DynamicArray, FixedArray};
 // stored element and a mutating method mutates it (uniform with every other `x.m()`).
 type value Counter {
     int32 n;                                     // default private
-    public Counter(int32 start) { this.n = start; }
+    public ctor make(int32 start) { Counter r; r.n = start; return give r; }
     public fn int32 get() { return this.n; }     // read-only
     public fn void bump(int32 by) { this.n = this.n + by; }   // mutates the stored element
 }
@@ -12,8 +12,8 @@ type value Counter {
 fn int32 main()
 {
     DynamicArray<Counter> xs = DynamicArray.empty();
-    Counter a = Counter(start: 10);
-    Counter b = Counter(start: 20);
+    Counter a = Counter.make(start: 10);
+    Counter b = Counter.make(start: 20);
     xs.add(item: a);
     xs.add(item: b);
 
@@ -26,7 +26,7 @@ fn int32 main()
 
     // same for a fixed FixedArray
     FixedArray<Counter> ar = FixedArray(size: 2);
-    Counter z = Counter(start: 3);
+    Counter z = Counter.make(start: 3);
     ar[0] = z;
     ar[0].bump(by: 4);                            // 3 -> 7
     sum = sum + ar[0].get();                      // 55 + 7 = 62

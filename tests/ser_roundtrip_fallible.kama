@@ -5,11 +5,11 @@ import std::serialization::json::{encode, decode};
 type value Point {
     @field int32 x;
     @field int32 y;
-    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
+    public ctor make(int32 x, int32 y) { Point r; r.x = x; r.y = y; return give r; }
     public fn int32 sum() { return this.x + this.y; }
 }
 fn int main() {
-    Point p = Point(x: 30, y: 12);
+    Point p = Point.make(x: 30, y: 12);
     Result<string, Owned<Error>> je = encode(v: p);
     string j = match (give je) { case Ok(s): give s; case Err(e): { return 250; } };
     Result<Point, Owned<Error>> pr = decode::<Point>(src: give j);

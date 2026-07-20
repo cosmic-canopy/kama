@@ -5,11 +5,11 @@ type resource User {
     @field(name: "user_name") string name;
     @field int32 id;
     @skip int32 loginCount;
-    public User(string name, int32 id) { this.name = give name; this.id = id; this.loginCount = 0; }
+    public ctor make(string name, int32 id) { User r; r.name = give name; r.id = id; r.loginCount = 0; return give r; }
     public fn int32 tag() { return this.id + cast<int32>(this.name.length()); }
 }
 fn int main() {
-    User u = User(name: "kai", id: 39);
+    User u = User.make(name: "kai", id: 39);
     Result<string, Owned<Error>> j_r = encode(v: u);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };                       // {"user_name":"kai","id":39}
     Result<User, Owned<Error>> res = decode::<User>(src: give j);

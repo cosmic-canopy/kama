@@ -11,15 +11,15 @@ type resource Node {
     DynamicArray<int32> data;                                  // owns heap -> a real pointee dtor runs on cycle drop
     Optional<Shared<Node>> next;                       // forward edge (owns)
     Optional<Weak<Node>> back;                          // back edge (weak) — breaks the ownership cycle
-    public Node(int32 v) { this.data.add(item: v); this.next = Optional::None; this.back = Optional::None; }
+    public ctor make(int32 v) { Node r; r.data.add(item: v); r.next = Optional::None; r.back = Optional::None; return give r; }
     public fn void setNext(Shared<Node> n) { this.next = Optional::Some(value: give n); }
     public fn void setBack(Weak<Node> w) { this.back = Optional::Some(value: give w); }
     public fn int32 val() { return this.data[0]; }
 }
 
 fn int main() {
-    Shared<Node> a = new Node(v: 10);
-    Shared<Node> b = new Node(v: 20);
+    Shared<Node> a = new Node.make(v: 10);
+    Shared<Node> b = new Node.make(v: 20);
     b.setBack(w: a.downgrade());                        // b -> a (weak back-edge)
     a.setNext(n: give b);                               // a -> b (owns); a is the root
     return a.val();                                     // 10; `a` drops here -> cycle teardown

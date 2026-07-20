@@ -8,12 +8,12 @@ type contract Shape for both { fn int32 area(); }
 
 type resource Sq implements Shape {
     DynamicArray<int32> side;                                  // owns heap -> destructible
-    public Sq(int32 s) { this.side.add(item: s); }
+    public ctor make(int32 s) { Sq r; r.side.add(item: s); return give r; }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 
 fn int32 shared_case() {
-    Shared<Sq> a = new Sq(s: 6);                       // library thin handle {p, c}
+    Shared<Sq> a = new Sq.make(s: 6);                       // library thin handle {p, c}
     Shared<Shape> s = a;                               // UPCAST: retain into the intrinsic fat handle
     int32 viaConcrete = a.area();                      // 36 (a still valid)
     int32 viaContract = s.area();                      // 36 (dynamic dispatch through vtbl)
@@ -24,7 +24,7 @@ fn int32 shared_case() {
 }
 
 fn int32 owned_case() {
-    Owned<Sq> o = new Sq(s: 5);
+    Owned<Sq> o = new Sq.make(s: 5);
     Owned<Shape> w = o;                                // UPCAST: MOVE (o consumed; w owns the Sq)
     return w.area();                                   // 25
 }

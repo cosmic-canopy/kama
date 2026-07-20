@@ -6,7 +6,7 @@ extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 type resource Probe {
     Ptr p;
-    public Probe() { unsafe { this.p = malloc(n: 32); } }
+    public ctor make() { Probe r; unsafe { r.p = malloc(n: 32); } return give r; }
     ~Probe() { unsafe { free(p: this.p); } }
     public fn int32 live() { return 1; }
 }
@@ -16,7 +16,7 @@ implements Error for LoadError {
 }
 fn Result<int32, Owned<Error>> load(bool ok) {
     if (ok) { return Result::Ok(value: 5); }
-    Shared<Probe> sp = new Probe();
+    Shared<Probe> sp = new Probe.make();
     return Result::Err(error: LoadError::Wrapped(probe: give sp));   // box owns the Shared now
 }
 fn int32 use(Result<int32, Owned<Error>> r) {

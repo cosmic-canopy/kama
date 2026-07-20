@@ -3,13 +3,13 @@
 // MOVES (no "scream", no accidental duplication) and the method named `copy` is just a method.
 type resource R {
     int32 n;
-    public R(int32 n) { this.n = n; }
+    public ctor make(int32 n) { R r; r.n = n; return give r; }
     ~R() { }
-    public fn R copy() { return R(n: this.n); }   // a method named `copy` — NOT the Copyable opt-in
+    public fn R copy() { return R.make(n: this.n); }   // a method named `copy` — NOT the Copyable opt-in
     public fn int32 get() { return this.n; }
 }
 fn int32 main() {
-    R a = R(n: 42);
+    R a = R.make(n: 42);
     R b = a;            // MOVE (move-only — a lone `copy()` doesn't opt in); a is consumed
     return b.get();     // 42
 }

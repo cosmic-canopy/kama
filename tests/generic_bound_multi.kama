@@ -4,7 +4,7 @@ type contract Weighable for both { fn int32 weight(); }
 type contract Named for both { fn int32 tag(); }
 type value Crate implements Weighable, Named {
     int32 g;
-    public Crate(int32 g) { this.g = g; }
+    public ctor make(int32 g) { Crate r; r.g = g; return give r; }
     public fn int32 weight() { return this.g; }
     public fn int32 tag() { return 100; }
 }
@@ -12,6 +12,6 @@ fn int32 describe<K: Weighable + Named>(K x) {
     return x.weight() + x.tag();   // one method from each bound contract
 }
 fn int32 main() {
-    Crate c = Crate(g: 5);
+    Crate c = Crate.make(g: 5);
     return describe(x: c);   // 5 + 100 = 105
 }

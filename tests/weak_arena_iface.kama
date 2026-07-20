@@ -9,13 +9,13 @@ type contract Shape for both { fn int32 area(); }
 
 type value Circle implements Shape {
     int32 r;
-    public Circle(int32 r) { this.r = r; }
+    public ctor make(int32 r) { Circle self; self.r = r; return give self; }
     public fn int32 area() { return this.r * this.r; }
 }
 
 // s drops at fn-end (strong 1→0, pointee released — an arena no-op); the ctrl stays (weak=1) in the arena.
 fn Weak<Shape, BumpAllocator> orphan(BumpAllocator alloc) {
-    Shared<Shape, BumpAllocator> s = new(allocator: alloc) Circle(r: 7);
+    Shared<Shape, BumpAllocator> s = new(allocator: alloc) Circle.make(r: 7);
     Weak<Shape, BumpAllocator> w = s;
     return give w;
 }

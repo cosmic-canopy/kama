@@ -4,13 +4,13 @@ type contract Shape for both{
 type value Circle implements Shape
 {
     int64 r;
-    public Circle(int64 r) { this.r = r; }
+    public ctor make(int64 r) { Circle r2; r2.r = r; return give r2; }
     public fn int64 area() { return r * r; }
 }
 type value Square implements Shape
 {
     int64 s;
-    public Square(int64 s) { this.s = s; }
+    public ctor make(int64 s) { Square r; r.s = s; return give r; }
     public fn int64 area() { return s * s; }
 }
 fn int64 measure(Shape sh)
@@ -19,8 +19,8 @@ fn int64 measure(Shape sh)
 }
 fn int main()
 {
-    Circle c = Circle(r: 7);
-    Square q = Square(s: 5);
+    Circle c = Circle.make(r: 7);
+    Square q = Square.make(s: 5);
     int64 a = measure(sh: c);
     int64 b = measure(sh: q);
     uint64 sum = cast<uint64>(a) + cast<uint64>(b);

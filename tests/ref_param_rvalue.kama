@@ -5,7 +5,7 @@ import std::collections::{Map};
 
 type value Point implements Hashable, Equatable {
     int32 x; int32 y;
-    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
+    public ctor make(int32 x, int32 y) { Point r; r.x = x; r.y = y; return give r; }
     public fn uint64 hash() { return cast<uint64>(this.x) * 31ui64 + cast<uint64>(this.y); }
     public fn bool equals(Point other) { return this.x == other.x && this.y == other.y; }
 }
@@ -19,10 +19,10 @@ fn int main() {
     if (m.contains(key: 5)) { r = r + 10; }                              // inline literal again
 
     Map<Point, int32> pm = Map.empty();
-    Point origin = Point(x: 1, y: 2);
+    Point origin = Point.make(x: 1, y: 2);
     pm.put(key: origin, value: 99);
-    int32 pv = match (pm.get(key: Point(x: 1, y: 2))) { case Some(x): x; case None: 0; };  // inline ctor key
+    int32 pv = match (pm.get(key: Point.make(x: 1, y: 2))) { case Some(x): x; case None: 0; };  // inline ctor key
     if (pv == 99)                          { r = r + 10; }
-    if (!pm.contains(key: Point(x: 9, y: 9))) { r = r + 12; }            // inline ctor, absent
+    if (!pm.contains(key: Point.make(x: 9, y: 9))) { r = r + 12; }            // inline ctor, absent
     return r;   // 42
 }

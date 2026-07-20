@@ -7,7 +7,7 @@ extern fn int kama_trace_get();
 
 type resource Res {
     DynamicArray<int32> items;
-    public Res(int32 v) { this.items.add(item: v); }
+    public ctor make(int32 v) { Res r; r.items.add(item: v); return give r; }
     ~Res() { kama_trace(code: 1); }
     public fn int32 head() { return this.items[0]; }
 }
@@ -16,7 +16,7 @@ fn int32 sink(Res r) { return r.head(); }
 
 fn int32 main() {
     for (int32 i = 0; i < 3; i = i + 1) {
-        Res a = Res(v: i);      // fresh each iteration
+        Res a = Res.make(v: i);      // fresh each iteration
         sink(r: give a);        // moved into sink; a's own dtor skipped
     }
     return kama_trace_get();   // 3 drops -> 225

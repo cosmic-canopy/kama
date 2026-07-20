@@ -6,13 +6,13 @@ extern fn int kama_trace_get();
 type resource Probe
 {
     int32 id;
-    Probe(int32 id) { this.id = id; }
+    public ctor make(int32 id) { Probe r; r.id = id; return give r; }
     ~Probe() { kama_trace(code: 7); }
 }
 
 fn int build()
 {
-    Owned<Probe> p = new Probe(id: 1);
+    Owned<Probe> p = new Probe.make(id: 1);
     return 0;   // p drops -> Owned_Probe__dtor -> Probe__dtor + free
 }
 

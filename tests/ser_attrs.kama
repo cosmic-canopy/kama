@@ -5,12 +5,12 @@ type value Config {
     @field(name: "max_retries") int32 maxRetries;
     @skip int32 internalCounter;
     @field bool enabled;
-    public Config(int32 maxRetries, int32 internalCounter, bool enabled) {
-        this.maxRetries = maxRetries; this.internalCounter = internalCounter; this.enabled = enabled;
+    public ctor make(int32 maxRetries, int32 internalCounter, bool enabled) {
+        Config r; r.maxRetries = maxRetries; r.internalCounter = internalCounter; r.enabled = enabled; return give r;
     }
 }
 fn int main() {
-    Config c = Config(maxRetries: 5, internalCounter: 999, enabled: true);
+    Config c = Config.make(maxRetries: 5, internalCounter: 999, enabled: true);
     Result<string, Owned<Error>> j_r = encode(v: c);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (j == "{\"max_retries\":5,\"enabled\":true}") { return 0; }   // internalCounter skipped

@@ -4,11 +4,11 @@
 type value Pair<T> {
     public T a;
     public T b;
-    public Pair(T x, T y) { this.a = x; this.b = y; }
+    public ctor make(T x, T y) { Pair<T> r; r.a = x; r.b = y; return give r; }
 }
 fn ref T first<T>(ref Pair<T> p) { return p.a; }
 fn int32 main() {
-    Pair<int32> p = Pair(x: 3, y: 4);
+    Pair<int32> p = Pair.make(x: 3, y: 4);
     first::<int32>(p: ref p) = 10;              // write through the generic place
     first::<int32>(p: ref p) += 0;             // compound through it
     return first::<int32>(p: ref p) + p.b;     // 10 + 4 = 14

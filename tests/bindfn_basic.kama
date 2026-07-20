@@ -5,12 +5,12 @@ import std::memory::{Owned};
 fnptr int32 Compare(int32 a, int32 b);
 type value Scaler {
     int32 k;
-    Scaler(int32 k) { this.k = k; }
+    public ctor make(int32 k) { Scaler r; r.k = k; return give r; }
     fn int32 apply(int32 a, int32 b) { return (a - b) * this.k; }
 }
 fn int32 sub(int32 a, int32 b) { return a - b; }
 fn int32 main() {
-    Owned<Scaler> s = new Scaler(k: 3);
+    Owned<Scaler> s = new Scaler.make(k: 3);
     BindableFunctionPtr<Compare> c = new BindableFunctionPtr<Compare>(obj: s, method: Scaler::apply);
     BindableFunctionPtr<Compare> f = sub;            // free-fn promotion
     return c(a: 9, b: 2) + f(a: 30, b: 9);           // (9-2)*3 + (30-9) = 21 + 21 = 42

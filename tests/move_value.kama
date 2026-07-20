@@ -7,7 +7,7 @@ extern fn int kama_trace_get();
 
 type resource Res {
     DynamicArray<int32> items;                                  // owns a heap buffer
-    public Res(int32 v) { this.items.add(item: v); }
+    public ctor make(int32 v) { Res r; r.items.add(item: v); return give r; }
     ~Res() { kama_trace(code: 5); }                    // observable drop (+ the DynamicArray frees)
     public fn int32 head() { return this.items[0]; }
 }
@@ -15,7 +15,7 @@ type resource Res {
 fn int32 consume(Res r) { return r.head(); }            // r owned by callee, drops at fn-end
 
 fn int32 main() {
-    Res a = Res(v: 1);        // fresh rvalue — bare, legal
+    Res a = Res.make(v: 1);        // fresh rvalue — bare, legal
     consume(r: give a);       // move a into the callee; a's dtor suppressed in main
     return kama_trace_get();  // exactly one drop -> 5   (a silent copy would fold to 160)
 }

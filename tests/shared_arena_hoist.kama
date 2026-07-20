@@ -6,7 +6,7 @@ import std::collections::{Arena, BumpAllocator};
 
 type value Node {
     int32 v;
-    Node(int32 v) { this.v = v; }
+    public ctor make(int32 v) { Node r; r.v = v; return give r; }
     public fn int32 get() { return this.v; }
 }
 
@@ -15,12 +15,12 @@ fn int32 peek(Shared<Node, BumpAllocator> b) { return b.get(); }
 
 // returns an arena-backed Shared — exercises placement `new` in a RETURN position
 fn Shared<Node, BumpAllocator> make(BumpAllocator a, int32 v) {
-    return new(allocator: a) Node(v: v);
+    return new(allocator: a) Node.make(v: v);
 }
 
 fn int32 main() {
     Arena arena = Arena(capacity: 1 << 12);
-    int32 r = peek(b: new(allocator: arena.handle()) Node(v: 42));     // arg position → 42
+    int32 r = peek(b: new(allocator: arena.handle()) Node.make(v: 42));     // arg position → 42
     Shared<Node, BumpAllocator> m = make(a: arena.handle(), v: 100);   // return position
     r = r + m.get();                                                   // 142
     return r;                                                          // 142

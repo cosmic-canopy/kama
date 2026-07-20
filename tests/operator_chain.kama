@@ -1,16 +1,16 @@
 // M31b — operator chaining + compound assignment. A method-form operator takes `this` by pointer, so a
 // nested rvalue operand (`a + b + c`, `-(a + b)`) is materialized into a hoisted temp (ISO C, no
 // statement-expressions) before its `&` is taken. Compound assignment `a += b` lowers to `a = a + b`.
+@generate(of)
 type value V {
     public int32 x;
-    public V(int32 x) { this.x = x; }
-    public V operator+(V rhs) { return V(x: this.x + rhs.x); }
-    public V operator-(V rhs) { return V(x: this.x - rhs.x); }   // binary minus …
-    public V operator-()       { return V(x: -this.x); }          // … coexists with unary minus
-    public V operator*(int32 s){ return V(x: this.x * s); }
+    public V operator+(V rhs) { return V.of(x: this.x + rhs.x); }
+    public V operator-(V rhs) { return V.of(x: this.x - rhs.x); }   // binary minus …
+    public V operator-()       { return V.of(x: -this.x); }          // … coexists with unary minus
+    public V operator*(int32 s){ return V.of(x: this.x * s); }
 }
 fn int32 main() {
-    V a = V(x: 10); V b = V(x: 3); V c = V(x: 1);
+    V a = V.of(x: 10); V b = V.of(x: 3); V c = V.of(x: 1);
 
     V r1 = a + b + c;        // 14  — left-nested chain
     V r2 = -a + b;           // -7  — unary then binary
@@ -18,7 +18,7 @@ fn int32 main() {
     V r4 = (a + b) * 2;      // 26  — nested arith into the scalar method form
     V r5 = -(a + b);         // -13 — unary of a nested result
 
-    V acc = V(x: 0);
+    V acc = V.of(x: 0);
     acc += a;                // 10  — compound assignment (a += b == a = a + b)
     acc += b;                // 13
     acc = acc + r1 + r2 + r3 + r4 + r5;   // 13 + (14-7+6+26-13) = 13 + 26 = 39

@@ -2,14 +2,14 @@ import std::memory::{Shared};
 type resource Probe
 {
     int32 id;
-    public Probe(int32 id) { this.id = id; }
+    public ctor make(int32 id) { Probe r; r.id = id; return give r; }
     ~Probe() { }
     public fn int32 val() { return this.id; }
 }
 enum Box { Full(Shared<Probe> p), Empty }
 fn int main()
 {
-    Shared<Probe> s = new Probe(id: 42);
+    Shared<Probe> s = new Probe.make(id: 42);
     Box a = Box::Full(p: copy s);
     Box e = Box::Empty;
     int32 v = match (a) {

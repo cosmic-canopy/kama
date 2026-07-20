@@ -3,12 +3,12 @@ import std::memory::{Owned};
 // lives — `ref stackValue` or `ref ownedHandle` (auto-derefs to the heap object). Same fn.
 type value Counter {
     int32 n;
-    public Counter(int32 n) { this.n = n; }
+    public ctor make(int32 n) { Counter r; r.n = n; return give r; }
     public fn int32 get() { return this.n; }
 }
 fn int32 read(ref Counter c) { return c.get(); }
 fn int32 main() {
-    Counter stackC = Counter(n: 10);
-    Owned<Counter> heapC = new Counter(n: 32);
+    Counter stackC = Counter.make(n: 10);
+    Owned<Counter> heapC = new Counter.make(n: 32);
     return read(c: ref stackC) + read(c: ref heapC);   // 10 + 32 = 42
 }

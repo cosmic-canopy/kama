@@ -3,17 +3,17 @@ extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 
 type value Ctrl { public int32 strong; public int32 weak; }
-type value Counter { public int32 n; public Counter(int32 start) { this.n = start; } }
+type value Counter { public int32 n; public ctor make(int32 start) { Counter r; r.n = start; return give r; } }
 
 type resource RcWeak<T> {
     Ptr<T> p;
     Ptr<Ctrl> c;
-    public RcWeak(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }   // shares an existing ctrl
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { RcWeak<T> r; r.p = p; r.c = c; return give r; }   // shares an existing ctrl
     public fn Optional<Rc<T>> tryUpgrade() {
         unsafe {
             if (this.c[0].strong > 0) {
                 this.c[0].strong = this.c[0].strong + 1;
-                return Optional::Some(value: Rc(p: this.p, c: this.c));   // fresh ctor -> no marker
+                return Optional::Some(value: Rc.make(p: this.p, c: this.c));   // fresh ctor -> no marker
             }
         }
         return Optional::None;
@@ -29,20 +29,20 @@ type resource RcWeak<T> {
 type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     Ptr<T> p;
     Ptr<Ctrl> c;
-    public Rc(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }       // shares an existing ctrl
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { Rc<T> r; r.p = p; r.c = c; return give r; }       // shares an existing ctrl
     public ctor adopt(Ptr<T> raw) {
         Ptr<Ctrl> ctrl;
         unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
-        return Rc(p: raw, c: ctrl);                                     // fresh ctor -> no marker
+        return Rc.make(p: raw, c: ctrl);                                     // fresh ctor -> no marker
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     public fn Rc<T> copy() {
         unsafe { this.c[0].strong = this.c[0].strong + 1; }
-        return Rc(p: this.p, c: this.c);                               // retain
+        return Rc.make(p: this.p, c: this.c);                               // retain
     }
     public fn RcWeak<T> downgrade() {
         unsafe { this.c[0].weak = this.c[0].weak + 1; }
-        return RcWeak(p: this.p, c: this.c);
+        return RcWeak.make(p: this.p, c: this.c);
     }
     ~Rc() {
         unsafe {
@@ -57,12 +57,12 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
 }
 
 fn RcWeak<Counter> makeExpired() {
-    Rc<Counter> a = new Counter(start: 100);
+    Rc<Counter> a = new Counter.make(start: 100);
     return a.downgrade();   // `a` drops on return -> object freed -> the returned weak is expired
 }
 
 fn int32 main() {
-    Rc<Counter> a = new Counter(start: 7);
+    Rc<Counter> a = new Counter.make(start: 7);
     RcWeak<Counter> w = a.downgrade();
     Optional<Rc<Counter>> o1 = w.tryUpgrade();
     int32 alive = match (o1) { case Some(u): u.n; case None: -1; };   // 7 (a alive)

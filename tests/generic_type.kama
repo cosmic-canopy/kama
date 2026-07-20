@@ -4,14 +4,14 @@
 type value Box<T>
 {
     public T value;
-    public Box(T v) { this.value = v; }
+    public ctor make(T v) { Box<T> r; r.value = v; return give r; }
     public fn T get() { return this.value; }
     public fn T twice() { return this.value + this.value; }
 }
 fn int main()
 {
-    Box<int32>   bi = Box(v: 7);     // Box_int32__ctor(&bi, 7)
-    Box<float64> bf = Box(v: 2.5);   // Box_float64 (a distinct instantiation)
+    Box<int32>   bi = Box.make(v: 7);     // Box_int32__ctor(&bi, 7)
+    Box<float64> bf = Box.make(v: 2.5);   // Box_float64 (a distinct instantiation)
     int32   n = bi.get();            // Box_int32__get   -> 7
     float64 f = bf.twice();          // Box_float64__twice -> 5.0
     return n + cast<int32>(f);       // 7 + 5 = 12

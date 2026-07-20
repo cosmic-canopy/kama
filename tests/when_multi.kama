@@ -3,13 +3,13 @@
 // resolves. (A move-only arg makes `copy()` cleanly absent — see xfail/when_multi_off.)
 type resource Box2<A, B> implements Copyable(bare: give) when [A: Copyable, B: Copyable] {
     A a; B b;
-    public Box2(A a, B b) { this.a = give a; this.b = give b; }
-    public fn Box2<A,B> copy() when [A: Copyable, B: Copyable] { return Box2::<A,B>(a: copy this.a, b: copy this.b); }
+    public ctor make(A a, B b) { Box2<A, B> r; r.a = give a; r.b = give b; return give r; }
+    public fn Box2<A,B> copy() when [A: Copyable, B: Copyable] { return Box2.make::<A,B>(a: copy this.a, b: copy this.b); }
     public fn int32 tag() { return 42; }
 }
 
 fn int main() {
-    Box2<int32, int32> p = Box2(a: 1, b: 2);
+    Box2<int32, int32> p = Box2.make(a: 1, b: 2);
     Box2<int32, int32> q = copy p;   // both int32 Copyable -> copy() exists -> compiles + runs
     p.tag();
     return q.tag();   // 42

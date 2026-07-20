@@ -9,21 +9,21 @@ import std::memory::{Owned, Shared};
 type contract Shape for both { fn int32 area(); }
 type resource Sq implements Shape {
     DynamicArray<int32> side;
-    public Sq(int32 s) { this.side.add(item: s); }
+    public ctor make(int32 s) { Sq r; r.side.add(item: s); return give r; }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 type resource Holder {
     Shared<Shape> shape;                                  // owning-interface FIELD
-    public Holder(Shared<Shape> s) { this.shape = give s; }
+    public ctor make(Shared<Shape> s) { Holder r; r.shape = give s; return give r; }
     public fn int32 area() { return this.shape.area(); }   // polymorphic dispatch through the field
 }
 fn Owned<Shape> makeShape(int32 s) {                      // RETURN an owned interface
-    Owned<Shape> o = new Sq(s: s);
+    Owned<Shape> o = new Sq.make(s: s);
     return give o;
 }
 fn int32 main() {
-    Shared<Shape> a = new Sq(s: 3);
-    Holder h = Holder(s: give a);                          // move the shared into the field
+    Shared<Shape> a = new Sq.make(s: 3);
+    Holder h = Holder.make(s: give a);                          // move the shared into the field
     Owned<Shape> m = makeShape(s: 5);                     // returned owned interface
     return h.area() + m.area();                            // 9 + 25 = 34; h and m drop -> each Sq freed once
 }

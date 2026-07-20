@@ -2,11 +2,11 @@
 // the same place semantics as a built-in collection, but written in the language.
 type value Grid3 {
     InlineArray<int32, 9> cells;
-    public Grid3() { this.cells = [0; 9]; }
+    public ctor make() { Grid3 r; r.cells = [0; 9]; return give r; }
     public ref int32 operator[](usize i) { return this.cells[i]; }
 }
 fn int32 main() {
-    Grid3 g = Grid3();
+    Grid3 g = Grid3.make();
     g[0] = 5;
     g[4] = 10;
     g[0] += 1;             // compound through the place

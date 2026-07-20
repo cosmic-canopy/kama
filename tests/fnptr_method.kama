@@ -3,14 +3,14 @@
 // the receiver (`ref Vec2 self`). The object is passed explicitly at the call.
 type value Vec2 {
     int32 x; int32 y;
-    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
+    public ctor make(int32 x, int32 y) { Vec2 r; r.x = x; r.y = y; return give r; }
     fn int32 dot(ref Vec2 o) { return this.x * o.x + this.y * o.y; }
 }
 fnptr int32 DotFn(ref Vec2 self, ref Vec2 o);   // receiver is an explicit first param
 
 fn int32 main() {
-    Vec2 u = Vec2(x: 3, y: 4);
-    Vec2 v = Vec2(x: 6, y: 6);
+    Vec2 u = Vec2.make(x: 3, y: 4);
+    Vec2 v = Vec2.make(x: 6, y: 6);
     DotFn d = Vec2::dot;                          // unbound method ref (:: = no binding)
     return d(self: ref u, o: ref v);             // pass the object explicitly: 3*6+4*6 = 42
 }

@@ -2,20 +2,20 @@
 import std::serialization::json::{encode};
 import std::collections::{DynamicArray};
 @generate(Serialize)
-type value Pt { @field int32 x; @field int32 y; public Pt(int32 x, int32 y) { this.x = x; this.y = y; } }
+type value Pt { @field int32 x; @field int32 y; public ctor make(int32 x, int32 y) { Pt r; r.x = x; r.y = y; return give r; } }
 @generate(Serialize)
 type resource Scene {
     @field string name;
     @field DynamicArray<int32> ids;
     @field DynamicArray<Pt> pts;
-    public Scene(string name, DynamicArray<int32> ids, DynamicArray<Pt> pts) {
-        this.name = give name; this.ids = give ids; this.pts = give pts;
+    public ctor make(string name, DynamicArray<int32> ids, DynamicArray<Pt> pts) {
+        Scene r; r.name = give name; r.ids = give ids; r.pts = give pts; return give r;
     }
 }
 fn int main() {
     DynamicArray<int32> ids = DynamicArray.empty(); ids.add(item: 7); ids.add(item: 8);
-    DynamicArray<Pt> pts = DynamicArray.empty(); pts.add(item: Pt(x: 1, y: 2)); pts.add(item: Pt(x: 3, y: 4));
-    Scene s = Scene(name: "lvl1", ids: give ids, pts: give pts);
+    DynamicArray<Pt> pts = DynamicArray.empty(); pts.add(item: Pt.make(x: 1, y: 2)); pts.add(item: Pt.make(x: 3, y: 4));
+    Scene s = Scene.make(name: "lvl1", ids: give ids, pts: give pts);
     Result<string, Owned<Error>> j_r = encode(v: s);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (j == "{\"name\":\"lvl1\",\"ids\":[7,8],\"pts\":[{\"x\":1,\"y\":2},{\"x\":3,\"y\":4}]}") { return 0; }

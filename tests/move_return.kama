@@ -7,13 +7,13 @@ extern fn int kama_trace_get();
 
 type resource Res {
     DynamicArray<int32> items;
-    public Res(int32 v) { this.items.add(item: v); }
+    public ctor make(int32 v) { Res r; r.items.add(item: v); return give r; }
     ~Res() { kama_trace(code: 3); }
     public fn int32 head() { return this.items[0]; }
 }
 
 fn Res make(int32 n) {
-    Res r = Res(v: n);
+    Res r = Res.make(v: n);
     return give r;            // move out — r's dtor suppressed here; the caller owns it
 }
 

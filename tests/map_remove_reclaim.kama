@@ -4,15 +4,15 @@ import std::collections::{Map};
 
 type resource Counter {
     int32 n;
-    public Counter(int32 n) { this.n = n; }
+    public ctor make(int32 n) { Counter r; r.n = n; return give r; }
     public fn int32 get() { return this.n; }
 }
 
 fn int main() {
     Map<int32, Counter> m = Map.empty();
-    m.put(key: 1, value: Counter(n: 10));
-    m.put(key: 2, value: Counter(n: 20));
-    m.put(key: 3, value: Counter(n: 30));
+    m.put(key: 1, value: Counter.make(n: 10));
+    m.put(key: 2, value: Counter.make(n: 20));
+    m.put(key: 3, value: Counter.make(n: 30));
 
     int32 r = 0;
     // RECLAIM: take ownership of the removed value out of the map (bind the local, then match it).

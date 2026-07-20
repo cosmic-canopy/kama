@@ -5,14 +5,14 @@ type value Node {
     @field int32 id;
     @field Optional<int32> parent;
     @field Optional<int32> next;
-    public Node(int32 id, Optional<int32> parent, Optional<int32> next) {
-        this.id = id; this.parent = parent; this.next = next;
+    public ctor make(int32 id, Optional<int32> parent, Optional<int32> next) {
+        Node r; r.id = id; r.parent = parent; r.next = next; return give r;
     }
 }
 fn int main() {
     Optional<int32> par = Optional::Some(value: 3);
     Optional<int32> nx = Optional::None;
-    Node n = Node(id: 7, parent: par, next: nx);
+    Node n = Node.make(id: 7, parent: par, next: nx);
     Result<string, Owned<Error>> j_r = encode(v: n);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (j == "{\"id\":7,\"parent\":3,\"next\":null}") { return 0; }

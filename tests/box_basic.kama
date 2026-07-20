@@ -6,7 +6,7 @@ extern fn void free(Ptr p);
 
 type value Counter {
     public int32 n;
-    public Counter(int32 start) { this.n = start; }
+    public ctor make(int32 start) { Counter r; r.n = start; return give r; }
     public fn int32 bump() { this.n = this.n + 1; return this.n; }
 }
 
@@ -18,7 +18,7 @@ type resource Box<T> implements Deref<T>, HeapOwner<T> {
 }
 
 fn int32 main() {
-    Box<Counter> c = new Counter(start: 40);   // heap placement + adopt, 0 copies
+    Box<Counter> c = new Counter.make(start: 40);   // heap placement + adopt, 0 copies
     int32 a = c.bump();                          // auto-deref -> 41
     int32 b = c.n;                               // auto-deref field -> 41
     return a + b;                                // 82  (then RAII frees the heap Counter)

@@ -8,13 +8,13 @@ extern fn int kama_trace_get();
 type resource Node
 {
     int32 id;
-    Node(int32 id) { this.id = id; kama_trace(code: 5); }
+    public ctor make(int32 id) { Node r; r.id = id; kama_trace(code: 5); return give r; }
     ~Node() { kama_trace(code: 6); }
 }
 
 fn Owned<Node> make(int32 v)
 {
-    Owned<Node> n = new Node(id: v);   // construct -> 5
+    Owned<Node> n = new Node.make(id: v);   // construct -> 5
     return n;                                  // MOVE OUT (make's unwind no-ops)
 }
 

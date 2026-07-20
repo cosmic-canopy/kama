@@ -6,19 +6,19 @@ import std::serialization::json::{encode, decode};
 import std::memory::{Shared};
 
 @generate(Serialize, Deserialize, noOnConstruction)
-type resource Leaf { @field int32 v; public Leaf(int32 v) { this.v = v; } }
+type resource Leaf { @field int32 v; public ctor make(int32 v) { Leaf r; r.v = v; return give r; } }
 
 @generate(Serialize, Deserialize, noOnConstruction)
 type resource Pair {
     @field Shared<Leaf> a;
     @field Shared<Leaf> b;
-    public Pair(Shared<Leaf> a, Shared<Leaf> b) { this.a = give a; this.b = give b; }
+    public ctor make(Shared<Leaf> a, Shared<Leaf> b) { Pair r; r.a = give a; r.b = give b; return give r; }
 }
 
 fn int main() {
-    Shared<Leaf> leaf = new Leaf(v: 42);
+    Shared<Leaf> leaf = new Leaf.make(v: 42);
     Shared<Leaf> l2 = leaf;                    // second owner of the SAME leaf
-    Pair p = Pair(a: give leaf, b: give l2);
+    Pair p = Pair.make(a: give leaf, b: give l2);
     Result<string, Owned<Error>> j_r = encode(v: p);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     // root Pair = id 1; a and b share the leaf = id 2 (written once)

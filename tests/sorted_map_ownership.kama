@@ -7,7 +7,7 @@ import std::collections::{SortedMap, DynamicArray};
 // A move-only value (no `Copyable`): proves the tree never copies or drops a value it shouldn't.
 type resource Counter {
     int32 n;
-    public Counter(int32 n) { this.n = n; }
+    public ctor make(int32 n) { Counter r; r.n = n; return give r; }
     public fn void bump() { this.n = this.n + 1; }
     public fn int32 get() { return this.n; }
 }
@@ -45,7 +45,7 @@ fn int32 main() {
     // (b) MOVE-ONLY values: insert 40 (forces splits), mutate one in place via getRef, reclaim one on remove.
     SortedMap<int32, Counter> cm = SortedMap.empty();
     int32 i = 0;
-    while (i < 40) { int32 kk = (i * 17) % 40; cm.put(key: kk, value: Counter(n: kk)); i = i + 1; }
+    while (i < 40) { int32 kk = (i * 17) % 40; cm.put(key: kk, value: Counter.make(n: kk)); i = i + 1; }
     if (cm.length() == 40) { r = r + 5; }
     cm.getRef(key: 20).bump(); cm.getRef(key: 20).bump();       // borrow + mutate in place (chained ref)
     int32 b = cm.getRef(key: 20).get();

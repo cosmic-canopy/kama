@@ -6,15 +6,15 @@ type contract Drawable for both { fn int32 area(); }
 type contract Animated for both implements Drawable { fn int32 step(); }
 type resource Sprite implements Animated {
     int32 s;
-    public Sprite(int32 s) { this.s = s; }
+    public ctor make(int32 s) { Sprite r; r.s = s; return give r; }
     public fn int32 area() { return this.s * this.s; }
     public fn int32 step() { return this.s + 1; }
 }
 fn int32 useAnim(Animated a) { return a.area() + a.step(); }   // borrow: refined `area` + own `step`
 fn int32 main() {
-    Sprite sp = Sprite(s: 5);
+    Sprite sp = Sprite.make(s: 5);
     int32 r = useAnim(a: sp);              // 25 + 6 = 31
-    Shared<Animated> h = new Sprite(s: 3); // own a Sprite behind the refined contract handle
+    Shared<Animated> h = new Sprite.make(s: 3); // own a Sprite behind the refined contract handle
     r = r + h.area() + h.step();           // 9 + 4 = 13  -> 44
     return r;                              // 44
 }

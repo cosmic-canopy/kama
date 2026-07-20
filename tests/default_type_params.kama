@@ -4,24 +4,24 @@
 type value Wrap<T, U = int32> {
     public T first;
     public U second;
-    public Wrap(T a, U b) { this.first = a; this.second = b; }
+    public ctor make(T a, U b) { Wrap<T, U> r; r.first = a; r.second = b; return give r; }
 }
 
 fn int32 main() {
     int32 r = 0;
 
     // U omitted -> fills from its default (int32).
-    Wrap<bool> a = Wrap(a: true, b: 7);
+    Wrap<bool> a = Wrap.make(a: true, b: 7);
     if (a.first && a.second == 7) { r = r + 10; }
 
     // Spelling the default explicitly resolves to the SAME monomorph as `Wrap<bool>` (dedup): if the two
     // minted separate C structs this translation unit would still compile, but the point is one instance —
     // and both coexisting cleanly is the observable proof there is no duplicate-emission clash.
-    Wrap<bool, int32> b = Wrap(a: false, b: 42);
+    Wrap<bool, int32> b = Wrap.make(a: false, b: 42);
     if (!b.first && b.second == 42) { r = r + 10; }
 
     // Override the default positionally (U = float64).
-    Wrap<bool, float64> c = Wrap(a: true, b: 3.5);
+    Wrap<bool, float64> c = Wrap.make(a: true, b: 3.5);
     if (c.first && c.second > 3.0 && c.second < 4.0) { r = r + 10; }
 
     return r;   // 30

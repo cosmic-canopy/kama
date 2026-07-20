@@ -8,33 +8,33 @@ type value Ctrl { public int32 strong; public int32 weak; }
 type contract Shape for both { fn int32 area(); }
 type resource Circle implements Shape {
     Ptr<int32> buf;
-    public Circle(int32 r) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = r; } }
+    public ctor make(int32 r) { Circle r2; unsafe { r2.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); r2.buf[0] = r; } return give r2; }
     public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
     ~Circle() { unsafe { free(p: cast<Ptr>(this.buf)); } }
 }
 type resource RcWeak<T> {
     Ptr<T> p; Ptr<Ctrl> c;
-    public RcWeak(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { RcWeak<T> r; r.p = p; r.c = c; return give r; }
     public fn Optional<Rc<T>> tryUpgrade() {
-        unsafe { if (this.c[0].strong > 0) { this.c[0].strong = this.c[0].strong + 1; return Optional::Some(value: Rc(p: this.p, c: this.c)); } }
+        unsafe { if (this.c[0].strong > 0) { this.c[0].strong = this.c[0].strong + 1; return Optional::Some(value: Rc.make(p: this.p, c: this.c)); } }
         return Optional::None;
     }
     ~RcWeak() { unsafe { this.c[0].weak = this.c[0].weak - 1; if (this.c[0].strong == 0 && this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } }
 }
 type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     Ptr<T> p; Ptr<Ctrl> c;
-    public Rc(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
-    public ctor adopt(Ptr<T> raw) { Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc(p: raw, c: k); }
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { Rc<T> r; r.p = p; r.c = c; return give r; }
+    public ctor adopt(Ptr<T> raw) { Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc.make(p: raw, c: k); }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    public fn Rc<T> copy() { unsafe { this.c[0].strong = this.c[0].strong + 1; } return Rc(p: this.p, c: this.c); }
-    public fn RcWeak<T> downgrade() { unsafe { this.c[0].weak = this.c[0].weak + 1; } return RcWeak(p: this.p, c: this.c); }
+    public fn Rc<T> copy() { unsafe { this.c[0].strong = this.c[0].strong + 1; } return Rc.make(p: this.p, c: this.c); }
+    public fn RcWeak<T> downgrade() { unsafe { this.c[0].weak = this.c[0].weak + 1; } return RcWeak.make(p: this.p, c: this.c); }
     ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } } }
 }
 fn int32 main() {
     RcWeak<Shape> w;
     int32 v = 0;
     {
-        Rc<Shape> a = new Circle(r: 7);
+        Rc<Shape> a = new Circle.make(r: 7);
         w = a.downgrade();
         v = a.area();               // 49
     }   // a drops: strong 0 -> Circle __dtor frees buf; ctrl stays (weak=1)

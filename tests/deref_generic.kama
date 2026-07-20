@@ -7,20 +7,20 @@ extern "<stdlib.h>";
 extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 
+@generate(of)
 type value Point {
     public int32 x; public int32 y;
-    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
     public fn int32 sum() { return this.x + this.y; }
 }
 
 type resource Own<T> implements Deref<T> {
     Ptr<T> p;
-    public Own(T v) { unsafe { this.p = cast<Ptr<T>>(malloc(n: sizeof(T))); this.p[0] = v; } }
+    public ctor make(T v) { Own<T> r; unsafe { r.p = cast<Ptr<T>>(malloc(n: sizeof(T))); r.p[0] = v; } return give r; }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     ~Own() { unsafe { free(p: cast<Ptr>(this.p)); } }
 }
 
 fn int32 main() {
-    Own<Point> o = Own(v: Point(x: 30, y: 12));
+    Own<Point> o = Own.make(v: Point.of(x: 30, y: 12));
     return o.sum() + o.x;   // 42 + 30 = 72 (RAII frees the heap Point)
 }

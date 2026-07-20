@@ -6,12 +6,12 @@ import std::serialization::json::{encode, decode};
 type value Point {
     @field int32 x;
     @field int32 y;
-    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
+    public ctor make(int32 x, int32 y) { Point r; r.x = x; r.y = y; return give r; }
     public fn int32 sum() { return this.x + this.y; }
 }
 fn int main() {
     // good input -> Ok
-    Point p = Point(x: 30, y: 12);
+    Point p = Point.make(x: 30, y: 12);
     Result<string, Owned<Error>> j_r = encode(v: p);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<Point, Owned<Error>> good = decode::<Point>(src: give j);

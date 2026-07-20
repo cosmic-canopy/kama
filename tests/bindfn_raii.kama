@@ -7,12 +7,12 @@ extern fn int kama_trace_get();
 fnptr int32 Get(int32 d);
 type resource Probe {
     int32 id;
-    Probe(int32 id) { this.id = id; }
+    public ctor make(int32 id) { Probe r; r.id = id; return give r; }
     ~Probe() { kama_trace(code: 9); }
     fn int32 read(int32 d) { return this.id + d; }
 }
 fn int use() {
-    Owned<Probe> p = new Probe(id: 1);
+    Owned<Probe> p = new Probe.make(id: 1);
     BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
     return g(d: 41);                                 // 42; on exit g drops -> Probe::~ once
 }

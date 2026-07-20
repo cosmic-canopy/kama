@@ -12,14 +12,14 @@ type resource Node {
     @field int32 id;
     @field Optional<Shared<Node>> next;   // owns (forward edge)
     @field Optional<Weak<Node>> back;     // weak (back edge), wired after construction
-    public Node(int32 id) { this.id = id; this.next = Optional::None; this.back = Optional::None; }
+    public ctor make(int32 id) { Node r; r.id = id; r.next = Optional::None; r.back = Optional::None; return give r; }
     public fn void setNext(Shared<Node> n) { this.next = Optional::Some(value: give n); }
     public fn void setBack(Weak<Node> w) { this.back = Optional::Some(value: give w); }
 }
 
 fn int main() {
-    Shared<Node> a = new Node(id: 1);
-    Shared<Node> b = new Node(id: 2);
+    Shared<Node> a = new Node.make(id: 1);
+    Shared<Node> b = new Node.make(id: 2);
     b.setBack(w: a.downgrade());          // b -> a (weak)
     a.setNext(n: give b);                 // a -> b (owns); a is the root
     Result<string, Owned<Error>> j_r = encode(v: a);

@@ -2,15 +2,15 @@ import std::memory::{Shared};
 // Returning a copy-only Shared FIELD is a bare hand-off that RETAINS (copy-only default): the caller
 // gets its own handle and the field stays valid, with no double-decrement. (Under the old model this
 // needed an explicit `give`/`copy` marker; copy-only ownership makes the bare retain unambiguous.)
-type value C { int32 n; public C(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
+type value C { int32 n; public ctor make(int32 n){ C r; r.n = n; return give r; } public fn int32 get(){ return this.n; } }
 type resource H {
     Shared<C> c;
-    public H(Shared<C> handle) { this.c = handle; }     // retain into the field
+    public ctor make(Shared<C> handle) { H r; r.c = handle; return give r; }     // retain into the field
     public fn Shared<C> borrow() { return this.c; }      // bare field return = retain (copy)
 }
 fn int32 main() {
-    Shared<C> s = new C(n: 7);
-    H h = H(handle: s);            // field retains
+    Shared<C> s = new C.make(n: 7);
+    H h = H.make(handle: s);            // field retains
     Shared<C> a = h.borrow();      // retain again — a, h.c, s all share one C
     Shared<C> b = h.borrow();      // and again
     return a.get() + b.get();      // 7 + 7 = 14  (every handle drops; C freed exactly once)

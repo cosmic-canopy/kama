@@ -4,11 +4,11 @@ import std::collections::{DynamicArray};
 // once (ASan-clean). An empty resource would be move-only too, by identity.
 type resource Box {
     DynamicArray<int32> sides;
-    public Box(int32 v) { this.sides.add(item: v); }
+    public ctor make(int32 v) { Box r; r.sides.add(item: v); return give r; }
     public fn int32 head() { return this.sides[0]; }
 }
 fn int32 take(Box b) { return b.head(); }      // b owned by the callee, dropped at fn-end
 fn int32 main() {
-    Box a = Box(v: 42);
+    Box a = Box.make(v: 42);
     return take(b: give a);                     // move a into the callee; freed exactly once
 }

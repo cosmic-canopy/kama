@@ -4,17 +4,17 @@
 type value Counter
 {
     int32 value;
-    Counter(int32 start) { this.value = start; }
+    public ctor make(int32 start) { Counter r; r.value = start; return give r; }
     public fn void bump() { this.value = this.value + 1; }
     public fn int32 get() { return this.value; }
 }
 
 fn int main()
 {
-    Owned<Counter> o = new Counter(start: 9);
+    Owned<Counter> o = new Counter.make(start: 9);
     o.bump();                                     // 10
 
-    Shared<Counter> s = new Counter(start: 20);
+    Shared<Counter> s = new Counter.make(start: 20);
     Weak<Counter> w = s.downgrade();              // weak ref (does not keep alive)
     Optional<Shared<Counter>> up = w.tryUpgrade();
     int32 fromWeak = match (up) {

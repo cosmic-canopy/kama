@@ -1,6 +1,6 @@
 type value Account {
     int64 balance;
-    public Account(int64 b) { this.balance = b; }
+    public ctor make(int64 b) { Account r; r.balance = b; return give r; }
     friend readBalance[balance];     // a free function
     friend Bank[balance];            // a whole class
     friend Ledger::post[balance];    // a single method
@@ -13,7 +13,7 @@ type value Ledger {
     public fn int64 post(ref Account a) { return a.balance; }      // granted method
 }
 fn int main() {
-    Account acc = Account(b: 14);
+    Account acc = Account.make(b: 14);
     Bank bk = Bank();
     Ledger lg = Ledger();
     int64 total = readBalance(a: ref acc) + bk.viaBank(a: ref acc) + lg.post(a: ref acc);

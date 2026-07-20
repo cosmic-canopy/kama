@@ -3,12 +3,12 @@ type contract Drawable for resource { fn int32 draw(); }
 type contract Rankable for value    { fn int32 rank(); }
 type resource Sprite implements Drawable {
     int32 z;
-    public Sprite(int32 z) { this.z = z; }
+    public ctor make(int32 z) { Sprite r; r.z = z; return give r; }
     public fn int32 draw() { return this.z; }
 }
 type value Card implements Rankable {
     int32 r;
-    public Card(int32 r) { this.r = r; }
+    public ctor make(int32 r) { Card rr; rr.r = r; return give rr; }
     public fn int32 rank() { return this.r; }
 }
-fn int32 main() { Sprite s = Sprite(z: 10); Card c = Card(r: 32); return s.draw() + c.rank(); }
+fn int32 main() { Sprite s = Sprite.make(z: 10); Card c = Card.make(r: 32); return s.draw() + c.rank(); }

@@ -8,17 +8,19 @@ extern fn void free(Ptr<int32> p);
 type resource IntVec {
     Ptr<int32> data;
     int32 len;
-    public IntVec(int32 n) {
-        this.data = malloc(n: cast<usize>(n) * 4);
-        this.len = n;
-        unsafe { int32 i = 0; while (i < n) { this.data[i] = 0; i = i + 1; } }
+    public ctor make(int32 n) {
+        IntVec r;
+        r.data = malloc(n: cast<usize>(n) * 4);
+        r.len = n;
+        unsafe { int32 i = 0; while (i < n) { r.data[i] = 0; i = i + 1; } }
+        return give r;
     }
     public ref int32 operator[](int32 i) { unsafe { return this.data[i]; } }
     public fn int32 length() { return this.len; }
     ~IntVec() { free(p: this.data); }
 }
 fn int32 main() {
-    IntVec v = IntVec(n: 4);
+    IntVec v = IntVec.make(n: 4);
     v[0] = 100;
     v[1] = 20;
     v[2] += 3;

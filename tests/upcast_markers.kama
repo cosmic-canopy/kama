@@ -5,15 +5,15 @@ import std::collections::{DynamicArray};
 type contract Draw for both { fn int32 v(); }
 type resource Dot implements Draw {
     DynamicArray<int32> h;
-    public Dot(int32 x) { this.h.add(item: x); }
+    public ctor make(int32 x) { Dot r; r.h.add(item: x); return give r; }
     public fn int32 v() { return this.h[0]; }
 }
 fn int32 main() {
-    Shared<Dot> a = new Dot(x: 3);
+    Shared<Dot> a = new Dot.make(x: 3);
     Shared<Draw> s = copy a;          // explicit retain-upcast (a stays valid)
-    Shared<Dot> a2 = new Dot(x: 4);
+    Shared<Dot> a2 = new Dot.make(x: 4);
     s = a2;                            // reseat: release the old Dot(3), retain Dot(4)
-    Owned<Dot> o = new Dot(x: 5);
+    Owned<Dot> o = new Dot.make(x: 5);
     Owned<Draw> od = give o;          // give-move-upcast (o consumed)
     return a.v() + s.v() + od.v();     // 3 + 4 + 5 = 12
 }

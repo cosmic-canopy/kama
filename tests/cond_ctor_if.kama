@@ -1,15 +1,15 @@
 // M31 — a value-producing construct (here an inline constructor) is now legal in a raw condition. The
 // method-form `==` needs `&self` for an rvalue, and the inline ctor needs a statement slot to materialize
 // — so the `if` is wrapped in a block and the ctor temp is flushed before it.
+@generate(of)
 type value V {
     public int32 x;
-    public V(int32 x) { this.x = x; }
     public bool operator==(V rhs) { return this.x == rhs.x; }
 }
 fn int32 main() {
-    V a = V(x: 7);
+    V a = V.of(x: 7);
     int32 r = 0;
-    if (a == V(x: 7)) { r = r + 5; }     // inline ctor operand in the condition -> true
-    if (a == V(x: 9)) { r = r + 100; }   // false
+    if (a == V.of(x: 7)) { r = r + 5; }     // inline ctor operand in the condition -> true
+    if (a == V.of(x: 9)) { r = r + 100; }   // false
     return r;   // 5
 }

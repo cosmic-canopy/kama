@@ -5,7 +5,7 @@ import std::collections::{Map};
 
 type resource Counter {
     int32 n;
-    public Counter(int32 n) { this.n = n; }
+    public ctor make(int32 n) { Counter r; r.n = n; return give r; }
     public fn void bump() { this.n = this.n + 1; }
     public fn int32 get() { return this.n; }
 }
@@ -13,8 +13,8 @@ type resource Counter {
 fn int main() {
     // (a) valuesMut over a MOVE-ONLY value map, read back via getRef (values() is unavailable for non-Copyable).
     Map<int32, Counter> cm = Map.empty();
-    cm.put(key: 1, value: Counter(n: 10));
-    cm.put(key: 2, value: Counter(n: 20));
+    cm.put(key: 1, value: Counter.make(n: 10));
+    cm.put(key: 2, value: Counter.make(n: 20));
     foreach (ref Counter c in cm.valuesMut()) { c.bump(); }   // -> 11, 21
     int32 a = cm.getRef(key: 1).get() + cm.getRef(key: 2).get();   // 32
 

@@ -6,12 +6,12 @@ type value Vitals {
     @field int32 mp;
     @field float64 ratio;
     @field bool alive;
-    public Vitals(int32 hp, int32 mp, float64 ratio, bool alive) {
-        this.hp = hp; this.mp = mp; this.ratio = ratio; this.alive = alive;
+    public ctor make(int32 hp, int32 mp, float64 ratio, bool alive) {
+        Vitals r; r.hp = hp; r.mp = mp; r.ratio = ratio; r.alive = alive; return give r;
     }
 }
 fn int main() {
-    Vitals v = Vitals(hp: 100, mp: 0i32 - 5i32, ratio: 0.5, alive: true);
+    Vitals v = Vitals.make(hp: 100, mp: 0i32 - 5i32, ratio: 0.5, alive: true);
     Result<string, Owned<Error>> j_r = encode(v: v);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     if (j == "{\"hp\":100,\"mp\":-5,\"ratio\":0.5,\"alive\":true}") { return 0; }

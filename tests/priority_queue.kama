@@ -6,7 +6,7 @@ import std::collections::{PriorityQueue};
 // A move-only (resource) element that is Comparable — proves the heap relocates owned elements correctly.
 type resource Task implements Comparable {
     int32 prio;
-    public Task(int32 prio) { this.prio = prio; }
+    public ctor make(int32 prio) { Task r; r.prio = prio; return give r; }
     public fn int32 priority() { return this.prio; }
     public fn Ordering compareTo(ref Task other) {
         int32 mine = this.prio; int32 theirs = other.priority();   // named receivers (a primitive rvalue can't be one)
@@ -45,9 +45,9 @@ fn int32 main() {
 
     // (c) move-only element: reclaim in priority order, borrow the next, drop the rest at scope exit.
     PriorityQueue<Task> pq = PriorityQueue.minHeap();
-    pq.push(item: Task(prio: 30));
-    pq.push(item: Task(prio: 10));
-    pq.push(item: Task(prio: 20));
+    pq.push(item: Task.make(prio: 30));
+    pq.push(item: Task.make(prio: 10));
+    pq.push(item: Task.make(prio: 20));
     int32 firstPrio = match (pq.pop()) { case Some(t): t.priority(); case None: 0 - 1; };
     if (firstPrio == 10) { r = r + 5; }                 // lowest priority out first (min-heap)
     int32 borrowed = pq.peekRef().priority();           // borrow the new root in place, no removal

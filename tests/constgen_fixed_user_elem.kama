@@ -1,12 +1,12 @@
 // A InlineArray element may be any `value` — here a user `value Point` (indexed + field access + foreach),
 // the case the ambiguous `Vec4[4]` type-suffix syntax could never express.
+@generate(of)
 type value Point {
     public int32 x;
     public int32 y;
-    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
 }
 fn int32 main() {
-    InlineArray<Point, 3> pts = [Point(x: 1, y: 2), Point(x: 3, y: 4), Point(x: 5, y: 6)];
+    InlineArray<Point, 3> pts = [Point.of(x: 1, y: 2), Point.of(x: 3, y: 4), Point.of(x: 5, y: 6)];
     int32 t = 0;
     foreach (Point p in pts) { t = t + p.x + p.y; }   // 3 + 7 + 11 = 21
     return t + pts[2].x;   // 21 + 5 = 26

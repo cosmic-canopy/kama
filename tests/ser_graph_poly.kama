@@ -13,14 +13,14 @@ type contract Shape for both { fn int32 area(); }
 @generate(Serialize, Deserialize, noOnConstruction)
 type resource Sq implements Shape {
     @field int32 side;
-    public Sq(int32 side) { this.side = side; }
+    public ctor make(int32 side) { Sq r; r.side = side; return give r; }
     public fn int32 area() { return this.side * this.side; }
 }
 
 @generate(Serialize, Deserialize, noOnConstruction)
 type resource Circle implements Shape {
     @field int32 r;
-    public Circle(int32 r) { this.r = r; }
+    public ctor make(int32 r) { Circle self; self.r = r; return give self; }
     public fn int32 area() { return 3 * this.r * this.r; }
 }
 
@@ -28,17 +28,17 @@ type resource Circle implements Shape {
 type resource Scene {
     @field Shared<Shape> a;
     @field Shared<Shape> b;
-    public Scene(Shared<Shape> a, Shared<Shape> b) { this.a = give a; this.b = give b; }
+    public ctor make(Shared<Shape> a, Shared<Shape> b) { Scene r; r.a = give a; r.b = give b; return give r; }
     public fn int32 areaA() { return this.a.area(); }   // dynamic dispatch through the rebuilt fat edges
     public fn int32 areaB() { return this.b.area(); }
 }
 
 fn int main() {
-    Shared<Sq> sq = new Sq(side: 4);
+    Shared<Sq> sq = new Sq.make(side: 4);
     Shared<Shape> sa = sq;                 // retain-upcast into the fat contract handle
-    Shared<Circle> ci = new Circle(r: 2);
+    Shared<Circle> ci = new Circle.make(r: 2);
     Shared<Shape> sb = ci;
-    Scene sc = Scene(a: give sa, b: give sb);
+    Scene sc = Scene.make(a: give sa, b: give sb);
     Result<string, Owned<Error>> j_r = encode(v: sc);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     // root Scene=1; a -> Sq=2, b -> Circle=3; each concrete carries its own `__type`.

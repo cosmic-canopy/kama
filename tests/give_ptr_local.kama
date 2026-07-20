@@ -4,7 +4,7 @@
 // skipped, so no double-drop — ASan-clean; a bare copy would leave `w` live and drop it twice).
 type resource Widget {
     int32 id;
-    public Widget(int32 id) { this.id = id; }
+    public ctor make(int32 id) { Widget r; r.id = id; return give r; }
     public fn int32 get() { return this.id; }
     ~Widget() { }
 }
@@ -12,7 +12,7 @@ type resource Widget {
 fn int32 main() {
     Ptr<Widget> buf;
     unsafe { buf = cast<Ptr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)) * cast<usize>(2))); }
-    Widget w = Widget(id: 42);
+    Widget w = Widget.make(id: 42);
     unsafe { buf[0] = give w; }               // the newly-allowed bare-local raw-slot MOVE (consumes w)
     Widget got;                               // zero-init owned local — the move-out target
     Ptr<Widget> gp = addr(of: got);

@@ -4,11 +4,11 @@ import std::memory::{Owned};
 fnptr int32 Get(int32 d);
 type value Probe {
     int32 id;
-    Probe(int32 id) { this.id = id; }
+    public ctor make(int32 id) { Probe r; r.id = id; return give r; }
     fn int32 read(int32 d) { return this.id + d; }
 }
 fn BindableFunctionPtr<Get> make(int32 id) {
-    Owned<Probe> p = new Probe(id: id);
+    Owned<Probe> p = new Probe.make(id: id);
     BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
     return g;
 }

@@ -5,22 +5,22 @@ extern "<stdlib.h>";
 extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 
+@generate(of)
 type value Point {
     public int32 x; public int32 y;
-    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
     public fn int32 sum() { return this.x + this.y; }
 }
 
 type resource OwnPoint implements Deref<Point> {
     Ptr<Point> p;
-    public OwnPoint(Point v) {
-        unsafe { this.p = cast<Ptr<Point>>(malloc(n: sizeof(Point))); this.p[0] = v; }
-    }
+    public ctor make(Point v) { OwnPoint r;
+        unsafe { r.p = cast<Ptr<Point>>(malloc(n: sizeof(Point))); r.p[0] = v; }
+     return give r; }
     public fn ref Point deref() { unsafe { return this.p[0]; } }   // place into the heap object
     ~OwnPoint() { unsafe { free(p: cast<Ptr>(this.p)); } }
 }
 
 fn int32 main() {
-    OwnPoint o = OwnPoint(v: Point(x: 30, y: 12));
+    OwnPoint o = OwnPoint.make(v: Point.of(x: 30, y: 12));
     return o.sum() + o.x;   // 42 + 30 = 72 (then RAII frees the heap Point)
 }

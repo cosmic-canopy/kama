@@ -8,11 +8,11 @@ type virtual resource Shape
 type final resource Circle extends Shape
 {
     int r;
-    public Circle(int r) { this.r = r; }
+    public ctor make(int r) { Circle r0; r0.r = r; return give r0; }
     protected override fn int area() { return r * r; }
 }
 fn int main()
 {
-    Circle c = Circle(r: 7);
+    Circle c = Circle.make(r: 7);
     return c.describe();
 }

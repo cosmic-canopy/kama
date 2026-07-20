@@ -5,17 +5,17 @@ import std::serialization::json::{encode};
 @generate(Serialize)
 type value Measure {
     @field float64 v;
-    public Measure(float64 v) { this.v = v; }
+    public ctor make(float64 v) { Measure r; r.v = v; return give r; }
 }
 fn int main() {
     // finite -> Ok
-    Measure ok = Measure(v: 1.5);
+    Measure ok = Measure.make(v: 1.5);
     Result<string, Owned<Error>> okr = encode(v: ok);
     int32 okv = match (okr) { case Ok(s): 40; case Err(e): 0 - 1; };
 
     // non-finite (Inf via overflow) -> Err(NotRepresentable), recovered as a concrete SerError
     float64 big = 1.0e308; float64 inf = big * 10.0;
-    Measure bad = Measure(v: inf);
+    Measure bad = Measure.make(v: inf);
     Result<string, Owned<Error>> badr = encode(v: bad);
     int32 errv = match (badr) {
         case Ok(s): 0 - 3;                                   // must NOT succeed

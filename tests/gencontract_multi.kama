@@ -4,7 +4,7 @@ type contract Pairing<K, V> for both { fn K key(); fn V val(); }
 
 type value Entry implements Pairing<int32, int32> {
     int32 k; int32 v;
-    public Entry(int32 k, int32 v) { this.k = k; this.v = v; }
+    public ctor make(int32 k, int32 v) { Entry r; r.k = k; r.v = v; return give r; }
     public fn int32 key() { return this.k; }
     public fn int32 val() { return this.v; }
 }
@@ -12,6 +12,6 @@ type value Entry implements Pairing<int32, int32> {
 fn int32 combine<P: Pairing<int32, int32>>(P p) { return p.key() + p.val(); }
 
 fn int32 main() {
-    Entry e = Entry(k: 30, v: 12);
+    Entry e = Entry.make(k: 30, v: 12);
     return combine(p: e);   // 42
 }

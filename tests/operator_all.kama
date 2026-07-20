@@ -1,23 +1,23 @@
 // M31b — operator overloading, EVERY overloadable operator on one `value` type. `Num` wraps an int32
 // and defines the full set: arithmetic, bitwise, comparison, unary, and increment/decrement. Each
 // `a <op> b` lowers to a positional call `Num__op_xxx(&a, b)` (method form — `this` is the left operand).
+@generate(of)
 type value Num {
     public int32 v;
-    public Num(int32 v) { this.v = v; }
 
     // arithmetic (method form: `this` + rhs)
-    public Num operator+(Num rhs) { return Num(v: this.v + rhs.v); }
-    public Num operator-(Num rhs) { return Num(v: this.v - rhs.v); }
-    public Num operator*(Num rhs) { return Num(v: this.v * rhs.v); }
-    public Num operator/(Num rhs) { return Num(v: this.v / rhs.v); }
-    public Num operator%(Num rhs) { return Num(v: this.v % rhs.v); }
+    public Num operator+(Num rhs) { return Num.of(v: this.v + rhs.v); }
+    public Num operator-(Num rhs) { return Num.of(v: this.v - rhs.v); }
+    public Num operator*(Num rhs) { return Num.of(v: this.v * rhs.v); }
+    public Num operator/(Num rhs) { return Num.of(v: this.v / rhs.v); }
+    public Num operator%(Num rhs) { return Num.of(v: this.v % rhs.v); }
 
     // bitwise
-    public Num operator&(Num rhs) { return Num(v: this.v & rhs.v); }
-    public Num operator|(Num rhs) { return Num(v: this.v | rhs.v); }
-    public Num operator^(Num rhs) { return Num(v: this.v ^ rhs.v); }
-    public Num operator<<(Num rhs) { return Num(v: this.v << rhs.v); }
-    public Num operator>>(Num rhs) { return Num(v: this.v >> rhs.v); }
+    public Num operator&(Num rhs) { return Num.of(v: this.v & rhs.v); }
+    public Num operator|(Num rhs) { return Num.of(v: this.v | rhs.v); }
+    public Num operator^(Num rhs) { return Num.of(v: this.v ^ rhs.v); }
+    public Num operator<<(Num rhs) { return Num.of(v: this.v << rhs.v); }
+    public Num operator>>(Num rhs) { return Num.of(v: this.v >> rhs.v); }
 
     // comparison (return bool)
     public bool operator==(Num rhs) { return this.v == rhs.v; }
@@ -28,18 +28,18 @@ type value Num {
     public bool operator>=(Num rhs) { return this.v >= rhs.v; }
 
     // unary (0 params — operate on `this`)
-    public Num operator-() { return Num(v: -this.v); }
-    public Num operator~() { return Num(v: ~this.v); }
+    public Num operator-() { return Num.of(v: -this.v); }
+    public Num operator~() { return Num.of(v: ~this.v); }
     public bool operator!() { return this.v == 0; }
 
     // increment / decrement (mutating in place; returns the new value)
-    public Num operator++() { this.v = this.v + 1; return Num(v: this.v); }
-    public Num operator--() { this.v = this.v - 1; return Num(v: this.v); }
+    public Num operator++() { this.v = this.v + 1; return Num.of(v: this.v); }
+    public Num operator--() { this.v = this.v - 1; return Num.of(v: this.v); }
 }
 
 fn int32 main() {
-    Num a = Num(v: 12);
-    Num b = Num(v: 5);
+    Num a = Num.of(v: 12);
+    Num b = Num.of(v: 5);
     int32 acc = 0;
 
     // arithmetic: 17 + 7 + 60 + 2 + 2 = 88
@@ -51,8 +51,8 @@ fn int32 main() {
     acc = acc + add.v + sub.v + mul.v + div.v + mod.v;
 
     // bitwise: 4 + 13 + 9 + 10 + 3 = 39   (running total 127)
-    Num one = Num(v: 1);
-    Num two = Num(v: 2);
+    Num one = Num.of(v: 1);
+    Num two = Num.of(v: 2);
     Num band = a & b;
     Num bor  = a | b;
     Num bxor = a ^ b;
@@ -71,11 +71,11 @@ fn int32 main() {
     Num neg  = -a;
     Num bnot = ~b;
     acc = acc + neg.v + bnot.v;
-    Num zero = Num(v: 0);
+    Num zero = Num.of(v: 0);
     if (!zero) { acc = acc + 10; }
 
     // increment / decrement: 100 -> 101 -> 100 -> 99   (running total 249)
-    Num c = Num(v: 100);
+    Num c = Num.of(v: 100);
     c++;
     c--;
     c--;

@@ -4,7 +4,7 @@ import std::collections::{DynamicArray};
 // (2) the field auto-initialized to a valid empty collection by the ctor.
 type resource Bag {
     DynamicArray<int32> items;
-    public Bag() { }
+    public ctor make() { Bag r; return give r; }
     public fn void add(int32 v) { this.items.add(item: v); }
     public fn int32 sum() {
         int32 s = 0;
@@ -12,4 +12,4 @@ type resource Bag {
         return s;
     }
 }
-fn int32 main() { Bag b = Bag(); b.add(v: 20); b.add(v: 22); return b.sum(); }   // 42
+fn int32 main() { Bag b = Bag.make(); b.add(v: 20); b.add(v: 22); return b.sum(); }   // 42

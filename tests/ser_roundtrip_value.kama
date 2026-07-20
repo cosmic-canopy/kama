@@ -5,11 +5,11 @@ type value Vec {
     @field int32 x;
     @field int32 y;
     @field int32 z;
-    public Vec(int32 x, int32 y, int32 z) { this.x = x; this.y = y; this.z = z; }
+    public ctor make(int32 x, int32 y, int32 z) { Vec r; r.x = x; r.y = y; r.z = z; return give r; }
     public fn int32 dot() { return this.x + this.y + this.z; }
 }
 fn int main() {
-    Vec v = Vec(x: 10, y: 20, z: 12);
+    Vec v = Vec.make(x: 10, y: 20, z: 12);
     Result<string, Owned<Error>> j_r = encode(v: v);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<Vec, Owned<Error>> res = decode::<Vec>(src: give j);

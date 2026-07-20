@@ -554,6 +554,7 @@ private:
     int                _curLine = 0;                   // last source line seen (conditional-drop diagnostics)
     bool               _inUnsafe = false;             // inside an `unsafe { }` block
     bool               _inCtor   = false;             // emitting a ctor (const fields writable here)
+    bool               _inNamedCtorBody = false;       // emitting a named `ctor` factory body (const fields of the built local are writable)
     bool               _inStaticMethod = false;        // emitting a `static` method body (no `self`/`this`)
 
     void line(int srcLine);                          // emit a #line directive
@@ -1079,6 +1080,7 @@ private:
     std::string emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line);   // user operand → dispatch, else raw C
     int         compoundToBinary(int token);   // PLUSEQ -> PLUS … (compound assignment on a user type)
     std::string bareCtorClass(SharedExpression e);       // the class if `e` is a bare inline ctor call, else ""
+    std::string dotCtorFactoryClass(SharedExpression e); // the class if `e` is a dot-on-type ctor call `T.make(…)`, else "" (arg path only)
     void        rejectUnhoistableCtor(SharedExpression e);   // clean error for an inline ctor with no statement slot
     std::string hoistCtorIfInline(SharedExpression e);   // an inline ctor operand → a hoisted temp name, else ""
     std::string emitOperandByValue(SharedExpression e);  // emit an operator operand by value (hoisting an inline ctor)

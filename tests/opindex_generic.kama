@@ -3,11 +3,11 @@
 type value Pair<T> {
     T a;
     T b;
-    public Pair(T x, T y) { this.a = x; this.b = y; }
+    public ctor make(T x, T y) { Pair<T> r; r.a = x; r.b = y; return give r; }
     public ref T operator[](usize i) { if (i == 0) { return this.a; } return this.b; }
 }
 fn int32 main() {
-    Pair<int32> p = Pair(x: 5, y: 6);
+    Pair<int32> p = Pair.make(x: 5, y: 6);
     p[0] = 50;
     p[1] += 4;             // 10
     return p[0] + p[1];    // 60

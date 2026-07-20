@@ -9,14 +9,14 @@ type contract Shape for both { fn int32 area(); }
 
 type value Circle implements Shape {
     int32 r;
-    public Circle(int32 r) { this.r = r; }
+    public ctor make(int32 r) { Circle r2; r2.r = r; return give r2; }
     public fn int32 area() { return this.r * this.r; }
 }
 
 fn int main() {
     Arena arena = Arena(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
 
-    Shared<Shape, BumpAllocator> c = new(allocator: arena.handle()) Circle(r: 6);   // area 36
+    Shared<Shape, BumpAllocator> c = new(allocator: arena.handle()) Circle.make(r: 6);   // area 36
     Shared<Shape, BumpAllocator> d = c;                  // retain → strong=2, shares the arena-backed ctrl
     return c.area() + d.area();                          // 72, both handles observe the one Circle
 }

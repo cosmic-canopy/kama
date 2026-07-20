@@ -3,16 +3,16 @@
 type value Row {
     public int32 a;
     public int32 b;
-    public Row() { this.a = 0; this.b = 0; }
+    public ctor make() { Row r; r.a = 0; r.b = 0; return give r; }
     public ref int32 operator[](usize j) { if (j == 0) { return this.a; } return this.b; }
 }
 type value Mat {
     InlineArray<Row, 2> rows;
-    public Mat() { Row r = Row(); this.rows = [r; 2]; }
+    public ctor make() { Mat r; Row r2 = Row.make(); r.rows = [r2; 2]; return give r; }
     public ref Row operator[](usize i) { return this.rows[i]; }
 }
 fn int32 main() {
-    Mat m = Mat();
+    Mat m = Mat.make();
     m[0][1] = 7;           // nested place: m[0] (ref Row) then [1] (ref int32)
     m[1][0] = 9;
     m[0].a = 3;            // field write through m[0] (a Row place)

@@ -2,23 +2,23 @@
 // A `ref Base` dispatches to the most-derived override; each level composes its parent via base.step().
 type virtual resource Base
 {
-    public Base() {}
+    public ctor make() { Base r; return give r; }
     public fn int32 rank() { return this.step(); }
     protected virtual fn int32 step() { return 1; }
 }
 type virtual resource Mid extends Base
 {
-    public Mid() {}
+    public ctor make() { Mid r; return give r; }
     protected override fn int32 step() { return base.step() + 10; }
 }
 type final resource Leaf extends Mid
 {
-    public Leaf() {}
+    public ctor make() { Leaf r; return give r; }
     protected override fn int32 step() { return base.step() + 100; }
 }
 fn int32 measure(ref Base b) { return b.rank(); }
 fn int main()
 {
-    Leaf leaf = Leaf();
+    Leaf leaf = Leaf.make();
     return measure(b: ref leaf);   // Leaf.step: (Base 1 + Mid 10) + 100 = 111
 }

@@ -7,7 +7,7 @@ extern fn void free(Ptr p);
 type contract Shape for both { fn int32 area(); }
 type resource Circle implements Shape {
     Ptr<int32> buf;
-    public Circle(int32 r) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = r; } }
+    public ctor make(int32 r) { Circle rr; unsafe { rr.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); rr.buf[0] = r; } return give rr; }
     public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
     ~Circle() { unsafe { free(p: cast<Ptr>(this.buf)); } }   // must run via vtbl->__dtor
 }
@@ -18,6 +18,6 @@ type resource Box<T> implements Deref<T>, HeapOwner<T> {
     ~Box() { unsafe { free(p: cast<Ptr>(this.p)); } }
 }
 fn int32 main() {
-    Box<Shape> a = new Circle(r: 6);
+    Box<Shape> a = new Circle.make(r: 6);
     return a.area();   // 36; at return, Box drops -> vtbl->__dtor(Circle) frees buf
 }

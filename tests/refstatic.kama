@@ -3,11 +3,11 @@
 // (the `Type::m()` path now derefs place returns, closing a pre-existing gap).
 type value Buf {
     InlineArray<int32, 4> d;
-    public Buf() { this.d = [0; 4]; }
+    public ctor make() { Buf r; r.d = [0; 4]; return give r; }
     public static fn ref int32 at(ref Buf b, usize i) { return b.d[i]; }
 }
 fn int32 main() {
-    Buf b = Buf();
+    Buf b = Buf.make();
     Buf::at(b: ref b, i: 0) = 7;
     Buf::at(b: ref b, i: 0) += 1;      // 8
     return Buf::at(b: ref b, i: 0);    // 8

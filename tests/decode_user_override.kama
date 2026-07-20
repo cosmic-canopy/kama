@@ -9,7 +9,7 @@ import std::serialization::json::{encode, decode};
 type value Point {
     @field int32 x;
     @field int32 y;
-    public Point(int32 x, int32 y) { this.x = x; this.y = y; }
+    public ctor make(int32 x, int32 y) { Point r; r.x = x; r.y = y; return give r; }
     public fn int32 sum() { return this.x + this.y; }
 }
 
@@ -17,13 +17,13 @@ type value Point {
 type value Line {
     @field Point start;
     @field Point end;
-    public Line(Point start, Point end) { this.start = start; this.end = end; }
+    public ctor make(Point start, Point end) { Line r; r.start = start; r.end = end; return give r; }
     public fn int32 total() { return this.start.sum() + this.end.sum(); }
 
     // Hand-written deserialize: reads both Point fields via the `r.deserialize::<Point>()` sugar.
     public ctor Result<Line, Owned<Error>> deserialize(Deserializer r) {
-        Point s = Point(x: 0, y: 0);
-        Point e = Point(x: 0, y: 0);
+        Point s = Point.make(x: 0, y: 0);
+        Point e = Point.make(x: 0, y: 0);
         r.beginObject();
         while (r.moreFields()) {
             string key = r.fieldName();
@@ -34,14 +34,14 @@ type value Line {
             };
             if (key.equals(other: "start")) { s = p; } else { e = p; }
         }
-        Line ln = Line(start: s, end: e);
+        Line ln = Line.make(start: s, end: e);
         return Result::Ok(value: ln);
     }
 }
 
 fn int main() {
     // good input -> the override reads both Points, round-trips to Ok
-    Line ln = Line(start: Point(x: 30, y: 12), end: Point(x: 3, y: 5));
+    Line ln = Line.make(start: Point.make(x: 30, y: 12), end: Point.make(x: 3, y: 5));
     Result<string, Owned<Error>> j_r = encode(v: ln);
     string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
     Result<Line, Owned<Error>> good = decode::<Line>(src: give j);

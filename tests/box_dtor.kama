@@ -7,7 +7,7 @@ extern fn void free(Ptr p);
 
 type resource Noisy {
     Ptr<int32> buf;
-    public Noisy(int32 id) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = id; } }
+    public ctor make(int32 id) { Noisy r; unsafe { r.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); r.buf[0] = id; } return give r; }
     public fn int32 val() { unsafe { return this.buf[0]; } }
     ~Noisy() { unsafe { free(p: cast<Ptr>(this.buf)); } }   // must run, or `buf` leaks
 }
@@ -20,6 +20,6 @@ type resource Box<T> implements Deref<T>, HeapOwner<T> {
 }
 
 fn int32 main() {
-    Box<Noisy> b = new Noisy(id: 9);
+    Box<Noisy> b = new Noisy.make(id: 9);
     return b.val();   // auto-deref -> 9; at return b drops -> Noisy__dtor frees buf (ASan verifies)
 }

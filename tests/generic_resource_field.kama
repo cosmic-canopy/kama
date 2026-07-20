@@ -7,12 +7,12 @@ import std::collections::{DynamicArray};
 // (A `type value Wrap<T>` here is correctly rejected — a value can't own a resource; see the xfail.)
 type resource Wrap<T> {
     DynamicArray<T> items;
-    public Wrap(T a, T b) { this.items.add(item: a); this.items.add(item: b); }
+    public ctor make(T a, T b) { Wrap<T> r; r.items.add(item: a); r.items.add(item: b); return give r; }
     public fn T first() { return this.items[0]; }
     public fn int32 size() { return this.items.length(); }
 }
 fn int32 total(Wrap<int32> w) { return w.first() + w.size(); }   // moved-in w drops at fn-end
 fn int32 main() {
-    Wrap<int32> a = Wrap(a: 40, b: 99);
+    Wrap<int32> a = Wrap.make(a: 40, b: 99);
     return total(w: give a);   // 40 + 2 = 42; the moved-in Wrap's list freed exactly once
 }

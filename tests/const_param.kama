@@ -4,13 +4,13 @@
 // separately). Mirrors the same deep-const rules as const locals.
 type value Vec2 {
     int32 x; int32 y;
-    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
+    public ctor make(int32 x, int32 y) { Vec2 r; r.x = x; r.y = y; return give r; }
     public const fn int32 lenSq() { return this.x * this.x + this.y * this.y; }
 }
 fn int32 dist2(const ref Vec2 a, const int32 bias) {   // read-only borrow + const value
     return a.lenSq() + bias;                            // const method call on a const borrow: OK
 }
 fn int32 main() {
-    Vec2 v = Vec2(x: 3, y: 4);
+    Vec2 v = Vec2.make(x: 3, y: 4);
     return dist2(a: ref v, bias: 17);                   // 25 + 17 = 42
 }

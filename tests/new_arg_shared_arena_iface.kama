@@ -9,12 +9,12 @@ type contract Shape for both { fn int32 area(); }
 
 type value Circle implements Shape {
     int32 r;
-    public Circle(int32 r) { this.r = r; }
+    public ctor make(int32 r) { Circle result; result.r = r; return give result; }
     public fn int32 area() { return this.r * this.r; }
 }
 
 fn Shared<Shape, BumpAllocator> make(BumpAllocator alloc, int32 r) {
-    return new(allocator: alloc) Circle(r: r);       // RETURN position → the hoisted new-site
+    return new(allocator: alloc) Circle.make(r: r);       // RETURN position → the hoisted new-site
 }
 
 fn int32 areaOf(Shared<Shape, BumpAllocator> s) { return s.area(); }

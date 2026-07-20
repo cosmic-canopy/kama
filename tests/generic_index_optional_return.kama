@@ -9,7 +9,7 @@ import std::collections::{DynamicArray};
 
 type resource Store<V> {
     DynamicArray<V> d;
-    public Store() { this.d = DynamicArray.empty(); }
+    public ctor make() { Store<V> r; r.d = DynamicArray.empty(); return give r; }
     public fn void add(V x) { this.d.add(item: give x); }
     fn V clone(ref V v) when [V: Copyable] { return copy v; }
 
@@ -27,7 +27,7 @@ type resource Store<V> {
 
 fn int32 main() {
     int32 r = 0;
-    Store<int32> s = Store(); s.add(x: 5); s.add(x: 9);
+    Store<int32> s = Store.make(); s.add(x: 5); s.add(x: 9);
     Optional<int32> a = s.cloned(i: 1);
     int32 av = match (a) { case Some(x): x; case None: 0; };  // 9
     Optional<int32> b = s.direct(i: 0);

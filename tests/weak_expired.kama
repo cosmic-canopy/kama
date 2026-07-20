@@ -4,13 +4,13 @@ import std::memory::{Shared, Weak};
 type value Counter
 {
     int32 value;
-    Counter(int32 start) { this.value = start; }
+    public ctor make(int32 start) { Counter r; r.value = start; return give r; }
     fn int32 get() { return this.value; }
 }
 
 fn Weak<Counter> orphan()
 {
-    Shared<Counter> s = new Counter(start: 7);
+    Shared<Counter> s = new Counter.make(start: 7);
     return s.downgrade();   // s drops at fn-end -> Counter freed (strong 1->0); ctrl kept (weak=1)
 }
 

@@ -5,7 +5,7 @@ import std::collections::{SlotMap, Handle};
 
 type resource Counter {
     int32 n;
-    public Counter(int32 n) { this.n = n; }
+    public ctor make(int32 n) { Counter r; r.n = n; return give r; }
     public fn void bump() { this.n = this.n + 1; }
     public fn int32 get() { return this.n; }
 }
@@ -45,8 +45,8 @@ fn int32 main() {
 
     // (c) move-only value: getRef mutates in place; remove reclaims ownership; the rest drop at scope exit.
     SlotMap<Counter> cm = SlotMap.empty();
-    Handle h1 = cm.insert(value: Counter(n: 100));
-    Handle h2 = cm.insert(value: Counter(n: 200));
+    Handle h1 = cm.insert(value: Counter.make(n: 100));
+    Handle h2 = cm.insert(value: Counter.make(n: 200));
     cm.getRef(handle: h1).bump();                      // 100 -> 101, through the borrow
     int32 g1 = cm.getRef(handle: h1).get();
     if (g1 == 101) { r = r + 5; }

@@ -8,10 +8,10 @@ extern fn void free(Ptr p);
 type resource Vec<T> {
     Ptr<T> data;
     int32 len;
-    public Vec(int32 n) {
-        this.data = cast<Ptr<T>>(malloc(n: cast<usize>(n) * sizeof(T)));
-        this.len = n;
-    }
+    public ctor make(int32 n) { Vec<T> r;
+        r.data = cast<Ptr<T>>(malloc(n: cast<usize>(n) * sizeof(T)));
+        r.len = n;
+     return give r; }
     public ref T operator[](int32 i) {
         if (i < 0) { panic(msg: "Vec: negative index"); }
         assert(cond: i < this.len);
@@ -21,7 +21,7 @@ type resource Vec<T> {
     ~Vec() { free(p: cast<Ptr>(this.data)); }
 }
 fn int32 main() {
-    Vec<int32> v = Vec(n: 3);
+    Vec<int32> v = Vec.make(n: 3);
     v[0] = 40;  v[1] = 2;  v[2] = 0;
     v[2] += 100;
     int32 s = 0;  int32 i = 0;

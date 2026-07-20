@@ -4,7 +4,7 @@ import std::collections::{DynamicArray};
 // `case X: …;`), producing collection + resource results.
 type resource Box {
     DynamicArray<int32> v;
-    public Box(int32 x) { this.v.add(item: x); }
+    public ctor make(int32 x) { Box r; r.v.add(item: x); return give r; }
     public fn int32 val() { return this.v[0]; }
 }
 fn int32 listCase(Optional<int32> o) {
@@ -18,8 +18,8 @@ fn int32 listCase(Optional<int32> o) {
 }
 fn Box boxCase(Optional<int32> o) {
     return match (o) {                                                        // simple `case X: <expr>;` form
-        case Some(v): Box(x: v);                                              // fresh inline ctor, no marker
-        case None: Box(x: 0);
+        case Some(v): Box.make(x: v);                                              // fresh inline ctor, no marker
+        case None: Box.make(x: 0);
     };
 }
 fn int32 main() {

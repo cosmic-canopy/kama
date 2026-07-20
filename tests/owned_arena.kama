@@ -8,7 +8,7 @@ import std::collections::{Arena, BumpAllocator};
 
 type value Node {
     int32 v;
-    Node(int32 v) { this.v = v; }
+    public ctor make(int32 v) { Node r; r.v = v; return give r; }
     public fn int32 get() { return this.v; }
     public fn void bump() { this.v = this.v + 1; }
 }
@@ -16,13 +16,13 @@ type value Node {
 fn int32 main() {
     Arena arena = Arena(capacity: 1 << 12);         // declared FIRST → drops LAST (outlives the box)
 
-    Owned<Node, BumpAllocator> n = new(allocator: arena.handle()) Node(v: 40);
+    Owned<Node, BumpAllocator> n = new(allocator: arena.handle()) Node.make(v: 40);
     n.bump();
     n.bump();
     int32 r = n.get();                              // 42, via auto-deref through the arena-backed box
 
     // a second box from the SAME arena — both bump-allocate into the one region
-    Owned<Node, BumpAllocator> m = new(allocator: arena.handle()) Node(v: 100);
+    Owned<Node, BumpAllocator> m = new(allocator: arena.handle()) Node.make(v: 100);
     r = r + m.get();                                // 142
 
     return r;                                        // 142

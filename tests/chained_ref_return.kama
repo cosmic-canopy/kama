@@ -11,9 +11,11 @@ type resource Node {
     DynamicArray<int32> vals;
     DynamicArray<Owned<Node>> kids;
     bool leaf;
-    public Node(bool leaf) {
+    public ctor make(bool leaf) {
+        Node r;
         DynamicArray<int32> v = DynamicArray.empty(); DynamicArray<Owned<Node>> c = DynamicArray.empty();
-        this.vals = give v; this.kids = give c; this.leaf = leaf;
+        r.vals = give v; r.kids = give c; r.leaf = leaf;
+        return give r;
     }
     public fn void add(int32 x) { this.vals.add(item: x); }
     public fn void addKid(Owned<Node> c) { this.kids.add(item: give c); }
@@ -28,18 +30,18 @@ type resource Node {
 
 type resource Tree {
     Owned<Node> root;
-    public Tree(Owned<Node> r) { this.root = give r; }
+    public ctor make(Owned<Node> root) { Tree r; r.root = give root; return give r; }
     public fn ref int32 slot(int32 c, int32 i) { return this.root.slot(c: c, i: i); }  // another forward layer
 }
 
 fn int32 main() {
     int32 r = 0;
 
-    Owned<Node> root = new Node(leaf: false);
-    Owned<Node> child = new Node(leaf: true);
+    Owned<Node> root = new Node.make(leaf: false);
+    Owned<Node> child = new Node.make(leaf: true);
     child.add(x: 10); child.add(x: 20); child.add(x: 30);
     root.addKid(c: give child);
-    Tree t = Tree(r: give root);
+    Tree t = Tree.make(root: give root);
 
     // (a) read a borrow chained through Tree -> root(Owned) -> child(Owned) -> vals[i]
     int32 a = t.slot(c: 0, i: 1);

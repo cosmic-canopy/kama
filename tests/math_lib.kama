@@ -4,41 +4,41 @@
 //
 // Note: no overloading (a stated non-goal) — a type has ONE `operator*`. `Mat3 * Vec3` is the operator
 // (the hot transform path); matrix composition would be a named `static` method (not needed here).
+@generate(of)
 type value Vec3 {
     public int32 x;
     public int32 y;
     public int32 z;
-    public Vec3(int32 x, int32 y, int32 z) { this.x = x; this.y = y; this.z = z; }
 
-    public Vec3 operator+(Vec3 rhs) { return Vec3(x: this.x + rhs.x, y: this.y + rhs.y, z: this.z + rhs.z); }
-    public Vec3 operator-(Vec3 rhs) { return Vec3(x: this.x - rhs.x, y: this.y - rhs.y, z: this.z - rhs.z); }
-    public Vec3 operator*(int32 s)  { return Vec3(x: this.x * s, y: this.y * s, z: this.z * s); }   // scale
-    public Vec3 operator-()         { return Vec3(x: -this.x, y: -this.y, z: -this.z); }             // negate
+    public Vec3 operator+(Vec3 rhs) { return Vec3.of(x: this.x + rhs.x, y: this.y + rhs.y, z: this.z + rhs.z); }
+    public Vec3 operator-(Vec3 rhs) { return Vec3.of(x: this.x - rhs.x, y: this.y - rhs.y, z: this.z - rhs.z); }
+    public Vec3 operator*(int32 s)  { return Vec3.of(x: this.x * s, y: this.y * s, z: this.z * s); }   // scale
+    public Vec3 operator-()         { return Vec3.of(x: -this.x, y: -this.y, z: -this.z); }             // negate
     public bool operator==(Vec3 rhs){ return this.x == rhs.x && this.y == rhs.y && this.z == rhs.z; }
 
     public static fn int32 dot(Vec3 a, Vec3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
     public static fn Vec3 cross(Vec3 a, Vec3 b) {
-        return Vec3(x: a.y*b.z - a.z*b.y, y: a.z*b.x - a.x*b.z, z: a.x*b.y - a.y*b.x);
+        return Vec3.of(x: a.y*b.z - a.z*b.y, y: a.z*b.x - a.x*b.z, z: a.x*b.y - a.y*b.x);
     }
 }
 
+@generate(of)
 type value Mat3 {
     public Vec3 r0;   // rows, held by value
     public Vec3 r1;
     public Vec3 r2;
-    public Mat3(Vec3 r0, Vec3 r1, Vec3 r2) { this.r0 = r0; this.r1 = r1; this.r2 = r2; }
 
     // matrix * vector: each component is the dot of a row with the vector
     public Vec3 operator*(Vec3 v) {
-        return Vec3(x: Vec3::dot(a: this.r0, b: v),
+        return Vec3.of(x: Vec3::dot(a: this.r0, b: v),
                     y: Vec3::dot(a: this.r1, b: v),
                     z: Vec3::dot(a: this.r2, b: v));
     }
 }
 
 fn int32 main() {
-    Vec3 a = Vec3(x: 1, y: 2, z: 3);
-    Vec3 b = Vec3(x: 4, y: 5, z: 6);
+    Vec3 a = Vec3.of(x: 1, y: 2, z: 3);
+    Vec3 b = Vec3.of(x: 4, y: 5, z: 6);
 
     Vec3 sum    = a + b;    // (5, 7, 9)
     Vec3 diff   = b - a;    // (3, 3, 3)
@@ -49,9 +49,9 @@ fn int32 main() {
     Vec3  x = Vec3::cross(a: a, b: b);    // (-3, 6, -3) -> sums to 0
 
     // diag(2, 3, 4) scaling matrix, transform `a`
-    Mat3 m = Mat3(r0: Vec3(x: 2, y: 0, z: 0),
-                  r1: Vec3(x: 0, y: 3, z: 0),
-                  r2: Vec3(x: 0, y: 0, z: 4));
+    Mat3 m = Mat3.of(r0: Vec3.of(x: 2, y: 0, z: 0),
+                  r1: Vec3.of(x: 0, y: 3, z: 0),
+                  r2: Vec3.of(x: 0, y: 0, z: 4));
     Vec3 t = m * a;         // (2, 6, 12)
 
     int32 acc = 0;

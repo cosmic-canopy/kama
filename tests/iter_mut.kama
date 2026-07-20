@@ -6,19 +6,19 @@ extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 type value VecIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len;
-    public VecIterMut(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    public ctor make(Ptr<T> data, int32 len) { VecIterMut<T> r; r.data = data; r.pos = 0; r.len = len; return give r; }
     public fn bool hasNext() { return this.pos < this.len; }
     public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
 }
 type resource Vec<T> implements IterableMut<T> {
     Ptr<T> data; int32 len;
-    public Vec(int32 n) { this.data = cast<Ptr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); this.len = n; }
+    public ctor make(int32 n) { Vec<T> r; r.data = cast<Ptr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); r.len = n; return give r; }
     public ref T operator[](int32 i) { unsafe { return this.data[i]; } }
-    public fn VecIterMut<T> iterMut() { return VecIterMut(data: this.data, len: this.len); }
+    public fn VecIterMut<T> iterMut() { return VecIterMut.make(data: this.data, len: this.len); }
     ~Vec() { free(p: cast<Ptr>(this.data)); }
 }
 fn int32 main() {
-    Vec<int32> v = Vec(n: 3);
+    Vec<int32> v = Vec.make(n: 3);
     v[0] = 1; v[1] = 2; v[2] = 3;
     foreach (ref int32 x in v) { x = x * 10; }
     return v[0] + v[1] + v[2];   // 60

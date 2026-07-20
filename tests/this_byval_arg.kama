@@ -1,15 +1,15 @@
 // Passing a bare `this` as a BY-VALUE value-type argument must deref (`*self`), not pass the pointer.
 // Before the fix this failed to *build* (clang: passing 'V *' to a 'V' parameter). Returns 42.
+@generate(of)
 type value V {
     public int32 a;
-    public V(int32 a) { this.a = a; }
     public static fn int32 sum(V p, V q) { return p.a + q.a; }
     public fn int32 addSelf(V other) { return this.a + other.a; }
     public fn int32 twice()  { return V::sum(p: this, q: this); }   // bare `this` in both by-value slots
     public fn int32 dbl()    { return this.addSelf(other: this); }  // this.method(x: this)
 }
 fn int main() {
-    V v = V(a: 21);
+    V v = V.of(a: 21);
     int32 t = v.twice();       // 42
     int32 d = v.dbl();         // 42
     return (t == d) ? t : 0;   // 42

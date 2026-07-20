@@ -8,7 +8,7 @@ import std::collections::{Arena, BumpAllocator};
 
 type value Counter {
     int32 value;
-    Counter(int32 start) { this.value = start; }
+    public ctor make(int32 start) { Counter r; r.value = start; return give r; }
     public fn void bump() { this.value = this.value + 1; }
     public fn int32 get() { return this.value; }
 }
@@ -16,7 +16,7 @@ type value Counter {
 fn int main() {
     Arena arena = Arena(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
 
-    Shared<Counter, BumpAllocator> c = new(allocator: arena.handle()) Counter(start: 40);
+    Shared<Counter, BumpAllocator> c = new(allocator: arena.handle()) Counter.make(start: 40);
     Shared<Counter, BumpAllocator> d = c;                // copy → strong=2, shares the arena-backed ctrl
     c.bump();
     c.bump();                                            // 42 (both handles observe the one pointee)

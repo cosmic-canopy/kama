@@ -3,18 +3,18 @@
 // `Vec2__op_add(&a, b)` — zero-cost, reusing M27's bound + `This` machinery.
 type contract Arithmetic for both { This operator+(This rhs); }
 
+@generate(of)
 type value Vec2 implements Arithmetic {
     public int32 x;
     public int32 y;
-    public Vec2(int32 x, int32 y) { this.x = x; this.y = y; }
-    public This operator+(This rhs) { return Vec2(x: this.x + rhs.x, y: this.y + rhs.y); }
+    public This operator+(This rhs) { return Vec2.of(x: this.x + rhs.x, y: this.y + rhs.y); }
 }
 
 fn T sum<T: Arithmetic>(T a, T b) { return a + b; }   // `a + b` via the bound → static dispatch
 
 fn int32 main() {
-    Vec2 p = Vec2(x: 10, y: 20);
-    Vec2 q = Vec2(x: 3, y: 9);
+    Vec2 p = Vec2.of(x: 10, y: 20);
+    Vec2 q = Vec2.of(x: 3, y: 9);
     Vec2 r = sum(a: p, b: q);   // (13, 29)
     return r.x + r.y;           // 42
 }

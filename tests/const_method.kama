@@ -4,14 +4,14 @@
 // separately). Mutable receivers keep full access.
 type value Counter {
     int32 n;
-    public Counter(int32 n) { this.n = n; }
+    public ctor make(int32 n) { Counter r; r.n = n; return give r; }
     public const fn int32 value() { return this.n; }              // read-only
     public const fn int32 doubled() { return this.value() * 2; }  // const calling const: OK
     public fn void bump() { this.n = this.n + 1; }                // mutating
 }
 fn int32 main() {
-    const Counter c = Counter(n: 9);
-    Counter m = Counter(n: 14);
+    const Counter c = Counter.make(n: 9);
+    Counter m = Counter.make(n: 14);
     m.bump();                                       // mutable receiver: OK
     return c.value() + c.doubled() + m.value();     // 9 + 18 + 15 = 42
 }
