@@ -3,23 +3,23 @@
 import std::memory::{Owned, Shared};
 type value Box {
     int32 v;
-    public Box(int32 v) { this.v = v; }
+    public ctor make(int32 v) { Box r; r.v = v; return give r; }
     public fn int32 get() { return this.v; }
 }
 type resource Holder {
     Owned<Box>  a;
     Shared<Box> b;
-    public Holder(Owned<Box> a, Shared<Box> b) { this.a = give a; this.b = give b; }
+    public ctor make(Owned<Box> a, Shared<Box> b) { Holder r; r.a = give a; r.b = give b; return give r; }
     public fn void bump() {                        // reassign: release old, install new (never null)
-        Owned<Box> n = new Box(v: this.a.get() + 1);
+        Owned<Box> n = new Box.make(v: this.a.get() + 1);
         this.a = give n;
     }
     public fn int32 total() { return this.a.get() + this.b.get(); }
 }
 fn int main() {
-    Owned<Box> a = new Box(v: 10);
-    Shared<Box> b = new Box(v: 20);
-    Holder h = Holder(a: give a, b: give b);
+    Owned<Box> a = new Box.make(v: 10);
+    Shared<Box> b = new Box.make(v: 20);
+    Holder h = Holder.make(a: give a, b: give b);
     h.bump();                       // a: 10 -> 11
     return h.total();               // 11 + 20 = 31
 }

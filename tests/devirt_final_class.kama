@@ -3,17 +3,17 @@
 // Inside `meow`, `this` is a `Cat` (final), so `this.noise()` lowers to a direct Cat__noise.
 type virtual resource Animal
 {
-    public Animal() {}
+    public ctor make() { Animal r; return give r; }
     protected virtual fn int32 noise() { return 1; }
 }
 type final resource Cat extends Animal
 {
-    public Cat() {}
+    public ctor make() { Cat r; return give r; }
     protected override fn int32 noise() { return 7; }
     public fn int32 meow() { return this.noise(); }
 }
 fn int main()
 {
-    Cat c = Cat();
+    Cat c = Cat.make();
     return c.meow();
 }
