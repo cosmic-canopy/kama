@@ -1,2 +1,2 @@
-type value V for both { int32 a; public V(int32 a) { this.a = a; } }
+type value V for both { int32 a; public ctor make(int32 a) { V r; r.a = a; return give r; } }
 fn int32 main() { return 0; }

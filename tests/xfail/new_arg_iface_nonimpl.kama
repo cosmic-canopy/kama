@@ -1,5 +1,5 @@
 import std::memory::{Owned};
 type contract Shape for both { fn int32 area(); }
-type value Square { int32 s; public Square(int32 s){ this.s=s; } }   // does NOT implement Shape
+type value Square { int32 s; public ctor make(int32 s){ Square r; r.s=s; return give r; } }   // does NOT implement Shape
 fn int32 take(Owned<Shape> c){ return c.area(); }
-fn int32 main(){ return take(c: new Square(s: 4)); }   // ERROR: Square does not implement Shape
+fn int32 main(){ return take(c: new Square.make(s: 4)); }   // ERROR: Square does not implement Shape

@@ -4,9 +4,11 @@ extern fn int kama_trace_get();
 type resource Res
 {
     int id;
-    public Res(int id)
+    public ctor make(int id)
     {
-        this.id = id;
+        Res r;
+        r.id = id;
+        return give r;
     }
     ~Res()
     {
@@ -17,8 +19,8 @@ type resource Res
 fn int main()
 {
     {
-        Res a = Res(id: 1);
-        Res b = Res(id: 2);
+        Res a = Res.make(id: 1);
+        Res b = Res.make(id: 2);
     }
     return kama_trace_get();
 }

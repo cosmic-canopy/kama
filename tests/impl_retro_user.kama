@@ -3,7 +3,8 @@
 // bound `<T: Weighable>` (satisfiesBound sees the retro conformance) and a direct call. Returns 42.
 type contract Weighable for both { fn int32 weight(); }
 
-type value Widget { public int32 w; public Widget(int32 w) { this.w = w; } }
+@generate(of)
+type value Widget { public int32 w; }
 
 implements Weighable for Widget {
     public fn int32 weight() { return this.w; }
@@ -12,8 +13,8 @@ implements Weighable for Widget {
 fn int32 total<T: Weighable>(T a, T b) { return a.weight() + b.weight(); }
 
 fn int main() {
-    Widget x = Widget(w: 20);
-    Widget y = Widget(w: 22);
+    Widget x = Widget.of(w: 20);
+    Widget y = Widget.of(w: 22);
     if (x.weight() != 20) { return 1; }        // direct call on the retro method
     return total::<Widget>(a: x, b: y);        // via the generic bound → 42
 }

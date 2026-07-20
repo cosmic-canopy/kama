@@ -1,9 +1,9 @@
 import std::collections::{DynamicArray};
 // A give/copy marker on a FRESH inline ctor argument is meaningless (a fresh rvalue is consumed in place) —
 // clean "needs no marker" error, matching init/assignment positions (not a confusing "unknown function").
-type resource Box { DynamicArray<int32> v; public Box(int32 x) { this.v.add(item: x); } }
+type resource Box { DynamicArray<int32> v; public ctor make(int32 x) { Box r; r.v.add(item: x); return give r; } }
 fn int32 main() {
     DynamicArray<Box> lb = DynamicArray.empty();
-    lb.add(item: give Box(x: 1));           // give on a fresh ctor -> clean error (drop the marker)
+    lb.add(item: give Box.make(x: 1));           // give on a fresh ctor -> clean error (drop the marker)
     return 0;
 }

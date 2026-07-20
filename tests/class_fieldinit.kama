@@ -2,8 +2,10 @@ type value Box
 {
     int w = 6;
     int h = 7;
-    public Box()
+    public ctor make()
     {
+        Box r;
+        return give r;
     }
     public fn int area()
     {
@@ -12,6 +14,6 @@ type value Box
 }
 fn int main()
 {
-    Box b = Box();
+    Box b = Box.make();
     return b.area();
 }

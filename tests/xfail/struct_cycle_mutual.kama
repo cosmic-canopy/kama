@@ -1,5 +1,7 @@
-type value A { public B b; public A(B b){this.b=b;} }
-type value B { public A a; public B(A a){this.a=a;} }
+@generate(of)
+type value A { public B b; }
+@generate(of)
+type value B { public A a; }
 fn int main()
 {
     return 0;

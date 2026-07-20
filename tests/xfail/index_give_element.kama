@@ -1,9 +1,9 @@
 // An indexed element is a borrowable PLACE, not a movable slot: you can't `give` a resource out of a
 // collection (it would leave the collection holding a moved-from value).
-type resource R { public int32 v; public R(int32 v){ this.v = v; } }
+type resource R { public int32 v; public ctor make(int32 v){ R r; r.v = v; return give r; } }
 fn int32 main() {
     DynamicArray<R> xs = new DynamicArray<R>();
-    xs.add(item: R(v: 1));
+    xs.add(item: R.make(v: 1));
     R taken = give xs[0];   // ERROR: can't move out of an element
     return taken.v;
 }

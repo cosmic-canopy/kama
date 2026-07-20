@@ -1,4 +1,5 @@
-type value Vec2 { public float64 x; public float64 y; public Vec2(float64 x, float64 y){this.x=x;this.y=y;} }
+@generate(of)
+type value Vec2 { public float64 x; public float64 y; }
 enum Event { Resize(Vec2 size), Click(int32 x, int32 y), Quit }
 fn int area(Event e)
 {
@@ -10,7 +11,7 @@ fn int area(Event e)
 }
 fn int main()
 {
-    Event a = Event::Resize(size: Vec2(x: 4.0, y: 3.0));
+    Event a = Event::Resize(size: Vec2.of(x: 4.0, y: 3.0));
     Event b = Event::Click(x: 10, y: 5);
     Event c = Event::Quit;
     return area(e: a) + area(e: b) + area(e: c);

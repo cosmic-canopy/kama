@@ -1,7 +1,8 @@
 // const is deep: writing a field through a const collection's subscript is rejected.
-type value P { public int32 x; public int32 y; public P(int32 x, int32 y){ this.x=x; this.y=y; } }
+@generate(of)
+type value P { public int32 x; public int32 y; }
 fn int32 main() {
-    const InlineArray<P, 2> f = [P(x: 1, y: 2), P(x: 3, y: 4)];
+    const InlineArray<P, 2> f = [P.of(x: 1, y: 2), P.of(x: 3, y: 4)];
     f[0].x = 9;   // ERROR: cannot write through a const binding
     return 0;
 }

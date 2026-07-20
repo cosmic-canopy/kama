@@ -1,7 +1,7 @@
 import std::memory::{Owned};
 // Construction-model M3: wrapping an incomplete object in `Result::Ok(value: …)` does NOT excuse it — the
 // checker unwraps `Ok` and still requires every owning field set. (Infallible counterpart: ctor_missing_owning_ptr.)
-type value Box { int32 v; public Box(int32 v) { this.v = v; } }
+type value Box { int32 v; public ctor make(int32 v) { Box r; r.v = v; return give r; } }
 type resource Holder {
     Owned<Box> a;
     public ctor Result<Holder, int32> make(int32 v) {

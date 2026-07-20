@@ -1,9 +1,11 @@
 type value Accum
 {
     int total;
-    public Accum(int init)
+    public ctor make(int init)
     {
-        total = init;
+        Accum r;
+        r.total = init;
+        return give r;
     }
     public fn void bump()
     {
@@ -17,7 +19,7 @@ type value Accum
 }
 fn int main()
 {
-    Accum a = Accum(init: 40);
+    Accum a = Accum.make(init: 40);
     a.bump();
     return a.run();
 }

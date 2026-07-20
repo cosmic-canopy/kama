@@ -11333,6 +11333,10 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     }
     ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : nullptr;
     if (!stci) { unsupported(("unknown type in constructor call `" + disp + "`").c_str(), call->line); return "0"; }
+    if (stci->isAbstractClass) {   // instantiating one leaves a NULL vtable slot (the nameless `emitCtorCall` path checked this too)
+        unsupported(("cannot instantiate abstract class '" + disp + "' (it has an unimplemented method)").c_str(), call->line);
+        return "0";
+    }
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(stci, method, &owner);
     if (!mi) {

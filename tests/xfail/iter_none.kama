@@ -1,7 +1,7 @@
 // A user type without an iterator protocol can't be `foreach`-ed.
-type value Bag { public int32 a; public Bag() { this.a = 0; } }
+type value Bag { public int32 a; public ctor make() { Bag r; r.a = 0; return give r; } }
 fn int32 main() {
-    Bag b = Bag();
+    Bag b = Bag.make();
     foreach (int32 x in b) { return x; }   // ERROR: Bag has no iterator()/next()
     return 0;
 }
