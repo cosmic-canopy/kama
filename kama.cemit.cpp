@@ -2508,7 +2508,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         unsupported(("a `contract` method (`" + (md->name && md->name->value ? *md->name->value : std::string())
                                      + "`) has no body — it is a guarantee, not an implementation").c_str(), md->line);
                     if (md->name && md->name->value)
-                        ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef});
+                        ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor});
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                     // an operator in a `contract` is a bound for generic math: `IArithmetic`
                     // declares `This operator+(This rhs)`. Register it under the SAME synthetic name
@@ -7127,7 +7127,10 @@ bool CEmitter::isDefaultFillable(const std::string& c)
     if (it == _classes.end()) return true;                 // primitive / Ptr / enum-not-in-_classes
     ClassInfo& fc = it->second;
     if (fc.isIntrinsicColl) return true;                   // zero = valid empty collection / null Weak
-    for (auto& kv : fc.ctors) if (kv.second.isDefaultCtor) return true;
+    // Scan `methods` (NOT `ctors`): the `when [A: default]` gate (registerGenericTypeInst) drops a gated-away
+    // `empty()` from `methods` per-monomorph but leaves it in `ctors`, so `methods` is the gate-ACCURATE set.
+    // A custom-`A` collection whose `default` ctor was gated off is therefore correctly NOT default-fillable.
+    for (auto& kv : fc.methods) if (kv.second.isDefaultCtor) return true;
     return false;
 }
 
@@ -7171,6 +7174,10 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
     std::function<void(SharedExpression, std::string&, int&)> classify =
         [&](SharedExpression e, std::string& bad, int& badLine) {
         if (!e || !bad.empty()) return;
+        // `return give m` / `return copy m` — collections consume the built local through a HandoffNode.
+        // Unwrap to the inner value so the bare-owner-local check below runs (else the gate silently skips
+        // every collection factory — the second half of why the gate was inert for generics).
+        if (auto* h = dynamic_cast<HandoffNode*>(e.get())) { classify(h->value, bad, badLine); return; }
         // `Result::Ok(value: V)` — check V; `Result::Err(…)` — no object exists, accept.
         if (auto* iv = dynamic_cast<InvocationNode*>(e.get())) {
             if (iv->identifier && iv->identifier->value && iv->identifier->qualifier
@@ -7204,8 +7211,14 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         if (!st) return;
         ASTNode* n = st.get();
         if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
+            // Match BOTH forms: a concrete owner via `resolveUserName` (template name == owner.name), AND a
+            // GENERIC owner via `cType` — for a monomorph, `owner.name` is the mangled instance
+            // (`DynamicArray_int32_BumpAllocator`) but `resolveUserName` yields the bare TEMPLATE, so it never
+            // matched → the whole gate was inert for generics (M8c finding). `cType(lv->type)` resolves the
+            // local's `DynamicArray<T,A>` under the active instance subst to that same mangled name.
             bool isOwnerTy = lv->type && lv->type->value
-                             && resolveUserName(*lv->type->value, lv->type->qualifier) == owner.name;
+                             && (resolveUserName(*lv->type->value, lv->type->qualifier) == owner.name
+                                 || cType(lv->type) == owner.name);
             if (isOwnerTy && lv->variables)
                 for (auto& v : *lv->variables) if (v && v->name && v->name->value) {
                     ownerLocals.insert(*v->name->value);
@@ -9061,6 +9074,7 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     ContractSubst _cs(*this, ii);   // bind T->int32 for a generic-contract instance (`Iterator_int32`)
     *_out << "struct " << ii.name << "_vtbl {\n";
     for (auto& m : ii.methods) {
+        if (m.isCtor) continue;   // a contract-required `ctor` (HeapOwner::adopt) is not dispatchable — no slot
         indent(1);
         // a place-returning contract method (`fn ref T m()`) is lowered to a `T*`-returning slot.
         *_out << cType(m.returnType) << (m.isPlaceReturn ? "*" : "") << " (*" << m.name << ")"
@@ -9106,6 +9120,20 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&ci, m.name, &owner);
+            if (m.isCtor) {
+                // A contract-required `ctor` (M8a, e.g. `HeapOwner::adopt`) is a COMPILE-TIME conformance
+                // guarantee, not a runtime slot — construction can't be dispatched on an instance. On a
+                // generic monomorph the ctor may be `when`-gated away (Owned's default-alloc `adopt` under a
+                // custom `A`) while the TEMPLATE still provides it, so conformance holds. Verify presence
+                // (instance OR template) and emit no vtbl slot.
+                bool present = mi != nullptr;
+                if (!present && _genericTypeInsts.count(ci.name)) {
+                    auto ti = _genericTypes.find(_genericTypeInsts[ci.name].templateKey);
+                    present = ti != _genericTypes.end() && ti->second.methods.count(m.name);
+                }
+                if (!present) unsupported(("class missing contract method '" + m.name + "'").c_str(), ci.node->line);
+                continue;
+            }
             if (!mi) { unsupported(("class missing contract method '" + m.name + "'").c_str(), ci.node->line); continue; }
             // an interface is a PUBLIC contract — a method that satisfies it must be
             // public too (else it's reachable through the interface but not by name: a leak).

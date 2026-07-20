@@ -46,11 +46,10 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     // HeapOwner: adopt a raw pointee into a box with the DEFAULT allocator (the bare-`new` path). The ctrl
     // block is drawn from libc `malloc`. Field-poke `p`/`c` then `give` the handle out — the move transfers
     // the ref (no `copy()` retain, and unlike a ctor rvalue it needs no default-`A` value to pass). `alloc`
-    // is left unset: this path is only reached with `A == GlobalAllocator` (a bare `new` into a stateful-`A`
-    // box is rejected by the emitter), and `GlobalAllocator` is stateless — its `deallocate` == `free`
-    // (matching the malloc) and never reads the handle, so an unset value is inert (same as the M10 bare
-    // container ctors leaving `alloc` at its default).
-    public ctor adopt(Ptr<T> raw) {
+    // is left unset: this path is only reached with `A == GlobalAllocator` — now COMPILER-ENFORCED via the
+    // `when [A: default]` gate (a custom `A` box comes through `adoptIn`). `GlobalAllocator` is stateless — its
+    // `deallocate` == `free` (matching the malloc) and never reads the handle, so an unset value is inert.
+    public ctor adopt(Ptr<T> raw) when [A: default] {
         Ptr<Ctrl> ctrl;
         unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
         Shared<T, A> s; s.p = raw; s.c = ctrl; return give s;

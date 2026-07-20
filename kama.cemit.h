@@ -309,7 +309,8 @@ struct CollectionInfo {
 // return type + params are stored directly (not a node pointer) so it can be built from a
 // `type contract` (ClassMethodDeclarationNode).
 struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedParameterList params;
-                         bool isPlaceReturn = false; };  // `fn ref T m()` — vtbl slot/cast spells `T*`
+                         bool isPlaceReturn = false;     // `fn ref T m()` — vtbl slot/cast spells `T*`
+                         bool isCtor = false; };         // a contract-required `ctor` (M8a) — compile-time guarantee, NOT a vtbl slot
 struct InterfaceInfo {
     std::string                  name;
     std::vector<InterfaceMethod> methods;

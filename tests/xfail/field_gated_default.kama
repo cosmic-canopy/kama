@@ -1,0 +1,17 @@
+// M8d.1 — `isDefaultFillable` must be GATE-ACCURATE. A `Map<…, BumpAllocator>` has a `default ctor empty()`
+// on its template, but that ctor is `when [A: default]`-gated AWAY for a custom `A` (M8d.0). So a custom-`A`
+// Map is NOT default-fillable — a field of that type left unassigned is a hard error (it would zero-init to a
+// garbage-allocator map). `make()` forgets to assign `m`, so it must be rejected. (Before M8d.1,
+// `isDefaultFillable` scanned `ctors` — which retains the gated entry — and wrongly deemed it fillable.)
+import std::collections::{Map, Arena, BumpAllocator};
+
+type resource Holder {
+    Map<int32, int32, A: BumpAllocator> m;
+    public ctor make() { Holder h; return give h; }   // FORGETS `h.m` (non-default-fillable)
+    public fn int32 size() { return this.m.length(); }
+}
+
+fn int32 main() {
+    Holder h = Holder.make();
+    return h.size();
+}
