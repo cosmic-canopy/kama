@@ -1350,6 +1350,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     }
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(init.get())) {
+                    checkNamelessNewBanned(oc, n->line);   // M8 Phase E: no nameless `new Type(...)`
                     // `new` is the HEAP operator — it boxes a value into a smart
                     // pointer (Owned/Shared/Weak), naming the element type directly:
                     // `Owned<Box> p = new Box(...)`. (BindableFunctionPtr keeps `new` for
@@ -1566,8 +1567,18 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // the `= {0}` declared above (`WGPUColor c = WGPUColor(r: 1.0, g: 0.5)`).
                         std::string s = externAggregateInit(nm, _classes[ty], stackCtor->args, n->line);
                         if (!s.empty()) { line(n->line); indent(depth); *_out << s << "\n"; }
+                    } else if (!_classes[ty].ctors.empty()
+                               || (stackCtor->args && !stackCtor->args->empty())) {
+                        // M8 Phase E: a bare `Type(args)` on a named-ctor type has no legacy ctor to call —
+                        // it would SILENTLY drop the args and leave the value default (a wrong-value hole).
+                        // Reject and point at the named form. (A ctor-less no-arg struct still default-inits.)
+                        std::string disp = (stackCtor->identifier && stackCtor->identifier->value)
+                                         ? *stackCtor->identifier->value : ty;
+                        unsupported(("nameless construction `" + disp + "(...)` is no longer allowed — use a "
+                                     "named constructor (`" + disp + ".make(...)` / `" + disp
+                                     + ".of(...)`)").c_str(), n->line);
                     }
-                    // class with no ctor: left default-initialized
+                    // class with no ctor + no args: left default-initialized
                 } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
                            && isSmartPtrLValue(init) && exprClass(init) != ty) {
                     // Shared->Weak conversion (different C structs, same layout):
@@ -3107,6 +3118,17 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         ci.methods[*md->name->value] = mi;
                     }
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
+                    // Construction-model M8 Phase E: the legacy class-named constructor is no longer allowed —
+                    // all construction is a named factory `ctor` called dot-on-type. EXEMPT serialization types
+                    // (@generate(Serialize/Deserialize)): their `onConstruction` hook injects at the ctor's end
+                    // and is finalized/removed at M8e, so their construction migrates there. After the fixture
+                    // sweep only the two onConstruction fixtures reach this exemption.
+                    if (!ci.genSerialize && !ci.genDeserialize) {
+                        std::string tnm = (cd->name && cd->name->value) ? *cd->name->value : "T";
+                        unsupported(("class-named constructor `" + tnm + "(...)` is no longer allowed — declare a "
+                                     "named constructor `ctor make(...)` and call it dot-on-type (`" + tnm
+                                     + ".make(...)`)").c_str(), cc->line);
+                    }
                     if (ci.hasCtor)
                         unsupported("multiple constructors (no overloading yet)", cc->line);
                     ci.hasCtor   = true;
@@ -8399,6 +8421,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
     if (!_hoistOK || targetCType.empty()) return "";
     auto* oc = dynamic_cast<ObjectCreationNode*>(e.get());
     if (!oc) return "";
+    checkNamelessNewBanned(oc, srcLine);   // M8 Phase E: no nameless `new Type(...)`
     auto cit = _classes.find(targetCType);
     if (cit == _classes.end()) return "";
     std::string octy = cType(oc->type);
@@ -11281,7 +11304,9 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
     }
     if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
         if (id->value && exprClass(ma->expression).empty()) {   // empty => not a binding/field of a class
-            std::string t = resolveUserName(*id->value, nullptr);
+            // Pass the receiver's qualifier so a namespace-alias-qualified type (`Gfx::Texture.make(...)`)
+            // resolves through the alias — the nameless `bareCtorClass` path already threads it. #M8-PhaseE
+            std::string t = resolveUserName(*id->value, id->qualifier);
             // A concrete type is in `_classes`; a GENERIC type's template is in `_genericTypeParams` (its
             // concrete instances live in `_classes` under mangled names). `Pair.make(...)` names the template,
             // so route it here — emitDotOnTypeCtorCall resolves the instance (turbofish or LHS inference). #M7-E2
@@ -11535,11 +11560,37 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     return (pmi && pmi->isPlaceReturn) ? ("(*" + callStr + ")") : callStr;
 }
 
+// Construction-model M8 Phase E: reject a NAMELESS `new Type(...)` for a type that has named constructors
+// (or that was passed constructor arguments). Under the named model the nameless form has no ctor to call,
+// so `new Type(args)` would SILENTLY leave the object un-constructed and drop the args (a wrong-value hole).
+// A truly ctor-less raw struct built no-arg (`new Raw()`, caller fills fields) still works. Exempt serde
+// types that keep a legacy ctor (hasCtor) until M8e, and intrinsic collections.
+void CEmitter::checkNamelessNewBanned(ObjectCreationNode* oc, int line)
+{
+    if (!oc || oc->ctorName || !oc->type || !oc->type->value) return;
+    std::string cls = resolveUserName(*oc->type->value, oc->type->qualifier);
+    if (!isClass(cls)) return;
+    ClassInfo& ci = _classes[cls];
+    if (ci.isIntrinsicColl || ci.hasCtor) return;
+    bool hasNamed = !ci.ctors.empty();
+    bool hasArgs  = oc->args && !oc->args->empty();
+    if (hasNamed || hasArgs)
+        unsupported(("nameless `new " + *oc->type->value + "(...)` is no longer allowed — construct through a "
+                     "named constructor (`new " + *oc->type->value + ".make(...)`)").c_str(), line);
+}
+
 std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine)
 {
     if (ci.isAbstractClass)   // instantiating one crashes on a NULL vtable slot
         unsupported(("cannot instantiate abstract class '" + ci.name
                      + "' (it has an unimplemented method)").c_str(), srcLine);
+    // Construction-model M8 Phase E: a bare `Type(...)` call reaches here with no legacy ctor to bind — the
+    // named model routes all construction through `Type.make(...)`/`Type.of(...)` (dot-on-type). Reject it
+    // rather than emit an undefined `Type__ctor`. (The bare-local default-init caller only reaches here for a
+    // legacy/serde `hasCtor` type, so this fires only for a genuine nameless user call.)
+    if (!ci.hasCtor && !ci.isIntrinsicColl && !ci.ctors.empty())
+        unsupported(("nameless construction `" + ci.name + "(...)` is no longer allowed — use a named "
+                     "constructor (`" + ci.name + ".make(...)` / `" + ci.name + ".of(...)`)").c_str(), srcLine);
     if (ci.hasCtor && !ci.isIntrinsicColl)   // private ctor blocks external `new` (intrinsics exempt)
         canAccess(&ci, ci.ctorVisibility, "constructor", srcLine);
     return emitReorderedCall(ci.name + "__ctor", "&" + cVar, ci.ctorParams, args, srcLine);

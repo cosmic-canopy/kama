@@ -2,8 +2,8 @@ import Graphics::{Texture};       // Texture unqualified; Graphics::scale stays 
 import Physics;                   // dependency; Physics::Texture used qualified
 fn int main()
 {
-    Texture g = Texture(id: 10);                  // Graphics::Texture (imported)
-    Physics::Texture p = Physics::Texture(m: 7);  // qualified, distinct type
+    Texture g = Texture.make(id: 10);             // Graphics::Texture (imported)
+    Physics::Texture p = Physics::Texture.make(m: 7);  // qualified, distinct type
     int32 s = Graphics::scale(x: 3);              // qualified namespaced call -> 6
     return g.get() + p.get() + s;                 // 10 + 7 + 6 = 23
 }

@@ -3,11 +3,11 @@ import std::memory::{Owned};
 // zero-inited, so the first field assignment's "release the old handle" is a safe no-op (not a wild free)
 // and the scope-exit dtor is safe. Before the fix this double-freed / aborted. A plain `static fn` reaches
 // the same path as a named `ctor` — the bug is in bare-local emission, not in construction syntax.
-type value Box { int32 v; public Box(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+type value Box { int32 v; public ctor make(int32 v) { Box r; r.v = v; return give r; } public fn int32 get() { return this.v; } }
 type resource Holder {
     Owned<Box> a;
     public static fn Holder make(int32 v) {
-        Owned<Box> b = new Box(v: v);
+        Owned<Box> b = new Box.make(v: v);
         Holder h;                 // bare, destructible, no default ctor -> must zero-init
         h.a = give b;             // "drop old" here would free garbage without the fix
         return h;

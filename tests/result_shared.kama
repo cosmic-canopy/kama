@@ -1,8 +1,8 @@
 import std::memory::{Shared};
-type resource Probe { int32 id; public Probe(int32 id){this.id=id;} ~Probe(){} public fn int32 val(){return this.id;} }
+type resource Probe { int32 id; public ctor make(int32 id){ Probe r; r.id=id; return give r; } ~Probe(){} public fn int32 val(){return this.id;} }
 fn int main()
 {
-    Shared<Probe> s = new Probe(id: 8);
+    Shared<Probe> s = new Probe.make(id: 8);
     Result<Shared<Probe>, int32> ok  = Result::Ok(value: copy s);
     Result<Shared<Probe>, int32> err = Result::Err(error: 3);
     int32 a = match (ok)  { case Ok(p): p.val(); case Err(e): e; };

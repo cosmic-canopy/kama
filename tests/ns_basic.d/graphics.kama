@@ -1,4 +1,4 @@
 namespace Graphics;
 export { Texture, scale };
-type value Texture { int32 id; public Texture(int32 id) { this.id = id; } public fn int32 get() { return this.id; } }
+type value Texture { int32 id; public ctor make(int32 id) { Texture r; r.id = id; return give r; } public fn int32 get() { return this.id; } }
 fn int32 scale(int32 x) { return x * 2; }

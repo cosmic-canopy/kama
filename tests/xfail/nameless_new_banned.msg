@@ -1,0 +1,1 @@
+nameless `new C(...)` is no longer allowed

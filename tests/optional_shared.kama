@@ -1,8 +1,8 @@
 import std::memory::{Shared};
-type resource Probe { int32 id; public Probe(int32 id){this.id=id;} ~Probe(){} public fn int32 val(){return this.id;} }
+type resource Probe { int32 id; public ctor make(int32 id){ Probe r; r.id=id; return give r; } ~Probe(){} public fn int32 val(){return this.id;} }
 fn int main()
 {
-    Shared<Probe> s = new Probe(id: 9);
+    Shared<Probe> s = new Probe.make(id: 9);
     Optional<Shared<Probe>> a = Optional::Some(value: copy s);
     Optional<Shared<Probe>> b = Optional::None;
     int32 v = match (a) { case Some(p): p.val(); case None: 0; };

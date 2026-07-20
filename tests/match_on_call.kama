@@ -1,13 +1,13 @@
 import std::memory::{Shared, Weak};
-type resource Counter { int32 n; public Counter(int32 n){this.n=n;} ~Counter(){} public fn int32 get(){return this.n;} }
+type resource Counter { int32 n; public ctor make(int32 n){ Counter r; r.n=n; return give r; } ~Counter(){} public fn int32 get(){return this.n;} }
 fn Weak<Counter> orphan()
 {
-    Shared<Counter> s = new Counter(n: 5);
+    Shared<Counter> s = new Counter.make(n: 5);
     return s.downgrade();   // s dies at fn-end -> the returned weak is already expired
 }
 fn int main()
 {
-    Shared<Counter> s = new Counter(n: 7);
+    Shared<Counter> s = new Counter.make(n: 7);
     Weak<Counter> live = s.downgrade();
     Weak<Counter> gone = orphan();
     int32 a = match (live.tryUpgrade()) { case Some(sh): sh.get(); case None: 0; };

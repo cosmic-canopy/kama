@@ -2,9 +2,9 @@ import std::memory::{Shared};
 // A Shared is now BOTH Movable and Copyable (`implements Copyable(bare: copy)`): a bare hand-off
 // RETAINS (strong++), but `give` RELOCATES the handle — the strong count is untouched (it's the same
 // handle in a new home) and the source is consumed. Use-after-give is a compile error (xfail).
-type value Counter { public int32 n; public Counter(int32 n){this.n=n;} public fn int32 get(){return this.n;} }
+@generate(of) type value Counter { public int32 n; public fn int32 get(){return this.n;} }
 fn int32 main() {
-    Shared<Counter> a = new Counter(n: 7);
+    Shared<Counter> a = new Counter.of(n: 7);
     Shared<Counter> b = give a;   // MOVE: a consumed, b holds the sole handle (strong stays 1)
     return b.get();               // 7 (b drops -> Counter freed exactly once)
 }

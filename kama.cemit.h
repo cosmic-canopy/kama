@@ -953,6 +953,7 @@ private:
                              const std::string& method, SharedArgumentList args, int srcLine);
     // `new T(args)` reordered against the ctor signature -> "T__ctor(&dst, a0, ...)"
     std::string emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine);
+    void checkNamelessNewBanned(ObjectCreationNode* oc, int line);   // M8 Phase E: ban nameless `new Type(...)`
 
     // Statements
     void emitStatement(SharedStatement stmt, int depth);

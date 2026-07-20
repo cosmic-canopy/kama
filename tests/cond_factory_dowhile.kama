@@ -1,0 +1,13 @@
+// M8 Phase E: a named-ctor FACTORY call (`V.make(...)`) in a do/while condition compiles cleanly — it is
+// a plain call expression needing no hoisting (unlike the retired nameless inline-ctor, which required a
+// hoisted temp the non-hoistable do/while condition rejected; see the deleted xfail/cond_ctor_dowhile).
+type value V {
+    public int32 x;
+    public ctor make(int32 x) { V r; r.x = x; return give r; }
+    public bool operator<(V rhs) { return this.x < rhs.x; }
+}
+fn int32 main() {
+    int32 i = 0;
+    do { i = i + 1; } while (V.make(x: i) < V.make(x: 3));   // factory call in a do/while condition
+    return i;                                                // 1,2 loop; V(3) < V(3) false -> stop -> 3
+}

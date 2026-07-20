@@ -1,25 +1,32 @@
 // Base-field embedding: a derived class reaches inherited base data.
-// M25b: fields are private (kind-decides), so the base exposes `x` to subclasses via a
-// `protected` accessor — the sanctioned "private field, protected accessor" pattern.
+// M25b: fields are private (kind-decides), so the base exposes `x` to subclasses via `protected`
+// accessors — read (`getX`) and, for construction, write (`setX`).
+// M8 Phase E: construction is a named factory (no `: base(...)` delegation — a factory builds a bare
+// local, it has no `self` to chain a base ctor). A derived factory initializes the inherited base part
+// through the base's `protected` setter, then sets its own fields; the bare local's `__vptr` is set by
+// the vtable-typed bare-local store.
 type virtual resource Base
 {
     int x;                                       // private; embedded in the derived layout
-    public Base(int x) { this.x = x; }
+    protected fn void setX(int x) { this.x = x; }   // subclasses initialize base data through this
     protected fn int getX() { return this.x; }   // visible to subclasses, not to the world
     protected virtual fn int tag() { return 0; }
 }
 type final resource Derived extends Base
 {
     int y;
-    public Derived(int x, int y) : base(x: x)
+    public ctor make(int x, int y)
     {
-        this.y = y;
+        Derived r;
+        r.setX(x: x);      // initialize the inherited base field
+        r.y = y;
+        return give r;
     }
     protected override fn int tag() { return 1; }
     public fn int sum() { return this.getX() + y; }   // base data via the protected accessor
 }
 fn int main()
 {
-    Derived d = Derived(x: 30, y: 12);
+    Derived d = Derived.make(x: 30, y: 12);
     return d.sum();
 }

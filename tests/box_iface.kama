@@ -5,8 +5,8 @@ extern "<stdlib.h>";
 extern fn void free(Ptr p);
 
 type contract Shape for both { fn int32 area(); }
-type value Circle implements Shape { int32 r; public Circle(int32 r) { this.r = r; } public fn int32 area() { return this.r * this.r; } }
-type value Square implements Shape { int32 s; public Square(int32 s) { this.s = s; } public fn int32 area() { return this.s * this.s; } }
+type value Circle implements Shape { int32 r; public ctor make(int32 r) { Circle x; x.r = r; return give x; } public fn int32 area() { return this.r * this.r; } }
+type value Square implements Shape { int32 s; public ctor make(int32 s) { Square x; x.s = s; return give x; } public fn int32 area() { return this.s * this.s; } }
 
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
     Ptr<T> p;
@@ -16,7 +16,7 @@ type resource Box<T> implements Deref<T>, HeapOwner<T> {
 }
 
 fn int32 main() {
-    Box<Shape> a = new Circle(r: 5);   // 25
-    Box<Shape> b = new Square(s: 4);   // 16 (heterogeneous — different concrete types, one Box<Shape>)
+    Box<Shape> a = new Circle.make(r: 5);   // 25
+    Box<Shape> b = new Square.make(s: 4);   // 16 (heterogeneous — different concrete types, one Box<Shape>)
     return a.area() + b.area();        // 41 (virtual dispatch)
 }

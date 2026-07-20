@@ -1,11 +1,11 @@
 import std::memory::{Shared};
-type resource Probe { int32 id; public Probe(int32 id){this.id=id;} ~Probe(){} public fn int32 val(){return this.id;} }
+type resource Probe { int32 id; public ctor make(int32 id){ Probe r; r.id=id; return give r; } ~Probe(){} public fn int32 val(){return this.id;} }
 enum E { A(int32 n), B }
 fn int main()
 {
     E e = E::A(n: 5);
     int32 r = match (e) {
-        case A(n): { Shared<Probe> p = new Probe(id: n * 2); := p.val(); }
+        case A(n): { Shared<Probe> p = new Probe.make(id: n * 2); := p.val(); }
         case B: 0;
     };
     return r;

@@ -1,0 +1,6 @@
+// M8 Phase E — bare nameless `Type(args)` construction is no longer allowed; use `Type.make(...)`.
+type value C { int32 n; public ctor make(int32 n) { C r; r.n = n; return give r; } public fn int32 g(){ return this.n; } }
+fn int32 main() {
+    C a = C(n: 5);                  // ERROR: use `C.make(n: 5)`
+    return a.g();
+}
