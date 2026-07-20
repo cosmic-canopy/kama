@@ -1727,7 +1727,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // the returned view roots at `this` or a `ref`/by-value view parameter — the borrow then
         // outlives the call. The by-value sibling of the `ref T` place-return rule above; structural
         // root-tracing, no lifetime analysis (north star 3e). A view over a LOCAL is (correctly) rejected.
-        if (retExpr && isViewCType(_currentReturnCType)) {
+        // A named `ctor` factory RETURNS the view it builds (borrowing from its by-value `Ptr`/view params,
+        // which the caller owns); that provenance is validated structurally by checkViewCtorEscape instead,
+        // so skip the fn-shaped check here for a ctor body.
+        if (retExpr && !_inNamedCtorBody && isViewCType(_currentReturnCType)) {
             std::string root = viewReturnRoot(retExpr);
             if (root != "this" && !_refParams.count(root) && !_viewParams.count(root))
                 unsupported("a view borrows its buffer, so it can only be returned when it borrows `this` "
@@ -5574,7 +5577,10 @@ void CEmitter::emitSmartPtrBaseUpcast(const std::string& nm, const std::string& 
         // source's allocator handle so the base handle releases the shared ctrl through the SAME
         // allocator (a zero-init default would `free` an arena-owned ctrl → double-free on reset).
         std::string allocArg = boxAllocatorArg(dstTy).empty() ? "" : (", (" + srcE + ").alloc");
-        indent(depth); *_out << dstTy << "__ctor(&" << nm << ", " << basePtr << ", (" << srcE << ").c" << allocArg << ");\n";
+        // The library ctor is the named factory `make(p, c, alloc)` (M8d.2 F7 renamed the nameless primary),
+        // so it returns the base handle BY VALUE — assign it into the already-declared `nm` (not the old
+        // in-place `__ctor(&nm, …)`, which no longer exists).
+        indent(depth); *_out << nm << " = " << dstTy << "__make(" << basePtr << ", (" << srcE << ").c" << allocArg << ");\n";
         if (retain) { indent(depth); *_out << "(" << srcE << ").c->strong++;\n"; }
     } else {
         // Owned: adopt the base subobject (no ctrl); always a move.
@@ -6993,13 +6999,21 @@ std::string CEmitter::viewReturnRoot(SharedExpression e) const
     if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
         std::string callee = (inv->identifier && inv->identifier->value) ? *inv->identifier->value : "";
         bool bareCall = !inv->expression;   // `View(...)` has no receiver; `recv.m(...)` does
-        if (bareCall && _viewTypeNames.count(callee)) {                  // a view constructor
+        if (bareCall && _viewTypeNames.count(callee)) {                  // legacy nameless view ctor `View(...)`
             if (inv->args && !inv->args->empty()) return borrowArgRoot((*inv->args)[0]->expression);
             return "";
         }
-        if (inv->expression)                                            // chained: `recv.slice(...)`
-            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
-                if (ma->expression) return rootBinding(ma->expression);
+        if (inv->expression)                                            // `recv.slice(...)` or `View.make(...)`
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
+                // Dot-on-type view ctor `View.make(...)`: the receiver names a view TYPE (not an instance),
+                // so it borrows like the legacy nameless `View(...)` — root at its first (pointer) argument.
+                if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                    if (id->value && (!id->qualifier || id->qualifier->empty()) && _viewTypeNames.count(*id->value)) {
+                        if (inv->args && !inv->args->empty()) return borrowArgRoot((*inv->args)[0]->expression);
+                        return "";
+                    }
+                if (ma->expression) return rootBinding(ma->expression);  // chained: `recv.slice(...)` -> receiver's root
+            }
         return "";                                                      // unknown call form -> reject
     }
     return rootBinding(e);                                              // bare view local/param
@@ -7318,6 +7332,82 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         // (for/foreach/match: not modeled — a returned bare-incomplete local through them stays conservative)
     };
     for (auto& st : *body->statements) walk(st, true);
+}
+
+// Option-B view-ctor escape check. A `type view` ctor is a factory: it builds a local view and RETURNS it
+// (the M8 construction model). The returned view borrows through its `Ptr`/nested-view fields — each must
+// trace to a PARAMETER (a by-value `Ptr`/view param points at caller-owned memory that outlives the call)
+// or `this`, never a ctor-LOCAL (whose buffer dies at return -> dangle). Pure structural root-tracing
+// (north star 3e — no lifetime analysis): the ctor-body analog of the emit-time fn check at the ReturnNode,
+// mirroring checkNamedCtorComplete's top-level-only discipline (a borrow assigned only inside a branch is
+// unprovable -> conservatively rejected). Keeps `type view` as a sound second-class borrow through a factory.
+void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode* mnode)
+{
+    if (!mnode || !mnode->body || !mnode->body->statements) return;
+
+    std::set<std::string> borrowFields;                      // fields that can dangle: raw `Ptr<T>` or a `type view`
+    for (auto& f : owner.fields)
+        if (f.type && f.type->value && (*f.type->value == "Ptr" || isViewCType(cType(f.type))))
+            borrowFields.insert(f.name);
+    if (borrowFields.empty()) return;                        // nothing borrowable -> nothing to check
+
+    std::set<std::string> params;                            // param names -> roots that outlive the call
+    if (mnode->params) for (auto& p : *mnode->params)
+        if (p->identifier && p->identifier->value) params.insert(*p->identifier->value);
+    auto safeRoot = [&](const std::string& r) { return r == "this" || params.count(r) > 0; };
+
+    std::set<std::string> viewLocals;                        // locals of THIS view type (the object being built)
+    std::map<std::string, std::map<std::string, std::string>> borrowRoot;   // local -> borrow-field -> root of its RHS
+
+    // `local.field` on a tracked view local -> {local, field}; else {"",""}.
+    auto localFieldRef = [&](SharedExpression e) -> std::pair<std::string, std::string> {
+        auto* ma = dynamic_cast<MemberAccessNode*>(e.get());
+        if (!ma || !ma->identifier || !ma->identifier->value) return {"", ""};
+        auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get());
+        if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return {"", ""};
+        if (!viewLocals.count(*id->value)) return {"", ""};
+        return {*id->value, *ma->identifier->value};
+    };
+
+    std::function<void(SharedStatement, bool)> walk = [&](SharedStatement st, bool topLevel) {
+        if (!st) return;
+        ASTNode* n = st.get();
+        if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
+            bool isViewTy = lv->type && cType(lv->type) == owner.name;    // `View<T> r;` under the active subst
+            if (isViewTy && lv->variables)
+                for (auto& v : *lv->variables) if (v && v->name && v->name->value)
+                    viewLocals.insert(*v->name->value);
+        } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+            if (topLevel) {
+                std::pair<std::string, std::string> lf = localFieldRef(as->unaryExpression);
+                if (!lf.first.empty() && borrowFields.count(lf.second))
+                    borrowRoot[lf.first][lf.second] = borrowArgRoot(as->expression);
+            }
+        } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
+            SharedExpression e = ret->expression;
+            if (e) if (auto* h = dynamic_cast<HandoffNode*>(e.get())) e = h->value;   // `return give r`
+            auto* id = e ? dynamic_cast<IdentifierNode*>(e.get()) : nullptr;
+            if (id && id->value && (!id->qualifier || id->qualifier->empty()) && viewLocals.count(*id->value)) {
+                auto& roots = borrowRoot[*id->value];
+                for (auto& f : owner.fields) {
+                    if (!borrowFields.count(f.name)) continue;
+                    auto it = roots.find(f.name);
+                    std::string r = it == roots.end() ? "" : it->second;   // an unset borrow field -> "" -> reject
+                    if (!safeRoot(r))
+                        unsupported("a view borrows its buffer, so a view constructor may only borrow its "
+                                    "parameters — returning a view over a local would dangle", ret->line);
+                }
+            }
+        } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
+            walk(iff->ifStatement, false);                    // branch bodies don't count as unconditional
+            walk(iff->elseStatement, false);
+        } else if (auto* wh = dynamic_cast<WhileNode*>(n)) {
+            walk(wh->whileStatement, false);
+        } else if (auto* blk = dynamic_cast<BlockNode*>(n)) {
+            if (blk->statements) for (auto& s : *blk->statements) walk(s, topLevel);
+        }
+    };
+    for (auto& st : *mnode->body->statements) walk(st, true);
 }
 
 // Definite-assignment for LOCALS — the whole-function dual of the use-after-move check. Reading an owning
@@ -9531,6 +9621,9 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // Construction-model M3: a named `ctor` is a static factory — seal it so no returned object leaks a
         // null owning pointer (a legacy instance ctor is sealed by checkCtorNeverNull inside the body emit).
         if (mi.isCtor) checkNamedCtorComplete(ci, mi.node->body);
+        // ...and a view ctor may only hand back a borrow of its params (not a ctor-local) — see the fn-shaped
+        // sibling at the ReturnNode, skipped for a ctor body (which is validated here instead).
+        if (mi.isCtor && isViewCType(ret)) checkViewCtorEscape(ci, mi.node);
         // A named `ctor` is a static factory (no `self`), so it can't pass isCtor=true (that emits a
         // `self->__vptr` store). But it DOES construct — its bare local of the return type is the object
         // being built, so const fields written on it (`r.id = id`) must be allowed. Flag it. #M8d.2

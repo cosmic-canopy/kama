@@ -1038,6 +1038,7 @@ private:
                                 std::set<std::string>& assigned, std::set<std::string>& locals, bool topLevel);
     void        checkCtorNeverNull(ClassInfo& owner, SharedBlock body);
     void        checkNamedCtorComplete(ClassInfo& owner, SharedBlock body);
+    void        checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode* mnode);   // a view ctor may only borrow its params
     // Construction-model M8b: a value field may be left unassigned in a ctor iff its type is DEFAULT-FILLABLE
     // (a primitive / raw `Ptr` — zero is a valid value; an intrinsic collection — zero is a valid empty; or a
     // type with an explicit `default` ctor). Otherwise it must be explicitly assigned. `concreteCType` is the

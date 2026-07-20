@@ -33,7 +33,7 @@ type value ViewIterMut<T> implements IteratorMut<T> {
 type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable] {
     Ptr<T> data; int32 len;
 
-    public View(Ptr<T> data, int32 len) { this.data = data; this.len = len; }
+    public ctor make(Ptr<T> data, int32 len) { View<T> r; r.data = data; r.len = len; return give r; }
 
     public fn int32 length() { return this.len; }
     public fn bool  isEmpty() { return this.len == 0; }
@@ -52,7 +52,7 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable] {
     // `this` (the view), which itself borrows the underlying buffer, so it's escape-safe.
     public fn View<T> slice(int32 from, int32 count) {
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "View.slice out of bounds"); }
-        if (count == 0) { return View::<T>(data: this.data, len: 0); }
-        unsafe { return View::<T>(data: addr(of: this.data[from]), len: count); }
+        if (count == 0) { return View.make::<T>(data: this.data, len: 0); }
+        unsafe { return View.make::<T>(data: addr(of: this.data[from]), len: count); }
     }
 }
