@@ -130,6 +130,20 @@ genuinely later-track or opt-in.
   abstraction: a typed `Slot<T>` (kama's `MaybeUninit`) with `write(give x)` / `take() -> T` intrinsics so
   container authors stop hand-rolling both directions. Spike: is the wrapper worth the surface, or does the
   handful of container sites not justify it? Non-blocking; pure ergonomics for stdlib authors, not users.
+- **Generic named-ctor type-arg spelling — pick ONE (favor one way to do a thing).** A generic named ctor
+  called with explicit type args currently takes them in *different positions* by context: a plain call is
+  `T.make::<Args>(…)` (turbofish on the ctor — the M7.0 form), but through `new` only `new T<Args>.make(…)`
+  parses (args in *type* position; the turbofish-after-ctor form `new T.make::<Args>(…)` is a parse error —
+  found during the M8d.2 BTreeNode migration). Two spellings for the same intent. The SPEC's own rule
+  ([SPEC.md](SPEC.md) §Turbofish, ~1140: *"turbofish reaches only generic **functions**; a generic **type**
+  is written `Box<int32>` in type position"*) points at the canonical answer: the args being supplied are the
+  **enclosing type's** params, so they belong in type position — **`T<Args>.make(…)` everywhere**, with `::<>`
+  reserved for a ctor's *own* generic params (rare). Decide whether to (a) make plain calls also accept
+  `T<Args>.make(…)` and deprecate/retire the `T.make::<Args>(…)` turbofish form, or (b) teach `new` to accept
+  the turbofish form too. **Settle before the M8 Phase-E enforcement flip** (which locks the construction
+  surface) so 1.0 ships one spelling; reconcile the SPEC turbofish note + the stale `new T<Args>(…)`
+  nameless-primary examples (SPEC ~111/117) at the same M8e doc pass. Low effort if (a); the sweep already
+  uses the turbofish form pervasively in the stdlib, so migrating those call sites is mechanical.
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
