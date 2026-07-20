@@ -38,15 +38,15 @@ type value BitSetIter implements Iterator<int32> {
 type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: give) {
     Ptr<uint64> words; int32 wordCount; int32 mods; A alloc;
 
-    public BitSet() { unsafe { this.words = cast<Ptr<uint64>>(cast<usize>(0)); } this.wordCount = 0; this.mods = 0; }
-
     // The four-ctor matrix (M8c) — `withCapacity` is sized in BITS. `empty()` is the `default` zero-arg build.
-    public default ctor empty() when [A: default] { return BitSet(); }
+    // A bare `BitSet<A> s;` zero-inits the primitive fields (words=null, wordCount=0, mods=0) and default-fills
+    // `alloc` (the zero-size `GlobalAllocator`); the M8d.1 completeness gate proves it's fully initialized.
+    public default ctor empty() when [A: default] { BitSet<A> s; return give s; }
 
     // Preallocate room for at least `bits` bits (rounded up to a whole word). K,V-style target-type inference:
     // `BitSet s = BitSet.withCapacity(bits: 256);`.
     public ctor withCapacity(int32 bits) when [A: default] {
-        BitSet<A> s = BitSet();
+        BitSet<A> s;
         if (bits > 0) { s.growTo(nc: (bits + 63) >> 6); }
         return give s;
     }
@@ -54,14 +54,14 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     // Draw the word buffer from a caller-owned allocator (e.g. an `Arena`). The bare `BitSet()` uses the
     // default zero-size `GlobalAllocator`; this sets the handle before any grow.
     public ctor withAllocator(A allocator) {
-        BitSet<A> result = BitSet();
+        BitSet<A> result;
         result.alloc = allocator;
         return give result;
     }
 
     // Caller-owned allocator AND preallocated for `bits` bits — `alloc` set before `growTo`.
     public ctor withCapacityAndAllocator(A allocator, int32 bits) {
-        BitSet<A> result = BitSet();
+        BitSet<A> result;
         result.alloc = allocator;
         if (bits > 0) { result.growTo(nc: (bits + 63) >> 6); }
         return give result;
@@ -168,7 +168,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     // Deep-copy into an independent buffer (bare `give` still MOVES). uint64 is always Copyable, so a BitSet
     // is unconditionally Copyable — a plain word-for-word buffer clone.
     public fn BitSet<A> copy() {
-        BitSet<A> result = BitSet();
+        BitSet<A> result;
         result.alloc = this.alloc;                    // copy the allocator handle (a value) — same arena
         if (this.wordCount > 0) {
             result.growTo(nc: this.wordCount);

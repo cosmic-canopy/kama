@@ -44,8 +44,6 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // The `alloc` field is a plain value (not Owned/Shared), so the bare ctor need not set it; a
     // custom-allocator list is built by `withAllocator`, which assigns `alloc` after construction
     // (Kama has no ctor overloading, so there is one ctor and the allocator arrives via the factory).
-    public DynamicArray() { unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); } this.len = 0; this.cap = 0; this.mods = 0; }
-
     // The four-ctor matrix (construction-model M8c): `empty` / `withCapacity` (default `GlobalAllocator`),
     // `withAllocator` / `withCapacityAndAllocator` (caller-owned `A`). `empty()` is the canonical zero-arg
     // build — marked `default`, so a `DynamicArray<T,A>` field elsewhere is default-fillable. `empty`/
@@ -53,16 +51,16 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // `when [A: default]` — these default-allocator conveniences EXIST only when `A` is default-constructible
     // (a custom `A: BumpAllocator` has no `default`, so `.empty()`/`.withCapacity()` don't exist for it → a
     // clean "no such ctor" error, not a zero-allocator collection). Use `withAllocator` for a custom `A`.
-    public default ctor empty() when [A: default] { return DynamicArray(); }
+    public default ctor empty() when [A: default] { DynamicArray<T, A> r; return give r; }
 
     // Empty, but pre-grown so at least `capacity` elements fit without a later reallocation.
-    public ctor withCapacity(int32 capacity) when [A: default] { DynamicArray<T, A> m = DynamicArray(); m.reserve(n: capacity); return give m; }
+    public ctor withCapacity(int32 capacity) when [A: default] { DynamicArray<T, A> m; m.reserve(n: capacity); return give m; }
 
     // Build an empty list whose buffer is drawn from `allocator` (e.g. an `Arena` bump handle), so all
     // of this list's allocations route into that region. The handle is a cheap copyable value stored
     // by value; it is set after the bare construction (no overloaded ctor).
     public ctor withAllocator(A allocator) {
-        DynamicArray<T, A> result = DynamicArray();
+        DynamicArray<T, A> result;
         result.alloc = allocator;
         return give result;
     }
@@ -70,7 +68,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // Caller-owned allocator AND pre-grown for `capacity` — `alloc` set before `reserve` (grow routes
     // through `this.alloc`).
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
-        DynamicArray<T, A> result = DynamicArray();
+        DynamicArray<T, A> result;
         result.alloc = allocator;
         result.reserve(n: capacity);
         return give result;
@@ -158,7 +156,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // draws from the SAME allocator as the source (the handle is copied), so a bump-backed list's copy
     // lands in the same arena.
     public fn DynamicArray<T, A> copy() {
-        DynamicArray<T, A> result = DynamicArray();
+        DynamicArray<T, A> result;
         result.alloc = this.alloc;                    // copy the allocator handle (a value) — same arena
         int32 i = 0;
         while (i < this.len) { result.add(item: copy this[i]); i = i + 1; }
@@ -266,7 +264,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // Reconstruct from a JSON array — a fresh list, each element read fallibly and moved in. A bad element
     // read propagates its boxed error (dropping the partial list via RAII).
     public static fn Result<DynamicArray<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
-        DynamicArray<T> result = DynamicArray();
+        DynamicArray<T> result;
         r.beginArray();
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T::deserialize(r: r);   // bind — a match needs a named enum subject

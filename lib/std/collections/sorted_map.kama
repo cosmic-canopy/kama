@@ -472,21 +472,21 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     int32 len; int32 mods;
     A alloc;                                            // the allocator the tree's nodes + arrays draw from
 
-    public SortedMap() {
-        Owned<BTreeNode<K,V,A>> r = new BTreeNode<K,V,A>(leaf: true, allocator: this.alloc);
-        this.root = give r; this.len = 0; this.mods = 0;
+    // The canonical zero-arg build (M8c `default`) — a NON-zero default: it builds a live B-tree root. A
+    // B-tree has no backing buffer to presize, so SortedMap has no `withCapacity`. A bare `SortedMap<K,V,A> r;`
+    // zero-inits `len`/`mods`, default-fills `alloc`, and leaves the owning `root` for us to assign — the
+    // M8d.1 completeness gate REQUIRES `root` be set before return, which building it satisfies.
+    public default ctor empty() when [A: default] {
+        SortedMap<K,V,A> result;
+        Owned<BTreeNode<K,V,A>> r = new BTreeNode<K,V,A>(leaf: true, allocator: result.alloc);
+        result.root = give r;
+        return give result;
     }
 
-    // The canonical zero-arg build (M8c `default`) — a NON-zero default (the primary builds a live B-tree
-    // root). A B-tree has no backing buffer to presize, so SortedMap has no `withCapacity`. Keeps delegation
-    // (a bare local would trip the completeness gate on the owning `root`, which the primary builds).
-    public default ctor empty() when [A: default] { return SortedMap(); }
-
-    // Back the whole tree with a caller-owned allocator (e.g. an `Arena`). The bare ctor above built a
-    // root whose arrays bound the zero-init `alloc`, so REPLACE it (dropping the default root) with one
-    // built from the real handle — mirrors `PriorityQueue::withAllocator` replacing its embedded array.
+    // Back the whole tree with a caller-owned allocator (e.g. an `Arena`). The bare local zero-inits `root`;
+    // we set `alloc` from the real handle, then build the root from it — mirrors `PriorityQueue::withAllocator`.
     public ctor withAllocator(A allocator) {
-        SortedMap<K,V,A> result = SortedMap();
+        SortedMap<K,V,A> result;
         result.alloc = allocator;
         Owned<BTreeNode<K,V,A>> r = new BTreeNode<K,V,A>(leaf: true, allocator: allocator);
         result.root = give r;
@@ -532,15 +532,15 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // with `foreach (K k in m.keys())`. Eager (materialized) so it reuses the array's tested iterator + stays
     // valid independent of the tree; O(n) space. `values()` is ordered by key, parallel to `keys()`.
     public fn DynamicArray<K> keys() when [K: Copyable] {
-        DynamicArray<K> acc = DynamicArray(); this.root.collectKeys(dest: acc); return give acc;
+        DynamicArray<K> acc; this.root.collectKeys(dest: acc); return give acc;
     }
     public fn DynamicArray<V> values() when [V: Copyable] {
-        DynamicArray<V> acc = DynamicArray(); this.root.collectVals(dest: acc); return give acc;
+        DynamicArray<V> acc; this.root.collectVals(dest: acc); return give acc;
     }
 
     // Ascending keys in the half-open window [from, to) — the ordered range query (empty if from >= to).
     public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable] {
-        DynamicArray<K> acc = DynamicArray(); this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
+        DynamicArray<K> acc; this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
     }
 
     // Drop every entry, resetting to an empty single-leaf tree (keeps the root box).
@@ -574,7 +574,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // default `SortedMap<K,V>` (a stateful-A instance would bare-ctor a zero-init handle and crash on the
     // first `put`). Same convention as the other collections' A-ignoring deserialize.
     public static fn Result<SortedMap<K,V>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
-        SortedMap<K,V> result = SortedMap();
+        SortedMap<K,V> result = SortedMap.empty();
         r.beginArray();
         while (r.moreElems()) {
             r.beginObject();

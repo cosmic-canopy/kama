@@ -10,19 +10,16 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
         Serialize when [K: Serialize, K: Copyable], Deserialize when [K: Deserialize] {
     Map<K, Unit, H, A> m;
 
-    // `this.m = Map()` won't infer the map's type args from the field, so build it in a typed local
-    // first, then move it in (the tracked bare-generic-ctor-in-a-non-local-init gap).
-    public Set() { Map<K, Unit, H, A> inner = Map(); this.m = give inner; }
-
     // The four-ctor matrix (M8c). `Set` carries no `alloc` field (it wraps `Map<K,Unit,H,A> m`); the
     // capacity ctors build the inner map via the matching `Map` ctor. `empty`/`withCapacity` are the
-    // default-allocator conveniences (custom `A` uses the allocator-taking ctors).
-    public default ctor empty() when [A: default] { return Set(); }
+    // default-allocator conveniences (custom `A` uses the allocator-taking ctors). A bare `Set<K,H,A> r;`
+    // default-fills the inner `m` (`Map.empty()`); the M8d.1 completeness gate proves it's initialized.
+    public default ctor empty() when [A: default] { Set<K,H,A> r; return give r; }
 
     // Build an empty set whose backing map draws from `allocator` (e.g. an `Arena` bump handle). The
     // bare `Set()` builds an empty (cap-0) inner map that is dropped when replaced by the arena-backed one.
     public ctor withAllocator(A allocator) {
-        Set<K,H,A> result = Set();
+        Set<K,H,A> result;
         Map<K, Unit, H, A> inner = Map::withAllocator(allocator: allocator);
         result.m = give inner;
         return give result;
@@ -34,7 +31,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // Build an empty set already sized for `capacity` entries. M8c: now a `ctor` returning the enclosing
     // `Set<K,H,A>` (was a `static fn`), building the inner map via `Map::withCapacity`.
     public ctor withCapacity(int32 capacity) when [A: default] {
-        Set<K,H,A> s = Set();
+        Set<K,H,A> s;
         Map<K, Unit, H, A> inner = Map::withCapacity(capacity: capacity);
         s.m = give inner;
         return give s;
@@ -42,7 +39,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
 
     // Caller-owned allocator AND pre-sized — builds the inner map via `Map::withCapacityAndAllocator`.
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
-        Set<K,H,A> s = Set();
+        Set<K,H,A> s;
         Map<K, Unit, H, A> inner = Map::withCapacityAndAllocator(allocator: allocator, capacity: capacity);
         s.m = give inner;
         return give s;
@@ -72,7 +69,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
         return Result::Ok(value: Unit::Unit);
     }
     public static fn Result<Set<K,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
-        Set<K,H> result = Set();
+        Set<K,H> result;
         r.beginArray();
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K::deserialize(r: r);   // bind — a match needs a named enum subject

@@ -20,26 +20,25 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
     DynamicArray<T, A> data;   // the heap-ordered backing store (data[0] = root)
     bool maxOrder;             // false = min-heap (smallest first), true = max-heap (largest first)
 
-    // A MIN-heap (smallest element first) — the common priority-by-cost default. Use `maxHeap()` to invert.
-    public PriorityQueue() { this.data = DynamicArray(); this.maxOrder = false; }
-
-    // Self-documenting factories (T inferred from the target type). `minHeap()` == the bare ctor; `maxHeap()`
+    // Self-documenting factories (T inferred from the target type). `minHeap()` builds the min-heap default;
+    // a bare `PriorityQueue<T, A> q;` default-fills `data` (`DynamicArray.empty()`) and zero-inits `maxOrder`;
+    // `maxHeap()`
     // makes the LARGEST element come out first. They return the enclosing instance's own `A` (so `q` is the
     // SAME class — the private `maxOrder` write resolves); for a non-default `A` use `withAllocator` instead,
     // which supplies the allocator (the bare ctor here would leave a custom `A`'s handle uninitialized).
-    public default ctor minHeap() when [A: default] { PriorityQueue<T, A> q = PriorityQueue(); return give q; }
-    public ctor maxHeap() when [A: default] { PriorityQueue<T, A> q = PriorityQueue(); q.maxOrder = true; return give q; }
+    public default ctor minHeap() when [A: default] { PriorityQueue<T, A> q; return give q; }
+    public ctor maxHeap() when [A: default] { PriorityQueue<T, A> q; q.maxOrder = true; return give q; }
 
     // Capacity presizing (M8c) rides the backing `DynamicArray` — like C++/Java/Rust priority queues taking a
     // reserve size. Direction stays explicit (min/max); `data` is built via `DynamicArray::withCapacity`.
     public ctor minHeapWithCapacity(int32 capacity) when [A: default] {
-        PriorityQueue<T, A> q = PriorityQueue();
+        PriorityQueue<T, A> q;
         q.data = DynamicArray::withCapacity(capacity: capacity);
         q.maxOrder = false;
         return give q;
     }
     public ctor maxHeapWithCapacity(int32 capacity) when [A: default] {
-        PriorityQueue<T, A> q = PriorityQueue();
+        PriorityQueue<T, A> q;
         q.data = DynamicArray::withCapacity(capacity: capacity);
         q.maxOrder = true;
         return give q;
@@ -49,7 +48,7 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
     // (private, so it can't be set post-hoc — this one factory covers both min and max in-arena). All
     // allocation rides the embedded `DynamicArray<T, A>`.
     public ctor withAllocator(A allocator, bool maxOrder) {
-        PriorityQueue<T, A> q = PriorityQueue();
+        PriorityQueue<T, A> q;
         q.data = DynamicArray::withAllocator(allocator: allocator);   // drops the empty default-built data (cap=0)
         q.maxOrder = maxOrder;
         return give q;
@@ -57,7 +56,7 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
 
     // Caller-owned allocator AND presized — both direction and capacity in one arena-backed factory.
     public ctor withCapacityAndAllocator(A allocator, int32 capacity, bool maxOrder) {
-        PriorityQueue<T, A> q = PriorityQueue();
+        PriorityQueue<T, A> q;
         q.data = DynamicArray::withCapacityAndAllocator(allocator: allocator, capacity: capacity);
         q.maxOrder = maxOrder;
         return give q;
@@ -143,7 +142,7 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
     // Deep-copy the whole queue (present only for a Copyable element): the backing array is cloned element by
     // element and the ordering flag carried over, so the heap invariant is preserved without re-heapifying.
     public fn PriorityQueue<T, A> copy() when [T: Copyable] {
-        PriorityQueue<T, A> result = PriorityQueue();
+        PriorityQueue<T, A> result;
         result.data = copy this.data;   // DynamicArray.copy carries the allocator handle over — same arena
         result.maxOrder = this.maxOrder;
         return give result;

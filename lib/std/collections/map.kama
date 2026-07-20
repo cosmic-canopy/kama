@@ -139,27 +139,20 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // The bare map draws from the default `GlobalAllocator` (a zero-size field — no state, no cost). A
     // custom-allocator map is built by `withAllocator`, which sets `alloc` after construction (Kama has
     // no ctor overloading; `alloc` is a plain value, so the bare ctor need not set it).
-    public Map() {
-        unsafe {
-            this.keys = cast<Ptr<K>>(cast<usize>(0));
-            this.vals = cast<Ptr<V>>(cast<usize>(0));
-            this.state = cast<Ptr<uint8>>(cast<usize>(0));
-        }
-        this.len = 0; this.cap = 0; this.tombs = 0; this.mods = 0;
-    }
-
     // The four-ctor matrix (M8c). `empty`/`withCapacity` are the default-allocator conveniences, gated
     // `when [A: default]` (M8d.0) so they don't exist for a custom `A` without a `default` (which would
     // otherwise build a zero-allocator, incomplete map). Custom `A` uses the allocator-taking ctors below.
-    public default ctor empty() when [A: default] { return Map(); }
+    // A bare `Map<K,V,H,A> r;` zero-inits the primitive/`Ptr` fields and default-fills `alloc`; the M8d.1
+    // completeness gate proves it's fully initialized.
+    public default ctor empty() when [A: default] { Map<K,V,H,A> r; return give r; }
 
     // Empty, but pre-sized so `capacity` entries fit without a rehash. Returns the enclosing `Map<K,V,H,A>`.
-    public ctor withCapacity(int32 capacity) when [A: default] { Map<K,V,H,A> m = Map(); m.reserve(n: capacity); return give m; }
+    public ctor withCapacity(int32 capacity) when [A: default] { Map<K,V,H,A> m; m.reserve(n: capacity); return give m; }
 
     // Build an empty map whose three buffers are drawn from `allocator` (e.g. an `Arena` bump handle),
     // so all of this map's allocations route into that region. The handle is a cheap copyable value.
     public ctor withAllocator(A allocator) {
-        Map<K,V,H,A> result = Map();
+        Map<K,V,H,A> result;
         result.alloc = allocator;
         return give result;
     }
@@ -167,7 +160,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // Caller-owned allocator AND pre-sized for `capacity` — `alloc` set before `reserve` (rehash allocates
     // through `this.alloc`).
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
-        Map<K,V,H,A> result = Map();
+        Map<K,V,H,A> result;
         result.alloc = allocator;
         result.reserve(n: capacity);
         return give result;
@@ -219,7 +212,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
     public fn Map<K,V,H,A> copy() when [K: Copyable, V: Copyable] {
-        Map<K,V,H,A> result = Map();
+        Map<K,V,H,A> result;
         result.alloc = this.alloc;                  // copy the allocator handle (a value) — same arena
         int32 i = 0;
         while (i < this.cap) {
@@ -419,7 +412,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // Reconstruct from the pair array: each entry is `{"key":k,"value":v}` (key before value on the wire),
     // read positionally — `moreFields()` consumes the object structure (commas + closing brace).
     public static fn Result<Map<K,V,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
-        Map<K,V,H> result = Map();
+        Map<K,V,H> result;
         r.beginArray();
         while (r.moreElems()) {
             r.beginObject();

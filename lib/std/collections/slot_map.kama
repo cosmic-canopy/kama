@@ -70,31 +70,23 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     Ptr<V> values; Ptr<uint32> gens; Ptr<int32> freeList;
     int32 slotCount; int32 freeLen; int32 len; int32 cap; int32 mods; A alloc;
 
-    public SlotMap() {
-        unsafe {
-            this.values = cast<Ptr<V>>(cast<usize>(0));
-            this.gens = cast<Ptr<uint32>>(cast<usize>(0));
-            this.freeList = cast<Ptr<int32>>(cast<usize>(0));
-        }
-        this.slotCount = 0; this.freeLen = 0; this.len = 0; this.cap = 0; this.mods = 0;
-    }
-
     // The four-ctor matrix (M8c). `empty()` is the `default` zero-arg build; `empty`/`withCapacity` are the
-    // default-allocator conveniences (custom `A` uses the allocator-taking ctors).
-    public default ctor empty() when [A: default] { return SlotMap(); }
-    public ctor withCapacity(int32 capacity) when [A: default] { SlotMap<V, A> m = SlotMap(); m.reserve(n: capacity); return give m; }
+    // default-allocator conveniences (custom `A` uses the allocator-taking ctors). A bare `SlotMap<V, A> r;`
+    // zero-inits the primitive/`Ptr` fields and default-fills `alloc` — the M8d.1 gate proves completeness.
+    public default ctor empty() when [A: default] { SlotMap<V, A> r; return give r; }
+    public ctor withCapacity(int32 capacity) when [A: default] { SlotMap<V, A> m; m.reserve(n: capacity); return give m; }
 
     // Draw the three parallel buffers from a caller-owned allocator (e.g. an `Arena`). The bare `SlotMap()`
     // uses the default zero-size `GlobalAllocator`; this sets the handle before any grow.
     public ctor withAllocator(A allocator) {
-        SlotMap<V, A> result = SlotMap();
+        SlotMap<V, A> result;
         result.alloc = allocator;
         return give result;
     }
 
     // Caller-owned allocator AND pre-grown for `capacity` slots — `alloc` set before `reserve`.
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
-        SlotMap<V, A> result = SlotMap();
+        SlotMap<V, A> result;
         result.alloc = allocator;
         result.reserve(n: capacity);
         return give result;

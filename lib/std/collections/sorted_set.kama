@@ -10,13 +10,13 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
         Serialize when [K: Serialize, K: Copyable], Deserialize when [K: Deserialize] {
     SortedMap<K, Unit, A> m;
 
-    // Build the inner map in a typed local, then move it in (the field-init can't infer its type args).
-    public SortedSet() { SortedMap<K, Unit, A> inner = SortedMap(); this.m = give inner; }
-    public default ctor empty() when [A: default] { return SortedSet(); }   // M8c/M8d.0: default-alloc only (custom `A` → withAllocator)
+    // A bare `SortedSet<K, A> r;` default-fills the inner `m` (`SortedMap.empty()` — a non-zero default that
+    // builds a live B-tree root, via the M8d.1 fill); the completeness gate proves it's initialized.
+    public default ctor empty() when [A: default] { SortedSet<K, A> r; return give r; }   // M8c/M8d.0: default-alloc only (custom `A` → withAllocator)
 
     // Back the set with a caller-owned allocator (e.g. an `Arena`) — forwards to the inner map's factory.
     public ctor withAllocator(A allocator) {
-        SortedSet<K, A> result = SortedSet();
+        SortedSet<K, A> result;
         result.m = SortedMap::withAllocator(allocator: allocator);   // drops the empty default-built inner map
         return give result;
     }
@@ -40,7 +40,7 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
     // `foreach (K k in set.elements())` — ascending members (key copies).
     public fn DynamicArray<K> elements() when [K: Copyable] { return this.m.keys(); }
     public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable] { return this.m.range(from: from, to: to); }
-    public fn SortedSet<K, A> copy() when [K: Copyable] { SortedSet<K, A> result = SortedSet(); result.m = copy this.m; return give result; }
+    public fn SortedSet<K, A> copy() when [K: Copyable] { SortedSet<K, A> result; result.m = copy this.m; return give result; }
 
     // Serialize as a JSON array of the members in ascending order (Serialize needs a Copyable key — the key
     // view yields copies); deserialize just `add`s each key back.
@@ -58,7 +58,7 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
         return Result::Ok(value: Unit::Unit);
     }
     public static fn Result<SortedSet<K>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
-        SortedSet<K> result = SortedSet();
+        SortedSet<K> result;
         r.beginArray();
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K::deserialize(r: r);   // bind — a match needs a named enum subject
