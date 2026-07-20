@@ -24,13 +24,13 @@ enum WtState { Connecting, Connected, Closed }
 // Non-blocking only. Closes the session on drop (RAII).
 type resource WtConnection implements DatagramSocket {
     int32 handle;
-    private WtConnection(int32 handle) { this.handle = handle; }
+    private ctor make(int32 handle) { WtConnection r; r.handle = handle; return give r; }
 
     // Open a session to an https:// URL (HTTP/3). Returns immediately; poll state() until Connected.
     public ctor Result<WtConnection, IoError> connect(ref string url) {
         int32 h = kama_wt_connect(url: url.cstr());
         if (h < 0) { return Result::Err(error: IoError::Other(code: 0 - 1)); }
-        return Result::Ok(value: WtConnection(handle: h));
+        return Result::Ok(value: WtConnection.make(handle: h));
     }
 
     public fn WtState state() {
@@ -64,7 +64,7 @@ type resource WtConnection implements DatagramSocket {
     public fn Result<RecvFrom, IoError> recvFrom(ref FixedArray<uint8> into) {
         Result<usize, IoError> r = this.recv(into: into);
         return match (r) {
-            case Ok(n):  Result::Ok(value: RecvFrom(count: n, from: SocketAddr::fromHostIp(ip: 0ui32, port: 0ui16)));
+            case Ok(n):  Result::Ok(value: RecvFrom.of(count: n, from: SocketAddr::fromHostIp(ip: 0ui32, port: 0ui16)));
             case Err(e): Result::Err(error: e);
         };
     }

@@ -43,7 +43,7 @@ type contract DatagramSocket for resource {
 // makes recv/recvFrom return `Err(WouldBlock)` instead of stalling (the game-loop drain model).
 type resource UdpSocket implements DatagramSocket {
     isize fd;
-    private UdpSocket(isize fd) { this.fd = fd; }
+    private ctor make(isize fd) { UdpSocket r; r.fd = fd; return give r; }
 
     // Bind to a numeric host:port. host ""/"0.0.0.0" = all interfaces; port 0 = OS-assigned ephemeral
     // (read the actual port back with localAddr()). SO_REUSEADDR is set. The socket closes on drop.
@@ -58,7 +58,7 @@ type resource UdpSocket implements DatagramSocket {
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: UdpSocket(fd: fd));
+        return Result::Ok(value: UdpSocket.make(fd: fd));
     }
 
     // Set a default peer (POSIX `connect` on a datagram socket): send/recv then need no address, and recv
@@ -88,7 +88,7 @@ type resource UdpSocket implements DatagramSocket {
         while (true) {
             isize n = kama_recvfrom_inet(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()),
                                          outIp: addr(of: ip), outPort: addr(of: port));
-            if (n >= 0) { return Result::Ok(value: RecvFrom(count: cast<usize>(n), from: SocketAddr::fromHostIp(ip: ip, port: port))); }
+            if (n >= 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(n), from: SocketAddr::fromHostIp(ip: ip, port: port))); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }

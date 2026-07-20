@@ -36,7 +36,7 @@ type resource TcpStream implements ReliableStream {
     isize fd;
     // Adopt an already-connected socket fd. This is the escape hatch used by TcpListener.accept();
     // prefer `connect` for client sockets.
-    public TcpStream(isize fd) { this.fd = fd; }
+    public ctor make(isize fd) { TcpStream r; r.fd = fd; return give r; }
 
     // Connect to a numeric host:port (e.g. "127.0.0.1"). The stream closes on drop.
     public ctor Result<TcpStream, IoError> connect(ref string host, uint16 port) {
@@ -49,7 +49,7 @@ type resource TcpStream implements ReliableStream {
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: TcpStream(fd: fd));
+        return Result::Ok(value: TcpStream.make(fd: fd));
     }
 
     // Read up to into.length() bytes into `into`; returns the count (0 = peer closed). EINTR-retried.
@@ -120,7 +120,7 @@ type resource TcpStream implements ReliableStream {
                 return Result::Err(error: err);
             }
         }
-        return Result::Ok(value: TcpStream(fd: fd));   // connected instantly (loopback) or in flight
+        return Result::Ok(value: TcpStream.make(fd: fd));   // connected instantly (loopback) or in flight
     }
 
     // Resolve a non-blocking connect once the socket reports writable: Ok if connected, else the cause
@@ -139,7 +139,7 @@ type resource TcpStream implements ReliableStream {
 // A listening TCP socket. Closes on drop (RAII). Move-only.
 type resource TcpListener {
     isize fd;
-    private TcpListener(isize fd) { this.fd = fd; }
+    private ctor make(isize fd) { TcpListener r; r.fd = fd; return give r; }
 
     // Bind + listen on a numeric host:port. host "" or "0.0.0.0" = all interfaces. SO_REUSEADDR is set.
     public ctor Result<TcpListener, IoError> bind(ref string host, uint16 port) {
@@ -158,14 +158,14 @@ type resource TcpListener {
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: TcpListener(fd: fd));
+        return Result::Ok(value: TcpListener.make(fd: fd));
     }
 
     // Accept the next incoming connection (blocking). EINTR-retried.
     public fn Result<TcpStream, IoError> accept() {
         while (true) {
             isize cfd = kama_accept(fd: this.fd);
-            if (cfd >= 0) { return Result::Ok(value: TcpStream(fd: cfd)); }
+            if (cfd >= 0) { return Result::Ok(value: TcpStream.make(fd: cfd)); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }

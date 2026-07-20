@@ -17,7 +17,6 @@ enum IpAddr {
 type value SocketAddr {
     public IpAddr ip;
     public uint16 port;
-    public SocketAddr(IpAddr ip, uint16 port) { this.ip = ip; this.port = port; }
 
     // Rebuild from the HOST-order IPv4 + host-order port the C layer returns (kama_os.h ntohl's `s_addr`),
     // so octet extraction is fixed-shift and endianness-independent.
@@ -26,7 +25,7 @@ type value SocketAddr {
         uint8 b = cast<uint8>((ip >> 16ui32) & 255ui32);
         uint8 c = cast<uint8>((ip >> 8ui32) & 255ui32);
         uint8 d = cast<uint8>(ip & 255ui32);
-        return SocketAddr(ip: IpAddr::V4(a: a, b: b, c: c, d: d), port: port);
+        return SocketAddr.of(ip: IpAddr::V4(a: a, b: b, c: c, d: d), port: port);
     }
 
     // Just the "a.b.c.d" host text (no port) — feeds the C `sockaddr_in` fill for sendTo.
@@ -47,5 +46,4 @@ type value SocketAddr {
 type value RecvFrom {
     public usize count;
     public SocketAddr from;
-    public RecvFrom(usize count, SocketAddr from) { this.count = count; this.from = from; }
 }

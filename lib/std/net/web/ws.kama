@@ -25,14 +25,14 @@ enum WsState { Connecting, Open, Closing, Closed }
 // (EOF, matching TcpStream). Closes on drop (RAII).
 type resource WsConnection implements ReliableStream {
     int32 handle;
-    private WsConnection(int32 handle) { this.handle = handle; }
+    private ctor make(int32 handle) { WsConnection r; r.handle = handle; return give r; }
 
     // Open a ws:// or wss:// connection. Returns immediately; the handshake completes asynchronously —
     // poll state() until Open before sending.
     public ctor Result<WsConnection, IoError> connect(ref string url) {
         int32 h = kama_ws_connect(url: url.cstr());
         if (h < 0) { return Result::Err(error: IoError::Other(code: 0 - 1)); }
-        return Result::Ok(value: WsConnection(handle: h));
+        return Result::Ok(value: WsConnection.make(handle: h));
     }
 
     public fn WsState state() {

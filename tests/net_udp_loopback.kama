@@ -37,7 +37,7 @@ fn int32 exchange(ref UdpSocket a, ref UdpSocket b, int32 n) {
     int32 ap = portOf(s: a);
     if (bp <= 0) { return 81; }
     if (ap <= 0) { return 82; }
-    SocketAddr bAddr = SocketAddr(ip: IpAddr::V4(a: cast<uint8>(127), b: cast<uint8>(0),
+    SocketAddr bAddr = SocketAddr.of(ip: IpAddr::V4(a: cast<uint8>(127), b: cast<uint8>(0),
                                                  c: cast<uint8>(0), d: cast<uint8>(1)), port: cast<uint16>(bp));
 
     DynamicArray<uint8> msg = pattern(n: n);
