@@ -1265,7 +1265,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // structs zero-init so unset descriptor fields are well-defined.
                 line(n->line); indent(depth);
                 bool hasDefaultCtor = !_classes[ty].isAbstractClass
-                    && ((_classes[ty].hasCtor && _classes[ty].ctorParams.empty()) || _classes[ty].synthCtor);
+                    && (_classes[ty].hasCtor && _classes[ty].ctorParams.empty());
                 // A bare (uninitialized) local must be brought to a valid state so its scope-exit dtor — and
                 // any `f = …` that first RELEASES the old field — don't free stack garbage. Collections /
                 // extern structs zero-init (no kama ctor); a destructible `resource` WITHOUT a zero-arg ctor
@@ -1313,6 +1313,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     *_out << nm << "." << f.name << " = " << kv.second.cName << "();\n";
                                     break;
                                 }
+                        }
+                        // Construction-model M8 Phase E: a polymorphic (vtable-carrying) bare local sets its
+                        // `__vptr` directly — the value-local (`.`) mirror of the synth ctor body's
+                        // `self->…__vptr = &T__vtable` store. Previously the synth default ctor did this via
+                        // `T__ctor(&r)`; with `synthCtor` removed a factory-built bare local of a polymorphic
+                        // class would otherwise dispatch through a NULL vptr. Most-derived vtable at the root slot.
+                        if (_classes[ty].hasVtable && !_classes[ty].isAbstractClass) {
+                            line(n->line); indent(depth);
+                            *_out << nm << "." << vptrPrefix(&_classes[ty]) << "__vptr = &"
+                                  << _classes[ty].name << "__vtable;\n";
                         }
                     }
                     return;   // otherwise declared-only (zero-inited empty, or a non-destructible value)
@@ -6008,14 +6018,10 @@ void CEmitter::buildVtables()
                 if (!ci->slotImpl.count(vs.name)) { ci->isAbstractClass = true; break; }
         }
 
-        // Bug 1 fix: a polymorphic class without an explicit constructor must still
-        // get one synthesized, or `new` leaves __vptr uninitialized and the first
-        // virtual call crashes. Topo order means the base is flagged first, so a
-        // derived synth ctor sees base->hasCtor and chains it.
-        if (ci->hasVtable && !ci->hasCtor && !ci->isIntrinsicColl && !ci->isExternStruct) {
-            ci->synthCtor = true;
-            ci->hasCtor   = true;   // `new` now calls the ctor; prototype gets emitted
-        }
+        // Construction-model M8 Phase E: NO synthesized default ctor. A polymorphic class is constructed
+        // only by its named `ctor`s; a factory-built bare local sets its own `__vptr` directly (see the
+        // vtable-typed bare-local store in emitLocalVariableDeclaration). "Nothing is constructible by
+        // default" (design §5) — a ctor-less polymorphic type is simply not constructible.
     }
     // Whole-program override index for devirtualization: a virtual slot must stay an indirect call
     // iff some class overrides it. A never-overridden slot (and every method of a `final` class /
@@ -9378,8 +9384,6 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
         *_out << stat << "void " << ci.name << "__ctor("
              << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
-    else if (ci.synthCtor)                                // synthesized default ctor
-        *_out << stat << "void " << ci.name << "__ctor(" << paramListC(nullptr, ci.name.c_str()) << ");\n";
     if (ci.destructible)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
     if (ci.hasVtable)   // polymorphic drop dispatcher (defined with the vtable instance)
@@ -9526,11 +9530,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             SharedArgumentList baseArgs;
             if (owner.ctorNode && owner.ctorNode->declarator && owner.ctorNode->declarator->initializer)
                 baseArgs = owner.ctorNode->declarator->initializer->args;
-            if (owner.synthCtor && owner.base->ctorNode && !owner.base->ctorParams.empty()) {
-                // A synthesized default ctor can't supply the base's required args.
-                unsupported(("'" + owner.name + "' needs an explicit constructor to pass arguments to base '"
-                             + owner.baseName + "'").c_str(), owner.node ? owner.node->line : 0);
-            } else if (owner.base->hasCtor) {
+            if (owner.base->hasCtor) {
                 indent(1);
                 *_out << emitReorderedCall(owner.baseName + "__ctor", "&self->__base",
                                           owner.base->ctorParams, baseArgs, owner.node->line) << ";\n";
@@ -9605,9 +9605,6 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         line(ci.ctorNode->line);
         emitMethodOrCtorBody(ci.name + "__ctor", "void",
                              ci.ctorNode->declarator->params, ci.ctorNode->body, ci, true);
-    } else if (ci.synthCtor) {                            // emit the synthesized default ctor
-        emitMethodOrCtorBody(ci.name + "__ctor", "void",
-                             SharedParameterList(), SharedBlock(), ci, true);
     }
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;

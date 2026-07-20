@@ -1,18 +1,21 @@
-// M19 regression (Bug 1): a polymorphic class with NO explicit constructor must
-// still get its vtable initialized, or the first virtual call segfaults.
-// M25b: polymorphism is opt-in — `virtual class`, a `protected virtual` hook behind a
-// public method; the sealed leaf is a `final class`.
+// M19 regression (Bug 1) → M8 Phase E: a polymorphic class's vtable pointer must be initialized when the
+// object is BUILT, or the first virtual call segfaults. Construction is now always via a named `ctor` (no
+// synthesized default ctor — "nothing is constructible by default"); the factory builds a bare local of a
+// polymorphic class, whose `__vptr` is set directly by the vtable-typed bare-local store (the replacement
+// for the removed synth-ctor vptr init). M25b: polymorphism is opt-in — `virtual`/`protected virtual` hook
+// behind a public method; the sealed leaf is a `final` class.
 type virtual resource Shape {
     protected virtual fn int32 val() { return 0; }
     public fn int32 plus1() { return this.val() + 1; }   // public surface dispatches virtually
 }
 type final resource Box extends Shape {
-    int32 n;                                          // private (kind-decides); set via accessor
+    int32 n;                                          // private (kind-decides); set via accessor, zero-fills at build
+    public ctor make() { Box b; return give b; }      // bare local -> __vptr set by the vtable-typed store
     public fn void put(int32 v) { this.n = v; }
     protected override fn int32 val() { return this.n; }
 }
 fn int32 main() {
-    Box b = Box();   // ctor-less derived class
+    Box b = Box.make();   // named ctor; the built object carries a valid vptr
     b.put(v: 41);
     return b.plus1();    // virtual dispatch -> Box.val() = 41, +1 = 42
 }
