@@ -104,7 +104,13 @@ removes today's vtable-only synthesized default ctor: a polymorphic type must de
   (`type contract HeapOwner<T> for resource { ctor adopt(Ptr<T> raw); }`); conformance matches it by name
   to a `ctor` (or, during coexistence, a self-returning `static fn`) impl. This is the one construction
   capability a contract carries — a contract still holds no state and has no instance construction of its
-  own. (Storing a raw `Ptr` needs no `unsafe`; only dereferencing does.)
+  own. (Storing a raw `Ptr` needs no `unsafe`; only dereferencing does.) A contract's ctor requirement may
+  be infallible (`ctor make(...)`) or fallible (`ctor Result<This, E> open(...)`), same as any ctor.
+  **Generic code bounded by such a contract may construct through the type parameter** —
+  `fn T fresh<T: Something>(int32 s) { return T.something(someval: s); }` lowers, per monomorphization, to
+  the concrete implementer's ctor. This is why there is **no privileged `Default` contract**: "default
+  construction" is simply a contract that requires a zero-arg ctor; a designer defines whatever
+  construction contract they need and bounds on it.
 - **extern-`value` FFI stays outside this model** (the C-POD aggregate-init path is unchanged).
 - **A default-parameter convenience factory that returns a *different specialization* stays `static fn`.**
   `Map::withCapacity` / `Set::withCapacity` take no allocator, so they return the DEFAULT-allocator
