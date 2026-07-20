@@ -31,7 +31,7 @@ fn int32 main() {
     pq.push(item: 99);                                     // peek → 99
 
     // Caller-owned allocator AND presized, via a GlobalAllocator value (the custom-`A` presize path).
-    Map<int32, int32> m2 = Map.withCapacityAndAllocator(allocator: GlobalAllocator(), capacity: 4);
+    Map<int32, int32> m2 = Map.withCapacityAndAllocator(allocator: GlobalAllocator.make(), capacity: 4);
     m2.put(key: 2, value: 6);                              // 6
 
     Map<int32, int32> viaBridge = Map::empty();            // `::` bridge on a ctor still works

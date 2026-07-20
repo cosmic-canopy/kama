@@ -18,16 +18,16 @@ type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable(bare: 
     Ptr<T> p;
     Ptr<Ctrl> c;
     A alloc;
-    public Weak(Ptr<T> p, Ptr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c, A alloc) { Weak<T, A> r; r.p = p; r.c = c; r.alloc = alloc; return give r; }
     public fn Weak<T, A> copy() {                                     // Copyable -> another weak handle
         unsafe { this.c[0].weak = this.c[0].weak + 1; }
-        return Weak(p: this.p, c: this.c, alloc: this.alloc);
+        return Weak.make(p: this.p, c: this.c, alloc: this.alloc);
     }
     public fn Optional<Shared<T, A>> tryUpgrade() {
         unsafe {
             if (this.c[0].strong > 0) {
                 this.c[0].strong = this.c[0].strong + 1;
-                return Optional::Some(value: Shared(p: this.p, c: this.c, alloc: this.alloc));   // cross-type ctor
+                return Optional::Some(value: Shared.make(p: this.p, c: this.c, alloc: this.alloc));   // cross-type ctor
             }
         }
         return Optional::None;

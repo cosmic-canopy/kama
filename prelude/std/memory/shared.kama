@@ -31,7 +31,7 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     Ptr<T> p;
     Ptr<Ctrl> c;
     A alloc;
-    public Shared(Ptr<T> p, Ptr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }   // shares an existing ctrl
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c, A alloc) { Shared<T, A> r; r.p = p; r.c = c; r.alloc = alloc; return give r; }   // shares an existing ctrl
     // Deserialize INTO a Shared: a graph root is heap + shared-owned, so `decode::<Shared<N>>` reconstructs the
     // whole object graph and hands back the owning root handle. Delegates to `T::deserialize` — for a graph type
     // `N` the `@generate(Deserialize)` intrinsic emits `N::deserialize` returning `Shared<N>` (the two-pass graph
@@ -59,16 +59,16 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     public ctor adoptIn(Ptr<T> raw, A allocator) {
         Ptr<Ctrl> ctrl;
         unsafe { ctrl = cast<Ptr<Ctrl>>(allocator.allocate(bytes: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
-        return Shared(p: raw, c: ctrl, alloc: allocator);
+        return Shared.make(p: raw, c: ctrl, alloc: allocator);
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     public fn Shared<T, A> copy() {                                   // Copyable -> retain, carry the allocator
         unsafe { this.c[0].strong = this.c[0].strong + 1; }
-        return Shared(p: this.p, c: this.c, alloc: this.alloc);
+        return Shared.make(p: this.p, c: this.c, alloc: this.alloc);
     }
     public fn Weak<T, A> downgrade() {
         unsafe { this.c[0].weak = this.c[0].weak + 1; }
-        return Weak(p: this.p, c: this.c, alloc: this.alloc);        // cross-type -> Weak's public ctor
+        return Weak.make(p: this.p, c: this.c, alloc: this.alloc);        // cross-type -> Weak's public ctor
     }
     ~Shared() {
         unsafe {

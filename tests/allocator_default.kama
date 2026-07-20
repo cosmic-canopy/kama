@@ -6,7 +6,7 @@ import std::collections::{DynamicArray, Map};
 fn int32 main() {
     int32 r = 0;
     DynamicArray<int32> a = DynamicArray.empty();                                         // A = GlobalAllocator (default)
-    DynamicArray<int32, GlobalAllocator> b = DynamicArray::withAllocator(allocator: GlobalAllocator());
+    DynamicArray<int32, GlobalAllocator> b = DynamicArray::withAllocator(allocator: GlobalAllocator.make());
     int32 i = 0; while (i < 50) { a.add(item: i); b.add(item: i); i = i + 1; }
     if (a.length() == 50 && b.length() == 50 && a[49] == 49) { r = r + 25; }
 
