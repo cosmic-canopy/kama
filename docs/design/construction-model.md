@@ -87,15 +87,25 @@ removes today's vtable-only synthesized default ctor: a polymorphic type must de
 `new File.open(...)` → **`Result<Owned<File>, E>`** for a fallible ctor (`new` boxes `Ok`, propagates
 `Err`). Fallible-`new` is the resource-acquisition idiom and is in scope (sequenced after infallible-`new`).
 
-## 6. Full enforcement (after migration)
+## 6. Full enforcement (after migration) — ✅ DONE (M8 Phase E)
 
-- The **class-named ctor *declaration*** (`public Rect(w, h) {}`) becomes an error → declare a named
-  `ctor make(...)`. The nameless `Type(...)` call form is gone entirely; all construction is `Type.name(...)`.
-- A `static fn` returning the enclosing type becomes an error → use a `ctor`. (Genuine static utilities that
-  return *other* types — `Vec3::dot` → `float` — stay `static fn`, called with `::`.)
+- The **class-named ctor *declaration*** (`public Rect(w, h) {}`) is now an error → declare a named
+  `ctor make(...)`. ✅ *(EXEMPT until M8e: `@generate(Serialize/Deserialize)` types whose `onConstruction`
+  hook injects at ctor-end.)*
+- The nameless **`Type(...)` / `new Type(...)` call form** is now an error → all construction is dot-on-type
+  `Type.name(...)`. It silently dropped its args / left the object un-constructed, so this closes a wrong-value
+  hole. ✅ *(A truly ctor-less no-arg raw struct still default-inits.)*
+- The vtable-only **synthesized default ctor is removed** — a polymorphic bare local sets its own `__vptr`
+  directly (the value-local mirror of the synth ctor's vptr store). ✅
+- A `static fn` returning the enclosing type becomes an error → use a `ctor`. *(Genuine static utilities that
+  return other types — `Vec3::dot` → `float` — stay `static fn`.)* **DEFERRED to M8e:** the only self-returning
+  `static fn`s left are `deserialize` (a Deserialize CONTRACT method → `Result<This>`) and `File.open`, which
+  migrate to ctors with the error-model work.
 - A `resource` with owning (`Owned`/`Shared`) fields must construct through a ctor — definite-assignment
-  guarantees the never-null seal (closing a latent hole where a ctorless owning-field resource null-inits the
-  field).
+  guarantees the never-null seal. ✅
+- **Generic named-ctor spelling — turbofish ON THE TYPE, uniform** *(Step 0)*: `T::<Args>.make(…)` and
+  `new T::<Args>.make(…)`; `::` keeps it conflict-free, and the ctor's own turbofish slot stays free for a
+  future ctor with its own generics. The retired `T.make::<Args>(…)` (type args on the ctor) is a hard error.
 
 ## 7. Carve-outs
 
@@ -196,7 +206,14 @@ single-layer fallible serde, `@generate(of, zero)`). **M7 (stdlib migration) don
 transparent values carry `@generate(of)`, and each container has a named `empty()` — all callable dot-on-type
 or via the coexistence `::` bridge, triple-green. **M7 also required three emitter enablers (M7.0):** a generic
 `ctor`'s body/return-type now specialize per instance, and a dot-on-type ctor call resolves a generic receiver
-both by LHS inference and via an explicit turbofish `Type.ctor::<T>(...)`. Deferred to **M8** (coupled with the
-enforcement flip): the resource instance-ctors that build in place (`Arena`, `TcpStream(fd)`, `JsonWriter`/
-`JsonReader`, FixedArray's sized primary), removing the nameless `Type(...)` primaries, the ~340-site call
-sweep to `Type.name(...)`, and the error-model tail (§8).
+both by LHS inference and via an explicit turbofish. **M8a–M8d done** (contracts may require a `ctor`;
+the `default` modifier + completeness generalization; the collections four-ctor matrix + `when [A: default]`
+gate; the automatic never-null seal; the full lib/prelude/bench legacy-ctor sweep). **✅ M8 Phase E (the
+enforcement flip) DONE** — the point of no return: legacy class-named ctor DECLs and nameless `Type(…)` /
+`new Type(…)` calls are hard errors (§6); the vtable-only synth default ctor is removed (a polymorphic bare
+local sets its own `__vptr`); the generic-ctor spelling is turbofish-on-the-type (`T::<Args>.make(…)`,
+uniform); the whole test corpus (~90 fixtures) migrated to named ctors; triple-green native 629 / SAN 616 /
+WASM 607. **Deferred to M8e (the final milestone):** the self-returning `static fn` reject (blocked on
+migrating `deserialize` (a Deserialize contract method) + `File.open` to ctors), the `E: Error` bound +
+~44 `Result<_, int32>` sites, dropping `onConstruction` (two fixtures keep a legacy ctor under a Phase-E
+exemption until then), and the SPEC construction-section reconciliation → tag 1.0.

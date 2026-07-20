@@ -99,11 +99,14 @@ genuinely later-track or opt-in.
   `when [A: default]` (custom-`A` boxes use `adoptIn`); to keep `HeapOwner` conformance (heapOwnerTarget /
   owning-field detection) working, a contract-required `ctor` is now a compile-time guarantee, **not** a runtime
   vtbl slot. And the M8b-deferred **non-zero `default` fill** landed (a field whose `default` allocates is
-  filled by calling its ctor, not zero-inited). **STILL OPEN → M8d.2:** the coexistence-era nameless primary
-  (`DynamicArray()`) still leaves `alloc` unassigned for a custom `A` without rejection (`checkCtorNeverNull`
-  guards only owning pointers), and the nameless `Type()` call form persists — both closed by removing the
-  nameless primaries (unblocking a `checkCtorNeverNull` widen) + the ~160-site call sweep + the enforcement
-  flip. Must land before tag 1.0.
+  filled by calling its ctor, not zero-inited). **✅ CLOSED (M8d.2 + M8 Phase E):** the coexistence-era
+  nameless primaries were removed (M8d.2) and the whole legacy construction surface is now a hard compile
+  error (Phase E): a legacy class-named ctor DECL, and a nameless `Type(…)` / `new Type(…)` call on a
+  named-ctor type (which silently dropped its args / left the object un-constructed), both reject and point at
+  `Type.make(…)`. The vtable-only synth default ctor is gone (a polymorphic bare local sets its own `__vptr`).
+  **Remaining for M8e:** the self-returning `static fn` reject (blocked on migrating `deserialize` (a
+  Deserialize CONTRACT method → `Result<This>`) and `File.open` to ctors) + the `E: Error` bound + drop
+  `onConstruction` (its two fixtures keep a legacy ctor under a Phase-E exemption until then).
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by
@@ -130,20 +133,16 @@ genuinely later-track or opt-in.
   abstraction: a typed `Slot<T>` (kama's `MaybeUninit`) with `write(give x)` / `take() -> T` intrinsics so
   container authors stop hand-rolling both directions. Spike: is the wrapper worth the surface, or does the
   handful of container sites not justify it? Non-blocking; pure ergonomics for stdlib authors, not users.
-- **Generic named-ctor type-arg spelling — pick ONE (favor one way to do a thing).** A generic named ctor
-  called with explicit type args currently takes them in *different positions* by context: a plain call is
-  `T.make::<Args>(…)` (turbofish on the ctor — the M7.0 form), but through `new` only `new T<Args>.make(…)`
-  parses (args in *type* position; the turbofish-after-ctor form `new T.make::<Args>(…)` is a parse error —
-  found during the M8d.2 BTreeNode migration). Two spellings for the same intent. The SPEC's own rule
-  ([SPEC.md](SPEC.md) §Turbofish, ~1140: *"turbofish reaches only generic **functions**; a generic **type**
-  is written `Box<int32>` in type position"*) points at the canonical answer: the args being supplied are the
-  **enclosing type's** params, so they belong in type position — **`T<Args>.make(…)` everywhere**, with `::<>`
-  reserved for a ctor's *own* generic params (rare). Decide whether to (a) make plain calls also accept
-  `T<Args>.make(…)` and deprecate/retire the `T.make::<Args>(…)` turbofish form, or (b) teach `new` to accept
-  the turbofish form too. **Settle before the M8 Phase-E enforcement flip** (which locks the construction
-  surface) so 1.0 ships one spelling; reconcile the SPEC turbofish note + the stale `new T<Args>(…)`
-  nameless-primary examples (SPEC ~111/117) at the same M8e doc pass. Low effort if (a); the sweep already
-  uses the turbofish form pervasively in the stdlib, so migrating those call sites is mechanical.
+- **Generic named-ctor type-arg spelling — ✅ RESOLVED (M8 Phase E Step 0): turbofish ON THE TYPE, uniform.**
+  A generic named ctor's explicit type args always ride the TYPE via turbofish, in BOTH plain-call and `new`
+  positions: `T::<Args>.make(…)` and `new T::<Args>.make(…)`. Chosen over bare type-position `T<Args>.make(…)`
+  because keeping the `::` disambiguator makes it conflict-free in plain-expression position (a bare `T<Args>`
+  is ambiguous with less-than), and the ctor's own turbofish slot stays free for a future ctor with its OWN
+  generics (`T::<TypeArgs>.make::<CtorArgs>(…)`). The stdlib was swept `X.make::<A>(` → `X::<A>.make(`; the
+  retired `X.make::<A>(…)` (type args on the ctor) is now a hard error redirecting to the on-type form.
+  **Remaining (M8e doc pass):** reconcile the SPEC turbofish note (~1140) + the stale nameless-construction
+  examples (`new T(…)` / `T(…)`, e.g. SPEC ~111/117/366/…) to the named-ctor surface — the SPEC construction
+  section has been deferred to the design doc (`docs/design/construction-model.md`) throughout the campaign.
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
