@@ -25,16 +25,16 @@ extern fn int32  kama_EINTR();
 enum OpenMode { Read, Write }
 
 // File metadata (extensible — mtime/permissions later).
+@generate(of)
 type value Metadata {
     public usize size;
     public bool isDir;
-    public Metadata(usize size, bool isDir) { this.size = size; this.isDir = isDir; }
 }
 
 // An open file that closes its descriptor on drop (RAII). Move-only.
 type resource File {
     int32 fd;
-    private File(int32 fd) { this.fd = fd; }
+    private ctor make(int32 fd) { File r; r.fd = fd; return give r; }
 
     // Open a file for reading or writing (Write creates/truncates). The returned `File` closes on drop.
     public static fn Result<File, IoError> open(ref string path, OpenMode mode) {
@@ -43,7 +43,7 @@ type resource File {
             case Write: kama_open_create(path: path.cstr());
         };
         if (fd < 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: File(fd: fd));
+        return Result::Ok(value: File.make(fd: fd));
     }
 
     // Read up to `into.length()` bytes into `into`; returns the count (0 = end of file). EINTR-retried.
@@ -120,7 +120,7 @@ fn Result<Metadata, IoError> stat(ref string path) {
     int32 isdir = 0;
     int32 rc = kama_path_stat(path: path.cstr(), outSize: addr(of: sz), outIsDir: addr(of: isdir));
     if (rc != 0) { return Result::Err(error: lastError()); }
-    return Result::Ok(value: Metadata(size: cast<usize>(sz), isDir: isdir != 0));
+    return Result::Ok(value: Metadata.of(size: cast<usize>(sz), isDir: isdir != 0));
 }
 
 // Delete a file. Ok on success; Err(NotFound) if the path did not exist.

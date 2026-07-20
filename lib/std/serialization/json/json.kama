@@ -17,12 +17,14 @@ type resource JsonWriter implements Serializer {
     bool err;              // STICKY error flag (mirror of JsonReader)
     SerError code;         // the recorded write error
 
-    public JsonWriter() {
+    public ctor make() {
+        JsonWriter r;
         DynamicArray<uint8> b = DynamicArray.empty();
-        this.buf = give b;
-        this.needComma = false;
-        this.err = false;
-        this.code = SerError::NotRepresentable;
+        r.buf = give b;
+        r.needComma = false;
+        r.err = false;
+        r.code = SerError::NotRepresentable;
+        return give r;
     }
 
     // --- low-level byte output ---
@@ -156,7 +158,7 @@ type resource JsonWriter implements Serializer {
 // value's vtable travels in the fat pointer, sidestepping cross-module static-vtable visibility. A `value`
 // copies cheaply; pass `copy`/`give` for a `resource` you want to keep or move.
 fn Result<string, std::memory::Owned<Error>> encode(Serialize v) {
-    JsonWriter w = JsonWriter();
+    JsonWriter w = JsonWriter.make();
     Serializer s = w;              // borrow the writer behind the Serializer interface
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
     match (give r) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
@@ -179,13 +181,15 @@ type resource JsonReader implements Deserializer {
     int32 objMark;      // start of the graph `objects` table (for the two-pass rewind); 0 until beginGraph
     DeError code;       // the specific error `failWith` recorded; `Malformed` by default
 
-    public JsonReader(string src) {
-        this.len = cast<int32>(src.length());
-        this.src = give src;
-        this.pos = 0;
-        this.err = false;
-        this.objMark = 0;
-        this.code = DeError::Malformed;
+    public ctor make(string src) {
+        JsonReader r;
+        r.len = cast<int32>(src.length());
+        r.src = give src;
+        r.pos = 0;
+        r.err = false;
+        r.objMark = 0;
+        r.code = DeError::Malformed;
+        return give r;
     }
 
     // --- low-level cursor ---
@@ -423,6 +427,6 @@ type resource JsonReader implements Deserializer {
 // ctor: zero-init + field-set), carrying any parse failure in the reader's sticky error flag; this wraps that
 // into a `Result` after checking `failed()`.
 fn Result<T, Owned<Error>> decode<T: Deserialize>(string src) {
-    JsonReader r = JsonReader(src: give src);
+    JsonReader r = JsonReader.make(src: give src);
     return T::deserialize(r: r);   // fallibility now lives inside the ctor (sticky check + boxed DeError)
 }
