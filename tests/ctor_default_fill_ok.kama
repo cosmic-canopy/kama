@@ -1,0 +1,23 @@
+// Construction-model M8b: a value field whose type HAS a `default` ctor may be left unassigned in another
+// type's ctor — the compiler supplies the default (here a zero default via zero-init; the non-zero fill
+// codegen lands with M8c). `Thing` marks a `default ctor`, so a `Thing` field is default-fillable and
+// `Holder.make` need not assign it. (Reject counterpart: xfail/field_no_default, where the field's type has
+// no `default`.)
+type value Thing {
+    public int32 n;
+    public default ctor blank() { Thing t; t.n = 0; return t; }
+}
+type value Holder {
+    public Thing t;
+    public int32 tag;
+    public ctor make(int32 tg) {
+        Holder h;
+        h.tag = tg;
+        return h;             // `t` (a `Thing`, has a `default`) left unassigned -> filled with its default
+    }
+    public fn int32 sum() { return this.t.n + this.tag; }
+}
+fn int32 main() {
+    Holder h = Holder.make(tg: 42);
+    return h.sum();          // t.n defaults to 0, + tag 42 = 42
+}

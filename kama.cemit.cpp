@@ -1256,8 +1256,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // (e.g. a factory-built one) MUST zero-init too — else its `Owned`/`Shared` field is garbage
                 // and the first assignment's "drop old" frees a wild pointer (glibc tolerates it, macOS
                 // aborts). A type WITH a default ctor is brought up by that ctor (below) instead.
+                // Construction-model M8b: a bare aggregate local with no default ctor + no initializer (a
+                // factory building a value field-by-field) also zero-inits — so any DEFAULT-FILLABLE field
+                // left unassigned reaches its zero default (`ZERO COUNTS`) rather than stack garbage. The
+                // non-zero default fill (calling the field type's `default` ctor) lands with M8c.
                 bool zeroInit = _classes[ty].isIntrinsicColl || _classes[ty].isExternStruct
-                    || (_classes[ty].destructible && !hasDefaultCtor && !d->initializer);
+                    || (!hasDefaultCtor && !d->initializer);
                 *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // track empty resources for move analysis
@@ -7100,6 +7104,24 @@ void CEmitter::checkCtorNeverNull(ClassInfo& owner, SharedBlock body)
                         owner.ctorNode ? owner.ctorNode->line : (owner.node ? owner.node->line : 0));
 }
 
+// Construction-model M8b: is a field of concrete type `c` DEFAULT-FILLABLE — i.e. may a ctor leave it
+// unassigned (the compiler supplies its default) rather than requiring an explicit assignment?
+//   - not a user aggregate (primitive, raw `Ptr<T>`, enum): YES — zero is a valid value (deref is `unsafe`).
+//   - an intrinsic collection (`List`/`Array`/`String`/`Weak`/…): YES — zero is a valid EMPTY value.
+//   - a user type with an explicit `default` ctor: YES — the default designates a valid zero-arg build.
+//   - otherwise (a value with no `default`, e.g. a stateful `BumpAllocator`): NO — a zero handle is garbage,
+//     so it must be assigned. This is the M7.2 allocator footgun, gated structurally per instantiation.
+// Owning pointers (`Owned`/`Shared`) are handled by the caller's never-null set, NOT here.
+bool CEmitter::isDefaultFillable(const std::string& c)
+{
+    auto it = _classes.find(c);
+    if (it == _classes.end()) return true;                 // primitive / Ptr / enum-not-in-_classes
+    ClassInfo& fc = it->second;
+    if (fc.isIntrinsicColl) return true;                   // zero = valid empty collection / null Weak
+    for (auto& kv : fc.ctors) if (kv.second.isDefaultCtor) return true;
+    return false;
+}
+
 // Enforce complete-init on a NAMED ctor (`ctor make(…)`) — a static factory returning the enclosing type
 // (or `Result<This,E>`). Unlike a legacy instance ctor (which mutates `this`, sealed by checkCtorNeverNull),
 // a factory builds a value via a bare local + field assignments, or returns a fresh object by DELEGATION
@@ -7113,10 +7135,14 @@ void CEmitter::checkCtorNeverNull(ClassInfo& owner, SharedBlock body)
 // trusted during coexistence; that gap closes at M8 when self-returning `static fn` becomes an error).
 void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
 {
-    std::set<std::string> owning;
-    for (auto& f : owner.fields)
-        if (!heapOwnerTarget(cType(f.type)).empty()) owning.insert(f.name);   // Owned/Shared (not Weak)
-    if (owning.empty() || !body || !body->statements) return;                 // no owning fields => nothing to seal
+    std::set<std::string> owning;       // Owned/Shared fields — never-null
+    std::set<std::string> mustAssign;   // M8b: owning ∪ non-default-fillable value fields (e.g. a stateful `A alloc`)
+    for (auto& f : owner.fields) {
+        std::string fc = cType(f.type);                                       // resolves a field-`T`/`A` per instance
+        if (!heapOwnerTarget(fc).empty()) { owning.insert(f.name); mustAssign.insert(f.name); }   // Owned/Shared (not Weak)
+        else if (!isDefaultFillable(fc))  { mustAssign.insert(f.name); }      // a value with no `default` → must assign
+    }
+    if (mustAssign.empty() || !body || !body->statements) return;             // nothing to seal
 
     std::set<std::string> ownerLocals;                       // locals whose declared type is this owner
     std::set<std::string> completeByInit;                    // ownerLocals declared with a constructing initializer
@@ -7159,7 +7185,7 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
                 if (completeByInit.count(*id->value)) return;
                 auto& done = assigned[*id->value];
                 for (auto& f : owner.fields)
-                    if (owning.count(f.name) && !done.count(f.name)) { bad = f.name; badLine = e->line; return; }
+                    if (mustAssign.count(f.name) && !done.count(f.name)) { bad = f.name; badLine = e->line; return; }
             }
         }
         // else — a construction / delegating factory call / param: complete by delegation.
@@ -7179,14 +7205,19 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
             if (topLevel) {
                 std::pair<std::string, std::string> lf = localFieldRef(as->unaryExpression);
-                if (!lf.first.empty() && owning.count(lf.second)) assigned[lf.first].insert(lf.second);
+                if (!lf.first.empty() && mustAssign.count(lf.second)) assigned[lf.first].insert(lf.second);
             }
         } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
             std::string bad; int line = 0;
             classify(ret->expression, bad, line);
-            if (!bad.empty())
-                unsupported(("'" + bad + "' must be set before the constructor returns "
-                             "(`Owned`/`Shared` are never-null)").c_str(), line ? line : st->line);
+            if (!bad.empty()) {
+                if (owning.count(bad))
+                    unsupported(("'" + bad + "' must be set before the constructor returns "
+                                 "(`Owned`/`Shared` are never-null)").c_str(), line ? line : st->line);
+                else
+                    unsupported(("'" + bad + "' has no `default` — assign it in the constructor "
+                                 "(or give its type a `default ctor`)").c_str(), line ? line : st->line);
+            }
         } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
             walk(iff->ifStatement, false);                    // branch bodies don't count as unconditional assigns
             walk(iff->elseStatement, false);

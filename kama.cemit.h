@@ -1036,6 +1036,11 @@ private:
                                 std::set<std::string>& assigned, std::set<std::string>& locals, bool topLevel);
     void        checkCtorNeverNull(ClassInfo& owner, SharedBlock body);
     void        checkNamedCtorComplete(ClassInfo& owner, SharedBlock body);
+    // Construction-model M8b: a value field may be left unassigned in a ctor iff its type is DEFAULT-FILLABLE
+    // (a primitive / raw `Ptr` — zero is a valid value; an intrinsic collection — zero is a valid empty; or a
+    // type with an explicit `default` ctor). Otherwise it must be explicitly assigned. `concreteCType` is the
+    // field's type ALREADY resolved to its concrete C name (under the active _typeSubst / per instance).
+    bool        isDefaultFillable(const std::string& concreteCType);
     void        checkDefiniteAssignment(SharedBlock body);   // owning read-before-assign is a compile error
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;

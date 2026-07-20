@@ -356,6 +356,11 @@ extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 type value GlobalAllocator implements Allocator {
     public GlobalAllocator() {}
+    // The canonical zero-arg build (construction-model M8b): marks GlobalAllocator's zero as a valid `default`
+    // — it is a stateless, zero-size handle, so a defaulted `A alloc` field (`Owned`/`DynamicArray`/`Map`/…)
+    // may be left unassigned for the default fill rather than requiring an explicit assignment. Coexists with
+    // the nameless primary until M8d removes it.
+    public default ctor make() { GlobalAllocator g; return g; }
     public fn Ptr allocate(usize bytes) {
         Ptr p;
         unsafe { p = malloc(n: bytes); }

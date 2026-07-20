@@ -1,0 +1,18 @@
+// Construction-model M8b: a value field whose type has NO `default` ctor must be explicitly assigned in
+// every ctor — leaving it for a "default fill" is a compile error (the M7.2 allocator footgun, generalized
+// from owning pointers to any non-default-fillable value field). `Widget` has a `ctor of`, but it is NOT
+// marked `default`, so a `Widget` field cannot be left unassigned.
+type value Widget {
+    public int32 n;
+    public ctor of(int32 n) { Widget w; w.n = n; return w; }
+}
+type value Holder {
+    Widget w;
+    public int32 tag;
+    public ctor make(int32 t) {
+        Holder h;
+        h.tag = t;
+        return h;             // `w` (a `Widget`, no `default`) is never assigned -> rejected
+    }
+}
+fn int32 main() { return 0; }
