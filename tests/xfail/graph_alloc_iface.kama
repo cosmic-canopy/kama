@@ -11,14 +11,14 @@ type contract Shape for both { fn int32 area(); }
 @generate(Serialize, Deserialize, noOnConstruction)
 type resource Circle implements Shape {
     @field int32 r;
-    public Circle(int32 r) { this.r = r; }
+    public ctor make(int32 r) { Circle c; c.r = r; return give c; }
     public fn int32 area() { return this.r * this.r; }
 }
 
 @generate(Serialize, Deserialize, noOnConstruction)
 type resource Scene {
     @field Shared<Shape, BumpAllocator> a;   // ERROR: stateful allocator on a graph edge
-    public Scene(Shared<Shape, BumpAllocator> a) { this.a = give a; }
+    public ctor make(Shared<Shape, BumpAllocator> a) { Scene r; r.a = give a; return give r; }
 }
 
 fn int main() {

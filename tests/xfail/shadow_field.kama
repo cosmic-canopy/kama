@@ -2,7 +2,7 @@
 // (The ctor's param `w` sharing the field name `w` — the `this.x = x` idiom — is ALLOWED.)
 type value Box {
     int32 w;
-    public Box(int32 w){ this.w = w; }                          // param==field: allowed
+    public ctor make(int32 w){ Box r; r.w = w; return give r; }                          // param==field: allowed
     public fn int32 doubled(){ int32 w = 2; return w * this.w; }   // ERROR: local `w` shadows field `w`
 }
-fn int32 main() { Box b = Box(w: 3); return b.doubled(); }
+fn int32 main() { Box b = Box.make(w: 3); return b.doubled(); }

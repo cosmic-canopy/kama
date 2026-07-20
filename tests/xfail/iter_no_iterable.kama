@@ -3,7 +3,7 @@
 // declares `implements Iterable<T>`.
 type value RangeIter implements Iterator<int32> {
     int32 cur; int32 end;
-    public RangeIter(int32 cur, int32 end) { this.cur = cur; this.end = end; }
+    public ctor make(int32 cur, int32 end) { RangeIter r; r.cur = cur; r.end = end; return give r; }
     public fn Optional<int32> next() {
         if (this.cur >= this.end) { return Optional::None; }
         int32 v = this.cur; this.cur = this.cur + 1; return Optional::Some(value: v);
@@ -11,11 +11,11 @@ type value RangeIter implements Iterator<int32> {
 }
 type value Range {                       // has iterator() but does NOT `implements Iterable<int32>`
     int32 n;
-    public Range(int32 n) { this.n = n; }
-    public fn RangeIter iterator() { return RangeIter(cur: 0, end: this.n); }
+    public ctor make(int32 n) { Range r; r.n = n; return give r; }
+    public fn RangeIter iterator() { return RangeIter.make(cur: 0, end: this.n); }
 }
 fn int32 main() {
-    Range r = Range(n: 3);
+    Range r = Range.make(n: 3);
     int32 s = 0;
     foreach (int32 x in r) { s = s + x; }   // ERROR: Range does not `implements Iterable<int32>`
     return s;

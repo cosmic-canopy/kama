@@ -4,7 +4,7 @@
 import std::collections::{DynamicArray};
 type value Counter {
     int32 n;
-    public Counter(int32 start) { this.n = start; }
+    public ctor make(int32 start) { Counter r; r.n = start; return give r; }
     public fn int32 get() { return this.n; }
     public fn void bump(int32 by) { this.n = this.n + by; }   // mutates
 }
@@ -13,7 +13,7 @@ fn void touch(const ref DynamicArray<Counter> xs) {
 }
 fn int32 main() {
     DynamicArray<Counter> xs = DynamicArray.empty();
-    Counter a = Counter(start: 1);
+    Counter a = Counter.make(start: 1);
     xs.add(item: a);
     touch(xs: ref xs);
     return xs[0].get();

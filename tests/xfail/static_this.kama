@@ -1,7 +1,7 @@
 // M31a — a `static` method has no `this`, so a bare field reference is a clean error.
 type value Vec2 {
     int32 x;
-    public Vec2(int32 x) { this.x = x; }
+    public ctor make(int32 x) { Vec2 r; r.x = x; return give r; }
     public static fn int32 bad() { return x; }   // `x` is `this.x` — unavailable in a static method
 }
 fn int32 main() { return Vec2::bad(); }

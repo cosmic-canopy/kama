@@ -1,7 +1,7 @@
 // A `ref T` result must borrow `this` or a `ref` parameter — a place into a local would dangle.
 type value B {
     InlineArray<int32, 4> d;
-    public B() { this.d = [0; 4]; }
+    public ctor make() { B r; r.d = [0; 4]; return give r; }
     public fn ref int32 bad(usize i) { InlineArray<int32, 4> local = [0; 4]; return local[i]; }
 }
-fn int32 main() { B b = B(); return b.bad(i: 0); }
+fn int32 main() { B b = B.make(); return b.bad(i: 0); }

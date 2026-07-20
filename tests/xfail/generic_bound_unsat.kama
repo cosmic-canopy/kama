@@ -3,10 +3,10 @@
 type contract Weighable for both { fn int32 weight(); }
 type value Feather {
     int32 g;
-    public Feather(int32 g) { this.g = g; }
+    public ctor make(int32 g) { Feather r; r.g = g; return give r; }
 }
 fn int32 heft<T: Weighable>(T x) { return x.weight(); }
 fn int32 main() {
-    Feather f = Feather(g: 1);
+    Feather f = Feather.make(g: 1);
     return heft(x: f);   // ERROR: Feather does not satisfy bound Weighable
 }

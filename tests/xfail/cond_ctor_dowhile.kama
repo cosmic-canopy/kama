@@ -1,5 +1,9 @@
 // M31 — `do`/`while` conditions are NOT hoistable (its `continue` must skip to the bottom condition,
 // which a naive while(1) rewrite breaks). An inline construct here is a clean "bind to a local" error.
+// NOTE: legacy nameless inline-ctor retained deliberately — this restriction is specific to the
+// nameless inline-ctor materialization (a hoisted temp). The new `V.make(...)` factory form is a plain
+// call expression that needs no hoisting, so it compiles fine here; this fixture retires at the Phase-E
+// enforcement flip (delete, or convert to a positive test of a factory call in a do/while condition).
 type value V {
     public int32 x;
     public V(int32 x) { this.x = x; }

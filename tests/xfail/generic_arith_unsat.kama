@@ -3,14 +3,14 @@ type contract Arithmetic for both { This operator+(This rhs); }
 
 type value Plain {
     public int32 v;
-    public Plain(int32 v) { this.v = v; }   // no operator+
+    public ctor make(int32 v) { Plain r; r.v = v; return give r; }   // no operator+
 }
 
 fn T sum<T: Arithmetic>(T a, T b) { return a + b; }
 
 fn int32 main() {
-    Plain p = Plain(v: 1);
-    Plain q = Plain(v: 2);
+    Plain p = Plain.make(v: 1);
+    Plain q = Plain.make(v: 2);
     Plain r = sum(a: p, b: q);   // Plain does not satisfy Arithmetic
     return r.v;
 }

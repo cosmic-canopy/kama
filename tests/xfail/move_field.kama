@@ -1,5 +1,7 @@
 // M26f-2 — you can't `give` a `resource` value OUT of a field: it would leave the owner
 // holding a moved-from value. (Deferred to Optional<T>, M28.) Compile error.
+// NOTE: legacy nullary ctor retained deliberately — a named `ctor make` would trip the completeness
+// gate ("`r` has no default") before the give-out-of-field error; migrate at the Phase-E flip.
 type resource Res { DynamicArray<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} }
 type value Box {
     Res r;

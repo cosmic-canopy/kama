@@ -1,11 +1,11 @@
 // M31b — `==` is EXPLICIT: a `value` without `operator==` cannot be compared (no auto structural `==`).
 type value Vec2 {
     public int32 x;
-    public Vec2(int32 x) { this.x = x; }
+    public ctor make(int32 x) { Vec2 r; r.x = x; return give r; }
 }
 fn int32 main() {
-    Vec2 a = Vec2(x: 3);
-    Vec2 b = Vec2(x: 3);
+    Vec2 a = Vec2.make(x: 3);
+    Vec2 b = Vec2.make(x: 3);
     if (a == b) { return 1; }   // no operator== defined
     return 0;
 }

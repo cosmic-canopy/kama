@@ -3,11 +3,11 @@
 type contract Shape for both { fn int64 area(); }
 type value Circle implements Shape {
     int64 r;
-    public Circle(int64 r) { this.r = r; }
+    public ctor make(int64 r) { Circle c; c.r = r; return give c; }
     public fn int64 area() { return r * r; }
 }
 fn int64 read(ref Shape sh) { return sh.area(); }
 fn int main() {
-    Circle c = Circle(r: 6);
+    Circle c = Circle.make(r: 6);
     return cast<int>(read(sh: ref c));   // ERROR: ref a concrete Circle to `ref Shape`
 }

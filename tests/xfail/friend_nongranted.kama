@@ -2,8 +2,8 @@
 type value Account {
     int64 balance;
     int32 pin;
-    public Account(int64 b, int32 p) { this.balance = b; this.pin = p; }
+    public ctor make(int64 b, int32 p) { Account r; r.balance = b; r.pin = p; return give r; }
     friend audit[balance];   // granted balance only
 }
 fn int32 audit(ref Account a) { return a.pin; }   // ERROR: pin is not in the grant
-fn int main() { Account acc = Account(b: 1, p: 2); return audit(a: ref acc); }
+fn int main() { Account acc = Account.make(b: 1, p: 2); return audit(a: ref acc); }

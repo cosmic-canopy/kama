@@ -5,12 +5,12 @@ type contract Comparable<T> for both { fn int32 compareTo(T other); }
 
 type value Widget {
     int32 id;
-    public Widget(int32 id) { this.id = id; }
+    public ctor make(int32 id) { Widget r; r.id = id; return give r; }
 }
 
 fn int32 pick<T: Comparable<int32>>(T a) { return 0; }
 
 fn int32 main() {
-    Widget w = Widget(id: 1);
+    Widget w = Widget.make(id: 1);
     return pick(a: w);   // ERROR: Widget does not satisfy bound Comparable
 }

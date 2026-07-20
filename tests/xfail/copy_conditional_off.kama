@@ -3,13 +3,13 @@
 // Cell is otherwise usable.
 type resource Cell<T> implements Copyable(bare: give) when [T: Copyable] {
     T value;
-    public Cell(T v) { this.value = give v; }
-    public fn Cell<T> copy() { return Cell(v: copy this.value); }
+    public ctor make(T v) { Cell<T> r; r.value = give v; return give r; }
+    public fn Cell<T> copy() { return Cell.make(v: copy this.value); }
     ~Cell() { drop(value: this.value); }
 }
-type resource MoveOnly { int32 n; public MoveOnly(int32 n){this.n=n;} ~MoveOnly(){} public fn int32 val(){return this.n;} }
+type resource MoveOnly { int32 n; public ctor make(int32 n){MoveOnly r; r.n=n; return give r;} ~MoveOnly(){} public fn int32 val(){return this.n;} }
 fn int32 main() {
-    Cell<MoveOnly> m = Cell(v: MoveOnly(n: 9));
+    Cell<MoveOnly> m = Cell.make(v: MoveOnly.make(n: 9));
     Cell<MoveOnly> c = copy m;   // ERROR: Cell<MoveOnly> is not Copyable
     return 0;
 }
