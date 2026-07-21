@@ -1,0 +1,212 @@
+namespace std::io;
+
+// The streaming byte substrate: a `Writer` (sink) and `Reader` (source) that serde, fs, net, and fmt all
+// build on. The byte layer is BINARY-NATIVE — it moves raw `View<uint8>` with no charset assumptions, so a
+// binary serializer writes bytes straight in while text backends (json/…) layer UTF-8 on top. Errors are
+// `Result<_, IoError>` PER OP (the production model — Rust/Go/Zig `io`, and kama's own std::net already
+// agrees); the sticky-error `Serializer`/`Deserializer` token layer sits ABOVE this and latches these
+// Results. Unbounded data is first-class: read/write loop over a FIXED buffer → O(1) memory in the payload.
+
+import std::io::{IoError};
+import std::collections::{DynamicArray, FixedArray, View};
+
+export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, writeAll, pump };
+
+// A byte SINK. `write` is the partial-write PRIMITIVE: it writes UP TO bytes.length() bytes and returns the
+// count actually taken (may be `< length` when the sink is full/slow — this is how backpressure is expressed;
+// the caller loops, or uses the free `writeAll`). `flush` drains any buffered bytes to the ultimate
+// destination (an in-memory sink no-ops). Kept to these two so every impl is trivial; `writeAll`/`copy` are
+// free helpers (kama contracts carry no default methods).
+type contract Writer for resource {
+    fn Result<usize, IoError> write(View<uint8> bytes);
+    fn Result<Unit, IoError> flush();
+}
+
+// A byte SOURCE. `read` fills UP TO into.length() bytes and returns the count read; `Ok(0)` means EOF. The
+// caller loops until EOF — bounded memory regardless of how much data flows through.
+type contract Reader for resource {
+    fn Result<usize, IoError> read(View<uint8> into);
+}
+
+// Write EVERY byte, looping over the partial-write primitive until done (or error). A write that makes no
+// progress (returns 0) on a would-block sink surfaces as `WouldBlock` rather than spinning forever.
+fn Result<Unit, IoError> writeAll(Writer w, View<uint8> bytes) {
+    int32 total = bytes.length();
+    int32 off = 0;
+    while (off < total) {
+        Result<usize, IoError> r = w.write(bytes: bytes.slice(from: off, count: total - off));
+        match (r) {
+            case Err(e): { return Result::Err(error: e); }
+            case Ok(n): {
+                if (n == cast<usize>(0)) { return Result::Err(error: IoError::WouldBlock); }
+                off = off + cast<int32>(n);
+            }
+        };
+    }
+    return Result::Ok(value: Unit::Unit);
+}
+
+// Pump every byte from `from` to `to` through ONE fixed 4 KiB scratch buffer (= Go `io.Copy`; named `pump`
+// since `copy` is a keyword) — the idiom for moving unbounded data in bounded memory. Returns the total
+// byte count transferred.
+fn Result<usize, IoError> pump(Reader from, Writer to) {
+    FixedArray<uint8> scratch = FixedArray.make(size: 4096);
+    usize total = cast<usize>(0);
+    while (true) {
+        Result<usize, IoError> rr = from.read(into: scratch.view());
+        match (rr) {
+            case Err(e): { return Result::Err(error: e); }
+            case Ok(n): {
+                if (n == cast<usize>(0)) { return Result::Ok(value: total); }   // EOF
+                int32 k = cast<int32>(n);
+                Result<Unit, IoError> wr = writeAll(w: to, bytes: scratch.slice(from: 0, count: k));
+                match (wr) { case Err(e2): { return Result::Err(error: e2); } case Ok(_): {} };
+                total = total + n;
+            }
+        };
+    }
+}
+
+// The in-memory `Writer`: accumulates bytes in a growable buffer and hands them back as an owned UTF-8
+// string via `finish()`. This is the sink behind serde's `encode -> string` sugar and fmt's to-string.
+type resource StringWriter implements Writer {
+    DynamicArray<uint8> buf;
+
+    public ctor make() {
+        StringWriter r;
+        DynamicArray<uint8> b = DynamicArray.empty();
+        r.buf = give b;
+        return give r;
+    }
+
+    public fn Result<usize, IoError> write(View<uint8> bytes) {
+        int32 n = bytes.length();
+        int32 i = 0;
+        while (i < n) { this.buf.add(item: bytes[i]); i = i + 1; }
+        return Result::Ok(value: cast<usize>(n));
+    }
+
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+
+    // How many bytes have accumulated so far.
+    public fn int32 length() { return this.buf.length(); }
+
+    // Materialize the accumulated bytes as an owned string (the writer is typically dropped after).
+    public fn string finish() {
+        if (this.buf.length() == 0) { return ""; }
+        unsafe { return kama_string_from_raw(src: addr(of: this.buf[0]), start: 0, len: cast<int32>(this.buf.length())); }
+    }
+}
+
+// The in-memory `Reader`: reads out of an owned byte source (a `string`'s UTF-8 bytes). This is the source
+// behind serde's `decode(string)` sugar. Single-pass, fully streamable, bounded memory in the reader's own
+// buffer (the source itself is held whole — that is the caller's `string`, by design for the sugar path).
+type resource SliceReader implements Reader {
+    string src;
+    int32 pos;
+    int32 len;
+
+    public ctor make(string src) {
+        SliceReader r;
+        r.len = cast<int32>(src.length());
+        r.src = give src;
+        r.pos = 0;
+        return give r;
+    }
+
+    public fn Result<usize, IoError> read(View<uint8> into) {
+        int32 avail = this.len - this.pos;
+        if (avail <= 0) { return Result::Ok(value: cast<usize>(0)); }   // EOF
+        int32 want = into.length();
+        int32 k = avail < want ? avail : want;
+        int32 i = 0;
+        while (i < k) { into[i] = this.src[this.pos + i]; i = i + 1; }
+        this.pos = this.pos + k;
+        return Result::Ok(value: cast<usize>(k));
+    }
+}
+
+// A buffering `Writer` wrapper: coalesces many small writes into one downstream write (kills per-field
+// syscalls when serde streams to a file/socket). Owns its inner `W` BY VALUE — kama forbids stored borrows,
+// so a wrapper owns its sink (exactly as a collection owns its `A: Allocator`). Flush drains the buffer
+// through the inner writer's own `write` (monomorphic — no contract upcast). Its internal buffer is the
+// ring-buffer layer of the substrate.
+type resource BufWriter<W: Writer> implements Writer {
+    W inner;
+    DynamicArray<uint8> buf;
+    int32 cap;
+
+    public ctor make(W inner) {
+        BufWriter<W> r;
+        r.inner = give inner;
+        DynamicArray<uint8> b = DynamicArray.empty();
+        r.buf = give b;
+        r.cap = 4096;
+        return give r;
+    }
+
+    public fn Result<usize, IoError> write(View<uint8> bytes) {
+        int32 n = bytes.length();
+        int32 i = 0;
+        while (i < n) { this.buf.add(item: bytes[i]); i = i + 1; }
+        if (this.buf.length() >= this.cap) {
+            Result<Unit, IoError> fr = this.flush();
+            match (fr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+        }
+        return Result::Ok(value: cast<usize>(n));
+    }
+
+    public fn Result<Unit, IoError> flush() {
+        int32 total = this.buf.length();
+        int32 off = 0;
+        while (off < total) {
+            Result<usize, IoError> wr = this.inner.write(bytes: this.buf.slice(from: off, count: total - off));
+            match (wr) {
+                case Err(e): { return Result::Err(error: e); }
+                case Ok(m): {
+                    if (m == cast<usize>(0)) { return Result::Err(error: IoError::WouldBlock); }
+                    off = off + cast<int32>(m);
+                }
+            };
+        }
+        this.buf.clear();
+        return this.inner.flush();
+    }
+}
+
+// A buffering `Reader` wrapper: reads the inner source in fixed chunks and serves callers out of the buffer,
+// so many small reads cost few downstream reads. Owns its inner `R` by value (same reason as BufWriter).
+type resource BufReader<R: Reader> implements Reader {
+    R inner;
+    FixedArray<uint8> buf;
+    int32 pos;    // next unread byte in buf
+    int32 fill;   // count of valid bytes in buf
+
+    public ctor make(R inner) {
+        BufReader<R> r;
+        r.inner = give inner;
+        FixedArray<uint8> b = FixedArray.make(size: 4096);
+        r.buf = give b;
+        r.pos = 0;
+        r.fill = 0;
+        return give r;
+    }
+
+    public fn Result<usize, IoError> read(View<uint8> into) {
+        if (this.pos >= this.fill) {
+            Result<usize, IoError> rr = this.inner.read(into: this.buf.view());
+            match (rr) {
+                case Err(e): { return Result::Err(error: e); }
+                case Ok(n): { this.fill = cast<int32>(n); this.pos = 0; }
+            };
+            if (this.fill == 0) { return Result::Ok(value: cast<usize>(0)); }   // EOF
+        }
+        int32 avail = this.fill - this.pos;
+        int32 want = into.length();
+        int32 k = avail < want ? avail : want;
+        int32 i = 0;
+        while (i < k) { into[i] = this.buf[this.pos + i]; i = i + 1; }
+        this.pos = this.pos + k;
+        return Result::Ok(value: cast<usize>(k));
+    }
+}

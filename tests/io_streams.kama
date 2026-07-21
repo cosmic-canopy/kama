@@ -1,0 +1,59 @@
+// std::io — the streaming byte substrate (M1). Exercises the Writer/Reader contracts, the in-memory
+// StringWriter/SliceReader, buffering wrappers (BufWriter/BufReader), and the writeAll/copy free helpers.
+// Round-trips a payload and checks EOF + byte fidelity. Returns 55.
+import std::io::{Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, writeAll, pump, IoError};
+import std::collections::{DynamicArray, FixedArray, View};
+
+// Build a DynamicArray<uint8> holding the bytes 1..=n, view it, and write it all into a StringWriter.
+fn string makePayload(int32 n) {
+    StringWriter w = StringWriter.make();
+    DynamicArray<uint8> data = DynamicArray.empty();
+    int32 i = 1;
+    while (i <= n) { data.add(item: cast<uint8>(i)); i = i + 1; }
+    Result<Unit, IoError> wr = writeAll(w: w, bytes: data.view());
+    match (wr) { case Err(e): { panic(msg: "writeAll failed"); } case Ok(_): {} };
+    return w.finish();
+}
+
+// Read a Reader fully via a fixed 8-byte buffer (forces multiple reads), summing every byte.
+fn int32 drainSum(Reader r) {
+    FixedArray<uint8> buf = FixedArray.make(size: 8);
+    int32 sum = 0;
+    while (true) {
+        Result<usize, IoError> rr = r.read(into: buf.view());
+        int32 n = match (rr) { case Ok(k): cast<int32>(k); case Err(e): -1; };
+        if (n < 0) { return -1; }
+        if (n == 0) { return sum; }        // EOF
+        int32 j = 0;
+        while (j < n) { sum = sum + cast<int32>(buf[j]); j = j + 1; }
+    }
+}
+
+fn int main() {
+    // 1..=10 → 55 bytes of content; sum of values 1..10 = 55.
+    string payload = makePayload(n: 10);
+    if (cast<int32>(payload.length()) != 10) { return 1; }
+
+    // Direct in-memory round-trip: SliceReader over the payload, drained through an 8-byte buffer (EOF path).
+    SliceReader sr = SliceReader.make(src: give payload);
+    int32 s1 = drainSum(r: sr);
+    if (s1 != 55) { return 2; }
+
+    // Buffered round-trip: BufReader wrapping a SliceReader, same sum through the ring buffer.
+    string payload2 = makePayload(n: 10);
+    BufReader<SliceReader> br = BufReader::<SliceReader>.make(inner: SliceReader.make(src: give payload2));
+    int32 s2 = drainSum(r: br);
+    if (s2 != 55) { return 3; }
+
+    // pump(): move a SliceReader into a BufWriter<StringWriter>, flush, and verify byte count.
+    string payload3 = makePayload(n: 10);
+    BufWriter<StringWriter> bw = BufWriter::<StringWriter>.make(inner: StringWriter.make());
+    SliceReader src3 = SliceReader.make(src: give payload3);
+    Result<usize, IoError> cr = pump(from: src3, to: bw);
+    int32 moved = match (cr) { case Ok(k): cast<int32>(k); case Err(e): -1; };
+    if (moved != 10) { return 4; }
+    Result<Unit, IoError> fr = bw.flush();
+    match (fr) { case Err(e): { return 5; } case Ok(_): {} };
+
+    return 55;
+}
