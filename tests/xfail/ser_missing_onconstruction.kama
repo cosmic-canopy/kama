@@ -1,4 +1,0 @@
-// A @generate(Deserialize) type must define onConstruction() or opt out with noOnConstruction.
-@generate(Serialize, Deserialize)
-type value Bad { @field int32 x; public Bad(int32 x) { this.x = x; } }
-fn int main() { return 0; }

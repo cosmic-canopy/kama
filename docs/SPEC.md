@@ -1394,9 +1394,6 @@ exactly what you name:
 - **Enums** serialize externally-tagged: `{"tag":"V"}` (no payload) / `{"tag":"V","value":{fields…}}` (payload);
   deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError`.
 - **`Map<K,V>`** serializes as an array of `{"key":…,"value":…}` pairs (a generic key can't be a JSON object key).
-- **`onConstruction()`** — an opt-in lifecycle hook run on *every* construction (at ctor-end **and** after a
-  deserialize field-set, since deserialize bypasses the ctor; may be private). A `@generate(Deserialize)` product
-  must define it or opt out with **`@generate(Deserialize, noOnConstruction)`**.
 
 **Graph specifics.** `Shared`/`Weak`/`Owned` fields serialize as integer ids into the side table (`0` = null /
 expired). `Shared`/`Weak` dedup by pointee identity; a `Weak` writes its id only while a strong handle exists.
@@ -1416,14 +1413,14 @@ core model; see [TYPE_MODEL.md](TYPE_MODEL.md).
 import std::serialization::json::{encode, decode};   // wire backend (library); the triad needs no import
 
 // by-value (tree): a pointer-free resource round-trips on the stack
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource User { @field(name: "user_name") string name; @field int32 age;
-    public User(string name, int32 age) { this.name = give name; this.age = age; } }
-string j = encode(v: User(name: "ada", age: 36));                 // {"user_name":"ada","age":36}
+    public ctor make(string name, int32 age) { User r; r.name = give name; r.age = age; return give r; } }
+string j = encode(v: User.make(name: "ada", age: 36));            // {"user_name":"ada","age":36}
 Result<User, DeError> u = decode::<User>(src: give j);            // by value
 
 // graph (heap): reaches a pointer -> only via Shared; cycles rebuilt through the Weak back-edge
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Node { @field int32 id; @field Optional<Shared<Node>> next; @field Optional<Weak<Node>> back; … }
 Result<Shared<Node>, DeError> g = decode::<Shared<Node>>(src: give wire);
 // decode::<Node>(...) would be a compile error: Node reaches a pointer -> decode as Shared<Node>

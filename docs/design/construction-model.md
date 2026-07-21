@@ -90,8 +90,8 @@ removes today's vtable-only synthesized default ctor: a polymorphic type must de
 ## 6. Full enforcement (after migration) — ✅ DONE (M8 Phase E)
 
 - The **class-named ctor *declaration*** (`public Rect(w, h) {}`) is now an error → declare a named
-  `ctor make(...)`. ✅ *(EXEMPT until M8e: `@generate(Serialize/Deserialize)` types whose `onConstruction`
-  hook injects at ctor-end.)*
+  `ctor make(...)`. ✅ *(Unconditional as of M8e: the transitional serde exemption is gone — the
+  `onConstruction` hook was removed.)*
 - The nameless **`Type(...)` / `new Type(...)` call form** is now an error → all construction is dot-on-type
   `Type.name(...)`. It silently dropped its args / left the object un-constructed, so this closes a wrong-value
   hole. ✅ *(A truly ctor-less no-arg raw struct still default-inits.)*
@@ -159,7 +159,7 @@ concrete error stays an ergonomic Kama `enum` (matchable, payload-carrying) but 
 **boxed** into a fat `Owned<Error>` handle and dynamically dispatched (`.message()`), and recovered with
 `error.as<DeError>()` (a vtbl-pointer downcast → `Optional<DeError>`). A chained callee's `Owned<Error>` flows
 into the caller's `Owned<Error>` by identity (already boxed). The remaining tail — a uniform `E: Error` **bound
-on `Result`** + migrating the ~17 `Result<_, int32>` sites + dropping `onConstruction` — is deferred to **M8**.
+on `Result`** + migrating the `Result<_, int32>` sites + dropping `onConstruction` — shipped in **M8e**. ✅
 
 ## 9. Interaction with prior deferrals
 
@@ -213,7 +213,7 @@ enforcement flip) DONE** — the point of no return: legacy class-named ctor DEC
 `new Type(…)` calls are hard errors (§6); the vtable-only synth default ctor is removed (a polymorphic bare
 local sets its own `__vptr`); the generic-ctor spelling is turbofish-on-the-type (`T::<Args>.make(…)`,
 uniform); the whole test corpus (~90 fixtures) migrated to named ctors; triple-green native 629 / SAN 616 /
-WASM 607. **Deferred to M8e (the final milestone):** the self-returning `static fn` reject (blocked on
-migrating `deserialize` (a Deserialize contract method) + `File.open` to ctors), the `E: Error` bound +
-~44 `Result<_, int32>` sites, dropping `onConstruction` (two fixtures keep a legacy ctor under a Phase-E
-exemption until then), and the SPEC construction-section reconciliation → tag 1.0.
+WASM 607. **M8e (the final milestone) — ✅ DONE:** the self-returning `static fn` reject (after migrating
+`deserialize` + `File.open` to ctors), the `E: Error` bound on `Result` + the `Result<_, int32>` migration
+(a boxed `Owned<Error>` satisfies the `Error` bound), and dropping `onConstruction` (the transitional serde
+exemption removed) → ready to tag 1.0.

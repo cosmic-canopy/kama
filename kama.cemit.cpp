@@ -2722,7 +2722,6 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                             if (a && a->name && a->name->value && !a->expression) {
                                 if      (*a->name->value == "Serialize")   eser = true;
                                 else if (*a->name->value == "Deserialize") ede = true;
-                                else if (*a->name->value == "noOnConstruction") { /* n/a to an enum; tolerated */ }
                                 else unsupported("`@generate(...)` on an enum accepts only Serialize, Deserialize", ed->line);
                             }
                     }
@@ -2864,10 +2863,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         std::string which = (a && a->name && a->name->value && !a->expression) ? *a->name->value : "";
                         if      (which == "Serialize")   ci.genSerialize = true;
                         else if (which == "Deserialize") ci.genDeserialize = true;
-                        else if (which == "noOnConstruction") ci.serNoOnConstruction = true;   // opt out of the hook rule
                         else if (which == "of")   ci.genOf = true;     // bag ctor — validated + registered after fields (below)
                         else if (which == "zero") ci.genZero = true;
-                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, of, zero, noOnConstruction", cd->line);
+                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, of, zero", cd->line);
                     }
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name + "` (expected `@generate`)").c_str(), cd->line);
@@ -2979,8 +2977,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     if (serGen && !fSkip && fd->type && fd->type->value) {
                         const std::string& tn = *fd->type->value;
                         if (tn == "Bindable")
-                            unsupported("a `Bindable<…>` field can't be serialized — `@skip` it and rebind in "
-                                        "`onConstruction`", fd->line);
+                            unsupported("a `Bindable<…>` field can't be serialized — `@skip` it and rebind it "
+                                        "after decoding", fd->line);
                     }
 
                     if (fd->declarators) {
@@ -3136,12 +3134,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         ci.methods[*md->name->value] = mi;
                     }
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
-                    // Construction-model M8 Phase E: the legacy class-named constructor is no longer allowed —
-                    // all construction is a named factory `ctor` called dot-on-type. EXEMPT serialization types
-                    // (@generate(Serialize/Deserialize)): their `onConstruction` hook injects at the ctor's end
-                    // and is finalized/removed at M8e, so their construction migrates there. After the fixture
-                    // sweep only the two onConstruction fixtures reach this exemption.
-                    if (!ci.genSerialize && !ci.genDeserialize) {
+                    // Construction-model M8 (Phase E + M8e): the legacy class-named constructor is no longer
+                    // allowed — all construction is a named factory `ctor` called dot-on-type. The Phase-E
+                    // serde exemption is gone (M8e removed the `onConstruction` hook).
+                    {
                         std::string tnm = (cd->name && cd->name->value) ? *cd->name->value : "T";
                         unsupported(("class-named constructor `" + tnm + "(...)` is no longer allowed — declare a "
                                      "named constructor `ctor make(...)` and call it dot-on-type (`" + tnm
@@ -3248,15 +3244,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 unsupported(("`" + ci.name + "` implements `Copyable` but doesn't declare its bare-hand-off default "
                              "— write `implements Copyable(bare: give)` or `Copyable(bare: copy)`").c_str(), cd->line);
         }
-        // A `@generate(Deserialize)` type has its constructor BYPASSED during deserialization (the struct is
-        // zero-initialized and its fields populated in place). So any "runs on every construction" logic must
-        // live in an `onConstruction()` hook — the compiler calls it at the end of the constructor AND after a
-        // deserialize field-set. To keep that decision explicit, such a type MUST either define
-        // `fn void onConstruction()` or opt out with `@generate(Deserialize, noOnConstruction)`.
-        if (ci.genDeserialize && !ci.serNoOnConstruction && !ci.methods.count("onConstruction"))
-            unsupported(("`" + ci.name + "` is `@generate(Deserialize)`: define `fn void onConstruction()` (runs on "
-                         "every construction, incl. deserialize) or opt out with `@generate(Deserialize, noOnConstruction)`").c_str(),
-                        cd->line);
         // By-value serialization intrinsic (Phase C): synthesize `serialize`/`deserialize` in C for a
         // `@generate` tree struct that supplies NEITHER a hand-written impl NOR a driver-generated graph
         // impl — both land a method in `ci.methods`, so the `!count` guard makes hand-written / graph win.
@@ -9630,13 +9617,6 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         for (auto& st : *body->statements) { emitStatement(st, 1); last = st; }
     }
     if (!(last && stmtIsJump(last))) {
-        // `onConstruction()` lifecycle hook: for a `@generate(Deserialize)` type that defines it, the compiler
-        // calls it at the END of every constructor (and the deserialize codegen calls it after field-set), so
-        // "runs on every construction" logic lives in one place despite deserialize bypassing the ctor.
-        if (isCtor && owner.genDeserialize && owner.methods.count("onConstruction")) {
-            indent(1);
-            *_out << owner.name << "__onConstruction(self);\n";
-        }
         emitScopeCleanup(_scopes.back(), 1);
     }
     *_out << "}\n\n";
@@ -9913,9 +9893,6 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     std::string box = emitStickyErrBox(2);
     indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
     indent(1); *_out << "}\n";
-    if (!ci.serNoOnConstruction && ci.methods.count("onConstruction")) {
-        indent(1); *_out << ci.name << "__onConstruction(&result);\n";   // hook runs after a successful field-set
-    }
     indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = result } };\n";
     *_out << "}\n\n";
 }

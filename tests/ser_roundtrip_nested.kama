@@ -4,7 +4,7 @@
 import std::serialization::json::{encode, decode};
 import std::collections::{DynamicArray};
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Child {
     @field int32 v;
     @field string tag;
@@ -12,7 +12,7 @@ type resource Child {
     public fn int32 weight() { return this.v + cast<int32>(this.tag.length()); }
 }
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Parent {
     @field int32 id;
     @field Child main;                 // nested resource field (direct)

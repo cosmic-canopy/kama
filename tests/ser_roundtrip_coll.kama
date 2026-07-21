@@ -2,7 +2,7 @@
 // these container shapes (natural defaults: Optional::None, empty DynamicArray).
 import std::serialization::json::{encode, decode};
 import std::collections::{DynamicArray};
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Rec {
     @field int32 id;
     @field Optional<int32> parent;

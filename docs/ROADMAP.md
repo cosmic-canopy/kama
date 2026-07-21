@@ -104,9 +104,10 @@ genuinely later-track or opt-in.
   error (Phase E): a legacy class-named ctor DECL, and a nameless `Type(…)` / `new Type(…)` call on a
   named-ctor type (which silently dropped its args / left the object un-constructed), both reject and point at
   `Type.make(…)`. The vtable-only synth default ctor is gone (a polymorphic bare local sets its own `__vptr`).
-  **Remaining for M8e:** the self-returning `static fn` reject (blocked on migrating `deserialize` (a
-  Deserialize CONTRACT method → `Result<This>`) and `File.open` to ctors) + the `E: Error` bound + drop
-  `onConstruction` (its two fixtures keep a legacy ctor under a Phase-E exemption until then).
+  **✅ CLOSED (M8e — the final milestone):** the self-returning `static fn` reject (after migrating
+  `deserialize` and `File.open` to ctors), the `E: Error` bound on `Result` (a boxed `Owned<Error>` satisfies
+  it), and dropping `onConstruction` (the transitional serde exemption removed). Construction is now uniform
+  and fully enforced — ready to tag 1.0.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way
   to do a thing," and **named parameters** already cover the disambiguation overloading is usually reached
   for. **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by

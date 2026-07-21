@@ -3,7 +3,7 @@
 // only supported form — mirroring the free-fn turbofish reject.
 import std::serialization::json::{decode};
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type value Bad {
     @field int32 v;
     public ctor make(int32 v) { Bad r; r.v = v; return give r; }

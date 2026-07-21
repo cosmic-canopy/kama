@@ -3,7 +3,7 @@
 import std::serialization::json::{encode, decode};
 @generate(Serialize, Deserialize)
 enum Geo { Circle(int32 r), Rect(int32 w, int32 h), Empty }
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 @generate(of)
 type value Drawing { @field public int32 id; @field public Geo shape; }
 fn int main() {

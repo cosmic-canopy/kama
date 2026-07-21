@@ -7,7 +7,7 @@
 import std::serialization::json::{encode, decode};
 import std::memory::{Shared, Weak};
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Node {
     @field int32 id;
     @field Optional<Shared<Node>> next;   // owns (forward edge)

@@ -10,21 +10,21 @@ import std::memory::{Shared};
 
 type contract Shape for both { fn int32 area(); }
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Sq implements Shape {
     @field int32 side;
     public ctor make(int32 side) { Sq r; r.side = side; return give r; }
     public fn int32 area() { return this.side * this.side; }
 }
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Circle implements Shape {
     @field int32 r;
     public ctor make(int32 r) { Circle self; self.r = r; return give self; }
     public fn int32 area() { return 3 * this.r * this.r; }
 }
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Scene {
     @field Shared<Shape> a;
     @field Shared<Shape> b;

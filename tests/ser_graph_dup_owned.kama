@@ -4,10 +4,10 @@
 import std::serialization::json::{decode};
 import std::memory::{Shared, Owned};
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Child { @field int32 v; public ctor make(int32 v) { Child r; r.v = v; return give r; } }
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type resource Twin {
     @field Owned<Child> a;
     @field Owned<Child> b;

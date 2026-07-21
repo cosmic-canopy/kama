@@ -165,9 +165,6 @@ struct ClassInfo {
     // emission of the reflective `__serialize`/`__deserialize` helpers (see emitSerialize/DeserializeDefinition).
     bool                              genSerialize = false;
     bool                              genDeserialize = false;
-    // `@generate(Deserialize, noOnConstruction)` — the type explicitly declares it has no birth logic, so
-    // it is exempt from the "must define `onConstruction()`" rule (deserialize bypasses the constructor).
-    bool                              serNoOnConstruction = false;
     // `@generate(of|zero)` — bag-only opt-in ctors on a TRANSPARENT value (all public fields, see
     // isTransparentValue). `of` = a synthesized memberwise ctor `V.of(f1: …, …)`; `zero` = a zero-init ctor
     // `V.zero()`. Both synthesize a named `ctor` (registered in `ctors`/`methods`) whose body is emitted by

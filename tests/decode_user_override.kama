@@ -5,7 +5,7 @@
 // nested composite, and a malformed field surfaces as `Err(nothing)` recovered via `.as<DeError>()`.
 import std::serialization::json::{encode, decode};
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type value Point {
     @field int32 x;
     @field int32 y;
@@ -13,7 +13,7 @@ type value Point {
     public fn int32 sum() { return this.x + this.y; }
 }
 
-@generate(Serialize, Deserialize, noOnConstruction)
+@generate(Serialize, Deserialize)
 type value Line {
     @field Point start;
     @field Point end;
