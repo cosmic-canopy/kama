@@ -28,7 +28,20 @@
           "begin": "\"",
           "end": "\"",
           "patterns": [
-            { "name": "constant.character.escape.kama", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" }
+            { "name": "constant.character.escape.kama", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" },
+            {
+              "comment": "string interpolation hole ${ident.field[index]} — a plain identifier with .field/[index] accessors",
+              "name": "meta.interpolation.kama",
+              "begin": "\\$\\{",
+              "end": "\\}",
+              "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.kama" } },
+              "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.kama" } },
+              "patterns": [
+                { "name": "variable.other.kama", "match": "[A-Za-z_][A-Za-z0-9_]*" },
+                { "name": "punctuation.accessor.kama", "match": "[.\\[\\]]" },
+                { "name": "constant.numeric.kama", "match": "[0-9]+" }
+              ]
+            }
           ]
         },
         {

@@ -1,0 +1,8 @@
+// Interpolation holes are restricted to an identifier with `.field`/`[index]` accessors — an operator
+// expression must be bound to a `let` first. `${a + b}` is a compile-time error (lexed in the hole state).
+fn int main() {
+    int32 a = 1i32;
+    int32 b = 2i32;
+    string s = "sum ${a + b}";
+    return 0;
+}

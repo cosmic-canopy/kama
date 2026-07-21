@@ -636,6 +636,64 @@ std::string CEmitter::emitUnaryUserOp(int opToken, SharedExpression operand, int
 // Expressions
 // ---------------------------------------------------------------------------
 
+// String interpolation `"a ${x} b"` lowers to a Formatter build, hoisted into the enclosing statement (ISO
+// C — no statement-expressions): a `Formatter` temp, a `writeStr` per literal part + a `<hole>.format(ref f)`
+// per hole (synthesized method-call ASTs, so EVERY hole type goes through the real Format dispatch), then a
+// `finish()` whose owned-string temp is the expression's value (scope-dropped like any string rvalue). The
+// whole nested value materializes in ONE growing buffer — no O(n²) concat.
+std::string CEmitter::emitInterpolation(InterpolatedStringNode* is)
+{
+    if (!is) return "\"\"";
+    if (!_hoistOK) {
+        unsupported("string interpolation must appear where a statement can be hoisted (an initializer, "
+                    "argument, or return) — not a raw `if`/`while` condition; bind a `let` first", is->line);
+        return "\"\"";
+    }
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<interp>"));
+    CodeGenContext& ctx = *_synthCtx;
+    auto ident = [&](const std::string& s) { return std::make_shared<IdentifierNode>(ctx, std::make_shared<std::string>(s)); };
+
+    std::string fv = "__fmt" + std::to_string(_tempCounter++);
+    _hoisted.push_back("Formatter " + fv + " = Formatter__make();");
+    recordDestructibleLocal(fv, "Formatter");
+
+    size_t nh = is->holes.size();
+    for (size_t i = 0; i < is->parts.size(); ++i) {
+        const std::string& part = is->parts[i] ? *is->parts[i] : std::string();
+        if (!part.empty()) {   // skip empty chunks (adjacent holes / empty head or tail)
+            // A literal part appends directly (a borrowed literal temp -> writeStr's `ref string`); reuse the
+            // StringNode emitter for correct C-escaping. No synthesized method call — the receiver `fv` is a
+            // fresh C temp the method-dispatch wouldn't resolve as a class.
+            std::string litExpr = emitExpression(std::make_shared<StringNode>(ctx, std::make_shared<std::string>(part)));
+            std::string pv = "__ip" + std::to_string(_tempCounter++);
+            _hoisted.push_back("kama_string " + pv + " = " + litExpr + ";");
+            _hoisted.push_back("Formatter__writeStr(&" + fv + ", &" + pv + ");");
+        }
+        if (i < nh && is->holes[i]) {
+            // A `char` hole renders its CHARACTER via the Formatter's writeChar fast-path — `char` has no
+            // Format conformance (it shares uint32's cType), so the dispatch below would render it numeric.
+            if (exprIsChar(is->holes[i])) {
+                _hoisted.push_back("Formatter__writeChar(&" + fv + ", " + emitExpression(is->holes[i]) + ");");
+                continue;
+            }
+            // A hole formats via the real Format dispatch: synthesize `<hole>.format(f: ref fv)` so the hole's
+            // static type picks the right `format` (user type, primitive conformance, or string). `ref fv`
+            // needs only the variable, not fv's class, so this resolves though writeStr-on-fv would not.
+            auto args = std::make_shared<ArgumentList>();
+            args->push_back(std::make_shared<ArgumentNode>(ctx, ident("f"),
+                              std::make_shared<ModifierNode>(ctx, std::make_shared<std::string>("ref")), ident(fv)));
+            auto call = std::make_shared<InvocationNode>(ctx,
+                          std::make_shared<MemberAccessNode>(ctx, ident("format"), is->holes[i]), args);
+            _hoisted.push_back(emitExpression(call) + ";");
+        }
+    }
+
+    // Return the `finish()` call itself (a fresh owned-string rvalue, like `a + b`), NOT a recorded temp —
+    // so the enclosing assignment/return/arg takes sole ownership with no double-drop. `fv` (scope-dropped)
+    // frees its now-empty buffer harmlessly after the zero-copy take.
+    return "Formatter__finish(&" + fv + ")";
+}
+
 std::string CEmitter::emitExpression(SharedExpression expr)
 {
     if (!expr) return "";
@@ -711,6 +769,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         os << "\", " << s.size() << ")";
         return os.str();
     }
+
+    if (auto* is = dynamic_cast<InterpolatedStringNode*>(n)) return emitInterpolation(is);
 
     if (auto* v = dynamic_cast<IdentifierNode*>(n)) {
         // Variable/parameter reference. Qualified/member resolution is later.
@@ -1205,6 +1265,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 }
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
                 _localCTypes[nm] = ty;                        // full C type (incl. primitives) for assignment-RHS lowering
+                _localTypeNodes[nm] = declType;               // kama type node (keeps char vs uint32 for interpolation)
                 if (isConstDecl) {
                     if (!d->initializer)
                         unsupported("a const must be initialized (it is immutable)", n->line);
@@ -1941,6 +2002,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         bool hadType = _localTypes.count(nm);
         std::string prevType = hadType ? _localTypes[nm] : std::string();
         _localTypes[nm] = elemClass;   // element binding's class (for x.method() resolution)
+        if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
 
         // `foreach (ref T e …)` binds each element by PLACE (a bounds-checked `T*` via `__at`), so
         // mutation persists; `e` joins `_refParams` so reads/writes in the body deref it (`(*e)`),
@@ -5343,6 +5405,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     bool hadType = _localTypes.count(nm);
     std::string prevType = hadType ? _localTypes[nm] : std::string();
     _localTypes[nm] = elemClass;
+    if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
     bool hadRef = _refParams.count(nm);
     if (fe->isRef) {
         _refParams.insert(nm);   // reads/writes deref the place, like a `ref` param / built-in `foreach ref`
@@ -9051,7 +9114,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
     _paramNames.clear();
-    _localTypes.clear(); _constLocals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _inCtor = false;
     _moveState.clear();   // per-function move analysis
     _pendingParamDtors.clear();
     _currentClass = nullptr;
@@ -9066,6 +9129,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
             _localCTypes[pn] = pty;                    // full C type (incl. enums/primitives) — e.g. a plain-enum `match` subject
+            _localTypeNodes[pn] = p->type;             // kama type node (keeps char vs uint32 for interpolation)
             // a by-value smart-ptr OR owning collection/`string` param is OWNED by the callee — drop it at
             // fn-end (a `ref` param is a borrow — never). The function-root scope is created later
             // (emitBlockScoped); stash it there. Sound because the arg path now forces the caller to
@@ -9458,7 +9522,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _currentClass = &ci;
     _refParams.clear();
     _paramNames.clear();
-    _localTypes.clear(); _constLocals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _inCtor = false;
     _currentReturnCType = "void";
     _tempCounter = 0;
     _scopes.clear();
@@ -9532,7 +9596,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _refParams.clear();
     _paramNames.clear();
     _viewParams.clear();
-    _localTypes.clear(); _constLocals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _inCtor = false;
     _moveState.clear();   // per-method move analysis
     _inCtor = isCtor;   // const fields are writable only here
     if (isConstMethod) _constLocals.insert("this");   // `this` is immutable (deep)
@@ -9551,6 +9615,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
             _localCTypes[pn] = pty;                    // full C type (incl. enums/primitives) — e.g. a plain-enum `match` subject
+            _localTypeNodes[pn] = p->type;             // kama type node (keeps char vs uint32 for interpolation)
             // a by-value smart-ptr OR owning collection/`string` param is owned by the callee — drop it at
             // fn-end (a `ref` is a borrow — never). The root scope is already on the stack, so record it
             // directly (dropped last). recordDestructibleLocal also move-tracks an ownsByValue param.
@@ -9624,7 +9689,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _scopes.clear();
     _currentClass = nullptr;
     _refParams.clear();
-    _localTypes.clear(); _constLocals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _inCtor = false;
     _inStaticMethod = false;
 }
 
@@ -10631,6 +10696,7 @@ std::string CEmitter::exprClass(SharedExpression e)
     ASTNode* n = e.get();
 
     if (dynamic_cast<StringNode*>(n)) return "kama_string";   // a string literal is the `string` primitive
+    if (dynamic_cast<InterpolatedStringNode*>(n)) return "kama_string";   // an interpolation lowers to a `string`
 
     if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) {        // `.as<T>()` -> Optional<T>
         std::string oc = cType(optionalTypeNode(ad->type));
@@ -11412,6 +11478,68 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     return emitReorderedCall(mi->cName, "", mi->params, call->args, call->line);
 }
 
+// The C scalar type of a receiver whose class is a PRIMITIVE (so `exprClass` is "") — lets the primitive
+// method dispatch resolve a conformance on a member/index receiver (`p.x.format(f)`, `arr[i].hash()`,
+// `s[i].format(f)`), not just a bare identifier. Powers primitive-typed interpolation holes like `${p.x}`.
+// "" if it isn't a resolvable primitive place.
+std::string CEmitter::receiverScalarCType(SharedExpression e)
+{
+    if (!e) return "";
+    ASTNode* n = e.get();
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (id->value && _localCTypes.count(*id->value)) return _localCTypes[*id->value];
+        return "";
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        std::string recv = exprClass(ma->expression);
+        if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
+            ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
+            if (owner)
+                for (auto& f : owner->fields)
+                    if (f.name == *ma->identifier->value && f.type)
+                        return cTypeInInstance(recv, f.type);   // a primitive field -> "int32_t", etc.
+        }
+        return "";
+    }
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        std::string cc;   // the container's C type
+        if (ea->identifier && ea->identifier->value && _localCTypes.count(*ea->identifier->value))
+            cc = _localCTypes[*ea->identifier->value];
+        else if (ea->expression) {
+            if (auto* tid = dynamic_cast<IdentifierNode*>(ea->expression.get()))
+                if (tid->value && _localCTypes.count(*tid->value)) cc = _localCTypes[*tid->value];
+            if (cc.empty()) cc = exprClass(ea->expression);
+        }
+        if (cc == "kama_string") return "uint8_t";                        // a string byte index
+        if (!cc.empty() && _collections.count(cc)) return _collections[cc].elemCType;
+        return "";
+    }
+    return "";
+}
+
+// True iff `e`'s kama type is `char` — a char literal, an identifier/param/foreach binding, or a struct field.
+// `char` and `uint32` share the C type `uint32_t`, so `_primConformances` (cType-keyed) can't hold a distinct
+// char `Format`; this consults the KAMA type node so an interpolation hole `${c}` renders its CHARACTER (via
+// `writeChar`) rather than `uint32`'s numeric conformance.
+bool CEmitter::exprIsChar(SharedExpression e)
+{
+    if (!e) return false;
+    ASTNode* n = e.get();
+    if (dynamic_cast<CharNode*>(n)) return true;
+    SharedIdentifier ty;
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) ty = it->second; }
+    } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        std::string recv = exprClass(ma->expression);
+        if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
+            ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
+            if (owner) for (auto& f : owner->fields)
+                if (f.name == *ma->identifier->value) { ty = f.type; break; }
+        }
+    }
+    return ty && !ty->genericArg && ty->builtInVal == IDENTIFIER_CHAR_VAL;
+}
+
 std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* recv)
 {
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
@@ -11461,10 +11589,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // receiver's C type from `_localCTypes` (params/locals record it there). Resolve on `_primConformances`;
     // the call is a plain free function `int32_t__hash(k)` (no pointer, no vtable).
     {
+        // Recover the scalar C type for a bare identifier OR a member/index place (`p.x`, `arr[i]`), so a
+        // primitive conformance (`format`/`hash`/…) dispatches on any primitive receiver, not just a local.
         std::string primTy = cls;
-        if (primTy.empty())
-            if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get()))
-                if (rid->value && _localCTypes.count(*rid->value)) primTy = _localCTypes[*rid->value];
+        if (primTy.empty()) primTy = receiverScalarCType(receiver);
         auto pit = _primConformances.find(primTy);
         if (pit != _primConformances.end()) {
             ClassInfo* powner = nullptr;
@@ -12057,7 +12185,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // by emitClassPrototypes. Free-function prototypes follow (they may use a wrapper too).
     for (ClassInfo* ci : classes)
         if (!ci->isIntrinsicColl && !ci->isExternStruct && ci->destructible)
-            *_out << "void " << ci->name << "__dtor(" << ci->name << "* self);\n";
+            // A prelude type's dtor is defined `static inline` at the end pass, so its early proto must match
+            // (else "static declaration follows non-static") — same reasoning as the preludeStatic branch below.
+            *_out << (ci->preludeStatic ? "static inline " : "") << "void " << ci->name << "__dtor(" << ci->name << "* self);\n";
     // a collection of `Copyable` elements deep-copies via the element's `copy()`, so its
     // prototype must precede the `_FUNCS` macro that calls it (re-declared identically by
     // emitClassPrototypes). The C signature is `Elem Elem__copy(Elem* self)` (nullary; paramListC).

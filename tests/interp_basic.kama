@@ -1,0 +1,50 @@
+// String interpolation (P2): `${expr}` holes lower to a Formatter build. Covers primitives + string, member
+// access, a whole user type via its Format, the `\${` escape + literal `$`, verbatim non-interpolation,
+// adjacent holes, and an index hole. Exit code is a bitset of the checks that passed (127 = all seven).
+type value Pt implements Format {
+    public int32 x; public int32 y;
+    public ctor make(int32 x, int32 y) { Pt p; p.x = x; p.y = y; return p; }
+    public fn void format(ref Formatter f) {
+        f.writeStr(s: "("); f.writeI64(v: cast<int64>(this.x));
+        f.writeStr(s: ","); f.writeI64(v: cast<int64>(this.y)); f.writeStr(s: ")");
+    }
+}
+
+fn int main() {
+    int32 r = 0;
+    int32 n = 7i32;
+    string who = "kama";
+    bool ok = true;
+    float64 half = 3.5;
+
+    // primitives + string interleaved
+    string a = "n=${n} who=${who} ok=${ok} half=${half}";
+    if (a == "n=7 who=kama ok=true half=3.5") { r = r + 1; }
+
+    // member-access holes
+    Pt p = Pt.make(x: 3i32, y: 4i32);
+    string b = "pt=${p.x},${p.y}";
+    if (b == "pt=3,4") { r = r + 2; }
+
+    // a whole user type renders via its Format impl
+    string c = "here ${p}!";
+    if (c == "here (3,4)!") { r = r + 4; }
+
+    // `\${` is a literal `${`; a lone `$` (not followed by `{`) stays literal
+    string d = "cost \${n} is $5";
+    if (d == "cost \${n} is $5") { r = r + 8; }        // compare against the same escaped literal
+
+    // a verbatim string never interpolates
+    string e = @"raw ${n}";
+    if (e == @"raw ${n}") { r = r + 16; }              // verbatim on both sides — both literal
+
+    // empty head + adjacent holes
+    string g = "${n}${n}";
+    if (g == "77") { r = r + 32; }
+
+    // index hole (string byte 'k' = 107)
+    string h = "b0=${who[0]}";
+    if (h == "b0=107") { r = r + 64; }
+
+    return r;   // 1+2+4+8+16+32+64 = 127
+}

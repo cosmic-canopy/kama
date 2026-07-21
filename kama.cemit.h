@@ -409,6 +409,8 @@ private:
     std::map<std::string, std::string> _localTypes;  // local/param -> class name ("" if primitive)
     std::map<std::string, std::string> _localCTypes; // local -> full C type (incl. primitives) — the
                                                      // target type for a value-producing RHS at an assignment
+    std::map<std::string, SharedIdentifier> _localTypeNodes; // local/param/foreach -> its KAMA type node; keeps the
+                                                     // char-vs-uint32 distinction cType erases (for char interpolation holes)
     // Compile-time move analysis for `resource` (destructible) VALUES. Per-local
     // move-state, consulted by emitScopeCleanup (skip a moved local's dtor) and the hand-off
     // sites (reject use-after-move). A value moved on some-but-not-all paths that is live at
@@ -910,6 +912,8 @@ private:
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is Ptr<T>, the element C-type; else ""
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is Ptr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
+    std::string receiverScalarCType(SharedExpression e); // C scalar type of a primitive receiver place (`p.x`, `arr[i]`), "" if none
+    bool exprIsChar(SharedExpression e);                // true iff `e`'s kama type is `char` (a char literal, local/param/foreach binding, or a char field)
     std::string lvalueCType(SharedExpression e);        // C type of an lvalue local/param/field, KEEPING collection/string types
     bool exprIsString(SharedExpression e);              // true iff `e` statically has kama type `string` (kama_string)
     std::string hoistStringTemp(SharedExpression e);    // owned-string RVALUE -> a scope-dtor'd temp (frees it); "" for lvalue/literal/non-string
@@ -972,6 +976,7 @@ private:
 
     // Expressions -> C expression text
     std::string emitExpression(SharedExpression expr);
+    std::string emitInterpolation(InterpolatedStringNode* is);   // `"a ${x} b"` -> a hoisted Formatter build
     std::string emitInvocation(InvocationNode* call);
     std::string emitVariantConstruction(ClassInfo& ci, const std::string& variant,
                                         SharedArgumentList args, int srcLine);

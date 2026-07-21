@@ -62,8 +62,12 @@ genuinely later-track or opt-in.
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
-- **String interpolation `"${x}"` + formatting** — needs a general to-string / `Display`-like mechanism
-  (also covers `string + <number>`); sequences with reflection (its to-string substrate).
+- **String interpolation `"${x}"` + formatting ✅** — shipped: the `Format` contract + `Formatter` sink +
+  `toString<T>` (prelude), and `${expr}` holes (identifier + `.field`/`[index]`) lowering to a compile-time,
+  statically-checked `Formatter` build (see [SPEC.md](SPEC.md) "Formatting & string interpolation"). Still
+  open on this substrate: format specifiers (`${x:.2f}`), a `@generate` debug derive, and tagged strings
+  (`sql"…"`/`html"…"`/`stripIndent"…"` — the AST already carries `{parts, holes}`). `string + <number>` stays
+  a compile error by design — interpolation is the one way to mix values into text.
 - **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (see
   [SPEC.md](SPEC.md) + §5); the **full `expose`** — richer wasm module exports + the scripting host
   interface — stays **2.0** (§7).

@@ -50,6 +50,11 @@ struct LexerInstanceData {
       generic `<` and drops it on the matching `>`; while >0 the lexer splits a `>>` into two `>`
       (so `DynamicArray<Shared<Circle>>` needs no space). 0 in expression context, so `a >> b` stays a shift. */
    int genericDepth = 0;
+
+   /* Set true when a `${` interpolation hole is seen inside the current string literal, so its closing
+      `"` emits a tail `ISTR_CHUNK` (interpolated) rather than a plain `STRING_LITERAL`. Strings don't
+      nest (holes carry only identifier/member/index tokens), so a single flag suffices. */
+   bool strInterp = false;
 };
 
 struct kamayystype {
@@ -94,6 +99,7 @@ struct kamayystype {
   SharedClassMemberDeclarationList classmemberdecllist;
   
   SharedString string;
+  SharedInterpolatedString interpstring;
   int token;
 };
 #define YYSTYPE kamayystype
@@ -120,6 +126,7 @@ struct kamayystype {
 /* Tokens */
 %token <string> IDENTIFIER 
 %token <string> FLOAT_LITERAL_NO_SUFFIX FLOAT_LITERAL_32 FLOAT_LITERAL_64 CHARACTER_LITERAL STRING_LITERAL
+%token <string> ISTR_CHUNK   /* a literal chunk of an interpolated string: head, mid, or tail (between holes) */
 %token <string> DEC_LITERAL_NO_SUFFIX HEX_LITERAL_NO_SUFFIX OCT_LITERAL_NO_SUFFIX BASED_LITERAL_NO_SUFFIX 
 %token <string> DEC_LITERAL HEX_LITERAL OCT_LITERAL BASED_LITERAL
 
@@ -185,7 +192,9 @@ struct kamayystype {
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
 %type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis array_literal
 %type <expression> postfix_expression cast_expression sizeof_expression member_access element_access this_access
-%type <expression> as_downcast_expression
+%type <expression> as_downcast_expression interp_expr interp_hole
+%type <interpstring> interp_body
+%type <expressionlist> interp_index
 %type <expression> base_access primary_expression multiplicative_expression additive_expression
 %type <expression> shift_expression relational_expression equality_expression and_expression
 %type <expression> exclusive_or_expression inclusive_or_expression conditional_and_expression
@@ -349,7 +358,31 @@ literal
   | FLOAT_LITERAL_64   { $$ = std::make_shared<Float64Node>(SCANNER_CODEGENCONTEXT, strtod ($1->substr(0,$1->length() - 3).c_str(), nullptr)); }
   | CHARACTER_LITERAL   { $$ = std::make_shared<CharNode>(SCANNER_CODEGENCONTEXT, (uint32_t)strtoul($1->c_str(), NULL, 10)); }
   | STRING_LITERAL   { $$ = std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | interp_expr
   | NULL_LITERAL   { $$ = std::make_shared<NullNode>(SCANNER_CODEGENCONTEXT); }
+  ;
+
+/* String interpolation `"a ${x} b ${y} c"`. The lexer emits: a literal chunk (ISTR_CHUNK) before each hole
+   and a final tail chunk, with the hole's identifier/member/index tokens in between. `interp_body` gathers
+   CHUNK hole (CHUNK hole)* (parts.size()==holes.size()); `interp_expr` appends the trailing tail chunk so
+   parts.size()==holes.size()+1. Holes are restricted to an identifier with `.field`/`[index]` accessors. */
+interp_expr
+  : interp_body ISTR_CHUNK   { $1->parts.push_back($2); $$ = $1; }
+  ;
+interp_body
+  : ISTR_CHUNK interp_hole
+      { $$ = std::make_shared<InterpolatedStringNode>(SCANNER_CODEGENCONTEXT); $$->parts.push_back($1); $$->holes.push_back($2); }
+  | interp_body ISTR_CHUNK interp_hole
+      { $1->parts.push_back($2); $1->holes.push_back($3); $$ = $1; }
+  ;
+interp_hole
+  : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | interp_hole DOT IDENTIFIER   { $$ = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); }
+  | interp_hole LEFT_BRACKET interp_index RIGHT_BRACKET   { $$ = std::make_shared<ElementAccessNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
+  ;
+interp_index
+  : IDENTIFIER              { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
+  | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, strtol($1->c_str(), NULL, 10))); }
   ;
 boolean_literal
   : TRUE   { $$ = std::make_shared<BooleanNode>(SCANNER_CODEGENCONTEXT, true); }

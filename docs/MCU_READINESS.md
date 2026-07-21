@@ -24,7 +24,10 @@ A surprising amount of the bare-metal core is already in place:
   no pointer decay), fixed `FixedArray`, and raw `Ptr` all work with **zero heap**. `sizeof(T)` is compile-time.
 - **A runtime that leans only on freestanding headers** — `kama_runtime.h` includes just
   `<stdint.h>`/`<stdbool.h>`/`<stddef.h>`; the panic/bounds-check path writes to fd 2 and traps (no `<stdio.h>`
-  pulled into user code).
+  pulled into user code). The `std::fmt`/`Format` number formatters live here too and stay header-clean:
+  integer/char/bool/string formatting is a pure digit/encode loop (no libc), and float formatting declares
+  `snprintf` at **block scope** (like `malloc`/`memcpy`) — so no header leaks, though a `-nostdlib` build that
+  *formats a float* still needs a `snprintf` symbol (integer/string formatting is fully freestanding).
 - **A pluggable allocator seam** — the `Allocator` contract + `GlobalAllocator` (prelude), caller-owned `Arena`/
   `BumpAllocator`, custom-allocator containers (**M10**), and allocator-aware `new` / `Owned<T, A>` (**M11a**).
   A supplied allocator can already route container + boxed-object memory to a static region.

@@ -103,7 +103,31 @@ literal
   | FLOAT_LITERAL_64
   | CHARACTER_LITERAL
   | STRING_LITERAL
+  | interp_expr
   | NULL_LITERAL
+  ;
+
+/* String interpolation `"a $ b $ c"`. The lexer emits: a literal chunk (ISTR_CHUNK) before each hole
+   and a final tail chunk, with the hole's identifier/member/index tokens in between. `interp_body` gathers
+   CHUNK hole (CHUNK hole)* (parts.size()==holes.size()); `interp_expr` appends the trailing tail chunk so
+   parts.size()==holes.size()+1. Holes are restricted to an identifier with `.field`/`[index]` accessors. */
+interp_expr
+  : interp_body ISTR_CHUNK
+  ;
+interp_body
+  : ISTR_CHUNK interp_hole
+
+  | interp_body ISTR_CHUNK interp_hole
+
+  ;
+interp_hole
+  : IDENTIFIER
+  | interp_hole DOT IDENTIFIER
+  | interp_hole LEFT_BRACKET interp_index RIGHT_BRACKET
+  ;
+interp_index
+  : IDENTIFIER
+  | DEC_LITERAL_NO_SUFFIX
   ;
 boolean_literal
   : TRUE

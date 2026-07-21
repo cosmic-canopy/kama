@@ -579,6 +579,111 @@ static inline kama_string kama_string_from_raw(const uint8_t* base, int32_t star
     return r;
 }
 
+// ---- Number / char -> string -----------------------------------------------
+// The formatting primitives behind `std::fmt` AND the prelude `Display`/`Formatter`. They live HERE (not
+// in the opt-in kama_fmt.h) because the prelude — which is emitted into EVERY program and is NOT tree-shaken
+// — binds them via `extern fn`, exactly like `kama_string_from_raw` above. Integer formatting is a pure
+// digit loop (no libc). Float formatting delegates to `snprintf` at round-trip precision (`%.17g`/`%.9g`);
+// `snprintf` is declared at BLOCK scope (the same pattern as `malloc`/`memcpy` at the top of this header),
+// so this stays `<stdio.h>`-free and the freestanding property holds — a program links `snprintf` from libc
+// only if it actually formats a float. Every result is a fresh heap-owned `kama_string`.
+
+// Reversed digit loop for an unsigned 64-bit value into `buf` (no NUL); returns the digit count.
+// `0` renders as a single '0'. buf must hold >= 20 bytes.
+static inline int kama_fmt_u64_digits(char* buf, uint64_t v) {
+    char tmp[20]; int t = 0;
+    if (v == 0) tmp[t++] = '0';
+    while (v) { tmp[t++] = (char)('0' + (int)(v % 10u)); v /= 10u; }
+    int n = t, i = 0;
+    while (t) buf[i++] = tmp[--t];
+    return n;
+}
+
+// Unsigned decimal -> fresh heap-owned kama_string.
+static inline kama_string kama_fmt_u64(uint64_t v) {
+    char buf[24];
+    int n = kama_fmt_u64_digits(buf, v);
+    return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
+}
+
+// Signed decimal -> fresh heap-owned kama_string. INT64_MIN is handled by taking the magnitude in the
+// unsigned domain (`0u - (uint64_t)v`), which is well-defined two's-complement and never overflows.
+static inline kama_string kama_fmt_i64(int64_t v) {
+    char buf[24]; int n = 0;
+    if (v < 0) {
+        buf[n++] = '-';
+        n += kama_fmt_u64_digits(buf + n, (uint64_t)0 - (uint64_t)v);
+    } else {
+        n = kama_fmt_u64_digits(buf, (uint64_t)v);
+    }
+    return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
+}
+
+// float64 -> fresh heap-owned kama_string, at shortest-round-trip precision (%.17g).
+static inline kama_string kama_fmt_f64(double v) {
+    extern int snprintf(char*, size_t, const char*, ...);
+    char buf[32];
+    int n = snprintf(buf, sizeof buf, "%.17g", v);
+    if (n < 0) n = 0;
+    if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
+    return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
+}
+
+// float32 -> fresh heap-owned kama_string, at shortest-round-trip precision for single (%.9g).
+static inline kama_string kama_fmt_f32(float v) {
+    extern int snprintf(char*, size_t, const char*, ...);
+    char buf[24];
+    int n = snprintf(buf, sizeof buf, "%.9g", (double)v);
+    if (n < 0) n = 0;
+    if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
+    return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
+}
+
+// UTF-8 encode a single Unicode scalar (codepoint) -> fresh heap-owned kama_string of 1–4 bytes. The
+// inverse of the prelude `Chars` decoder. A surrogate (0xD800..0xDFFF) or out-of-range value yields the
+// U+FFFD replacement character rather than emitting ill-formed UTF-8.
+static inline kama_string kama_fmt_char(uint32_t cp) {
+    unsigned char b[4]; int n;
+    if (cp <= 0x7Fu) { b[0] = (unsigned char)cp; n = 1; }
+    else if (cp <= 0x7FFu) { b[0] = (unsigned char)(0xC0u | (cp >> 6)); b[1] = (unsigned char)(0x80u | (cp & 0x3Fu)); n = 2; }
+    else if ((cp >= 0xD800u && cp <= 0xDFFFu) || cp > 0x10FFFFu) { cp = 0xFFFDu; b[0] = (unsigned char)(0xE0u | (cp >> 12)); b[1] = (unsigned char)(0x80u | ((cp >> 6) & 0x3Fu)); b[2] = (unsigned char)(0x80u | (cp & 0x3Fu)); n = 3; }
+    else if (cp <= 0xFFFFu) { b[0] = (unsigned char)(0xE0u | (cp >> 12)); b[1] = (unsigned char)(0x80u | ((cp >> 6) & 0x3Fu)); b[2] = (unsigned char)(0x80u | (cp & 0x3Fu)); n = 3; }
+    else { b[0] = (unsigned char)(0xF0u | (cp >> 18)); b[1] = (unsigned char)(0x80u | ((cp >> 12) & 0x3Fu)); b[2] = (unsigned char)(0x80u | ((cp >> 6) & 0x3Fu)); b[3] = (unsigned char)(0x80u | (cp & 0x3Fu)); n = 4; }
+    return kama_string_from_raw(b, 0, (int32_t)n);
+}
+
+// Amortized-growth append of `n` bytes onto an owned kama_string buffer used as a builder — the backing of
+// the prelude `Formatter`. Repeated appends double the capacity, so building a string is amortized O(1) per
+// byte (unlike `kama_string__concat`, which reallocates the WHOLE string every call → O(n²) for a chain). A
+// fresh/empty buffer (`cap==0`, possibly a borrowed literal) is upgraded to a heap allocation on first push;
+// an existing heap buffer (`cap>0`) is `realloc`-grown. The result stays a well-formed `kama_string` (NUL
+// terminated, `cap>len`), so ordinary string RAII frees it — the `Formatter` needs no custom destructor.
+static inline void kama_str_push(kama_string* s, const kama_string* add) {
+    size_t n = add->len;
+    if (n == 0) return;
+    size_t need = s->len + n + 1;                         // +1 for the NUL
+    if (s->cap == 0 || need > s->cap) {
+        size_t ncap = s->cap ? s->cap : 16;
+        while (ncap < need) ncap *= 2;
+        char* nb = (char*)kama_alloc(ncap);
+        if (s->len) kama_copy(nb, s->data, s->len);
+        if (s->cap) kama_free(s->data);                  // free the old heap buffer; a cap==0 literal isn't freed
+        s->data = nb; s->cap = ncap;
+    }
+    kama_copy(s->data + s->len, add->data, n);
+    s->len += n;
+    s->data[s->len] = '\0';
+}
+
+// Move a builder's buffer OUT as an owned string, leaving the field empty (`{NULL,0,0}` — a safe no-op to
+// drop). The zero-copy `Formatter.finish`: it hands off the accumulated heap buffer rather than copying it.
+// An untouched buffer is still the empty literal (`cap==0`), which transfers harmlessly as a borrowed "".
+static inline kama_string kama_str_take(kama_string* s) {
+    kama_string r = *s;
+    s->data = NULL; s->len = 0; s->cap = 0;
+    return r;
+}
+
 // User-triggerable trap for `panic(msg: …)` and a failed `assert(cond: …)`. Writes
 // "kama: panic: <msg>" to stderr and `abort()`s — the same clean-abort mechanism as the bounds
 // trap (no <stdio.h>, no undefined behavior). Never returns.

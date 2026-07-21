@@ -67,7 +67,7 @@ float_literal32             {float_literal_no_suffix}f(32)
 float_literal64             {float_literal_no_suffix}f(64)
 
 single_char                 [^\\\']
-simple_esc_seq              \\[\'\"\\0abfnrtv]
+simple_esc_seq              \\[\'\"\\0abfnrtv$]
 simple_esc_seq_literal      \'{simple_esc_seq}\'
 single_char_literal         \'{single_char}\'
 
@@ -93,7 +93,7 @@ letter_char                 [A-Za-z]
 ident_char                  {dec_digit}|{letter_char}|"_"
 identifier                  ({letter_char}|"_"){ident_char}*
 
-%x IN_COMMENT IN_VERBATIM_STRING IN_REGULAR_STRING
+%x IN_COMMENT IN_VERBATIM_STRING IN_REGULAR_STRING IN_INTERP_HOLE
 
 %%
 
@@ -166,10 +166,20 @@ identifier                  ({letter_char}|"_"){ident_char}*
 {multibyte_char_literal}                       { unsigned cp = decodeUTF8Codepoint(&(yytext[1]), yyleng - 2); if (cp == 0xFFFFFFFFu) { error("invalid multibyte char literal (overlong, surrogate, or out of range)", yyscanner); } else { std::string s = std::to_string(cp); SAVE_TOKEN(s.c_str(), s.size(), yyleng); return CHARACTER_LITERAL; } }
 
 {regular_string_start}                         {
-                                                 yy_push_state(IN_REGULAR_STRING, yyscanner); 
+                                                 yy_push_state(IN_REGULAR_STRING, yyscanner);
                                                  yyextra->codeGenContext->col = yyextra->next_column_number;
-                                                 yyextra->next_column_number += 1; 
+                                                 yyextra->next_column_number += 1;
                                                  yyextra->workString = std::make_shared<std::string>();
+                                                 yyextra->strInterp = false;   // set true on the first interpolation hole
+                                               }
+  /* Interpolation hole opener: emit the literal chunk accumulated so far as an ISTR_CHUNK, then lex the hole
+     in IN_INTERP_HOLE until the closer. Longest-match beats single_string_char. A lone dollar (not followed
+     by a brace) and an escaped dollar stay literal via single_string_char / simple_esc_seq. */
+<IN_REGULAR_STRING>"${"                         {
+                                                 yyextra->strInterp = true;
+                                                 yy_push_state(IN_INTERP_HOLE, yyscanner);
+                                                 SAVE_TOKEN_FROM_BUFFER(2);
+                                                 return ISTR_CHUNK;
                                                }
 <IN_REGULAR_STRING>{single_string_char}        {
                                                  ++(yyextra->next_column_number);
@@ -189,14 +199,39 @@ identifier                  ({letter_char}|"_"){ident_char}*
                                                  yyextra->workString->append(hexToUTF8(hexVal));
                                                }
 <IN_REGULAR_STRING>{regular_string_end}        {
+                                                 bool interp = yyextra->strInterp;
                                                  yy_pop_state(yyscanner);
                                                  SAVE_TOKEN_FROM_BUFFER(1);
-                                                 return STRING_LITERAL; 
+                                                 // An interpolated string's closing `"` emits the final (tail) chunk;
+                                                 // a plain string emits STRING_LITERAL as before.
+                                                 return interp ? ISTR_CHUNK : STRING_LITERAL;
                                                }
 <IN_REGULAR_STRING>.                           { error("unexpected character lexing string", yyscanner); }
 <IN_REGULAR_STRING><<EOF>>                     {
                                                   error("unexpected end of file lexing string", yyscanner);
                                                   yyterminate();   /* stop — else flex re-matches <<EOF>> at EOF forever */
+                                               }
+
+  /* Interpolation hole `${ … }` — a RESTRICTED expression: an identifier optionally followed by `.field`
+     or `[index]` accessors (no operators/calls — bind a `let` for anything more). These lex as the ordinary
+     IDENTIFIER / DOT / bracket / index-literal tokens so the parser reuses real expression nodes; `}` closes
+     the hole and resumes string lexing (the next ISTR_CHUNK follows). Whitespace inside the hole is ignored. */
+<IN_INTERP_HOLE>[ \t]+                          { yyextra->next_column_number += yyleng; }
+<IN_INTERP_HOLE>{new_line}                      { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
+<IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return getToken(yytext); }
+<IN_INTERP_HOLE>{dec_literal_no_suffix}         { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return DEC_LITERAL_NO_SUFFIX; }
+<IN_INTERP_HOLE>"."                             { RETURN_TOKEN(DOT, 1); }
+<IN_INTERP_HOLE>"["                             { RETURN_TOKEN(LEFT_BRACKET, 1); }
+<IN_INTERP_HOLE>"]"                             { RETURN_TOKEN(RIGHT_BRACKET, 1); }
+<IN_INTERP_HOLE>"}"                             {
+                                                 yyextra->next_column_number += 1;
+                                                 yy_pop_state(yyscanner);                       // back to IN_REGULAR_STRING
+                                                 yyextra->workString = std::make_shared<std::string>();   // accumulate the next chunk
+                                               }
+<IN_INTERP_HOLE>.                               { error("unexpected character in a string interpolation hole - only an identifier with member or index accessors is allowed", yyscanner); }
+<IN_INTERP_HOLE><<EOF>>                         {
+                                                  error("unexpected end of file in a string interpolation hole", yyscanner);
+                                                  yyterminate();
                                                }
 
 {identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return getToken(yytext); }
@@ -398,6 +433,9 @@ char getSimpleEscape(const char* input, int index)
     break;
     case 'v':
       rtn = '\v';
+    break;
+    case '$':          // `\$` -> a literal `$` (so `\${` is a literal `${`, not an interpolation hole)
+      rtn = '$';
     break;
   }
 

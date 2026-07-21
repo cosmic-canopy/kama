@@ -1,0 +1,33 @@
+// std::fmt (P1) coverage: char UTF-8 encoding, float, the empty buffer, and the migrated `SocketAddr`
+// rendering through the `Format` contract via the free `toString`. Exit code 15 = all four checks passed.
+import std::net::{SocketAddr};
+
+fn int main() {
+    int32 r = 0;
+
+    // char -> its UTF-8 character (ASCII + a 3-byte snowman U+2603)
+    Formatter fc = Formatter.make();
+    fc.writeChar(c: 'A');
+    char snow = cast<char>(0x2603ui32);
+    fc.writeChar(c: snow);
+    string cs = fc.finish();
+    if (cs == "A☃") { r = r + 1; }
+
+    // float64 round-trips at shortest precision
+    Formatter ff = Formatter.make();
+    ff.writeF64(v: 1.5);
+    string fs = ff.finish();
+    if (fs == "1.5") { r = r + 2; }
+
+    // an untouched Formatter finishes to the empty string
+    Formatter fe = Formatter.make();
+    string es = fe.finish();
+    if (es == "") { r = r + 4; }
+
+    // SocketAddr now implements Format; the free toString renders it via the sink
+    SocketAddr a = SocketAddr.fromHostIp(ip: 2130706433ui32, port: 8080ui16);   // 127.0.0.1
+    string rendered = toString(x: ref a);
+    if (rendered == "127.0.0.1:8080") { r = r + 8; }
+
+    return r;   // 1 + 2 + 4 + 8 = 15
+}

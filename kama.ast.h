@@ -186,6 +186,19 @@ public:
     StringNode(CodeGenContext& context, SharedString value) : ASTNode(context),  ExpressionNode(context), value(value) { }
 };
 
+// A string interpolation `"a ${x} b ${y} c"` — an ordered alternation of literal PARTS and hole
+// EXPRESSIONS, with the invariant `parts.size() == holes.size() + 1` (chunk, hole, chunk, …, chunk).
+// Both lists are explicit so a Campaign-2 tagged string (`sql"…${x}…"`) is an ADDITIVE `tag` on the SAME
+// node, not a reshape — an untagged interpolation is the "default tag" (write each hole into a Formatter).
+// Lowers to a Formatter build: writeStr(part) then hole.format(ref f) per segment, then finish().
+class InterpolatedStringNode : public ExpressionNode {
+public:
+    std::vector<SharedString> parts;        // literal chunks — always holes.size()+1 of them
+    std::vector<SharedExpression> holes;    // interpolated hole expressions (identifier/member/index)
+    SharedString tag;                       // Campaign 2: the tag name, or null for a plain interpolation
+    InterpolatedStringNode(CodeGenContext& context) : ASTNode(context), ExpressionNode(context) { }
+};
+
 class BooleanNode : public ExpressionNode {
 public:
     bool value;

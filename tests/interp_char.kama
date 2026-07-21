@@ -1,0 +1,26 @@
+// char-typed interpolation holes render as their CHARACTER (not the codepoint number) via the Formatter's
+// writeChar fast-path — char has no Format conformance (shares uint32's C type), so the compiler detects a
+// char hole from its kama type node (local, foreach binding, or struct field). Exit 7 = all three forms.
+type value Glyph implements Format {
+    public char ch;
+    public ctor make(char c) { Glyph g; g.ch = c; return g; }
+    public fn void format(ref Formatter f) { f.writeChar(c: this.ch); }
+}
+
+fn int main() {
+    int32 r = 0;
+
+    char c = 'A';
+    string a = "letter=${c}";
+    if (a == "letter=A") { r = r + 1; }
+
+    string acc = "";
+    foreach (char ch in "hi".chars()) { string piece = "${ch}."; acc = acc + piece; }
+    if (acc == "h.i.") { r = r + 2; }
+
+    Glyph g = Glyph.make(c: cast<char>(0x2603ui32));   // ☃ (3-byte UTF-8)
+    string b = "snow=${g.ch}";
+    if (b == "snow=☃") { r = r + 4; }
+
+    return r;   // 1+2+4 = 7
+}

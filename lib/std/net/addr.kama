@@ -1,6 +1,6 @@
 namespace std::net;
 
-import std::fmt::{u8Str, u16Str};
+import std::fmt::{u8Str};
 
 export { IpAddr, SocketAddr, RecvFrom };
 
@@ -14,7 +14,7 @@ enum IpAddr {
 // sender) and `localAddr()` (the OS-assigned ephemeral port). Callers still pass plain `host`+`port`
 // strings/scalars INTO connect/bind/sendTo; `SocketAddr` exists so returns have a first-class shape.
 @generate(of)
-type value SocketAddr {
+type value SocketAddr implements Format {
     public IpAddr ip;
     public uint16 port;
 
@@ -35,9 +35,13 @@ type value SocketAddr {
         };
     }
 
-    // Render "a.b.c.d:port" for logging/tests.
-    public fn string toString() {
-        return this.ipString() + ":" + u16Str(v: this.port);
+    // Render "a.b.c.d:port" into a Formatter (the `Format` contract). Free `toString(x: ref addr)` (prelude)
+    // gives the owned-string convenience; `ipString()` supplies the host octets (host-order match).
+    public fn void format(ref Formatter f) {
+        string host = this.ipString();
+        f.writeStr(s: ref host);
+        f.writeStr(s: ":");
+        f.writeU64(v: cast<uint64>(this.port));
     }
 }
 

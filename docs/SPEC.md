@@ -75,8 +75,9 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
 
 - **`+` / `==` / `!=`** — `a + b` concatenates (a fresh heap-owned string), `a == b` / `a != b` compare
   bytes. The compiler special-cases string operands (not a user overload — `string` is a primitive); both
-  operands must be `string` (`string + <number>` is a compile error — a to-string/`Display` substrate is
-  future work). Chains and compose: `a + b + c`, `s.trim() == "x"`.
+  operands must be `string` (`string + <number>` is a compile error — **string interpolation** is the one way
+  to mix values into text; see below). An interpolation counts as a `string` operand (`name == "hi ${x}"`).
+  Chains and compose: `a + b + c`, `s.trim() == "x"`.
 - **slice** — `substring(start:, end:)` copies the byte range `[start, end)` into an owned string
   (bounds-checked; a **byte** range, not codepoint-validated — use `.chars()` for codepoints).
 - **search** — `find(substring:)` returns `Optional<usize>` (the first byte offset, `None` when absent —
@@ -98,6 +99,51 @@ string greet = "Hello, " + name + "!";
 if (greet.toLower().contains(substring: "hello")) { … }
 match (greet.find(substring: ",")) { case Some(i): …; case None: …; }
 ```
+
+### Formatting & string interpolation ✅
+
+Rendering a value as text goes through **one** contract, `Format` (prelude, so it works without an import and
+survives `--no-std`) — the display twin of `Serialize`:
+
+```kama
+type contract Format for both { fn void format(ref Formatter f); }
+```
+
+A type writes its pieces into a caller-owned **`Formatter`** sink (a growable UTF-8 buffer), so a whole nested
+value materializes in **one** allocation — no O(n²) concat. `Formatter` has `writeStr` / `writeI64` /
+`writeU64` / `writeF64` / `writeF32` / `writeBool` / `writeChar` and a `finish() -> string`. Every primitive
+(`int8`..`uint64`, `float32/64`, `bool`, `string`) conforms; a free `toString<T: Format>(ref T) -> string`
+wraps the build for convenience. `Format` is **infallible** (`void`, no `Result`) — an in-memory write can't
+fail, unlike `serialize` over an I/O sink.
+
+```kama
+type value Point implements Format {
+    int32 x; int32 y;
+    public fn void format(ref Formatter f) {
+        f.writeStr(s: "("); f.writeI64(v: cast<int64>(this.x));
+        f.writeStr(s: ", "); f.writeI64(v: cast<int64>(this.y)); f.writeStr(s: ")");
+    }
+}
+```
+
+**Interpolation.** A `${expr}` hole in a plain string literal splices a value in — lowered at **compile time**
+to a `Formatter` build (a `writeStr` per literal chunk, `expr.format(ref f)` per hole), statically type-checked,
+**no runtime reflection**:
+
+```kama
+string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who[0].format into one buffer
+```
+
+- **Holes are restricted** to an identifier with `.field` / `[index]` accessors (`${user.name}`, `${items[i]}`).
+  Anything with an operator or call must be bound first (`let sum = a + b; "…${sum}"`) — logic stays out of
+  string literals (Rust RFC 2795's restraint).
+- **Escape** a literal `${` as `\${`; a lone `$` (not before `{`) stays literal.
+- **Verbatim** strings never interpolate — `@"raw ${x}"` is literal (the raw escape hatch).
+- A **`char`-typed hole** renders as its character (`${c}` → the glyph) via a `writeChar` fast-path — the
+  compiler detects `char` from the hole's type node (`char` shares `uint32`'s C type, so it can't hold a
+  `Format` conformance directly).
+- **Format specifiers** (`${x:.2f}`), a `@generate` debug derive, and **tagged strings** (`sql"…"` / `html"…"`
+  / `stripIndent"…"`) are planned; the interpolation AST already carries `{parts, holes}` so a tag is additive.
 
 ## Collections & strings ✅
 

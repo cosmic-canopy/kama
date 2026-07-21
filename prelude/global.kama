@@ -368,3 +368,65 @@ type value GlobalAllocator implements Allocator {
     }
     public fn void deallocate(Ptr pointer, usize bytes) { unsafe { free(p: pointer); } }
 }
+
+// ── std::fmt core: human-facing text rendering (language-level) ──────────────────────────────────────────
+// `Format` is the ONE to-text contract — the display twin of `Serialize`: a type writes its own pieces into
+// a caller-owned `Formatter` sink, so a whole nested value materializes in ONE allocation (no O(n²) concat).
+// `toString(x)` is the convenience wrapper on top. This lives in the prelude (survives `--no-std`) because
+// string interpolation (`"${x}"`) lowers to `format` calls and so must resolve everywhere. INFALLIBLE: an
+// in-memory buffer write cannot fail, so `format` returns `void` — a deliberate divergence from `serialize`
+// (which has a real I/O sink + non-representable floats and so is `Result`-returning). The scalar formatters
+// bind the stdio-free runtime helpers in kama_runtime.h ("Number / char -> string"), like `kama_string_from_raw`.
+extern fn string kama_fmt_i64(int64 v);
+extern fn string kama_fmt_u64(uint64 v);
+extern fn string kama_fmt_f64(float64 v);
+extern fn string kama_fmt_f32(float32 v);
+extern fn string kama_fmt_char(char cp);
+// Amortized-growth byte append onto the buffer (kama_runtime.h). `DynamicArray` is a std::collections library
+// generic — unavailable this early (the prelude is collected before any std module), so the sink is backed by
+// an owned `string` grown in place instead, which keeps ordinary string RAII (no custom destructor needed).
+extern fn void kama_str_push(Ptr<string> buf, ref string src);
+extern fn string kama_str_take(Ptr<string> buf);
+type contract Format for both { fn void format(ref Formatter f); }
+// The growable UTF-8 sink — write your pieces in, `finish()` hands back the owned string. Each scalar becomes
+// its decimal/UTF-8 text via a runtime formatter, whose bytes are appended to the single backing buffer, so a
+// whole nested value materializes in ONE growing allocation rather than one per `+`.
+type resource Formatter {
+    string buf;
+    public ctor make() { Formatter r; r.buf = ""; return give r; }
+    // Append a string's UTF-8 bytes verbatim (borrowed — reads the fat pointer, doesn't dup the bytes).
+    public fn void writeStr(ref string s) { unsafe { kama_str_push(buf: addr(of: this.buf), src: s); } }
+    public fn void writeI64(int64 v)   { string t = kama_fmt_i64(v: v);  this.writeStr(s: ref t); }
+    public fn void writeU64(uint64 v)  { string t = kama_fmt_u64(v: v);  this.writeStr(s: ref t); }
+    public fn void writeF64(float64 v) { string t = kama_fmt_f64(v: v);  this.writeStr(s: ref t); }
+    public fn void writeF32(float32 v) { string t = kama_fmt_f32(v: v);  this.writeStr(s: ref t); }
+    public fn void writeBool(bool v)   { string t = "false"; if (v) { t = "true"; } this.writeStr(s: ref t); }
+    public fn void writeChar(char c)   { string t = kama_fmt_char(cp: c); this.writeStr(s: ref t); }
+    // Hand back the accumulated buffer as the owned result string (zero-copy move-out; the Formatter is spent).
+    public fn string finish() { unsafe { return kama_str_take(buf: addr(of: this.buf)); } }
+}
+// Primitive conformances (pure-kama retro-impls, like the Hashable/Comparable ones above) — every scalar and
+// `string` renders in its natural form, so `<T: Format>` bounds and `"${x}"` compose universally without an
+// import. Narrow integers widen into the widest write (JSON-style: one conversion per signedness). NO `char`
+// conformance: `char` and `uint32` share the C type `uint32_t`, so the cType-keyed conformance registry can't
+// hold both (the same limitation `Serialize` notes) — a `char` interpolated as `${c}` renders as its CHARACTER
+// via the compiler's `writeChar` fast path, while a `char` reached through a generic bound rides `uint32`.
+implements Format for int8    { public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); } }
+implements Format for int16   { public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); } }
+implements Format for int32   { public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); } }
+implements Format for int64   { public fn void format(ref Formatter f) { f.writeI64(v: this); } }
+implements Format for uint8   { public fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); } }
+implements Format for uint16  { public fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); } }
+implements Format for uint32  { public fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); } }
+implements Format for uint64  { public fn void format(ref Formatter f) { f.writeU64(v: this); } }
+implements Format for float32 { public fn void format(ref Formatter f) { f.writeF32(v: this); } }
+implements Format for float64 { public fn void format(ref Formatter f) { f.writeF64(v: this); } }
+implements Format for bool    { public fn void format(ref Formatter f) { f.writeBool(v: this); } }
+implements Format for string  { public fn void format(ref Formatter f) { f.writeStr(s: this); } }
+// The convenience wrapper: build a Formatter, format into it, finish — ONE allocation for the whole value.
+// A generic bound method call (like the `__kamaDeserialize` trampoline), monomorphized per `T`.
+fn string toString<T: Format>(ref T x) {
+    Formatter f = Formatter.make();
+    x.format(f: ref f);
+    return f.finish();
+}
