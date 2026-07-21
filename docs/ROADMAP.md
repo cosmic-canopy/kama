@@ -89,7 +89,15 @@ genuinely later-track or opt-in.
      enum-typed fields — they'd gain `Format` separately); `@generate(Format)` on a **generic**/**variant**/
      **enum** type itself; and, if a type ever needs BOTH a curated display and a structural dump, a
      `${x:?}`-routed `@generate(Debug)` (the spec hook already exists — purely additive, does not reopen the
-     one-contract decision).
+     one-contract decision). **Per-derive `@skip(Derive…)` (deferred, additive):** today `@skip` is a single
+     boolean shared by every derive (skip from serialization AND the Format dump). When a field needs to
+     diverge — the killer case is *redaction* (persist `passwordHash` via Serialize but hide it from a `${acct}`
+     log line), and the inverse (a cached/computed field: `@skip` Serialize but show in Format) — the sanctioned
+     design is to parameterize it: `@skip(Format)` / `@skip(Serialize)` / `@skip(Serialize, Format)`, with bare
+     `@skip` = all, using the same contract-name vocabulary as `@generate(...)`. `FieldInfo::serSkip` becomes a
+     per-derive set; `@field(name:)` stays serde-only. Note the mandatory-marking interaction: `@skip(Format)`
+     leaves the field IN serde, so it still needs an explicit `@field` (`@field @skip(Format)`). Build when a
+     concrete need appears (YAGNI); bare `@skip` today is forward-compatible.
   3. **Tagged strings** (`sql"…"`/`html"…"`/`stripIndent"…"`) — additive on the finalized
      `{parts, holes(+spec), tag}` AST (the `tag` field already exists, unused). The biggest piece.
   `string + <number>` stays a compile error by design — interpolation is the one way to mix values into text.
