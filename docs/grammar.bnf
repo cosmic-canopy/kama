@@ -104,6 +104,8 @@ literal
   | CHARACTER_LITERAL
   | STRING_LITERAL
   | interp_expr
+  | STRING_TAG STRING_LITERAL      /* a tagged plain string: one part, no holes */
+  | STRING_TAG interp_expr      /* a tagged interpolation */
   | NULL_LITERAL
   ;
 

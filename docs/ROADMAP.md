@@ -98,8 +98,15 @@ genuinely later-track or opt-in.
      per-derive set; `@field(name:)` stays serde-only. Note the mandatory-marking interaction: `@skip(Format)`
      leaves the field IN serde, so it still needs an explicit `@field` (`@field @skip(Format)`). Build when a
      concrete need appears (YAGNI); bare `@skip` today is forward-compatible.
-  3. **Tagged strings** (`sql"…"`/`html"…"`/`stripIndent"…"`) — additive on the finalized
-     `{parts, holes(+spec), tag}` AST (the `tag` field already exists, unused). The biggest piece.
+  3. **Tagged strings ✅** (`sql"…"`/`html"…"`/`stripIndent"…"`) — an identifier immediately before a string
+     tags it; the compiler hands a tag function `fn R name(ref Template t)` the trusted literal parts and the
+     rendered holes SEPARATELY (a `Template` value over borrowed arrays), so `html` escapes holes, `sql` binds
+     them as out-of-band `?` params (injection-safe), `stripIndent` dedents the template only. Tags + `SqlQuery`
+     live in `std::fmt`; `Template` is a prelude type. Specs compose inside a tag. Built additively on the
+     `{parts, holes(+spec), tag}` AST. **Deferred (compatible future add-on, no current need):** *type-preserved
+     params* — each hole keeping its static type into the params list (Model B, a per-tag hole contract) rather
+     than the rendered `string` of the shipped Model A. `html` returning a distinct `SafeHtml` type is likewise
+     future. Regex is a separate campaign.
   `string + <number>` stays a compile error by design — interpolation is the one way to mix values into text.
 - **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (see
   [SPEC.md](SPEC.md) + §5); the **full `expose`** — richer wasm module exports + the scripting host

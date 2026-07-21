@@ -24,31 +24,58 @@
     "strings": {
       "patterns": [
         {
+          "comment": "html\"…\" tagged string — inject HTML highlighting into the body, keep ${…} holes live",
+          "begin": "(html)(\")",
+          "end": "\"",
+          "beginCaptures": { "1": { "name": "entity.name.function.tag.kama" }, "2": { "name": "punctuation.definition.string.begin.kama" } },
+          "name": "string.quoted.double.tagged.html.kama",
+          "patterns": [ { "include": "#interp-body" }, { "include": "text.html.basic" } ]
+        },
+        {
+          "comment": "sql\"…\" tagged string — inject SQL highlighting into the body, keep ${…} holes live",
+          "begin": "(sql)(\")",
+          "end": "\"",
+          "beginCaptures": { "1": { "name": "entity.name.function.tag.kama" }, "2": { "name": "punctuation.definition.string.begin.kama" } },
+          "name": "string.quoted.double.tagged.sql.kama",
+          "patterns": [ { "include": "#interp-body" }, { "include": "source.sql" } ]
+        },
+        {
+          "comment": "a generic tag\"…\" tagged string (stripIndent, user tags) — highlight the tag, keep ${…} holes",
+          "begin": "([A-Za-z_][A-Za-z0-9_]*)(\")",
+          "end": "\"",
+          "beginCaptures": { "1": { "name": "entity.name.function.tag.kama" }, "2": { "name": "punctuation.definition.string.begin.kama" } },
+          "name": "string.quoted.double.tagged.kama",
+          "patterns": [ { "include": "#interp-body" } ]
+        },
+        {
           "name": "string.quoted.double.kama",
           "begin": "\"",
           "end": "\"",
-          "patterns": [
-            { "name": "constant.character.escape.kama", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" },
-            {
-              "comment": "string interpolation hole ${ident.field[index]:spec} — an identifier with .field/[index] accessors and an optional format spec",
-              "name": "meta.interpolation.kama",
-              "begin": "\\$\\{",
-              "end": "\\}",
-              "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.kama" } },
-              "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.kama" } },
-              "patterns": [
-                { "comment": "format specifier :.2 / :0x / :+06 — highlighted as a unit before the accessor rules", "name": "keyword.other.format-spec.kama", "match": ":[-+.0-9A-Za-z]+" },
-                { "name": "variable.other.kama", "match": "[A-Za-z_][A-Za-z0-9_]*" },
-                { "name": "punctuation.accessor.kama", "match": "[.\\[\\]]" },
-                { "name": "constant.numeric.kama", "match": "[0-9]+" }
-              ]
-            }
-          ]
+          "patterns": [ { "include": "#interp-body" } ]
         },
         {
           "name": "string.quoted.verbatim.kama",
           "begin": "@\"",
           "end": "\""
+        }
+      ]
+    },
+    "interp-body": {
+      "patterns": [
+        { "name": "constant.character.escape.kama", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" },
+        {
+          "comment": "string interpolation hole ${ident.field[index]:spec} — an identifier with .field/[index] accessors and an optional format spec",
+          "name": "meta.interpolation.kama",
+          "begin": "\\$\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.kama" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.kama" } },
+          "patterns": [
+            { "comment": "format specifier :.2 / :0x / :+06 — highlighted as a unit before the accessor rules", "name": "keyword.other.format-spec.kama", "match": ":[-+.0-9A-Za-z]+" },
+            { "name": "variable.other.kama", "match": "[A-Za-z_][A-Za-z0-9_]*" },
+            { "name": "punctuation.accessor.kama", "match": "[.\\[\\]]" },
+            { "name": "constant.numeric.kama", "match": "[0-9]+" }
+          ]
         }
       ]
     },

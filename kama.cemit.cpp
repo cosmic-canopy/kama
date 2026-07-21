@@ -651,7 +651,11 @@ std::string CEmitter::emitInterpolation(InterpolatedStringNode* is)
     }
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<interp>"));
     CodeGenContext& ctx = *_synthCtx;
-    auto ident = [&](const std::string& s) { return std::make_shared<IdentifierNode>(ctx, std::make_shared<std::string>(s)); };
+
+    // A TAGGED string `html"…${x}…"` routes literal parts + rendered holes to a tag function (Campaign 2),
+    // which treats them differently (escape holes, dedent parts, bind holes as params). Handled separately
+    // from the default Formatter lowering below.
+    if (is->tag) return emitTaggedInterpolation(is);
 
     std::string fv = "__fmt" + std::to_string(_tempCounter++);
     _hoisted.push_back("Formatter " + fv + " = Formatter__make();");
@@ -669,36 +673,100 @@ std::string CEmitter::emitInterpolation(InterpolatedStringNode* is)
             _hoisted.push_back("kama_string " + pv + " = " + litExpr + ";");
             _hoisted.push_back("Formatter__writeStr(&" + fv + ", &" + pv + ");");
         }
-        if (i < nh && is->holes[i]) {
-            // A `${x:spec}` hole applies its format specifier via a Formatter fast-path (precision/base),
-            // leaving the `Format` contract spec-less. Checked before the char/format paths so a spec on a
-            // char (or any non-numeric hole) is diagnosed rather than silently dropped.
-            if (i < is->specs.size() && is->specs[i]) {
-                emitHoleSpec(fv, is->holes[i], *is->specs[i]);
-                continue;
-            }
-            // A `char` hole renders its CHARACTER via the Formatter's writeChar fast-path — `char` has no
-            // Format conformance (it shares uint32's cType), so the dispatch below would render it numeric.
-            if (exprIsChar(is->holes[i])) {
-                _hoisted.push_back("Formatter__writeChar(&" + fv + ", " + emitExpression(is->holes[i]) + ");");
-                continue;
-            }
-            // A hole formats via the real Format dispatch: synthesize `<hole>.format(f: ref fv)` so the hole's
-            // static type picks the right `format` (user type, primitive conformance, or string). `ref fv`
-            // needs only the variable, not fv's class, so this resolves though writeStr-on-fv would not.
-            auto args = std::make_shared<ArgumentList>();
-            args->push_back(std::make_shared<ArgumentNode>(ctx, ident("f"),
-                              std::make_shared<ModifierNode>(ctx, std::make_shared<std::string>("ref")), ident(fv)));
-            auto call = std::make_shared<InvocationNode>(ctx,
-                          std::make_shared<MemberAccessNode>(ctx, ident("format"), is->holes[i]), args);
-            _hoisted.push_back(emitExpression(call) + ";");
-        }
+        if (i < nh && is->holes[i])
+            emitHoleInto(fv, is->holes[i], (i < is->specs.size()) ? is->specs[i] : nullptr);
     }
 
     // Return the `finish()` call itself (a fresh owned-string rvalue, like `a + b`), NOT a recorded temp —
     // so the enclosing assignment/return/arg takes sole ownership with no double-drop. `fv` (scope-dropped)
     // frees its now-empty buffer harmlessly after the zero-copy take.
     return "Formatter__finish(&" + fv + ")";
+}
+
+// Render ONE interpolation hole into the Formatter named `fv` (a hoisted C temp): a `${x:spec}` applies its
+// specifier via a Formatter fast-path; a `char` renders its CHARACTER (char has no Format conformance — it
+// shares uint32's cType); everything else dispatches through the real `Format` contract on the hole's static
+// type. Shared by the plain lowering above and the per-hole render in emitTaggedInterpolation.
+void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, SharedString spec)
+{
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<interp>"));
+    CodeGenContext& ctx = *_synthCtx;
+    auto ident = [&](const std::string& s) { return std::make_shared<IdentifierNode>(ctx, std::make_shared<std::string>(s)); };
+    if (spec) { emitHoleSpec(fv, hole, *spec); return; }
+    if (exprIsChar(hole)) { _hoisted.push_back("Formatter__writeChar(&" + fv + ", " + emitExpression(hole) + ");"); return; }
+    // synthesize `<hole>.format(f: ref fv)` so the hole's static type picks the right `format`.
+    auto args = std::make_shared<ArgumentList>();
+    args->push_back(std::make_shared<ArgumentNode>(ctx, ident("f"),
+                      std::make_shared<ModifierNode>(ctx, std::make_shared<std::string>("ref")), ident(fv)));
+    auto call = std::make_shared<InvocationNode>(ctx,
+                  std::make_shared<MemberAccessNode>(ctx, ident("format"), hole), args);
+    _hoisted.push_back(emitExpression(call) + ";");
+}
+
+// A tagged string `<tag>"lit ${hole} lit"` lowers to: render each part + hole to an owned `kama_string`, pack
+// them into two C arrays, wrap a prelude `Template` (borrowed `Ptr<string>` + counts) over them, and call the
+// tag function `fn R <tag>(ref Template)`. The tag decides how literals (trusted) and holes (values) combine —
+// escaping, dedenting, or `?`-parameter binding (holes stay out-of-band → injection-safe by construction).
+// Holes render via the SAME per-hole path as plain interpolation (spec/char/Format), so specs compose for free.
+std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
+{
+    CodeGenContext& ctx = *_synthCtx;
+
+    std::string tagKey = resolveFunc(*is->tag, nullptr);
+    if (!_funcs.count(tagKey)) {
+        unsupported(("unknown string tag '" + *is->tag + "' — expected an imported `fn R " + *is->tag +
+                    "(ref Template t)` (e.g. `html`, `sql`, `stripIndent` from std::fmt)").c_str(), is->line);
+        return "\"\"";
+    }
+
+    // 1. Render each hole into its own owned `kama_string` temp; record it destructible so RAII frees it once
+    //    at scope end (the C arrays below hold borrowed fat-pointer copies — never separately freed).
+    std::vector<std::string> holeVars;
+    for (size_t i = 0; i < is->holes.size(); ++i) {
+        if (!is->holes[i]) continue;
+        std::string hf = "__thf" + std::to_string(_tempCounter++);
+        _hoisted.push_back("Formatter " + hf + " = Formatter__make();");
+        recordDestructibleLocal(hf, "Formatter");
+        emitHoleInto(hf, is->holes[i], (i < is->specs.size()) ? is->specs[i] : nullptr);
+        std::string hv = "__thv" + std::to_string(_tempCounter++);
+        _hoisted.push_back("kama_string " + hv + " = Formatter__finish(&" + hf + ");");
+        recordDestructibleLocal(hv, "kama_string");
+        holeVars.push_back(hv);
+    }
+
+    // 2. Materialize each literal part into a `kama_string` temp (string literals are non-owning — no drop).
+    std::vector<std::string> partVars;
+    for (size_t i = 0; i < is->parts.size(); ++i) {
+        const std::string& part = is->parts[i] ? *is->parts[i] : std::string();
+        std::string litExpr = emitExpression(std::make_shared<StringNode>(ctx, std::make_shared<std::string>(part)));
+        std::string pv = "__tp" + std::to_string(_tempCounter++);
+        _hoisted.push_back("kama_string " + pv + " = " + litExpr + ";");
+        partVars.push_back(pv);
+    }
+
+    // 3. Pack into C arrays (a zero-length array is illegal C → use NULL when there are no holes).
+    std::string pa = "__tpa" + std::to_string(_tempCounter++);
+    { std::string s = "kama_string " + pa + "[" + std::to_string(partVars.size()) + "] = {";
+      for (size_t i = 0; i < partVars.size(); ++i) s += (i ? ", " : " ") + partVars[i];
+      s += " };"; _hoisted.push_back(s); }
+    std::string holesPtr = "NULL";
+    if (!holeVars.empty()) {
+        std::string ha = "__tha" + std::to_string(_tempCounter++);
+        std::string s = "kama_string " + ha + "[" + std::to_string(holeVars.size()) + "] = {";
+        for (size_t i = 0; i < holeVars.size(); ++i) s += (i ? ", " : " ") + holeVars[i];
+        s += " };"; _hoisted.push_back(s);
+        holesPtr = ha;
+    }
+
+    // 4. Wrap a `Template` over the borrowed arrays (designated init — robust to field layout).
+    std::string tv = "__tmpl" + std::to_string(_tempCounter++);
+    _hoisted.push_back("Template " + tv + " = { ._parts = " + pa + ", ._nparts = " + std::to_string(partVars.size()) +
+                       ", ._holes = " + holesPtr + ", ._nholes = " + std::to_string(holeVars.size()) + " };");
+
+    // 5. Call the tag: `<tag>(&__tmpl)` returns a fresh owned R (like Formatter__finish), which the enclosing
+    //    assignment/return/arg takes ownership of. Hand-emitted via the resolved cName (bypasses named-arg
+    //    matching, so the tag's Template parameter may have any name).
+    return _funcs[tagKey].cName + "(&" + tv + ")";
 }
 
 std::string CEmitter::emitExpression(SharedExpression expr)
@@ -10793,7 +10861,14 @@ std::string CEmitter::exprClass(SharedExpression e)
     ASTNode* n = e.get();
 
     if (dynamic_cast<StringNode*>(n)) return "kama_string";   // a string literal is the `string` primitive
-    if (dynamic_cast<InterpolatedStringNode*>(n)) return "kama_string";   // an interpolation lowers to a `string`
+    if (auto* is = dynamic_cast<InterpolatedStringNode*>(n)) {
+        // A tagged string takes the tag function's return type; a plain interpolation lowers to a `string`.
+        if (is->tag) {
+            std::string key = resolveFunc(*is->tag, nullptr);
+            if (_funcs.count(key)) { std::string rc = _funcs[key].retCType; return (isClass(rc) || rc == "kama_string") ? rc : ""; }
+        }
+        return "kama_string";
+    }
 
     if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) {        // `.as<T>()` -> Optional<T>
         std::string oc = cType(optionalTypeNode(ad->type));

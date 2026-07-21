@@ -128,6 +128,7 @@ struct kamayystype {
 %token <string> FLOAT_LITERAL_NO_SUFFIX FLOAT_LITERAL_32 FLOAT_LITERAL_64 CHARACTER_LITERAL STRING_LITERAL
 %token <string> ISTR_CHUNK   /* a literal chunk of an interpolated string: head, mid, or tail (between holes) */
 %token <string> ISTR_SPEC    /* the raw format-spec text of a hole `${expr:SPEC}` (e.g. `.2`, `0x`); parsed at codegen */
+%token <string> STRING_TAG   /* a tag name immediately preceding a string literal: `sql"…"`, `html"…"` (Campaign 2) */
 %token <string> DEC_LITERAL_NO_SUFFIX HEX_LITERAL_NO_SUFFIX OCT_LITERAL_NO_SUFFIX BASED_LITERAL_NO_SUFFIX 
 %token <string> DEC_LITERAL HEX_LITERAL OCT_LITERAL BASED_LITERAL
 
@@ -360,6 +361,8 @@ literal
   | CHARACTER_LITERAL   { $$ = std::make_shared<CharNode>(SCANNER_CODEGENCONTEXT, (uint32_t)strtoul($1->c_str(), NULL, 10)); }
   | STRING_LITERAL   { $$ = std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1); }
   | interp_expr
+  | STRING_TAG STRING_LITERAL   { auto n = std::make_shared<InterpolatedStringNode>(SCANNER_CODEGENCONTEXT); n->parts.push_back($2); n->tag = $1; $$ = n; }   /* a tagged plain string: one part, no holes */
+  | STRING_TAG interp_expr   { std::static_pointer_cast<InterpolatedStringNode>($2)->tag = $1; $$ = $2; }   /* a tagged interpolation */
   | NULL_LITERAL   { $$ = std::make_shared<NullNode>(SCANNER_CODEGENCONTEXT); }
   ;
 

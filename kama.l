@@ -253,6 +253,12 @@ identifier                  ({letter_char}|"_"){ident_char}*
                                                   yyterminate();
                                                }
 
+  /* A tagged string `html"…"` / `sql"…"` / `stripIndent"…"` — an identifier IMMEDIATELY adjacent to a
+     string's opening `"` (no whitespace). Trailing context `/\"` matches the identifier without consuming
+     the quote, so the {regular_string_start} rule fires next and lexes the string/interpolation unchanged;
+     the parser attaches this STRING_TAG to the resulting node. `foo "x"` (with a space) is NOT a tag. Placed
+     before the plain {identifier} rule so it wins the same-length tie on quote-adjacency. */
+{identifier}/\"                                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return STRING_TAG; }
 {identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return getToken(yytext); }
 
 ","     { RETURN_TOKEN(COMMA, 1); }

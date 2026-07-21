@@ -927,6 +927,7 @@ private:
     bool exprIsChar(SharedExpression e);                // true iff `e`'s kama type is `char` (a char literal, local/param/foreach binding, or a char field)
     int holeBuiltinType(SharedExpression e);            // IDENTIFIER_*_VAL of an interp hole's numeric kama type (local/param/field/literal), 0 if unknown
     void emitHoleSpec(const std::string& fv, SharedExpression hole, const std::string& spec);  // format-specifier fast-path for `${x:spec}`
+    void emitHoleInto(const std::string& fv, SharedExpression hole, SharedString spec);        // render one hole into Formatter `fv` (spec / char / Format dispatch); shared by plain + tagged interpolation
     std::string lvalueCType(SharedExpression e);        // C type of an lvalue local/param/field, KEEPING collection/string types
     bool exprIsString(SharedExpression e);              // true iff `e` statically has kama type `string` (kama_string)
     std::string hoistStringTemp(SharedExpression e);    // owned-string RVALUE -> a scope-dtor'd temp (frees it); "" for lvalue/literal/non-string
@@ -990,6 +991,7 @@ private:
     // Expressions -> C expression text
     std::string emitExpression(SharedExpression expr);
     std::string emitInterpolation(InterpolatedStringNode* is);   // `"a ${x} b"` -> a hoisted Formatter build
+    std::string emitTaggedInterpolation(InterpolatedStringNode* is);   // `tag"a ${x} b"` -> a Template + a `<tag>(ref Template)` call
     std::string emitInvocation(InvocationNode* call);
     std::string emitVariantConstruction(ClassInfo& ci, const std::string& variant,
                                         SharedArgumentList args, int srcLine);

@@ -1,0 +1,17 @@
+// A tag applies to a plain string literal too — a tagged string with NO holes. The tag still runs; literal
+// parts are passed through untouched (html does NOT escape literals — only holes). Exit bitset (3 = both).
+import std::fmt::{html, stripIndent};
+
+fn int32 main() {
+    int32 r = 0;
+
+    string h = html"<p>raw & <ok></p>";                 // no holes → the literal is emitted verbatim, unescaped
+    if (h == "<p>raw & <ok></p>") { r = r + 1; }
+
+    string s = stripIndent"
+        alpha
+        beta";
+    if (s == "alpha\nbeta") { r = r + 2; }               // no holes → pure template dedent
+
+    return r;
+}

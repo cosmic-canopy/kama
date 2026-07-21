@@ -442,3 +442,21 @@ fn string toString<T: Format>(ref T x) {
     x.format(f: ref f);
     return f.finish();
 }
+
+// A tagged string `html"…${x}…"` hands its trusted literal PARTS and its rendered HOLE values to a tag
+// function `fn R name(ref Template t)` — kept SEPARATE so the tag can escape holes (html), dedent parts
+// (stripIndent), or bind holes as out-of-band `?` params (sql, injection-safe by construction). The compiler
+// materializes this over two borrowed C arrays (invariant: partCount() == holeCount() + 1) and constructs it
+// ONLY in emitted code — there is no kama ctor. The `Ptr` fields are borrows: `Template` owns nothing.
+type value Template {
+    Ptr<string> _parts;
+    int32 _nparts;
+    Ptr<string> _holes;
+    int32 _nholes;
+    public fn int32 partCount() { return this._nparts; }
+    public fn int32 holeCount() { return this._nholes; }
+    // The i-th literal part / rendered hole, as a fresh owned copy (the backing bytes are borrowed, so a copy
+    // is what a tag can keep, iterate, or `give` onward).
+    public fn string part(int32 at) { if (at < 0 || at >= this._nparts) { panic(msg: "Template.part index out of bounds"); } unsafe { return copy this._parts[at]; } }
+    public fn string hole(int32 at) { if (at < 0 || at >= this._nholes) { panic(msg: "Template.hole index out of bounds"); } unsafe { return copy this._holes[at]; } }
+}

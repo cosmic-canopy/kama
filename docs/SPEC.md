@@ -171,8 +171,26 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   generic/variant/enum carrying the attribute, is a clear compile error — see [ROADMAP.md](ROADMAP.md) §2).
   It is named after the **contract** (`Format`), not `display`/`debug` — Kama has one to-string contract, no
   Display/Debug split; a `${x:?}`-routed structural `Debug` derive stays a possible additive future.
-- **Tagged strings** (`sql"…"` / `html"…"` / `stripIndent"…"`) are planned; the interpolation AST already
-  carries `{parts, holes, specs, tag}` so a tag is additive.
+- **Tagged strings** ✅ — an identifier placed **immediately** before a string (`html"…"`, `sql"…"`,
+  `stripIndent"…"`; no space) makes it *tagged*. The compiler splits the string into its trusted literal
+  **parts** and its rendered **holes** (each hole run through `Format`) and hands them to a function
+  `fn R name(ref Template t)`, which decides how they combine — so a tag is just a function you can define:
+
+  ```kama
+  fn string html(ref Template t) { /* literals verbatim, holes HTML-escaped — XSS-safe */ }
+
+  string page = html"<b>${user}</b>";            // ${user} escaped, <b> kept raw
+  SqlQuery  q = sql"… WHERE id = ${id}";          // holes become `?` params, out-of-band (injection-safe)
+  string    s = stripIndent"…";                   // the literal template is dedented; hole values verbatim
+  ```
+
+  Because parts and holes stay **separate**, a tag treats literals (trusted) and holes (values) differently:
+  `html` escapes holes but not literals, `sql` never splices a hole into the query text (values go to a
+  params array), `stripIndent` dedents only the template. `Template` (a prelude type) exposes `partCount()`
+  / `holeCount()` / `part(at:)` / `hole(at:)`; `stripIndent`, `html`, `sql` (+`SqlQuery`) live in `std::fmt`.
+  Format specifiers compose inside a tag (`sql"…${amt:.2}"`). An unknown tag (no matching `fn` in scope) is a
+  compile error. *(Type-preserved params — each hole keeping its static type into the params list rather than
+  a rendered `string` — is a compatible future extension; see [ROADMAP.md](ROADMAP.md) §2.)*
 
 ## Collections & strings ✅
 

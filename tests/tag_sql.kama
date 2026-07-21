@@ -1,0 +1,21 @@
+// Tagged strings — `sql"…"`: each hole becomes a `?` placeholder in the query TEXT, and the hole VALUE goes
+// out-of-band into a separate params array. Values never enter the text, so injection is impossible by design.
+// Exit code is a bitset of the checks (7 = all three, including the injection-safety assertion).
+import std::fmt::{sql, SqlQuery};
+
+fn int32 main() {
+    int32 id = 42;
+    string name = "Alice";
+    string evil = "' OR 1=1 --";          // a classic SQL-injection payload
+    int32 r = 0;
+
+    SqlQuery q = sql"SELECT * FROM u WHERE id = ${id} AND name = ${name}";
+    if (q.queryText() == "SELECT * FROM u WHERE id = ? AND name = ?") { r = r + 1; }              // 1: placeholders
+
+    if (q.paramCount() == 2 && q.param(at: 0) == "42" && q.param(at: 1) == "Alice") { r = r + 2; } // 2: params out-of-band
+
+    SqlQuery q2 = sql"name = ${evil}";
+    if (q2.queryText() == "name = ?" && q2.param(at: 0) == "' OR 1=1 --") { r = r + 4; }           // 3: payload ONLY in params
+
+    return r;
+}

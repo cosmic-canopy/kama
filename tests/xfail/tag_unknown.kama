@@ -1,0 +1,6 @@
+// A tagged string whose tag has no matching `fn R name(ref Template)` in scope is rejected at compile time.
+fn int32 main() {
+    int32 x = 1;
+    string s = nope"v=${x}";
+    return 0;
+}
