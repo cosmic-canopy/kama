@@ -108,13 +108,13 @@ a **place** (an lvalue): you can write a field through it (`a[i].x = v`), index 
 bounds-checked. (Reading `a[i]` still yields a copy.)
 
 ```kama
-FixedArray<int32> a = new FixedArray<int32>(size: 4);   // fixed buffer, zero-initialized
+FixedArray<int32> a = FixedArray.make(size: 4);   // fixed buffer, zero-initialized
 a[0] = 10;  a[1] = 20;                          // bounds-checked []
 int32 first = a[0];
 foreach (int32 x in a) { /* ... */ }            // iterate (x is a copy)
 foreach (ref int32 x in a) { x = x * 2; }       // `ref`: mutate each element in place
 
-DynamicArray<Point> ps = new DynamicArray<Point>();             // growable
+DynamicArray<Point> ps = DynamicArray.empty();             // growable
 ps.add(item: p);   int n = ps.length();   Point q = ps[0];
 
 string s = "ab";                                // borrowed literal (no alloc)
@@ -143,7 +143,7 @@ ownership transfer). It is a **`type view`** (the stack-only-borrow kind; see *T
 escape check keeps it from being stored or outliving its buffer, so it can't dangle without a borrow checker.
 
 ```kama
-DynamicArray<float32> verts = new DynamicArray<float32>();  // … fill …
+DynamicArray<float32> verts = DynamicArray.empty();  // … fill …
 View<float32> all = verts.view();                       // borrow the whole buffer
 View<float32> mid = verts.slice(from: 2, count: 4);     // a sub-range [2, 6)
 uploadToGpu(window: verts.slice(from: 0, count: 3));    // pass a subrange down — no copy
@@ -194,13 +194,13 @@ is not enough), the same rule as `foreach`.
 ```kama
 import std::collections::{Map, Set};
 
-Map<string, int32> counts = Map();
+Map<string, int32> counts = Map.empty();
 counts.put(key: "a", value: 1);
 counts.put(key: "a", value: 2);                        // overwrite (drops the old value)
 int32 v = match (counts.get(key: "a")) { case Some(x): x; case None: 0; };   // 2
 counts.remove(key: "a");   bool has = counts.contains(key: "b");   int32 n = counts.length();
 
-Set<string> seen = Set();
+Set<string> seen = Set.empty();
 seen.add(key: "x");   bool member = seen.contains(key: "x");
 ```
 
@@ -225,7 +225,7 @@ the accessor that makes a `Map` of move-only values like `Owned`/`Shared`/a coll
 write-only; panics on an absent key, so guard with `contains` first, as a map lookup is *partial*);
 `remove(key:) -> Optional<V>` **moves the value out** (`None` when absent — reclaim it or discard to drop).
 A key that is an inline rvalue — a `string`/number literal or a user-type ctor — is materialized into a temp
-automatically, so `m.get(key: 5)` / `m.get(key: Point(1, 2))` work without binding a local first.
+automatically, so `m.get(key: 5)` / `m.get(key: Point.make(x: 1, y: 2))` work without binding a local first.
 
 `std::collections` also carries **`Deque<T>`** (a growable ring buffer — O(1) push/pop at both ends) and
 **`PriorityQueue<T: Comparable>`** (a binary heap). The queue is a **min-heap by default** (bare ctor or
@@ -300,7 +300,7 @@ construction. `Allocator`/`GlobalAllocator` are prelude (global, no import); `Ar
 ```kama
 import std::collections::{DynamicArray, Map, Arena, BumpAllocator};
 
-Arena arena = Arena(capacity: 1 << 16);                                  // caller-owned; drops last
+Arena arena = Arena.make(capacity: 1 << 16);                             // caller-owned; drops last
 DynamicArray<int32, BumpAllocator> xs = DynamicArray::withAllocator(allocator: arena.handle());
 Map<int32, int32, A: BumpAllocator> m = Map::withAllocator(allocator: arena.handle());  // named arg skips H
 // ... fill/use; xs and m draw from the one arena; their deallocate is a no-op; the Arena frees the buffer.
@@ -314,15 +314,15 @@ milestone (it rides this same seam). Coverage is the direct-`malloc` containers 
 ### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅
 
 Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>`,
-`Shared<T, A>`, and `Weak<T, A>`. A bare `new T(args)` is unchanged (`A` defaults to `GlobalAllocator` → libc
-malloc/free); a **placement** form `new(allocator: a) T(args)` draws the block from `a` and stores the handle in
+`Shared<T, A>`, and `Weak<T, A>`. A bare `new T.make(args)` is unchanged (`A` defaults to `GlobalAllocator` → libc
+malloc/free); a **placement** form `new(allocator: a) T.make(args)` draws the block from `a` and stores the handle in
 the box, so its dtor releases through the **same** allocator — letting a boxed object live in a caller-owned
 arena and be bulk-reclaimed on `reset()`:
 
 ```kama
-Arena arena = Arena(capacity: 1 << 12);                       // drops last (outlives the box)
-Owned<Node, BumpAllocator>  n = new(allocator: arena.handle()) Node(v: 42);
-Shared<Node, BumpAllocator> s = new(allocator: arena.handle()) Node(v: 7);   // pointee AND ctrl from the arena
+Arena arena = Arena.make(capacity: 1 << 12);                  // drops last (outlives the box)
+Owned<Node, BumpAllocator>  n = new(allocator: arena.handle()) Node.make(v: 42);
+Shared<Node, BumpAllocator> s = new(allocator: arena.handle()) Node.make(v: 7);   // pointee AND ctrl from the arena
 // n/s dtor deallocate() is a no-op; the objects live in the arena; the Arena frees the region.
 ```
 
@@ -346,14 +346,14 @@ edge spelling a stateful `A` is rejected at compile time (deserialize has no all
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 
 The smart-pointer triad `Owned`/`Shared`/`Weak` is **prelude / built-in — always in scope, no `import`**.
-RAII-over-GC *is* the language (every `new T(args)` already targets a `HeapOwner`, and the compiler
+RAII-over-GC *is* the language (every `new T.make(args)` already targets a `HeapOwner`, and the compiler
 special-cases the triad throughout: `HeapOwner`/`Deref`, never-null checks, drop insertion, ctrl-block layout),
 so the ownership triad is as fundamental as `int` or `Ptr` and shouldn't require an import. "Built-in" means
 **always-available, not rewritten in C**: they stay **kama-defined** (RAII `resource`s over `Deref`/`HeapOwner`,
 refcounting in kama), loaded as part of the prelude like the primitive `Hashable`/`Equatable` retro-impls.
 
 The compiler adds only what a library can't express: the type-erasure (fat pointer + vtable) that makes
-`Owned<Shape>`/`Shared<Shape>` over a **contract** work, `new T(args)` heap placement into any `HeapOwner<T>`,
+`Owned<Shape>`/`Shared<Shape>` over a **contract** work, `new T.make(args)` heap placement into any `HeapOwner<T>`,
 and — because it *is* their emitter — direct manipulation of their internals (ctrl blocks, shell-adopt,
 ownership transfer) in the emitted C of the serialization graph lowering, so that machinery leaks **no** public
 `__`-methods onto the triad.
@@ -363,10 +363,10 @@ ownership transfer) in the emitted C of the serialization graph lowering, so tha
 Use it for heap objects, recursive data structures, and polymorphic ownership.
 
 ```kama
-Owned<Counter> c = new Counter(start: 40);          // `new` heap-boxes the ELEMENT type
+Owned<Counter> c = new Counter.make(start: 40);     // `new` heap-boxes the ELEMENT type
 c.bump();  int n = c.get();                          // auto-deref: . reaches the pointee
 Owned<Counter> d = c;                                // MOVE: c is now empty (moved-from)
-fn Owned<Node> make(int v) { return new Node(id: v); }   // inline `new` in return/arg position — factory, moves out
+fn Owned<Node> make(int v) { return new Node.make(id: v); }   // inline `new` in return/arg position — factory, moves out
 ```
 
 Move-only: copying/initializing/returning an `Owned` transfers ownership and invalidates the source, so the
@@ -410,7 +410,7 @@ method is literally named `copy`.
 type resource Res implements Copyable(bare: copy) {   // a bare hand-off deep-copies
     DynamicArray<int32> items;
     ~Res() { }
-    public fn Res copy() { Res r = Res(v: this.items[0]); return give r; }   // the Copyable method
+    public fn Res copy() { Res r = Res.make(v: this.items[0]); return give r; }   // the Copyable method
 }
 Res b = copy a;   // deep copy — a stays valid, b has its own buffer
 Res c = give b;   // move — b consumed
@@ -428,13 +428,13 @@ rules as `ref T operator[]` (no lifetimes needed). This is how a smart pointer i
 
 ```kama
 type value Point { public int32 x; public int32 y; public fn int32 sum() { return this.x + this.y; }
-                   public Point(int32 x, int32 y) { this.x = x; this.y = y; } }
+                   public ctor make(int32 x, int32 y) { Point r; r.x = x; r.y = y; return give r; } }
 type value BoxP implements Deref<Point> {
     Point inner;
-    public BoxP(Point p) { this.inner = p; }
+    public ctor make(Point p) { BoxP r; r.inner = p; return give r; }
     public fn ref Point deref() { return this.inner; }
 }
-BoxP b = BoxP(p: Point(x: 30, y: 12));
+BoxP b = BoxP.make(p: Point.make(x: 30, y: 12));
 int32 s = b.sum();   // auto-deref -> Point__sum(BoxP__deref(&b))  (42)
 int32 x = b.x;       // auto-deref -> BoxP__deref(&b)->x           (30)
 ```
@@ -469,7 +469,7 @@ allowed; a static method has no `this`, so a local there can never shadow a fiel
 (refcount++), each drop releases, and the pointee is destroyed when the **last** handle goes away.
 
 ```kama
-Shared<Tex> a = new Tex(id: 7);
+Shared<Tex> a = new Tex.make(id: 7);
 Shared<Tex> b = a;     // retain — a and b share one Tex (both valid)
 b.use();  int n = a.id;
 // a, b drop in RAII order; the Tex is freed exactly once, with the last handle
@@ -759,12 +759,12 @@ other object, and **the ownership model follows the pointer type you hand in** �
 
 ```kama
 fnptr int32 Compare(int32 a, int32 b);   // NB: receiver is HIDDEN here (the inverse of an unbound fnptr)
-type value Scaler { int32 k; public Scaler(int32 k){ this.k = k; }
+type value Scaler { int32 k; public ctor make(int32 k){ Scaler r; r.k = k; return give r; }
                public fn int32 apply(int32 a, int32 b){ return (a - b) * this.k; } }
 
-Owned<Scaler>  s  = new Scaler(k: 3);     // (constructed as Owned)
+Owned<Scaler>  s  = new Scaler.make(k: 3);     // (constructed as Owned)
 BindableFunctionPtr<Compare> c  = new BindableFunctionPtr<Compare>(obj: s,  method: Scaler::apply);  // MOVE-in (sole owner)
-Shared<Scaler> s2 = new Scaler(k: 2);
+Shared<Scaler> s2 = new Scaler.make(k: 2);
 BindableFunctionPtr<Compare> c2 = new BindableFunctionPtr<Compare>(obj: s2, method: Scaler::apply);  // RETAIN (shared owner)
 BindableFunctionPtr<Compare> c3 = sub;   // free-function PROMOTION (no object) — so this type "accepts either"
 
@@ -865,19 +865,19 @@ remain ordinary identifiers everywhere else (`int32 value = 5;`). Only `type` is
 ```kama
 type value Counter {
     int value;                                       // fields are private by default
-    public Counter(int start) { value = start; }     // constructor (mark `public` to call from outside)
+    public ctor make(int start) { Counter r; r.value = start; return give r; }   // named ctor (`public` to call from outside)
     public fn void add(int n) { value = value + n; } // method (implicit self)
     public fn int get() { return value; }
 }
-Counter c = Counter(start: 40);   // stack value — a stack value uses the plain ctor, not `new`
-c.add(n: 2);                       // a `value` copies on hand-off
+Counter c = Counter.make(start: 40);   // stack value — dot-on-type construction, not `new`
+c.add(n: 2);                            // a `value` copies on hand-off
 ```
 
-Fields, methods (take an implicit `self`), one constructor, field initializers (run in the ctor),
+Fields, methods (take an implicit `self`), named constructors, field initializers (run in the ctor),
 `this.field`, `obj.method(args)`. Lowers to a `struct` + `Counter__method(Counter* self, …)` functions.
 Members are **private by default**; `new` is reserved for the heap (`Owned`/`Shared` element construction), so
-a stack value uses `Counter(start: 40)`, not `new Counter(...)`. A stack constructor may also be written
-**inline in a call argument** — `f(x: Counter(start: 5))` — it materializes a temporary passed by value (a
+a stack value uses `Counter.make(start: 40)`, not `new Counter.make(...)`. A constructor may also be called
+**inline in a call argument** — `f(x: Counter.make(start: 5))` — it materializes a temporary passed by value (a
 `value` copies, a `resource` moves); use a local for a `ref`/`out` parameter.
 
 A type that owns a heap resource (a collection, an `Owned`/`Shared`/`Weak`, or another `resource`) is
@@ -886,7 +886,7 @@ declared **`type resource`** and is move-only:
 ```kama
 type resource Buffer {
     DynamicArray<byte> data;                                 // owns heap → resource; fields stay private
-    public Buffer(int n) { … }
+    public ctor make(int n) { … }
     public fn int32 size() { return this.data.length(); }
 }
 ```
@@ -902,27 +902,30 @@ order. No GC; allocation/deallocation is predictable.
 
 ## Fallible construction (no exceptions) ✅
 
-kama has no exceptions, so **constructors are infallible** — trivial, in-place field setup that cannot fail.
-Fallible resource acquisition is a **`static fn` factory returning `Result<T, E>`**: the fallible work lives
-in the factory, and on failure it returns `Err` *before* the resource exists, so no half-constructed object
-can escape and `match` forces the caller to handle the error.
+kama has no exceptions, so a **fallible constructor returns `Result<T, E>`** (where `E: Error`) — an
+infallible ctor returns the bare `T`. The fallible work lives in the ctor, and on failure it returns `Err`
+*before* the object exists, so no half-constructed object can escape and `match` forces the caller to handle
+the error. A fallible `new Type.ctor(...)` composes to `Result<Owned<T>, E>` — the box is allocated only on
+`Ok`.
 
 ```kama
+enum SizeError { TooSmall }
+implements Error for SizeError { public fn string message() { return "size must be positive"; } }
 type resource Buffer {
     int32 size;
-    private Buffer(int32 size) { this.size = size; }              // trivial, infallible, private
-    public static fn Result<Owned<Buffer>, int32> create(int32 size) {
-        if (size <= 0) { return Result::Err(error: -1); }         // fail before the resource exists
-        Owned<Buffer> b = new Buffer(size: size);
-        return Result::Ok(value: give b);
+    private ctor make(int32 size) { Buffer r; r.size = size; return give r; }        // trivial, infallible
+    public ctor Result<Buffer, SizeError> create(int32 size) {
+        if (size <= 0) { return Result::Err(error: SizeError::TooSmall); }            // fail before it exists
+        return Result::Ok(value: Buffer.make(size: size));                           // delegate to the base ctor
     }
     ~Buffer() { /* … */ }
 }
+Result<Owned<Buffer>, SizeError> b = new Buffer.create(size: 8);   // fallible `new` -> Result<Owned<T>, E>
 ```
 
 A type with a *meaningful* inert state may instead start valid-but-inert and expose a `bring_up():
-Result<…>` method. (This reuses static methods + `Result` + `Owned` + RAII — no dedicated feature. See
-`tests/fallible_factory`.)
+Result<…>` method. (This reuses named ctors + `Result` + `Owned` + RAII — no dedicated feature. See
+`tests/fallible_factory`, `tests/ctor_named_fallible`, `tests/dot_on_type_new_fallible`.)
 
 ## Inheritance & virtual dispatch ✅
 
@@ -935,6 +938,7 @@ type virtual resource Shape {                          // `type virtual resource
     protected virtual fn int area() { return 0; }      // overridable hooks are written `protected`
 }
 type final resource Circle extends Shape {             // `type final resource` = sealed leaf
+    public ctor make() { Circle r; return give r; }    // named ctor (sets its own vtable)
     protected override fn int area() { return 42; }
 }
 ```
@@ -952,9 +956,9 @@ table.
 over a base class (or a contract it satisfies) — the IS-A relationship, Liskov-style:
 
 ```kama
-Shared<Circle> c = new Circle();
+Shared<Circle> c = new Circle.make();
 Shared<Shape>  s = c;          // upcast — retain (both handles share one Circle)
-Owned<Circle>  u = new Circle();
+Owned<Circle>  u = new Circle.make();
 Owned<Shape>   o = give u;     // upcast — move (u consumed)
 int a = s.describe();          // polymorphic: describe() calls the protected virtual area() -> Circle's
 ```
@@ -975,7 +979,7 @@ bodies, no fields, no ctor/dtor.
 type contract Shape { fn int64 area(); }               // a public guarantee (a "type placeholder")
 type value Circle implements Shape {                   // a value satisfies a contract, too
     int64 r;
-    public Circle(int64 r) { this.r = r; }
+    public ctor make(int64 r) { Circle c; c.r = r; return give c; }
     public fn int64 area() { return r * r; }           // a method satisfying Shape MUST be `public`
 }
 fn int64 measure(Shape sh) { return sh.area(); }       // accept "any shape" — by value = zero-copy dispatch
@@ -1006,7 +1010,7 @@ ownership"** — the same reason a `ref` parameter can't be returned and a retur
 owned smart-pointer handle.
 
 **Owned contracts — `Owned`/`Shared`/`Weak<Shape>`.** A smart pointer *over a contract* owns the concrete
-object behind a fat handle `{obj, vtbl}` (`Shared`/`Weak` add a `ctrl` block). `new Circle(...)` boxes a
+object behind a fat handle `{obj, vtbl}` (`Shared`/`Weak` add a `ctrl` block). `new Circle.make(...)` boxes a
 concrete implementer into it; `p.draw()` dispatches polymorphically through the vtable; dropping the handle
 runs the concrete destructor through a **virtual-destructor slot in the contract vtable**, then frees the
 object. `Owned<Shape>` is move-only; `Shared<Shape>` retains/releases (`Weak<Shape>.tryUpgrade() ->
@@ -1015,7 +1019,7 @@ function return:
 
 ```kama
 type resource Holder { Shared<Shape> shape;  public fn int64 area() { return this.shape.area(); } }
-fn Owned<Shape> make(int64 s) { Owned<Shape> o = new Square(s: s); return give o; }
+fn Owned<Shape> make(int64 s) { Owned<Shape> o = new Square.make(s: s); return give o; }
 ```
 
 A `DynamicArray<Shared<Shape>>` (the engine's scene) works — polymorphic elements stored and dropped in RAII order.
@@ -1059,9 +1063,9 @@ one-line std `implements` blocks, added on demand.)
 args:
 
 ```kama
+@generate(of)
 type value Vec2 {
-    public float64 x;  public float64 y;
-    public Vec2(float64 x, float64 y) { this.x = x; this.y = y; }
+    public float64 x;  public float64 y;   // all-public transparent value → `@generate(of)` gives `Vec2.of(x:, y:)`
     public static fn float64 dot(Vec2 left, Vec2 right) { return left.x*right.x + left.y*right.y; }
 }
 float64 d = Vec2::dot(left: a, right: b);
@@ -1125,9 +1129,9 @@ User-defined generics, **monomorphized** (one specialized copy per concrete type
 boxing; identical layout and cost to the built-in collections).
 
 ```kama
-type value Pair<A, B> { public A a; public B b; public Pair(A a, B b){ this.a = a; this.b = b; } }
+type value Pair<A, B> { public A a; public B b; public ctor make(A a, B b){ Pair<A, B> r; r.a = a; r.b = b; return give r; } }
 fn T max<T>(T a, T b) { return a > b ? a : b; }         // generic fn — type args INFERRED from the call
-Pair<int32, string> p = Pair(a: 1, b: "x");             // generic type
+Pair<int32, string> p = Pair.make(a: 1, b: "x");       // generic type (args inferred from the LHS)
 int32 m = max(a: 3, b: 4);                              // -> max<int32>, a static specialized C fn
 DynamicArray<Shared<Shape>> scene;                              // nested generics, no space (the `>>` split)
 ```
@@ -1137,8 +1141,9 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   per-instance dtor). Function type args are inferred from the call.
 - **Turbofish — explicit type arguments.** When inference can't determine the type args — most commonly a
   **return-only generic** whose type parameter never appears in an argument — spell them explicitly with
-  `f::<int32>()` (the `::` before `<` is unambiguous). Turbofish reaches only generic *functions*; a generic
-  *type* is still written `Box<int32>` in type position.
+  `f::<int32>()` (the `::` before `<` is unambiguous). Turbofish reaches a generic *function*; a generic
+  *type* is still written `Box<int32>` in type position; and a generic *constructor* spells the type args on
+  the type — `Box::<int32>.make(...)` / `new Box::<int32>.make(...)` (turbofish on the type, uniform).
   ```kama
   fn T zero<T>() { return cast<T>(0); }   // T appears only in the return — inference can't see it
   int32 x = zero::<int32>();              // turbofish supplies it
@@ -1182,8 +1187,8 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   named, and fully-spelled forms all dedup to a single specialized instance.
   ```kama
   type value Wrap<T, U = int32> { public T first; public U second; /* … */ }
-  Wrap<bool>          a = Wrap(a: true,  b: 7);     // U defaults to int32
-  Wrap<bool, float64> c = Wrap(a: true,  b: 3.5);   // U overridden positionally
+  Wrap<bool>          a = Wrap.make(a: true,  b: 7);     // U defaults to int32
+  Wrap<bool, float64> c = Wrap.make(a: true,  b: 3.5);   // U overridden positionally
   Wrap<bool, U: int32> d = /* … */;                 // named override — same instance as `Wrap<bool>`
   ```
   Default **function/constructor** parameters are a deliberate non-goal (one way to do a thing) — a
