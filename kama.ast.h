@@ -195,6 +195,7 @@ class InterpolatedStringNode : public ExpressionNode {
 public:
     std::vector<SharedString> parts;        // literal chunks — always holes.size()+1 of them
     std::vector<SharedExpression> holes;    // interpolated hole expressions (identifier/member/index)
+    std::vector<SharedString> specs;        // per-hole format spec (`${x:.2}`), parallel to holes; null = no spec
     SharedString tag;                       // Campaign 2: the tag name, or null for a plain interpolation
     InterpolatedStringNode(CodeGenContext& context) : ASTNode(context), ExpressionNode(context) { }
 };

@@ -142,8 +142,17 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
 - A **`char`-typed hole** renders as its character (`${c}` → the glyph) via a `writeChar` fast-path — the
   compiler detects `char` from the hole's type node (`char` shares `uint32`'s C type, so it can't hold a
   `Format` conformance directly).
-- **Format specifiers** (`${x:.2f}`), a `@generate` debug derive, and **tagged strings** (`sql"…"` / `html"…"`
-  / `stripIndent"…"`) are planned; the interpolation AST already carries `{parts, holes}` so a tag is additive.
+- **Format specifiers** `${expr:spec}` render a numeric hole in a chosen form — the vocabulary **mirrors
+  Kama's numeric literals** rather than printf. Precision is `.N` (`${pi:.2}` → `3.14`) — no printf type-letter,
+  since the hole's type is already known; it requires a **float** hole. Base reuses the literal prefixes
+  `0x`/`0o`/`0b`, and *the leading `0` you type is echoed*, so `${n:x}` → `ff` (bare) while `${n:0x}` → `0xff`
+  (prefixed — itself a valid Kama literal); the letter's case controls digit case (`${n:0X}` → `0XFF`). Base
+  requires an **integer** hole and shows the unsigned bit pattern of its declared width, so a signed negative
+  round-trips (`${x:0x}` on `-1i8` → `0xff`). A spec on a user-type hole, or a kind mismatch (`.N` on an int,
+  `0x` on a float), is a compile error — the `Format` contract stays spec-less (specs are `Formatter`
+  fast-paths). Width/zero-pad (`${n:04}`) and sign/fill are the planned next slices.
+- A **`@generate` debug derive** and **tagged strings** (`sql"…"` / `html"…"` / `stripIndent"…"`) are planned;
+  the interpolation AST already carries `{parts, holes, specs}` so a tag is additive.
 
 ## Collections & strings ✅
 

@@ -1,0 +1,31 @@
+// String interpolation format specifiers (M1): precision `.N` on floats, and base markers on integers —
+// `x`/`0x`/`0X`/`o`/`0o`/`b`/`0b`, where the leading `0` you type is echoed so `0x` output round-trips as a
+// kama literal, and the letter's case controls hex-digit case. A signed-negative hex value round-trips via
+// width masking (the unsigned bit pattern of the declared width). Exit is a bitset (255 = all eight checks).
+fn int main() {
+    int32 r = 0;
+
+    float64 pi = 3.14159;
+    string a = "${pi:.2}";
+    if (a == "3.14") { r = r + 1; }
+    string b = "${pi:.0}";
+    if (b == "3") { r = r + 2; }
+
+    int32 n = 255i32;
+    string c = "${n:x}";
+    if (c == "ff") { r = r + 4; }              // bare hex — no leading 0 typed, none emitted
+    string d = "${n:0x}";
+    if (d == "0xff") { r = r + 8; }            // prefixed — a valid kama hex literal
+    string e = "${n:0X}";
+    if (e == "0XFF") { r = r + 16; }           // uppercase digits + echoed prefix case
+    string g = "${n:0o}";
+    if (g == "0o377") { r = r + 32; }
+    string h = "${n:0b}";
+    if (h == "0b11111111") { r = r + 64; }
+
+    int8 neg = -1i8;
+    string k = "${neg:0x}";
+    if (k == "0xff") { r = r + 128; }          // -1i8 as its 8-bit unsigned pattern -> 0xff
+
+    return r;   // 1+2+4+8+16+32+64+128 = 255
+}

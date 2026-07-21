@@ -382,6 +382,10 @@ extern fn string kama_fmt_u64(uint64 v);
 extern fn string kama_fmt_f64(float64 v);
 extern fn string kama_fmt_f32(float32 v);
 extern fn string kama_fmt_char(char cp);
+// Format-specifier variants (`${x:.2}` / `${n:0x}`): fixed-precision float + base-N integer. Emitted as
+// Formatter fast-paths by the interpolation codegen (like writeChar), so the `Format` contract is unchanged.
+extern fn string kama_fmt_f64_prec(float64 v, int32 prec);
+extern fn string kama_fmt_u64_radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix);
 // Amortized-growth byte append onto the buffer (kama_runtime.h). `DynamicArray` is a std::collections library
 // generic — unavailable this early (the prelude is collected before any std module), so the sink is backed by
 // an owned `string` grown in place instead, which keeps ordinary string RAII (no custom destructor needed).
@@ -402,6 +406,10 @@ type resource Formatter {
     public fn void writeF32(float32 v) { string t = kama_fmt_f32(v: v);  this.writeStr(s: ref t); }
     public fn void writeBool(bool v)   { string t = "false"; if (v) { t = "true"; } this.writeStr(s: ref t); }
     public fn void writeChar(char c)   { string t = kama_fmt_char(cp: c); this.writeStr(s: ref t); }
+    // Format-specifier writers (interpolation fast-paths): fixed float precision + base-N integer. `upper`
+    // and `prefix` are 0/1 flags; the integer is masked to `width` bits so a signed negative round-trips.
+    public fn void writeF64Prec(float64 v, int32 prec) { string t = kama_fmt_f64_prec(v: v, prec: prec); this.writeStr(s: ref t); }
+    public fn void writeU64Radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix) { string t = kama_fmt_u64_radix(v: v, radix: radix, width: width, upper: upper, prefix: prefix); this.writeStr(s: ref t); }
     // Hand back the accumulated buffer as the owned result string (zero-copy move-out; the Formatter is spent).
     public fn string finish() { unsafe { return kama_str_take(buf: addr(of: this.buf)); } }
 }

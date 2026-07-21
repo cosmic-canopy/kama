@@ -30,13 +30,14 @@
           "patterns": [
             { "name": "constant.character.escape.kama", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" },
             {
-              "comment": "string interpolation hole ${ident.field[index]} — a plain identifier with .field/[index] accessors",
+              "comment": "string interpolation hole ${ident.field[index]:spec} — an identifier with .field/[index] accessors and an optional format spec",
               "name": "meta.interpolation.kama",
               "begin": "\\$\\{",
               "end": "\\}",
               "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.kama" } },
               "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.kama" } },
               "patterns": [
+                { "comment": "format specifier :.2 / :0x — highlighted as a unit before the accessor rules", "name": "keyword.other.format-spec.kama", "match": ":[.0-9A-Za-z]+" },
                 { "name": "variable.other.kama", "match": "[A-Za-z_][A-Za-z0-9_]*" },
                 { "name": "punctuation.accessor.kama", "match": "[.\\[\\]]" },
                 { "name": "constant.numeric.kama", "match": "[0-9]+" }

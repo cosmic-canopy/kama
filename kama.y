@@ -127,6 +127,7 @@ struct kamayystype {
 %token <string> IDENTIFIER 
 %token <string> FLOAT_LITERAL_NO_SUFFIX FLOAT_LITERAL_32 FLOAT_LITERAL_64 CHARACTER_LITERAL STRING_LITERAL
 %token <string> ISTR_CHUNK   /* a literal chunk of an interpolated string: head, mid, or tail (between holes) */
+%token <string> ISTR_SPEC    /* the raw format-spec text of a hole `${expr:SPEC}` (e.g. `.2`, `0x`); parsed at codegen */
 %token <string> DEC_LITERAL_NO_SUFFIX HEX_LITERAL_NO_SUFFIX OCT_LITERAL_NO_SUFFIX BASED_LITERAL_NO_SUFFIX 
 %token <string> DEC_LITERAL HEX_LITERAL OCT_LITERAL BASED_LITERAL
 
@@ -371,9 +372,13 @@ interp_expr
   ;
 interp_body
   : ISTR_CHUNK interp_hole
-      { $$ = std::make_shared<InterpolatedStringNode>(SCANNER_CODEGENCONTEXT); $$->parts.push_back($1); $$->holes.push_back($2); }
+      { $$ = std::make_shared<InterpolatedStringNode>(SCANNER_CODEGENCONTEXT); $$->parts.push_back($1); $$->holes.push_back($2); $$->specs.push_back(nullptr); }
+  | ISTR_CHUNK interp_hole ISTR_SPEC
+      { $$ = std::make_shared<InterpolatedStringNode>(SCANNER_CODEGENCONTEXT); $$->parts.push_back($1); $$->holes.push_back($2); $$->specs.push_back($3); }
   | interp_body ISTR_CHUNK interp_hole
-      { $1->parts.push_back($2); $1->holes.push_back($3); $$ = $1; }
+      { $1->parts.push_back($2); $1->holes.push_back($3); $1->specs.push_back(nullptr); $$ = $1; }
+  | interp_body ISTR_CHUNK interp_hole ISTR_SPEC
+      { $1->parts.push_back($2); $1->holes.push_back($3); $1->specs.push_back($4); $$ = $1; }
   ;
 interp_hole
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }

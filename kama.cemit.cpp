@@ -670,6 +670,13 @@ std::string CEmitter::emitInterpolation(InterpolatedStringNode* is)
             _hoisted.push_back("Formatter__writeStr(&" + fv + ", &" + pv + ");");
         }
         if (i < nh && is->holes[i]) {
+            // A `${x:spec}` hole applies its format specifier via a Formatter fast-path (precision/base),
+            // leaving the `Format` contract spec-less. Checked before the char/format paths so a spec on a
+            // char (or any non-numeric hole) is diagnosed rather than silently dropped.
+            if (i < is->specs.size() && is->specs[i]) {
+                emitHoleSpec(fv, is->holes[i], *is->specs[i]);
+                continue;
+            }
             // A `char` hole renders its CHARACTER via the Formatter's writeChar fast-path — `char` has no
             // Format conformance (it shares uint32's cType), so the dispatch below would render it numeric.
             if (exprIsChar(is->holes[i])) {
@@ -11543,6 +11550,87 @@ bool CEmitter::exprIsChar(SharedExpression e)
         }
     }
     return ty && !ty->genericArg && ty->builtInVal == IDENTIFIER_CHAR_VAL;
+}
+
+// The IDENTIFIER_*_VAL builtin kind of an interpolation hole's numeric type — for the `${x:spec}` fast-path.
+// Resolves the exact kama type node for an identifier (local/param/foreach) or a struct field (so `char`
+// stays distinct from `uint32`), then falls back to the C scalar type of a place (`arr[i]`, `s[i]`, a field
+// through an instance) mapped back to a kind. Returns 0 for a user type or anything it can't classify.
+int CEmitter::holeBuiltinType(SharedExpression e)
+{
+    if (!e) return 0;
+    SharedIdentifier ty;
+    ASTNode* n = e.get();
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) ty = it->second; }
+    } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        std::string recv = exprClass(ma->expression);
+        if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
+            ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
+            if (owner) for (auto& f : owner->fields)
+                if (f.name == *ma->identifier->value) { ty = f.type; break; }
+        }
+    }
+    if (ty && !ty->genericArg && ty->builtInVal) return ty->builtInVal;
+    std::string ct = receiverScalarCType(e);
+    if (ct == "int8_t")   return IDENTIFIER_INT8_VAL;
+    if (ct == "int16_t")  return IDENTIFIER_INT16_VAL;
+    if (ct == "int32_t")  return IDENTIFIER_INT32_VAL;
+    if (ct == "int64_t")  return IDENTIFIER_INT64_VAL;
+    if (ct == "uint8_t")  return IDENTIFIER_UINT8_VAL;
+    if (ct == "uint16_t") return IDENTIFIER_UINT16_VAL;
+    if (ct == "uint32_t") return IDENTIFIER_UINT32_VAL;
+    if (ct == "uint64_t") return IDENTIFIER_UINT64_VAL;
+    if (ct == "float")    return IDENTIFIER_FLOAT32_VAL;
+    if (ct == "double")   return IDENTIFIER_FLOAT64_VAL;
+    return 0;
+}
+
+// Emit a format-specifier hole `${x:spec}` as a Formatter fast-path (the Format contract stays spec-less).
+// `spec` is the raw text after the `:`. Two forms in M1: `.N` precision (float holes) and a base marker
+// `x`/`0x`/`0X`/`o`/`0o`/`b`/`0b` (integer holes). A wrong hole kind or an unrecognized spec is a hard error.
+void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const std::string& spec)
+{
+    int bt = holeBuiltinType(hole);
+    bool isFloat = (bt == IDENTIFIER_FLOAT32_VAL || bt == IDENTIFIER_FLOAT64_VAL);
+    bool isInt   = (bt >= IDENTIFIER_INT8_VAL && bt <= IDENTIFIER_UINT64_VAL);   // INT8..UINT64 (not bool/char)
+    int width = 32;
+    switch (bt) {
+        case IDENTIFIER_INT8_VAL:  case IDENTIFIER_UINT8_VAL:  width = 8;  break;
+        case IDENTIFIER_INT16_VAL: case IDENTIFIER_UINT16_VAL: width = 16; break;
+        case IDENTIFIER_INT64_VAL: case IDENTIFIER_UINT64_VAL: width = 64; break;
+        default: width = 32; break;
+    }
+    std::string val = emitExpression(hole);
+
+    // Precision `.N` — a float-only render override.
+    if (!spec.empty() && spec[0] == '.') {
+        bool ok = spec.size() >= 2;
+        for (size_t j = 1; ok && j < spec.size(); ++j) if (!isdigit((unsigned char)spec[j])) ok = false;
+        if (!ok) { unsupported(("unrecognized precision specifier `:" + spec + "` — expected `.N` digits").c_str(), hole->line); return; }
+        if (!isFloat) { unsupported(("precision specifier `:" + spec + "` applies only to a float hole").c_str(), hole->line); return; }
+        int prec = 0;
+        for (size_t j = 1; j < spec.size(); ++j) prec = prec * 10 + (spec[j] - '0');
+        _hoisted.push_back("Formatter__writeF64Prec(&" + fv + ", (double)(" + val + "), " + std::to_string(prec) + ");");
+        return;
+    }
+
+    // Base marker `x`/`0x`/`0X`/`o`/`0o`/`b`/`0b` — an integer-only base + optional `0`-prefix (echoed).
+    int prefix = 0; size_t k = 0;
+    if (spec.size() == 2 && spec[0] == '0') { prefix = 1; k = 1; }
+    else if (spec.size() != 1) { unsupported(("unrecognized format specifier `:" + spec + "`").c_str(), hole->line); return; }
+    int base = 0, upper = 0;
+    switch (spec[k]) {
+        case 'x': base = 16; upper = 0; break;
+        case 'X': base = 16; upper = 1; break;
+        case 'o': case 'O': base = 8;  break;
+        case 'b': case 'B': base = 2;  break;
+        default: unsupported(("unrecognized format specifier `:" + spec + "`").c_str(), hole->line); return;
+    }
+    if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole->line); return; }
+    _hoisted.push_back("Formatter__writeU64Radix(&" + fv + ", (uint64_t)(" + val + "), "
+                       + std::to_string(base) + ", " + std::to_string(width) + ", "
+                       + std::to_string(upper) + ", " + std::to_string(prefix) + ");");
 }
 
 std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* recv)

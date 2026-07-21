@@ -117,7 +117,11 @@ interp_expr
 interp_body
   : ISTR_CHUNK interp_hole
 
+  | ISTR_CHUNK interp_hole ISTR_SPEC
+
   | interp_body ISTR_CHUNK interp_hole
+
+  | interp_body ISTR_CHUNK interp_hole ISTR_SPEC
 
   ;
 interp_hole

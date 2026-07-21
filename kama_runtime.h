@@ -652,6 +652,39 @@ static inline kama_string kama_fmt_char(uint32_t cp) {
     return kama_string_from_raw(b, 0, (int32_t)n);
 }
 
+// Fixed-precision float -> fresh heap-owned kama_string (the `${x:.N}` interpolation specifier). `%.*f` at the
+// requested decimal count; `prec` is clamped to [0,64]. `snprintf` is declared at block scope so this stays
+// `<stdio.h>`-free (the same pattern as kama_fmt_f64). A generous buffer covers DBL_MAX at 64 decimals.
+static inline kama_string kama_fmt_f64_prec(double v, int32_t prec) {
+    extern int snprintf(char*, size_t, const char*, ...);
+    if (prec < 0) prec = 0; if (prec > 64) prec = 64;
+    char buf[400];
+    int n = snprintf(buf, sizeof buf, "%.*f", (int)prec, v);
+    if (n < 0) n = 0;
+    if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
+    return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
+}
+
+// Integer rendered in a non-decimal base -> fresh heap-owned kama_string (the `${n:0x}` / `${n:x}` etc.
+// interpolation specifiers). `v` is masked to `width_bits` (8/16/32/64) first, so the value is shown as the
+// unsigned bit pattern of its declared width — a signed negative round-trips (`${x:0x}` on `-1i8` -> `0xff`).
+// `base` is 16/8/2; `upper` uppercases the hex digits; `prefix` emits the matching `0x`/`0o`/`0b` marker so
+// the output is itself a valid Kama literal. A base-16 uint64 is at most 16 digits + a 2-char prefix.
+static inline kama_string kama_fmt_u64_radix(uint64_t v, int32_t base, int32_t width_bits, int32_t upper, int32_t prefix) {
+    if (width_bits > 0 && width_bits < 64) v &= ((uint64_t)1 << width_bits) - 1u;
+    const char* digs = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    char tmp[64]; int t = 0;
+    if (v == 0) tmp[t++] = '0';
+    while (v) { tmp[t++] = digs[(int)(v % (uint64_t)base)]; v /= (uint64_t)base; }
+    char buf[72]; int i = 0;
+    if (prefix) {
+        buf[i++] = '0';
+        buf[i++] = (base == 16) ? (upper ? 'X' : 'x') : (base == 8 ? 'o' : 'b');
+    }
+    while (t) buf[i++] = tmp[--t];
+    return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)i);
+}
+
 // Amortized-growth append of `n` bytes onto an owned kama_string buffer used as a builder — the backing of
 // the prelude `Formatter`. Repeated appends double the capacity, so building a string is amortized O(1) per
 // byte (unlike `kama_string__concat`, which reallocates the WHOLE string every call → O(n²) for a chain). A

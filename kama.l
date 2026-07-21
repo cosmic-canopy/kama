@@ -93,7 +93,7 @@ letter_char                 [A-Za-z]
 ident_char                  {dec_digit}|{letter_char}|"_"
 identifier                  ({letter_char}|"_"){ident_char}*
 
-%x IN_COMMENT IN_VERBATIM_STRING IN_REGULAR_STRING IN_INTERP_HOLE
+%x IN_COMMENT IN_VERBATIM_STRING IN_REGULAR_STRING IN_INTERP_HOLE IN_INTERP_SPEC
 
 %%
 
@@ -223,6 +223,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 <IN_INTERP_HOLE>"."                             { RETURN_TOKEN(DOT, 1); }
 <IN_INTERP_HOLE>"["                             { RETURN_TOKEN(LEFT_BRACKET, 1); }
 <IN_INTERP_HOLE>"]"                             { RETURN_TOKEN(RIGHT_BRACKET, 1); }
+<IN_INTERP_HOLE>":"                             { yyextra->next_column_number += 1; BEGIN(IN_INTERP_SPEC); }   // a format spec follows the hole expr
 <IN_INTERP_HOLE>"}"                             {
                                                  yyextra->next_column_number += 1;
                                                  yy_pop_state(yyscanner);                       // back to IN_REGULAR_STRING
@@ -231,6 +232,24 @@ identifier                  ({letter_char}|"_"){ident_char}*
 <IN_INTERP_HOLE>.                               { error("unexpected character in a string interpolation hole - only an identifier with member or index accessors is allowed", yyscanner); }
 <IN_INTERP_HOLE><<EOF>>                         {
                                                   error("unexpected end of file in a string interpolation hole", yyscanner);
+                                                  yyterminate();
+                                               }
+
+  /* Interpolation format spec `${expr:SPEC}` — the raw spec text (e.g. `.2`, `0x`, `0X`, `x`, `0o`, `0b`) is
+     returned as ONE ISTR_SPEC token and parsed at codegen (kept raw so the AST/hole model is stable as the
+     specifier vocabulary grows). The `}` closes the whole hole and resumes string lexing, exactly like the
+     hole-state closer above. Entered from IN_INTERP_HOLE on `:` via BEGIN (no stack push — the IN_REGULAR_STRING
+     pushed at `${` stays on the stack, so yy_pop_state here returns to it). */
+<IN_INTERP_SPEC>[.0-9A-Za-z]+                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return ISTR_SPEC; }
+<IN_INTERP_SPEC>{new_line}                      { error("unexpected end of line in a string interpolation format specifier", yyscanner); }
+<IN_INTERP_SPEC>"}"                             {
+                                                 yyextra->next_column_number += 1;
+                                                 yy_pop_state(yyscanner);                       // back to IN_REGULAR_STRING
+                                                 yyextra->workString = std::make_shared<std::string>();   // accumulate the next chunk
+                                               }
+<IN_INTERP_SPEC>.                               { error("unexpected character in a string interpolation format specifier", yyscanner); }
+<IN_INTERP_SPEC><<EOF>>                         {
+                                                  error("unexpected end of file in a string interpolation format specifier", yyscanner);
                                                   yyterminate();
                                                }
 

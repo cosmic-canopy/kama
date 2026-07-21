@@ -914,6 +914,8 @@ private:
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
     std::string receiverScalarCType(SharedExpression e); // C scalar type of a primitive receiver place (`p.x`, `arr[i]`), "" if none
     bool exprIsChar(SharedExpression e);                // true iff `e`'s kama type is `char` (a char literal, local/param/foreach binding, or a char field)
+    int holeBuiltinType(SharedExpression e);            // IDENTIFIER_*_VAL of an interp hole's numeric kama type (local/param/field/literal), 0 if unknown
+    void emitHoleSpec(const std::string& fv, SharedExpression hole, const std::string& spec);  // format-specifier fast-path for `${x:spec}`
     std::string lvalueCType(SharedExpression e);        // C type of an lvalue local/param/field, KEEPING collection/string types
     bool exprIsString(SharedExpression e);              // true iff `e` statically has kama type `string` (kama_string)
     std::string hoistStringTemp(SharedExpression e);    // owned-string RVALUE -> a scope-dtor'd temp (frees it); "" for lvalue/literal/non-string
