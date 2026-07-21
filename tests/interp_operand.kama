@@ -1,0 +1,33 @@
+// An interpolation used as a `+` operand in a string-reassignment accumulator (`acc = acc + "${x}"`) —
+// the classic loop-accumulator idiom — now hoists its Formatter build correctly (was the P2 papercut).
+// Covers a foreach accumulator and a string FIELD reassigned inside a method. Exit 7 = all three checks.
+type resource Buf {
+    string s;
+    public ctor make() { Buf b; b.s = ""; return b; }
+    public fn void add(int32 n) { this.s = this.s + "[${n}]"; }   // string-field reassignment slot
+    public fn bool matches(ref string want) { return this.s == want; }
+}
+
+fn int main() {
+    int32 r = 0;
+
+    // foreach accumulator: interpolation as the RHS `+` operand of a `string` reassignment
+    string acc = "";
+    InlineArray<int32, 3> ns = [1, 2, 3];
+    foreach (int32 i in ns) { acc = acc + "n${i};"; }
+    if (acc == "n1;n2;n3;") { r = r + 1; }
+
+    // the same slot on a `this.`-qualified string field
+    Buf b = Buf.make();
+    b.add(n: 4i32); b.add(n: 5i32);
+    string want = "[4][5]";
+    if (b.matches(want: want)) { r = r + 2; }
+
+    // a non-empty head then an accumulator step (mixed literal + operand interpolation)
+    string acc2 = "sum=";
+    int32 total = 9i32;
+    acc2 = acc2 + "${total}!";
+    if (acc2 == "sum=9!") { r = r + 4; }
+
+    return r;   // 1+2+4 = 7
+}

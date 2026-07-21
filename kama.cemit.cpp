@@ -2360,10 +2360,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 }
                 // Fresh owned rvalue (concat/substring/literal): the RHS may READ the old LHS
                 // (`s = s.concat(…)`), so hoist it into a temp BEFORE releasing the old buffer, then assign.
+                // Enable hoisting for the RHS emit so an interpolation operand (`acc = acc + "${x}"`) can
+                // lift its Formatter build — the only owning-string sink that otherwise forgot to.
                 std::string b = emitExpression(as->unaryExpression);
+                bool ph = _hoistOK; _hoistOK = true;
                 std::string rv = emitExpression(as->expression);
+                _hoistOK = ph;
                 std::string t = "__asgn" + std::to_string(_tempCounter++);
                 line(n->line);
+                flushHoisted(depth);                                   // Formatter build + operand temps first…
                 indent(depth); *_out << lty << " " << t << " = " << rv << ";\n";
                 indent(depth); *_out << lty << "__dtor(&" << b << ");\n";
                 indent(depth); *_out << b << " = " << t << ";\n";

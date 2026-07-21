@@ -15,7 +15,7 @@ fn int main() {
     if (a == "letter=A") { r = r + 1; }
 
     string acc = "";
-    foreach (char ch in "hi".chars()) { string piece = "${ch}."; acc = acc + piece; }
+    foreach (char ch in "hi".chars()) { acc = acc + "${ch}."; }
     if (acc == "h.i.") { r = r + 2; }
 
     Glyph g = Glyph.make(c: cast<char>(0x2603ui32));   // ☃ (3-byte UTF-8)
