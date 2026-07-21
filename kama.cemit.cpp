@@ -6470,7 +6470,17 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // bound check that runs during collection (before applyRetroactive injects the methods) still sees
         // it — matched on the raw source name, the same key both the pre-scan and applyRetroactive use.
         bool retro = _retroConformances.count(cls) && _retroConformances[cls].count(*b->value);
-        if (!retro && (!ci || !classSatisfiesBound(ci, contract)))
+        // A boxed polymorphic contract handle satisfies the contract bound: `Owned<C>`/`Shared<C>`/
+        // `Weak<C>` (and `Owned<X>` where `X` implements `C`) dynamic-dispatches `C`'s methods, so a
+        // boxed `Error` IS an `Error` (Model C). This lets `Result<T, Owned<Error>>` — the uniform serde
+        // error channel — satisfy the `E: Error` bound without `Owned` itself declaring `implements Error`.
+        bool boxed = false;
+        if (!retro && isSmartPtrClass(cls)) {
+            const std::string& elem = _classes[cls].collElemClass;
+            if (elem == contract) boxed = true;
+            else if (_classes.count(elem) && classSatisfiesBound(&_classes[elem], contract)) boxed = true;
+        }
+        if (!retro && !boxed && (!ci || !classSatisfiesBound(ci, contract)))
             unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
                          + "` does not satisfy bound `" + *b->value + "`").c_str(), line);
     }

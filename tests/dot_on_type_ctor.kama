@@ -3,21 +3,23 @@
 // Covers both fallibility modes through the dot spelling: an infallible ctor returns `T`, a fallible one
 // returns `Result<T,E>`. Distinct from `Type::staticFn()` (a static fn stays `::` — see
 // dot_vs_static_greppable) and `Enum::Variant` (stays `::`).
+enum PointErr { NegativeX }
+implements Error for PointErr { public fn string message() { return "negative x"; } }
 type value Point {
     int32 x;
     int32 y;
     public ctor make(int32 x, int32 y) { Point p; p.x = x; p.y = y; return p; }
-    public ctor Result<Point, int32> checked(int32 x, int32 y) {
-        if (x < 0) { return Result::Err(error: -1); }   // fail before the object exists
+    public ctor Result<Point, PointErr> checked(int32 x, int32 y) {
+        if (x < 0) { return Result::Err(error: PointErr::NegativeX); }   // fail before the object exists
         return Result::Ok(value: Point.make(x: x, y: y));   // delegate to the infallible ctor (dot chain)
     }
     public fn int32 sum() { return this.x + this.y; }
 }
 fn int32 main() {
     Point p = Point.make(x: 10, y: 20);                    // infallible dot-on-type
-    Result<Point, int32> ok  = Point.checked(x: 5, y: 7);  // fallible dot-on-type
-    Result<Point, int32> bad = Point.checked(x: -1, y: 0);
-    int32 a = match (ok)  { case Ok(q): q.sum(); case Err(e): e; };   // 12
-    int32 b = match (bad) { case Ok(q): 999;     case Err(e): e; };   // -1
+    Result<Point, PointErr> ok  = Point.checked(x: 5, y: 7);  // fallible dot-on-type
+    Result<Point, PointErr> bad = Point.checked(x: -1, y: 0);
+    int32 a = match (ok)  { case Ok(q): q.sum(); case Err(e): 0 - 1; };   // 12
+    int32 b = match (bad) { case Ok(q): 999;     case Err(e): 0 - 1; };   // -1
     return p.sum() + a + b + 1;   // 30 + 12 - 1 + 1 = 42
 }

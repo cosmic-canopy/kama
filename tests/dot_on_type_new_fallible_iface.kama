@@ -5,31 +5,34 @@
 // `Result`'s dtor; Err allocates nothing).
 import std::memory::{Owned, Shared};
 
+enum ShapeErr { Negative }
+implements Error for ShapeErr { public fn string message() { return "negative"; } }
+
 type contract Shape for both { fn int32 area(); }
 
 type value Circle implements Shape {
     int32 r;
-    public ctor Result<Circle, int32> open(int32 r) {
-        if (r < 0) { return Result::Err(error: -1); }   // fail before the object exists (no allocation)
+    public ctor Result<Circle, ShapeErr> open(int32 r) {
+        if (r < 0) { return Result::Err(error: ShapeErr::Negative); }   // fail before the object exists (no allocation)
         Circle c; c.r = r; return Result::Ok(value: c);
     }
     public fn int32 area() { return this.r * this.r; }
 }
 
 // return-position fallible interface `new`
-fn Result<Owned<Shape>, int32> acquire(int32 r) {
+fn Result<Owned<Shape>, ShapeErr> acquire(int32 r) {
     return new Circle.open(r: r);
 }
 
 fn int32 main() {
-    Result<Owned<Shape>, int32>  ok  = new Circle.open(r: 5);   // Ok  -> boxed Owned<Shape>, area 25
-    Result<Owned<Shape>, int32>  bad = new Circle.open(r: -1);  // Err -> propagated, nothing allocated
-    Result<Shared<Shape>, int32> sh  = new Circle.open(r: 4);   // Ok  -> Shared<Shape> (ctrl block), area 16
-    Result<Owned<Shape>, int32>  ret = acquire(r: 3);           // Ok  -> return-position, area 9
+    Result<Owned<Shape>, ShapeErr>  ok  = new Circle.open(r: 5);   // Ok  -> boxed Owned<Shape>, area 25
+    Result<Owned<Shape>, ShapeErr>  bad = new Circle.open(r: -1);  // Err -> propagated, nothing allocated
+    Result<Shared<Shape>, ShapeErr> sh  = new Circle.open(r: 4);   // Ok  -> Shared<Shape> (ctrl block), area 16
+    Result<Owned<Shape>, ShapeErr>  ret = acquire(r: 3);           // Ok  -> return-position, area 9
 
-    int32 a = match (ok)  { case Ok(s): s.area(); case Err(e): e; };   // 25
-    int32 b = match (bad) { case Ok(s): 100;      case Err(e): e; };   // -1
-    int32 c = match (sh)  { case Ok(s): s.area(); case Err(e): e; };   // 16
-    int32 d = match (ret) { case Ok(s): s.area(); case Err(e): e; };   //  9
+    int32 a = match (ok)  { case Ok(s): s.area(); case Err(e): 0 - 1; };   // 25
+    int32 b = match (bad) { case Ok(s): 100;      case Err(e): 0 - 1; };   // -1
+    int32 c = match (sh)  { case Ok(s): s.area(); case Err(e): 0 - 1; };   // 16
+    int32 d = match (ret) { case Ok(s): s.area(); case Err(e): 0 - 1; };   //  9
     return a + b + c + d;   // 25 - 1 + 16 + 9 = 49
 }

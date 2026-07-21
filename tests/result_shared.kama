@@ -1,11 +1,13 @@
 import std::memory::{Shared};
+enum ProbeErr { Failed }
+implements Error for ProbeErr { public fn string message() { return "failed"; } }
 type resource Probe { int32 id; public ctor make(int32 id){ Probe r; r.id=id; return give r; } ~Probe(){} public fn int32 val(){return this.id;} }
 fn int main()
 {
     Shared<Probe> s = new Probe.make(id: 8);
-    Result<Shared<Probe>, int32> ok  = Result::Ok(value: copy s);
-    Result<Shared<Probe>, int32> err = Result::Err(error: 3);
-    int32 a = match (ok)  { case Ok(p): p.val(); case Err(e): e; };
-    int32 b = match (err) { case Ok(p): p.val(); case Err(e): e; };
+    Result<Shared<Probe>, ProbeErr> ok  = Result::Ok(value: copy s);
+    Result<Shared<Probe>, ProbeErr> err = Result::Err(error: ProbeErr::Failed);
+    int32 a = match (ok)  { case Ok(p): p.val(); case Err(e): 3; };
+    int32 b = match (err) { case Ok(p): p.val(); case Err(e): 3; };
     return a + b;
 }

@@ -1,9 +1,11 @@
+enum DivErr { DivByZero }
+implements Error for DivErr { public fn string message() { return "div by zero"; } }
 fn int divide(int32 a, int32 b)
 {
-    Result<int32, int32> r = b == 0 ? Result::Err(error: -1) : Result::Ok(value: a / b);
+    Result<int32, DivErr> r = b == 0 ? Result::Err(error: DivErr::DivByZero) : Result::Ok(value: a / b);
     return match (r) {
         case Ok(v): v;
-        case Err(e): e;
+        case Err(e): 0 - 1;
     };
 }
 fn int main()

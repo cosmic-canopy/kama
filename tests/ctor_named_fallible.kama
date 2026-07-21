@@ -1,19 +1,21 @@
 // Construction-model M2: a NAMED fallible constructor `ctor Result<T,E> name(…)` returning Result — the
 // factory idiom (see fallible_factory) promoted to a `ctor`. On failure it returns `Err` before the object
 // exists. Called via `::` (the M2 bridge; M4 adds `Percent.of`).
+enum PercentErr { OutOfRange }
+implements Error for PercentErr { public fn string message() { return "out of range"; } }
 type value Percent {
     public int32 v;
     public ctor make(int32 v) { Percent r; r.v = v; return give r; }
-    public ctor Result<Percent, int32> of(int32 v) {
-        if (v < 0 || v > 100) { return Result::Err(error: -1); }   // fail before the object exists
+    public ctor Result<Percent, PercentErr> of(int32 v) {
+        if (v < 0 || v > 100) { return Result::Err(error: PercentErr::OutOfRange); }   // fail before the object exists
         Percent p = Percent.make(v: v);
         return Result::Ok(value: p);
     }
 }
 fn int32 main() {
-    Result<Percent, int32> ok  = Percent::of(v: 42);
-    Result<Percent, int32> bad = Percent::of(v: 250);
-    int32 a = match (ok)  { case Ok(p): p.v; case Err(e): e; };   // 42
-    int32 b = match (bad) { case Ok(p): p.v; case Err(e): e; };   // -1
+    Result<Percent, PercentErr> ok  = Percent::of(v: 42);
+    Result<Percent, PercentErr> bad = Percent::of(v: 250);
+    int32 a = match (ok)  { case Ok(p): p.v; case Err(e): 0 - 1; };   // 42
+    int32 b = match (bad) { case Ok(p): p.v; case Err(e): 0 - 1; };   // -1
     return a + b + 1;   // 42
 }

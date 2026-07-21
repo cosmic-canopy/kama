@@ -6,10 +6,13 @@
 import std::memory::{Owned};
 import std::collections::{Arena, BumpAllocator};
 
+enum OpenErr { Negative }
+implements Error for OpenErr { public fn string message() { return "negative"; } }
+
 type value Gauge {
     int32 v;
-    public ctor Result<Gauge, int32> open(int32 v) {
-        if (v < 0) { return Result::Err(error: -1); }
+    public ctor Result<Gauge, OpenErr> open(int32 v) {
+        if (v < 0) { return Result::Err(error: OpenErr::Negative); }
         Gauge g; g.v = v; return Result::Ok(value: g);
     }
     public fn int32 get() { return this.v; }
@@ -19,8 +22,8 @@ type contract Shape for both { fn int32 area(); }
 
 type value Circle implements Shape {
     int32 r;
-    public ctor Result<Circle, int32> open(int32 r) {
-        if (r < 0) { return Result::Err(error: -1); }
+    public ctor Result<Circle, OpenErr> open(int32 r) {
+        if (r < 0) { return Result::Err(error: OpenErr::Negative); }
         Circle c; c.r = r; return Result::Ok(value: c);
     }
     public fn int32 area() { return this.r * this.r; }
@@ -30,16 +33,16 @@ fn int32 main() {
     Arena arena = Arena.make(capacity: 1 << 12);   // declared FIRST → drops LAST (outlives the boxes)
 
     // concrete + placement: `adoptIn(raw, alloc)` into a library HeapOwner box
-    Result<Owned<Gauge, BumpAllocator>, int32> g  = new(allocator: arena.handle()) Gauge.open(v: 10);
-    Result<Owned<Gauge, BumpAllocator>, int32> gb = new(allocator: arena.handle()) Gauge.open(v: -1);  // Err, no alloc
+    Result<Owned<Gauge, BumpAllocator>, OpenErr> g  = new(allocator: arena.handle()) Gauge.open(v: 10);
+    Result<Owned<Gauge, BumpAllocator>, OpenErr> gb = new(allocator: arena.handle()) Gauge.open(v: -1);  // Err, no alloc
 
     // interface + placement (cross-product): fat handle drawn from the arena
-    Result<Owned<Shape, BumpAllocator>, int32> s  = new(allocator: arena.handle()) Circle.open(r: 6);
-    Result<Owned<Shape, BumpAllocator>, int32> sb = new(allocator: arena.handle()) Circle.open(r: -1); // Err, no alloc
+    Result<Owned<Shape, BumpAllocator>, OpenErr> s  = new(allocator: arena.handle()) Circle.open(r: 6);
+    Result<Owned<Shape, BumpAllocator>, OpenErr> sb = new(allocator: arena.handle()) Circle.open(r: -1); // Err, no alloc
 
-    int32 a = match (g)  { case Ok(x): x.get();  case Err(e): e; };   // 10
-    int32 b = match (gb) { case Ok(x): 100;      case Err(e): e; };   // -1
-    int32 c = match (s)  { case Ok(x): x.area(); case Err(e): e; };   // 36
-    int32 d = match (sb) { case Ok(x): 100;      case Err(e): e; };   // -1
+    int32 a = match (g)  { case Ok(x): x.get();  case Err(e): 0 - 1; };   // 10
+    int32 b = match (gb) { case Ok(x): 100;      case Err(e): 0 - 1; };   // -1
+    int32 c = match (s)  { case Ok(x): x.area(); case Err(e): 0 - 1; };   // 36
+    int32 d = match (sb) { case Ok(x): 100;      case Err(e): 0 - 1; };   // -1
     return a + b + c + d;   // 10 - 1 + 36 - 1 = 44
 }

@@ -6,7 +6,7 @@
 // (contracts before the retro-impls that satisfy them).
 
 enum Optional<T> { Some(T value), None }
-enum Result<T, E> { Ok(T value), Err(E error) }
+enum Result<T, E: Error> { Ok(T value), Err(E error) }
 // The empty value — the payload for a fallible op that succeeds with nothing to return
 // (`Result<Unit, E>`, the analogue of Rust's `Result<(), E>`). Keeps ONE error convention
 // (always Result) whether or not there is a value; no dead/placeholder payload. A single-variant

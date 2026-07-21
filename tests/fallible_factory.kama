@@ -4,21 +4,23 @@ import std::memory::{Owned};
 // `Result<T, E>`. On failure it returns `Err` BEFORE the resource exists — so no half-built object can
 // escape, and `match` forces the caller to handle the error. No new feature: M31a static methods +
 // M28e Result + Owned + RAII.
+enum BufferErr { BadSize }
+implements Error for BufferErr { public fn string message() { return "bad size"; } }
 type resource Buffer {
     int32 size;
     private ctor make(int32 size) { Buffer r; r.size = size; return give r; }             // trivial, infallible, private
     public fn int32 capacity() { return this.size; }
-    public static fn Result<Owned<Buffer>, int32> create(int32 size) {
-        if (size <= 0) { return Result::Err(error: -1); }        // fail before the resource exists
+    public static fn Result<Owned<Buffer>, BufferErr> create(int32 size) {
+        if (size <= 0) { return Result::Err(error: BufferErr::BadSize); }        // fail before the resource exists
         Owned<Buffer> b = new Buffer.make(size: size);                // bind local, then hand off
         return Result::Ok(value: give b);
     }
     ~Buffer() { }                                                // RAII drop (proven by SAN on the Ok path)
 }
 fn int32 main() {
-    Result<Owned<Buffer>, int32> ok  = Buffer::create(size: 8);
-    Result<Owned<Buffer>, int32> bad = Buffer::create(size: 0);
-    int32 a = match (ok)  { case Ok(b): b.capacity(); case Err(e): e; };   // Ok  -> 8
-    int32 c = match (bad) { case Ok(b): b.capacity(); case Err(e): e; };   // Err -> -1
+    Result<Owned<Buffer>, BufferErr> ok  = Buffer::create(size: 8);
+    Result<Owned<Buffer>, BufferErr> bad = Buffer::create(size: 0);
+    int32 a = match (ok)  { case Ok(b): b.capacity(); case Err(e): 0 - 1; };   // Ok  -> 8
+    int32 c = match (bad) { case Ok(b): b.capacity(); case Err(e): 0 - 1; };   // Err -> -1
     return a + c + 34;   // 41
 }

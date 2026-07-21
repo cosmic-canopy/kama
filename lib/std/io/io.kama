@@ -39,6 +39,28 @@ enum IoError {
     Other(int32 code)
 }
 
+// `IoError` is a first-class `Error` (Model C): a fallible ctor/fn may return it directly as
+// `Result<T, IoError>` (matchable), or box it into `Owned<Error>` for a polymorphic error channel.
+implements Error for IoError {
+    public fn string message() {
+        return match (this) {
+            case NotFound:          "not found";
+            case PermissionDenied:  "permission denied";
+            case WouldBlock:        "would block";
+            case ConnectionRefused: "connection refused";
+            case ConnectionReset:   "connection reset";
+            case AddrInUse:         "address in use";
+            case UnexpectedEof:     "unexpected end of file";
+            case InProgress:        "in progress";
+            case TimedOut:          "timed out";
+            case HostUnreachable:   "host unreachable";
+            case MessageTooLong:    "message too long";
+            case BrokenPipe:        "broken pipe";
+            case Other(c):          "i/o error";
+        };
+    }
+}
+
 // Read the platform's last-error ONCE (call this immediately after a failed syscall) and classify it.
 fn IoError lastError() {
     int32 e = kama_last_error();
