@@ -6,33 +6,63 @@ namespace std::serialization::json;
 // for arbitrary nesting because endObject/endArray leave a complete value (a following sibling gets its
 // comma) while a value right after fieldName does not.
 
-import std::collections::{DynamicArray};
+import std::collections::{DynamicArray, FixedArray};
 import std::fmt::{i8Str, i16Str, i32Str, i64Str, u8Str, u16Str, u32Str, u64Str, f32Str, f64Str, boolStr};
+import std::io::{Writer, Reader, StringWriter, readAll, IoError};
 
-export { JsonWriter, JsonReader, encode, decode };
+export { JsonWriter, JsonReader, encode, decode, decodeFrom };   // stream-write via JsonWriter.encodeValue
 
-type resource JsonWriter implements Serializer {
-    DynamicArray<uint8> buf;
+// Serializes JSON tokens straight into an owned `W: Writer` sink — a file, socket, buffered writer, or the
+// in-memory `StringWriter` behind `encode -> string`. Owns its sink by value (kama forbids stored borrows,
+// so a serializer owns `W` exactly as a collection owns its allocator). A byte write that fails LATCHES the
+// sticky `err`/`code`; the generated `serialize` surfaces it once at the end (mirror of JsonReader).
+type resource JsonWriter<W: Writer> implements Serializer {
+    W sink;
+    FixedArray<uint8> scratch;   // size-1 staging for a single-byte `sink.write` (View can't wrap a stack local)
     bool needComma;
     bool err;              // STICKY error flag (mirror of JsonReader)
     SerError code;         // the recorded write error
 
-    public ctor make() {
-        JsonWriter r;
-        DynamicArray<uint8> b = DynamicArray.empty();
-        r.buf = give b;
+    public ctor make(W sink) {
+        JsonWriter<W> r;
+        r.sink = give sink;
+        r.scratch = FixedArray.make(size: 1);
         r.needComma = false;
         r.err = false;
         r.code = SerError::NotRepresentable;
         return give r;
     }
 
+    // Borrow the underlying sink (e.g. so `encode` can `finish()` its concrete StringWriter). W-agnostic body.
+    public fn ref W innerRef() { return this.sink; }
+
+    // Stream a `Serialize` value's JSON into this writer's owned sink, then flush — the streaming twin of the
+    // `encode` sugar, without materializing the whole string. The ergonomic write-to-a-sink entry (a generic
+    // free fn / static method can't instantiate `JsonWriter<W>`, so this is an INSTANCE method on a writer the
+    // caller builds at a concrete site):
+    //   JsonWriter<StringWriter> w = JsonWriter::<StringWriter>.make(sink: give mySink);
+    //   Result<Unit, Owned<Error>> r = w.encodeValue(v: myValue);
+    public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serialize v) {
+        Serializer s = this;   // borrow self behind the Serializer interface
+        Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+        match (give r) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+        Result<Unit, IoError> fr = this.sink.flush();
+        match (fr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+        return Result::Ok(value: Unit::Unit);
+    }
+
     // --- low-level byte output ---
-    fn void byte(uint8 b) { this.buf.add(item: b); }
+    fn void byte(uint8 b) {
+        this.scratch[0] = b;
+        match (this.sink.write(bytes: this.scratch.view())) {
+            case Err(_): { this.failWith(e: SerError::IoError); }
+            case Ok(_): {}
+        };
+    }
     fn void ascii(string s) {
         int32 n = cast<int32>(s.length());
         int32 i = 0;
-        while (i < n) { this.buf.add(item: s[i]); i = i + 1; }
+        while (i < n) { this.byte(b: s[i]); i = i + 1; }
     }
     fn void sep() { if (this.needComma) { this.byte(b: 44ui8); } }   // ','
     fn uint8 hexDigit(uint8 v) {
@@ -142,15 +172,6 @@ type resource JsonWriter implements Serializer {
     public fn void fail() { this.err = true; }
     public fn void failWith(SerError e) { this.err = true; this.code = e; }
     public fn SerError errorCode() { return this.code; }
-
-    // Materialize the accumulated bytes as a fresh owned string.
-    public fn string finish() {
-        if (cast<int32>(this.buf.length()) == 0) { return ""; }
-        unsafe {
-            return kama_string_from_raw(src: addr(of: this.buf[0]), start: 0,
-                                        len: cast<int32>(this.buf.length()));
-        }
-    }
 }
 
 // Serialize any `Serialize` value to a JSON string. Takes the value behind the `Serialize` interface
@@ -158,11 +179,11 @@ type resource JsonWriter implements Serializer {
 // value's vtable travels in the fat pointer, sidestepping cross-module static-vtable visibility. A `value`
 // copies cheaply; pass `copy`/`give` for a `resource` you want to keep or move.
 fn Result<string, std::memory::Owned<Error>> encode(Serialize v) {
-    JsonWriter w = JsonWriter.make();
+    JsonWriter<StringWriter> w = JsonWriter::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;              // borrow the writer behind the Serializer interface
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
     match (give r) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
-    return Result::Ok(value: w.finish());
+    return Result::Ok(value: w.innerRef().finish());   // materialize the concrete StringWriter's bytes
 }
 
 // Borrows the token string (`ref` → `kama_string*`): C reads `.data` via strtod and never owns/frees it,
@@ -429,4 +450,17 @@ type resource JsonReader implements Deserializer {
 fn Result<T, Owned<Error>> decode<T: Deserialize>(string src) {
     JsonReader r = JsonReader.make(src: give src);
     return T::deserialize(r: r);   // fallibility now lives inside the ctor (sticky check + boxed DeError)
+}
+
+// Deserialize from any `Reader` — the streaming twin of `decode`. Drains the reader fully into a string
+// first (`readAll`), then parses: JSON graph decode seeks backward (`rewindGraph`), so the source must be
+// whole — the accepted bounded-memory boundary. A read `IoError` auto-boxes into `Owned<Error>`.
+fn Result<T, Owned<Error>> decodeFrom<T: Deserialize>(Reader from) {
+    Result<string, IoError> rr = readAll(r: from);
+    string src = match (give rr) {
+        case Ok(s):  { := give s; }
+        case Err(e): { return Result::Err(error: e); }   // IoError auto-boxes into Owned<Error>
+    };
+    JsonReader r = JsonReader.make(src: give src);
+    return T::deserialize(r: r);
 }

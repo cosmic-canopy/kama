@@ -1354,7 +1354,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     *_out << ty << " " << nm;
                     if (d->initializer) {
                         std::string c = exprClass(d->initializer);
-                        if (!c.empty() && isClass(c))
+                        if (!c.empty() && isClass(c) && dynamic_cast<ThisAccessNode*>(d->initializer.get()))
+                            // `this` is ALREADY a pointer to the concrete object; fatPointer's `&(lvalue)` would
+                            // wrongly take the address OF the `this` pointer. Bind the pointer directly.
+                            *_out << " = (" << ty << "){ (void*)(" << emitExpression(d->initializer)
+                                  << "), &" << c << "__as_" << ty << " }";
+                        else if (!c.empty() && isClass(c))
                             *_out << " = " << fatPointer(ty, c, emitExpression(d->initializer));
                         else if (!c.empty() && isInterface(c))
                             *_out << " = " << emitExpression(d->initializer);  // already an interface value
@@ -10775,7 +10780,11 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     _emitStaticClass = true;
     if      (phase == 0) { emitStruct(ci); }   // forward typedef now emitted in the phase-(a) loop
     else if (phase == 1) emitClassPrototypes(ci);
-    else { emitClassDefinitions(ci); emitClassInterfaceVtables(ci); }   // + `static` C__as_I vtables (e.g. List<int32> as Serialize)
+    // Interface vtables BEFORE method bodies: a generic instance's own method may upcast `this` to a contract
+    // (`Serializer s = this`), referencing the `static const C__as_I` vtable — which has no forward decl for a
+    // header-inline instance, so it must be defined first. Vtable slots reference only method PROTOTYPES
+    // (phase 1), so this order is safe. (Free fns emit later, so they never hit the ordering hazard.)
+    else { emitClassInterfaceVtables(ci); emitClassDefinitions(ci); }   // `static` C__as_I vtables (e.g. List<int32> as Serialize)
     _emitStaticClass = false;
     _typeSubst.clear();
     _nsCtx = savedCtx;

@@ -10,7 +10,7 @@ namespace std::io;
 import std::io::{IoError};
 import std::collections::{DynamicArray, FixedArray, View};
 
-export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, writeAll, pump };
+export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, writeAll, pump, readAll };
 
 // A byte SINK. `write` is the partial-write PRIMITIVE: it writes UP TO bytes.length() bytes and returns the
 // count actually taken (may be `< length` when the sink is full/slow — this is how backpressure is expressed;
@@ -65,6 +65,17 @@ fn Result<usize, IoError> pump(Reader from, Writer to) {
             }
         };
     }
+}
+
+// Drain a `Reader` fully into an owned UTF-8 string (through a `StringWriter` + `pump`). The bounded-memory
+// boundary for readers that need whole-source access — e.g. serde's JSON graph decode seeks backward
+// (`rewindGraph`), so `decodeFrom` reads all first. Buffers the whole source BY DESIGN (matches Go
+// `encoding/json`'s buffer-a-value model); genuine record-streaming is a separate future API.
+fn Result<string, IoError> readAll(Reader r) {
+    StringWriter sw = StringWriter.make();
+    Result<usize, IoError> pr = pump(from: r, to: sw);
+    match (pr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+    return Result::Ok(value: sw.finish());
 }
 
 // The in-memory `Writer`: accumulates bytes in a growable buffer and hands them back as an owned UTF-8

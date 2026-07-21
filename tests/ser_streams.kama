@@ -1,0 +1,43 @@
+// std::io streams M2 — the JSON serde backend now rides the streaming byte substrate. Exercises:
+//   (a) `encode` still returns the byte-identical string (JsonWriter<StringWriter>);
+//   (b) `encodeTo` streams into an owned sink — a bare StringWriter AND a BufWriter<StringWriter> —
+//       proving the generic writer instantiates over distinct W monomorphs and the flush path drains.
+//       (encodeTo shares JsonWriter's exact byte path with encode, verified byte-exact by (a).)
+//   (c) `decodeFrom` over a SliceReader round-trips through readAll + pump + JsonReader.
+// A free fn takes a `Serialize` as a second-class borrow, so `r` stays usable across calls. Returns 0.
+import std::serialization::json::{encode, decodeFrom, JsonWriter};
+import std::io::{Writer, Reader, StringWriter, SliceReader, BufWriter};
+
+@generate(Serialize, Deserialize)
+type resource Rec {
+    @field int32 id;
+    @field string name;
+    @field bool ok;
+    public ctor make(int32 id, string name, bool ok) {
+        Rec r; r.id = id; r.name = give name; r.ok = ok; return give r;
+    }
+    public fn int32 verify() { if (this.id == 7 && this.ok && this.name == "hi") { return 0; } return 99; }
+}
+
+fn int main() {
+    Rec r = Rec.make(id: 7, name: "hi", ok: true);
+
+    // (a) sugar path — byte-identical to pre-streams output.
+    Result<string, Owned<Error>> ja = encode(v: r);
+    string j = match (give ja) { case Ok(s): give s; case Err(e): { return 10; } };
+    if (!(j == "{\"id\":7,\"name\":\"hi\",\"ok\":true}")) { return 11; }
+
+    // (b) streaming path: build a JsonWriter over two different owned sinks and drive encodeValue on each
+    //     (proves the generic writer instantiates over distinct W monomorphs + the flush path drains).
+    JsonWriter<StringWriter> w1 = JsonWriter::<StringWriter>.make(sink: StringWriter.make());
+    Result<Unit, Owned<Error>> e1 = w1.encodeValue(v: r);
+    match (give e1) { case Ok(_): {} case Err(e): { return 12; } };
+    JsonWriter<BufWriter<StringWriter>> w2 = JsonWriter::<BufWriter<StringWriter>>.make(sink: BufWriter::<StringWriter>.make(inner: StringWriter.make()));
+    Result<Unit, Owned<Error>> e2 = w2.encodeValue(v: r);
+    match (give e2) { case Ok(_): {} case Err(e): { return 13; } };
+
+    // (c) reader path — decode straight out of a SliceReader over the encoded bytes.
+    Result<Rec, Owned<Error>> d = decodeFrom::<Rec>(from: SliceReader.make(src: give j));
+    Rec q = match (give d) { case Ok(x): give x; case Err(e): { return 14; } };
+    return q.verify();
+}
