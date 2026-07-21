@@ -11588,11 +11588,14 @@ int CEmitter::holeBuiltinType(SharedExpression e)
 
 // Emit a format-specifier hole `${x:spec}` as a Formatter fast-path (the Format contract stays spec-less).
 // `spec` is the raw text after the `:`. Forms:
-//   base (M1)   — `x`/`0x`/`0X`/`o`/`0o`/`b`/`0b`  (integer holes; the leading `0` is echoed as a prefix)
-//   width (M2)  — `W` (space-pad) / `0W` (zero-pad) on decimal integers, and `W.N` / `0W.N` on floats
-//   precision   — `.N` on floats (a width of 0)
-// Base+width don't combine yet, and a float width needs a precision. A wrong hole kind / unrecognized spec is
-// a hard error. The raw spec is parsed here (not in the lexer/grammar), so future specifiers add no AST churn.
+//   base (M1)      — `x`/`0x`/`0X`/`o`/`0o`/`b`/`0b`  (integer holes; the leading `0` is echoed as a prefix)
+//   width (M2)     — `W` (space-pad) / `0W` (zero-pad) on decimal integers, and `W.N` / `0W.N` on floats
+//   precision      — `.N` on floats (a width of 0)
+//   flags (M3)     — a leading `+` (force sign) and/or `-` (left-align) on any decimal int/float form
+// Grammar (parsed here, not in the lexer — future specifiers add no AST churn):
+//   spec := [ '+' | '-' ]*  [ '0'? digits ]  [ '.' digits ]  | base
+// A base spec doesn't combine with width/flags/precision yet, and a float width needs a precision. A wrong
+// hole kind / unrecognized spec is a hard error. Flag bits mirror kama_runtime.h: 1=zero, 2=left, 4=plus.
 void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const std::string& spec)
 {
     int bt = holeBuiltinType(hole);
@@ -11609,54 +11612,65 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
     std::string val = emitExpression(hole);
     auto isBaseLetter = [](char c) { return c=='x'||c=='X'||c=='o'||c=='O'||c=='b'||c=='B'; };
 
-    // ---- Base marker (M1): a bare letter, or a `0`-prefixed letter (the `0` is echoed in the output). ----
-    bool baseForm = (spec.size() == 1 && isBaseLetter(spec[0]))
-                 || (spec.size() == 2 && spec[0] == '0' && isBaseLetter(spec[1]));
-    if (baseForm) {
-        int prefix = (spec.size() == 2) ? 1 : 0;
-        char c = spec[spec.size() - 1];
-        int base = (c=='x'||c=='X') ? 16 : (c=='o'||c=='O') ? 8 : 2;
-        int upper = (c=='X') ? 1 : 0;
+    // ---- Split off a trailing base marker (always last): `x`/`0x`/... A `0` before the letter that is the
+    //      whole remaining head is the echoed prefix; otherwise the base is bare and any `0` is a pad flag. ----
+    std::string head = spec;
+    bool hasBase = false; int base = 0, upper = 0, prefix = 0;
+    if (!spec.empty() && isBaseLetter(spec.back())) {
+        char c = spec.back(); hasBase = true;
+        base = (c=='x'||c=='X') ? 16 : (c=='o'||c=='O') ? 8 : 2;
+        upper = (c=='X') ? 1 : 0;
+        head = spec.substr(0, spec.size() - 1);
+        if (head == "0") { prefix = 1; head.clear(); }
+    }
+
+    // ---- Parse the head: [flags] [`0`? width] [`.` prec]. ----
+    size_t pos = 0; bool plus = false, left = false, zero = false, hasWidth = false, hasPrec = false;
+    int width = 0, prec = 0;
+    while (pos < head.size() && (head[pos] == '+' || head[pos] == '-')) { if (head[pos] == '+') plus = true; else left = true; ++pos; }
+    if (pos + 1 < head.size() && head[pos] == '0' && isdigit((unsigned char)head[pos+1])) { zero = true; ++pos; }
+    while (pos < head.size() && isdigit((unsigned char)head[pos])) { width = width*10 + (head[pos]-'0'); hasWidth = true; ++pos; }
+    if (pos < head.size() && head[pos] == '.') {
+        ++pos; hasPrec = true; size_t d0 = pos;
+        while (pos < head.size() && isdigit((unsigned char)head[pos])) { prec = prec*10 + (head[pos]-'0'); ++pos; }
+        if (pos == d0) { unsupported(("precision specifier `:" + spec + "` needs digits (e.g. `.2`)").c_str(), hole->line); return; }
+    }
+    if (pos != head.size()) { unsupported(("unrecognized format specifier `:" + spec + "`").c_str(), hole->line); return; }
+    bool hasFlag = plus || left || zero;
+    int flags = (zero ? 1 : 0) | (left ? 2 : 0) | (plus ? 4 : 0);
+
+    // ---- Base spec: integer only, no width/flags/precision yet. ----
+    if (hasBase) {
         if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole->line); return; }
+        if (hasWidth || hasFlag || hasPrec) {
+            unsupported(("width/sign/align specifiers can't be combined with a base yet — use `:0x` or `:6`, "
+                         "not `:" + spec + "`").c_str(), hole->line);
+            return;
+        }
         _hoisted.push_back("Formatter__writeU64Radix(&" + fv + ", (uint64_t)(" + val + "), "
                            + std::to_string(base) + ", " + std::to_string(bits) + ", "
                            + std::to_string(upper) + ", " + std::to_string(prefix) + ");");
         return;
     }
 
-    // ---- Width / precision (M2): [`0`] [digits] [ `.` digits ]. ----
-    size_t pos = 0; bool zeroPad = false, hasWidth = false, hasPrec = false; int width = 0, prec = 0;
-    if (pos + 1 < spec.size() && spec[pos] == '0' && isdigit((unsigned char)spec[pos+1])) { zeroPad = true; ++pos; }
-    while (pos < spec.size() && isdigit((unsigned char)spec[pos])) { width = width*10 + (spec[pos]-'0'); hasWidth = true; ++pos; }
-    if (pos < spec.size() && spec[pos] == '.') {
-        ++pos; hasPrec = true; size_t d0 = pos;
-        while (pos < spec.size() && isdigit((unsigned char)spec[pos])) { prec = prec*10 + (spec[pos]-'0'); ++pos; }
-        if (pos == d0) { unsupported(("precision specifier `:" + spec + "` needs digits (e.g. `.2`)").c_str(), hole->line); return; }
-    }
-    if (pos != spec.size() || (!hasWidth && !hasPrec)) {
-        if (pos < spec.size() && isBaseLetter(spec[pos]))
-            unsupported(("width and base specifiers can't be combined yet — use `:0x` or `:6`, not `:" + spec + "`").c_str(), hole->line);
-        else
-            unsupported(("unrecognized format specifier `:" + spec + "`").c_str(), hole->line);
-        return;
-    }
+    if (!hasWidth && !hasPrec && !hasFlag) { unsupported(("unrecognized format specifier `:" + spec + "`").c_str(), hole->line); return; }
 
-    // Precision (with optional width) — float only.
+    // ---- Precision (with optional width/flags) — float only. ----
     if (hasPrec) {
         if (!isFloat) { unsupported(("precision specifier `:" + spec + "` applies only to a float hole").c_str(), hole->line); return; }
         _hoisted.push_back("Formatter__writeF64Prec(&" + fv + ", (double)(" + val + "), "
-                           + std::to_string(prec) + ", " + std::to_string(width) + ", " + std::to_string(zeroPad?1:0) + ");");
+                           + std::to_string(prec) + ", " + std::to_string(width) + ", " + std::to_string(flags) + ");");
         return;
     }
-    // Width only — decimal integer (a float width needs a precision to be well-defined).
+    // ---- Width/flags only — decimal integer (a float width needs a precision to be well-defined). ----
     if (isFloat) { unsupported(("a float width needs a precision (e.g. `:" + std::to_string(width) + ".2`)").c_str(), hole->line); return; }
-    if (!isInt) { unsupported(("width specifier `:" + spec + "` applies only to a numeric hole").c_str(), hole->line); return; }
+    if (!isInt) { unsupported(("format specifier `:" + spec + "` applies only to a numeric hole").c_str(), hole->line); return; }
     if (isSigned)
         _hoisted.push_back("Formatter__writeI64Width(&" + fv + ", (int64_t)(" + val + "), "
-                           + std::to_string(width) + ", " + std::to_string(zeroPad?1:0) + ");");
+                           + std::to_string(width) + ", " + std::to_string(flags) + ");");
     else
         _hoisted.push_back("Formatter__writeU64Width(&" + fv + ", (uint64_t)(" + val + "), "
-                           + std::to_string(width) + ", " + std::to_string(zeroPad?1:0) + ");");
+                           + std::to_string(width) + ", " + std::to_string(flags) + ");");
 }
 
 std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* recv)

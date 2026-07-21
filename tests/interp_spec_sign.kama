@@ -1,0 +1,33 @@
+// Format specifiers M3: the `+` flag forces a leading sign on non-negatives, and `-` left-aligns within a
+// field width. Both compose with the M2 width/zero-pad and float precision. Order: flags, then width, then
+// `.precision`. Exit is a bitset (127 = all seven checks).
+fn int main() {
+    int32 r = 0;
+
+    int32 n = 42i32;
+    string a = "${n:+}";
+    if (a == "+42") { r = r + 1; }               // force sign, no width
+
+    string b = "${n:+06}";
+    if (b == "+00042") { r = r + 2; }            // sign ahead of the zero-pad
+
+    string c = "${n:-6}!";
+    if (c == "42    !") { r = r + 4; }           // left-align in width 6
+
+    int32 neg = -7i32;
+    string d = "${neg:+4}";
+    if (d == "  -7") { r = r + 8; }              // negative keeps its own sign, right-aligned
+
+    float64 pi = 3.14159;
+    string e = "${pi:+.2}";
+    if (e == "+3.14") { r = r + 16; }            // sign on a float precision
+
+    string g = "${pi:-8.2}!";
+    if (g == "3.14    !") { r = r + 32; }        // left-aligned float in width 8
+
+    uint32 u = 5ui32;
+    string h = "${u:+4}";
+    if (h == "   5") { r = r + 64; }             // `+` is a no-op on unsigned (never negative)
+
+    return r;   // 1+2+4+8+16+32+64 = 127
+}

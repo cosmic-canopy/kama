@@ -240,7 +240,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
      specifier vocabulary grows). The `}` closes the whole hole and resumes string lexing, exactly like the
      hole-state closer above. Entered from IN_INTERP_HOLE on `:` via BEGIN (no stack push — the IN_REGULAR_STRING
      pushed at `${` stays on the stack, so yy_pop_state here returns to it). */
-<IN_INTERP_SPEC>[.0-9A-Za-z]+                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return ISTR_SPEC; }
+<IN_INTERP_SPEC>[-+.0-9A-Za-z]+                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return ISTR_SPEC; }
 <IN_INTERP_SPEC>{new_line}                      { error("unexpected end of line in a string interpolation format specifier", yyscanner); }
 <IN_INTERP_SPEC>"}"                             {
                                                  yyextra->next_column_number += 1;

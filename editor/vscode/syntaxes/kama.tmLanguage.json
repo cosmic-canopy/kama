@@ -37,7 +37,7 @@
               "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.kama" } },
               "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.kama" } },
               "patterns": [
-                { "comment": "format specifier :.2 / :0x — highlighted as a unit before the accessor rules", "name": "keyword.other.format-spec.kama", "match": ":[.0-9A-Za-z]+" },
+                { "comment": "format specifier :.2 / :0x / :+06 — highlighted as a unit before the accessor rules", "name": "keyword.other.format-spec.kama", "match": ":[-+.0-9A-Za-z]+" },
                 { "name": "variable.other.kama", "match": "[A-Za-z_][A-Za-z0-9_]*" },
                 { "name": "punctuation.accessor.kama", "match": "[.\\[\\]]" },
                 { "name": "constant.numeric.kama", "match": "[0-9]+" }

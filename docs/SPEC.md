@@ -152,8 +152,10 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   `0x` on a float), is a compile error — the `Format` contract stays spec-less (specs are `Formatter`
   fast-paths). A **minimum field width** right-aligns: `${n:6}` space-pads, `${n:06}` zero-pads (the sign
   stays ahead of the zeros), and on a float it composes with a precision (`${pi:8.2}`, `${pi:08.2}`) — ideal
-  for zero-padded columns (`${h:02}:${m:02}`). Width and a base marker don't combine yet, and sign/fill are
-  the planned next slice.
+  for zero-padded columns (`${h:02}:${m:02}`). A leading **`+`** forces a sign on non-negatives (`${n:+}` →
+  `+42`) and **`-`** left-aligns within the width (`${n:-6}`); both compose with the width/precision. The full
+  spec grammar is `[+|-]* [0? width] [.precision] | base`. Combining a base marker with width/flags, a custom
+  fill character, and center-align are not yet supported (see [ROADMAP.md](ROADMAP.md) §2).
 - A **`@generate` debug derive** and **tagged strings** (`sql"…"` / `html"…"` / `stripIndent"…"`) are planned;
   the interpolation AST already carries `{parts, holes, specs}` so a tag is additive.
 
