@@ -1,0 +1,7 @@
+// A width on a float hole needs a precision to be well-defined — `${pi:8}` is a compile error (the default
+// float render is variable-width shortest-round-trip). Use `${pi:8.2}`.
+fn int main() {
+    float64 pi = 3.14159;
+    string s = "${pi:8}";
+    return 0;
+}

@@ -150,7 +150,10 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   requires an **integer** hole and shows the unsigned bit pattern of its declared width, so a signed negative
   round-trips (`${x:0x}` on `-1i8` → `0xff`). A spec on a user-type hole, or a kind mismatch (`.N` on an int,
   `0x` on a float), is a compile error — the `Format` contract stays spec-less (specs are `Formatter`
-  fast-paths). Width/zero-pad (`${n:04}`) and sign/fill are the planned next slices.
+  fast-paths). A **minimum field width** right-aligns: `${n:6}` space-pads, `${n:06}` zero-pads (the sign
+  stays ahead of the zeros), and on a float it composes with a precision (`${pi:8.2}`, `${pi:08.2}`) — ideal
+  for zero-padded columns (`${h:02}:${m:02}`). Width and a base marker don't combine yet, and sign/fill are
+  the planned next slice.
 - A **`@generate` debug derive** and **tagged strings** (`sql"…"` / `html"…"` / `stripIndent"…"`) are planned;
   the interpolation AST already carries `{parts, holes, specs}` so a tag is additive.
 

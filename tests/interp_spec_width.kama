@@ -1,0 +1,32 @@
+// Format specifiers M2: minimum field width + zero-pad. `W` space-pads (right-aligns), `0W` zero-pads (the
+// sign stays ahead of the zeros); on a float a width composes with a precision (`W.N` / `0W.N`). The killer
+// case is zero-padded columns/timestamps (`${h:02}:${m:02}`). Exit is a bitset (127 = all seven checks).
+fn int main() {
+    int32 r = 0;
+
+    int32 n = 42i32;
+    string a = "${n:6}";
+    if (a == "    42") { r = r + 1; }           // space-pad to width 6
+    string b = "${n:06}";
+    if (b == "000042") { r = r + 2; }           // zero-pad to width 6
+
+    int32 neg = -42i32;
+    string c = "${neg:06}";
+    if (c == "-00042") { r = r + 4; }           // sign ahead of the zeros
+
+    float64 pi = 3.14159;
+    string d = "${pi:8.2}";
+    if (d == "    3.14") { r = r + 8; }          // width 8, precision 2
+    string e = "${pi:08.2}";
+    if (e == "00003.14") { r = r + 16; }         // zero-pad + precision
+
+    uint32 u = 7ui32;
+    string g = "${u:04}";
+    if (g == "0007") { r = r + 32; }             // unsigned zero-pad
+
+    int32 h = 9i32; int32 m = 5i32; int32 s = 3i32;
+    string clock = "${h:02}:${m:02}:${s:02}";
+    if (clock == "09:05:03") { r = r + 64; }     // zero-padded columns in one string
+
+    return r;   // 1+2+4+8+16+32+64 = 127
+}

@@ -1,0 +1,6 @@
+// Width and base specifiers can't be combined yet (M2) — `${n:8x}` is a compile error. Use `:0x` or `:6`.
+fn int main() {
+    int32 n = 255i32;
+    string s = "${n:8x}";
+    return 0;
+}

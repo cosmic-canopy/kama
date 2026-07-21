@@ -66,14 +66,15 @@ genuinely later-track or opt-in.
   `toString<T>` (prelude), and `${expr}` holes (identifier + `.field`/`[index]`) lowering to a compile-time,
   statically-checked `Formatter` build (see [SPEC.md](SPEC.md) "Formatting & string interpolation"). The
   interp-in-operand papercut is closed (`93bde40`). Still open on this substrate, in DECIDED ORDER:
-  1. **Format specifiers ✅ (M1)** — `${expr:spec}` with a literal-analog vocabulary: precision `.N` on
+  1. **Format specifiers ✅ (M1+M2)** — `${expr:spec}` with a literal-analog vocabulary: precision `.N` on
      floats (`${pi:.2}`) and base `0x`/`0o`/`0b` on integers, where the leading `0` is echoed so `${n:x}`→`ff`
      and `${n:0x}`→`0xff` (a valid Kama literal); the letter's case controls digit case. A signed negative
-     round-trips via width masking. Applied via spec-aware `Formatter` fast-paths (`writeF64Prec`/
-     `writeU64Radix`), so the `Format` contract is UNCHANGED; a spec on a user-type/kind-mismatched hole is a
-     compile error. The hole AST now carries a parallel `specs` vector — the model the tags feature consumes.
-     **Remaining slices:** M2 width + zero-pad (`${n:04}`), M3 sign + fill/align (zero AST churn — the raw
-     spec string is parsed at codegen).
+     round-trips via width masking. **M2** adds a minimum field width — `${n:6}` (space-pad) / `${n:06}`
+     (zero-pad), composing with precision on floats (`${pi:08.2}`) — for zero-padded columns (`${h:02}:${m:02}`).
+     Applied via spec-aware `Formatter` fast-paths (`writeF64Prec`/`writeU64Radix`/`writeI64Width`/
+     `writeU64Width`), so the `Format` contract is UNCHANGED; a spec on a user-type/kind-mismatched hole is a
+     compile error. The hole AST carries a parallel `specs` vector (raw spec parsed at codegen — zero AST
+     churn as the vocabulary grows). **Remaining slice:** M3 sign + fill/align (+ the width×base combo).
   2. **`@generate(Format)`** — synthesize a default `Format` impl (a field dump), mirroring
      `@generate(Serialize, Deserialize)`. NOTE: named after the CONTRACT (`Format`), NOT `display`/`debug` —
      kama has one to-string contract, no Display/Debug split. Independent of specifiers + tags.

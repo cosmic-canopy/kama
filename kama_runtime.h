@@ -652,14 +652,38 @@ static inline kama_string kama_fmt_char(uint32_t cp) {
     return kama_string_from_raw(b, 0, (int32_t)n);
 }
 
-// Fixed-precision float -> fresh heap-owned kama_string (the `${x:.N}` interpolation specifier). `%.*f` at the
-// requested decimal count; `prec` is clamped to [0,64]. `snprintf` is declared at block scope so this stays
-// `<stdio.h>`-free (the same pattern as kama_fmt_f64). A generous buffer covers DBL_MAX at 64 decimals.
-static inline kama_string kama_fmt_f64_prec(double v, int32_t prec) {
+// Fixed-precision float -> fresh heap-owned kama_string (the `${x:.N}` / `${x:W.N}` interpolation specifiers).
+// `%*.*f` at the requested decimal count and minimum field width; `prec` is clamped to [0,64] and `width` to
+// [0,256], and `zero` left-pads with '0' (sign stays ahead). `snprintf` is declared at block scope so this
+// stays `<stdio.h>`-free (the same pattern as kama_fmt_f64). The buffer covers width 256 + precision 64.
+static inline kama_string kama_fmt_f64_prec(double v, int32_t prec, int32_t width, int32_t zero) {
     extern int snprintf(char*, size_t, const char*, ...);
     if (prec < 0) prec = 0; if (prec > 64) prec = 64;
-    char buf[400];
-    int n = snprintf(buf, sizeof buf, "%.*f", (int)prec, v);
+    if (width < 0) width = 0; if (width > 256) width = 256;
+    char buf[512];
+    int n = snprintf(buf, sizeof buf, zero ? "%0*.*f" : "%*.*f", (int)width, (int)prec, v);
+    if (n < 0) n = 0;
+    if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
+    return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
+}
+
+// Decimal integer, minimum field width (the `${n:W}` / `${n:0W}` specifiers). `width` is clamped to [0,256];
+// `zero` left-pads with '0' instead of spaces (the sign stays ahead of the zeros, like printf `%0*lld`).
+// Signed vs unsigned pick `lld`/`llu`. Block-scope `snprintf` keeps this stdio-free.
+static inline kama_string kama_fmt_i64_width(int64_t v, int32_t width, int32_t zero) {
+    extern int snprintf(char*, size_t, const char*, ...);
+    if (width < 0) width = 0; if (width > 256) width = 256;
+    char buf[300];
+    int n = snprintf(buf, sizeof buf, zero ? "%0*lld" : "%*lld", (int)width, (long long)v);
+    if (n < 0) n = 0;
+    if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
+    return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
+}
+static inline kama_string kama_fmt_u64_width(uint64_t v, int32_t width, int32_t zero) {
+    extern int snprintf(char*, size_t, const char*, ...);
+    if (width < 0) width = 0; if (width > 256) width = 256;
+    char buf[300];
+    int n = snprintf(buf, sizeof buf, zero ? "%0*llu" : "%*llu", (int)width, (unsigned long long)v);
     if (n < 0) n = 0;
     if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
     return kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n);
