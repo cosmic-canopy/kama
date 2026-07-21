@@ -79,9 +79,17 @@ genuinely later-track or opt-in.
      codegen, so additive):** combining a base marker with width/flags (`${n:08x}` zero-padded hex), a custom
      fill character (non-space/`0`, e.g. `*`), and center-align (`^`). Each currently errors with a clear
      "can't be combined / unsupported" diagnostic.
-  2. **`@generate(Format)`** — synthesize a default `Format` impl (a field dump), mirroring
-     `@generate(Serialize, Deserialize)`. NOTE: named after the CONTRACT (`Format`), NOT `display`/`debug` —
-     kama has one to-string contract, no Display/Debug split. Independent of specifiers + tags.
+  2. **`@generate(Format)` ✅** — synthesizes a default field-dump `Format` impl (`Type { f1: v1, f2: v2 }`),
+     mirroring `@generate(Serialize, Deserialize)`: a `genFormat` flag → a synth `format` method whose body
+     (`emitFormatDefinition`) writes each non-`@skip`ped field into the caller's `Formatter` (scalars via the
+     matching `writeX` fast-path, `char` via `writeChar`, a composite field through its own `__format`).
+     Strings render **raw/unquoted** (uniform single-contract dispatch). Named after the CONTRACT (`Format`),
+     NOT `display`/`debug` — kama has one to-string contract, no Display/Debug split. **Deferred (each a clean
+     compile error today, additive later):** a field that doesn't `implements Format` (`Optional`/collection/
+     enum-typed fields — they'd gain `Format` separately); `@generate(Format)` on a **generic**/**variant**/
+     **enum** type itself; and, if a type ever needs BOTH a curated display and a structural dump, a
+     `${x:?}`-routed `@generate(Debug)` (the spec hook already exists — purely additive, does not reopen the
+     one-contract decision).
   3. **Tagged strings** (`sql"…"`/`html"…"`/`stripIndent"…"`) — additive on the finalized
      `{parts, holes(+spec), tag}` AST (the `tag` field already exists, unused). The biggest piece.
   `string + <number>` stays a compile error by design — interpolation is the one way to mix values into text.

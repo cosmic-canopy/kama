@@ -1,0 +1,52 @@
+// `@generate(Format)` (fmt Task 2): the compiler synthesizes a default field-dump `Format` impl —
+// `Type { f1: v1, f2: v2 }`, strings raw/unquoted, each field dispatching to its own Format. Covers a plain
+// value (primitives), composite recursion into ONE buffer, `@skip`, a `resource` with a `string` field, and
+// the free `toString`. Exit code is a bitset of the checks (63 = all six).
+
+// A plain value: `Format` + `of` compose — one gives the memberwise ctor, the other the dump.
+@generate(Format, of) type value Stat { public int32 hp; public bool alive; }
+
+// A field that is itself a Format value — proves composite recursion (Stat's format writes into the SAME sink).
+@generate(Format, of) type value Line { public Stat lead; public int32 len; }
+
+// `@skip` omits a field from the dump.
+@generate(Format, of) type value Secret { public int32 shown; @skip public int32 hidden; }
+
+// A `resource` (owns its `string`) works too — a hand ctor, fields private.
+@generate(Format) type resource Named {
+    string name; int32 n;
+    public ctor make(string name, int32 n) { Named r; r.name = give name; r.n = n; return give r; }
+}
+
+fn int main() {
+    int32 r = 0;
+
+    Stat s = Stat.of(hp: 30i32, alive: true);
+    string a = "${s}";
+    if (a == "Stat { hp: 30, alive: true }") { r = r + 1; }
+
+    // nested composite → one growing buffer, no per-field allocation
+    Line ln = Line.of(lead: Stat.of(hp: 5i32, alive: false), len: 9i32);
+    string b = "${ln}";
+    if (b == "Line { lead: Stat { hp: 5, alive: false }, len: 9 }") { r = r + 2; }
+
+    // `@skip`ped field is absent from the dump
+    Secret sec = Secret.of(shown: 1i32, hidden: 999i32);
+    string c = "${sec}";
+    if (c == "Secret { shown: 1 }") { r = r + 4; }
+
+    // a resource with a string field dumps raw/unquoted
+    Named nm = Named.make(name: "orc", n: 7i32);
+    string d = "${nm}";
+    if (d == "Named { name: orc, n: 7 }") { r = r + 8; }
+
+    // the free `toString` gives the identical rendering
+    string e = toString(x: ref s);
+    if (e == "Stat { hp: 30, alive: true }") { r = r + 16; }
+
+    // interpolated inline alongside other text
+    string g = "unit=${s}.";
+    if (g == "unit=Stat { hp: 30, alive: true }.") { r = r + 32; }
+
+    return r;   // 1+2+4+8+16+32 = 63
+}

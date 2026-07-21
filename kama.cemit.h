@@ -92,6 +92,9 @@ struct MethodInfo {
     // null: the proto/body loops skip these and emit via emitSerializeDefinition/emitDeserializeDefinition.
     bool                         isSynthSer = false;  // synthesized `serialize(ref Serializer)`
     bool                         isSynthDe  = false;  // synthesized static `deserialize(Deserializer) -> This`
+    // Compiler-synthesized `@generate(Format)` field-dump `format(ref Formatter)`. `node` is null: the
+    // proto/body loops skip the ordinary path and emit via emitFormatDefinition.
+    bool                         isSynthFormat = false;
     // Compiler-synthesized `@generate(of|zero)` bag ctor (M6). `node` is null: the proto/body loops skip the
     // ordinary path and emit via bagCtorSig/emitBagCtorBody, dispatching on the method key ("of"/"zero").
     bool                         isSynthBag = false;
@@ -171,6 +174,9 @@ struct ClassInfo {
     // emitBagCtorDefinitions. See the construction-model campaign (M6).
     bool                              genOf = false;
     bool                              genZero = false;
+    // `@generate(Format)` — opt-in synthesized field-dump `Format` impl (`Type { f: v, … }`), infallible;
+    // the display analog of genSerialize. Body emitted by emitFormatDefinition.
+    bool                              genFormat = false;
     std::map<std::string, MethodInfo> methods;    // by kama method name
     bool                              hasCtor = false;
     bool                              preludeStatic = false;  // a non-generic prelude type (e.g. Chars) whose
@@ -793,6 +799,11 @@ private:
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);
     void emitDeserializeDefinition(ClassInfo& ci);
+    // `@generate(Format)` — the synthesized infallible field-dump `void T__format(T* self, Formatter* f)` and
+    // its per-field writer (scalar -> a Formatter writeX, composite -> its own `__format`).
+    void emitFormatDefinition(ClassInfo& ci);
+    void emitFmtFieldWrite(SharedIdentifier ty, const std::string& access, int line);
+    void emitFmtLiteral(const std::string& s);   // write a literal chunk via a kama_string temp + Formatter__writeStr
     // `@generate(of|zero)` bag ctors (M6): the C signature (`V V__of(f1…)` / `V V__zero(void)`) shared by the
     // prototype and the definition, and the synthesized memberwise/zero-init body. `which` is "of" or "zero".
     std::string bagCtorSig(const ClassInfo& ci, const std::string& which);

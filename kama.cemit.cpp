@@ -2939,7 +2939,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         else if (which == "Deserialize") ci.genDeserialize = true;
                         else if (which == "of")   ci.genOf = true;     // bag ctor — validated + registered after fields (below)
                         else if (which == "zero") ci.genZero = true;
-                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, of, zero", cd->line);
+                        else if (which == "Format") ci.genFormat = true;   // field-dump Format impl — registered below
+                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, Format, of, zero", cd->line);
                     }
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name + "` (expected `@generate`)").c_str(), cd->line);
@@ -3041,8 +3042,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             }
                             else unsupported(("unknown field attribute `@" + an + "`").c_str(), fd->line);
                         }
-                    if (!serGen && fd->attributes && !fd->attributes->empty())
+                    if (!serGen && !ci.genFormat && fd->attributes && !fd->attributes->empty())
                         unsupported("field attributes (`@field`/`@skip`) require `@generate(...)` on the type", fd->line);
+                    // `@generate(Format)` honors `@skip` (omit a field from the dump) but does NOT require every
+                    // field marked — a field dump needs no wire names, so marking would be pointless ceremony.
                     if (serGen && !fMarked)
                         unsupported("every field of a `@generate`d type must be marked `@field` or `@skip`", fd->line);
                     // Smart-pointer fields = object-graph mode: `Shared`/`Weak`/`Owned` serialize as integer ids
@@ -3355,6 +3358,21 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
                 }
             }
+            // `@generate(Format)` — a synthesized infallible field-dump `fn void format(ref Formatter f)`
+            // (`Type { f1: v1, … }`). The display analog of Serialize: register the nominal `Format`
+            // conformance + the synth method; a hand-written `format` wins via the `!count` guard (body only).
+            // returnType stays null -> cType(null) == "void".
+            if (ci.genFormat) {
+                if (!hasItf("Format")) ci.interfaces.push_back("Format");
+                if (!ci.methods.count("format")) {
+                    MethodInfo mi; mi.cName = ci.name + "__format"; mi.visibility = Visibility::Public;
+                    mi.isSynthFormat = true;
+                    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+                    mi.returnType = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("void"), IDENTIFIER_VOID_VAL);
+                    ParamSig f; f.name = "f"; f.byRef = true; f.className = "Formatter"; mi.params.push_back(f);
+                    ci.methods["format"] = mi;   // `fn void format(ref Formatter f)`
+                }
+            }
             // `@generate(of|zero)` bag ctors (M6) — BAG-ONLY: a transparent `value` (all public fields). `of`
             // = a synthesized memberwise ctor `V.of(f1: …, …)`; `zero` = a zero-init ctor `V.zero()`. Both are
             // infallible named ctors (returnType = the enclosing type), registered in `ctors`/`methods` and
@@ -3394,6 +3412,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             // non-variant) transparent `value`. Per-instance synthesis for generics is out of scope for M6.
             unsupported("`@generate(of, zero)` applies only to a plain transparent `value` (all public fields) "
                         "— not a generic or variant type; write a `ctor`", cd->line);
+        } else if (ci.genFormat) {
+            // A generic `value<T>` template or a variant: `@generate(Format)` is out of scope for a first cut;
+            // write a hand `implements Format` (per-instance synthesis for generics is a later milestone).
+            unsupported("`@generate(Format)` applies only to a plain (non-generic, non-variant) type "
+                        "— write `implements Format` by hand for a generic or variant", cd->line);
         }
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
@@ -9512,6 +9535,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         if (mi.isSynthSer) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }   // P4: Result<Unit, Owned<Error>>
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
+        if (mi.isSynthFormat) { *_out << stat << "void " << ci.name << "__format(" << ci.name << "* self, Formatter* f);\n"; continue; }   // `@generate(Format)`
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
@@ -9720,6 +9744,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         if (mi.isSynthSer) { ci.reachesPointer   ? emitGraphSerializeDefinition(ci)   : emitSerializeDefinition(ci); continue; }
         if (mi.isSynthDe)  { ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci); continue; }
         if (mi.isSynthBag) { emitBagCtorBody(ci, kv.first); continue; }   // M6: `@generate(of|zero)` bag ctor
+        if (mi.isSynthFormat) { emitFormatDefinition(ci); continue; }     // `@generate(Format)` field dump
         // an operator has no `node`; emit its body from `opDecl` (free form: no self).
         if (mi.isOperator) {
             auto* d = mi.opDecl->operatorDeclarator.get();
@@ -9864,6 +9889,66 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
     indent(2); *_out << "return (" << resC << "){ .tag = " << resC << "_Err, .u.Err = { .error = " << box << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .tag = " << resC << "_Ok, .u.Ok = { .value = Unit_Unit } };\n";
+    *_out << "}\n\n";
+}
+
+// `@generate(Format)` — write a literal chunk of the dump ("Type {", " name: ", ", ", " }") into the caller's
+// Formatter. `kama_string_lit` is non-owning (points at static rodata), so the temp needs no dtor — the same
+// reason emitInterpolation's literal chunks are dtor-free.
+void CEmitter::emitFmtLiteral(const std::string& s)
+{
+    std::string tmp = "__fl" + std::to_string(_tempCounter++);
+    indent(1); *_out << "kama_string " << tmp << " = " << kamaStrLit(s) << "; Formatter__writeStr(f, &" << tmp << ");\n";
+}
+
+// `@generate(Format)` — write one field of the dump. A scalar/string/char/bool uses the matching Formatter
+// fast-path (char is direct via writeChar — it has no Format conformance, sharing uint32's cType, exactly as
+// emitInterpolation special-cases it); a composite field must itself `implements Format` and recurses through
+// its own `__format` into the SAME Formatter (one buffer, no per-field allocation).
+void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access, int line)
+{
+    int bv = ty ? ty->builtInVal : 0;
+    switch (bv) {
+        case IDENTIFIER_STRING_VAL:  indent(1); *_out << "Formatter__writeStr(f, &" << access << ");\n";  return;
+        case IDENTIFIER_CHAR_VAL:    indent(1); *_out << "Formatter__writeChar(f, " << access << ");\n";   return;
+        case IDENTIFIER_BOOL_VAL:    indent(1); *_out << "Formatter__writeBool(f, " << access << ");\n";   return;
+        case IDENTIFIER_INT8_VAL: case IDENTIFIER_INT16_VAL:
+        case IDENTIFIER_INT32_VAL: case IDENTIFIER_INT64_VAL:
+            indent(1); *_out << "Formatter__writeI64(f, (int64_t)(" << access << "));\n";  return;
+        case IDENTIFIER_UINT8_VAL: case IDENTIFIER_UINT16_VAL:
+        case IDENTIFIER_UINT32_VAL: case IDENTIFIER_UINT64_VAL:
+            indent(1); *_out << "Formatter__writeU64(f, (uint64_t)(" << access << "));\n"; return;
+        case IDENTIFIER_FLOAT32_VAL: indent(1); *_out << "Formatter__writeF32(f, " << access << ");\n";    return;
+        case IDENTIFIER_FLOAT64_VAL: indent(1); *_out << "Formatter__writeF64(f, " << access << ");\n";    return;
+    }
+    // Composite field: it must itself implement Format. (Optional/collections/enum-typed fields don't today
+    // and land here as a clean error — v1 scope, tracked on the ROADMAP.)
+    std::string ct = cType(ty);
+    if (!satisfiesBound(ct, "Format"))
+        unsupported(("`@generate(Format)` needs every field to be a primitive/string or a type that "
+                     "`implements Format`; field type `" + (ty && ty->value ? *ty->value : ct)
+                     + "` does not").c_str(), line);
+    indent(1); *_out << ct << "__format(&" << access << ", f);\n";
+}
+
+// `@generate(Format)` — the synthesized infallible field dump: `Type { f1: v1, f2: v2 }` (empty => `Type {}`).
+// The display analog of emitSerializeDefinition; string fields render raw/unquoted (each field dispatches to
+// its own Format — no special-case, no escaping runtime). Honors `@skip` via FieldInfo::serSkip.
+void CEmitter::emitFormatDefinition(ClassInfo& ci)
+{
+    int line = ci.node ? ci.node->line : 0;
+    // The dump uses the SOURCE type name (`Stat`), not the mangled C name (`_F4__Stat`).
+    std::string disp = (ci.node && ci.node->name && ci.node->name->value) ? *ci.node->name->value : ci.name;
+    *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name
+          << "__format(" << ci.name << "* self, Formatter* f)\n{\n";
+    bool any = false;
+    for (auto& fld : ci.fields) {
+        if (fld.serSkip) continue;
+        emitFmtLiteral((any ? ", " : disp + " { ") + fld.name + ": ");
+        emitFmtFieldWrite(fld.type, "self->" + fld.name, line);
+        any = true;
+    }
+    emitFmtLiteral(any ? " }" : disp + " {}");
     *_out << "}\n\n";
 }
 

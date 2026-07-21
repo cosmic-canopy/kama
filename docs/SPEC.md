@@ -156,8 +156,23 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   `+42`) and **`-`** left-aligns within the width (`${n:-6}`); both compose with the width/precision. The full
   spec grammar is `[+|-]* [0? width] [.precision] | base`. Combining a base marker with width/flags, a custom
   fill character, and center-align are not yet supported (see [ROADMAP.md](ROADMAP.md) §2).
-- A **`@generate` debug derive** and **tagged strings** (`sql"…"` / `html"…"` / `stripIndent"…"`) are planned;
-  the interpolation AST already carries `{parts, holes, specs}` so a tag is additive.
+- **`@generate(Format)`** synthesizes a default field-dump `Format` impl so a type renders without a
+  hand-written `format` — `Type { field1: v1, field2: v2 }`, each field dispatching to its own `Format` into
+  the same sink (so nesting composes, one allocation):
+
+  ```kama
+  @generate(Format) type value Stat { public int32 hp; public bool alive; }
+  string s = "${Stat.of(hp: 30i32, alive: true)}";   // "Stat { hp: 30, alive: true }"
+  ```
+
+  Strings render **raw/unquoted** (uniform single-contract dispatch — no special-case). A hand-written
+  `format` wins over the derive; `@skip` omits a field. Every non-skipped field must itself be a
+  primitive/string or a type that `implements Format` (an `Optional`/collection/enum-typed field, or a
+  generic/variant/enum carrying the attribute, is a clear compile error — see [ROADMAP.md](ROADMAP.md) §2).
+  It is named after the **contract** (`Format`), not `display`/`debug` — Kama has one to-string contract, no
+  Display/Debug split; a `${x:?}`-routed structural `Debug` derive stays a possible additive future.
+- **Tagged strings** (`sql"…"` / `html"…"` / `stripIndent"…"`) are planned; the interpolation AST already
+  carries `{parts, holes, specs, tag}` so a tag is additive.
 
 ## Collections & strings ✅
 
