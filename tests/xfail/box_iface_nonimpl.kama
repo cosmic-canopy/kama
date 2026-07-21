@@ -1,12 +1,12 @@
 extern "<stdlib.h>";
 extern fn void free(Ptr p);
 type contract Shape for both { fn int32 area(); }
-type value Circle implements Shape { int32 r; public Circle(int32 r){this.r=r;} public fn int32 area(){return this.r;} }
-type value Square { int32 s; public Square(int32 s){this.s=s;} }   // does NOT implement Shape
+type value Circle implements Shape { int32 r; public ctor make(int32 r){Circle c; c.r=r; return give c;} public fn int32 area(){return this.r;} }
+type value Square { int32 s; public ctor make(int32 s){Square c; c.s=s; return give c;} }   // does NOT implement Shape
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
     Ptr<T> p;
     public ctor adopt(Ptr<T> raw) { Box<T> b; b.p = raw; return b; }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     ~Box() { unsafe { free(p: cast<Ptr>(this.p)); } }
 }
-fn int32 main() { Box<Shape> b = new Square(s: 4); return 0; }   // ERROR: Square does not implement Shape
+fn int32 main() { Box<Shape> b = new Square.make(s: 4); return 0; }   // ERROR: Square does not implement Shape

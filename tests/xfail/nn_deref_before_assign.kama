@@ -1,14 +1,16 @@
-// Reading an `Owned` field before it is assigned in the constructor — never-null violation.
-// NOTE: legacy instance ctor retained deliberately — tests the legacy in-ctor definite-assignment
-// path; migrate at the Phase-E enforcement flip.
+// Reading an `Owned` field before it is assigned in a constructor — never-null violation.
+// A named `ctor` factory builds a bare local; the definite-assignment pass flags a read of its
+// owning field before it is assigned (the same rule the legacy in-ctor path had).
 import std::memory::{Owned};
-type value Box { int32 v; public Box(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+type value Box { int32 v; public ctor make(int32 v) { Box r; r.v = v; return give r; } public fn int32 get() { return this.v; } }
 type resource Bad {
     Owned<Box> a;
-    public Bad(int32 seed) {
-        int32 x = this.a.get() + seed;         // reads `a` before it is assigned
-        Owned<Box> n = new Box(v: x);
-        this.a = give n;
+    public ctor make(int32 seed) {
+        Bad r;
+        int32 x = r.a.get() + seed;            // reads `a` before it is assigned
+        Owned<Box> n = new Box.make(v: x);
+        r.a = give n;
+        return give r;
     }
 }
-fn int main() { Bad b = Bad(seed: 5); return 0; }
+fn int main() { Bad b = Bad.make(seed: 5); return 0; }
