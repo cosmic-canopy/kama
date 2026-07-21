@@ -64,10 +64,17 @@ genuinely later-track or opt-in.
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
 - **String interpolation `"${x}"` + formatting ✅** — shipped: the `Format` contract + `Formatter` sink +
   `toString<T>` (prelude), and `${expr}` holes (identifier + `.field`/`[index]`) lowering to a compile-time,
-  statically-checked `Formatter` build (see [SPEC.md](SPEC.md) "Formatting & string interpolation"). Still
-  open on this substrate: format specifiers (`${x:.2f}`), a `@generate` debug derive, and tagged strings
-  (`sql"…"`/`html"…"`/`stripIndent"…"` — the AST already carries `{parts, holes}`). `string + <number>` stays
-  a compile error by design — interpolation is the one way to mix values into text.
+  statically-checked `Formatter` build (see [SPEC.md](SPEC.md) "Formatting & string interpolation"). The
+  interp-in-operand papercut is closed (`93bde40`). Still open on this substrate, in DECIDED ORDER:
+  1. **Format specifiers** (`${x:.2f}`) — an optional spec on an interpolation hole; applied via
+     spec-aware primitive writers on `Formatter` (a codegen fast-path, like `writeChar`), so the `Format`
+     contract is UNCHANGED. This also finalizes the hole model the tags feature consumes.
+  2. **`@generate(Format)`** — synthesize a default `Format` impl (a field dump), mirroring
+     `@generate(Serialize, Deserialize)`. NOTE: named after the CONTRACT (`Format`), NOT `display`/`debug` —
+     kama has one to-string contract, no Display/Debug split. Independent of specifiers + tags.
+  3. **Tagged strings** (`sql"…"`/`html"…"`/`stripIndent"…"`) — additive on the finalized
+     `{parts, holes(+spec), tag}` AST (the `tag` field already exists, unused). The biggest piece.
+  `string + <number>` stays a compile error by design — interpolation is the one way to mix values into text.
 - **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (see
   [SPEC.md](SPEC.md) + §5); the **full `expose`** — richer wasm module exports + the scripting host
   interface — stays **2.0** (§7).
