@@ -263,7 +263,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     }
     // Reconstruct from a JSON array — a fresh list, each element read fallibly and moved in. A bad element
     // read propagates its boxed error (dropping the partial list via RAII).
-    public static fn Result<DynamicArray<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
+    public ctor Result<DynamicArray<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
         DynamicArray<T> result;
         r.beginArray();
         while (r.moreElems()) {

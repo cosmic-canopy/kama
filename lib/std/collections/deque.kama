@@ -193,7 +193,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    public static fn Result<Deque<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
+    public ctor Result<Deque<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
         Deque<T> result;
         r.beginArray();
         while (r.moreElems()) {

@@ -411,7 +411,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     }
     // Reconstruct from the pair array: each entry is `{"key":k,"value":v}` (key before value on the wire),
     // read positionally — `moreFields()` consumes the object structure (commas + closing brace).
-    public static fn Result<Map<K,V,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
+    public ctor Result<Map<K,V,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
         Map<K,V,H> result;
         r.beginArray();
         while (r.moreElems()) {

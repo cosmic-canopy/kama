@@ -1,0 +1,1 @@
+a self-returning `static fn origin` is a constructor

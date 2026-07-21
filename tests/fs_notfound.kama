@@ -11,7 +11,7 @@ fn int main() {
     int32 a = match (readFile(path: missing)) { case Ok(b): 10; case Err(e): isNotFound(e: e); };
     if (a != 1) { return 20; }
 
-    Result<File, IoError> rb = File::open(path: missing, mode: OpenMode::Read);
+    Result<File, IoError> rb = File.open(path: missing, mode: OpenMode::Read);
     int32 b = match (rb) { case Ok(f): 11; case Err(e): isNotFound(e: e); };
     if (b != 1) { return 21; }
 

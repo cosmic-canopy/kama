@@ -1,6 +1,6 @@
 // M31 capstone — a realistic engine Tier-0 math library. `Vec3` carries the full operator set;
 // `Mat3` holds three `Vec3` rows BY VALUE (M30 struct ordering) and transforms a vector via
-// `operator*`. Static methods provide the type-level helpers `Vec3::dot` / `Vec3::cross`.
+// `operator*`. Static methods provide the type-level helpers `Vec3::dot` / `Vec3.cross`.
 //
 // Note: no overloading (a stated non-goal) — a type has ONE `operator*`. `Mat3 * Vec3` is the operator
 // (the hot transform path); matrix composition would be a named `static` method (not needed here).
@@ -17,7 +17,8 @@ type value Vec3 {
     public bool operator==(Vec3 rhs){ return this.x == rhs.x && this.y == rhs.y && this.z == rhs.z; }
 
     public static fn int32 dot(Vec3 a, Vec3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
-    public static fn Vec3 cross(Vec3 a, Vec3 b) {
+    // cross builds a fresh Vec3 from two others → a named ctor (construction-model: self-returning is a ctor).
+    public ctor cross(Vec3 a, Vec3 b) {
         return Vec3.of(x: a.y*b.z - a.z*b.y, y: a.z*b.x - a.x*b.z, z: a.x*b.y - a.y*b.x);
     }
 }
@@ -46,7 +47,7 @@ fn int32 main() {
     Vec3 neg    = -a;       // (-1, -2, -3)
 
     int32 d = Vec3::dot(a: a, b: b);      // 4 + 10 + 18 = 32
-    Vec3  x = Vec3::cross(a: a, b: b);    // (-3, 6, -3) -> sums to 0
+    Vec3  x = Vec3.cross(a: a, b: b);    // (-3, 6, -3) -> sums to 0
 
     // diag(2, 3, 4) scaling matrix, transform `a`
     Mat3 m = Mat3.of(r0: Vec3.of(x: 2, y: 0, z: 0),

@@ -57,7 +57,7 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    public static fn Result<SortedSet<K>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
+    public ctor Result<SortedSet<K>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
         SortedSet<K> result;
         r.beginArray();
         while (r.moreElems()) {

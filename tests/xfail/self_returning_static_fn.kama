@@ -1,0 +1,12 @@
+// Construction-model M8e: a self-returning `static fn` (returns the enclosing type or `Result<This, E>`) IS
+// a constructor — it must be declared `ctor` and called dot-on-type. A static fn returning ANY OTHER type
+// (`describe -> int32`) stays a legitimate utility.
+type value Point {
+    public int32 x;
+    public static fn int32 describe(Point p) { return p.x; }        // OK: returns another type
+    public static fn Point origin() { Point r; r.x = 0; return r; }  // ERROR: self-returning -> use `ctor`
+}
+fn int32 main() {
+    Point p = Point::origin();
+    return p.x;
+}

@@ -3091,6 +3091,24 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 unsupported("a `static` method has no `this` — it can't be `virtual`/`override`/`abstract`", md->line);
                             if (!md->body)
                                 unsupported("a `static` method needs a body", md->line);
+                            // Construction-model M8e: a SELF-RETURNING `static fn` (returns the enclosing type,
+                            // or `Result<EnclosingType, E>`) IS a constructor — the whole factory role now lives
+                            // in `ctor`. Reject it so there is exactly one way to construct. A static fn returning
+                            // any OTHER type (`Vec3::dot -> float`, `Buffer::create -> Result<Owned<Buffer>, E>`)
+                            // stays a legitimate utility.
+                            if (!md->isCtor && cd->name && cd->name->value && md->returnType && md->returnType->value) {
+                                const std::string& encl = *cd->name->value;
+                                const std::string& rt = *md->returnType->value;
+                                bool selfRet = (rt == encl || rt == "This");
+                                if (rt == "Result" && md->returnType->genericArg && md->returnType->genericArg->value) {
+                                    const std::string& okTy = *md->returnType->genericArg->value;
+                                    selfRet = selfRet || okTy == encl || okTy == "This";
+                                }
+                                if (selfRet)
+                                    unsupported(("a self-returning `static fn " + *md->name->value + "` is a constructor — "
+                                                 "declare it `ctor " + *md->name->value + "(...)` and call it dot-on-type (`"
+                                                 + encl + "." + *md->name->value + "(...)`)").c_str(), md->line);
+                            }
                         }
                         if (!md->body) mi.isAbstract = mi.isVirtual = true;   // null body => pure
                         // polymorphism rules.
@@ -11851,7 +11869,10 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     mi.node         = md;
                     mi.isConst      = md->isConst;
                     mi.isPlaceReturn = md->isRef;
-                    mi.isStatic     = modHas(md->modifiers, "static");  // a static factory (no `self`) — e.g. `deserialize`
+                    // a static factory (no `self`) — e.g. `deserialize`; a `ctor` (construction-model M8e:
+                    // `deserialize` is a fallible ctor) is ALWAYS static, like the in-class ctor path.
+                    mi.isStatic     = modHas(md->modifiers, "static") || md->isCtor;
+                    mi.isCtor       = md->isCtor;
                     mi.visibility   = Visibility::Public;   // a contract's methods are public
                     mi.isRetro      = true;                 // emitted static-inline in the header (below)
                     // A PRIMITIVE serde conformance's `Result<scalar, Owned<Error>>` return (the ~12 monomorphs)
@@ -12113,8 +12134,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                     auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                     if (!md || !md->name || !md->name->value) continue;
                     std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
-                    // a `static` retro method has no implicit `self` receiver param
-                    const char* recv = modHas(md->modifiers, "static") ? nullptr : tcip->name.c_str();
+                    // a `static` retro method (or a `ctor` — always static) has no implicit `self` receiver param
+                    const char* recv = (modHas(md->modifiers, "static") || md->isCtor) ? nullptr : tcip->name.c_str();
                     *_out << stat << ret << " " << tcip->name << "__" << *md->name->value << "("
                           << paramListC(md->params, recv) << ");\n";
                 }
@@ -12211,7 +12232,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 _returnIsPlace = md->isRef;
                 emitMethodOrCtorBody(tcip->name + "__" + *md->name->value, ret.c_str(),
                                      md->params, md->body, *tcip, false, md->isConst,
-                                     modHas(md->modifiers, "static"));
+                                     modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
                 _returnIsPlace = false;
             }
         }
@@ -12260,7 +12281,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             _returnIsPlace = md->isRef;
             emitMethodOrCtorBody(tci.name + "__" + *md->name->value, ret.c_str(),
                                  md->params, md->body, tci, false, md->isConst,
-                                 modHas(md->modifiers, "static"));
+                                 modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
             _returnIsPlace = false;
         }
     }

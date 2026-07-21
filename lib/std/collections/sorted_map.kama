@@ -575,7 +575,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // Deserialize is GlobalAllocator-only: the wire format carries no allocator handle, so it builds a
     // default `SortedMap<K,V>` (a stateful-A instance would bare-ctor a zero-init handle and crash on the
     // first `put`). Same convention as the other collections' A-ignoring deserialize.
-    public static fn Result<SortedMap<K,V>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
+    public ctor Result<SortedMap<K,V>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
         SortedMap<K,V> result = SortedMap.empty();
         r.beginArray();
         while (r.moreElems()) {

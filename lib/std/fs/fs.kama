@@ -37,7 +37,7 @@ type resource File {
     private ctor make(int32 fd) { File r; r.fd = fd; return give r; }
 
     // Open a file for reading or writing (Write creates/truncates). The returned `File` closes on drop.
-    public static fn Result<File, IoError> open(ref string path, OpenMode mode) {
+    public ctor Result<File, IoError> open(ref string path, OpenMode mode) {
         int32 fd = match (mode) {
             case Read:  kama_open_read(path: path.cstr());
             case Write: kama_open_create(path: path.cstr());
@@ -98,7 +98,7 @@ type resource File {
 
 // Read an entire file into an owning byte buffer (opens, reads to EOF, closes on drop).
 fn Result<DynamicArray<uint8>, IoError> readFile(ref string path) {
-    Result<File, IoError> r = File::open(path: path, mode: OpenMode::Read);
+    Result<File, IoError> r = File.open(path: path, mode: OpenMode::Read);
     return match (r) {
         case Ok(f):  f.readAll();                       // f closes at arm end (RAII)
         case Err(e): Result::Err(error: e);
@@ -107,7 +107,7 @@ fn Result<DynamicArray<uint8>, IoError> readFile(ref string path) {
 
 // Create/truncate a file and write the whole buffer to it.
 fn Result<usize, IoError> writeFile(ref string path, ref DynamicArray<uint8> bytes) {
-    Result<File, IoError> r = File::open(path: path, mode: OpenMode::Write);
+    Result<File, IoError> r = File.open(path: path, mode: OpenMode::Write);
     return match (r) {
         case Ok(f):  f.writeAll(bytes: bytes);
         case Err(e): Result::Err(error: e);

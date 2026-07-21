@@ -68,7 +68,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    public static fn Result<Set<K,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
+    public ctor Result<Set<K,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
         Set<K,H> result;
         r.beginArray();
         while (r.moreElems()) {

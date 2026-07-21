@@ -13,7 +13,7 @@ fn int main() {
 
     int32 i = 0;
     while (i < 5000) {
-        Result<File, IoError> ro = File::open(path: self, mode: OpenMode::Read);
+        Result<File, IoError> ro = File.open(path: self, mode: OpenMode::Read);
         int32 rc = match (ro) {
             case Ok(f):  0;                     // f drops here -> fd closed (RAII)
             case Err(e): 41;                    // fires if fds leaked and hit the limit
