@@ -38,6 +38,13 @@ static inline void  kama_free(void* p)                { extern void  free(void*)
 static inline void  kama_copy(void* d, const void* s, size_t n) { extern void* memcpy(void*, const void*, size_t); memcpy(d, s, n); }
 static inline int   kama_cmp(const void* a, const void* b, size_t n) { extern int memcmp(const void*, const void*, size_t); return memcmp(a, b, n); }
 
+// IEEE-754 bit reinterpretation (for the binary serializer's exact float encoding — a value cast would
+// round, these preserve the bit pattern). memcpy is the portable, strict-aliasing-safe reinterpret.
+static inline uint32_t kama_f32_bits(float v)        { uint32_t b; kama_copy(&b, &v, 4); return b; }
+static inline float    kama_f32_from_bits(uint32_t b){ float v;    kama_copy(&v, &b, 4); return v; }
+static inline uint64_t kama_f64_bits(double v)       { uint64_t b; kama_copy(&b, &v, 8); return b; }
+static inline double   kama_f64_from_bits(uint64_t b){ double v;   kama_copy(&v, &b, 8); return v; }
+
 // ---- Collections ----------------------------------------------------------
 // Generic collections are monomorphized per element type from these templates.
 // The kama surface stays pointer-free and safe. Indexing is bounds-checked.

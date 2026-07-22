@@ -1,0 +1,50 @@
+// KBIN object-graph round-trip with a cycle: node 1 owns node 2 (Shared forward edge), node 2 holds a Weak
+// back-edge to node 1. Serialize terminates + is leak-free (Weak breaks the ownership cycle); decode rebuilds
+// both edges — proven by a byte-identical re-encode; ASan proves the rebuilt cycle stays leak-free. Nullable
+// edges (Optional); 0 = absent/expired. Returns 55.
+import std::serialization::binary::{encode, decode};
+import std::collections::{DynamicArray};
+import std::memory::{Shared, Weak};
+
+@generate(Serialize, Deserialize)
+type resource Node {
+    @field int32 id;
+    @field Optional<Shared<Node>> next;   // owns (forward edge)
+    @field Optional<Weak<Node>> back;     // weak (back edge), wired after construction
+    public ctor make(int32 id) { Node r; r.id = id; r.next = Optional::None; r.back = Optional::None; return give r; }
+    public fn void setNext(Shared<Node> n) { this.next = Optional::Some(value: give n); }
+    public fn void setBack(Weak<Node> w) { this.back = Optional::Some(value: give w); }
+}
+
+fn DynamicArray<uint8> clone(ref DynamicArray<uint8> src) {
+    DynamicArray<uint8> c = DynamicArray.empty();
+    int32 i = 0; int32 n = cast<int32>(src.length());
+    while (i < n) { c.add(item: src[i]); i = i + 1; }
+    return give c;
+}
+fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    int32 i = 0; int32 n = cast<int32>(a.length());
+    while (i < n) { if (a[i] != b[i]) { return false; } i = i + 1; }
+    return true;
+}
+
+fn int main() {
+    Shared<Node> a = new Node.make(id: 1);
+    Shared<Node> b = new Node.make(id: 2);
+    b.setBack(w: a.downgrade());          // b -> a (weak)
+    a.setNext(n: give b);                 // a -> b (owns); a is the root
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = encode(v: a);
+    DynamicArray<uint8> b1 = match (give e1) { case Ok(x): give x; case Err(__e): { return 250; } };
+
+    Result<Shared<Node>, Owned<Error>> res = decode::<Shared<Node>>(src: clone(src: ref b1));
+    match (res) {
+        case Ok(sh): {
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = encode(v: sh);
+            DynamicArray<uint8> b2 = match (give e2) { case Ok(x): give x; case Err(__e): { return 1; } };
+            return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
+        }
+        case Err(e): { return 2; }
+    };
+    return 3;
+}

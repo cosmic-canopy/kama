@@ -1,0 +1,276 @@
+namespace std::serialization::binary;
+
+// KBIN — the binary backend for the serialization framework, a drop-in twin of the JSON backend over the
+// SAME format-agnostic `Serializer`/`Deserializer` token model (no compiler changes). Self-describing and
+// little-endian: every value is one TAG byte + a fixed-width LE payload, so `skipValue` works without a schema
+// and the format stays forward-compatible (unknown fields skip cleanly). Binary output is raw bytes (embedded
+// nulls, non-UTF-8), so `encode` yields a `DynamicArray<uint8>` and `decode` takes bytes — NOT a `string`.
+//
+// TAG TABLE (1 byte):
+//   0x01 I8   0x02 I16  0x03 I32  0x04 I64        (LE two's-complement)
+//   0x05 U8   0x06 U16  0x07 U32  0x08 U64        (LE)
+//   0x09 F32  0x0A F64                            (LE IEEE-754 bits — NaN/Inf round-trip exactly)
+//   0x0B bool:false  0x0C bool:true              (value in the tag, no payload)
+//   0x0D null
+//   0x0E char  (u32 LE codepoint)
+//   0x0F string  (u32 LE byte-length + raw UTF-8)   ← also how a field NAME is written
+//   0x10 obj-begin  0x11 obj-end                  (moreFields consumes obj-end)
+//   0x12 arr-begin  0x13 arr-end                  (moreElems consumes arr-end)
+//   0x14 graph-begin (+u64 root, then the table obj-begin)   0x15 entry-key (+u64 id)
+//   0x16 ref (+u64 id)                            0x17 graph-end
+
+import std::collections::{DynamicArray, FixedArray, View};
+import std::io::{Writer, Reader, StringWriter, pump, IoError};
+
+export { BinaryWriter, BinaryReader, encode, decode, decodeFrom };
+
+// IEEE-754 exact bit reinterpretation (a value cast would round) — defined in kama_runtime.h, always included.
+extern fn uint32 kama_f32_bits(float32 v);
+extern fn float32 kama_f32_from_bits(uint32 b);
+extern fn uint64 kama_f64_bits(float64 v);
+extern fn float64 kama_f64_from_bits(uint64 b);
+
+// Serializes KBIN straight into an owned `W: Writer` sink (a file, socket, buffered writer, or the in-memory
+// `StringWriter` behind `encode`). Owns its sink by value (kama forbids stored borrows). A failed byte write
+// LATCHES the sticky `err`/`code`; the generated `serialize` surfaces it once at the end.
+type resource BinaryWriter<W: Writer> implements Serializer {
+    W sink;
+    FixedArray<uint8> scratch;   // size-1 staging for a single-byte `sink.write` (View can't wrap a stack local)
+    bool err;
+    SerError code;
+
+    public ctor make(W sink) {
+        BinaryWriter<W> r;
+        r.sink = give sink;
+        r.scratch = FixedArray.make(size: 1);
+        r.err = false;
+        r.code = SerError::NotRepresentable;
+        return give r;
+    }
+
+    // Borrow the underlying sink (e.g. so `encode` can `takeBytes()` its concrete StringWriter). W-agnostic.
+    public fn ref W innerRef() { return this.sink; }
+
+    // Stream a `Serialize` value's KBIN into this writer's owned sink, then flush — the streaming twin of the
+    // `encode` sugar (a generic free fn can't instantiate `BinaryWriter<W>`, so this is an instance method the
+    // caller builds at a concrete site). Mirrors JsonWriter.encodeValue.
+    public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serialize v) {
+        Serializer s = this;
+        Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+        match (give r) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+        Result<Unit, IoError> fr = this.sink.flush();
+        match (fr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // --- low-level byte output ---
+    fn void byte(uint8 b) {
+        this.scratch[0] = b;
+        match (this.sink.write(bytes: this.scratch.view())) {
+            case Err(_): { this.failWith(e: SerError::IoError); }
+            case Ok(_): {}
+        };
+    }
+    // Write the low `n` bytes of `v`, little-endian.
+    fn void putU(uint64 v, int32 n) {
+        int32 i = 0;
+        while (i < n) { this.byte(b: cast<uint8>(v & 255ui64)); v = v >> 8ui64; i = i + 1; }
+    }
+    // A tagged string: 0x0F + u32 LE length + raw bytes. Used for both string VALUES and field NAMES.
+    fn void putStr(ref string s) {
+        this.byte(b: 15ui8);
+        int32 n = cast<int32>(s.length());
+        this.putU(v: cast<uint64>(cast<uint32>(n)), n: 4);
+        int32 i = 0;
+        while (i < n) { this.byte(b: s[i]); i = i + 1; }
+    }
+
+    // --- Serializer contract ---
+    public fn void beginObject() { this.byte(b: 16ui8); }
+    public fn void endObject()   { this.byte(b: 17ui8); }
+    public fn void beginArray(usize count) { this.byte(b: 18ui8); }   // self-delimiting; count unused
+    public fn void endArray()    { this.byte(b: 19ui8); }
+    public fn void fieldName(string name) { this.putStr(s: ref name); }
+    public fn void writeI8(int8 v)   { this.byte(b: 1ui8); this.putU(v: cast<uint64>(cast<uint8>(v)),  n: 1); }
+    public fn void writeI16(int16 v) { this.byte(b: 2ui8); this.putU(v: cast<uint64>(cast<uint16>(v)), n: 2); }
+    public fn void writeI32(int32 v) { this.byte(b: 3ui8); this.putU(v: cast<uint64>(cast<uint32>(v)), n: 4); }
+    public fn void writeI64(int64 v) { this.byte(b: 4ui8); this.putU(v: cast<uint64>(v),               n: 8); }
+    public fn void writeU8(uint8 v)   { this.byte(b: 5ui8); this.putU(v: cast<uint64>(v), n: 1); }
+    public fn void writeU16(uint16 v) { this.byte(b: 6ui8); this.putU(v: cast<uint64>(v), n: 2); }
+    public fn void writeU32(uint32 v) { this.byte(b: 7ui8); this.putU(v: cast<uint64>(v), n: 4); }
+    public fn void writeU64(uint64 v) { this.byte(b: 8ui8); this.putU(v: v, n: 8); }
+    // Binary stores raw IEEE-754 bits, so NaN/Inf round-trip exactly (no NotRepresentable rejection like JSON).
+    public fn void writeF32(float32 v) { this.byte(b: 9ui8);  this.putU(v: cast<uint64>(kama_f32_bits(v: v)), n: 4); }
+    public fn void writeF64(float64 v) { this.byte(b: 10ui8); this.putU(v: kama_f64_bits(v: v), n: 8); }
+    public fn void writeBool(bool v) { this.byte(b: v ? 12ui8 : 11ui8); }
+    public fn void writeChar(char v) { this.byte(b: 14ui8); this.putU(v: cast<uint64>(cast<uint32>(v)), n: 4); }
+    public fn void writeString(ref string v) { this.putStr(s: ref v); }
+    public fn void writeNull() { this.byte(b: 13ui8); }
+    // --- graph/pointer framing ---
+    public fn void writeRef(uint64 id) { this.byte(b: 22ui8); this.putU(v: id, n: 8); }
+    public fn void beginGraph(uint64 rootId) {
+        this.byte(b: 20ui8); this.putU(v: rootId, n: 8);   // graph-begin + root
+        this.byte(b: 16ui8);                               // then the table's obj-begin
+    }
+    public fn void beginTableEntry(uint64 id, string ty) {
+        this.byte(b: 21ui8); this.putU(v: id, n: 8);       // entry-key + id
+        this.byte(b: 16ui8);                               // entry obj-begin
+        string k = "__type";
+        this.putStr(s: ref k); this.putStr(s: ref ty);     // "__type": <ty>
+    }
+    public fn void endTableEntry() { this.byte(b: 17ui8); }              // entry obj-end
+    public fn void endGraph() { this.byte(b: 17ui8); this.byte(b: 23ui8); }   // table obj-end + graph-end
+
+    // --- sticky error queries ---
+    public fn bool failed() { return this.err; }
+    public fn void fail() { this.err = true; }
+    public fn void failWith(SerError e) { this.err = true; this.code = e; }
+    public fn SerError errorCode() { return this.code; }
+}
+
+// A KBIN reader over an owned byte buffer, implementing Deserializer with a STICKY error flag (a malformed
+// token sets `err` and returns a default; the caller checks `failed()` once). The whole source is held so the
+// two-pass object-graph decode can `rewindGraph` to the table — the same bounded-memory boundary as JSON.
+type resource BinaryReader implements Deserializer {
+    DynamicArray<uint8> buf;
+    int32 pos;
+    int32 len;
+    bool err;
+    int32 objMark;      // byte offset of the graph objects table (for the two-pass rewind)
+    DeError code;
+
+    public ctor make(DynamicArray<uint8> src) {
+        BinaryReader r;
+        r.len = cast<int32>(src.length());
+        r.buf = give src;
+        r.pos = 0;
+        r.err = false;
+        r.objMark = 0;
+        r.code = DeError::Malformed;
+        return give r;
+    }
+
+    // --- low-level cursor ---
+    fn uint8 at() {                                  // peek (0 past end)
+        if (this.pos >= this.len) { return 0ui8; }
+        return this.buf[this.pos];
+    }
+    fn uint8 next() {                                // consume one byte
+        if (this.pos >= this.len) { this.err = true; return 0ui8; }
+        uint8 b = this.buf[this.pos];
+        this.pos = this.pos + 1;
+        return b;
+    }
+    fn uint64 getU(int32 n) {                        // read n LE bytes
+        uint64 v = 0ui64;
+        int32 i = 0;
+        while (i < n) { v = v | (cast<uint64>(this.next()) << cast<uint64>(i * 8)); i = i + 1; }
+        return v;
+    }
+    fn void expectTag(uint8 t) { if (this.next() != t) { this.err = true; } }
+    fn string readStr() {
+        this.expectTag(t: 15ui8);
+        if (this.err) { return ""; }
+        int32 n = cast<int32>(this.getU(n: 4));
+        if (n == 0) { return ""; }
+        if (n < 0 || this.pos + n > this.len) { this.err = true; return ""; }
+        int32 start = this.pos;
+        this.pos = this.pos + n;
+        unsafe { return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n); }
+    }
+
+    // --- structural (Deserializer) ---
+    public fn void beginObject() { this.expectTag(t: 16ui8); }
+    public fn void beginArray()  { this.expectTag(t: 18ui8); }
+    public fn bool moreFields() {
+        if (this.err) { return false; }
+        if (this.at() == 17ui8) { this.pos = this.pos + 1; return false; }   // obj-end -> consume, done
+        return true;
+    }
+    public fn bool moreElems() {
+        if (this.err) { return false; }
+        if (this.at() == 19ui8) { this.pos = this.pos + 1; return false; }   // arr-end -> consume, done
+        return true;
+    }
+    public fn string fieldName() { return this.readStr(); }
+
+    // --- scalars ---
+    public fn int8  readI8()  { this.expectTag(t: 1ui8); return cast<int8>(cast<uint8>(this.getU(n: 1))); }
+    public fn int16 readI16() { this.expectTag(t: 2ui8); return cast<int16>(cast<uint16>(this.getU(n: 2))); }
+    public fn int32 readI32() { this.expectTag(t: 3ui8); return cast<int32>(cast<uint32>(this.getU(n: 4))); }
+    public fn int64 readI64() { this.expectTag(t: 4ui8); return cast<int64>(this.getU(n: 8)); }
+    public fn uint8  readU8()  { this.expectTag(t: 5ui8); return cast<uint8>(this.getU(n: 1)); }
+    public fn uint16 readU16() { this.expectTag(t: 6ui8); return cast<uint16>(this.getU(n: 2)); }
+    public fn uint32 readU32() { this.expectTag(t: 7ui8); return cast<uint32>(this.getU(n: 4)); }
+    public fn uint64 readU64() { this.expectTag(t: 8ui8); return this.getU(n: 8); }
+    public fn float32 readF32() { this.expectTag(t: 9ui8);  return kama_f32_from_bits(b: cast<uint32>(this.getU(n: 4))); }
+    public fn float64 readF64() { this.expectTag(t: 10ui8); return kama_f64_from_bits(b: this.getU(n: 8)); }
+    public fn bool readBool() {
+        uint8 b = this.next();
+        if (b == 12ui8) { return true; }
+        if (b == 11ui8) { return false; }
+        this.err = true; return false;
+    }
+    public fn char readChar() { this.expectTag(t: 14ui8); return cast<char>(cast<uint32>(this.getU(n: 4))); }
+    public fn string readString() { return this.readStr(); }
+    public fn bool readNull() {
+        if (this.at() == 13ui8) { this.pos = this.pos + 1; return true; }   // consume only if actually null
+        return false;
+    }
+    // Skip one complete value of any tag (unknown/extra fields — the forward-compat path).
+    public fn void skipValue() {
+        uint8 t = this.next();
+        if (t == 1ui8 || t == 5ui8) { this.pos = this.pos + 1; }
+        else if (t == 2ui8 || t == 6ui8) { this.pos = this.pos + 2; }
+        else if (t == 3ui8 || t == 7ui8 || t == 9ui8 || t == 14ui8) { this.pos = this.pos + 4; }
+        else if (t == 4ui8 || t == 8ui8 || t == 10ui8 || t == 22ui8) { this.pos = this.pos + 8; }
+        else if (t == 11ui8 || t == 12ui8 || t == 13ui8) { }   // bool/null: no payload
+        else if (t == 15ui8) { int32 n = cast<int32>(this.getU(n: 4)); this.pos = this.pos + n; }
+        else if (t == 16ui8) { while (this.moreFields()) { string k = this.fieldName(); this.skipValue(); } }
+        else if (t == 18ui8) { while (this.moreElems()) { this.skipValue(); } }
+        else { this.err = true; }
+    }
+    public fn bool failed() { return this.err; }
+    public fn void fail() { this.err = true; }
+
+    // --- graph (object-table) reads — the twin of writeRef/beginGraph/beginTableEntry/… ---
+    public fn uint64 beginGraph() {
+        this.expectTag(t: 20ui8);                // graph-begin
+        uint64 root = this.getU(n: 8);
+        this.objMark = this.pos;                 // at the table's obj-begin (0x10) — left for beginObject()
+        return root;
+    }
+    public fn void rewindGraph() { this.pos = this.objMark; }
+    public fn uint64 entryKey() { this.expectTag(t: 21ui8); return this.getU(n: 8); }   // leaves cursor at entry obj-begin
+    public fn uint64 readRef() { this.expectTag(t: 22ui8); return this.getU(n: 8); }
+    public fn void endGraph() { this.expectTag(t: 23ui8); }   // the table obj-end was consumed by moreFields
+    public fn void failWith(DeError e) { this.err = true; this.code = e; }
+    public fn DeError errorCode() { return this.code; }
+}
+
+// Serialize any `Serialize` value to a KBIN byte buffer. Byte-oriented (binary is not valid UTF-8): returns a
+// `DynamicArray<uint8>`, not a `string`. A concrete value auto-wraps behind the `Serialize` interface.
+fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serialize v) {
+    BinaryWriter<StringWriter> w = BinaryWriter::<StringWriter>.make(sink: StringWriter.make());
+    Serializer s = w;
+    Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
+    match (give r) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+    return Result::Ok(value: w.innerRef().takeBytes());
+}
+
+// Deserialize a KBIN byte buffer into a `Deserialize` type. Name the target with turbofish:
+// `binary::decode::<Point>(src)`. Takes owned bytes (the reader holds them for the two-pass graph rewind).
+fn Result<T, Owned<Error>> decode<T: Deserialize>(DynamicArray<uint8> src) {
+    BinaryReader r = BinaryReader.make(src: give src);
+    return T::deserialize(r: r);
+}
+
+// Deserialize from any `Reader` (a file, socket, …) — the streaming twin of `decode`. Drains the reader fully
+// into a byte buffer first (graph decode seeks backward), then parses. A read `IoError` auto-boxes.
+fn Result<T, Owned<Error>> decodeFrom<T: Deserialize>(Reader from) {
+    StringWriter sw = StringWriter.make();
+    Result<usize, IoError> pr = pump(from: from, to: sw);
+    match (pr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+    BinaryReader r = BinaryReader.make(src: give sw.takeBytes());
+    return T::deserialize(r: r);
+}

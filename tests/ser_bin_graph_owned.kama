@@ -1,0 +1,46 @@
+// KBIN object-graph round-trip with a UNIQUELY-OWNED child: a Parent owns a Child via `Owned<Child>`. Decode
+// rebuilds into a Shared<Parent>, transferring the child by GIVE-ONCE (no refcount) — proven by a byte-identical
+// re-encode; ASan proves the single-owner child frees exactly once. Returns 55.
+import std::serialization::binary::{encode, decode};
+import std::collections::{DynamicArray};
+import std::memory::{Shared, Owned};
+
+@generate(Serialize, Deserialize)
+type resource Child { @field int32 v; public ctor make(int32 v) { Child r; r.v = v; return give r; } }
+
+@generate(Serialize, Deserialize)
+type resource Parent {
+    @field Owned<Child> kid;
+    public ctor make(Owned<Child> kid) { Parent r; r.kid = give kid; return give r; }
+}
+
+fn DynamicArray<uint8> clone(ref DynamicArray<uint8> src) {
+    DynamicArray<uint8> c = DynamicArray.empty();
+    int32 i = 0; int32 n = cast<int32>(src.length());
+    while (i < n) { c.add(item: src[i]); i = i + 1; }
+    return give c;
+}
+fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    int32 i = 0; int32 n = cast<int32>(a.length());
+    while (i < n) { if (a[i] != b[i]) { return false; } i = i + 1; }
+    return true;
+}
+
+fn int main() {
+    Owned<Child> c = new Child.make(v: 7);
+    Parent p = Parent.make(kid: give c);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = encode(v: p);
+    DynamicArray<uint8> b1 = match (give e1) { case Ok(x): give x; case Err(__e): { return 250; } };
+
+    Result<Shared<Parent>, Owned<Error>> res = decode::<Shared<Parent>>(src: clone(src: ref b1));
+    match (res) {
+        case Ok(sh): {
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = encode(v: sh);
+            DynamicArray<uint8> b2 = match (give e2) { case Ok(x): give x; case Err(__e): { return 1; } };
+            return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
+        }
+        case Err(e): { return 2; }
+    };
+    return 3;
+}

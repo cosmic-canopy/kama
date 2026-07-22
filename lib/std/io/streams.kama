@@ -107,6 +107,18 @@ type resource StringWriter implements Writer {
         if (this.buf.length() == 0) { return ""; }
         unsafe { return kama_string_from_raw(src: addr(of: this.buf[0]), start: 0, len: cast<int32>(this.buf.length())); }
     }
+
+    // Move the accumulated bytes out as a raw `DynamicArray<uint8>`, leaving the writer empty. The byte-oriented
+    // twin of `finish()` — for a binary sink whose output is not valid UTF-8 (embedded nulls, arbitrary bytes),
+    // so it must NOT go through `string`. Used by the binary serializer's `encode -> DynamicArray<uint8>`.
+    public fn DynamicArray<uint8> takeBytes() {
+        DynamicArray<uint8> taken = DynamicArray.empty();
+        int32 n = this.buf.length();
+        int32 i = 0;
+        while (i < n) { taken.add(item: this.buf[i]); i = i + 1; }
+        this.buf.clear();
+        return give taken;
+    }
 }
 
 // The in-memory `Reader`: reads out of an owned byte source (a `string`'s UTF-8 bytes). This is the source

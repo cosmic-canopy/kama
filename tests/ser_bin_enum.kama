@@ -1,0 +1,23 @@
+// KBIN round-trip of an externally-tagged enum (payload variant) nested in a value type. Exercises the
+// beginObject/fieldName/writeString(tag)/nested-object token path + the enum deserialize close-via-moreFields.
+// Returns 23 (id 3 + w*h 4*5).
+import std::serialization::binary::{encode, decode};
+import std::collections::{DynamicArray};
+
+@generate(Serialize, Deserialize)
+enum Geo { Circle(int32 r), Rect(int32 w, int32 h), Empty }
+
+@generate(Serialize, Deserialize)
+@generate(of)
+type value Drawing { @field public int32 id; @field public Geo shape; }
+
+fn int main() {
+    Drawing d = Drawing.of(id: 3, shape: Geo::Rect(w: 4, h: 5));
+    Result<DynamicArray<uint8>, Owned<Error>> e_r = encode(v: d);
+    DynamicArray<uint8> bytes = match (give e_r) { case Ok(b): give b; case Err(__e): { return 250; } };
+    Result<Drawing, Owned<Error>> res = decode::<Drawing>(src: give bytes);
+    return match (res) {
+        case Ok(b): b.id + (match (b.shape) { case Rect(w, h): w * h; case Circle(r): r; case Empty: 0; });
+        case Err(e): 0 - 1;
+    };
+}

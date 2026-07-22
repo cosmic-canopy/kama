@@ -1,0 +1,49 @@
+// KBIN graph decode surfaces a DANGLING reference. We hand-drive a BinaryWriter to craft a graph whose only
+// entry (id 1, a Pair) references id 2 for both fields, but id 2 is never defined — so the two-pass wire can't
+// resolve it and `decode` returns `DeError::UnresolvedReference` (the specific code, via failWith), not a crash
+// or the generic Malformed. This is the binary analog of the JSON string-edit dangling test. Returns 0.
+import std::serialization::binary::{encode, decode, BinaryWriter};
+import std::collections::{DynamicArray};
+import std::io::{StringWriter};
+import std::memory::{Shared};
+
+@generate(Serialize, Deserialize)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { Leaf r; r.v = v; return give r; } }
+
+@generate(Serialize, Deserialize)
+type resource Pair {
+    @field Shared<Leaf> a;
+    @field Shared<Leaf> b;
+    public ctor make(Shared<Leaf> a, Shared<Leaf> b) { Pair r; r.a = give a; r.b = give b; return give r; }
+}
+
+fn int main() {
+    // Craft {root:1, objects:{ 1:{__type:Pair, a:ref(2), b:ref(2)} }} — id 2 (the Leaf) is MISSING.
+    BinaryWriter<StringWriter> w = BinaryWriter::<StringWriter>.make(sink: StringWriter.make());
+    w.beginGraph(rootId: cast<uint64>(1));
+    w.beginTableEntry(id: cast<uint64>(1), ty: "Pair");
+    w.fieldName(name: "a"); w.writeRef(id: cast<uint64>(2));
+    w.fieldName(name: "b"); w.writeRef(id: cast<uint64>(2));
+    w.endTableEntry();
+    w.endGraph();
+    DynamicArray<uint8> bytes = w.innerRef().takeBytes();
+
+    Result<Shared<Pair>, Owned<Error>> res = decode::<Shared<Pair>>(src: give bytes);
+    match (res) {
+        case Ok(sh): { return 1; }                          // must NOT succeed
+        case Err(e): {
+            match (e.as<DeError>()) {
+                case Some(ec): { match (ec) {
+                    case UnresolvedReference: { return 0; }  // expected
+                    case Malformed: { return 2; }
+                    case UnexpectedEnd: { return 3; }
+                    case TypeMismatch: { return 4; }
+                    case MissingField: { return 5; }
+                    case DuplicateId: { return 7; }
+                }; }
+                case None: { return 8; }
+            };
+        }
+    };
+    return 6;
+}

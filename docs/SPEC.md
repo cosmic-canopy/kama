@@ -1476,7 +1476,14 @@ restrictions — and nothing leaks into the public API.
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
 - **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
   `beginObject`/`fieldName`/…, and the graph framing `writeRef`/`beginGraph`/…) + `DeError`. `std::serialization::json`
-  is the reference backend; yaml/binary/user backends are just new implementors — no compiler change.
+  (text) and `std::serialization::binary` (**KBIN** — a compact self-describing little-endian tagged format) both
+  ship; yaml/xml/user backends are just new implementors — no compiler change. A type opts into serialization
+  ONCE (`@generate(Serialize, Deserialize)`) and works with every backend automatically, since the generated code
+  drives only the format-agnostic token contract. The **binary** backend is byte-oriented — `binary::encode`
+  yields a `DynamicArray<uint8>` and `decode` takes bytes (not a `string`, since binary isn't valid UTF-8) — and
+  streams over the same `Writer`/`Reader` substrate as JSON (so it flows to a file or socket for game-save /
+  network payloads). It stores raw IEEE-754 bits (NaN/Inf round-trip) and is self-describing, so `skipValue`
+  works and unknown fields skip cleanly (forward-compatible).
 - **Intrinsic (compiler):** the per-type field walk and the whole graph machinery (id table, heap shells,
   two-pass wire, ownership transfer, ordering, cycles). Zero-cost — emitted **only** for `@generate` types.
 

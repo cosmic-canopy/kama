@@ -50,6 +50,15 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
    - **`std::fs` / `std::io`** — buffered readers, richer `Metadata` (mtime/perms), path helpers, `mkdir`.
+   - **`std::io` transform adapters (compression et al.)** — `Writer`/`Reader` *wrappers* that transform bytes
+     in flight, composing with serde and net over the M4 substrate (Go/Rust `io`-wrapper style):
+     `DeflateWriter<W>`/`InflateReader<R>` (gzip/deflate), later checksums/hashing/framing. On the **web target
+     these are a near-free ride** — wrap the browser's built-in `CompressionStream`/`DecompressionStream`
+     (no wasm code-size cost); on native, wrap zlib/zstd. Composes as `encodeTo(v, into: DeflateWriter(sink))`.
+     Note the *transport* free rides too (WebSocket `permessage-deflate`, HTTP `Content-Encoding`) — transparent,
+     no code. Generic compression also crushes the self-describing binary format's field-name redundancy, so it
+     pairs naturally with the binary serde backend. (Engine-level replication — snapshots/deltas/dirty-tracking,
+     reliable-vs-unreliable routing — stays above this, in the engine, not the stdlib.)
    - **`std::math`** — a **SIMD backend** (portable C vector extensions, `vector_size(16)` → SSE2/NEON/
      wasm128) as a pure implementation swap behind the unchanged, SIMD-ready-layout API (1.x / engine era);
      and a concrete `f64` (`DVec`) family alongside the `float32` one. Rotors deferred. **► This is the LAST
@@ -253,17 +262,21 @@ genuinely later-track or opt-in.
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
-Serialization ships today (by-value + object-graph + polymorphic contracts, json backend) — see
-[SPEC.md](SPEC.md) "Serialization". What remains is additive library + hardening work:
+Serialization ships today (by-value + object-graph + polymorphic contracts) with **two backends — `json` (text)
+and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains is additive library + hardening work:
 
 - **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T,N>` read; a bare `encode`/`decode` of an
   intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
-- **More back ends (library, no compiler change)** — YAML; **binary** (packing + `@bits(n)` + little-endian
-  canonical); **XML**/**HTML**. Each is a `Serializer`/`Deserializer` impl + `encode`/`decode`. `std::encoding::base64`
-  is a separate small module. **► The binary backend is the near-term priority** (user-requested, engine-facing:
-  compact scene/asset persistence). It slots directly onto the shipped streams substrate — a `Writer`/`Reader`
-  `Serializer`/`Deserializer` impl over raw `View<uint8>`, no charset layer — so it should land right after
-  streams M4 (the binary-first byte layer was designed for exactly this; see the streams work in the git log).
+- **✅ Binary backend (`std::serialization::binary`, KBIN) DONE** — a compact self-describing little-endian
+  tagged format; a pure-library `Serializer`/`Deserializer` over the streams `Writer`/`Reader` substrate (zero
+  compiler change), byte-oriented (`encode -> DynamicArray<uint8>`), full JSON parity incl. the object graph
+  (shared/cycle/Owned/polymorphic) + forward-compat `skipValue`; triple-green. **Follow-on (deferred):**
+  `@bits(n)` bit-packing (tighter integers/bools — a format add-on, in serde), field-name interning, and a
+  schema-locked *positional* mode (needs an emitter change; trades forward-compat for max compactness). Delta/
+  snapshot replication + reliable-vs-unreliable routing stay ENGINE-level (above serde); generic byte compression
+  is an io-adapter layer (see §2 `std::io` transform adapters), not a serde concern.
+- **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
+  impl + `encode`/`decode`. `std::encoding::base64` is a separate small module.
 - **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the `@`-attribute infra)
   emitting a use-site warning. Its own small task.
 - **Optional/default *function/constructor* parameters (language, adjacent)** — the "options struct with

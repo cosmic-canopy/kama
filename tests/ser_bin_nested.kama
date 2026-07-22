@@ -1,0 +1,31 @@
+// KBIN full round-trip of a nested aggregate: a resource owning a string + a primitive array + an array of
+// structs. Exercises arrays-of-objects both ways. Returns 25 (ids 7+8, pts 1+2+3+4, name len 4 gate).
+import std::serialization::binary::{encode, decode};
+import std::collections::{DynamicArray};
+
+@generate(Serialize, Deserialize)
+type value Pt { @field public int32 x; @field public int32 y; public ctor make(int32 x, int32 y) { Pt r; r.x = x; r.y = y; return give r; } }
+
+@generate(Serialize, Deserialize)
+type resource Scene {
+    @field string name;
+    @field DynamicArray<int32> ids;
+    @field DynamicArray<Pt> pts;
+    public ctor make(string name, DynamicArray<int32> ids, DynamicArray<Pt> pts) {
+        Scene r; r.name = give name; r.ids = give ids; r.pts = give pts; return give r;
+    }
+    public fn int32 score() {   // resource fields are private -> expose the check through a method
+        int32 sum = this.ids[0] + this.ids[1] + this.pts[0].x + this.pts[0].y + this.pts[1].x + this.pts[1].y;   // 25
+        return (cast<int32>(this.name.length()) == 4) ? sum : 0;
+    }
+}
+
+fn int main() {
+    DynamicArray<int32> ids = DynamicArray.empty(); ids.add(item: 7); ids.add(item: 8);
+    DynamicArray<Pt> pts = DynamicArray.empty(); pts.add(item: Pt.make(x: 1, y: 2)); pts.add(item: Pt.make(x: 3, y: 4));
+    Scene s = Scene.make(name: "lvl1", ids: give ids, pts: give pts);
+    Result<DynamicArray<uint8>, Owned<Error>> e_r = encode(v: s);
+    DynamicArray<uint8> bytes = match (give e_r) { case Ok(b): give b; case Err(__e): { return 250; } };
+    Result<Scene, Owned<Error>> res = decode::<Scene>(src: give bytes);
+    return match (res) { case Ok(b): b.score(); case Err(e): 0 - 1; };
+}

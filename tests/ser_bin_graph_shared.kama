@@ -1,0 +1,49 @@
+// KBIN object-graph round-trip: two owners share one leaf. Serialize dedups the leaf into the id table (both
+// pointer fields reference one id); decode rebuilds a `Shared<Pair>` re-sharing the single leaf. Proven by a
+// decode -> re-encode producing BYTE-IDENTICAL output (id dedup + graph structure survived). ASan proves the
+// refcounts balance. Returns 55.
+import std::serialization::binary::{encode, decode};
+import std::collections::{DynamicArray};
+import std::memory::{Shared};
+
+@generate(Serialize, Deserialize)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { Leaf r; r.v = v; return give r; } }
+
+@generate(Serialize, Deserialize)
+type resource Pair {
+    @field Shared<Leaf> a;
+    @field Shared<Leaf> b;
+    public ctor make(Shared<Leaf> a, Shared<Leaf> b) { Pair r; r.a = give a; r.b = give b; return give r; }
+}
+
+fn DynamicArray<uint8> clone(ref DynamicArray<uint8> src) {
+    DynamicArray<uint8> c = DynamicArray.empty();
+    int32 i = 0; int32 n = cast<int32>(src.length());
+    while (i < n) { c.add(item: src[i]); i = i + 1; }
+    return give c;
+}
+fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    int32 i = 0; int32 n = cast<int32>(a.length());
+    while (i < n) { if (a[i] != b[i]) { return false; } i = i + 1; }
+    return true;
+}
+
+fn int main() {
+    Shared<Leaf> leaf = new Leaf.make(v: 42);
+    Shared<Leaf> l2 = leaf;                       // second owner of the SAME leaf
+    Pair p = Pair.make(a: give leaf, b: give l2);
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = encode(v: p);
+    DynamicArray<uint8> b1 = match (give e1) { case Ok(b): give b; case Err(__e): { return 250; } };
+
+    Result<Shared<Pair>, Owned<Error>> res = decode::<Shared<Pair>>(src: clone(src: ref b1));
+    match (res) {
+        case Ok(sh): {
+            Result<DynamicArray<uint8>, Owned<Error>> e2 = encode(v: sh);
+            DynamicArray<uint8> b2 = match (give e2) { case Ok(b): give b; case Err(__e): { return 1; } };
+            return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
+        }
+        case Err(e): { return 2; }
+    };
+    return 3;
+}
