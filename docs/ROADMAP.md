@@ -68,7 +68,12 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
      `dot`/`length`/…) to vector ops with a scalar fallback; clang/emcc lower that to SSE2/NEON/wasm128
      automatically. No API churn (the layout was designed SIMD-ready) and the exact-value fixtures must stay
      green — so it's a focused codegen campaign, not a rewrite. Main care points: `Vec3` (3-wide, pad to 4),
-     matrix ops, and bit-exact parity with the scalar path.
+     matrix ops, and bit-exact parity with the scalar path. **► Kickoff plan + current-state facts + the
+     design options in [docs/design/simd.md](design/simd.md).** SIMD is a pure PERF change (results are
+     bit-identical, so the exact-value fixtures pass scalar-or-SIMD and can't detect it) — **verify via
+     `bench/run` + asm inspection at `-O3`, not the fixture suite.** **STEP 0 = MEASURE:** at `-O3` clang's
+     auto-vectorizer already vectorizes the simple `Vec4` ops, so `objdump` the hot ops first to size the real
+     work before writing emitter code.
    - **Windows CI** — the `windows-latest` leg now passes the full suite (the `kama_os.h` `_WIN32` branch is
      verified); promote the leg from best-effort to **required** so a Windows regression blocks a merge.
 3. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
