@@ -127,6 +127,18 @@ genuinely later-track or opt-in.
   'Shared_Probe'`). Reproduces with a plain `enum E { A, B(Shared<Probe>) }` constructed only via `A` —
   independent of Model C / `.as<>` (found alongside M5/P3). Fix: scan **every** variant's payload types at
   enum registration (like class fields via `scanTypeForCollections`), not lazily at construction.
+- **Generic free-fn / static-method can't instantiate a generic type from its own type param (limitation, workaround).**
+  A generic free function `fn f<W: C>(…) { Foo<W> x = Foo.make(…); … }` fails with "unknown type in constructor
+  call `Foo`": the dot-on-type ctor resolver only rewrites the type name when it is itself a type *param*
+  (`_genericTypeParams.count(tn)`), not when it is a generic *template* name — even though the free-fn body IS
+  monomorphized with `_typeSubst[W]` bound. A **static** method on a generic type is likewise uncallable with
+  explicit or inferred args (`Foo::<W>.m()` parses as a ctor; `Foo::<W>::m()` is a parse error; `Foo::m()`
+  can't infer W). What **works**: constructing from the enclosing *type's* own param inside a type method (how
+  `Map` does `MapKeyIter::<K>.make`), and **instance** methods on an instance the caller built at a concrete
+  site. **Workaround (used by streams M2):** expose the op as an instance method —
+  `JsonWriter<W> w = JsonWriter::<W>.make(sink: give s); w.encodeValue(v);` — rather than a free `encodeTo<W>`.
+  Fix = teach the ctor resolver to substitute template type-args under `_typeSubst`, plus a static-generic call
+  spelling. Post-1.0, additive; not a blocker (the instance-method form is clean). Surfaced during streams M2.
 - **Custom-allocator default-convenience — the automatic never-null seal (construction-model, pre-1.0).**
   **✅ M8d.0 DONE:** the structural `when [A: default]` gate shipped — `empty()`/`withCapacity()` (and the PQ
   heaps, wrapper `Set`/`Sorted*` conveniences) simply *do not exist* for a non-default-fillable `A`, so
