@@ -1,7 +1,7 @@
 namespace std::net;
 
-import std::io::{IoError, lastError};
-import std::collections::{DynamicArray, FixedArray};
+import std::io::{IoError, lastError, Reader, Writer};
+import std::collections::{View};
 import std::net::{ReliableStream};
 
 export { TcpListener, TcpStream };
@@ -30,9 +30,9 @@ extern fn int32 kama_EINPROGRESS();
 extern fn int32 kama_EAGAIN();
 
 // A connected TCP stream. Closes its socket on drop (RAII). Move-only. Implements the `ReliableStream`
-// contract (shared with the coming WebTransport-stream / WebSocket backends). Blocking by default;
-// `setNonBlocking(true)` makes read/writeAll return `Err(WouldBlock)` instead of stalling.
-type resource TcpStream implements ReliableStream {
+// contract (a `Reader` + `Writer` + `setNonBlocking`; shared with the WebSocket backend). Blocking by
+// default; `setNonBlocking(true)` makes read/write return `Err(WouldBlock)` instead of stalling.
+type resource TcpStream implements ReliableStream, Reader, Writer {
     isize fd;
     // Adopt an already-connected socket fd. This is the escape hatch used by TcpListener.accept();
     // prefer `connect` for client sockets.
@@ -52,29 +52,14 @@ type resource TcpStream implements ReliableStream {
         return Result::Ok(value: TcpStream.make(fd: fd));
     }
 
-    // Read up to into.length() bytes into `into`; returns the count (0 = peer closed). EINTR-retried.
-    public fn Result<usize, IoError> read(ref FixedArray<uint8> into) {
+    // `Reader`: read up to into.length() bytes into `into`; returns the count (0 = peer closed). EINTR-retried.
+    public fn Result<usize, IoError> read(View<uint8> into) {
+        if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
         while (true) {
             isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
-    }
-
-    // Write the whole buffer, looping until every byte is sent (partial sends + EINTR handled).
-    public fn Result<usize, IoError> writeAll(ref DynamicArray<uint8> bytes) {
-        int32 total = cast<int32>(bytes.length());
-        int32 off = 0;
-        while (off < total) {
-            int32 remaining = total - off;
-            isize n = kama_send(fd: this.fd, buf: addr(of: bytes[off]), n: cast<usize>(remaining));
-            if (n < 0) {
-                if (kama_last_error() == kama_EINTR()) { continue; }
-                return Result::Err(error: lastError());
-            }
-            off = off + cast<int32>(n);
-        }
-        return Result::Ok(value: cast<usize>(total));
     }
 
     // Toggle non-blocking mode. In non-blocking mode, read/write that would stall return WouldBlock.
@@ -91,13 +76,19 @@ type resource TcpStream implements ReliableStream {
         return Result::Ok(value: Unit::Unit);
     }
 
-    // Single-syscall send — may write fewer than all bytes (or Err(WouldBlock) when the socket buffer is
-    // full). For a non-blocking sender managing its own outbound buffer; blocking senders use writeAll.
-    public fn Result<usize, IoError> write(ref DynamicArray<uint8> bytes) {
-        isize n = kama_send(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
-        if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
-        return Result::Err(error: lastError());
+    // `Writer` primitive: single-syscall send — may write fewer than all bytes (or Err(WouldBlock) when the
+    // socket buffer is full). EINTR-retried. Callers wanting every byte sent use the free `std::io::writeAll`.
+    public fn Result<usize, IoError> write(View<uint8> bytes) {
+        if (bytes.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
+        while (true) {
+            isize n = kama_send(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
+            if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
     }
+
+    // `Writer`: our layer is unbuffered (the OS holds the send buffer), so flush is a no-op.
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
 
     // Begin a non-blocking connect. The returned stream's connection may still be in flight: poll it for
     // writability (see std::net::Poller), then call checkConnected() to learn the outcome. host "" = loopback.
@@ -133,7 +124,9 @@ type resource TcpStream implements ReliableStream {
     // The raw socket handle — the intended bridge for handing this stream to a std::net::Poller.
     public fn isize rawHandle() { return this.fd; }
 
-    ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
+    // fd > 0: 0 is the moved-from sentinel (and stdin) — never a real socket; guarding it keeps a dropped
+    // {0} from closing an unrelated fd (the raw-handle-zero trap; see std::fs::File / the drop-only-if-live work).
+    ~TcpStream() { if (this.fd > 0) { int32 rc = kama_close_socket(fd: this.fd); } }
 }
 
 // A listening TCP socket. Closes on drop (RAII). Move-only.
@@ -180,5 +173,5 @@ type resource TcpListener {
     // The raw socket handle — the intended bridge for handing this listener to a std::net::Poller.
     public fn isize rawHandle() { return this.fd; }
 
-    ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
+    ~TcpListener() { if (this.fd > 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // fd > 0: see ~TcpStream
 }

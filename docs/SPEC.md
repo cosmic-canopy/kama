@@ -690,7 +690,21 @@ A native, single-binary I/O foundation — **library over FFI, no new language s
 `enum Unit` (the empty `Result<Unit, E>` payload — one error convention for void-fallible ops). `std::io`
 gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor) plus free
 `readFile`/`writeFile`/`stat`/`readDir`/`remove`; `std::net` gives RAII `TcpListener`/`TcpStream` (blocking
-TCP). All fallible calls return `Result<…, IoError>`, consumed by `match`.
+TCP) and `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
+
+**The streaming byte substrate.** `std::io` also defines two contracts that unify every byte source/sink:
+`type contract Writer` (the partial-write primitive `write(View<uint8>) -> Result<usize, IoError>` + `flush`)
+and `type contract Reader` (`read(View<uint8>) -> Result<usize, IoError>`, `Ok(0)` = EOF). Buffers are always
+`View<uint8>` (a non-owning span — zero-copy sub-slicing, no charset assumptions: binary-native, text backends
+layer UTF-8 on top). Write-all looping, `pump` (Go `io.Copy`), and `readAll` are **free helpers** over the
+primitive (contracts carry no default methods); `StringWriter`/`SliceReader` are the in-memory impls and
+`BufWriter<W>`/`BufReader<R>` the buffering layer (each **owns** its inner sink/source by value — kama forbids
+stored borrows). `std::fs::File` implements both, and a reliable network stream is
+`type contract ReliableStream implements Reader, Writer` (refinement) + `setNonBlocking` — so `TcpStream` and
+the web `WsConnection` are drop-in `Reader`/`Writer`s. The upshot: the serde backends and `fmt` stream over a
+file or a socket with no transport-specific code (`decodeFrom<T>(from: someReader)`), and unbounded data moves
+in bounded memory. (Datagram endpoints — `UdpSocket`, WebTransport — are message-oriented, not byte streams, so
+they take `View<uint8>` buffers but do **not** implement `Reader`/`Writer`.)
 
 ```kama
 import std::fs::{readFile, writeFile};

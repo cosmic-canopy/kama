@@ -3,14 +3,14 @@
 // are called through the contract vtbl. Two ephemeral UDP sockets, one datagram a->b. Returns 55.
 import std::net::{UdpSocket, DatagramSocket, SocketAddr, IpAddr, RecvFrom};
 import std::io::{IoError};
-import std::collections::{DynamicArray, FixedArray};
+import std::collections::{DynamicArray, FixedArray, View};
 
 // These take the CONTRACT by value (a fat-pointer borrow of the concrete) — dispatch is dynamic.
-fn int32 sendVia(DatagramSocket d, ref DynamicArray<uint8> msg, ref SocketAddr to) {
+fn int32 sendVia(DatagramSocket d, View<uint8> msg, ref SocketAddr to) {
     Result<usize, IoError> r = d.sendTo(bytes: msg, to: to);
     return match (r) { case Ok(w): cast<int32>(w); case Err(e): -1; };
 }
-fn int32 recvVia(DatagramSocket d, ref FixedArray<uint8> into) {
+fn int32 recvVia(DatagramSocket d, View<uint8> into) {
     Result<RecvFrom, IoError> r = d.recvFrom(into: into);
     return match (r) { case Ok(rf): cast<int32>(rf.count); case Err(e): -1; };
 }
@@ -27,11 +27,11 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b) {
                                                  c: cast<uint8>(0), d: cast<uint8>(1)), port: cast<uint16>(bp));
     DynamicArray<uint8> msg = DynamicArray.empty();
     msg.add(item: cast<uint8>(42)); msg.add(item: cast<uint8>(99));
-    int32 sent = sendVia(d: a, msg: msg, to: bAddr);   // dynamic dispatch through DatagramSocket
+    int32 sent = sendVia(d: a, msg: msg.view(), to: bAddr);   // dynamic dispatch through DatagramSocket
     if (sent != 2) { return 72; }
 
     FixedArray<uint8> buf = FixedArray.make(size: 64);
-    int32 got = recvVia(d: b, into: buf);              // dynamic dispatch through DatagramSocket
+    int32 got = recvVia(d: b, into: buf.view());       // dynamic dispatch through DatagramSocket
     if (got != 2) { return 73; }
     if (cast<int32>(buf[0]) != 42) { return 74; }
     if (cast<int32>(buf[1]) != 99) { return 75; }

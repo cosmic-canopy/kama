@@ -40,6 +40,12 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
      *variant-producing ternary* directly as a subject — bind to a typed local. Documented RULES (not gaps):
      an inline `new`/value **borrowed** by a `ref`/`out` or contract parameter (an rvalue has no lvalue to
      reseat), and an inline construct in a `do/while` condition (ISO-C + `continue` semantics).
+   - **Contract-dispatched method call as a `match` subject** *(same "bind to a local first" workaround)*.
+     `match (g.method())` where `g` is a **contract value** and `method` returns an enum/`Result` fails
+     ("requires an enum subject") — a **concrete** method-call subject (`match (box.method())`) works, so the
+     gap is that match-subject inference doesn't resolve the *contract method's* declared return type through
+     fat-pointer dispatch. Found in streams M4; bind to a typed local (`Result<…> r = g.method(); match (r)`),
+     which is already the corpus-wide idiom.
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
@@ -66,6 +72,16 @@ Policy: **no known limitation stays untracked** — each is scheduled or a decla
 directly as a `match` subject (the common bare-variant-ctor subject now works); what remains here is
 genuinely later-track or opt-in.
 
+- **Contract refinement — two under-tested edges (tracked; clean workarounds).** `type contract Child …
+  implements Parent` works for dispatch, but was only exercised with scalar-param parents until streams M4
+  gave it generic-instance params. (a) A merged parent method whose param is a **generic instance**
+  (`View<uint8>`) re-resolves in the *child* contract's namespace at vtable-emit, so the child's file must
+  `import` that generic type or the emitted C vtable names an undefined type. (b) A concrete type implementing
+  the child gets **no parent-contract conformance thunk** — pass it where the parent is expected only if it
+  *also* spells `implements Parent` explicitly; and a child-contract-**value** → parent-contract-param upcast
+  is unsupported (dispatch *through* the child to inherited methods works). Both have trivial workarounds (used
+  in `lib/std/net/stream.kama`); fixing (a) = resolve the merged param under the parent's namespace in
+  `linkContracts`, (b) = auto-emit parent thunks for refining-contract implementers.
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).

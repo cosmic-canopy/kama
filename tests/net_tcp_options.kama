@@ -11,7 +11,7 @@ fn int32 checkClient(ref TcpStream c) {
     if (!isOk(r: c.setNoDelay(on: true)))     { return 71; }
     if (!isOk(r: c.setNonBlocking(on: true))) { return 72; }
     FixedArray<uint8> buf = FixedArray.make(size: 64);
-    Result<usize, IoError> rr = c.read(into: buf);
+    Result<usize, IoError> rr = c.read(into: buf.view());
     bool wb = match (rr) { case Ok(n): false; case Err(e): isWouldBlock(e: e); };
     if (!wb) { return 73; }
     return 55;

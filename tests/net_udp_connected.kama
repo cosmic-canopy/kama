@@ -12,12 +12,12 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b, int32 bport) {
 
     DynamicArray<uint8> msg = DynamicArray.empty();
     msg.add(item: cast<uint8>(7)); msg.add(item: cast<uint8>(9)); msg.add(item: cast<uint8>(11));
-    Result<usize, IoError> rs = a.send(bytes: msg);
+    Result<usize, IoError> rs = a.send(bytes: msg.view());
     int32 sent = match (rs) { case Ok(w): cast<int32>(w); case Err(e): -1; };
     if (sent != 3) { return 62; }
 
     FixedArray<uint8> buf = FixedArray.make(size: 64);
-    Result<RecvFrom, IoError> rr = b.recvFrom(into: buf);
+    Result<RecvFrom, IoError> rr = b.recvFrom(into: buf.view());
     int32 got = match (rr) { case Ok(rf): cast<int32>(rf.count); case Err(e): -1; };
     if (got != 3) { return 63; }
     if (cast<int32>(buf[0]) != 7)  { return 64; }
