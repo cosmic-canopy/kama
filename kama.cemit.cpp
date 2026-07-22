@@ -1446,14 +1446,23 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 *_out << nm << "." << f.name << " = " << emitExpression(f.initializer) << ";\n";
                                 continue;
                             }
-                            auto cit = _classes.find(cTypeInInstance(ty, f.type));
+                            std::string fcls = cTypeInInstance(ty, f.type);
+                            auto cit = _classes.find(fcls);
                             if (cit == _classes.end()) continue;
+                            bool filled = false;
                             for (auto& kv : cit->second.methods)
                                 if (kv.second.isDefaultCtor) {
                                     line(n->line); indent(depth);
                                     *_out << nm << "." << f.name << " = " << kv.second.cName << "();\n";
+                                    filled = true;
                                     break;
                                 }
+                            // Drop-only-if-live (A): a move-only-value field left `{0}` by the fill loop (no
+                            // inline initializer, no `default` ctor — e.g. a raw-handle `resource` field) is NOT
+                            // yet live. Seed its `local.field` move-state Moved so the first `f.field = give …`
+                            // does NOT drop the zeroed slot (which for a raw handle would e.g. close(0)).
+                            if (!filled && isMoveOnlyValue(fcls))
+                                _moveState[nm + "." + f.name] = MoveState::Moved;
                         }
                         // Construction-model M8 Phase E: a polymorphic (vtable-carrying) bare local sets its
                         // `__vptr` directly — the value-local (`.`) mirror of the synth ctor body's
@@ -2168,13 +2177,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             *_out << b << " = (" << lty << "){0}; " << s << "\n";
                             return;
                         }
-                        std::string lname;
-                        if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
-                            if (lid->value && (!lid->qualifier || lid->qualifier->empty())) lname = *lid->value;
+                        std::string lname = lvalueMoveKey(as->unaryExpression);   // bare local OR `local.field` slot
                         bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
                         std::string b = emitExpression(as->unaryExpression);
                         line(n->line);
-                        if (!bMoved && _classes[lty].destructible)                 // release the old value first
+                        if (!bMoved && _classes[lty].destructible)                 // release the old value first (skip a not-yet-live slot)
                             { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
                         if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // target is live again
                         bool ph = _hoistOK; _hoistOK = true;                       // hoist any arg hand-offs
@@ -2358,9 +2365,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (isNamedValue(rhs.get())) {
                 std::string lty = exprClass(as->unaryExpression);
                 checkConstWrite(as->unaryExpression, n->line);
-                std::string lname;
-                if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
-                    if (lid->value && (!lid->qualifier || lid->qualifier->empty())) lname = *lid->value;
+                std::string lname = lvalueMoveKey(as->unaryExpression);   // bare local OR `local.field` slot
                 bool cpy = isCopyable(lty);
                 bool doCopy;
                 if (handoff == 2) {
@@ -2504,8 +2509,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     *_out << "\n"; return;
                 }
                 checkConstWrite(as->unaryExpression, n->line);
+                std::string mkey = lvalueMoveKey(as->unaryExpression);   // bare local OR `local.field` slot
                 bool destructible = _classes.count(lhsCType) && _classes[lhsCType].destructible;
-                bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
+                bool bMoved = (!mkey.empty() && _moveState.count(mkey) && _moveState[mkey] == MoveState::Moved);
                 std::string lhs = emitExpression(as->unaryExpression);
                 line(n->line);
                 bool ph = _hoistOK; _hoistOK = true;
@@ -2517,7 +2523,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 flushHoisted(depth);
                 // RAII: drop a live destructible LHS before the blit (its owned resource would leak).
                 if (destructible && !bMoved) { indent(depth); *_out << lhsCType << "__dtor(&" << lhs << ");\n"; }
-                if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // target is live again
+                if (!mkey.empty()) _moveState[mkey] = MoveState::NotMoved;   // target is live again
                 indent(depth); *_out << lhs << " = " << rv << ";\n";
                 return;
             }
@@ -5868,6 +5874,7 @@ bool CEmitter::ownsByValue(const std::string& cls) const
     return it != _classes.end() && it->second.isIntrinsicColl && !isFixedColl(cls);
 }
 
+
 // has this type opted into the `Copyable` contract? (Detected structurally at collection
 // time — a public nullary `copy` returning the own type; see collectClasses.) Only ever consulted
 // for a move-only value, where it flips the marker from "silent move" to "mandatory give/copy".
@@ -5949,6 +5956,22 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
     }
     unsupported("cannot `give` out of a field/element — it would leave the owner holding a "
                 "moved-from value; move a local instead, or use Optional<T>", line);
+    return "";
+}
+
+// Move-state key for a drop-before-assign LHS. Superset of the inline `lname` extraction the
+// assignment handlers do: an unqualified local -> its name; a single-level `local.field` member
+// access whose receiver is an unqualified local -> "local.field" (mirrors checkNamedCtorComplete's
+// localFieldRef key format). Anything else (this.*, element access, nested, qualified) -> "".
+std::string CEmitter::lvalueMoveKey(SharedExpression lhs) const
+{
+    if (auto* id = dynamic_cast<IdentifierNode*>(lhs.get()))
+        if (id->value && (!id->qualifier || id->qualifier->empty())) return *id->value;
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(lhs.get()))
+        if (ma->identifier && ma->identifier->value)
+            if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                if (id->value && (!id->qualifier || id->qualifier->empty()))
+                    return *id->value + "." + *ma->identifier->value;
     return "";
 }
 
@@ -8315,6 +8338,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         struct Saved { std::string name; bool had; std::string prev; };
         std::vector<Saved> savedTypes;
         std::vector<std::string> borrowedHere;    // owning bindings marked non-giveable for this arm
+        bool defusedSubject = false;              // this consumed arm moved an owning payload out of the subject
         if (a->bindings && !a->bindings->empty()) {
             if (!vc || a->bindings->size() != vc->payload.size())
                 unsupported(("`match` arm for '" + (a->variantName ? *a->variantName : std::string("_"))
@@ -8334,6 +8358,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     indent(depth + 2); *_out << slot << " = (" << bcty << "){0};\n";
                     _scopes.back().locals.push_back({bn, bcty});
                     _moveState[bn] = MoveState::NotMoved;
+                    defusedSubject = true;
                 } else if (!subjConsumed && (ownsByValue(bcty) || isSmartPtrClass(bcty))) {
                     // BORROWING `match (x)`: this owning binding (a collection / move-only value / smart-ptr
                     // handle — incl. the interface-element fat handle `Owned<Error>`) only aliases the box the
@@ -8344,6 +8369,17 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 savedTypes.push_back({bn, (bool)_localTypes.count(bn), _localTypes.count(bn) ? _localTypes[bn] : std::string()});
                 _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
             }
+        }
+
+        // Drop-only-if-live (B): a consumed arm that moved an owning payload out of the subject leaves the
+        // subject holding a defused ({0}) payload. The post-switch subject drop (a whole-value dtor) would
+        // re-drop that zero — a no-op for pointer-shaped payloads but UB for a raw-handle resource (e.g.
+        // close(0)). Point the subject tag one past the last variant so the dtor's `switch(tag)` hits
+        // `default: break` and drops nothing. Only on consumed arms; borrowing-match subjects are untouched.
+        if (defusedSubject) {
+            std::string tagTy = ci.tagCType.empty() ? (subjCls + "_Tag") : ci.tagCType;
+            indent(depth + 2);
+            *_out << sp << "->tag = (" << tagTy << ")" << ci.variants.size() << ";\n";
         }
 
         // Arm body: a single expression, OR a block. Hoist temps INSIDE the arm braces.

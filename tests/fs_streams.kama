@@ -1,0 +1,55 @@
+// std::io streams M3 — std::fs::File now implements Reader/Writer, so serde streams straight to/from disk
+// with no whole-file string buffering. Write a record's JSON directly to an fd via JsonWriter::<File>, close,
+// reopen, and decode it back straight from the File (as a Reader). Each phase is scoped in a helper so the
+// owning JsonWriter/File drops (closes the fd) before the next phase. Returns 42 on full round-trip success.
+import std::fs::{File, OpenMode, remove};
+import std::io::{Reader, Writer, IoError};
+import std::serialization::json::{JsonWriter, decodeFrom};
+
+@generate(Serialize, Deserialize)
+type resource Rec {
+    @field int32 id;
+    @field string name;
+    @field bool ok;
+    public ctor make(int32 id, string name, bool ok) {
+        Rec r; r.id = id; r.name = give name; r.ok = ok; return give r;
+    }
+    public fn bool matches() { return this.id == 7 && this.ok && this.name == "hi"; }
+}
+
+// Stream `rec` as JSON straight into a freshly-created file. The JsonWriter owns the File by value, so when it
+// drops at the end of this scope the fd closes (flushing our unbuffered layer's no-op). Returns 0 on success.
+fn int32 writeRec(ref string path, ref Rec rec) {
+    Result<File, IoError> fo = File.open(path: path, mode: OpenMode::Write);
+    File f = match (give fo) { case Ok(x): give x; case Err(e): { return 20; } };
+    JsonWriter<File> w = JsonWriter::<File>.make(sink: give f);
+    Result<Unit, Owned<Error>> e = w.encodeValue(v: rec);
+    return match (give e) { case Ok(_): 0; case Err(er): 21; };
+}
+
+// Reopen the file for reading and decode a Rec straight out of it (File as a bare Reader). The File drops
+// (closes) at scope end. Returns 0 iff the decoded record round-trips.
+fn int32 readRec(ref string path) {
+    Result<File, IoError> fo = File.open(path: path, mode: OpenMode::Read);
+    File f = match (give fo) { case Ok(x): give x; case Err(e): { return 30; } };
+    Result<Rec, Owned<Error>> d = decodeFrom::<Rec>(from: f);
+    Rec q = match (give d) { case Ok(x): give x; case Err(e): { return 31; } };
+    if (!q.matches()) { return 32; }
+    return 0;
+}
+
+fn int main() {
+    string p = "_fs_streams.tmp";
+    Rec r = Rec.make(id: 7, name: "hi", ok: true);
+
+    int32 wc = writeRec(path: p, rec: r);
+    if (wc != 0) { return wc; }
+
+    int32 rc = readRec(path: p);
+    if (rc != 0) { return rc; }
+
+    int32 rmCode = match (remove(path: p)) { case Ok(u): 0; case Err(e): 70; };
+    if (rmCode != 0) { return rmCode; }
+
+    return 42;
+}

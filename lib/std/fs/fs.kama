@@ -1,7 +1,7 @@
 namespace std::fs;
 
-import std::io::{IoError, lastError};
-import std::collections::{DynamicArray, FixedArray};
+import std::io::{IoError, lastError, Reader, Writer};
+import std::collections::{DynamicArray, FixedArray, View};
 
 export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove };
 
@@ -31,8 +31,9 @@ type value Metadata {
     public bool isDir;
 }
 
-// An open file that closes its descriptor on drop (RAII). Move-only.
-type resource File {
+// An open file that closes its descriptor on drop (RAII). Move-only. Implements the streaming byte substrate
+// (`std::io::Reader`/`Writer`), so serde streams straight to/from disk (`JsonWriter::<File>` / `decodeFrom`).
+type resource File implements Reader, Writer {
     int32 fd;
     private ctor make(int32 fd) { File r; r.fd = fd; return give r; }
 
@@ -47,13 +48,30 @@ type resource File {
     }
 
     // Read up to `into.length()` bytes into `into`; returns the count (0 = end of file). EINTR-retried.
-    public fn Result<usize, IoError> read(ref FixedArray<uint8> into) {
+    // The `Reader` contract shape — fills a borrowed byte view (View's `operator[]` panics on an empty view,
+    // so a zero-length request short-circuits to Ok(0)).
+    public fn Result<usize, IoError> read(View<uint8> into) {
+        if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
         while (true) {
             isize n = kama_read(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }
+
+    // The `Writer` partial-write PRIMITIVE: one `kama_write` (EINTR-retried), returning the count actually
+    // written (may be `< length`). The free `writeAll(Writer, View)` loops over this to send every byte.
+    public fn Result<usize, IoError> write(View<uint8> bytes) {
+        if (bytes.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
+        while (true) {
+            isize n = kama_write(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
+            if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+
+    // The `Writer` flush: our fs layer is unbuffered (the OS buffers), so there is nothing to drain.
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
 
     // Read the whole file to EOF into an owning byte buffer.
     public fn Result<DynamicArray<uint8>, IoError> readAll() {
@@ -93,7 +111,13 @@ type resource File {
         return Result::Ok(value: cast<usize>(total));
     }
 
-    ~File() { if (this.fd >= 0) { int32 rc = kama_close_fd(fd: this.fd); } }
+    // "Drop only if live" (A/B) now stops the compiler from dropping a `{0}` on a field-first-write or a
+    // `match(give …)` payload extraction — the two paths that used to close(0) here. This guard remains for
+    // the residual it does NOT cover: a bare `File f;` that reaches a drop before its fd is assigned (an
+    // uninitialized/whole-reassigned local). `fd == 0` is stdin, so `fd > 0` treats the zero as the empty
+    // sentinel (a real descriptor this API opens is always > 0). A future "force explicit field init" pass
+    // (the language's proper answer to default assignment) would retire this guard entirely.
+    ~File() { if (this.fd > 0) { int32 rc = kama_close_fd(fd: this.fd); } }
 }
 
 // Read an entire file into an owning byte buffer (opens, reads to EOF, closes on drop).

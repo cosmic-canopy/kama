@@ -1,0 +1,28 @@
+// Drop-only-if-live (B) — match(give) payload extraction. A raw-handle `resource` is moved out of an
+// `Optional` via a consuming `match (give opt)`. The moved-out binding drops once at the arm end; the
+// post-switch subject drop must NOT re-drop the defused ({0}) payload (for a real fd that would be
+// close(0)). Handle's dtor is GUARD-FREE — the tag-sentinel must neutralize the subject drop.
+extern fn void kama_trace(int code);
+extern fn int kama_trace_get();
+
+type resource Handle {
+    int32 h;
+    public ctor open(int32 v) { Handle r; r.h = v; return give r; }
+    public fn int32 val() { return this.h; }
+    ~Handle() { kama_trace(code: 5); }               // one trace per REAL drop
+}
+
+fn int main() {
+    Handle h = Handle.open(v: 7);
+    Optional<Handle> opt = Optional::Some(value: give h);
+
+    int32 hv = match (give opt) {
+        case Some(x): x.val();                       // x owns the moved-out handle; drops at arm end -> trace(5)
+        case None:    0 - 1;
+    };                                               // subject drop after the switch must NOT re-drop the payload
+
+    if (hv != 7) { return 90; }
+    // exactly ONE Handle drop. fold of a single trace(5) = 5. A subject re-drop of the defused Some
+    // payload would fold in a second 5 -> 160.
+    return kama_trace_get();                         // expect 5
+}

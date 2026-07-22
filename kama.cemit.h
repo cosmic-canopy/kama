@@ -778,6 +778,10 @@ private:
     bool satisfiesBound(const std::string& t, const std::string& bound) const;   // does concrete C-type `t` satisfy contract `bound`? (Copyable: value/primitive yes, resource iff it implements it)
     void markMoved(const std::string& cVar);                // state -> Moved
     void checkNotMoved(const std::string& cVar, int line);  // reject a use of a moved local
+    // Move-state KEY for a drop-before-assign LHS: an unqualified local -> its name; a single-level
+    // `local.field` member access -> "local.field"; anything else -> "". Lets the field-first-write
+    // "release the old value" skip a not-yet-live (freshly zero-inited) move-only-value field slot.
+    std::string lvalueMoveKey(SharedExpression lhs) const;
     // The source of a move hand-off: a bare move-only local -> its name (caller marks it moved);
     // a field/element/base member -> reject (moving out would leave the owner moved-from).
     std::string moveOnlySource(SharedExpression e, int line);
