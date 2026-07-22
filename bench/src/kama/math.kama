@@ -1,0 +1,44 @@
+// math — std::math SIMD-readiness workload. A fixed 2×10⁶-iteration hot loop over the ops an engine
+// leans on: Vec4 +/-/scale, dot (reduction), Mat4*Vec4, Mat4*Mat4, and the Quat Hamilton product. All
+// inputs are small integer-valued float32s so every intermediate is EXACTLY representable (|v| < 2^24) —
+// the result is therefore bit-identical across float32 (kama/C/C++/Rust/Go) and float64 (JS/Lua/Python)
+// backends, so the fairness-gate checksum agrees everywhere. This is a pure codegen/throughput number:
+// the exact-value math fixtures already prove correctness; here we watch whether the ops vectorize.
+import std::math::{Vec4, Mat4, Quat};
+
+fn int main()
+{
+    // A fixed small integer matrix (two 1s per column), reused as the Mat4*Vec4 and Mat4*Mat4 operand.
+    Vec4 mc0 = Vec4.of(x: 1.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
+    Vec4 mc1 = Vec4.of(x: 0.0f32, y: 1.0f32, z: 1.0f32, w: 0.0f32);
+    Vec4 mc2 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 1.0f32);
+    Vec4 mc3 = Vec4.of(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
+    Mat4 m = Mat4::fromCols(c0: mc0, c1: mc1, c2: mc2, c3: mc3);
+
+    uint64 sum = 0;
+    for (uint64 i = 0; i < 2000000; i++)
+    {
+        float32 s = cast<float32>(i % 8);                                        // 0..7
+        Vec4 a = Vec4.of(x: s,          y: s + 1.0f32, z: s + 2.0f32, w: s + 3.0f32);
+        Vec4 b = Vec4.of(x: s + 2.0f32, y: s + 3.0f32, z: s + 4.0f32, w: s + 5.0f32);
+        Vec4 c = a + b;                                                          // add
+        Vec4 e = c * 3.0f32;                                                     // scale
+        Vec4 f = e - b;                                                          // sub (= 3a + 2b >= 0)
+        float32 dp = a.dot(r: b);                                                // reduction
+        Vec4 mv = m.transform(v: a);                                            // Mat4 * Vec4
+        Mat4 mm = m * m;                                                         // Mat4 * Mat4
+        Quat q1 = Quat.of(x: s,          y: s + 1.0f32, z: s + 2.0f32, w: s + 3.0f32);
+        Quat q2 = Quat.of(x: s + 1.0f32, y: s,          z: s + 3.0f32, w: s + 2.0f32);
+        Quat qq = q1 * q2;                                                       // Hamilton product
+        float32 qdot = qq.x*qq.x + qq.y*qq.y + qq.z*qq.z + qq.w*qq.w;
+
+        float32 acc = (f.x + f.y + f.z + f.w)
+                    + dp
+                    + (mv.x + mv.y + mv.z + mv.w)
+                    + (mm.cols[0].x + mm.cols[1].y + mm.cols[2].z + mm.cols[3].w)
+                    + qdot;
+        sum += cast<uint64>(acc);
+    }
+    uint64 mres = sum % 256;
+    return cast<int>(mres);
+}

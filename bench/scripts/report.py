@@ -12,7 +12,7 @@ TSV = os.path.join(ROOT, "bench/build/results.tsv")
 OUT_MD = os.path.join(ROOT, "docs/benchmarks/RESULTS.md")
 OUT_JSON = os.path.join(ROOT, "docs/benchmarks/results.json")
 
-WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr", "map"]
+WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr", "map", "math"]
 NATIVE = ["kama", "c", "cpp", "rust", "go", "csharp", "java", "lua", "python"]
 WASM = ["kama-wasm", "js", "ts"]
 LABEL = {"kama": "kama", "c": "C", "cpp": "C++", "rust": "Rust", "go": "Go",
@@ -206,6 +206,12 @@ diverged:
   2.9 → 5.7 ms; give kama a single-multiply hash and it goes 8.7 → 3.3 ms ≈ C. With an equal hash **and**
   equal preallocation, kama ≈ C (the Map machinery — probe, `Optional`, value copy — is already at parity).
   Both levers are stdlib design choices tracked in ROADMAP §5 (Map `reserve` + a pluggable hasher).
+- **math** — 2×10⁶ iterations of the `std::math` hot ops an engine leans on: `Vec4` add/sub/scale, `dot`,
+  `Mat4*Vec4`, `Mat4*Mat4`, and the `Quat` Hamilton product. Every input is a small integer-valued
+  float32 so all intermediates are **exactly representable** (`|v| < 2^24`) — the checksum is therefore
+  bit-identical across the float32 (kama/C/C++/Rust/Go) and float64 (JS/Lua/Python) backends. This is a
+  **codegen/SIMD-vectorization** number: kama's math types carry a SIMD-ready layout, so this row tracks
+  whether the field-by-field ops lower to packed SIMD as the backend evolves (ROADMAP §2 SIMD campaign).
 
 ## NATIVE — execution time (median, ms)
 

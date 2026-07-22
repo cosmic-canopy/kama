@@ -1,6 +1,6 @@
 {
   "env": {
-    "generated": "2026-07-16 02:13",
+    "generated": "2026-07-22 21:21",
     "arch": "aarch64",
     "kernel": "Linux",
     "clang": "Ubuntu clang version 18.1.3 (1ubuntu1)",
@@ -17,8 +17,8 @@
       "track": "native",
       "lang": "kama",
       "workload": "fib",
-      "time_ms": "6.03",
-      "rss_kb": "2896",
+      "time_ms": "6.08",
+      "rss_kb": "2912",
       "size_bytes": "67560",
       "exit": "225"
     },
@@ -26,8 +26,8 @@
       "track": "native",
       "lang": "c",
       "workload": "fib",
-      "time_ms": "5.82",
-      "rss_kb": "2836",
+      "time_ms": "5.96",
+      "rss_kb": "2848",
       "size_bytes": "67640",
       "exit": "225"
     },
@@ -35,8 +35,8 @@
       "track": "native",
       "lang": "cpp",
       "workload": "fib",
-      "time_ms": "6.15",
-      "rss_kb": "3104",
+      "time_ms": "6.17",
+      "rss_kb": "3096",
       "size_bytes": "67640",
       "exit": "225"
     },
@@ -44,8 +44,8 @@
       "track": "native",
       "lang": "rust",
       "workload": "fib",
-      "time_ms": "6.49",
-      "rss_kb": "2912",
+      "time_ms": "6.12",
+      "rss_kb": "2848",
       "size_bytes": "330040",
       "exit": "225"
     },
@@ -53,8 +53,8 @@
       "track": "native",
       "lang": "go",
       "workload": "fib",
-      "time_ms": "10.07",
-      "rss_kb": "2840",
+      "time_ms": "10.56",
+      "rss_kb": "2912",
       "size_bytes": "1643348",
       "exit": "225"
     },
@@ -62,25 +62,25 @@
       "track": "native",
       "lang": "csharp",
       "workload": "fib",
-      "time_ms": "31.88",
-      "rss_kb": "20416",
-      "size_bytes": "6656",
+      "time_ms": "33.62",
+      "rss_kb": "20864",
+      "size_bytes": "8192",
       "exit": "225"
     },
     {
       "track": "native",
       "lang": "java",
       "workload": "fib",
-      "time_ms": "25.37",
+      "time_ms": "28.12",
       "rss_kb": "40840",
-      "size_bytes": "3226",
+      "size_bytes": "4734",
       "exit": "225"
     },
     {
       "track": "native",
       "lang": "lua",
       "workload": "fib",
-      "time_ms": "88.51",
+      "time_ms": "92.27",
       "rss_kb": "2912",
       "size_bytes": "132",
       "exit": "225"
@@ -89,7 +89,7 @@
       "track": "native",
       "lang": "python",
       "workload": "fib",
-      "time_ms": "212.89",
+      "time_ms": "215.38",
       "rss_kb": "8600",
       "size_bytes": "114",
       "exit": "225"
@@ -98,7 +98,7 @@
       "track": "wasm",
       "lang": "kama-wasm",
       "workload": "fib",
-      "time_ms": "19.39",
+      "time_ms": "20.23",
       "rss_kb": "43712",
       "size_bytes": "400",
       "exit": "225"
@@ -107,7 +107,7 @@
       "track": "wasm",
       "lang": "js",
       "workload": "fib",
-      "time_ms": "28.2",
+      "time_ms": "27.67",
       "rss_kb": "45508",
       "size_bytes": "120",
       "exit": "225"
@@ -116,8 +116,8 @@
       "track": "wasm",
       "lang": "ts",
       "workload": "fib",
-      "time_ms": "27.38",
-      "rss_kb": "45508",
+      "time_ms": "29.23",
+      "rss_kb": "45504",
       "size_bytes": "149",
       "exit": "225"
     },
@@ -125,8 +125,8 @@
       "track": "native",
       "lang": "kama",
       "workload": "pi",
-      "time_ms": "11.8",
-      "rss_kb": "2848",
+      "time_ms": "11.79",
+      "rss_kb": "2912",
       "size_bytes": "67560",
       "exit": "27"
     },
@@ -134,8 +134,8 @@
       "track": "native",
       "lang": "c",
       "workload": "pi",
-      "time_ms": "11.69",
-      "rss_kb": "2896",
+      "time_ms": "11.77",
+      "rss_kb": "2912",
       "size_bytes": "67640",
       "exit": "27"
     },
@@ -143,8 +143,8 @@
       "track": "native",
       "lang": "cpp",
       "workload": "pi",
-      "time_ms": "11.99",
-      "rss_kb": "3100",
+      "time_ms": "11.98",
+      "rss_kb": "3108",
       "size_bytes": "67640",
       "exit": "27"
     },
@@ -152,8 +152,8 @@
       "track": "native",
       "lang": "rust",
       "workload": "pi",
-      "time_ms": "11.98",
-      "rss_kb": "2912",
+      "time_ms": "12.01",
+      "rss_kb": "2896",
       "size_bytes": "330040",
       "exit": "27"
     },
@@ -161,7 +161,7 @@
       "track": "native",
       "lang": "go",
       "workload": "pi",
-      "time_ms": "13.96",
+      "time_ms": "14.01",
       "rss_kb": "2912",
       "size_bytes": "1642481",
       "exit": "27"
@@ -170,26 +170,26 @@
       "track": "native",
       "lang": "csharp",
       "workload": "pi",
-      "time_ms": "33.77",
-      "rss_kb": "21120",
-      "size_bytes": "6656",
+      "time_ms": "34.01",
+      "rss_kb": "21444",
+      "size_bytes": "8192",
       "exit": "27"
     },
     {
       "track": "native",
       "lang": "java",
       "workload": "pi",
-      "time_ms": "35.49",
-      "rss_kb": "41352",
-      "size_bytes": "3226",
+      "time_ms": "37.01",
+      "rss_kb": "41544",
+      "size_bytes": "4734",
       "exit": "27"
     },
     {
       "track": "native",
       "lang": "lua",
       "workload": "pi",
-      "time_ms": "119.41",
-      "rss_kb": "2912",
+      "time_ms": "122.3",
+      "rss_kb": "2848",
       "size_bytes": "163",
       "exit": "27"
     },
@@ -197,8 +197,8 @@
       "track": "native",
       "lang": "python",
       "workload": "pi",
-      "time_ms": "1660.79",
-      "rss_kb": "8604",
+      "time_ms": "1655.09",
+      "rss_kb": "8600",
       "size_bytes": "149",
       "exit": "27"
     },
@@ -206,7 +206,7 @@
       "track": "wasm",
       "lang": "kama-wasm",
       "workload": "pi",
-      "time_ms": "20.64",
+      "time_ms": "21.27",
       "rss_kb": "43840",
       "size_bytes": "178",
       "exit": "27"
@@ -215,8 +215,8 @@
       "track": "wasm",
       "lang": "js",
       "workload": "pi",
-      "time_ms": "25.41",
-      "rss_kb": "46396",
+      "time_ms": "27.16",
+      "rss_kb": "46532",
       "size_bytes": "164",
       "exit": "27"
     },
@@ -224,8 +224,8 @@
       "track": "wasm",
       "lang": "ts",
       "workload": "pi",
-      "time_ms": "26.23",
-      "rss_kb": "46528",
+      "time_ms": "27.14",
+      "rss_kb": "46532",
       "size_bytes": "206",
       "exit": "27"
     },
@@ -233,8 +233,8 @@
       "track": "native",
       "lang": "kama",
       "workload": "collatz",
-      "time_ms": "65.74",
-      "rss_kb": "2848",
+      "time_ms": "65.95",
+      "rss_kb": "2912",
       "size_bytes": "67560",
       "exit": "2"
     },
@@ -242,7 +242,7 @@
       "track": "native",
       "lang": "c",
       "workload": "collatz",
-      "time_ms": "65.61",
+      "time_ms": "65.74",
       "rss_kb": "2848",
       "size_bytes": "67640",
       "exit": "2"
@@ -260,7 +260,7 @@
       "track": "native",
       "lang": "rust",
       "workload": "collatz",
-      "time_ms": "66.06",
+      "time_ms": "66.95",
       "rss_kb": "2848",
       "size_bytes": "330040",
       "exit": "2"
@@ -269,7 +269,7 @@
       "track": "native",
       "lang": "go",
       "workload": "collatz",
-      "time_ms": "90.86",
+      "time_ms": "91.13",
       "rss_kb": "2848",
       "size_bytes": "1642355",
       "exit": "2"
@@ -278,26 +278,26 @@
       "track": "native",
       "lang": "csharp",
       "workload": "collatz",
-      "time_ms": "125.68",
-      "rss_kb": "21188",
-      "size_bytes": "6656",
+      "time_ms": "124.91",
+      "rss_kb": "21376",
+      "size_bytes": "8192",
       "exit": "2"
     },
     {
       "track": "native",
       "lang": "java",
       "workload": "collatz",
-      "time_ms": "132.07",
-      "rss_kb": "41272",
-      "size_bytes": "3226",
+      "time_ms": "137.37",
+      "rss_kb": "41864",
+      "size_bytes": "4734",
       "exit": "2"
     },
     {
       "track": "native",
       "lang": "lua",
       "workload": "collatz",
-      "time_ms": "968.75",
-      "rss_kb": "2840",
+      "time_ms": "979.4",
+      "rss_kb": "2912",
       "size_bytes": "170",
       "exit": "2"
     },
@@ -305,7 +305,7 @@
       "track": "native",
       "lang": "python",
       "workload": "collatz",
-      "time_ms": "2996.56",
+      "time_ms": "2975.45",
       "rss_kb": "8600",
       "size_bytes": "181",
       "exit": "2"
@@ -314,8 +314,8 @@
       "track": "wasm",
       "lang": "kama-wasm",
       "workload": "collatz",
-      "time_ms": "92.53",
-      "rss_kb": "43840",
+      "time_ms": "94.67",
+      "rss_kb": "43828",
       "size_bytes": "185",
       "exit": "2"
     },
@@ -323,8 +323,8 @@
       "track": "wasm",
       "lang": "js",
       "workload": "collatz",
-      "time_ms": "417.29",
-      "rss_kb": "46148",
+      "time_ms": "427.76",
+      "rss_kb": "46136",
       "size_bytes": "175",
       "exit": "2"
     },
@@ -332,7 +332,7 @@
       "track": "wasm",
       "lang": "ts",
       "workload": "collatz",
-      "time_ms": "415.35",
+      "time_ms": "428.38",
       "rss_kb": "46148",
       "size_bytes": "204",
       "exit": "2"
@@ -341,8 +341,8 @@
       "track": "native",
       "lang": "kama",
       "workload": "dispatch",
-      "time_ms": "6.21",
-      "rss_kb": "2848",
+      "time_ms": "6.29",
+      "rss_kb": "2912",
       "size_bytes": "67736",
       "exit": "0"
     },
@@ -350,7 +350,7 @@
       "track": "native",
       "lang": "c",
       "workload": "dispatch",
-      "time_ms": "6.23",
+      "time_ms": "6.2",
       "rss_kb": "2912",
       "size_bytes": "67736",
       "exit": "0"
@@ -359,7 +359,7 @@
       "track": "native",
       "lang": "cpp",
       "workload": "dispatch",
-      "time_ms": "6.41",
+      "time_ms": "6.61",
       "rss_kb": "3112",
       "size_bytes": "67848",
       "exit": "0"
@@ -368,8 +368,8 @@
       "track": "native",
       "lang": "rust",
       "workload": "dispatch",
-      "time_ms": "6.34",
-      "rss_kb": "2848",
+      "time_ms": "6.48",
+      "rss_kb": "2844",
       "size_bytes": "330040",
       "exit": "0"
     },
@@ -377,7 +377,7 @@
       "track": "native",
       "lang": "go",
       "workload": "dispatch",
-      "time_ms": "14.47",
+      "time_ms": "14.08",
       "rss_kb": "2848",
       "size_bytes": "1642843",
       "exit": "0"
@@ -386,26 +386,26 @@
       "track": "native",
       "lang": "csharp",
       "workload": "dispatch",
-      "time_ms": "27.83",
-      "rss_kb": "21176",
-      "size_bytes": "6656",
+      "time_ms": "30.49",
+      "rss_kb": "21380",
+      "size_bytes": "8192",
       "exit": "0"
     },
     {
       "track": "native",
       "lang": "java",
       "workload": "dispatch",
-      "time_ms": "28.5",
-      "rss_kb": "41532",
-      "size_bytes": "3226",
+      "time_ms": "30.59",
+      "rss_kb": "41992",
+      "size_bytes": "4734",
       "exit": "0"
     },
     {
       "track": "native",
       "lang": "lua",
       "workload": "dispatch",
-      "time_ms": "102.99",
-      "rss_kb": "2848",
+      "time_ms": "104.74",
+      "rss_kb": "2912",
       "size_bytes": "460",
       "exit": "0"
     },
@@ -413,8 +413,8 @@
       "track": "native",
       "lang": "python",
       "workload": "dispatch",
-      "time_ms": "622.36",
-      "rss_kb": "8596",
+      "time_ms": "611.79",
+      "rss_kb": "8600",
       "size_bytes": "486",
       "exit": "0"
     },
@@ -422,7 +422,7 @@
       "track": "wasm",
       "lang": "kama-wasm",
       "workload": "dispatch",
-      "time_ms": "26.57",
+      "time_ms": "27.75",
       "rss_kb": "45832",
       "size_bytes": "7748",
       "exit": "0"
@@ -431,8 +431,8 @@
       "track": "wasm",
       "lang": "js",
       "workload": "dispatch",
-      "time_ms": "21.72",
-      "rss_kb": "46008",
+      "time_ms": "22.77",
+      "rss_kb": "46020",
       "size_bytes": "523",
       "exit": "0"
     },
@@ -440,8 +440,8 @@
       "track": "wasm",
       "lang": "ts",
       "workload": "dispatch",
-      "time_ms": "22.21",
-      "rss_kb": "46020",
+      "time_ms": "22.91",
+      "rss_kb": "45892",
       "size_bytes": "570",
       "exit": "0"
     },
@@ -449,8 +449,8 @@
       "track": "native",
       "lang": "kama",
       "workload": "alloc",
-      "time_ms": "1.36",
-      "rss_kb": "2836",
+      "time_ms": "1.34",
+      "rss_kb": "2912",
       "size_bytes": "67656",
       "exit": "64"
     },
@@ -458,8 +458,8 @@
       "track": "native",
       "lang": "c",
       "workload": "alloc",
-      "time_ms": "1.21",
-      "rss_kb": "2912",
+      "time_ms": "1.23",
+      "rss_kb": "2844",
       "size_bytes": "67656",
       "exit": "64"
     },
@@ -467,7 +467,7 @@
       "track": "native",
       "lang": "cpp",
       "workload": "alloc",
-      "time_ms": "1.61",
+      "time_ms": "1.63",
       "rss_kb": "3108",
       "size_bytes": "67784",
       "exit": "64"
@@ -476,7 +476,7 @@
       "track": "native",
       "lang": "rust",
       "workload": "alloc",
-      "time_ms": "2.29",
+      "time_ms": "2.33",
       "rss_kb": "2912",
       "size_bytes": "330040",
       "exit": "64"
@@ -485,8 +485,8 @@
       "track": "native",
       "lang": "go",
       "workload": "alloc",
-      "time_ms": "6.53",
-      "rss_kb": "6972",
+      "time_ms": "6.7",
+      "rss_kb": "7056",
       "size_bytes": "1642331",
       "exit": "64"
     },
@@ -494,26 +494,26 @@
       "track": "native",
       "lang": "csharp",
       "workload": "alloc",
-      "time_ms": "23.48",
-      "rss_kb": "25924",
-      "size_bytes": "6656",
+      "time_ms": "30.3",
+      "rss_kb": "26116",
+      "size_bytes": "8192",
       "exit": "64"
     },
     {
       "track": "native",
       "lang": "java",
       "workload": "alloc",
-      "time_ms": "42.86",
-      "rss_kb": "81676",
-      "size_bytes": "3226",
+      "time_ms": "48.47",
+      "rss_kb": "82048",
+      "size_bytes": "4734",
       "exit": "64"
     },
     {
       "track": "native",
       "lang": "lua",
       "workload": "alloc",
-      "time_ms": "24.22",
-      "rss_kb": "2912",
+      "time_ms": "24.75",
+      "rss_kb": "2848",
       "size_bytes": "202",
       "exit": "64"
     },
@@ -521,8 +521,8 @@
       "track": "native",
       "lang": "python",
       "workload": "alloc",
-      "time_ms": "109.35",
-      "rss_kb": "8588",
+      "time_ms": "113.07",
+      "rss_kb": "8600",
       "size_bytes": "184",
       "exit": "64"
     },
@@ -530,17 +530,17 @@
       "track": "wasm",
       "lang": "kama-wasm",
       "workload": "alloc",
-      "time_ms": "16.26",
-      "rss_kb": "47160",
-      "size_bytes": "7325",
+      "time_ms": "18.05",
+      "rss_kb": "47148",
+      "size_bytes": "7321",
       "exit": "64"
     },
     {
       "track": "wasm",
       "lang": "js",
       "workload": "alloc",
-      "time_ms": "15.52",
-      "rss_kb": "47796",
+      "time_ms": "16.23",
+      "rss_kb": "47812",
       "size_bytes": "212",
       "exit": "64"
     },
@@ -548,8 +548,8 @@
       "track": "wasm",
       "lang": "ts",
       "workload": "alloc",
-      "time_ms": "15.34",
-      "rss_kb": "47940",
+      "time_ms": "16.66",
+      "rss_kb": "47800",
       "size_bytes": "233",
       "exit": "64"
     },
@@ -557,7 +557,7 @@
       "track": "native",
       "lang": "kama",
       "workload": "fnptr",
-      "time_ms": "2.46",
+      "time_ms": "2.51",
       "rss_kb": "2848",
       "size_bytes": "67560",
       "exit": "0"
@@ -566,7 +566,7 @@
       "track": "native",
       "lang": "c",
       "workload": "fnptr",
-      "time_ms": "2.49",
+      "time_ms": "2.51",
       "rss_kb": "2848",
       "size_bytes": "67640",
       "exit": "0"
@@ -575,8 +575,8 @@
       "track": "native",
       "lang": "cpp",
       "workload": "fnptr",
-      "time_ms": "2.7",
-      "rss_kb": "3108",
+      "time_ms": "2.69",
+      "rss_kb": "3096",
       "size_bytes": "67640",
       "exit": "0"
     },
@@ -584,7 +584,7 @@
       "track": "native",
       "lang": "rust",
       "workload": "fnptr",
-      "time_ms": "2.76",
+      "time_ms": "2.73",
       "rss_kb": "2844",
       "size_bytes": "330040",
       "exit": "0"
@@ -593,8 +593,8 @@
       "track": "native",
       "lang": "go",
       "workload": "fnptr",
-      "time_ms": "5.04",
-      "rss_kb": "2836",
+      "time_ms": "5.17",
+      "rss_kb": "2912",
       "size_bytes": "1642219",
       "exit": "0"
     },
@@ -602,25 +602,25 @@
       "track": "native",
       "lang": "csharp",
       "workload": "fnptr",
-      "time_ms": "34.18",
-      "rss_kb": "21060",
-      "size_bytes": "6656",
+      "time_ms": "34.35",
+      "rss_kb": "21444",
+      "size_bytes": "8192",
       "exit": "0"
     },
     {
       "track": "native",
       "lang": "java",
       "workload": "fnptr",
-      "time_ms": "27.87",
-      "rss_kb": "41892",
-      "size_bytes": "3226",
+      "time_ms": "30.83",
+      "rss_kb": "44276",
+      "size_bytes": "4734",
       "exit": "0"
     },
     {
       "track": "native",
       "lang": "lua",
       "workload": "fnptr",
-      "time_ms": "138.31",
+      "time_ms": "140.02",
       "rss_kb": "2848",
       "size_bytes": "273",
       "exit": "0"
@@ -629,7 +629,7 @@
       "track": "native",
       "lang": "python",
       "workload": "fnptr",
-      "time_ms": "703.88",
+      "time_ms": "746.76",
       "rss_kb": "8600",
       "size_bytes": "224",
       "exit": "0"
@@ -638,8 +638,8 @@
       "track": "wasm",
       "lang": "kama-wasm",
       "workload": "fnptr",
-      "time_ms": "11.11",
-      "rss_kb": "43840",
+      "time_ms": "12.64",
+      "rss_kb": "43824",
       "size_bytes": "153",
       "exit": "0"
     },
@@ -647,8 +647,8 @@
       "track": "wasm",
       "lang": "js",
       "workload": "fnptr",
-      "time_ms": "41.75",
-      "rss_kb": "46260",
+      "time_ms": "43.12",
+      "rss_kb": "46392",
       "size_bytes": "242",
       "exit": "0"
     },
@@ -656,8 +656,8 @@
       "track": "wasm",
       "lang": "ts",
       "workload": "fnptr",
-      "time_ms": "41.15",
-      "rss_kb": "46392",
+      "time_ms": "42.57",
+      "rss_kb": "46276",
       "size_bytes": "354",
       "exit": "0"
     },
@@ -665,7 +665,7 @@
       "track": "native",
       "lang": "kama",
       "workload": "map",
-      "time_ms": "8.88",
+      "time_ms": "9.73",
       "rss_kb": "5988",
       "size_bytes": "67664",
       "exit": "192"
@@ -674,7 +674,7 @@
       "track": "native",
       "lang": "c",
       "workload": "map",
-      "time_ms": "2.69",
+      "time_ms": "2.76",
       "rss_kb": "4244",
       "size_bytes": "67656",
       "exit": "192"
@@ -683,8 +683,8 @@
       "track": "native",
       "lang": "cpp",
       "workload": "map",
-      "time_ms": "4.55",
-      "rss_kb": "7328",
+      "time_ms": "4.84",
+      "rss_kb": "7316",
       "size_bytes": "67840",
       "exit": "192"
     },
@@ -692,7 +692,7 @@
       "track": "native",
       "lang": "rust",
       "workload": "map",
-      "time_ms": "8.47",
+      "time_ms": "8.95",
       "rss_kb": "5000",
       "size_bytes": "330040",
       "exit": "192"
@@ -701,8 +701,8 @@
       "track": "native",
       "lang": "go",
       "workload": "map",
-      "time_ms": "23.09",
-      "rss_kb": "5276",
+      "time_ms": "23.54",
+      "rss_kb": "5000",
       "size_bytes": "1642371",
       "exit": "192"
     },
@@ -710,25 +710,25 @@
       "track": "native",
       "lang": "csharp",
       "workload": "map",
-      "time_ms": "56.56",
-      "rss_kb": "28032",
-      "size_bytes": "6656",
+      "time_ms": "60.35",
+      "rss_kb": "28280",
+      "size_bytes": "8192",
       "exit": "192"
     },
     {
       "track": "native",
       "lang": "java",
       "workload": "map",
-      "time_ms": "40.96",
-      "rss_kb": "70792",
-      "size_bytes": "3226",
+      "time_ms": "45.93",
+      "rss_kb": "71880",
+      "size_bytes": "4734",
       "exit": "192"
     },
     {
       "track": "native",
       "lang": "lua",
       "workload": "map",
-      "time_ms": "7.39",
+      "time_ms": "7.62",
       "rss_kb": "4128",
       "size_bytes": "246",
       "exit": "192"
@@ -737,8 +737,8 @@
       "track": "native",
       "lang": "python",
       "workload": "map",
-      "time_ms": "125.42",
-      "rss_kb": "21680",
+      "time_ms": "133.33",
+      "rss_kb": "21668",
       "size_bytes": "206",
       "exit": "192"
     },
@@ -746,8 +746,8 @@
       "track": "wasm",
       "lang": "kama-wasm",
       "workload": "map",
-      "time_ms": "21.65",
-      "rss_kb": "49396",
+      "time_ms": "23.11",
+      "rss_kb": "49400",
       "size_bytes": "8192",
       "exit": "192"
     },
@@ -755,47 +755,146 @@
       "track": "wasm",
       "lang": "js",
       "workload": "map",
-      "time_ms": "46.13",
-      "rss_kb": "55584",
+      "time_ms": "47.89",
+      "rss_kb": "55576",
       "size_bytes": "292",
       "exit": "192"
+    },
+    {
+      "track": "native",
+      "lang": "kama",
+      "workload": "math",
+      "time_ms": "27.1",
+      "rss_kb": "2848",
+      "size_bytes": "67560",
+      "exit": "0"
+    },
+    {
+      "track": "native",
+      "lang": "c",
+      "workload": "math",
+      "time_ms": "5.0",
+      "rss_kb": "2912",
+      "size_bytes": "67640",
+      "exit": "0"
+    },
+    {
+      "track": "native",
+      "lang": "cpp",
+      "workload": "math",
+      "time_ms": "5.3",
+      "rss_kb": "3108",
+      "size_bytes": "67640",
+      "exit": "0"
+    },
+    {
+      "track": "native",
+      "lang": "rust",
+      "workload": "math",
+      "time_ms": "6.14",
+      "rss_kb": "2848",
+      "size_bytes": "330040",
+      "exit": "0"
+    },
+    {
+      "track": "native",
+      "lang": "go",
+      "workload": "math",
+      "time_ms": "80.43",
+      "rss_kb": "2848",
+      "size_bytes": "1643690",
+      "exit": "0"
+    },
+    {
+      "track": "native",
+      "lang": "csharp",
+      "workload": "math",
+      "time_ms": "113.42",
+      "rss_kb": "21444",
+      "size_bytes": "8192",
+      "exit": "0"
+    },
+    {
+      "track": "native",
+      "lang": "java",
+      "workload": "math",
+      "time_ms": "111.76",
+      "rss_kb": "132972",
+      "size_bytes": "4734",
+      "exit": "0"
+    },
+    {
+      "track": "native",
+      "lang": "lua",
+      "workload": "math",
+      "time_ms": "3941.02",
+      "rss_kb": "2836",
+      "size_bytes": "1910",
+      "exit": "0"
+    },
+    {
+      "track": "native",
+      "lang": "python",
+      "workload": "math",
+      "time_ms": "4424.48",
+      "rss_kb": "8856",
+      "size_bytes": "1862",
+      "exit": "0"
+    },
+    {
+      "track": "wasm",
+      "lang": "kama-wasm",
+      "workload": "math",
+      "time_ms": "19.18",
+      "rss_kb": "43700",
+      "size_bytes": "341",
+      "exit": "0"
+    },
+    {
+      "track": "wasm",
+      "lang": "js",
+      "workload": "math",
+      "time_ms": "165.6",
+      "rss_kb": "50552",
+      "size_bytes": "1961",
+      "exit": "0"
     }
   ],
   "compile": {
     "kama": {
-      "compile_ms": "1445",
-      "artifacts": "7"
+      "compile_ms": "1996",
+      "artifacts": "8"
     },
     "c": {
-      "compile_ms": "268",
-      "artifacts": "7"
+      "compile_ms": "350",
+      "artifacts": "8"
     },
     "cpp": {
-      "compile_ms": "559",
-      "artifacts": "7"
+      "compile_ms": "670",
+      "artifacts": "8"
     },
     "rust": {
-      "compile_ms": "1534",
-      "artifacts": "7"
+      "compile_ms": "2271",
+      "artifacts": "8"
     },
     "go": {
-      "compile_ms": "1294",
-      "artifacts": "7"
+      "compile_ms": "1746",
+      "artifacts": "8"
     },
     "csharp": {
-      "compile_ms": "1591",
+      "compile_ms": "2459",
       "artifacts": "1"
     },
     "java": {
-      "compile_ms": "278",
+      "compile_ms": "600",
       "artifacts": "1"
     },
     "kama-wasm": {
-      "compile_ms": "3962",
-      "artifacts": "7"
+      "compile_ms": "5162",
+      "artifacts": "8"
     },
     "ts": {
-      "compile_ms": "228",
+      "compile_ms": "275",
       "artifacts": "1"
     }
   }

@@ -71,9 +71,17 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
      matrix ops, and bit-exact parity with the scalar path. **► Kickoff plan + current-state facts + the
      design options in [docs/design/simd.md](design/simd.md).** SIMD is a pure PERF change (results are
      bit-identical, so the exact-value fixtures pass scalar-or-SIMD and can't detect it) — **verify via
-     `bench/run` + asm inspection at `-O3`, not the fixture suite.** **STEP 0 = MEASURE:** at `-O3` clang's
-     auto-vectorizer already vectorizes the simple `Vec4` ops, so `objdump` the hot ops first to size the real
-     work before writing emitter code.
+     `bench/run` + asm inspection at `-O3`, not the fixture suite.** **► M0 (measure) DONE (2026-07-22) —
+     regroup pending a decision; findings in [docs/design/simd.md § M0](design/simd.md).** Surprise result:
+     when the ops **inline**, clang already auto-vectorizes them at parity with C — but `./kama build`
+     compiles each module as a **separate TU with no LTO**, so `std::math` never inlines into user loops and
+     ships as scalar out-of-line calls (native `math` bench: **5.3× C**, of which **~3× is missing inlining**,
+     ~2× the always-on safety traps; **wasm kama is *faster* than native** because its single-TU path inlines).
+     So the cheapest, highest-leverage fix is **cross-module inlining (LTO / `static inline` hot-op emission)**,
+     which unlocks the already-latent auto-vec — *not* SIMD emitter code. A `vector_size(16)` primitive still
+     has narrower value (out-of-line ABI-boundary `Vec4` + the `Quat` Hamilton product, which stays scalar
+     even inlined); gate that on the post-inlining re-measure. A permanent `math` workload now lives in the
+     bench suite (all 11 languages, fairness-gate green).
    - **Windows CI** — the `windows-latest` leg now passes the full suite (the `kama_os.h` `_WIN32` branch is
      verified); promote the leg from best-effort to **required** so a Windows regression blocks a merge.
 3. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here

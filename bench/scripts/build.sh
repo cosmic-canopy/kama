@@ -5,7 +5,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."   # repo root (/work)
 
 mkdir -p bench/build/{kama,c,cpp,rust,go,wasm,csharp,java}
-WORKLOADS="fib pi collatz dispatch alloc fnptr map"
+WORKLOADS="fib pi collatz dispatch alloc fnptr map math"
 
 # Compile-time metric: accumulate per-language wall-clock (ms) + artifact count while building,
 # emitted to bench/build/compile.tsv for report.py. Single-build snapshot (not hyperfine-averaged) —
