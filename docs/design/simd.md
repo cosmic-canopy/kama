@@ -101,12 +101,25 @@ iters, 10-run avg:
 | single-TU (all inlined) | 63 packed · 0 scalar | 8 ms/run |
 | hand-written C, `-O3` | (SLP/loop-vectorized) | 4 ms/run |
 
-So the shipped native math is ~6× C, and that decomposes into **two independent, orthogonal costs**:
-1. **~3× — no cross-module inlining** (25→8 ms). The ops never inline, so they never vectorize and pay
-   call overhead. **This is the dominant, highest-leverage issue and it is NOT a SIMD-codegen problem.**
-2. **~2× — kama's always-on safety traps** (8→4 ms): `-fsanitize=float-cast-overflow,signed-integer-overflow`
-   (driver ~690–697). Deliberate north-star safety; only bites cast-heavy / int-heavy loops. Orthogonal to
-   SIMD, not part of this campaign, noted for honesty.
+So the shipped native math is ~6× C. **The single cause is missing cross-module inlining** (~3×, 25→8 ms):
+the ops never inline, so they never vectorize and pay call overhead. **This is the dominant, highest-leverage
+issue and it is NOT a SIMD-codegen problem.** Fix inlining and native math lands **at parity with C** — proven
+by isolating the one remaining cost, which turns out to be a *benchmark artifact*, not a real cost (inlined,
+2×10⁶ iters, 10-run avg):
+
+| inlined variant | time |
+|---|---|
+| per-iteration `float→int` cast + full safety traps (**the bench**) | 8 ms |
+| **pure-FP loop (1 cast total) + full safety traps** | **3 ms** |
+| pure-FP loop, no traps | 3 ms |
+| hand C `-O3` (per-iter cast) | 5 ms |
+
+The residual "2×" I first attributed to the safety traps (`-fsanitize=float-cast-overflow,signed-integer-overflow`,
+driver ~690–697) is **almost entirely the per-iteration `float→int` cast** the checksum needs — an artifact of
+the *benchmark's* exit-code mechanism, not of real math. **A pure-float loop with all safety traps on is 3 ms —
+at parity with (here, faster than) C.** Real engine math (transforms, physics — all float, no per-iter int
+cast) pays a **near-zero** safety-trap tax. So once inlined, kama math **is on par with C**; there is no second
+tax to pay.
 
 Corroboration sitting right next to it: **wasm kama (16 ms) is *faster* than native kama (26 ms)** in the
 cross-language matrix below — because the wasm path (`transpile` → one `.c` → `emcc -O3`) **inlines

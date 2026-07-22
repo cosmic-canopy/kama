@@ -75,10 +75,12 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
      regroup pending a decision; findings in [docs/design/simd.md § M0](design/simd.md).** Surprise result:
      when the ops **inline**, clang already auto-vectorizes them at parity with C — but `./kama build`
      compiles each module as a **separate TU with no LTO**, so `std::math` never inlines into user loops and
-     ships as scalar out-of-line calls (native `math` bench: **5.3× C**, of which **~3× is missing inlining**,
-     ~2× the always-on safety traps; **wasm kama is *faster* than native** because its single-TU path inlines).
-     So the cheapest, highest-leverage fix is **cross-module inlining (LTO / `static inline` hot-op emission)**,
-     which unlocks the already-latent auto-vec — *not* SIMD emitter code. A `vector_size(16)` primitive still
+     ships as scalar out-of-line calls (native `math` bench: **5.3× C**). The whole gap is **missing
+     cross-module inlining**; the safety traps cost ~0 for pure-float math (a pure-FP loop *with* traps is at
+     parity with C — the apparent trap cost was the benchmark's per-iteration `float→int` checksum cast, not
+     real math). **wasm kama is *faster* than native** because its single-TU path already inlines. So the
+     cheapest, highest-leverage fix is **cross-module inlining (LTO / `static inline` hot-op emission)**, which
+     unlocks the already-latent auto-vec and lands native math **on par with C** — *not* SIMD emitter code. A `vector_size(16)` primitive still
      has narrower value (out-of-line ABI-boundary `Vec4` + the `Quat` Hamilton product, which stays scalar
      even inlined); gate that on the post-inlining re-measure. A permanent `math` workload now lives in the
      bench suite (all 11 languages, fairness-gate green).
