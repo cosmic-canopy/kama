@@ -15,7 +15,7 @@ fn int main()
     Vec4 mc3 = Vec4.of(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
     Mat4 m = Mat4::fromCols(c0: mc0, c1: mc1, c2: mc2, c3: mc3);
 
-    uint64 sum = 0;
+    float64 fsum = 0.0;
     for (uint64 i = 0; i < 2000000; i++)
     {
         float32 s = cast<float32>(i % 8);                                        // 0..7
@@ -37,8 +37,9 @@ fn int main()
                     + (mv.x + mv.y + mv.z + mv.w)
                     + (mm.cols[0].x + mm.cols[1].y + mm.cols[2].z + mm.cols[3].w)
                     + qdot;
-        sum += cast<uint64>(acc);
+        fsum += cast<float64>(acc);              // accumulate in float; cast once at the end (suite convention)
     }
+    uint64 sum = cast<uint64>(fsum);
     uint64 mres = sum % 256;
     return cast<int>(mres);
 }

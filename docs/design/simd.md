@@ -1,9 +1,11 @@
 # SIMD backend for `std::math` — campaign kickoff
 
-**Status:** **M0 (measure) done — regroup pending a decision.** See **[§ M0 findings](#-m0-findings-2026-07-22)**
-at the bottom: the headline is that clang **already auto-vectorizes** the math when it inlines, and the thing
-actually blocking SIMD in shipped binaries is **the multi-TU build model (no cross-module inlining)**, not
-the emitter. Read the findings before picking a design option — they change the recommendation.
+**Status:** **M0 (measure) done; the fix is SHIPPED.** See **[§ M0 findings](#-m0-findings-2026-07-22)** at the
+bottom. The headline: clang **already auto-vectorizes** the math when it inlines, and the thing that blocked
+SIMD in shipped binaries was **the multi-TU build model (no cross-module inlining)**, not the emitter. Fix
+delivered: **`--release` native builds now compile as one unity translation unit**, so `std::math` inlines +
+auto-vectorizes and native math lands **at C parity** — no SIMD emitter code required. Remaining SIMD-codegen
+work is optional and contained (`Quat` Hamilton product; the `f64`/`DVec` family).
 
 This is the **last Tier-0 engine-readiness item** ([ENGINE_READINESS.md](../ENGINE_READINESS.md));
 math types + `InlineArray` already ship. Pure **performance** optimization — bit-identical results, **no API
@@ -163,10 +165,13 @@ language; the whole opportunity is the **5.3× gap to the C/C++/Rust cluster**, 
 ### Re-evaluated design options
 
 - **The cheapest, highest-leverage change is not in the original three options: fix cross-module inlining of
-  the hot math ops.** Either (a) turn on `-flto` for `--release` native builds (the wasm path already proves
-  the payoff), or (b) emit the small hot `std::math` ops as `static inline` in the shared generated header so
-  they inline without LTO, or (c) whole-program single-TU release builds. This is a **build/emitter-packaging**
-  change, ~3×, and it **unlocks the auto-vectorization that is already latent** — no SIMD codegen required.
+  the hot math ops.** Three candidates were measured (multi-TU `math`, aarch64, 10-run avg): (a) **ThinLTO**
+  29→11 ms; (b) **full `-flto`** 29→8 ms; (c) **unity / single-TU** (fold all modules into one TU, the merge
+  the `transpile` command already does) **29→2 ms = exact C parity, fully vectorized**. **LTO across separate
+  TUs recovers only part of it — its cross-module inliner is far more conservative than a real single TU** —
+  while all three link in ~the same time (~160–180 ms; LTO added no build cost, unity has none). So **(c)
+  unity wins decisively**, and it needs no linker plugin (plain `-O3`), no emitter codegen change, and it
+  **unlocks the auto-vectorization that is already latent**.
 - **Option 1 (lean on `-O3` auto-vec)** is *validated for inlined code* — once the ops inline, clang packs
   them. So after the inlining fix, Option 1 may be almost the whole story for `Vec4`/`Mat4`.
 - **Option 2 (`vector_size(16)` primitive)** still has real, narrower value the auto-vectorizer won't give:
@@ -178,13 +183,24 @@ language; the whole opportunity is the **5.3× gap to the C/C++/Rust cluster**, 
 - **`Quat`** is the one op that stays scalar even inlined — a real, contained candidate for explicit SIMD
   (lane shuffles) whichever option wins.
 
-### Recommendation (for the regroup)
+### Resolution — unity release builds (IMPLEMENTED)
 
-1. **First, fix inlining** (LTO on release, or `static inline` hot-op emission). Cheapest, ~3×, unlocks the
-   latent auto-vec. Re-run the `math` bench to confirm native kama collapses toward the C cluster.
-2. **Then re-measure and decide** whether a `vector_size` primitive (Option 2) is still worth it for the
-   residual out-of-line/ABI gap + `Quat`, or whether Option 1 (now-inlined auto-vec) is enough.
-3. The safety-trap ~2× is a separate conversation (not this campaign).
+`--release` native builds now **fold all modules into one translation unit** (multi-unit debug builds keep
+per-module `.c` for faithful stepping; wasm keeps its path). This is `kama.driver.cpp`: the build path routes
+the multi-unit + `release && !wasm` case through the existing `transpileProgramToSingleFile` merge (extended
+to forward the `-lm`/link hints). kama has no incremental object cache — a build already hands every `.c` to a
+single `clang` invocation — so the multi-file split bought nothing and only *cost* cross-module inlining;
+unity removes that cost for free.
 
-**Decision needed:** which inlining mechanism (LTO vs `static inline` headers vs single-TU), and whether to
-pursue the `vector_size` primitive now or gate it on the post-inlining re-measure.
+Result: **native `math` drops from 5.3× C to C parity** (the hot loop inlines and auto-vectorizes; a pure-FP
+loop is 2 ms vs C's 2 ms). Correctness gate: debug suite 664/0; a `--release`/unity sweep of every native
+fixture is green (the only non-builds are the web-only `net_ws/rtc/wt` fixtures, which don't build native in
+*either* mode). **No SIMD emitter code, no API/layout change, no `vector_size` primitive needed** to reach
+parity for the common (inlined) case.
+
+Residual, for a later decision (gate on want, not now): the only op that stays **scalar even when inlined** is
+`Quat`'s Hamilton product (its shuffled ± pattern defeats auto-vec) — a small, contained candidate for a
+hand-written SIMD path if a Quat-heavy workload ever needs it. The out-of-line ABI penalty on `Vec4` (HFA in 4
+registers) only matters when the op *doesn't* inline, which unity now makes the uncommon case; a
+`vector_size(16)` primitive remains an option there but is no longer on the critical path. The safety-trap cost
+is ~0 for real (all-float) math and is a separate topic regardless.

@@ -403,7 +403,11 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
 // contract while supporting the module system (a single translation unit for downstream tools).
 int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units,
                                  const std::vector<std::string>& unitPaths,
-                                 const std::string& outPath, bool emitLines)
+                                 const std::string& outPath, bool emitLines,
+                                 bool* externsMathH = nullptr,   // link hints (see emitProgramUnits) — a
+                                 bool* externsNetWeb = nullptr,   // `build` caller needs these to append the
+                                 bool* externsApp = nullptr,      // right link flags (-lm, --js-library, …);
+                                 bool* externsGpu = nullptr)      // the `transpile` command passes none.
 {
     std::string dir = dirName(outPath);
     std::string stem = stripExtension(baseName(outPath));
@@ -412,7 +416,8 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
     std::vector<std::string> cPaths;
     for (size_t i = 0; i < units.size(); ++i)
         cPaths.push_back(dir + "/" + stem + "__u" + std::to_string(i) + ".c.tmp");
-    if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines) != 0) return 1;
+    if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines,
+                         externsMathH, externsNetWeb, externsApp, externsGpu) != 0) return 1;
 
     std::ofstream out(outPath);
     if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str()); return 1; }
@@ -611,6 +616,20 @@ int main(int argc, char** argv)
         if (units.size() == 1) {
             std::string cPath = stripExtension(input) + ".c";
             if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu) != 0) return 1;
+            cFiles.push_back(cPath);
+            genFiles.push_back(cPath);
+        } else if (release && !wasm) {
+            // UNITY release build: fold every unit into ONE translation unit (the same merge the
+            // `transpile` command uses) instead of per-module .c files. kama has no incremental object
+            // cache — a build already hands all .c to a single clang invocation — so the multi-file split
+            // buys nothing and *costs* cross-module inlining: with separate TUs the C compiler can't inline
+            // a stdlib call (a `std::math` Vec4 op, a collection accessor) into the user's hot loop, so
+            // numeric code stays out-of-line and never auto-vectorizes. One TU lets clang inline + vectorize
+            // it, landing hot math at C parity (measured ~6×→1× on the `math` bench; LTO across separate TUs
+            // recovers only part of it — docs/design/simd.md § M0). Debug keeps per-module .c for faithful
+            // stepping; wasm keeps its own path.
+            std::string cPath = genDir + "/" + baseName(stripExtension(outPath)) + ".c";
+            if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu) != 0) return 1;
             cFiles.push_back(cPath);
             genFiles.push_back(cPath);
         } else {

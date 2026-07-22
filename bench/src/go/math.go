@@ -33,7 +33,7 @@ func quatMul(a, b V4) V4 { // Hamilton product (x,y,z,w)
 
 func main() {
 	m := M4{V4{1, 1, 0, 0}, V4{0, 1, 1, 0}, V4{0, 0, 1, 1}, V4{1, 0, 0, 1}}
-	var sum uint64 = 0
+	var sum float64 = 0
 	for i := uint64(0); i < 2000000; i++ {
 		s := float32(i % 8)
 		a := V4{s, s + 1, s + 2, s + 3}
@@ -53,7 +53,7 @@ func main() {
 			(mv.x + mv.y + mv.z + mv.w) +
 			(mm.c0.x + mm.c1.y + mm.c2.z + mm.c3.w) +
 			qdot
-		sum += uint64(acc)
+		sum += float64(acc)
 	}
-	os.Exit(int(sum % 256))
+	os.Exit(int(uint64(sum) % 256))
 }

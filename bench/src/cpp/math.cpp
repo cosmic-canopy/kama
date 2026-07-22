@@ -30,7 +30,7 @@ static V4 quat_mul(V4 a, V4 b){   // Hamilton product (x,y,z,w)
 
 int main(){
   M4 m = { {1,1,0,0}, {0,1,1,0}, {0,0,1,1}, {1,0,0,1} };
-  uint64_t sum = 0;
+  double sum = 0.0;
   for(uint64_t i=0;i<2000000ULL;i++){
     float s = (float)(i % 8);
     V4 a = { s,   s+1, s+2, s+3 };
@@ -50,7 +50,7 @@ int main(){
               + (mv.x + mv.y + mv.z + mv.w)
               + (mm.c0.x + mm.c1.y + mm.c2.z + mm.c3.w)
               + qdot;
-    sum += (uint64_t)acc;
+    sum += acc;
   }
-  return (int)(sum % 256);
+  return (int)((uint64_t)sum % 256);
 }

@@ -25,7 +25,7 @@ def quat_mul(a, b):  # Hamilton product (x,y,z,w)
         a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2])
 
 m = ((1.0, 1.0, 0.0, 0.0), (0.0, 1.0, 1.0, 0.0), (0.0, 0.0, 1.0, 1.0), (1.0, 0.0, 0.0, 1.0))
-total = 0
+total = 0.0
 for i in range(2000000):
     s = float(i % 8)
     a = (s,       s + 1.0, s + 2.0, s + 3.0)
@@ -45,5 +45,5 @@ for i in range(2000000):
         + (mv[0] + mv[1] + mv[2] + mv[3]) \
         + (mm[0][0] + mm[1][1] + mm[2][2] + mm[3][3]) \
         + qdot
-    total += int(acc)
-sys.exit(total % 256)
+    total += acc
+sys.exit(int(total) % 256)

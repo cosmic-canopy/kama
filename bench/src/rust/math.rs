@@ -33,7 +33,7 @@ fn quat_mul(a: V4, b: V4) -> V4 {   // Hamilton product (x,y,z,w)
 fn main(){
     let m = M4{ c0:V4{x:1.0,y:1.0,z:0.0,w:0.0}, c1:V4{x:0.0,y:1.0,z:1.0,w:0.0},
                 c2:V4{x:0.0,y:0.0,z:1.0,w:1.0}, c3:V4{x:1.0,y:0.0,z:0.0,w:1.0} };
-    let mut sum: u64 = 0;
+    let mut sum: f64 = 0.0;
     for i in 0u64..2000000 {
         let s = (i % 8) as f32;
         let a = V4{ x:s,     y:s+1.0, z:s+2.0, w:s+3.0 };
@@ -53,7 +53,7 @@ fn main(){
                 + (mv.x + mv.y + mv.z + mv.w)
                 + (mm.c0.x + mm.c1.y + mm.c2.z + mm.c3.w)
                 + qdot;
-        sum += acc as u64;
+        sum += acc as f64;
     }
-    std::process::exit((sum % 256) as i32);
+    std::process::exit(((sum as u64) % 256) as i32);
 }

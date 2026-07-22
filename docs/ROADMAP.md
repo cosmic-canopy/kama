@@ -74,13 +74,16 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
      `bench/run` + asm inspection at `-O3`, not the fixture suite.** **► M0 (measure) DONE (2026-07-22) —
      regroup pending a decision; findings in [docs/design/simd.md § M0](design/simd.md).** Surprise result:
      when the ops **inline**, clang already auto-vectorizes them at parity with C — but `./kama build`
-     compiles each module as a **separate TU with no LTO**, so `std::math` never inlines into user loops and
-     ships as scalar out-of-line calls (native `math` bench: **5.3× C**). The whole gap is **missing
-     cross-module inlining**; the safety traps cost ~0 for pure-float math (a pure-FP loop *with* traps is at
-     parity with C — the apparent trap cost was the benchmark's per-iteration `float→int` checksum cast, not
-     real math). **wasm kama is *faster* than native** because its single-TU path already inlines. So the
-     cheapest, highest-leverage fix is **cross-module inlining (LTO / `static inline` hot-op emission)**, which
-     unlocks the already-latent auto-vec and lands native math **on par with C** — *not* SIMD emitter code. A `vector_size(16)` primitive still
+     compiles each module as a **separate TU with no LTO**, so `std::math` never inlined into user loops and
+     shipped as scalar out-of-line calls (native `math` bench: **5.3× C**). The whole gap was **missing
+     cross-module inlining** (the safety traps cost ~0 for pure-float math; the apparent trap cost was the
+     benchmark's per-iteration `float→int` checksum cast, not real math). **FIX SHIPPED:** `--release` native
+     builds now compile as **one unity translation unit** (debug keeps per-module `.c`; wasm keeps its path),
+     so `std::math` inlines + auto-vectorizes and **native math drops from 5.3× C to C parity** — measured
+     29→2 ms; unity beats LTO, which recovers only part of the gap because its cross-module inliner is far more
+     conservative than a real single TU. No SIMD emitter code, no API/layout change. Remaining SIMD-codegen
+     work is optional + contained: the `Quat` Hamilton product (scalar even when inlined) and the `f64`/`DVec`
+     family. A permanent `math` workload lives in the bench suite (all 11 languages, fairness-gate green). A `vector_size(16)` primitive still
      has narrower value (out-of-line ABI-boundary `Vec4` + the `Quat` Hamilton product, which stays scalar
      even inlined); gate that on the post-inlining re-measure. A permanent `math` workload now lives in the
      bench suite (all 11 languages, fairness-gate green).
