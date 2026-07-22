@@ -644,8 +644,15 @@ Methods + operators (one `operator*` per type: matrices/quaternions **compose**,
 are named methods — no overloading). Matrices are **column-major** with the **column-vector** convention
 (`result = M * v`, GPU/WebGPU-native); `perspective`/`orthographic`/`lookAt` target **WebGPU 0..1 depth**,
 right-handed. `Quat` is a unit quaternion (`fromAxisAngle`/`fromEuler`, Hamilton `*`, `rotate`, `slerp`/
-`nlerp`, `toMat3`/`toMat4`). All literals are `f32`-suffixed (a bare `1.0` is float64). SIMD is a later
-implementation swap behind this API (the layout is SIMD-ready).
+`nlerp`, `toMat3`/`toMat4`). All literals are `f32`-suffixed (a bare `1.0` is float64). **SIMD** needs no
+explicit vector types or intrinsics: the value types have a **SIMD-ready contiguous layout** (`Vec4` = 16 B,
+`Mat4` = 4×`Vec4`), and in a `--release` build the C backend **auto-vectorizes** the elementwise ops (`Vec4`
+`+`/`-`/scale, `Mat4*Vec4`, `Mat4*Mat4`) to SSE/NEON/wasm128 — landing hot math **at C parity**. This relies on
+the ops **inlining** into the caller, which release builds guarantee (see *Building & debugging* — release
+compiles as one translation unit). Results are bit-identical to the scalar path (the exact-value semantics are
+unchanged; SIMD is a pure throughput property). `Quat`'s Hamilton product is intentionally left scalar — its
+shuffled ± pattern makes a hand-vectorized version *slower* than the 16 pipelined scalar FMAs on measured
+hardware (ARM64).
 
 ### Numbers (`std::num`) ✅
 
@@ -1553,7 +1560,15 @@ kama build app.kama --release       # optimized, stripped, NDEBUG
 kama build app.kama --target wasm   # browser: .html + .js + .wasm
 ```
 
-Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back to `.kama`).
+Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back to `.kama`), and emit **one
+`.c` per module** (faithful stepping, readable generated code). A **`--release`** native build instead folds
+every module into **one unity translation unit** so the C compiler can inline across module boundaries — a
+`std::math` operator or a collection accessor inlines into the caller's hot loop and then auto-vectorizes,
+which is what lands numeric code at C parity (kama has no incremental object cache, so a build already compiles
+all modules in a single invocation — the unity fold costs nothing and only unlocks inlining). Numeric-safety
+traps (`integer-divide-by-zero`, `shift-exponent`, `float-cast-overflow`, `signed-integer-overflow` → a clean
+`__builtin_trap`, no sanitizer runtime) are on in **every** build; signed overflow additionally wraps
+(`-fwrapv`) in release.
 
 ## Reserved keywords not yet implemented 🚧
 

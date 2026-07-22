@@ -59,34 +59,18 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
      no code. Generic compression also crushes the self-describing binary format's field-name redundancy, so it
      pairs naturally with the binary serde backend. (Engine-level replication — snapshots/deltas/dirty-tracking,
      reliable-vs-unreliable routing — stays above this, in the engine, not the stdlib.)
-   - **`std::math`** — a **SIMD backend** (portable C vector extensions, `vector_size(16)` → SSE2/NEON/
-     wasm128) as a pure implementation swap behind the unchanged, SIMD-ready-layout API (1.x / engine era);
-     and a concrete `f64` (`DVec`) family alongside the `float32` one. Rotors deferred. **► This is the LAST
-     Tier-0 engine-readiness item** (math types + `InlineArray` already ✅ — see
-     [ENGINE_READINESS.md](ENGINE_READINESS.md)). Effort is well-bounded because the C compiler does the
-     portability: kama emits `Vec4` storage as a `vector_size(16)` C type and maps the arithmetic ops (and
-     `dot`/`length`/…) to vector ops with a scalar fallback; clang/emcc lower that to SSE2/NEON/wasm128
-     automatically. No API churn (the layout was designed SIMD-ready) and the exact-value fixtures must stay
-     green — so it's a focused codegen campaign, not a rewrite. Main care points: `Vec3` (3-wide, pad to 4),
-     matrix ops, and bit-exact parity with the scalar path. **► Kickoff plan + current-state facts + the
-     design options in [docs/design/simd.md](design/simd.md).** SIMD is a pure PERF change (results are
-     bit-identical, so the exact-value fixtures pass scalar-or-SIMD and can't detect it) — **verify via
-     `bench/run` + asm inspection at `-O3`, not the fixture suite.** **► M0 (measure) DONE (2026-07-22) —
-     regroup pending a decision; findings in [docs/design/simd.md § M0](design/simd.md).** Surprise result:
-     when the ops **inline**, clang already auto-vectorizes them at parity with C — but `./kama build`
-     compiles each module as a **separate TU with no LTO**, so `std::math` never inlined into user loops and
-     shipped as scalar out-of-line calls (native `math` bench: **5.3× C**). The whole gap was **missing
-     cross-module inlining** (the safety traps cost ~0 for pure-float math; the apparent trap cost was the
-     benchmark's per-iteration `float→int` checksum cast, not real math). **FIX SHIPPED:** `--release` native
-     builds now compile as **one unity translation unit** (debug keeps per-module `.c`; wasm keeps its path),
-     so `std::math` inlines + auto-vectorizes and **native math drops from 5.3× C to C parity** — measured
-     29→2 ms; unity beats LTO, which recovers only part of the gap because its cross-module inliner is far more
-     conservative than a real single TU. No SIMD emitter code, no API/layout change. Remaining SIMD-codegen
-     work is optional + contained: the `Quat` Hamilton product (scalar even when inlined) and the `f64`/`DVec`
-     family. A permanent `math` workload lives in the bench suite (all 11 languages, fairness-gate green). A `vector_size(16)` primitive still
-     has narrower value (out-of-line ABI-boundary `Vec4` + the `Quat` Hamilton product, which stays scalar
-     even inlined); gate that on the post-inlining re-measure. A permanent `math` workload now lives in the
-     bench suite (all 11 languages, fairness-gate green).
+   - **`std::math` SIMD ✅ DONE (2026-07-22).** The last Tier-0 engine-readiness item. Outcome: **no SIMD
+     emitter code was needed.** The measurement (permanent `math` bench, all 11 languages) showed clang already
+     auto-vectorizes the math when the ops **inline**; the only thing blocking it was the build model —
+     `./kama build` compiled each module as a separate TU, so `std::math` shipped as scalar out-of-line calls
+     (native `math`: 5.3× C). **Fix shipped:** `--release` native builds now compile as **one unity translation
+     unit** (debug keeps per-module `.c`), so the ops inline + auto-vectorize → **native math at C parity**
+     (27→3 ms; dead-even with C, ahead of C++/Rust). Unity beat LTO decisively (LTO's cross-module inliner is
+     far weaker than a real single TU). `Quat`'s Hamilton product is intentionally left **scalar** — measured, a
+     hand-vectorized version is *slower* than the 16 pipelined scalar FMAs on ARM64. Recorded in
+     [SPEC.md](SPEC.md) (*Math* + *Building & debugging*). **Deferred to 1.x (not blocking):** a concrete
+     `f64`/`DVec` family alongside `float32`; rotors. (The `vector_size(16)` primitive idea is dropped — auto-vec
+     behind unity builds delivers parity without it.)
    - **Windows CI** — the `windows-latest` leg now passes the full suite (the `kama_os.h` `_WIN32` branch is
      verified); promote the leg from best-effort to **required** so a Windows regression blocks a merge.
 3. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
