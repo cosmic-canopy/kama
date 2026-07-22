@@ -46,7 +46,14 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
    - **`std::fs` / `std::io`** — buffered readers, richer `Metadata` (mtime/perms), path helpers, `mkdir`.
    - **`std::math`** — a **SIMD backend** (portable C vector extensions, `vector_size(16)` → SSE2/NEON/
      wasm128) as a pure implementation swap behind the unchanged, SIMD-ready-layout API (1.x / engine era);
-     and a concrete `f64` (`DVec`) family alongside the `float32` one. Rotors deferred.
+     and a concrete `f64` (`DVec`) family alongside the `float32` one. Rotors deferred. **► This is the LAST
+     Tier-0 engine-readiness item** (math types + `InlineArray` already ✅ — see
+     [ENGINE_READINESS.md](ENGINE_READINESS.md)). Effort is well-bounded because the C compiler does the
+     portability: kama emits `Vec4` storage as a `vector_size(16)` C type and maps the arithmetic ops (and
+     `dot`/`length`/…) to vector ops with a scalar fallback; clang/emcc lower that to SSE2/NEON/wasm128
+     automatically. No API churn (the layout was designed SIMD-ready) and the exact-value fixtures must stay
+     green — so it's a focused codegen campaign, not a rewrite. Main care points: `Vec3` (3-wide, pad to 4),
+     matrix ops, and bit-exact parity with the scalar path.
    - **Windows CI** — the `windows-latest` leg now passes the full suite (the `kama_os.h` `_WIN32` branch is
      verified); promote the leg from best-effort to **required** so a Windows regression blocks a merge.
 3. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
@@ -121,6 +128,33 @@ genuinely later-track or opt-in.
   opt-in `@generate` surface, not three ad-hoc ones) — see `docs/design/construction-model.md` §8c. Kama today
   requires a hand-written `operator==` (auto structural `==` is a deliberate non-default); the derive would
   synthesize a memberwise `==` on request.
+- **Force explicit field init (construction-model tightening — design campaign).** Make every ctor assign
+  *every* field explicitly, with the compiler eliding redundant zero-stores — **except** types that opt into
+  zero (`@generate(zero)` bags). Precedent: **Rust** (all fields required), **Swift** (definite
+  initialization), **Zig** (all fields or a declared default), **C# structs**; C++ is the outlier (→ Core
+  Guidelines ES.20 + clang-tidy compensate — the "always initialize" house rule many game engines already
+  enforce). This *tightens* the existing keystone — `checkNamedCtorComplete` already forces owning +
+  non-default-fillable fields — by removing the carve-outs. Two design questions to settle first: (1) are
+  pointer-shaped fields (`Ptr`/`Owned`/collection) auto-exempt, or must they spell `= null` (Zig's
+  spell-or-declare-default is the most uniform)? (2) is a bare `T x;` *outside* a ctor still allowed, or must
+  every value come from a ctor (Rust/Swift: no bare uninitialized values)? Cost is a one-time stdlib sweep
+  (~40 collection/allocator ctors gain explicit `len = 0` / `data = null` — exactly the *implicit* zero-init
+  reliance this surfaces). **Why it matters here:** it is the language's proper answer to "drop only if live"
+  — it subsumes the abandoned definite-construction-for-drop-safety attempt and, as a *side effect*, lets a
+  raw-handle `resource` retire its `fd > 0` drop guard (a field must be explicitly assigned before it can be
+  dropped, so no `{0}` handle ever reaches a dtor), while also catching plain uninitialized-field logic bugs.
+  Relates to [construction-model](design/construction-model.md).
+- **Raw-handle drop guard + the "can you own stdin?" question (fix after force-explicit-field-init).** Today
+  `std::fs::File`'s dtor guards `if (fd > 0)` so a `{0}` (empty/uninitialized) `File` drops cleanly — but the
+  drop-only-if-live A/B compiler work (git log) already stops the compiler dropping a `{0}` on the
+  field-first-write and `match(give)` paths, so the guard now only defends the residual bare-local shapes
+  (a `File f;` whole-reassigned or never assigned then dropped). Two open threads: (a) the guard is
+  *empirically deletable* — the full ASan suite passes with it removed — so once force-explicit-field-init
+  closes the residual it should go; (b) `fd > 0` (not `>= 0`) means a `File` **cannot own fd 0/1/2**
+  (stdin/stdout/stderr) — the empty sentinel steals those. Decide whether owning a std stream in a `File` is
+  even legitimate (likely use a distinct type / `Optional<File>` and never wrap fd 0), or adopt a `-1` empty
+  niche (Rust `OwnedFd`) so `fd >= 0` is ownable. Same trap awaits every future raw-handle resource (sockets
+  in `std::net`, GPU handles).
 - **Enum-variant payload-type registration gap (bug, small).** A type used *only* as an enum variant's
   payload — where that variant is never constructed (the enum is exercised only via its other variants) —
   is not registered/emitted, so the enum's C `struct` references an undeclared type (`unknown type name
@@ -210,7 +244,10 @@ Serialization ships today (by-value + object-graph + polymorphic contracts, json
   intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
 - **More back ends (library, no compiler change)** — YAML; **binary** (packing + `@bits(n)` + little-endian
   canonical); **XML**/**HTML**. Each is a `Serializer`/`Deserializer` impl + `encode`/`decode`. `std::encoding::base64`
-  is a separate small module.
+  is a separate small module. **► The binary backend is the near-term priority** (user-requested, engine-facing:
+  compact scene/asset persistence). It slots directly onto the shipped streams substrate — a `Writer`/`Reader`
+  `Serializer`/`Deserializer` impl over raw `View<uint8>`, no charset layer — so it should land right after
+  streams M4 (the binary-first byte layer was designed for exactly this; see the streams work in the git log).
 - **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the `@`-attribute infra)
   emitting a use-site warning. Its own small task.
 - **Optional/default *function/constructor* parameters (language, adjacent)** — the "options struct with
