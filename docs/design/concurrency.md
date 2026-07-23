@@ -440,7 +440,46 @@ by default under **node** (the test harness — node v22, no flags needed), but 
 Kama concurrency binary must send `COOP: same-origin` + `COEP: require-corp` headers to unlock it. That's a
 deployment concern, out of scope here; noted for whoever ships a threaded Kama app to the web.
 
-**Next: M6** — `Atomic<T>` (the cross-isolate shared-mutable seam) + `parallel_for` (data-parallel fan-out).
+## M6.1 — landed (2026-07-23)
+
+`Atomic<T>` shipped — the ONE sanctioned cross-isolate shared-**mutable** cell (the concurrency analog of
+`unsafe {}`/`Ptr`). Pure-kama surface (`lib/std/concurrent/atomic.kama`, a move-only `resource` over one
+inline `T`) over a new freestanding `kama_atomic.h` width-generic op layer that dispatches on `sizeof(T)` to
+`__atomic_*_n` builtins — lock-free inline on native AND emscripten from one source. Element restricted to an
+integer primitive / `usize`/`isize` / `Ptr`. Ordering = C11's `_explicit` idiom (`load()` + `loadExplicit(order:)`),
+seq-cst by default. Exempted from the M4.2 same-root borrow rule (several children may `ref`-borrow one cell).
+Fixtures: `atomic_counter`/`atomic_cas`/`atomic_flag`/`atomic_ordering` (+ `xfail/atomic_nonscalar`), all
+green native + wasm + TSan.
+
+## M6.2 — landed (2026-07-23)
+
+immutable-`Shared` cross-isolate read sharing shipped — the first of the two *safe-sharing* primitives (§7a).
+A `Shared<T>`/`Weak<T>` over a **deeply-immutable** `T` is now sendable/shareable across isolates: immutable
+data is race-free even when shared, so several isolates can hold and read the same asset zero-copy.
+
+- **`immutable` type qualifier** (`type immutable value|resource T`) — a greppable modifier (kama.l/kama.y),
+  verified by a compiler fixpoint `computeDeeplyImmutable()` (the AND/greatest-fixpoint dual of
+  `reachesPointer`): a qualified type is deeply immutable iff every field/base/variant-payload is a primitive,
+  `string`, `enum`, or another deeply-immutable type — no raw `Ptr`, `Owned`/`Shared`/`Weak`, or mutable
+  collection. A qualified type with a mutable member is a compile error **naming the member**. Distinct from a
+  `const` binding (which permits a mutable alias, so cannot license cross-isolate sharing).
+- **Sendability** — a `Shared`/`Weak` over a deeply-immutable element no longer sets `reachesSharedWeak`, so
+  the channel-sendability gate and cross-scope `ref`-borrow accept it automatically.
+- **Two-flavor atomic refcount** — the control-block strong/weak ops route through a freestanding
+  `kama_ctrl.h` seam selected **per Shared/Weak instance** at emit time (`__kama_ctrl_atomic()` → 0/1 from a
+  `useAtomicRefcount` flag): an ordinary `Rc` keeps the non-atomic ops (zero overhead); a `Shared<immutable T>`
+  gets Arc-correct atomics (relaxed retains, release + acquire fence on the last drop, a CAS `tryUpgrade`).
+  Immutable graphs are acyclic by construction, so the atomic drop needs no cycle dance. `__atomic_*` lowers
+  on native AND emscripten from one source. *(Scope: the concrete-element **library** path — the primary
+  target — is done; the intrinsic fat-pointer path for `Shared<immutable Contract>` is a follow-up.)*
+
+Fixtures: `shared_immutable_send` (4 isolates hammer clone/drop on one `Shared<immutable Leaf>`),
+`shared_immutable_parallel_read` (3 isolates read a nested immutable asset zero-copy),
+`xfail/immutable_mutable_field`; the mutable-payload `xfail/channel_send_shared` still rejects. All green
+native + wasm + TSan (0 data races) + ASan.
+
+**Next: M6.3** — disjoint-slice `parallel_for` (the second safe-sharing primitive; data-parallel fan-out
+lending each task a non-overlapping mutable sub-`View`, safe by disjointness).
 
 ## Deferred (per §6)
 

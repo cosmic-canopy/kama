@@ -402,9 +402,13 @@ job system + event-loop scheduler are libraries, not language. Start there.
 **M4 (structured concurrency — `scope { }` + join-before-drop barrier + `ref`-borrow with escape &
 same-root-disjointness checks; the spawn verb is now `spawn`, bare `spawn` is scope-only)**, and
 **M5 (wasm parity — emscripten pthreads + `-sPROXY_TO_PTHREAD`; the seam headers compiled unchanged, all 15
-`std::concurrent` fixtures now pass on the wasm leg against the same `.expect` as native)** have landed
-(native TSan- + ASan-proven; concurrency now green on native **and** wasm). Next: **M6** `Atomic<T>` +
-`parallel_for`. See the design doc's per-milestone "landed" notes.
+`std::concurrent` fixtures now pass on the wasm leg against the same `.expect` as native)**,
+**M6.1 (`Atomic<T>` — the sanctioned cross-isolate shared-MUTABLE cell; width-generic `__atomic_*` seam,
+integer/`Ptr` element, C11 `_explicit` ordering)**, and **M6.2 (immutable-`Shared` cross-isolate reads — the
+`immutable` type qualifier + `computeDeeplyImmutable` fixpoint; a `Shared<immutable T>` is sendable and uses a
+two-flavor atomic refcount selected per-instance, ordinary `Rc` unchanged)** have landed (native TSan- +
+ASan-proven; concurrency green on native **and** wasm). Next: **M6.3** disjoint-slice `parallel_for` (the
+second safe-sharing primitive). See the design doc's per-milestone "landed" notes.
 
 **► Forward sequencing (agreed 2026-07-23):** finish the concurrency campaign (M5 → M6), then **re-triage the
 three READINESS docs** (Engine / MCU / Web) to pick the most impactful next track. The stated goal is to **wrap
