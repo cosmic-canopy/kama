@@ -20,6 +20,7 @@ class ModifierNode;
 class FunctionDeclarationNode;
 class FunctionParameterNode;
 class BlockNode;
+class IsolateNode;
 class VariableDeclarator;
 class LocalVariableDeclaration;
 class ConstVariableDeclarator;

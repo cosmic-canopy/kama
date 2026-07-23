@@ -1,0 +1,34 @@
+// M2 RAII: dropping an `Isolate` handle JOINS the isolate — no explicit join needed, so a forgotten join
+// can never orphan the thread (this is the seed of the M4 structured-concurrency scope). The handle lives
+// in an inner block; at its close `~Isolate()` joins, so the isolate's write is visible when main reads
+// `shared` afterward. KAMA_TSAN-clean (the drop-join is a happens-before barrier).
+import std::concurrent::{Isolate};
+
+type resource Payload {
+    Ptr<int32> slot;
+    int32 value;
+
+    public ctor make(Ptr<int32> slot, int32 value) {
+        Payload r;
+        r.slot = slot;
+        r.value = value;
+        return give r;
+    }
+
+    public fn void run() {
+        unsafe { this.slot[0] = this.value; }
+    }
+}
+
+fn void worker(Payload p) {
+    p.run();
+}
+
+fn int main() {
+    int32 shared = 0;
+    Payload p = Payload::make(slot: addr(of: shared), value: 7i32);
+    {
+        Isolate h = isolate worker(p: give p);
+    }   // ~Isolate() joins here — no explicit h.join()
+    return shared;   // 7 iff the drop joined and the isolate ran
+}

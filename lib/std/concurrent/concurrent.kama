@@ -1,0 +1,45 @@
+namespace std::concurrent;
+
+export { Isolate };
+
+// The concurrency module: the native isolate seam. The `isolate` statement is a compiler keyword, but
+// importing this module is what makes the seam header (and its `-lpthread` link) available to a program:
+//
+//     import std::concurrent;
+//     fn void worker(Payload p) { ... }              // entry: a top-level fn (no capture → shared-nothing)
+//     isolate worker(p: give payload);               // fused: spawn on a new OS thread, then join
+//     Isolate h = isolate worker(p: give payload);   // handle form: spawn now, join later (or on drop)
+//     h.join();                                       // explicit join; ~Isolate() also joins (RAII)
+//
+// The bundle is MOVED into the isolate (`give`), so any post-spawn use of the source is a compile error —
+// no memory is shared, which is what makes an isolate data-race-free by construction.
+extern "kama_isolate.h";
+extern fn void kama_isolate_join_boxed(Ptr h);
+
+// An RAII handle to a running isolate. Produced by `Isolate h = isolate worker(...)`; owns the join.
+// `join()` blocks for completion and is idempotent (it nulls the handle, so a second join — including the
+// destructor's — is a no-op, avoiding a double `pthread_join`). Dropping the handle joins, so a forgotten
+// join can never orphan the thread. This is the seed of the M4 structured-concurrency scope.
+type resource Isolate {
+    Ptr handle;   // heap-boxed kama_isolate_t; null once joined
+
+    // Wrap a raw boxed handle from the isolate seam. The compiler lowers the `isolate …` expression form
+    // to this ctor; it is not meant to be called directly (the handle must come from the spawn wrapper).
+    ctor fromRaw(Ptr handle) {
+        Isolate r;
+        r.handle = handle;
+        return give r;
+    }
+
+    // Block until the isolate finishes. Safe to call more than once (and the destructor calls it).
+    public fn void join() {
+        if (this.handle != null) {
+            kama_isolate_join_boxed(h: this.handle);
+            this.handle = cast<Ptr>(null);
+        }
+    }
+
+    ~Isolate() {
+        if (this.handle != null) { kama_isolate_join_boxed(h: this.handle); }
+    }
+}

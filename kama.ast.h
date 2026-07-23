@@ -332,6 +332,18 @@ public:
         : ASTNode(context),  StatementNode(context), body(body) { }
 };
 
+// `isolate worker(p: give x)` — spawn a top-level fn on a fresh OS thread with a MOVED-in argument bundle.
+// Both a STATEMENT (`isolate worker(...);` — fused spawn+join) and an EXPRESSION (`Isolate h = isolate
+// worker(...);` — spawn now, returning an RAII handle whose drop=join): hence ExpressionStatementNode.
+// `call` is the whole InvocationNode; the emitter validates the callee is a bare top-level fn (no receiver
+// → no env capture → shared-nothing) and reuses the `give` move machinery so post-spawn use is an error.
+class IsolateNode : public ExpressionStatementNode {
+public:
+    SharedExpression call;   // an InvocationNode
+    IsolateNode(CodeGenContext& context, SharedExpression call)
+        : ASTNode(context),  ExpressionStatementNode(context), call(call) { }
+};
+
 class VariableDeclarator : public StatementNode {
 public:
     SharedIdentifier name;

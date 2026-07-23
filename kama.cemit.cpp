@@ -776,6 +776,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* mm = dynamic_cast<MatchNode*>(n)) return emitMatch(mm);   // value-producing match (lifted)
     if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) return emitArrayLiteral(al);   // `[…]` -> a Fixed value
+    if (auto* iso = dynamic_cast<IsolateNode*>(n)) return emitIsolateExpr(iso);   // `= isolate worker(...)` handle
 
     if (auto* v = dynamic_cast<Int8Node*>(n))   return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int16Node*>(n))  return std::to_string((int)v->value);
@@ -1281,6 +1282,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         _inUnsafe = true;
         emitStatement(u->body, depth);   // the BlockNode -> a normal scoped { … }
         _inUnsafe = prev;
+        return;
+    }
+
+    // `isolate worker(p: give x);` — spawn a top-level fn on a fresh OS thread with a MOVED arg
+    // bundle, then join (fused, M2). Shared-nothing by construction (bare top-level entry + moved arg).
+    if (auto* iso = dynamic_cast<IsolateNode*>(n)) {
+        emitIsolate(iso, depth);
         return;
     }
 
@@ -5973,6 +5981,113 @@ std::string CEmitter::lvalueMoveKey(SharedExpression lhs) const
                 if (id->value && (!id->qualifier || id->qualifier->empty()))
                     return *id->value + "." + *ma->identifier->value;
     return "";
+}
+
+// Shared front half of both `isolate` forms (the fused statement and the `Isolate` handle expression):
+// validate the `isolate worker(p: give x)` call, queue the per-entry trampoline, emit the moved argument
+// expression, and mark its source moved. Returns the entry's mangled cName; sets `cls` (the bundle C type)
+// and `val` (the emitted, already-move-marked argument expression). Shared-nothing by construction: the
+// entry is a BARE top-level fn (no env capture) and its one argument is MOVED (the source is marked moved
+// via the existing `give` seam, so any post-spawn use is the standard use-after-move error).
+std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::string& val)
+{
+    // The seam header (and its `-lpthread` link) flows in via `import std::concurrent;`. Without it the
+    // generated spawn call would not compile — give a clear error instead.
+    if (!externsHeader("kama_isolate.h"))
+        unsupported("`isolate` requires `import std::concurrent;` (the native isolate seam)", iso->line);
+
+    auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
+    // Must be a BARE top-level fn call: `isolate worker(...)`. A receiver call (`isolate obj.m(...)`) or an
+    // indirect callee would capture/alias enclosing state — reject to keep the entry shared-nothing.
+    if (!inv || !inv->identifier || !inv->identifier->value || inv->expression)
+        unsupported("`isolate` entry must be a bare top-level function call, e.g. `isolate worker(p: give x)`", iso->line);
+
+    const std::string fname = *inv->identifier->value;
+    auto it = _funcs.find(resolveFunc(fname, inv->identifier->qualifier));
+    if (it == _funcs.end())
+        unsupported(("`isolate` entry `" + fname + "` names no known top-level function").c_str(), iso->line);
+    const FuncSig& sig = it->second;
+
+    // M2 shape: a `void` entry taking exactly one MOVED `resource` value (the bundle). This keeps the
+    // lowering trivial (one heap value, one trampoline) and is the shared-nothing contract; a `void`
+    // return because there is no channel to hand a result back over yet (M3). Richer signatures later.
+    if (sig.retCType != "void")
+        unsupported(("`isolate` entry `" + fname + "` must return void — M2 has no channel to return a result over").c_str(), iso->line);
+    if (sig.params.size() != 1)
+        unsupported(("`isolate` entry `" + fname + "` must take exactly one moved argument (the bundle) in M2").c_str(), iso->line);
+
+    const ParamSig& p = sig.params[0];
+    cls = p.className;
+    // A move-only `resource` VALUE owned by the callee: ownership actually transfers across the thread
+    // (a plain `value` would only be copied; a collection would need source-nulling — both deferred).
+    if (p.byRef || !isMoveOnlyValue(cls))
+        unsupported("`isolate` argument must be a moved `resource` value — the entry's parameter type is not one, in M2", iso->line);
+
+    if (!inv->args || inv->args->size() != 1)
+        unsupported(("`isolate` call to `" + fname + "` needs exactly one argument").c_str(), iso->line);
+    // The argument must be `give`n: a shared borrow would alias state across the thread boundary. Unwrap
+    // the HandoffNode ourselves (we emit no call — just the move + spawn).
+    SharedExpression argExpr = (*inv->args)[0]->expression;
+    auto* h = dynamic_cast<HandoffNode*>(argExpr.get());
+    if (!h || !h->isGive)
+        unsupported("`isolate` argument must be `give`n (moved) — a borrow would alias state across the thread", iso->line);
+    SharedExpression src = h->value;
+
+    // Emit the per-entry trampoline once (the same worker may be spawned from several sites / both forms).
+    if (_isolateTrampolines.insert(sig.cName).second) {
+        std::ostringstream tr;
+        tr << "static void* __kama_iso_" << sig.cName << "(void* __p) {\n"
+           << "    " << cls << " __v = *(" << cls << "*)__p;   /* relocate the bundle out of the heap box */\n"
+           << "    free(__p);\n"
+           << "    " << sig.cName << "(__v);                   /* callee owns __v and drops it at fn-end */\n"
+           << "    return (void*)0;\n"
+           << "}\n";
+        _fileScopeHelpers.push_back(tr.str());
+    }
+
+    // Read the source, then mark it moved (post-spawn use → use-after-move via the normal `give` seam).
+    // moveOnlySource rejects a field/element move, matching every other `give` site.
+    val = emitExpression(src);
+    std::string mv = moveOnlySource(src, iso->line); if (!mv.empty()) markMoved(mv);
+    return sig.cName;
+}
+
+// `isolate worker(p: give x);` — the FUSED statement: spawn the bundle onto a fresh OS thread and join it
+// immediately. Generated C: heap the moved bundle, spawn via the trampoline, join.
+void CEmitter::emitIsolate(IsolateNode* iso, int depth)
+{
+    std::string cls, val;
+    std::string cName = isolatePrep(iso, cls, val);
+    std::string arg = "__kama_iso_arg" + std::to_string(_tempCounter++);
+    std::string hnd = "__kama_iso" + std::to_string(_tempCounter++);
+
+    line(iso->line);
+    indent(depth);     *_out << "{\n";
+    indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << "));\n";
+    indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+    indent(depth + 1); *_out << "*" << arg << " = (" << val << ");\n";
+    indent(depth + 1); *_out << "kama_isolate_t " << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << arg << ");\n";
+    indent(depth + 1); *_out << "kama_isolate_join(" << hnd << ");\n";
+    indent(depth);     *_out << "}\n";
+}
+
+// `Isolate h = isolate worker(p: give x);` — the HANDLE form: spawn now and wrap the (heap-boxed) thread
+// handle in an RAII `std::concurrent::Isolate` whose drop = join. Generated C is a statement-expression:
+// heap the moved bundle, spawn (boxed), and hand the box to the `Isolate::fromRaw` ctor.
+std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
+{
+    std::string cls, val;
+    std::string cName = isolatePrep(iso, cls, val);
+    std::string iso_t = resolveUserName("Isolate", SharedStringList());
+    if (!_classes.count(iso_t))
+        unsupported("the `isolate` handle form needs `std::concurrent::Isolate` in scope — add `import std::concurrent;`", iso->line);
+    std::string arg = "__kama_iso_arg" + std::to_string(_tempCounter++);
+    std::ostringstream e;
+    e << "({ " << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << ")); "
+      << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13)); "
+      << "*" << arg << " = (" << val << "); "
+      << iso_t << "__fromRaw(kama_isolate_spawn_boxed(&__kama_iso_" << cName << ", " << arg << ")); })";
+    return e.str();
 }
 
 std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
@@ -12699,6 +12814,10 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         }
         return nullptr;
     };
+    // Emit this module's bodies into a buffer so any `isolate` trampolines they generate can be flushed
+    // to _out FIRST — a body takes the address of its trampoline, which C requires defined earlier in the TU.
+    std::ostringstream moduleBody;
+    std::ostream* savedModuleOut = _out; _out = &moduleBody;
     // vtable instances + interface vtables first (referenced by ctor bodies).
     for (auto& decl : *unit->codeDeclarationList)
         if (ClassInfo* ci = classOf(decl.get())) emitVtableInstance(*ci);
@@ -12765,6 +12884,12 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             *_out << "\n";
         }
     }
+    // Restore the real stream, emit any `isolate` trampolines this module produced (they must precede the
+    // bodies that reference them), then the buffered bodies.
+    _out = savedModuleOut;
+    for (auto& h : _fileScopeHelpers) *_out << h;
+    _fileScopeHelpers.clear();
+    *_out << moduleBody.str();
 }
 
 // FFI: emit a C `#include` per `extern "<header>";` directive, deduped.

@@ -377,6 +377,12 @@ public:
 
 private:
     std::set<std::string> _externedHeaders;   // every `extern "<h>";` seen (populated by emitIncludes)
+    // `isolate` lowering: per-module file-scope helper definitions (thread trampolines) to emit BEFORE a
+    // module's bodies (a body takes the address of a trampoline, which C requires defined earlier in the
+    // TU). Drained per module in emitModuleContent; deduped across the whole program by _isolateTrampolines
+    // (one trampoline per distinct entry fn, even if spawned from several sites).
+    std::vector<std::string> _fileScopeHelpers;
+    std::set<std::string>    _isolateTrampolines;   // entry cNames whose trampoline is already emitted
     std::set<std::string> _exposedNames;       // bare C-ABI symbols of `expose fn`s — collision check
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only
@@ -976,6 +982,9 @@ private:
 
     // Statements
     void emitStatement(SharedStatement stmt, int depth);
+    std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val);   // shared front half
+    void emitIsolate(IsolateNode* iso, int depth);   // `isolate worker(p: give x);` — fused spawn+join (M2)
+    std::string emitIsolateExpr(IsolateNode* iso);   // `Isolate h = isolate worker(...)` — RAII handle form
     void emitBlock(BlockNode* block, int depth);
     void emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot);
     void emitBody(SharedStatement stmt, int depth, bool loopBoundary);  // brace-wrapped control-flow body

@@ -217,7 +217,7 @@ threads out of the *language surface* does not restrict a server scheduler.
 - **M0 Design pass** — this spec. ✅ *(converged 2026-07-22)*
 - **M1 `std::time`** — the precondition module (`lib/std/time/`, `namespace std::time;`), native + wasm, fixtures.
 - **M2 Runtime isolate seam** — `kama_isolate_*` ABI; native pthreads; spawn one isolate running a top-level fn +
-  moved arg bundle and join it. `isolate` surface + emitter lowering. No channels yet. Add `KAMA_TSAN`.
+  moved arg bundle and join it. `isolate` surface + emitter lowering. No channels yet. Add `KAMA_TSAN`. ✅ *(landed 2026-07-22 — see below)*
 - **M3 Channels** — `channel<T>`; blocking send/recv reusing `give`/`copy` + move-tracking; structural
   sendability check with field-naming errors; bounded + rendezvous.
 - **M4 Structured-concurrency scope** — `scope` joining children at drop (RAII-for-tasks); the
@@ -227,42 +227,39 @@ threads out of the *language surface* does not restrict a server scheduler.
 - **M6 `Atomic<T>` + the two safe-sharing primitives** — the narrow shared seams (native + wasm/SharedArrayBuffer);
   immutable-`Shared` cross-isolate; disjoint-slice `parallel_for`. The job-system library lands on top.
 
-## M2 — implementation kickoff (verified hooks 2026-07-22 — don't re-explore)
+## M2 — landed (2026-07-22)
 
-A running start for the next session. M1 (`std::time`) is shipped + green. M2 adds the **native isolate seam**:
-spawn one isolate running a top-level fn with a **moved-in** argument bundle, and join it. **No channels yet.**
-*(Remove this section once M2 lands, as the SIMD/streams design docs were folded at close.)*
+The native isolate seam shipped: spawn a top-level fn on a fresh OS thread with a **moved-in** argument
+bundle, and join it. Shared-nothing by construction (bare top-level entry + moved arg), TSan-proven. No
+channels (M3), no wasm (M5), no `Atomic<T>` (M6).
 
-**Recommended M2 surface — a greppable `isolate` keyword returning an RAII handle** (the `Isolate` handle
-*is* the M4 structured-scope seed: `drop` = join, so a forgotten join can't orphan):
+**Surface** (`import std::concurrent;` for the fused form; `import std::concurrent::{Isolate};` for the handle):
 
 ```
-fn void worker(give Payload p) { ... }     // entry MUST be a top-level fn (no env capture → shared-nothing)
-...
-Isolate h = isolate worker(give p);        // spawn; `p` is moved (post-spawn use of `p` is a compile error)
-h.join();                                  // explicit join; ~Isolate() also joins (RAII)
+fn void worker(Payload p) { ... }              // entry: a top-level fn (no env capture → shared-nothing)
+isolate worker(p: give payload);               // fused: spawn on a new OS thread, then join
+Isolate h = isolate worker(p: give payload);   // handle form: spawn now; the RAII handle owns the join
+h.join();                                       // explicit join; ~Isolate() also joins (drop = join)
 ```
 
-Reject a `isolate { block }` capture form — it would close over the enclosing env, breaking shared-nothing.
-For first bring-up a fused `isolate worker(give p);` (spawn+join in one statement, no handle type) is the
-smallest thing that exercises the whole ABI; grow to the handle form for a *concurrently-observable* fixture.
+The `give`n bundle must be a move-only `resource` VALUE and the entry must return `void` (M2 has no channel
+to return over). Post-spawn use of the moved source is a compile error (reuses the `give` move seam — no new
+tracking). An `isolate { block }` capture form is intentionally not offered (it would close over the env).
 
-**Verified hook points** (file:line, copy-me templates — `unsafe { }` is the block-statement analog):
-
-| Layer | File:line | What to do |
-|---|---|---|
-| Lexer | `kama.l` :331–402 (sorted keyword table), dispatch :489 | one sorted entry `{"isolate", ISOLATE},` — nothing else |
-| Grammar | `kama.y` :149 (`%token UNSAFE`), :743 (`unsafe_statement : UNSAFE block {…UnsafeNode…}`), :728–737 (`embedded_statement` alts) | add `%token ISOLATE`, an `isolate_statement` production, wire into `embedded_statement` |
-| AST | `kama.ast.h` :328 (`class UnsafeNode : StatementNode { SharedStatement body }`) | mirror as `IsolateNode { entry fn ref + moved-arg expr }` |
-| Emitter | `kama.cemit.cpp` :1279 (`dynamic_cast<UnsafeNode*>` dispatch in `emitStatement`); `emitFunction`/`mangledFunctionName` :2625 | add an `IsolateNode` branch; **generate** (a) a heap arg-bundle struct, (b) a `void* __kama_iso_<worker>(void* p)` trampoline that unpacks → calls the mangled kama fn → frees → returns NULL, (c) the `kama_isolate_spawn` call + handle, (d) join/drop |
-| Move seam | `kama.cemit.cpp` :5869 `ownsByValue`, :5909 `markMoved`, :5950 `moveOnlySource` (all live) | reuse for the `give`n bundle so post-spawn use of the arg errors — **no new tracking** |
-| Runtime ABI | **new `kama_isolate.h`** (do NOT put in `kama_runtime.h` — would pull threads into the freestanding/MCU path; and `pthread_t` ≠ `void*` on glibc, so the block-scoped-`extern` trick is unsafe here) | `#include <pthread.h>` in a dedicated pay-for-what-you-use header (mirrors `kama_os.h`/`kama_gpu.h`): `typedef pthread_t kama_isolate_t;` + `static inline` `kama_isolate_spawn`/`_join` wrappers |
-| Driver link | `kama.driver.cpp` :612–615 (`needsGpu`-style bool set from `externsHeader("kama_gpu.h")` ~:346/386), :772 (`-lpthread` already linked for GLFW) | add `needsIsolate` set from `extern "kama_isolate.h"`; gate `-lpthread` on it (native) |
-| TSan sweep | `run_tests.sh` :36–47 (`SAN_FLAGS` via `--cc "clang -fsanitize=…"`), used :93 | add a mirrored `KAMA_TSAN=1` → `--cc "clang -fsanitize=thread -fno-omit-frame-pointer -g"`, mutually exclusive with `KAMA_SAN`/`KAMA_WASM`; a multi-isolate TSan-clean fixture is the shared-nothing **proof** |
-
-**Draft M2 fixtures:** (1) spawn one isolate that writes its result into its own moved bundle, join, assert;
-(2) spawn two isolates over disjoint state, join both, assert both ran — **TSan-clean** under `KAMA_TSAN=1`;
-(3) xfail: use of a bundle local after `isolate …(give it)` → the move-tracking use-after-move error.
+**Where it lives:**
+- Runtime ABI — `kama_isolate.h` (repo root; `#include <pthread.h>`, `static inline` `kama_isolate_spawn`/
+  `_join` + heap-boxed `_spawn_boxed`/`_join_boxed` for the handle). Deliberately NOT in `kama_runtime.h`
+  (keeps threads off the freestanding/MCU path; `pthread_t` ≠ `void*`).
+- Stdlib — `lib/std/concurrent/concurrent.kama` (`namespace std::concurrent`): `extern "kama_isolate.h";`
+  + `resource Isolate { Ptr handle; join(); ~Isolate(); fromRaw(Ptr) }` (drop = join, idempotent join).
+- Compiler — `isolate` keyword (`kama.l`); `%token ISOLATE` + `isolate_statement` (fused) and a
+  `variable_initializer` alt (handle) in `kama.y`; `IsolateNode : ExpressionStatementNode` (`kama.ast.h`);
+  `emitStatement`/`emitExpression` branches → `isolatePrep`/`emitIsolate`/`emitIsolateExpr` (`kama.cemit.cpp`),
+  which emit a per-entry file-scope trampoline (deduped) + heap-move + spawn/join. `needsIsolate` gates
+  `-lpthread` (native) in `kama.driver.cpp`.
+- Tests — `KAMA_TSAN=1` sweep in `run_tests.sh`; fixtures `tests/isolate_basic`, `isolate_two_disjoint`
+  (TSan-clean shared-nothing proof), `isolate_handle` + `isolate_raii_join` (handle + drop-join),
+  `tests/xfail/isolate_use_after_move`. Green on native + `KAMA_TSAN` + `KAMA_SAN`.
 
 ## Deferred (per §6)
 

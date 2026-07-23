@@ -1,0 +1,33 @@
+// M2: spawn ONE isolate over a MOVED bundle, join, observe its effect. The bundle carries a raw pointer
+// to a slot main owns plus the value to write; the worker writes through it on its own thread. The fused
+// `isolate …(give …)` spawns and joins, and join happens-before main's read — so there is no data race
+// (this fixture is the KAMA_TSAN shared-nothing proof) while still proving the worker actually ran.
+import std::concurrent;
+
+type resource Payload {
+    Ptr<int32> slot;
+    int32 value;
+
+    public ctor make(Ptr<int32> slot, int32 value) {
+        Payload r;
+        r.slot = slot;
+        r.value = value;
+        return give r;
+    }
+
+    // Write the value through the slot — runs on the isolate's own thread.
+    public fn void run() {
+        unsafe { this.slot[0] = this.value; }
+    }
+}
+
+fn void worker(Payload p) {   // owns the bundle by value (the caller `give`s it in)
+    p.run();
+}
+
+fn int main() {
+    int32 result = 0;
+    Payload p = Payload::make(slot: addr(of: result), value: 42i32);
+    isolate worker(p: give p);   // spawn on a fresh OS thread with the moved bundle, then join
+    return result;               // 42 iff the isolate ran
+}

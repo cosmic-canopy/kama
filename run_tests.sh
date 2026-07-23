@@ -46,6 +46,19 @@ if [ "${KAMA_SAN:-0}" != "0" ]; then
     echo "(sanitizer mode: ASan + UBSan on native positive fixtures)"
 fi
 
+# Opt-in data-race pass: KAMA_TSAN=1 builds every positive (and multi-file) fixture with ThreadSanitizer
+# and runs it, so a data race across `isolate`s fails the suite — the shared-nothing PROOF for the M2
+# concurrency seam (a multi-isolate fixture must stay TSan-clean). Native only; mutually exclusive with
+# KAMA_SAN (one -fsanitize set at a time) and KAMA_WASM (wasm has no pthreads). xfail fixtures never link.
+if [ "${KAMA_TSAN:-0}" != "0" ]; then
+    if [ "${KAMA_SAN:-0}" != "0" ] || [ "${KAMA_WASM:-0}" != "0" ]; then
+        echo "error: KAMA_TSAN is mutually exclusive with KAMA_SAN and KAMA_WASM" >&2; exit 2
+    fi
+    SAN_FLAGS=(--cc "clang -fsanitize=thread -fno-omit-frame-pointer -g")
+    export TSAN_OPTIONS="halt_on_error=1"
+    echo "(thread-sanitizer mode: TSan on native positive fixtures)"
+fi
+
 # Opt-in wasm pass: KAMA_WASM=1 builds every positive (and multi-file) fixture to wasm via emcc and runs
 # it under node, comparing the SAME .expect exit code — so a codegen/runtime divergence on the wasm target
 # (or an emcc-integration regression like the source-map load break) fails the suite, not just the single
