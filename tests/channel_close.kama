@@ -1,0 +1,27 @@
+// M3.3: close semantics. A producer that sends NOTHING and returns drops its `Sender`, which closes the
+// channel and wakes a receiver blocked on an empty queue — `recv` returns `None` promptly (no hang, no
+// crash) rather than blocking forever. This pins the drop-wakes-blocked-recv path. TSan-clean (KAMA_TSAN=1).
+import std::concurrent::{Channel, Sender, Receiver, Isolate};
+
+fn void producer(Sender<int32> tx) { }   // sends nothing; ~Sender() closes the sender side
+
+fn int main() {
+    Channel<int32> ch = Channel::bounded(capacity: 4);
+    Sender<int32>   tx = ch.sender();
+    Receiver<int32> rx = ch.receiver();
+
+    Isolate h = isolate producer(tx: give tx);
+
+    int32 got = 0;
+    bool going = true;
+    while (going) {
+        Optional<int32> v = rx.recv();   // main may block here until the producer drops its sender
+        match (v) {
+            case Some(x): { got = got + 1; }
+            case None:    { going = false; }
+        };
+    }
+
+    h.join();
+    return got + 7;   // 7 iff recv returned None with zero items (closed + drained), no hang
+}

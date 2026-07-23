@@ -1,0 +1,33 @@
+// M3.3: a rendezvous (capacity 0) channel — an UNBUFFERED, synchronous hand-off. Every `send` blocks
+// until a `recv` takes that exact value (no ring buffer at all), so producer and consumer step in
+// lockstep. Proves the cap-0 handshake delivers every value, in order. TSan-clean (KAMA_TSAN=1).
+import std::concurrent::{Channel, Sender, Receiver, Isolate};
+
+fn void producer(Sender<int32> tx) {
+    int32 i = 1;
+    while (i <= 5) {
+        tx.send(item: i);   // blocks until main's recv takes this value
+        i = i + 1;
+    }
+}
+
+fn int main() {
+    Channel<int32> ch = Channel::bounded(capacity: 0);   // 0 == rendezvous (unbuffered)
+    Sender<int32>   tx = ch.sender();
+    Receiver<int32> rx = ch.receiver();
+
+    Isolate h = isolate producer(tx: give tx);
+
+    int32 sum = 0;
+    bool going = true;
+    while (going) {
+        Optional<int32> v = rx.recv();
+        match (v) {
+            case Some(x): { sum = sum + x; }
+            case None:    { going = false; }
+        };
+    }
+
+    h.join();
+    return sum;   // 1+2+3+4+5 = 15
+}

@@ -67,9 +67,26 @@ static inline void kama_channel__free(kama_channel_t* ch) {
 // is still live. Returns 0 on success, -1 if the receiver has gone (the value is NOT enqueued — the
 // caller still owns the bytes at `elem`). The bytes are memcpy-relocated: the receiver's recv produces
 // the sole owning copy.
+//
+// Rendezvous (cap == 0): the single `buf[0]` slot is a synchronous hand-off. `send` places the value and
+// then BLOCKS until a receiver takes it (`count` returns to 0) — so `send` completing means the value was
+// actually received, not merely buffered. `count` doubles as the slot-full flag (0/1); head/tail unused.
 static inline int kama_channel_send(void* h, const void* elem) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
+    if (ch->cap == 0) {                                       /* rendezvous */
+        while (ch->count != 0 && ch->receiverLive)           /* wait for a free slot (prior hand-off done) */
+            pthread_cond_wait(&ch->notFull, &ch->mu);
+        if (!ch->receiverLive) { pthread_mutex_unlock(&ch->mu); return -1; }
+        memcpy(ch->buf, elem, ch->elemSize);
+        ch->count = 1;
+        pthread_cond_signal(&ch->notEmpty);                  /* offer it to a receiver */
+        while (ch->count != 0 && ch->receiverLive)           /* block until the receiver takes it */
+            pthread_cond_wait(&ch->notFull, &ch->mu);
+        int taken = (ch->count == 0);
+        pthread_mutex_unlock(&ch->mu);
+        return taken ? 0 : -1;                               /* receiver died before taking → not delivered */
+    }
     while (ch->count == ch->cap && ch->receiverLive)
         pthread_cond_wait(&ch->notFull, &ch->mu);
     if (!ch->receiverLive) { pthread_mutex_unlock(&ch->mu); return -1; }
@@ -90,6 +107,13 @@ static inline int kama_channel_recv(void* h, void* out) {
     while (ch->count == 0 && ch->senderLive)
         pthread_cond_wait(&ch->notEmpty, &ch->mu);
     if (ch->count == 0) { pthread_mutex_unlock(&ch->mu); return -1; }   /* drained + sender gone */
+    if (ch->cap == 0) {                                       /* rendezvous: take from the single slot */
+        memcpy(out, ch->buf, ch->elemSize);
+        ch->count = 0;
+        pthread_cond_signal(&ch->notFull);                   /* release the blocked sender (hand-off done) */
+        pthread_mutex_unlock(&ch->mu);
+        return 0;
+    }
     memcpy(out, ch->buf + ch->head * ch->elemSize, ch->elemSize);
     ch->head = (ch->head + 1) % ch->cap;
     ch->count--;
