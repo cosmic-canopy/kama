@@ -9,6 +9,12 @@ ordinary library/FFI work once the core gaps below are closed.
 Related: [ROADMAP.md](ROADMAP.md) §5 (embedded milestone) is the design of record; the allocator seam is shared
 with [ENGINE_READINESS.md](ENGINE_READINESS.md) (frame arenas) and the collections campaign (M10/M11).
 
+> **Post-concurrency triage (2026-07-23): this track is the front-runner.** With the concurrency campaign
+> complete, the readiness re-triage (ROADMAP §6 "Forward sequencing") leans MCU: it is the **only** track with
+> real **language-surface** work queued (Engine and Web are now library/platform work with no language gap),
+> and its #1 blocker builds directly onto the just-shipped concurrency model (see the statics row below). The
+> recommended sequence at the bottom is the actionable starting point.
+
 ## What kama already has (the foundation)
 
 A surprising amount of the bare-metal core is already in place:
@@ -44,7 +50,7 @@ mile of the no-heap story.**
 
 | Feature | Status | Why an MCU needs it | Effort |
 |---|---|---|---|
-| **Module-level mutable statics** (`static` globals with deterministic zero/const init) | ❌ missing — no module-scope mutable variable exists in the grammar | Firmware *lives* on module state: peripheral handles, ISR-shared flags, ring buffers, flash lookup tables. An ISR and `main` must share a flag; today there is no place to put it. **New language surface** (declaration + guaranteed zero/const init at reset). ROADMAP §5. **Build it *per-isolate by construction*** (plain C `static` on a single-core MCU → zero cost; `_Thread_local` on multicore native; automatic on wasm) so the same declaration is race-free under the threading model — cross-isolate sharing stays on the `Atomic<T>` seam. The concurrency spec pins this rule: [design/concurrency.md](design/concurrency.md) §"three sharing seams". | **M** |
+| **Module-level mutable statics** (`static` globals with deterministic zero/const init) | ❌ missing — no module-scope mutable variable exists in the grammar | Firmware *lives* on module state: peripheral handles, ISR-shared flags, ring buffers, flash lookup tables. An ISR and `main` must share a flag; today there is no place to put it. **New language surface** (declaration + guaranteed zero/const init at reset). ROADMAP §5. **Build it *per-isolate by construction*** (plain C `static` on a single-core MCU → zero cost; `_Thread_local` on multicore native; automatic on wasm) so the same declaration is race-free under the threading model — cross-isolate sharing stays on the `Atomic<T>` seam. The concurrency model that pins this rule is now **shipped** (campaign complete 2026-07-23: isolates + channels + `scope` + `Atomic<T>` + `parallel_for`, [design/concurrency.md](design/concurrency.md) §"three sharing seams"), so this is **settled, proven ground** — statics are a targeted addition onto working code, not a co-design with an unbuilt system. **This makes MCU the lowest-risk next track.** | **M** |
 | **`hardware` / `volatile` qualifier for MMIO** | ❌ missing — `volatile` is a *reserved* token; the emitter hard-errors ("reserved (embedded/MMIO) but not yet implemented", `kama.cemit.cpp`) | A memory-mapped register read/write must not be optimized away or reordered. Plan: a `hardware Ptr<T>` → C `volatile T*` (mirroring how `const Ptr<T>` already lowers), explicitly **not** a concurrency primitive. ROADMAP §5. | **M** |
 | **Interrupt handlers / ISR entry** | ❌ missing — no attribute or entry-point syntax; every `fn` is an ordinary C function | An ISR is a specific symbol (vector-table slot) with a target-specific calling convention (`__attribute__((interrupt))` / AVR `ISR()` / a naked reset handler). Needs an attribute to emit it and to keep it out of the normal `main`/argv path. | **M** |
 | **Freestanding build target** (`--target embedded`: `-ffreestanding -nostdlib`, no `argc/argv` shim, `main` never returns) | 🟡 partial — the runtime is freestanding-friendly, but the driver always synthesizes a hosted `int main(int argc, char** argv)` wrapper that calls `kama_main()` and *returns* | Bare metal has no `argc`/`argv`, no `exit`, and `main` is an infinite loop (or a vendor `reset_handler`). The compiler must emit a freestanding entry (or none) and let a startup object/linker script own the vector table. | **M** |

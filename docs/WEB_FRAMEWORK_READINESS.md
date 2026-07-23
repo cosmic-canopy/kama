@@ -6,11 +6,13 @@ small number of threads. Status: ✅ have · 🟡 partial · ❌ missing.
 
 The key distinction throughout: **language gaps** (the compiler/runtime must change) vs **library gaps** (pure
 kama work, unblocked today). A web framework is *mostly* library work — the HTTP parser, router, and middleware
-chain are ordinary kama. The genuine **language**-level questions are the **async/concurrency model** and
-**capturing closures**; almost everything else is library or FFI reach.
+chain are ordinary kama. The old **language**-level question — the **async/concurrency model** — is now
+**answered and shipped** (the concurrency campaign: isolates + channels + `scope` + `Atomic<T>` +
+`parallel_for`, ROADMAP §6), so the event-loop scheduler is now a *library* over `Poller`. The one remaining
+language ergonomic is **capturing closures** (a Tier-1 nice-to-have); everything else is library or FFI reach.
 
-Related: [ROADMAP.md](ROADMAP.md) §1 (net/std foundation), §6 (concurrency — the isolate model), and
-[ENGINE_READINESS.md](ENGINE_READINESS.md) (the shared FFI/dispatch foundation).
+Related: [ROADMAP.md](ROADMAP.md) §1 (net/std foundation), §6 (concurrency — the isolate model, **shipped**),
+and [ENGINE_READINESS.md](ENGINE_READINESS.md) (the shared FFI/dispatch foundation).
 
 ## What kama already has (the foundation)
 
@@ -44,8 +46,8 @@ missing to make it *Node-like* (ergonomic async, timeouts, scale) is below.
 
 | Feature | Kind | Status | Why a server needs it | Effort |
 |---|---|---|---|---|
-| **Async task model / event loop** | **language + runtime** | ❌ missing — only manual `Poller::wait()` polling exists; no scheduler, futures, or `async/await` | Node *is* an event loop. Without a task/scheduler abstraction, every handler that does I/O becomes a hand-rolled state machine threaded through the poll loop — unusable at framework scale. ROADMAP §6 designs a **shared-nothing isolate + channel** model (block on a channel, scheduler runs other ready work — Go/Erlang style, deliberately **not** `async/await` function-coloring). Designed, **not shipped**. **The single biggest gap.** | **XL** |
-| **Timers / monotonic clock (`std::time`)** | library (+thin FFI) | ❌ missing — no clock, `sleep`, or `setTimeout` | Connection/request timeouts, keep-alive expiry, rate limiting, session TTL, retry backoff — none are possible without a timer wheel driven off a monotonic clock and the poll timeout. Thin FFI to `clock_gettime`; the timer wheel is kama. | **M** |
+| **Async task model / event loop** | ~~language~~ → now **library** | 🟡 the **language primitives are shipped** (concurrency campaign complete, 2026-07-23) — isolates (`spawn`) + ownership-transferring `channel<T>` + structured-concurrency `scope` + `Atomic<T>` + disjoint-slice `parallel_for`, native + wasm, TSan/ASan-proven (ROADMAP §6). What remains is **not a language gap**: a single-thread **scheduler / event-loop library** over the existing `Poller` — block a task on a channel, run other ready work (Go/Erlang style, deliberately **not** `async/await` function-coloring). The concurrency design explicitly makes the scheduler a *library* on the primitives, not language surface. Still the biggest **build**, but no longer blocked by the compiler. | **L (library)** |
+| **Timers / monotonic clock (`std::time`)** | library (+thin FFI) | ✅ **`std::time` shipped** (concurrency M1 — monotonic `Instant`/`Duration`, native `clock_gettime` / wasm `emscripten_get_now` / Win QPC). The **timer wheel** (`setTimeout`/keep-alive expiry off the poll timeout) is the remaining piece — pure kama library on the shipped clock. | **S (lib)** |
 | **HTTP/1.1 (+ WebSocket upgrade) parser & server** | library | ❌ missing — only a ~200-line static-file `examples/httpd` proof | Request/response types, header parsing, chunked/`Content-Length` bodies, keep-alive, status constants. **Pure kama library work — not blocked by the language**; it just doesn't exist yet. | **M–L** |
 | **TLS / HTTPS** | library (FFI) | ❌ missing | Public-facing servers need TLS. Realistically an FFI binding to a C TLS stack (OpenSSL/BoringSSL/mbedTLS) behind a `ReliableStream`-shaped wrapper, so handlers are transport-agnostic. | **L** |
 
@@ -55,7 +57,7 @@ missing to make it *Node-like* (ergonomic async, timeouts, scale) is below.
 |---|---|---|---|---|
 | **Capturing closures** | **language** | 🟡 partial — free `fnptr` + `BindableFunctionPtr` only; no inline lambda that captures locals | Route handlers and middleware want to capture request context / config inline. Today you thread context through a handler *object* (a `type resource` whose fields hold the captures) and register `BindableFunctionPtr` methods — workable but verbose. Closures under the RAII/move model are a designed Tier-3 ergonomic (ROADMAP §3), not a blocker. | **M–L** |
 | **DNS resolution** | library (FFI) | ❌ missing — numeric hosts only (`"127.0.0.1:8080"`) | An HTTP *client* (proxies, upstreams, webhooks) needs name resolution; a bare listener does not. Thin `getaddrinfo` FFI. | **S–M** |
-| **Concurrency / threads** | **language + runtime** | ❌ missing — single-threaded; the isolate/channel/`Atomic<T>` model is designed (ROADMAP §6), not shipped | A single event-loop thread saturates one core. Node scales with a worker/cluster model; kama's planned shared-nothing isolates (mapping 1:1 to OS threads / WASM workers) are the equivalent. Reuses `give` (move) for channel transfer. | **XL** |
+| **Concurrency / threads** | **language + runtime** | ✅ **shipped** — isolates + `channel<T>` + `scope` + `Atomic<T>` + `parallel_for`, native (OS threads) **and** wasm (Web Workers over SharedArrayBuffer), TSan/ASan-proven (ROADMAP §6, campaign complete). A single event-loop thread saturates one core; kama's shared-nothing isolates (1:1 to OS threads / WASM workers) are the worker/cluster equivalent, `give` moving data across a channel zero-copy. The multi-core scale-out substrate now exists — a scheduler that fans handlers across isolates is a library on top. | done (lang/runtime) |
 | **`std::io` / `std::process`** | library | 🟡 partial — `std::fs` shipped; stdout/stderr, argv, env, exit are ad-hoc C FFI in examples | Structured logging, config from env/argv, graceful exit codes. Thin kama wrappers over the C calls already used. | **S** |
 
 ## Tier 2 — Framework polish (library / FFI; not language gaps)
@@ -79,17 +81,21 @@ sides.
 
 ## Recommended sequence
 
-1. **`std::time`** (monotonic clock + timer wheel) — small, and a precondition for every timeout in the loop.
-2. **The async task model** (ROADMAP §6 isolates/channels + a single-thread scheduler over `Poller`) — the
-   defining feature; everything ergonomic hangs off it. Land the **single-threaded** loop + scheduler first,
-   before multi-core isolates.
+1. ✅ **`std::time` shipped** (monotonic clock — concurrency M1). The **timer wheel** on top of it (a small
+   kama library) is the remaining piece for every timeout in the loop.
+2. **The async task model — now a *library*, not a language gap.** The primitives (isolates / `channel` /
+   `scope` / `parallel_for`) are shipped (ROADMAP §6); build the single-thread **scheduler over `Poller`**
+   (block a task on a channel, run other ready work) as a kama library. The defining feature; everything
+   ergonomic hangs off it. Single-threaded loop first, then fan across the (already-shipped) isolates.
 3. **HTTP/1.1 library** (parser + request/response + keep-alive) on top of the loop — pure kama, unblocked.
 4. **DNS** + **`std::io`/`std::process`** wrappers — fill the client + operational gaps.
-5. **TLS** (FFI) and **capturing closures** (language ergonomics) — production-facing polish.
-6. **Multi-core isolates**, then the Tier-2 codecs/regex/crypto library reach.
+5. **TLS** (FFI) and **capturing closures** (the one remaining language ergonomic) — production-facing polish.
+6. **Multi-core scale-out** (isolates + `parallel_for` are shipped — wire the scheduler across them), then the
+   Tier-2 codecs/regex/crypto library reach.
 
-**Bottom line:** the framework is **not blocked by the type system** — contracts, JSON, sockets, and byte
-handling are all here, and the HTTP layer is ordinary library work. The two real **language/runtime**
-investments are the **async task/event-loop model** (the Node-defining feature) and, secondarily, **capturing
-closures** and **threading** — all three already have a design direction in ROADMAP §6. Everything else is
-library and FFI reach that can proceed today.
+**Bottom line:** the framework is **not blocked by the type system** — contracts, JSON, sockets, byte
+handling, and now the **full concurrency substrate** (isolates + channels + `scope` + `Atomic<T>` +
+`parallel_for`, plus `std::time`) are all shipped. The Node-defining **async task/event-loop model has moved
+from a language investment to a *library* one** — a scheduler over `Poller` on the shipped primitives. The one
+remaining **language** ergonomic is **capturing closures** (Tier 1, a nice-to-have, not a blocker). Everything
+else — the HTTP/timer-wheel/scheduler layers and FFI reach — is ordinary kama that can proceed today.

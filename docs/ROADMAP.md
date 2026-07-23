@@ -14,8 +14,11 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
   math). Mostly library + codegen, little new syntax.
 - **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted, via a shared
   IR feeding C, direct-wasm, and a bytecode VM — the `kama` binary self-contained.
-- **Concurrency — shared-nothing by construction** (1.x/2.0 direction): data-race freedom by removing
-  shared mutable state, not a borrow checker. 1.0 ships a single-threaded core.
+- **Concurrency — shared-nothing by construction** (✅ **shipped** 2026-07-23, campaign complete): data-race
+  freedom by removing shared mutable state, not a borrow checker — isolates + ownership-transferring channels +
+  structured-concurrency `scope` + `Atomic<T>` + immutable-`Shared` + disjoint-slice `parallel_for`, native +
+  wasm, TSan/ASan-proven. **Next big direction: the post-concurrency readiness re-triage (§6) — MCU is the
+  front-runner.**
 - **Engine track** (product north star): a portable lightweight **WebGPU** game engine, woven through
   1.x. Its Tier-0 math types are unblocked now.
 
@@ -387,11 +390,12 @@ serialization, networking).
   exactly the critical path and nothing else. **Start Cortex-M, not AVR** (`zig cc`/clang do `thumbv*-none-eabi`
   cleanly; pico-sdk is tidy; AVR's Harvard/`PROGMEM`/`avr-gcc`-only pain comes later).
 
-## 6. Concurrency — shared-nothing by construction (design direction)
+## 6. Concurrency — shared-nothing by construction (✅ SHIPPED — campaign complete 2026-07-23)
 
-**► Spec converged: [docs/design/concurrency.md](design/concurrency.md)** — the M0 design-refinement pass is
-done; that doc is now the **spec** (surface + lowering + `kama_isolate_*` runtime ABI + structural sendability +
-the per-isolate-`static` rule) with milestones M1–M6. Decisions settled there: **execution = isolates +
+**► Spec + implementation: [docs/design/concurrency.md](design/concurrency.md)** — the M0 design-refinement pass
+converged into a **spec that is now fully implemented** (surface + lowering + `kama_isolate_*` runtime ABI +
+structural sendability + the per-isolate-`static` rule); milestones **M1–M6 all landed** (see the Progress line
+below and the doc's per-milestone "landed" notes). Decisions settled there: **execution = isolates +
 data-parallel jobs** (no language-level green threads / `async`; a native fiber scheduler for high-connection
 servers is a *library* on the primitives, since servers are native-only); **module `static` is per-isolate by
 construction** (unifies with the MCU Tier-0 statics blocker — §5 / [MCU_READINESS.md](MCU_READINESS.md)); the
@@ -406,21 +410,36 @@ same-root-disjointness checks; the spawn verb is now `spawn`, bare `spawn` is sc
 **M6.1 (`Atomic<T>` — the sanctioned cross-isolate shared-MUTABLE cell; width-generic `__atomic_*` seam,
 integer/`Ptr` element, C11 `_explicit` ordering)**, and **M6.2 (immutable-`Shared` cross-isolate reads — the
 `immutable` type qualifier + `computeDeeplyImmutable` fixpoint; a `Shared<immutable T>` is sendable and uses a
-two-flavor atomic refcount selected per-instance, ordinary `Rc` unchanged)** have landed (native TSan- +
-ASan-proven; concurrency green on native **and** wasm). Next: **M6.3** disjoint-slice `parallel_for` (the
-second safe-sharing primitive). See the design doc's per-milestone "landed" notes.
+two-flavor atomic refcount selected per-instance, ordinary `Rc` unchanged)**, and **M6.3 (disjoint-slice
+`parallel_for` — splits a `View<T>`/contiguous container into K non-overlapping sub-Views, one per worker
+isolate, joined at a self-joining barrier; safe by disjointness; the body is hoisted into a worker fn with
+captures threaded in as `ref` params, non-atomic captured writes rejected; K = hw cores, `KAMA_PARFOR_WORKERS`
+override)** have ALL landed (native TSan- + ASan-proven; concurrency green on native **and** wasm) — **the
+concurrency campaign is complete**. See the design doc's per-milestone "landed" notes.
 
-**► Forward sequencing (agreed 2026-07-23):** finish the concurrency campaign (M5 → M6), then **re-triage the
-three READINESS docs** (Engine / MCU / Web) to pick the most impactful next track. The stated goal is to **wrap
-up the remaining language-surface changes** those use-cases need. The **embedded/MCU track (§5) is the
-front-runner** and the intended next big direction: its #1 blocker — module-level statics — is already
-design-pinned to the concurrency model's **per-isolate-`static`** rule (§6 / [design/concurrency.md](design/concurrency.md)),
-so it builds onto settled ground; and it is the *only* readiness track with real **language-surface** work
-queued (statics, the `hardware` qualifier, ISR binding, freestanding runtime), whereas Engine and Web are
-mostly library/platform work with no language blocker. Re-confirm against the readiness docs after M6.
+**► NEXT ACTION — the post-concurrency readiness re-triage (start here next session).** The concurrency
+campaign is **done** (M1–M6 landed), so the agreed forward step is now live: **re-triage the three READINESS
+docs — [MCU_READINESS.md](MCU_READINESS.md) · [ENGINE_READINESS.md](ENGINE_READINESS.md) ·
+[WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md)** (all refreshed 2026-07-23 to the concurrency-complete
+state) — to pick the most impactful next track. The stated goal is to **wrap up the remaining language-surface
+changes** those use-cases need.
 
-The intended concurrency model. **1.0 ships a single-threaded core**; this is the 1.x/2.0 direction, not a
-shipped feature. It earns data-race freedom the way kama earns null-safety — by making the hazard
+**Leaning: MCU/embedded (§5) is the front-runner** — confirm, don't re-derive. Why it wins the triage:
+- It is the **only** track with real **language-surface** work queued: module-level statics, the `hardware`
+  (MMIO/`volatile`) qualifier, ISR-entry binding, a freestanding `--target embedded` runtime, fallible
+  `allocate -> Optional<Ptr>`. Engine and Web are now **library/platform** work with **no language blocker**
+  (Engine: WebGPU/`std::gpu` + the job-system *library* on the shipped `parallel_for`; Web: the event-loop
+  *scheduler library* over `Poller` on the shipped isolate/channel primitives + `std::time`).
+- Its **#1 blocker builds onto settled, shipped ground**: module statics lower to the concurrency model's
+  **per-isolate-`static`** rule (plain C `static` single-core / `_Thread_local` multicore native / automatic
+  wasm), and that model is now implemented, not just designed — lowest-risk of the three.
+
+**First concrete step if MCU is confirmed:** module-level statics with deterministic zero/const init, built to
+the per-isolate rule (§5 "Globals / statics" row + [MCU_READINESS.md](MCU_READINESS.md) Tier 0 / Recommended
+sequence step 1). Then the `hardware` qualifier, then `--target embedded`.
+
+The concurrency model (now **shipped** — the description below is the design record it was built to). It earns
+data-race freedom the way kama earns null-safety — by making the hazard
 *unrepresentable*, not by checking it. Where Rust proves exclusivity over shared memory with a borrow
 checker, kama **removes the shared mutable state**.
 

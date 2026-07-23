@@ -41,8 +41,11 @@ That is a complete systems-language core. The math layer (`std::math`), native f
 (`std::fs`/`std::io`/`std::net`), the **`Map<K,V>`/`Set<K>`** hash containers, opt-in **serialization**
 (`@generate`, intrinsic + json backend), and the **`expose` + `kama build --shared`** kama→host C-ABI
 boundary are all **shipped**; the remaining engine work is further **library and platform reach**, not
-language features: WebGPU bindings, more C bindings, allocators, and threading (already *designed* —
-the shared-nothing model in ROADMAP.md). (Slices/spans **shipped** — the `type view` kind + `View<T>`.)
+language features: WebGPU bindings, more C bindings, and allocators. **Threading is now shipped too** — the
+shared-nothing model (isolates + ownership-transferring channels + structured-concurrency `scope` +
+`Atomic<T>` + disjoint-slice `parallel_for`), native **and** wasm, so the job-system / parallel-ECS
+*substrate* exists and only the higher-level scheduler *library* remains (ROADMAP §6). (Slices/spans
+**shipped** — the `type view` kind + `View<T>`.)
 
 ---
 
@@ -72,7 +75,7 @@ the shared-nothing model in ROADMAP.md). (Slices/spans **shipped** — the `type
 
 | Feature | Status | Why | Effort |
 |---|---|---|---|
-| **Threading / atomics / memory model** | ❌ built · ✅ *designed* — the **shared-nothing model** (isolates + ownership-transferring channels + `Atomic<T>`, mapping 1:1 onto WASM Web Workers) is specified in [ROADMAP.md](ROADMAP.md) (§ Concurrency). That model **is** the engine's job-system / parallel-ECS substrate; only the runtime remains. | Job system, parallel ECS, async asset streaming. | XL (build) |
+| **Threading / atomics / memory model** | ✅ **shipped** (concurrency campaign complete, 2026-07-23) — the **shared-nothing model** is built and TSan/ASan-proven on native **and** wasm (Web Workers over SharedArrayBuffer) from one source: isolates (`spawn`) + ownership-transferring `channel<T>` + structured-concurrency `scope` (join-before-drop) + `Atomic<T>` (the one shared-mutable seam) + immutable-`Shared` cross-isolate reads + **disjoint-slice `parallel_for`**. **`parallel_for` IS the data-parallel / parallel-ECS fan-out** (splits a buffer into non-overlapping mutable sub-`View`s, one per worker, safe by disjointness). The engine's higher-level **job-system / work-stealing scheduler is now an ordinary library** on these primitives — no language work left. | Job system, parallel ECS, async asset streaming. | ✅ done (lang/runtime; job-system lib on top) |
 | **Bit/byte manipulation**: reinterpret/bitcast, byte buffers, endianness | 🟡 partial (bitwise ops only) | (De)serialization, networking, binary asset/scene formats. | M |
 | **File / network I/O** (files, sockets) | ✅ — **`std::fs`/`std::io`/`std::net` shipped** (RAII `File`, `readFile`/`writeFile`/`stat`/`readDir`; blocking TCP `TcpListener`/`TcpStream`; `Result<…,IoError>`), POSIX + Windows, over the bundled `kama_os.h` FFI boundary. `examples/httpd/` is a real static-file server on it. Follow-ups (UDP/DNS, buffered readers) tracked in ROADMAP §1. | Asset/scene loading, config, tooling, networking. | done |
 | **String formatting / interpolation** (`"${x}"`, number→string, logging) | ✅ — **shipped**: the `Format` contract + `Formatter` sink + `toString<T>` (prelude), plus `${expr}` interpolation (identifier + `.field`/`[index]` holes) lowering to a compile-time, statically-checked `Formatter` build — one buffer, no O(n²) concat. On top of the already-rich `string` (ops, `split`/`trim`/…, UTF-8 + `.chars()`). Follow-ups (additive): format specifiers `${x:.2f}`, a `@generate` debug derive, tagged strings (`sql"…"`/`html"…"`) — see [SPEC.md](SPEC.md) "Formatting & string interpolation". | Logging, text assets, tooling. | done (specifiers/tags follow) |
@@ -104,7 +107,9 @@ The language is complete; the path is now entirely library + platform work.
    operators, static methods, and now `InlineArray<T,N>` for matrix storage + `m[i][j]` place-indexing — so
    this is a pure library layer (a natural first opt-in **stdlib module**, per ROADMAP).
 2. **WebGPU bindings** (FFI is ready) → **a triangle on screen** → the engine spine + a real demo.
-3. Iterate as the engine grows: `Map`/slices/arenas as library types, then bit/byte + I/O, then threading.
+3. Iterate as the engine grows: `Map`/slices/arenas as library types, then bit/byte + I/O. **Threading is
+   now shipped** — build the job-system / parallel-ECS library on the isolate + `parallel_for` primitives
+   when the engine needs it (no language gap remains).
 
 Each item is independently shippable (a tagged release), matching the milestone cadence so far. The
 fast/deterministic-runtime thesis is already true today — the remaining gaps are about reach (hardware/OS)
