@@ -1,0 +1,35 @@
+// M4.1: nested `scope`s each own their own children. The inner scope's child is joined at the INNER
+// brace; the outer scope's child at the OUTER brace. A bare `spawn` registers into the INNERMOST enclosing
+// scope, so the two scopes keep separate join lists. Both writes are visible after the outer brace.
+// TSan-clean (disjoint cells). Run under KAMA_TSAN=1.
+import std::concurrent;
+
+type resource Slot {
+    Ptr<int32> cell;
+    int32 value;
+
+    public ctor make(Ptr<int32> cell, int32 value) {
+        Slot r;
+        r.cell = cell;
+        r.value = value;
+        return give r;
+    }
+
+    public fn void run() { unsafe { this.cell[0] = this.value; } }
+}
+
+fn void writer(Slot s) { s.run(); }
+
+fn int main() {
+    int32 a = 0;
+    int32 b = 0;
+    Slot sa = Slot::make(cell: addr(of: a), value: 30i32);
+    Slot sb = Slot::make(cell: addr(of: b), value: 12i32);
+    scope {
+        spawn writer(s: give sa);       // outer child -> joined at the OUTER brace
+        scope {
+            spawn writer(s: give sb);   // inner child -> joined at the INNER brace
+        }                               // inner BARRIER: `b` is written and visible here
+    }                                   // outer BARRIER: `a` is joined here
+    return a + b;   // 30 + 12 = 42
+}

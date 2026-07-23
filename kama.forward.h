@@ -21,6 +21,7 @@ class FunctionDeclarationNode;
 class FunctionParameterNode;
 class BlockNode;
 class IsolateNode;
+class ScopeNode;
 class VariableDeclarator;
 class LocalVariableDeclaration;
 class ConstVariableDeclarator;

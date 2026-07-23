@@ -138,7 +138,7 @@ struct kamayystype {
 %token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH IF IN
-%token <string> INT INT8 INT16 INT32 INT64 SPAWN
+%token <string> INT INT8 INT16 INT32 INT64 SPAWN SCOPE
 %token <string> MATCH
 %token <string> NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF
@@ -207,7 +207,7 @@ struct kamayystype {
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
-%type <statement> marked_type_declaration unsafe_statement spawn_statement arm_value_statement retroactive_impl_declaration
+%type <statement> marked_type_declaration unsafe_statement spawn_statement scope_statement arm_value_statement retroactive_impl_declaration
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <namespacedeclaration> namespace_opt
@@ -739,6 +739,7 @@ embedded_statement
   | arm_value_statement
   | unsafe_statement
   | spawn_statement
+  | scope_statement
   ;
 arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
@@ -753,6 +754,12 @@ unsafe_statement
      emitter validates the callee is a bare top-level fn (no receiver) → shared-nothing. */
 spawn_statement
   : SPAWN invocation_expression SEMICOLON   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
+  ;
+  /* `scope { ... }` — a structured-concurrency block (M4): bare `spawn`s inside it are deferred-join
+     children joined at the closing brace, before any local dtor. Block-bodied keyword, exactly like
+     `unsafe`. */
+scope_statement
+  : SCOPE block   { $$ = std::make_shared<ScopeNode>(SCANNER_CODEGENCONTEXT, $2); }
   ;
 empty_statement
   : SEMICOLON   {  }

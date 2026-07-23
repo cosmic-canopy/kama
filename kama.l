@@ -383,6 +383,7 @@ static struct name_value keywords [] = {
     {"public",      PUBLIC},
     {"ref",         REF},
     {"return",      RETURN},
+    {"scope",       SCOPE},
     {"sizeof",      SIZEOF},
     {"spawn",       SPAWN},
     {"static",      STATIC},

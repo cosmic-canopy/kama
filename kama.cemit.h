@@ -536,7 +536,11 @@ private:
     // RAII scope stack: live destructible locals per lexical scope.
     struct LiveLocal { std::string cVar; std::string className; };
     struct Scope { std::vector<LiveLocal> locals; std::vector<std::string> declaredNames;
-                   bool isLoopBoundary = false; bool isFunctionRoot = false; };
+                   bool isLoopBoundary = false; bool isFunctionRoot = false;
+                   // Structured concurrency (M4): a `scope { }` is a task scope. `taskChildren` are the C
+                   // names of the `kama_isolate_t` handles `spawn`ed inside it; emitScopeCleanup joins them
+                   // ALL before dropping any local (join-before-drop), on every exit path.
+                   bool isTaskScope = false; std::vector<std::string> taskChildren; };
     // Erase move-state for the closing scope's locals, then pop it. A name going out of scope is
     // lexically dead, so a sibling scope reusing it must start NotMoved (not inherit a stale Moved).
     void popScope();
@@ -995,8 +999,10 @@ private:
     // Statements
     void emitStatement(SharedStatement stmt, int depth);
     std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val);   // shared front half
-    void emitIsolate(IsolateNode* iso, int depth);   // `isolate worker(p: give x);` — fused spawn+join (M2)
-    std::string emitIsolateExpr(IsolateNode* iso);   // `Isolate h = isolate worker(...)` — RAII handle form
+    void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)
+    std::string emitIsolateExpr(IsolateNode* iso);   // `Isolate h = spawn worker(...)` — RAII handle form
+    void emitScope(ScopeNode* sc, int depth);        // `scope { }` — structured concurrency + join barrier (M4)
+    Scope* innermostTaskScope();                     // nearest enclosing `scope { }`, or null
     void emitBlock(BlockNode* block, int depth);
     void emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot);
     void emitBody(SharedStatement stmt, int depth, bool loopBoundary);  // brace-wrapped control-flow body

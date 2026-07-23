@@ -1119,6 +1119,11 @@ bool CEmitter::bodyDiverges(SharedStatement s)
 
 void CEmitter::emitScopeCleanup(const Scope& s, int depth)
 {
+    // M4 barrier: JOIN every child `spawn`ed in this task scope BEFORE dropping any local. This runs
+    // from every exit path — fall-through here, and the return/break/continue unwinds (emitUnwindAll /
+    // emitUnwindToLoop both call this) — so a borrowed scope-local is guaranteed to outlive its child on
+    // ALL paths (join-before-drop). Join order among siblings is irrelevant: the joins are independent.
+    for (auto& h : s.taskChildren) { indent(depth); *_out << "kama_isolate_join(" << h << ");\n"; }
     for (auto it = s.locals.rbegin(); it != s.locals.rend(); ++it) {
         auto ms = _moveState.find(it->cVar);
         if (ms != _moveState.end()) {
@@ -1228,6 +1233,40 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
     popScope();
 }
 
+// The nearest enclosing `scope { }` on the scope stack, or null. A bare `spawn` registers its join
+// handle into this; a `ref` borrow (M4.2) is checked against the locals it owns.
+CEmitter::Scope* CEmitter::innermostTaskScope()
+{
+    for (size_t i = _scopes.size(); i-- > 0; )
+        if (_scopes[i].isTaskScope) return &_scopes[i];
+    return nullptr;
+}
+
+// `scope { ... }` — structured concurrency (M4). Lowered like emitBlockScoped, but the scope is a TASK
+// scope: bare `spawn`s inside register their `kama_isolate_t` handles here, and emitScopeCleanup joins
+// them ALL before dropping any local (the join-before-drop barrier). A `scope` introduces exactly one
+// lexical C block, like a plain `{ }`, so child handles declared in it are in scope at the closing brace.
+void CEmitter::emitScope(ScopeNode* sc, int depth)
+{
+    line(sc->line);
+    indent(depth);
+    Scope s; s.isTaskScope = true;
+    _scopes.push_back(s);
+
+    *_out << "{\n";
+    SharedStatement last;
+    auto* block = dynamic_cast<BlockNode*>(sc->body.get());
+    if (block && block->statements) {
+        for (auto& stmt : *block->statements) { emitStatement(stmt, depth + 1); last = stmt; }
+    }
+    // Fall-through: join every child, then drop locals. On a jump exit the unwind path already ran the
+    // full cleanup (child joins included) via emitScopeCleanup — the double-destruction guard.
+    if (!(last && stmtIsJump(last)))
+        emitScopeCleanup(_scopes.back(), depth + 1);
+    indent(depth); *_out << "}\n";
+    popScope();
+}
+
 // write hoisted temp statements (inline-ctor-in-arg materialization) at `depth`, then clear.
 // A leaf statement sets _hoistOK, builds its expression string (which may push here), then calls
 // this BEFORE writing its own line — so the temps appear first. Pure ISO C, no `({ … })`.
@@ -1285,8 +1324,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         return;
     }
 
-    // `isolate worker(p: give x);` — spawn a top-level fn on a fresh OS thread with a MOVED arg
-    // bundle, then join (fused, M2). Shared-nothing by construction (bare top-level entry + moved arg).
+    // `scope { ... }` — structured concurrency (M4): a task scope that joins every child `spawn`ed
+    // inside it at the closing brace, before any local dtor (join-before-drop).
+    if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
+        emitScope(sc, depth);
+        return;
+    }
+
+    // `spawn worker(p: give x);` — a bare `spawn` statement: a deferred-join child of the enclosing
+    // `scope { }` (M4). Scope-only; shared-nothing by construction (bare top-level entry + moved arg).
     if (auto* iso = dynamic_cast<IsolateNode*>(n)) {
         emitIsolate(iso, depth);
         return;
@@ -6055,23 +6101,35 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     return sig.cName;
 }
 
-// `isolate worker(p: give x);` — the FUSED statement: spawn the bundle onto a fresh OS thread and join it
-// immediately. Generated C: heap the moved bundle, spawn via the trampoline, join.
+// `spawn worker(p: give x);` — a bare `spawn` STATEMENT, which is a **deferred-join child of the
+// enclosing `scope { }`** (M4). It is legal ONLY inside a scope (which owns the join); outside a scope
+// use the handle form `Isolate h = spawn worker(...)`. Generated C: heap the moved bundle and spawn now,
+// declaring the `kama_isolate_t` handle at the scope's block level; the join is emitted by the scope's
+// closing-brace barrier (emitScopeCleanup), which runs before any local dtor.
 void CEmitter::emitIsolate(IsolateNode* iso, int depth)
 {
+    if (!innermostTaskScope())
+        unsupported("a bare `spawn` must appear inside a `scope { }` (which owns the join) — outside a "
+                    "scope use the handle form `Isolate h = spawn worker(...)`", iso->line);
+
     std::string cls, val;
     std::string cName = isolatePrep(iso, cls, val);
     std::string arg = "__kama_iso_arg" + std::to_string(_tempCounter++);
     std::string hnd = "__kama_iso" + std::to_string(_tempCounter++);
 
     line(iso->line);
+    // The handle is declared at THIS depth (the scope's own block), NOT inside the malloc sub-block, so
+    // the scope-barrier join can name it. The malloc temp stays scoped to its sub-block.
+    indent(depth);     *_out << "kama_isolate_t " << hnd << ";\n";
     indent(depth);     *_out << "{\n";
     indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << "));\n";
     indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
     indent(depth + 1); *_out << "*" << arg << " = (" << val << ");\n";
-    indent(depth + 1); *_out << "kama_isolate_t " << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << arg << ");\n";
-    indent(depth + 1); *_out << "kama_isolate_join(" << hnd << ");\n";
+    indent(depth + 1); *_out << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << arg << ");\n";
     indent(depth);     *_out << "}\n";
+    // Register into the innermost scope AFTER emission (re-fetch: isolatePrep may have grown _scopes and
+    // invalidated an earlier pointer). The scope joins this handle at its closing brace.
+    innermostTaskScope()->taskChildren.push_back(hnd);
 }
 
 // `Isolate h = isolate worker(p: give x);` — the HANDLE form: spawn now and wrap the (heap-boxed) thread

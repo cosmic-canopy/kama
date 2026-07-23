@@ -1,0 +1,17 @@
+// M4: a bare `spawn` statement is a scope child — it is legal ONLY inside a `scope { }`, which owns the
+// join. Outside a scope there is nothing to join it (an orphan thread), so this MUST fail to compile.
+// Outside a scope, the handle form `Isolate h = spawn worker(...)` is the way to spawn.
+import std::concurrent;
+
+type resource Payload {
+    int32 value;
+    public ctor make(int32 value) { Payload r; r.value = value; return give r; }
+}
+
+fn void worker(Payload p) { int32 x = p.value; }
+
+fn int main() {
+    Payload p = Payload::make(value: 1i32);
+    spawn worker(p: give p);   // ERROR: bare `spawn` outside a `scope { }`
+    return 0;
+}

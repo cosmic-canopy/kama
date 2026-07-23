@@ -1,0 +1,39 @@
+// M4.1: many children in one `scope`, all joined at the brace. Four workers each write a distinct
+// power-of-two into a distinct cell through a moved bundle; after the barrier main sums them. Exercises a
+// task scope holding several child handles (the join list), all joined before the sum is read. TSan-clean
+// (disjoint cells). Run under KAMA_TSAN=1.
+import std::concurrent;
+
+type resource Slot {
+    Ptr<int32> cell;
+    int32 value;
+
+    public ctor make(Ptr<int32> cell, int32 value) {
+        Slot r;
+        r.cell = cell;
+        r.value = value;
+        return give r;
+    }
+
+    public fn void run() { unsafe { this.cell[0] = this.value; } }
+}
+
+fn void writer(Slot s) { s.run(); }
+
+fn int main() {
+    int32 c0 = 0;
+    int32 c1 = 0;
+    int32 c2 = 0;
+    int32 c3 = 0;
+    Slot s0 = Slot::make(cell: addr(of: c0), value: 1i32);
+    Slot s1 = Slot::make(cell: addr(of: c1), value: 2i32);
+    Slot s2 = Slot::make(cell: addr(of: c2), value: 4i32);
+    Slot s3 = Slot::make(cell: addr(of: c3), value: 8i32);
+    scope {
+        spawn writer(s: give s0);
+        spawn writer(s: give s1);
+        spawn writer(s: give s2);
+        spawn writer(s: give s3);
+    }                               // BARRIER: all four joined here
+    return c0 + c1 + c2 + c3;   // 1 + 2 + 4 + 8 = 15
+}

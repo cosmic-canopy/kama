@@ -1,0 +1,33 @@
+// M4.1: the join-before-continue proof. A `scope` spawns two children that each write a distinct value
+// through a MOVED pointer bundle into a distinct cell main owns. At the closing brace the scope JOINS both
+// children BEFORE control continues, so both writes are visible when main reads them right after — and the
+// cells are disjoint, so this is TSan-clean (join happens-before the read). Run under KAMA_TSAN=1.
+import std::concurrent;
+
+type resource Slot {
+    Ptr<int32> cell;
+    int32 value;
+
+    public ctor make(Ptr<int32> cell, int32 value) {
+        Slot r;
+        r.cell = cell;
+        r.value = value;
+        return give r;
+    }
+
+    public fn void run() { unsafe { this.cell[0] = this.value; } }
+}
+
+fn void writer(Slot s) { s.run(); }   // owns the moved bundle; writes through its own slot
+
+fn int main() {
+    int32 a = 0;
+    int32 b = 0;
+    Slot sa = Slot::make(cell: addr(of: a), value: 20i32);
+    Slot sb = Slot::make(cell: addr(of: b), value: 22i32);
+    scope {
+        spawn writer(s: give sa);   // deferred-join child — runs concurrently
+        spawn writer(s: give sb);   // another child — disjoint cell
+    }                               // BARRIER: both joined here, before `a`/`b` are read
+    return a + b;   // 42 iff both children ran and were joined
+}

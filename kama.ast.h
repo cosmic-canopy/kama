@@ -332,6 +332,17 @@ public:
         : ASTNode(context),  StatementNode(context), body(body) { }
 };
 
+// `scope { ... }` — a structured-concurrency block (M4). It owns the isolates `spawn`ed inside it and
+// JOINS them all at the closing brace, BEFORE any local destructor runs (join-before-drop). That ordering
+// is the whole point: it makes a child that borrows an enclosing local sound with no lifetime inference.
+// Statement-only (unlike IsolateNode); the emitter lowers it like a scoped block with a join barrier.
+class ScopeNode : public StatementNode {
+public:
+    SharedStatement body;   // a BlockNode
+    ScopeNode(CodeGenContext& context, SharedStatement body)
+        : ASTNode(context),  StatementNode(context), body(body) { }
+};
+
 // `isolate worker(p: give x)` — spawn a top-level fn on a fresh OS thread with a MOVED-in argument bundle.
 // Both a STATEMENT (`isolate worker(...);` — fused spawn+join) and an EXPRESSION (`Isolate h = isolate
 // worker(...);` — spawn now, returning an RAII handle whose drop=join): hence ExpressionStatementNode.
