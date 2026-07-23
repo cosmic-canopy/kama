@@ -388,10 +388,68 @@ lifetime inference, so the M4 guarantee is *lifetime* AND, for what it admits, *
   (=86); `xfail/spawn_outside_scope`, `xfail/scope_borrow_escape`, `xfail/scope_borrow_same_root`. Green on
   native + `KAMA_TSAN` + `KAMA_SAN`; skipped on wasm (native-only until M5).
 
-**Known limitations:** a bare `spawn` must be a DIRECT statement of the `scope` body (its handle is declared in
-the scope's C block so the barrier can name it) — spawning inside a nested block or a loop within the scope is
-not yet supported. Multi-arg entries (a borrow plus value params) are deferred: the single bundle param carries
-the child's inputs. Both are follow-ups if a concrete need appears.
+**Known limitations** (both deferred — not blocking; tackle only when a concrete need appears):
+- A bare `spawn` must be a DIRECT statement of the `scope` body (its handle is declared in the scope's C block
+  so the barrier can name it) — spawning inside a nested block or a `while`/`for` loop within the scope is not
+  yet supported. Fixing it needs the scope to hoist a dynamic handle list (a small vector joined at the brace).
+  **Dynamic N-way fan-out (spawn K workers where K is runtime) is really M6's `parallel_for`** — data-parallel
+  over a collection with disjoint slices — so spawn-in-loop may be subsumed rather than built directly.
+- The entry takes exactly ONE bundle param; multi-arg entries (a `ref` borrow plus value params, matching the
+  `accumulate(sink: ref …, lo:, hi:)` ideal) would need a per-entry arg-bundle struct. The single bundle param
+  carries the child's inputs today, so this is pure ergonomics.
+
+## M5 — implementation kickoff (wasm parity — verified hooks 2026-07-23, don't re-explore)
+
+A running start for the next session. M1–M4 are shipped + green on the **native** leg (pthreads); every
+`std::concurrent` fixture is **skipped on wasm** today. M5 makes the isolate seam (isolates + channels +
+`scope`) run on the **wasm** target too, and proves it with one fixture passing **identically** native + wasm.
+*(Remove this section once M5 lands, replacing it with an "M5 — landed" note like M2–M4.)*
+
+**The one real decision — how threads exist on wasm (read first).** Two models:
+1. **emscripten pthreads (Web Workers backed by a *shared* `SharedArrayBuffer` linear memory).** The C in
+   `kama_isolate.h` / `kama_channel.h` compiles *almost as-is* — `pthread_create`/`_join`, `pthread_mutex`,
+   `pthread_cond` all work under emscripten (mutex/cond lower to `Atomics.wait`). `give` stays a **pointer
+   handoff** (memory is physically shared, exactly like native pthreads). Kama's shared-nothing guarantee is
+   **structural** (bare-fn entry + moved bundle), not address-space separation — so this preserves the
+   guarantee while matching native semantics 1:1. **Recommended: true parity, minimal new code.**
+2. **Web Worker + `postMessage(transferable)` (separate address spaces).** The M0-era framing; `give` →
+   transferable. Much more machinery (serialize the bundle, host-spawns-the-worker, join via promises) and
+   it does NOT match native's shared-memory model. Only needed if SharedArrayBuffer is truly unavailable.
+
+Recommend **model 1**. It reframes the M0 "wasm = separate address spaces" note: now that native is
+shared-memory-pthreads + *structural* shared-nothing, emscripten-pthreads is the faithful wasm parity.
+
+**The load-bearing gotcha (model 1): the main browser/JS thread may not block.** `pthread_join` and a blocking
+`channel recv()` lower to `Atomics.wait`, which THROWS on the main thread (allowed only in a Worker). The fix
+is **`-sPROXY_TO_PTHREAD`** — emscripten runs kama's `main()` on a dedicated worker, so it may block on joins
+/ recv freely. Children then need worker slots: **`-sPTHREAD_POOL_SIZE=<n>`** (pre-created pool) or allow
+on-demand growth. A `scope` that spawns K children needs ≥ K live pool workers (or growth) to avoid a stall.
+
+**Verified hook points** (file:line — `kama_time.h` / `kama_app.h` are the copy-me per-target-`#if` analogs):
+
+| Layer | File:line | What to do |
+|---|---|---|
+| Runtime ABI | `kama_isolate.h` (whole file — `typedef pthread_t kama_isolate_t;` + `spawn`/`join`/`*_boxed`) | Under model 1, wrap in `#if defined(__EMSCRIPTEN__)` only if a divergence appears — `pthread_*` should compile unchanged. Mirror the `#if defined(__EMSCRIPTEN__)` split in `kama_time.h:18` / `kama_app.h:15` if any shim is needed. |
+| Channel ABI | `kama_channel.h` (`pthread_mutex`+2 condvars) | Should compile as-is under `-pthread`; verify `Atomics.wait` blocking recv runs only off the main thread (PROXY_TO_PTHREAD covers `main`). |
+| Build flags | `kama.driver.cpp:786-789` (`if (needsPthread && !wasm) cmd << "-lpthread ";`) | Add the wasm arm: when `needsPthread && wasm`, emit `-pthread -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=… ` (and `-sEXIT_RUNTIME=1`, already added for `std::app`) instead of `-lpthread`. `needsPthread` is already set from `externsHeader("kama_isolate.h")||("kama_channel.h")` (`kama.cemit.cpp:349`). |
+| Emit selection | `kama.driver.cpp:576-589` (emcc vs cc), `:599-602` (`.html`/`.js` out) | No change — the emcc path already exists (`--target wasm --cc emcc`). |
+| Test skip | `run_tests.sh:149-152` (`grep -q 'std::concurrent' … SKIP … native-only until M5`) | **Remove** this skip block (or narrow it) so `std::concurrent` fixtures run on the wasm leg. |
+| Test runner | `run_tests.sh:104` (`build … --target wasm --cc emcc -o $out.js`), `:113-122` (`node $1.js`) | wasm fixtures already build to `.js` and run under `node`. Node needs SharedArrayBuffer (default in modern node; may need `--experimental-wasm-threads` on older). Confirm the pool-size worker spawn works under node. |
+| Portability proof | new fixture | One fixture (e.g. `isolate_basic` / `scope_join_barrier`) asserted to exit identically on native AND wasm — the M5 acceptance test. Same `.expect`, both legs. |
+
+**Suggested sub-stages:** M5.1 flags + un-skip + get `isolate_basic` green on wasm under node (proves the
+pthread-pool + PROXY_TO_PTHREAD path). → M5.2 channels on wasm (blocking recv off the main thread) → M5.3 the
+`scope` fixtures + the portability-proof fixture asserted on both legs.
+
+**Risks / unknowns:** (a) **pool sizing** — dynamic `pthread_create` beyond the pool either grows (with a
+main-thread stall warning) or fails; a `scope` with many children may need a generous `PTHREAD_POOL_SIZE` or
+growth enabled — decide the default. (b) **node vs browser** — node is the test harness (SharedArrayBuffer
+on by default recently); a *browser* additionally needs COOP/COEP headers to enable SharedArrayBuffer (a
+serving concern, not a codegen one — note it, don't solve it in M5). (c) **`kama_channel.h` under emscripten**
+— verify the cap-0 rendezvous condvar dance and last-endpoint-drop free behave under `Atomics.wait`; if a
+blocking call lands on the main thread despite PROXY_TO_PTHREAD, it throws (catch it in a fixture early).
+(d) **`std::time`** already has a wasm leg (`emscripten_get_now`) — no work, but timeouts built on it inherit
+the main-thread-block rule.
 
 ## Deferred (per §6)
 
