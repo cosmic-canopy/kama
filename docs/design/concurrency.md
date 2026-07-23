@@ -320,6 +320,109 @@ queue non-empty) have their bytes reclaimed by the C buffer free, but their kama
 run — so a heap-owning `T` left buffered leaks. Value types never leak. The contract is *drain your channel*
 (the fixtures do). A drain-on-`~Receiver` (needs a non-blocking `try_recv`) is the clean fix — a follow-up.
 
+## M4 — implementation kickoff (verified hooks 2026-07-23 — don't re-explore)
+
+A running start for the next session. M2 (isolate seam) + M3 (channels) are shipped + green. M4 adds
+**`scope { … }`**: a structured-concurrency block that owns its child tasks and **joins them all at the closing
+brace** (RAII-for-tasks, §4), plus the escape-check rule that lets a child safely **borrow** from the enclosing
+scope. `parallel_for` is **M6, not M4** — M4 is just the `scope` container + the borrow rule. *(Remove this
+section once M4 lands, replacing it with an "M4 — landed" note like M2/M3.)*
+
+**The core insight (read first).** M2 already gives concurrent-spawn-with-deferred-join: `Isolate h = isolate
+w(...)` spawns now and joins when `h` drops (RAII). So a *plain* `{ }` block already joins handle-form isolates
+declared in it — BUT it joins them **interleaved with local dtors in reverse declaration order**
+(`emitScopeCleanup`, `kama.cemit.cpp:1120` walks `s.locals` in reverse). That interleaving is exactly what makes
+borrowing unsound: a child that borrowed a local declared *after* its handle would see that local dropped
+**before** the join. **So `scope`'s one essential codegen contribution is the barrier: join ALL children FIRST,
+then run the normal reverse-order local dtors.** That ordering — join-before-drop — is what makes a borrow into a
+scope-child sound, with no lifetime inference. This is the greppable decision, the M4 analog of M3's
+"all-thread-safety-in-C".
+
+**Recommended surface.** A `scope { … }` statement (a block-bodied keyword, exactly like `unsafe { … }`). A bare
+`isolate w(...)` **inside** a scope is a **deferred-join child** (spawned concurrently, joined at the barrier);
+**outside** a scope it keeps M2's spawn-join-now meaning. In M4.2 the child may **borrow** a scope(-enclosing)
+local instead of moving:
+
+```
+scope {                                  // structured: joins all children at the closing brace
+    isolate worker(slot: give a);        // M4.1: a deferred-join child (moved bundle, reuse the M2 trampoline)
+    isolate worker(slot: give b);        // another child — runs concurrently with the first
+}                                        // BARRIER: both joined here, before any local dtor
+// M4.2 — a child may borrow the scope's locals (joined before they drop, so no dangle):
+int32 total = 0;
+scope {
+    isolate accumulate(sink: ref total, lo: 0,  hi: 50);   // `ref total` — a borrow, not a move
+    isolate accumulate(sink: ref total, lo: 50, hi: 100);  // disjoint ranges (user-guaranteed in M4; §7b is M6)
+}                                        // both joined; `total` is safe to read after
+```
+
+`recv`-less `void` entries (M4 has no result channel of its own — use an M3 channel for results). SPSC-style
+children; the scope is the join owner.
+
+**Design decisions (recommend / flag):**
+1. **`scope`'s codegen = a barrier before cleanup.** `emitScope` mirrors `emitBlockScoped`
+   (`kama.cemit.cpp:1205` — push `Scope`, emit statements, `emitScopeCleanup`, `popScope`) with ONE addition:
+   the scope-`Scope` carries a child-handle list; at the closing brace emit `kama_isolate_join(hN)` for every
+   child **before** `emitScopeCleanup`. Add an `isTaskScope`/children vector to the `Scope` struct
+   (`kama.cemit.h:536`) so a nested `isolate` can register into the innermost task scope.
+2. **A bare `isolate` inside a scope defers its join.** `emitIsolate` (the fused form, `kama.cemit.cpp:1291`
+   dispatch → `emitIsolate` at ~6060) currently spawns+joins immediately; when a task scope is on the stack it
+   must instead `kama_isolate_spawn_boxed` (or bare spawn) and push the handle into the scope's child list — the
+   join is emitted by `emitScope` at the barrier. *(Alternative considered: require the handle form inside a
+   scope and have `scope` only reorder joins — but bare `isolate` as a scope-child matches the design's example
+   and is the ergonomic win; the context-dependence is the cost. Confirm this vs. a distinct spelling.)*
+3. **Borrow relaxation (M4.2) is a SECOND trampoline shape + an escape check.** M2's trampoline heap-boxes the
+   moved bundle and frees it (`isolatePrep`, `kama.cemit.cpp` ~6040). A borrowed arg instead passes a **pointer
+   to the scope-local** (no box, no free — the join-before-drop barrier guarantees the local outlives the
+   thread). This needs: (a) `isolatePrep`'s `give`-required gate (~6031: `if (!h || !h->isGive) unsupported("…
+   must be give'n …")`) relaxed to accept a `ref`/borrow arg **when inside a task scope**; (b) an entry whose
+   param is `ref T` (a borrow) rather than a moved `resource` value; (c) an escape check.
+4. **The escape check = structural root-tracing, no lifetimes.** Mirror `checkViewCtorEscape` /
+   the view-return check (`kama.cemit.cpp` ~1905, ~7823): trace the borrow arg to its root local; require that
+   root to be declared in the **enclosing task scope or an outer scope that outlives it** — reject a borrow
+   whose root drops before the barrier (e.g. a local of an *inner* block). The existing
+   `isNonEscapingBorrow`/`viewReturnRoot` provenance machinery (`kama.cemit.h:919`) is the template.
+5. **Disjointness is the user's responsibility in M4** (two children writing `ref total` to the SAME cell would
+   race). M4 does NOT prove disjointness — that is §7b `parallel_for` + disjoint sub-`View` slicing in **M6**.
+   M4's guarantee is only *lifetime* (join-before-drop), not *exclusivity*. Document this loudly; the M4.2
+   borrow fixture must use **disjoint** targets (separate cells / disjoint ranges) and stay TSan-clean.
+
+**Verified hook points** (file:line — `unsafe { }` + the M2 isolate seam are the copy-me analogs):
+
+| Layer | File:line | What to do |
+|---|---|---|
+| Lexer | `kama.l:374` (`{"isolate", ISOLATE}`) | add `{"scope", SCOPE}` |
+| Grammar | `kama.y:141`/`:149` (`%token` lists), `:210` (`%type <statement> … unsafe_statement`), `:732`–`741` (`embedded_statement` alts incl. `block`/`unsafe_statement`/`isolate_statement`), `:748`–`749` (`unsafe_statement : UNSAFE block → UnsafeNode`) | add `%token SCOPE`, `scope_statement` to `%type` + `embedded_statement`, and `scope_statement : SCOPE block { … ScopeNode … }` (mirror `unsafe_statement` exactly) |
+| AST | `kama.ast.h:328` (`class UnsafeNode : public StatementNode { SharedStatement body; }`) | add `class ScopeNode : public StatementNode { SharedStatement body; }` right after — a statement-only node (simpler than `IsolateNode`, which is also an expression) |
+| Emitter — dispatch | `kama.cemit.cpp:1280` (UnsafeNode branch) / `:1290` (IsolateNode → `emitIsolate`) in `emitStatement` | add a `dynamic_cast<ScopeNode*>` branch → `emitScope(sc, depth)` |
+| Emitter — scope lowering | new `emitScope`, modeled on `emitBlockScoped` (`kama.cemit.cpp:1205`) + `emitScopeCleanup` (`:1120`) + `popScope` (`:1144`) | push a task `Scope`; emit stmts; at the brace, join every registered child, THEN `emitScopeCleanup`; `popScope` |
+| Emitter — deferred-join spawn | `emitIsolate` (fused, ~`:6060`) | when a task scope is active, spawn-boxed + register the handle into the scope instead of joining now |
+| Emitter — borrow gate (M4.2) | `isolatePrep` give-gate (`kama.cemit.cpp` ~`:6031`) + the trampoline builder (~`:6040`) | accept a `ref` borrow arg inside a task scope; emit a no-box pointer-passing trampoline |
+| Emitter — escape check (M4.2) | new `checkScopeEscape`, mirroring `checkViewCtorEscape` (~`:7823`) / view-return root-trace (~`:1905`); `isNonEscapingBorrow` (`kama.cemit.h:919`) | reject a borrow whose root local drops before the scope barrier |
+| Scope struct | `kama.cemit.h:536` (`struct Scope { … }`) | add `bool isTaskScope` + a child-handle vector |
+| Tests | `run_tests.sh` — existing `KAMA_TSAN` sweep + the `std::concurrent` wasm-skip already cover it | new fixtures below (native-only until M5) |
+
+**Draft M4 fixtures** (native + `KAMA_TSAN` + `KAMA_SAN`; wasm-skipped): (1) **scope join barrier**: a scope
+spawns two children that each write through a moved slot; assert both effects are visible after the scope
+(TSan-clean — the join-before-continue proof). (2) **many children**: N children in one scope, all joined at the
+brace, summed. (3) **M4.2 borrow**: two children accumulate into **disjoint** cells (or disjoint ranges of one
+buffer) via `ref` — no move; assert the combined result; TSan-clean (disjoint = no race). (4) **xfail escape**:
+a child borrows a local of an **inner** block (drops before the barrier) → the escape-check reject naming the
+borrow root. (5) **nested scopes**: an inner scope's children join before the inner brace; the outer's before
+the outer brace.
+
+**Suggested sub-stages:** M4.1 the `scope` container (bare `isolate` = deferred-join child, moved bundle, the
+join-before-cleanup barrier — fixtures 1,2,5) → M4.2 the borrow relaxation + escape check (fixtures 3,4).
+
+**Risks / unknowns:** (a) **join order vs. dtor order** — the barrier must run every child join *before* the
+first local dtor; verify `emitScope` emits joins ahead of `emitScopeCleanup` on BOTH the fall-through and the
+early-jump (`return`/`break` out of a scope) paths (the jump path runs cleanup via a different site — see the
+`stmtIsJump` guard at `:1223` and the early-exit walks at `:1176`/`:1185`). (b) **borrow trampoline lifetime**
+(M4.2) — the pointer passed to the child must stay valid until join; sound *only* because the barrier precedes
+the local's dtor, so an early `return` out of a scope must ALSO join first. (c) **the deferred-join `isolate`
+context-dependence** (decision #2) — a bare `isolate` meaning different things in/out of a scope; if that reads
+too implicit, consider a distinct child spelling before M4.1 locks it.
+
 ## Deferred (per §6)
 
 Co-equal general shared-memory ("hybrid") threading; an M:N green-thread runtime / `async`/`await` in the
