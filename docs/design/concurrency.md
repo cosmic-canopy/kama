@@ -485,3 +485,16 @@ lending each task a non-overlapping mutable sub-`View`, safe by disjointness).
 
 Co-equal general shared-memory ("hybrid") threading; an M:N green-thread runtime / `async`/`await` in the
 language. Reopen only if a concrete case the seam + poller + a native scheduler library cannot express appears.
+
+**Immutable-`Shared` over a CONTRACT element (the M6.2 intrinsic fat-pointer path).** M6.2 shipped the atomic
+refcount for the concrete-element *library* path only. Sharing a *polymorphic* immutable object across isolates
+— `Shared<immutable Contract>`, the analog of Rust's `Arc<dyn Trait + Sync>` — is deliberately **deferred as
+YAGNI**: in kama it is largely absorbed by two already-working paths — a *closed* polymorphic set is an
+immutable sum type (`type immutable value Expr { case … }`, a concrete type on the shipped path), and a
+single-implementation object is just its concrete immutable type. The intrinsic path is genuinely needed only
+for *open* polymorphism (plugin/extensible interfaces) shared immutably across isolates, which has no consumer
+today. **Reopen when a concrete open-polymorphism case appears.** Design when wanted: an `immutable contract`
+(all implementers compiler-enforced deeply immutable) + routing the `KAMA_SHARED/WEAK_FUNCS` macros and the
+emitter-direct `ctrl->strong++` sites through the existing `kama_ctrl.h` seam (the `CollectionInfo`
+`useAtomicRefcount` flag is already set for it). Cheap interim option: reject `immutable` on a contract with a
+clear "not yet supported" message rather than silently ignoring it.
