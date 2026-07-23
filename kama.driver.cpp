@@ -744,8 +744,10 @@ int main(int argc, char** argv)
                     << "-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8 ";
         }
         // std::app's run loop keeps the wasm runtime alive (emscripten_set_main_loop); EXIT_RUNTIME lets
-        // its quit() (emscripten_force_exit) shut down cleanly with a real exit code.
-        if (wasm && needsApp) cmd << "-sEXIT_RUNTIME=1 ";
+        // its quit() (emscripten_force_exit) shut down cleanly with a real exit code. The isolate seam needs
+        // it too: under -sPROXY_TO_PTHREAD `main` runs on a worker, and EXIT_RUNTIME is what carries its
+        // return value out as the process exit code (else node sees 0 regardless).
+        if (wasm && (needsApp || needsPthread)) cmd << "-sEXIT_RUNTIME=1 ";
         for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
         // Native WebGPU seam: compile the surface TU (Objective-C on macOS — it attaches a CAMetalLayer
         // to the NSWindow) and link GLFW + the window-system libs. Only when the program externs
@@ -783,10 +785,24 @@ int main(int argc, char** argv)
         // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm
         // FFI). Native only — wasm/emscripten bundles libm. (--gc-sections still prunes unused code.)
         if (needsLibm && !wasm) cmd << "-lm ";
-        // Pay-for-what-you-use: link pthreads only when the program uses `isolate` (std::concurrent's
-        // kama_isolate.h). Native only — wasm has no pthread link (M5 uses Web Workers). Harmless on macOS
-        // (pthreads live in libc); required on Linux.
-        if (needsPthread && !wasm) cmd << "-lpthread ";
+        // Pay-for-what-you-use: wire up threads only when the program uses the isolate seam (std::concurrent's
+        // kama_isolate.h / kama_channel.h). Native: link libpthread (harmless on macOS — pthreads live in libc;
+        // required on Linux). Wasm: emscripten pthreads = Web Workers over a shared SharedArrayBuffer, so the
+        // same pthread_* C compiles unchanged (mutex/cond lower to Atomics.wait). -sPROXY_TO_PTHREAD runs
+        // `main` on a dedicated worker so it may block on join/recv (Atomics.wait THROWS on the JS main
+        // thread). PTHREAD_POOL_SIZE pre-warms worker slots (KAMA_PTHREAD_POOL, default 0); STRICT=0 lets the
+        // pool grow on demand so a `scope` with more children than the pool never stalls — pre-warm is a pure
+        // latency knob, not a correctness cap.
+        if (needsPthread) {
+            if (wasm) {
+                const char* pool = getenv("KAMA_PTHREAD_POOL");   // build-time override; unset => 0 (grow on demand)
+                cmd << "-pthread -sPROXY_TO_PTHREAD "
+                    << "-sPTHREAD_POOL_SIZE=" << (pool && *pool ? pool : "0") << " "
+                    << "-sPTHREAD_POOL_SIZE_STRICT=0 ";
+            } else {
+                cmd << "-lpthread ";
+            }
+        }
 #if defined(_WIN32)
         // std::net uses Winsock (kama_os.h). Link ws2_32 on native Windows builds; harmless (and pruned by
         // --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.

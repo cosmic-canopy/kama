@@ -146,10 +146,6 @@ test_one() {
         if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then
             echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return
         fi
-        # The isolate seam is native-only (pthreads) until M5 brings the Web Worker bridge; skip on wasm.
-        if grep -q 'std::concurrent' "$src"; then
-            echo "SKIP $name (isolate seam: native-only until M5 wasm parity)" >"$out"; echo SKIP >"$res"; return
-        fi
     else
         if [ "$uses_net_web" = 1 ]; then
             echo "SKIP $name (web net: browser-only transport)" >"$out"; echo SKIP >"$res"; return

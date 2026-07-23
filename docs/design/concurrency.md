@@ -222,8 +222,9 @@ threads out of the *language surface* does not restrict a server scheduler.
   sendability check with field-naming errors; bounded + rendezvous. ✅ *(landed 2026-07-23 — see below)*
 - **M4 Structured-concurrency scope** — `scope` joining children at drop (RAII-for-tasks); the
   borrow-outlives-task rule via the escape check.
-- **M5 wasm parity** — Worker + postMessage bridge behind the M2 ABI; `give`→transferable; the native↔wasm
-  portability proof (one fixture passing identically on both).
+- **M5 wasm parity** — emscripten pthreads (Web Workers over a shared `SharedArrayBuffer`) behind the M2 ABI;
+  `give` stays a pointer handoff; the native↔wasm portability proof (fixtures passing identically on both).
+  *(The postMessage/transferable bridge was the early framing; model 1 was chosen — see "M5 — landed".)*
 - **M6 `Atomic<T>` + the two safe-sharing primitives** — the narrow shared seams (native + wasm/SharedArrayBuffer);
   immutable-`Shared` cross-isolate; disjoint-slice `parallel_for`. The job-system library lands on top.
 
@@ -316,8 +317,8 @@ is the Shared|Weak-only sibling of `computeReachesPointer` (same fixpoint, `Owne
 - Tests — `channel_bounded` (cross-isolate hand-off, =45), `channel_backpressure` (cap-1, in-order),
   `channel_move_heap` (heap-owning `T`, free-once), `channel_send_owned` (`Owned<X>` IS sendable),
   `channel_rendezvous` (cap-0 lockstep), `channel_close` (drop wakes a blocked recv → None),
-  `tests/xfail/channel_send_shared` (the sendability reject). Green on native + `KAMA_TSAN` + `KAMA_SAN`;
-  skipped on wasm (native-only until M5).
+  `tests/xfail/channel_send_shared` (the sendability reject). Green on native + `KAMA_TSAN` + `KAMA_SAN`,
+  and on wasm since M5.
 
 **Known limitation:** items left **undelivered** in an abandoned channel (both endpoints dropped with the
 queue non-empty) have their bytes reclaimed by the C buffer free, but their kama-level destructors do **not**
@@ -331,7 +332,7 @@ isolates `spawn`ed inside it and **joins them all at the closing brace, before a
 (join-before-drop). That ordering is the one load-bearing codegen contribution — the M4 analog of M3's
 "all-thread-safety-in-C" — and it is what makes a child that **borrows** an enclosing local sound with **no
 lifetime inference**. Native pthreads (reuses the M2 `kama_isolate.h` seam — no new runtime). Native +
-`KAMA_TSAN` + `KAMA_SAN` green; wasm-skipped until M5.
+`KAMA_TSAN` + `KAMA_SAN` green; wasm-green since M5.
 
 **The spawn verb is now `spawn`** (was `isolate` through M3 — `isolate` is a noun; `Isolate` remains the RAII
 handle *type*). A bare `spawn f(…);` is **scope-only**: a deferred-join child of the enclosing scope; outside
@@ -386,7 +387,7 @@ lifetime inference, so the M4 guarantee is *lifetime* AND, for what it admits, *
   `kama_isolate.h`); `Scope` gains `isTaskScope` + `taskChildren` + `borrowedRoots`.
 - Tests — `scope_join_barrier` (=42), `scope_many_children` (=15), `scope_nested` (=42), `scope_borrow_disjoint`
   (=86); `xfail/spawn_outside_scope`, `xfail/scope_borrow_escape`, `xfail/scope_borrow_same_root`. Green on
-  native + `KAMA_TSAN` + `KAMA_SAN`; skipped on wasm (native-only until M5).
+  native + `KAMA_TSAN` + `KAMA_SAN`, and on wasm since M5.
 
 **Known limitations** (both deferred — not blocking; tackle only when a concrete need appears):
 - A bare `spawn` must be a DIRECT statement of the `scope` body (its handle is declared in the scope's C block
@@ -398,58 +399,48 @@ lifetime inference, so the M4 guarantee is *lifetime* AND, for what it admits, *
   `accumulate(sink: ref …, lo:, hi:)` ideal) would need a per-entry arg-bundle struct. The single bundle param
   carries the child's inputs today, so this is pure ergonomics.
 
-## M5 — implementation kickoff (wasm parity — verified hooks 2026-07-23, don't re-explore)
+## M5 — landed (2026-07-23)
 
-A running start for the next session. M1–M4 are shipped + green on the **native** leg (pthreads); every
-`std::concurrent` fixture is **skipped on wasm** today. M5 makes the isolate seam (isolates + channels +
-`scope`) run on the **wasm** target too, and proves it with one fixture passing **identically** native + wasm.
-*(Remove this section once M5 lands, replacing it with an "M5 — landed" note like M2–M4.)*
+Wasm parity shipped: the **same** isolate seam (isolates + channels + `scope`) now runs on the **wasm**
+target, with **zero runtime-C changes** — `kama_isolate.h` / `kama_channel.h` compiled unchanged under
+emscripten. All 15 `std::concurrent` fixtures that were wasm-skipped now pass on the wasm leg against the
+**same `.expect`** used natively (channels, isolates, scopes), plus the negative xfail tests still reject.
 
-**The one real decision — how threads exist on wasm (read first).** Two models:
-1. **emscripten pthreads (Web Workers backed by a *shared* `SharedArrayBuffer` linear memory).** The C in
-   `kama_isolate.h` / `kama_channel.h` compiles *almost as-is* — `pthread_create`/`_join`, `pthread_mutex`,
-   `pthread_cond` all work under emscripten (mutex/cond lower to `Atomics.wait`). `give` stays a **pointer
-   handoff** (memory is physically shared, exactly like native pthreads). Kama's shared-nothing guarantee is
-   **structural** (bare-fn entry + moved bundle), not address-space separation — so this preserves the
-   guarantee while matching native semantics 1:1. **Recommended: true parity, minimal new code.**
-2. **Web Worker + `postMessage(transferable)` (separate address spaces).** The M0-era framing; `give` →
-   transferable. Much more machinery (serialize the bundle, host-spawns-the-worker, join via promises) and
-   it does NOT match native's shared-memory model. Only needed if SharedArrayBuffer is truly unavailable.
+**Threading model = emscripten pthreads (model 1 of the two considered).** Web Workers over a shared
+`SharedArrayBuffer` linear memory; `pthread_create`/`_join`, `pthread_mutex`, `pthread_cond` lower to
+`Atomics.wait`. `give` stays a **pointer handoff** (memory physically shared, exactly like native pthreads).
+Kama's shared-nothing guarantee is **structural** (bare-fn entry + moved bundle), not address-space
+separation — so a shared linear memory doesn't weaken it, and native semantics are matched 1:1. The
+alternative (Web Worker + `postMessage(transferable)`, separate address spaces) was rejected: it serializes
+every bundle instead of handing off a pointer, needs a whole divergent runtime, and doesn't match native.
+The entire host-threading dependency stays **quarantined** in the two seam headers, so a future switch (e.g.
+WASI-threads) is contained to their wasm arm + driver flags — the language, emitter, and fixtures don't move.
 
-Recommend **model 1**. It reframes the M0 "wasm = separate address spaces" note: now that native is
-shared-memory-pthreads + *structural* shared-nothing, emscripten-pthreads is the faithful wasm parity.
+**The load-bearing gotcha (solved): the JS main thread may not block.** `pthread_join` and a blocking
+`channel recv()` lower to `Atomics.wait`, which THROWS on the main thread. Fixed with **`-sPROXY_TO_PTHREAD`**
+— emscripten runs kama's `main()` on a dedicated worker, so it blocks on join/recv freely — plus
+**`-sEXIT_RUNTIME=1`** to carry `main`'s return value out as the process exit code (else node sees 0).
 
-**The load-bearing gotcha (model 1): the main browser/JS thread may not block.** `pthread_join` and a blocking
-`channel recv()` lower to `Atomics.wait`, which THROWS on the main thread (allowed only in a Worker). The fix
-is **`-sPROXY_TO_PTHREAD`** — emscripten runs kama's `main()` on a dedicated worker, so it may block on joins
-/ recv freely. Children then need worker slots: **`-sPTHREAD_POOL_SIZE=<n>`** (pre-created pool) or allow
-on-demand growth. A `scope` that spawns K children needs ≥ K live pool workers (or growth) to avoid a stall.
+**What shipped** (all in `kama.driver.cpp`, guarded by the existing `needsPthread` gate —
+`externsHeader("kama_isolate.h")||("kama_channel.h")`, `kama.cemit.cpp:349`):
+- Wasm arm of the pthread block: `-pthread -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=<n> -sPTHREAD_POOL_SIZE_STRICT=0`
+  (native arm still `-lpthread`).
+- `-sEXIT_RUNTIME=1` extended from `std::app`-only to `needsApp || needsPthread`.
+- `run_tests.sh`: the `std::concurrent` wasm-skip block removed — fixtures build to `.js` and run under `node`.
 
-**Verified hook points** (file:line — `kama_time.h` / `kama_app.h` are the copy-me per-target-`#if` analogs):
+**Pool sizing = pre-warm 0, grow on demand.** `-sPTHREAD_POOL_SIZE_STRICT=0` lets the worker pool grow past
+the pre-warm, so correctness never depends on the pool size — a `scope` with more children than the pool
+never stalls; pre-warm is a pure startup-latency optimization. The pre-warm count reads from a
+**`KAMA_PTHREAD_POOL` env var at build time** (default `0`; same idiom as the driver's `EMCC`/`KAMA_HOME`
+reads), so it's tunable per build with no compiler recompile. (Tuning the pre-warm of an *already-built*
+`.wasm` per run would need emscripten's JS-expression form of `-sPTHREAD_POOL_SIZE` — deferred, unneeded.)
 
-| Layer | File:line | What to do |
-|---|---|---|
-| Runtime ABI | `kama_isolate.h` (whole file — `typedef pthread_t kama_isolate_t;` + `spawn`/`join`/`*_boxed`) | Under model 1, wrap in `#if defined(__EMSCRIPTEN__)` only if a divergence appears — `pthread_*` should compile unchanged. Mirror the `#if defined(__EMSCRIPTEN__)` split in `kama_time.h:18` / `kama_app.h:15` if any shim is needed. |
-| Channel ABI | `kama_channel.h` (`pthread_mutex`+2 condvars) | Should compile as-is under `-pthread`; verify `Atomics.wait` blocking recv runs only off the main thread (PROXY_TO_PTHREAD covers `main`). |
-| Build flags | `kama.driver.cpp:786-789` (`if (needsPthread && !wasm) cmd << "-lpthread ";`) | Add the wasm arm: when `needsPthread && wasm`, emit `-pthread -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=… ` (and `-sEXIT_RUNTIME=1`, already added for `std::app`) instead of `-lpthread`. `needsPthread` is already set from `externsHeader("kama_isolate.h")||("kama_channel.h")` (`kama.cemit.cpp:349`). |
-| Emit selection | `kama.driver.cpp:576-589` (emcc vs cc), `:599-602` (`.html`/`.js` out) | No change — the emcc path already exists (`--target wasm --cc emcc`). |
-| Test skip | `run_tests.sh:149-152` (`grep -q 'std::concurrent' … SKIP … native-only until M5`) | **Remove** this skip block (or narrow it) so `std::concurrent` fixtures run on the wasm leg. |
-| Test runner | `run_tests.sh:104` (`build … --target wasm --cc emcc -o $out.js`), `:113-122` (`node $1.js`) | wasm fixtures already build to `.js` and run under `node`. Node needs SharedArrayBuffer (default in modern node; may need `--experimental-wasm-threads` on older). Confirm the pool-size worker spawn works under node. |
-| Portability proof | new fixture | One fixture (e.g. `isolate_basic` / `scope_join_barrier`) asserted to exit identically on native AND wasm — the M5 acceptance test. Same `.expect`, both legs. |
+**Known caveat (serving, not codegen): browser needs cross-origin isolation.** `SharedArrayBuffer` is enabled
+by default under **node** (the test harness — node v22, no flags needed), but a **browser** page serving a
+Kama concurrency binary must send `COOP: same-origin` + `COEP: require-corp` headers to unlock it. That's a
+deployment concern, out of scope here; noted for whoever ships a threaded Kama app to the web.
 
-**Suggested sub-stages:** M5.1 flags + un-skip + get `isolate_basic` green on wasm under node (proves the
-pthread-pool + PROXY_TO_PTHREAD path). → M5.2 channels on wasm (blocking recv off the main thread) → M5.3 the
-`scope` fixtures + the portability-proof fixture asserted on both legs.
-
-**Risks / unknowns:** (a) **pool sizing** — dynamic `pthread_create` beyond the pool either grows (with a
-main-thread stall warning) or fails; a `scope` with many children may need a generous `PTHREAD_POOL_SIZE` or
-growth enabled — decide the default. (b) **node vs browser** — node is the test harness (SharedArrayBuffer
-on by default recently); a *browser* additionally needs COOP/COEP headers to enable SharedArrayBuffer (a
-serving concern, not a codegen one — note it, don't solve it in M5). (c) **`kama_channel.h` under emscripten**
-— verify the cap-0 rendezvous condvar dance and last-endpoint-drop free behave under `Atomics.wait`; if a
-blocking call lands on the main thread despite PROXY_TO_PTHREAD, it throws (catch it in a fixture early).
-(d) **`std::time`** already has a wasm leg (`emscripten_get_now`) — no work, but timeouts built on it inherit
-the main-thread-block rule.
+**Next: M6** — `Atomic<T>` (the cross-isolate shared-mutable seam) + `parallel_for` (data-parallel fan-out).
 
 ## Deferred (per §6)
 

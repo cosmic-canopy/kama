@@ -391,10 +391,12 @@ construction** (unifies with the MCU Tier-0 statics blocker — §5 / [MCU_READI
 job system + event-loop scheduler are libraries, not language. Start there.
 
 **► Progress (2026-07-23):** M1 (`std::time`), M2 (native isolate seam — spawn + moved bundle + join),
-**M3 (channels — bounded + rendezvous, blocking send/recv, structural sendability gate)**, and
+**M3 (channels — bounded + rendezvous, blocking send/recv, structural sendability gate)**,
 **M4 (structured concurrency — `scope { }` + join-before-drop barrier + `ref`-borrow with escape &
-same-root-disjointness checks; the spawn verb is now `spawn`, bare `spawn` is scope-only)** have landed on the
-native leg (TSan- + ASan-proven; wasm skips until M5). Next: **M5** wasm parity, then **M6** `Atomic<T>` +
+same-root-disjointness checks; the spawn verb is now `spawn`, bare `spawn` is scope-only)**, and
+**M5 (wasm parity — emscripten pthreads + `-sPROXY_TO_PTHREAD`; the seam headers compiled unchanged, all 15
+`std::concurrent` fixtures now pass on the wasm leg against the same `.expect` as native)** have landed
+(native TSan- + ASan-proven; concurrency now green on native **and** wasm). Next: **M6** `Atomic<T>` +
 `parallel_for`. See the design doc's per-milestone "landed" notes.
 
 **► Forward sequencing (agreed 2026-07-23):** finish the concurrency campaign (M5 → M6), then **re-triage the
