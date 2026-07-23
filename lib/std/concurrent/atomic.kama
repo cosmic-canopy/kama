@@ -1,6 +1,6 @@
 namespace std::concurrent;
 
-export { Atomic };
+export { Atomic, MemoryOrder };
 
 // `Atomic<T>` — the ONE sanctioned cross-isolate shared-MUTABLE cell (M6). The concurrency analog of
 // `unsafe {}`/`Ptr`: an opt-in, greppable seam where a value may be read and written concurrently by
@@ -29,11 +29,32 @@ export { Atomic };
 //         return counter.load();                // 2
 //     }
 //
-// Every operation is sequentially consistent (seq-cst) — the strongest, simplest ordering, always correct.
-// (Explicit weaker orderings are a possible future expert opt-in; seq-cst never needs one for correctness.)
+// The bare methods (`load`/`store`/`swap`/`compareExchange`/`fetchAdd`/`fetchSub`) are sequentially
+// consistent (seq-cst) — the strongest, simplest ordering, always correct; reach for these by default. Each
+// has an `…Explicit` sibling taking an explicit `MemoryOrder` for the expert who wants a weaker (faster)
+// ordering — mirroring C11's `atomic_load` / `atomic_load_explicit`. kama has no overloading, so the ordering
+// knob is simply a distinct, explicitly-named function (the language's one-way idiom), not a default arg.
 //
 // The cell is one inline `T`; each method takes its address to the width-generic op layer in kama_atomic.h,
 // which dispatches on `sizeof(T)` to a lock-free `__atomic_*_n` builtin (native AND wasm, one source).
+
+// Memory ordering for an atomic op (the `…Explicit` variants). Values match the compiler's `__ATOMIC_*`
+// enum, bridged by `orderBits`. `Consume` is deliberately omitted (every compiler treats it as `Acquire`;
+// even C++ discourages it). A load takes Relaxed/Acquire/SeqCst; a store Relaxed/Release/SeqCst; a
+// read-modify-write any of them — passing an ordering an op can't honor is a programmer error (as in C11).
+enum MemoryOrder { Relaxed, Acquire, Release, AcqRel, SeqCst }
+
+// Bridge a `MemoryOrder` to the `__ATOMIC_*` int the seam layer expects. Private to the module.
+fn int32 orderBits(MemoryOrder o) {
+    return match (o) {
+        case Relaxed: 0i32;
+        case Acquire: 2i32;
+        case Release: 3i32;
+        case AcqRel:  4i32;
+        case SeqCst:  5i32;
+    };
+}
+
 extern "kama_atomic.h";
 extern fn void   kama_atomic_load     (Ptr cell, Ptr dst, usize width, int32 mo);
 extern fn void   kama_atomic_store    (Ptr cell, Ptr val, usize width, int32 mo);
@@ -52,25 +73,28 @@ type resource Atomic<T> {
         return give a;
     }
 
-    // Atomically read the current value.
-    public fn T load() {
+    // Atomically read the current value (seq-cst). `loadExplicit` takes a weaker ordering.
+    public fn T load() { return this.loadExplicit(order: MemoryOrder::SeqCst); }
+    public fn T loadExplicit(MemoryOrder order) {
         T result;
         unsafe { kama_atomic_load(cell: cast<Ptr>(addr(of: this.value)), dst: cast<Ptr>(addr(of: result)),
-                                  width: sizeof(T), mo: 5i32); }
+                                  width: sizeof(T), mo: orderBits(o: order)); }
         return result;
     }
 
-    // Atomically replace the value.
-    public fn void store(T value) {
+    // Atomically replace the value (seq-cst). `storeExplicit` takes a weaker ordering.
+    public fn void store(T value) { this.storeExplicit(value: value, order: MemoryOrder::SeqCst); }
+    public fn void storeExplicit(T value, MemoryOrder order) {
         unsafe { kama_atomic_store(cell: cast<Ptr>(addr(of: this.value)), val: cast<Ptr>(addr(of: value)),
-                                   width: sizeof(T), mo: 5i32); }
+                                   width: sizeof(T), mo: orderBits(o: order)); }
     }
 
-    // Atomically store `value` and return the PRIOR value (atomic exchange).
-    public fn T swap(T value) {
+    // Atomically store `value` and return the PRIOR value (atomic exchange, seq-cst).
+    public fn T swap(T value) { return this.swapExplicit(value: value, order: MemoryOrder::SeqCst); }
+    public fn T swapExplicit(T value, MemoryOrder order) {
         T result;
         unsafe { kama_atomic_swap(cell: cast<Ptr>(addr(of: this.value)), val: cast<Ptr>(addr(of: value)),
-                                  dst: cast<Ptr>(addr(of: result)), width: sizeof(T), mo: 5i32); }
+                                  dst: cast<Ptr>(addr(of: result)), width: sizeof(T), mo: orderBits(o: order)); }
         return result;
     }
 
@@ -79,26 +103,35 @@ type resource Atomic<T> {
     // the fresh value without a separate reload:
     //     int32 cur = a.load();
     //     while (!a.compareExchange(expected: ref cur, desired: cur + 1i32)) { }   // cur is refreshed on failure
+    // `compareExchangeExplicit` takes distinct success/failure orderings (the failure order must be no
+    // stronger than success, and never Release/AcqRel — a failed CAS performs only a load, as in C11).
     public fn bool compareExchange(ref T expected, T desired) {
+        return this.compareExchangeExplicit(expected: ref expected, desired: desired,
+                                            success: MemoryOrder::SeqCst, failure: MemoryOrder::SeqCst);
+    }
+    public fn bool compareExchangeExplicit(ref T expected, T desired, MemoryOrder success, MemoryOrder failure) {
         int32 ok = 0i32;
         unsafe { ok = kama_atomic_cas(cell: cast<Ptr>(addr(of: this.value)), expected: cast<Ptr>(addr(of: expected)),
-                                      desired: cast<Ptr>(addr(of: desired)), width: sizeof(T), smo: 5i32, fmo: 5i32); }
+                                      desired: cast<Ptr>(addr(of: desired)), width: sizeof(T),
+                                      smo: orderBits(o: success), fmo: orderBits(o: failure)); }
         return ok != 0i32;
     }
 
-    // Atomically add `delta` and return the PRIOR value (integer elements). Wraps two's-complement.
-    public fn T fetchAdd(T delta) {
+    // Atomically add `delta` and return the PRIOR value (integer elements; seq-cst). Wraps two's-complement.
+    public fn T fetchAdd(T delta) { return this.fetchAddExplicit(delta: delta, order: MemoryOrder::SeqCst); }
+    public fn T fetchAddExplicit(T delta, MemoryOrder order) {
         uint64 prior = 0ui64;
         unsafe { prior = kama_atomic_fetch_add(cell: cast<Ptr>(addr(of: this.value)), delta: cast<uint64>(delta),
-                                               width: sizeof(T), mo: 5i32); }
+                                               width: sizeof(T), mo: orderBits(o: order)); }
         return cast<T>(prior);
     }
 
-    // Atomically subtract `delta` and return the PRIOR value (integer elements). Wraps two's-complement.
-    public fn T fetchSub(T delta) {
+    // Atomically subtract `delta` and return the PRIOR value (integer elements; seq-cst). Wraps two's-complement.
+    public fn T fetchSub(T delta) { return this.fetchSubExplicit(delta: delta, order: MemoryOrder::SeqCst); }
+    public fn T fetchSubExplicit(T delta, MemoryOrder order) {
         uint64 prior = 0ui64;
         unsafe { prior = kama_atomic_fetch_sub(cell: cast<Ptr>(addr(of: this.value)), delta: cast<uint64>(delta),
-                                               width: sizeof(T), mo: 5i32); }
+                                               width: sizeof(T), mo: orderBits(o: order)); }
         return cast<T>(prior);
     }
 

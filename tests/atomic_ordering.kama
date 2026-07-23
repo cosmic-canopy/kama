@@ -1,0 +1,28 @@
+// M6.1b: explicit MemoryOrder variants — kama's one-way answer to "no overloading" is a distinct named
+// function, mirroring C11's atomic_load / atomic_load_explicit. Four isolates increment a shared counter
+// with a RELAXED-ordered fetchAdd (ordering is irrelevant to a pure count, and the RMW is still atomic →
+// no lost updates, TSan-clean). Then main exercises the store/swap/CAS explicit variants single-threaded.
+import std::concurrent::{Atomic, MemoryOrder};
+
+fn void bumpRelaxed(ref Atomic<int32> c) {
+    int32 i = 0;
+    while (i < 25) { c.fetchAddExplicit(delta: 1i32, order: MemoryOrder::Relaxed); i = i + 1; }
+}
+
+fn int main() {
+    Atomic<int32> counter = Atomic::make(value: 0i32);
+    scope {
+        spawn bumpRelaxed(c: ref counter);
+        spawn bumpRelaxed(c: ref counter);
+        spawn bumpRelaxed(c: ref counter);
+        spawn bumpRelaxed(c: ref counter);
+    }                                                                       // counter = 100
+    int32 total = counter.loadExplicit(order: MemoryOrder::Acquire);        // 100
+    counter.storeExplicit(value: 5i32, order: MemoryOrder::Release);        // counter = 5
+    int32 prev = counter.swapExplicit(value: 20i32, order: MemoryOrder::AcqRel);  // prev = 5, counter = 20
+    int32 cur = counter.loadExplicit(order: MemoryOrder::Relaxed);          // 20
+    bool won = counter.compareExchangeExplicit(expected: ref cur, desired: 30i32,
+                                               success: MemoryOrder::AcqRel, failure: MemoryOrder::Relaxed); // counter = 30
+    if (!won) { return 1; }
+    return total - prev + counter.load();   // 100 - 5 + 30 = 125
+}
