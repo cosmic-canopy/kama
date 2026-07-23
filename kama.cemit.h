@@ -822,6 +822,7 @@ private:
     void computeReachesSharedWeak();   // channel-sendability gate — Shared|Weak-only sibling of reachesPointer
     void checkChannelSendability();    // reject a `channel<T>` whose T reaches a non-atomic shared refcount
     bool isSharedOrWeakClass(const std::string& cls) const;   // an intrinsic/triad Shared or Weak (not Owned)
+    bool isAtomicClass(const std::string& cls) const;         // an `Atomic<T>` instance (std::concurrent, M6)
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);
     void emitDeserializeDefinition(ClassInfo& ci);
@@ -885,6 +886,10 @@ private:
     // std::concurrent's channel-family generic-template keys, captured at collection (like the memory
     // triad above). Used by checkChannelSendability to find every `channel<T>` instantiation site.
     std::string _channelTmpl, _senderTmpl, _receiverTmpl;
+    // std::concurrent's `Atomic<T>` generic-template key (M6). Captured at collection like the family above;
+    // used to validate the element (integer/`Ptr` scalar only) and to exempt an `Atomic` from the
+    // disjoint-borrow rule (several isolates may `ref`-borrow the SAME atomic cell — the sanctioned case).
+    std::string _atomicTmpl;
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
     static bool isExtern(FunctionDeclarationNode* fn);
     static bool isExposed(FunctionDeclarationNode* fn);   // `expose fn` — kama→host C-ABI boundary

@@ -1,0 +1,106 @@
+namespace std::concurrent;
+
+export { Atomic };
+
+// `Atomic<T>` — the ONE sanctioned cross-isolate shared-MUTABLE cell (M6). The concurrency analog of
+// `unsafe {}`/`Ptr`: an opt-in, greppable seam where a value may be read and written concurrently by
+// several isolates WITHOUT a data race. Everything else in the language is shared-nothing (an isolate owns
+// its state; sharing is by move (`give`) or by immutable `Shared`). When two tasks must touch the SAME
+// mutable location — a counter, a done-flag, a lock-free head pointer — that location is an `Atomic<T>`.
+//
+// `T` is an integer primitive (`int8`…`uint64`, `usize`/`isize`) or `Ptr` — a naturally-aligned lock-free
+// scalar. A non-scalar element (a `resource`/`value`/contract) is a compile error: atomicity is a hardware
+// property of a machine word, so a struct can't be one cell (compose several `Atomic` fields instead).
+//
+// Sharing model: an `Atomic<T>` is a move-only `resource` (no silent copies — a copy would be a SECOND,
+// independent cell, defeating the point). Cross-isolate sharing is by `ref`-borrow inside a `scope`: the
+// scope joins every child before the cell's owner drops it, so the borrow can't dangle, and — uniquely for
+// `Atomic` — SEVERAL children may borrow the SAME cell (the sanctioned shared-mutable case, exempted from
+// the disjoint-borrow rule that governs ordinary locals):
+//
+//     import std::concurrent;
+//     fn void bump(ref Atomic<int32> c) { c.fetchAdd(delta: 1i32); }
+//     fn int main() {
+//         Atomic<int32> counter = Atomic::make(value: 0i32);
+//         scope {
+//             spawn bump(c: ref counter);      // many children, one shared cell — race-free
+//             spawn bump(c: ref counter);
+//         }                                     // barrier: both joined before `counter` drops
+//         return counter.load();                // 2
+//     }
+//
+// Every operation is sequentially consistent (seq-cst) — the strongest, simplest ordering, always correct.
+// (Explicit weaker orderings are a possible future expert opt-in; seq-cst never needs one for correctness.)
+//
+// The cell is one inline `T`; each method takes its address to the width-generic op layer in kama_atomic.h,
+// which dispatches on `sizeof(T)` to a lock-free `__atomic_*_n` builtin (native AND wasm, one source).
+extern "kama_atomic.h";
+extern fn void   kama_atomic_load     (Ptr cell, Ptr dst, usize width, int32 mo);
+extern fn void   kama_atomic_store    (Ptr cell, Ptr val, usize width, int32 mo);
+extern fn void   kama_atomic_swap     (Ptr cell, Ptr val, Ptr dst, usize width, int32 mo);
+extern fn int32  kama_atomic_cas      (Ptr cell, Ptr expected, Ptr desired, usize width, int32 smo, int32 fmo);
+extern fn uint64 kama_atomic_fetch_add(Ptr cell, uint64 delta, usize width, int32 mo);
+extern fn uint64 kama_atomic_fetch_sub(Ptr cell, uint64 delta, usize width, int32 mo);
+
+type resource Atomic<T> {
+    T value;   // the one shared cell; naturally aligned (a single-field struct), so the ops are lock-free
+
+    // Build a cell holding `value`. The only constructor — an `Atomic` is always created initialized.
+    public ctor make(T value) {
+        Atomic<T> a;
+        a.value = value;
+        return give a;
+    }
+
+    // Atomically read the current value.
+    public fn T load() {
+        T result;
+        unsafe { kama_atomic_load(cell: cast<Ptr>(addr(of: this.value)), dst: cast<Ptr>(addr(of: result)),
+                                  width: sizeof(T), mo: 5i32); }
+        return result;
+    }
+
+    // Atomically replace the value.
+    public fn void store(T value) {
+        unsafe { kama_atomic_store(cell: cast<Ptr>(addr(of: this.value)), val: cast<Ptr>(addr(of: value)),
+                                   width: sizeof(T), mo: 5i32); }
+    }
+
+    // Atomically store `value` and return the PRIOR value (atomic exchange).
+    public fn T swap(T value) {
+        T result;
+        unsafe { kama_atomic_swap(cell: cast<Ptr>(addr(of: this.value)), val: cast<Ptr>(addr(of: value)),
+                                  dst: cast<Ptr>(addr(of: result)), width: sizeof(T), mo: 5i32); }
+        return result;
+    }
+
+    // Compare-and-swap: if the cell equals `expected`, store `desired` and return true; otherwise write the
+    // observed value back through `expected` and return false. The write-back lets a CAS loop retry against
+    // the fresh value without a separate reload:
+    //     int32 cur = a.load();
+    //     while (!a.compareExchange(expected: ref cur, desired: cur + 1i32)) { }   // cur is refreshed on failure
+    public fn bool compareExchange(ref T expected, T desired) {
+        int32 ok = 0i32;
+        unsafe { ok = kama_atomic_cas(cell: cast<Ptr>(addr(of: this.value)), expected: cast<Ptr>(addr(of: expected)),
+                                      desired: cast<Ptr>(addr(of: desired)), width: sizeof(T), smo: 5i32, fmo: 5i32); }
+        return ok != 0i32;
+    }
+
+    // Atomically add `delta` and return the PRIOR value (integer elements). Wraps two's-complement.
+    public fn T fetchAdd(T delta) {
+        uint64 prior = 0ui64;
+        unsafe { prior = kama_atomic_fetch_add(cell: cast<Ptr>(addr(of: this.value)), delta: cast<uint64>(delta),
+                                               width: sizeof(T), mo: 5i32); }
+        return cast<T>(prior);
+    }
+
+    // Atomically subtract `delta` and return the PRIOR value (integer elements). Wraps two's-complement.
+    public fn T fetchSub(T delta) {
+        uint64 prior = 0ui64;
+        unsafe { prior = kama_atomic_fetch_sub(cell: cast<Ptr>(addr(of: this.value)), delta: cast<uint64>(delta),
+                                               width: sizeof(T), mo: 5i32); }
+        return cast<T>(prior);
+    }
+
+    ~Atomic() { }   // owns nothing — the cell is inline; a zero value is drop-safe (INVARIANT #0)
+}

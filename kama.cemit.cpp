@@ -3588,6 +3588,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (sn == "Channel"  && ci.scope == "std__concurrent") _channelTmpl  = ci.name;
                 else if (sn == "Sender"   && ci.scope == "std__concurrent") _senderTmpl   = ci.name;
                 else if (sn == "Receiver" && ci.scope == "std__concurrent") _receiverTmpl = ci.name;
+                else if (sn == "Atomic"   && ci.scope == "std__concurrent") _atomicTmpl   = ci.name;
             }
         } else {
             _classes[ci.name] = ci;
@@ -4287,6 +4288,20 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // concrete, so nothing is skipped there — `ListIter<int32>` etc. are unaffected. Mirrors `Fixed<T,N>`'s
     // unbound-`N` skip.)
     for (auto& c : concrete) if (argCarriesUnboundParam(c)) return;
+    // `Atomic<T>` (M6): the element must be a lock-free machine word — an integer primitive, `usize`/`isize`,
+    // or `Ptr`. A struct/`resource`/contract element can't be one atomic cell (atomicity is a hardware
+    // property of a word), so reject it here at the user's use-site with a clear message.
+    if (!_atomicTmpl.empty() && tmpl == _atomicTmpl && !concrete.empty() && concrete[0]) {
+        SharedIdentifier el = concrete[0];
+        bool isInt  = el->builtInVal >= IDENTIFIER_INT8_VAL && el->builtInVal <= IDENTIFIER_UINT64_VAL;
+        bool isSize = el->value && !el->genericArg && (*el->value == "usize" || *el->value == "isize");
+        bool isPtr  = el->value && *el->value == "Ptr";
+        if (!isInt && !isSize && !isPtr) {
+            unsupported(("`Atomic<T>` requires an integer primitive or `Ptr` element (a lock-free machine "
+                         "word) — `" + cType(el) + "` is not one; use one `Atomic` field per shared word").c_str(), line);
+            return;
+        }
+    }
 
     // A `type view` as a generic type ARGUMENT (a collection's buffered element, a user generic's field)
     // stores a borrow that dangles. A collection buffers behind `Ptr<View>` — NOT a bare `View` field — so
@@ -6125,7 +6140,9 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
             unsupported(("cannot borrow `" + root + "` — it was moved (given) away").c_str(), iso->line);
         // Same-root disjointness: no two children of one scope may borrow the SAME root (they would race
         // on it). Distinct roots are statically disjoint; overlapping index-ranges of one buffer are M6.
-        if (!innermostTaskScope()->borrowedRoots.insert(root).second)
+        // EXEMPTION (M6): an `Atomic<T>` is the sanctioned shared-mutable cell — its ops are race-free, so
+        // several children borrowing the SAME atomic root is exactly the intended use, not a data race.
+        if (!isAtomicClass(cls) && !innermostTaskScope()->borrowedRoots.insert(root).second)
             unsupported(("two children in this `scope` both borrow `" + root + "` — a shared mutable borrow "
                          "across tasks would race; borrow distinct locals, or use an `Atomic<T>` (M6)").c_str(), iso->line);
 
@@ -6668,6 +6685,15 @@ bool CEmitter::isSharedOrWeakClass(const std::string& cls) const
         return true;
     auto g = _genericTypeInstOf.find(cls);
     return g != _genericTypeInstOf.end() && (g->second == _sharedTmpl || g->second == _weakTmpl);
+}
+
+// An `Atomic<T>` instance (std::concurrent, M6) — the one sanctioned cross-isolate shared-mutable cell.
+// Used to exempt it from the disjoint-borrow rule (several children may borrow the SAME atomic cell).
+bool CEmitter::isAtomicClass(const std::string& cls) const
+{
+    if (_atomicTmpl.empty()) return false;
+    auto g = _genericTypeInstOf.find(cls);
+    return g != _genericTypeInstOf.end() && g->second == _atomicTmpl;
 }
 
 // Channel-sendability gate: the Shared|Weak-only sibling of computeReachesPointer(). A clone of that

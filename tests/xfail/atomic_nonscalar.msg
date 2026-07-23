@@ -1,0 +1,1 @@
+requires an integer primitive or

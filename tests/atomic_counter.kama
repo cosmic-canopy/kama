@@ -1,0 +1,22 @@
+// M6.1: the sanctioned shared-mutable cell. Four isolates each `fetchAdd(1)` twenty-five times into the
+// SAME `Atomic<int32>`, borrowed by `ref` inside a `scope`. Atomicity means no update is lost regardless
+// of interleaving, so the total is exactly 4*25 = 100 every run — and TSan-clean (the whole point: an
+// `Atomic` is race-free shared mutation). This is the case the M4.2 same-root borrow check REJECTS for an
+// ordinary local; `Atomic` is exempt. Run under KAMA_TSAN=1.
+import std::concurrent::{Atomic};
+
+fn void bump(ref Atomic<int32> c) {
+    int32 i = 0;
+    while (i < 25) { c.fetchAdd(delta: 1i32); i = i + 1; }
+}
+
+fn int main() {
+    Atomic<int32> counter = Atomic::make(value: 0i32);
+    scope {
+        spawn bump(c: ref counter);
+        spawn bump(c: ref counter);
+        spawn bump(c: ref counter);
+        spawn bump(c: ref counter);
+    }                               // BARRIER: all four joined before `counter` drops
+    return counter.load();          // 100
+}

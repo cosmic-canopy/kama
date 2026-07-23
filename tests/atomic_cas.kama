@@ -1,0 +1,23 @@
+// M6.1: a compare-exchange increment loop. Two isolates each perform 50 lock-free increments via a CAS
+// retry loop on one shared `Atomic<int32>`; `compareExchange` writes the observed value back through the
+// `ref expected` cell on failure, so the loop retries against the fresh value. The result is exactly 100
+// (no lost updates) — TSan-clean. Exercises the CAS write-back contract under real contention.
+import std::concurrent::{Atomic};
+
+fn void casInc(ref Atomic<int32> c) {
+    int32 n = 0;
+    while (n < 50) {
+        int32 cur = c.load();
+        while (!c.compareExchange(expected: ref cur, desired: cur + 1i32)) { }   // `cur` refreshed on failure
+        n = n + 1;
+    }
+}
+
+fn int main() {
+    Atomic<int32> c = Atomic::make(value: 0i32);
+    scope {
+        spawn casInc(c: ref c);
+        spawn casInc(c: ref c);
+    }
+    return c.load();   // 100
+}
