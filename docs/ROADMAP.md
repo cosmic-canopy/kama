@@ -397,6 +397,15 @@ same-root-disjointness checks; the spawn verb is now `spawn`, bare `spawn` is sc
 native leg (TSan- + ASan-proven; wasm skips until M5). Next: **M5** wasm parity, then **M6** `Atomic<T>` +
 `parallel_for`. See the design doc's per-milestone "landed" notes.
 
+**► Forward sequencing (agreed 2026-07-23):** finish the concurrency campaign (M5 → M6), then **re-triage the
+three READINESS docs** (Engine / MCU / Web) to pick the most impactful next track. The stated goal is to **wrap
+up the remaining language-surface changes** those use-cases need. The **embedded/MCU track (§5) is the
+front-runner** and the intended next big direction: its #1 blocker — module-level statics — is already
+design-pinned to the concurrency model's **per-isolate-`static`** rule (§6 / [design/concurrency.md](design/concurrency.md)),
+so it builds onto settled ground; and it is the *only* readiness track with real **language-surface** work
+queued (statics, the `hardware` qualifier, ISR binding, freestanding runtime), whereas Engine and Web are
+mostly library/platform work with no language blocker. Re-confirm against the readiness docs after M6.
+
 The intended concurrency model. **1.0 ships a single-threaded core**; this is the 1.x/2.0 direction, not a
 shipped feature. It earns data-race freedom the way kama earns null-safety — by making the hazard
 *unrepresentable*, not by checking it. Where Rust proves exclusivity over shared memory with a borrow
