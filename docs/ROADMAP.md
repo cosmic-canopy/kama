@@ -390,10 +390,12 @@ servers is a *library* on the primitives, since servers are native-only); **modu
 construction** (unifies with the MCU Tier-0 statics blocker — §5 / [MCU_READINESS.md](MCU_READINESS.md)); the
 job system + event-loop scheduler are libraries, not language. Start there.
 
-**► Progress (2026-07-23):** M1 (`std::time`), M2 (native isolate seam — spawn + moved bundle + join), and
-**M3 (channels — bounded + rendezvous, blocking send/recv, structural sendability gate)** have landed on the
-native leg (TSan- + ASan-proven; wasm skips until M5). Next: **M4** structured-concurrency `scope`, then **M5**
-wasm parity, then **M6** `Atomic<T>` + `parallel_for`. See the design doc's per-milestone "landed" notes.
+**► Progress (2026-07-23):** M1 (`std::time`), M2 (native isolate seam — spawn + moved bundle + join),
+**M3 (channels — bounded + rendezvous, blocking send/recv, structural sendability gate)**, and
+**M4 (structured concurrency — `scope { }` + join-before-drop barrier + `ref`-borrow with escape &
+same-root-disjointness checks; the spawn verb is now `spawn`, bare `spawn` is scope-only)** have landed on the
+native leg (TSan- + ASan-proven; wasm skips until M5). Next: **M5** wasm parity, then **M6** `Atomic<T>` +
+`parallel_for`. See the design doc's per-milestone "landed" notes.
 
 The intended concurrency model. **1.0 ships a single-threaded core**; this is the 1.x/2.0 direction, not a
 shipped feature. It earns data-race freedom the way kama earns null-safety — by making the hazard
