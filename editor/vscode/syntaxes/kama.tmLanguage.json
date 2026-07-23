@@ -90,7 +90,7 @@
     "keywords": {
       "patterns": [
         { "name": "keyword.control.kama", "match": "\\b(if|else|match|case|while|do|for|foreach|break|continue|return|spawn)\\b" },
-        { "name": "keyword.other.modifier.kama", "match": "\\b(abstract|override|virtual|final|static|default|private|protected|public|friend|const|volatile|ref|out|in|extern|export|expose)\\b" },
+        { "name": "keyword.other.modifier.kama", "match": "\\b(abstract|override|virtual|final|static|default|private|protected|public|friend|const|volatile|immutable|ref|out|in|extern|export|expose)\\b" },
         { "name": "keyword.other.kama", "match": "\\b(fn|fnptr|ctor|type|namespace|using|import|extends|implements|operator|unsafe|scope|give|copy|cast|as|when|sizeof|alignof)\\b" },
         { "name": "keyword.operator.new.kama", "match": "\\b(new)\\b" },
         { "name": "variable.language.kama", "match": "\\b(this|base)\\b" }

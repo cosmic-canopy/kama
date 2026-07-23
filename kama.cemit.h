@@ -208,6 +208,20 @@ struct ClassInfo {
     // that reaches one may not cross a `channel<T>` (its refcount would race across isolates). Populated
     // by computeReachesSharedWeak(); consumed by the channel-sendability check.
     bool                              reachesSharedWeak = false;
+    // `immutable value|resource T` — the greppable qualifier opting into cross-isolate sharing (M6.2). The
+    // emitter VERIFIES deep/transitive immutability (computeDeeplyImmutable); a qualified type with a mutable
+    // field is a compile error. Distinct from a `const` binding (which permits a mutable alias elsewhere).
+    bool                              isImmutableQualified = false;
+    // Deeply/transitively immutable (computed): `isImmutableQualified` AND every field/base/variant-payload/
+    // element is itself deeply immutable, with no raw `Ptr`/mutable-`Owned`/mutable collection. Populated by
+    // computeDeeplyImmutable(). A `Shared<T>`/`Weak<T>` over such a `T` is sendable across isolates (its
+    // control block uses the ATOMIC refcount flavor; see useAtomicRefcount) and does NOT set reachesSharedWeak.
+    bool                              deeplyImmutable = false;
+    // Refcount flavor (M6.2): a `Shared<T>`/`Weak<T>` instance whose element is deeplyImmutable uses the
+    // Arc-correct ATOMIC control-block ops (race-free clone/drop across isolates); every other Shared/Weak
+    // keeps the cheap non-atomic `Rc` ops. Set at monomorphization from deeplyImmutable(elem). Selected at
+    // emit time (zero runtime branch) by the kama_ctrl.h seam — the CollectionInfo sibling carries it too.
+    bool                              useAtomicRefcount = false;
     // A node in a serializable object graph: either a graph root (`reachesPointer`) OR a pointee reached via
     // some graph type's Shared/Weak/Owned field (a tree type like `Leaf` that is only ever a `Shared<Leaf>`
     // target). Populated by computeGraphNodeTypes() (a closure over the smart-ptr fields, seeded by
@@ -310,6 +324,10 @@ struct CollectionInfo {
     // the `KAMA_*_IFACE_ALLOC_*` macros + threads `A alloc`/`objsize` through the handle (M11d). Set at the
     // interface divert (the intrinsic collection has no `alloc` FIELD, so it can't be read via boxAllocatorArg).
     std::string  allocType;
+    // Refcount flavor (M6.2): true iff this Shared/Weak's element is deeplyImmutable -> the control block
+    // uses the Arc-correct ATOMIC kama_ctrl ops (race-free across isolates). The ClassInfo sibling of the
+    // same name carries it for the library (concrete-element) path; set at registerSmartPtr from the element.
+    bool         useAtomicRefcount = false;
 };
 
 // A `contract`: a set of method prototypes, lowered to a vtable struct
@@ -821,6 +839,12 @@ private:
     void computeReachesPointer();   // serialization mode gate — sibling of computeDestructible
     void computeReachesSharedWeak();   // channel-sendability gate — Shared|Weak-only sibling of reachesPointer
     void checkChannelSendability();    // reject a `channel<T>` whose T reaches a non-atomic shared refcount
+    // M6.2: greatest-fixpoint dual of computeReachesPointer — mark every deeply/transitively immutable type
+    // (the `immutable` qualifier verified) and error on a qualified type with a mutable part. A `Shared`/`Weak`
+    // over such a T is sendable across isolates and uses the atomic refcount flavor.
+    void computeDeeplyImmutable();
+    bool deeplyImmutable(const std::string& cls) const;        // predicate: `cls` is a deeply-immutable class
+    bool fieldTypeDeeplyImmutable(const SharedIdentifier& type) const;  // is a field/payload type immutable?
     bool isSharedOrWeakClass(const std::string& cls) const;   // an intrinsic/triad Shared or Weak (not Owned)
     bool isAtomicClass(const std::string& cls) const;         // an `Atomic<T>` instance (std::concurrent, M6)
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).

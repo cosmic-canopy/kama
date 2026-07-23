@@ -3155,6 +3155,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (mv == "abstract") ci.isAbstractClass = true;
                 else if (mv == "virtual")  ci.isVirtualClass = true;
                 else if (mv == "final")    ci.isFinalClass = true;
+                else if (mv == "immutable") ci.isImmutableQualified = true;   // M6.2: deep-immutability verified in computeDeeplyImmutable
                 else if (mv == "expose")
                     unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", cd->line);
                 else if (mv == "volatile")
@@ -6723,8 +6724,21 @@ bool CEmitter::isAtomicClass(const std::string& cls) const
 // the types that may not cross a `channel<T>`. `Owned` is sendable (unique) and does NOT seed here.
 void CEmitter::computeReachesSharedWeak()
 {
-    for (auto& kv : _classes)
-        kv.second.reachesSharedWeak = isSharedOrWeakClass(kv.first);
+    for (auto& kv : _classes) {
+        bool sw = isSharedOrWeakClass(kv.first);
+        // M6.2: a `Shared<T>`/`Weak<T>` over a DEEPLY-IMMUTABLE `T` is sendable across isolates — its control
+        // block uses the atomic refcount flavor, and the payload never mutates, so nothing races. Such a
+        // handle does NOT seed the sendability taint, so it (and any type holding it) may cross a channel /
+        // cross-scope borrow. A Shared/Weak over a mutable payload still seeds (its Rc counter would race).
+        if (sw) {
+            std::string elem;
+            auto gi = _genericTypeInsts.find(kv.first);
+            if (gi != _genericTypeInsts.end() && !gi->second.typeArgs.empty()) elem = cType(gi->second.typeArgs[0]);
+            else { auto ci = _collections.find(kv.first); if (ci != _collections.end()) elem = ci->second.elemClass; }
+            if (!elem.empty() && deeplyImmutable(elem)) sw = false;
+        }
+        kv.second.reachesSharedWeak = sw;
+    }
     bool changed = true;
     while (changed) {
         changed = false;
@@ -6766,6 +6780,101 @@ void CEmitter::computeReachesSharedWeak()
             if (inst) _typeSubst.clear();
             if (r) { ci.reachesSharedWeak = true; changed = true; }
         }
+    }
+}
+
+// M6.2 predicate: is `cls` a deeply-immutable class? (Primitives/enums aren't in `_classes`, so a non-class
+// name — a scalar, `Ptr`, etc. — is not deeply immutable here; that's handled by fieldTypeDeeplyImmutable.)
+bool CEmitter::deeplyImmutable(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.deeplyImmutable;
+}
+
+// Is a FIELD/variant-payload type deeply immutable — admissible inside an `immutable` type? A primitive
+// scalar (incl. `bool`/`float`/`char`) or the immutable `string` is an immutable leaf; an `enum` is an
+// immutable value; a named user type is immutable iff its class is `deeplyImmutable`. Everything else — a raw
+// `Ptr`, an `Owned`/`Shared`/`Weak`, a mutable collection, a `contract` box — is NOT (a mutable alias exists).
+// Resolves `type` under the caller's current `_typeSubst`/`_nsCtx` (set by computeDeeplyImmutable per class).
+bool CEmitter::fieldTypeDeeplyImmutable(const SharedIdentifier& type) const
+{
+    if (!type) return false;
+    // Primitive leaves: INT8..CHAR (1..14) EXCEPT void (13). `string` (12) is deeply immutable.
+    if (type->builtInVal >= IDENTIFIER_INT8_VAL && type->builtInVal <= IDENTIFIER_CHAR_VAL
+        && type->builtInVal != IDENTIFIER_VOID_VAL)
+        return true;
+    std::string ct = const_cast<CEmitter*>(this)->cType(type);
+    if (isEnum(ct)) return true;
+    return deeplyImmutable(ct);   // a user class -> its computed flag; a Ptr/Owned/Shared/collection -> false
+}
+
+// M6.2: the GREATEST-fixpoint dual of computeReachesPointer(). Seed every `immutable`-qualified type true,
+// then FALSIFY any whose base/field/variant-payload is not deeply immutable, to a fixpoint (so a cycle of
+// purely-immutable types stays true). Finally, a type that CARRIES `immutable` but failed is a compile error
+// naming the first mutable part — the qualifier is a verified guarantee, never a silent downgrade.
+void CEmitter::computeDeeplyImmutable()
+{
+    for (auto& kv : _classes)
+        kv.second.deeplyImmutable = kv.second.isImmutableQualified;
+
+    // Set the field-resolution context for class `ci` exactly as computeReachesSharedWeak does.
+    auto enterCtx = [&](ClassInfo& ci) -> bool {
+        bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
+        if (inst) {
+            const GenericTypeInst& gi = _genericTypeInsts[ci.name];
+            _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name]
+                                                        : _genericTypeCtx[gi.templateKey];
+            _typeSubst.clear();
+            const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+            for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+        } else {
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+        }
+        return inst;
+    };
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& kv : _classes) {
+            ClassInfo& ci = kv.second;
+            if (!ci.deeplyImmutable) continue;   // only a qualified candidate can lose the property
+            bool inst = enterCtx(ci);
+            bool ok = !(ci.base && !ci.base->deeplyImmutable);
+            if (ok)
+                for (auto& f : ci.fields)
+                    if (!fieldTypeDeeplyImmutable(f.type)) { ok = false; break; }
+            if (ok)
+                for (auto& v : ci.variants) {
+                    for (auto& f : v.payload) if (!fieldTypeDeeplyImmutable(f.type)) { ok = false; break; }
+                    if (!ok) break;
+                }
+            if (inst) _typeSubst.clear();
+            if (!ok) { ci.deeplyImmutable = false; changed = true; }
+        }
+    }
+
+    // Diagnostic: a qualified type that did NOT survive has a mutable part — name the first offender.
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (!ci.isImmutableQualified || ci.deeplyImmutable) continue;
+        bool inst = enterCtx(ci);
+        std::string field, ty;
+        if (ci.base && !ci.base->deeplyImmutable) { field = "(base)"; ty = ci.baseName; }
+        if (field.empty())
+            for (auto& f : ci.fields)
+                if (!fieldTypeDeeplyImmutable(f.type)) { field = f.name; ty = cType(f.type); break; }
+        if (field.empty())
+            for (auto& v : ci.variants) {
+                for (auto& f : v.payload) if (!fieldTypeDeeplyImmutable(f.type)) { field = f.name; ty = cType(f.type); break; }
+                if (!field.empty()) break;
+            }
+        if (inst) _typeSubst.clear();
+        unsupported(("`immutable` type `" + ci.name + "` has a mutable member `" + field + "` of type `" + ty
+                     + "` — every part of an `immutable` type must itself be deeply immutable (a primitive, "
+                       "`string`, `enum`, or another `immutable` type); it may not hold a `Ptr`, an "
+                       "`Owned`/`Shared`/`Weak`, or a mutable collection").c_str(),
+                    ci.node ? ci.node->line : 0);
     }
 }
 
@@ -12781,6 +12890,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         ci.node ? ci.node->line : 0);
     }
     computeReachesPointer();   // serialization mode gate (by-value vs. graph)
+    computeDeeplyImmutable();     // M6.2: mark deeply-immutable types (feeds the sendability seed below)
     computeReachesSharedWeak();   // channel-sendability gate (Shared|Weak-only sibling)
     checkChannelSendability();    // reject `channel<T>` whose T reaches a non-atomic shared refcount
     computeGraphNodeTypes();   // graph node closure + Shared<T> deserialize return types (Phase D)

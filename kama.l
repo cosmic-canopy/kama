@@ -363,6 +363,7 @@ static struct name_value keywords [] = {
     {"friend",      FRIEND},
     {"give",        GIVE},
     {"if",          IF},
+    {"immutable",   IMMUTABLE},
     {"implements",  IMPLEMENTS},
     {"import",      IMPORT},
     {"in",          IN},

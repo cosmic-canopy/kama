@@ -137,7 +137,7 @@ struct kamayystype {
 %token <string> CASE CAST CONST CONTINUE CTOR DEFAULT
 %token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
-%token <string> FN FNPTR FOR FOREACH IF IN
+%token <string> FN FNPTR FOR FOREACH IF IMMUTABLE IN
 %token <string> INT INT8 INT16 INT32 INT64 SPAWN SCOPE
 %token <string> MATCH
 %token <string> NAMESPACE
@@ -561,6 +561,7 @@ modifier
   | DEFAULT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | VOLATILE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | IMMUTABLE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* `immutable value T` — deeply-immutable, shareable across isolates (M6.2) */
   ;
 
 friend_declaration
