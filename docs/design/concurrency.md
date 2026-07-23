@@ -227,6 +227,43 @@ threads out of the *language surface* does not restrict a server scheduler.
 - **M6 `Atomic<T>` + the two safe-sharing primitives** — the narrow shared seams (native + wasm/SharedArrayBuffer);
   immutable-`Shared` cross-isolate; disjoint-slice `parallel_for`. The job-system library lands on top.
 
+## M2 — implementation kickoff (verified hooks 2026-07-22 — don't re-explore)
+
+A running start for the next session. M1 (`std::time`) is shipped + green. M2 adds the **native isolate seam**:
+spawn one isolate running a top-level fn with a **moved-in** argument bundle, and join it. **No channels yet.**
+*(Remove this section once M2 lands, as the SIMD/streams design docs were folded at close.)*
+
+**Recommended M2 surface — a greppable `isolate` keyword returning an RAII handle** (the `Isolate` handle
+*is* the M4 structured-scope seed: `drop` = join, so a forgotten join can't orphan):
+
+```
+fn void worker(give Payload p) { ... }     // entry MUST be a top-level fn (no env capture → shared-nothing)
+...
+Isolate h = isolate worker(give p);        // spawn; `p` is moved (post-spawn use of `p` is a compile error)
+h.join();                                  // explicit join; ~Isolate() also joins (RAII)
+```
+
+Reject a `isolate { block }` capture form — it would close over the enclosing env, breaking shared-nothing.
+For first bring-up a fused `isolate worker(give p);` (spawn+join in one statement, no handle type) is the
+smallest thing that exercises the whole ABI; grow to the handle form for a *concurrently-observable* fixture.
+
+**Verified hook points** (file:line, copy-me templates — `unsafe { }` is the block-statement analog):
+
+| Layer | File:line | What to do |
+|---|---|---|
+| Lexer | `kama.l` :331–402 (sorted keyword table), dispatch :489 | one sorted entry `{"isolate", ISOLATE},` — nothing else |
+| Grammar | `kama.y` :149 (`%token UNSAFE`), :743 (`unsafe_statement : UNSAFE block {…UnsafeNode…}`), :728–737 (`embedded_statement` alts) | add `%token ISOLATE`, an `isolate_statement` production, wire into `embedded_statement` |
+| AST | `kama.ast.h` :328 (`class UnsafeNode : StatementNode { SharedStatement body }`) | mirror as `IsolateNode { entry fn ref + moved-arg expr }` |
+| Emitter | `kama.cemit.cpp` :1279 (`dynamic_cast<UnsafeNode*>` dispatch in `emitStatement`); `emitFunction`/`mangledFunctionName` :2625 | add an `IsolateNode` branch; **generate** (a) a heap arg-bundle struct, (b) a `void* __kama_iso_<worker>(void* p)` trampoline that unpacks → calls the mangled kama fn → frees → returns NULL, (c) the `kama_isolate_spawn` call + handle, (d) join/drop |
+| Move seam | `kama.cemit.cpp` :5869 `ownsByValue`, :5909 `markMoved`, :5950 `moveOnlySource` (all live) | reuse for the `give`n bundle so post-spawn use of the arg errors — **no new tracking** |
+| Runtime ABI | **new `kama_isolate.h`** (do NOT put in `kama_runtime.h` — would pull threads into the freestanding/MCU path; and `pthread_t` ≠ `void*` on glibc, so the block-scoped-`extern` trick is unsafe here) | `#include <pthread.h>` in a dedicated pay-for-what-you-use header (mirrors `kama_os.h`/`kama_gpu.h`): `typedef pthread_t kama_isolate_t;` + `static inline` `kama_isolate_spawn`/`_join` wrappers |
+| Driver link | `kama.driver.cpp` :612–615 (`needsGpu`-style bool set from `externsHeader("kama_gpu.h")` ~:346/386), :772 (`-lpthread` already linked for GLFW) | add `needsIsolate` set from `extern "kama_isolate.h"`; gate `-lpthread` on it (native) |
+| TSan sweep | `run_tests.sh` :36–47 (`SAN_FLAGS` via `--cc "clang -fsanitize=…"`), used :93 | add a mirrored `KAMA_TSAN=1` → `--cc "clang -fsanitize=thread -fno-omit-frame-pointer -g"`, mutually exclusive with `KAMA_SAN`/`KAMA_WASM`; a multi-isolate TSan-clean fixture is the shared-nothing **proof** |
+
+**Draft M2 fixtures:** (1) spawn one isolate that writes its result into its own moved bundle, join, assert;
+(2) spawn two isolates over disjoint state, join both, assert both ran — **TSan-clean** under `KAMA_TSAN=1`;
+(3) xfail: use of a bundle local after `isolate …(give it)` → the move-tracking use-after-move error.
+
 ## Deferred (per §6)
 
 Co-equal general shared-memory ("hybrid") threading; an M:N green-thread runtime / `async`/`await` in the
