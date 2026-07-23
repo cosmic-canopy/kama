@@ -217,9 +217,9 @@ threads out of the *language surface* does not restrict a server scheduler.
 - **M0 Design pass** — this spec. ✅ *(converged 2026-07-22)*
 - **M1 `std::time`** — the precondition module (`lib/std/time/`, `namespace std::time;`), native + wasm, fixtures.
 - **M2 Runtime isolate seam** — `kama_isolate_*` ABI; native pthreads; spawn one isolate running a top-level fn +
-  moved arg bundle and join it. `isolate` surface + emitter lowering. No channels yet. Add `KAMA_TSAN`. ✅ *(landed 2026-07-22 — see below)*
+  moved arg bundle and join it. `isolate` surface + emitter lowering. No channels yet. Add `KAMA_TSAN`. ✅ *(landed 2026-07-23 — see below)*
 - **M3 Channels** — `channel<T>`; blocking send/recv reusing `give`/`copy` + move-tracking; structural
-  sendability check with field-naming errors; bounded + rendezvous. *(kickoff prepped 2026-07-22 — see below)*
+  sendability check with field-naming errors; bounded + rendezvous. ✅ *(landed 2026-07-23 — see below)*
 - **M4 Structured-concurrency scope** — `scope` joining children at drop (RAII-for-tasks); the
   borrow-outlives-task rule via the escape check.
 - **M5 wasm parity** — Worker + postMessage bridge behind the M2 ABI; `give`→transferable; the native↔wasm
@@ -261,104 +261,64 @@ tracking). An `isolate { block }` capture form is intentionally not offered (it 
   (TSan-clean shared-nothing proof), `isolate_handle` + `isolate_raii_join` (handle + drop-join),
   `tests/xfail/isolate_use_after_move`. Green on native + `KAMA_TSAN` + `KAMA_SAN`.
 
-## M3 — implementation kickoff (verified hooks 2026-07-22 — don't re-explore)
+## M3 — landed (2026-07-23)
 
-A running start for the next session. M2 (the isolate seam) is shipped + green. M3 adds **channels**: a typed,
-blocking `channel<T>` for moving values between isolates. *(Remove this section once M3 lands, as this doc's
-"M2 — landed" note replaced the M2 kickoff.)*
+The channel seam shipped: a typed, blocking `channel<T>` for moving values **between** isolates — the first
+sanctioned cross-isolate shared object. **All thread-safety lives in C** (`kama_channel.h`): one
+`pthread_mutex` + two condvars serialize send/recv/endpoint-drop, so **no atomics are needed** (the mutex also
+serializes liveness + free — the last endpoint to drop frees, race-free). The kama side is a thin `Ptr`-handle
+library, exactly like the M2 `Isolate` handle. Bounded ring **and** rendezvous (cap 0); SPSC (multi-producer
+`clone()` is a follow-up). TSan- + ASan-proven.
 
-**The core tension (read first).** M2 is shared-nothing by construction. A channel is the **first sanctioned
-cross-isolate shared mutable state** (the spec's greppable sharing seam, §6/Q6–Q7). ONE heap object (the queue)
-is co-owned by endpoints living on different threads. kama's `Shared<T>` refcount is **plain, non-atomic**
-(`prelude/std/memory/shared.kama:11` — `type value Ctrl { usize strong; usize weak; }`, `strong++`/`strong--`
-at :65/:86), so a cross-isolate `Shared<Queue>` would **race the refcount**. **Decision: put ALL thread-safety
-in C** — a dedicated `kama_channel.h` owning the queue + `pthread_mutex` + two condvars + endpoint-liveness flags,
-mirroring how `kama_isolate.h` owns the threads. Because every state transition (send, recv, endpoint-drop) runs
-under the one mutex, **no atomics are needed** — the mutex serializes liveness + free too (the second endpoint to
-drop frees, race-free). The kama side stays a thin `Ptr`-handle library, exactly like `Isolate`.
-
-**Recommended surface** — a `Channel<T>` factory producing a **move-only** `Sender<T>` / `Receiver<T>` pair (SPSC
-for bring-up; multi-producer `sender.clone()` is a follow-up). The sender moves into a spawned isolate's bundle;
-the receiver stays (or vice-versa):
+**Surface** (`import std::concurrent::{Channel, Sender, Receiver};` — the sender moves into a spawned isolate):
 
 ```
-import std::concurrent::{Channel, Sender, Receiver};
-
-fn void producer(Sender<int32> tx) {           // a `resource` bundle (Ptr handle) — moves into the isolate
-    int32 i = 0;
-    while (i < 10) { tx.send(give i); i = i + 1; }
-}                                               // ~Sender() marks the channel sender-closed → wakes recv
-
-fn int main() {
-    Channel<int32> ch = Channel::bounded(capacity: 4);   // capacity 0 == rendezvous (M3.3)
-    Sender<int32>   tx = ch.sender();
-    Receiver<int32> rx = ch.receiver();
-    isolate producer(tx: give tx);              // reuse the M2 bundle move (Sender is a move-only resource)
-    int32 sum = 0;
-    Optional<int32> v = rx.recv();              // blocks; None once drained AND all senders dropped
-    while (v != Optional::None) { sum = sum + v.unwrap(); v = rx.recv(); }
-    return sum;                                 // 45
-}
+fn void producer(Sender<int32> tx) { tx.send(item: give x); }   // ~Sender() closes → recv returns None
+Channel<int32> ch = Channel::bounded(capacity: 4);   // capacity 0 == rendezvous (synchronous hand-off)
+Sender<int32>   tx = ch.sender();
+Receiver<int32> rx = ch.receiver();
+Isolate h = isolate producer(tx: give tx);           // HANDLE form (fused would join → deadlock a producer)
+Optional<int32> v = rx.recv();                        // blocks; None once drained AND all senders dropped
 ```
 
-`recv()` → `Optional<T>` (None = closed+drained). `send(give x)` → `bool` (false if the receiver is gone). Both
-BLOCK. `send`/`recv` move a T **by memcpy relocation** (the same bitwise move the isolate bundle uses): send
-copies T's bytes into a queue slot and **marks the source moved** (no double-drop — the receiver's `recv` produces
-the sole owning copy). This is why the milestone says "reusing `give`/`copy` + move-tracking" — see decisions below.
+`send(item:)` → `bool` (false if the receiver is gone); `recv()` → `Optional<T>` (None = closed + drained).
+Both block. `Channel<T>` is a thin factory; the queue's lifetime is governed solely by the two endpoint
+liveness flags (last-dropper-frees), so `~Channel()` is a no-op — extract both endpoints before discarding it.
 
-**Design decisions (recommend / flag):**
-1. **`send`/`recv` are emitter-lowered intrinsics on the endpoint types, NOT pure library methods.** They must
-   splice into the move seam (memcpy + `markMoved(source)` for send; produce a fresh owned T for recv) so the
-   compiler suppresses the moved value's destructor — the SAME mechanism `isolatePrep` uses (`kama.cemit.cpp`
-   :6036 `emitExpression(src)` + `moveOnlySource`/`markMoved` :6050). Model the dispatch on smart-ptr method
-   interception (`emitSmartPtrCall`, `isSmartPtrClass` :5623). *(Alternative considered: a `mem::forget(give T)`
-   intrinsic keeping send pure-library — more general but more surface; the endpoints already need emitter
-   awareness for the memcpy+sizeof, so intrinsic `send`/`recv` is less total code.)*
-2. **Structural sendability gate.** T may cross only if it does not transitively reach a **non-atomic shared
-   refcount** — i.e. no `Shared<X>`/`Weak<X>` in T's field/variant/base graph (`Owned<X>` is fine: unique
-   ownership, the move transfers it whole; plain values, collections of sendable, resources of sendable fields
-   are all fine). Build this as a fixpoint field-walk cloned from **`computeReachesPointer()`** (`kama.cemit.cpp`
-   :6452–6514) — restricted to `CollKind::Shared|Weak` — with the field-naming error the milestone asks for:
-   "cannot send `T` over a channel — its field `x: Shared<Y>` shares a non-atomic refcount across isolates; use
-   `Owned<Y>` (unique) or send `Y` by value." `computeDestructible()` (:6373–6443) is the walk template (base +
-   `ci.fields` + `ci.variants`, resolving generics under `_typeSubst`).
-3. **Endpoints are move-only `resource`s holding a `Ptr` handle** (the `Isolate` pattern,
-   `lib/std/concurrent/concurrent.kama:23`). `~Sender()`/`~Receiver()` call `kama_channel_drop_sender/receiver`
-   (mark that side closed, wake the other, free when both closed). A resource holding a `Ptr` is sendable +
-   drop-safe (INVARIANT #0: null handle ⇒ drop is a no-op).
-4. **Bounded first, rendezvous second.** Bounded (`capacity ≥ 1`) is a ring buffer; rendezvous (`capacity 0`) is a
-   direct hand-off needing a slightly different handshake — land it in M3.3, not bring-up.
-5. **recv/send return via the prelude `Optional<T>` / `bool`** (no new error type for M3). A `recv`-with-timeout
-   rides `std::time::Duration` (`lib/std/time/time.kama`) + `pthread_cond_timedwait` — defer to a follow-up.
+**send/recv are PURE LIBRARY — no emitter intrinsics** (the kickoff expected intrinsics; two discoveries
+removed the need). `sizeof(T)` works in a generic body, so the factory is library. `addr(of:)` + `memset`
+let `send` be library too: the caller's `give` already suppresses the caller-side drop via normal
+move-tracking, and inside `send`, after the C memcpy relocates the bytes into the queue, the moved-in source
+is `memset` to zero so its method-end destructor is a no-op (INVARIANT #0: a resource's zero value is
+drop-safe). `recv` builds `Optional::Some(value: give dst)`, whose `give` suppresses `dst`'s drop. Bitwise
+relocation → the receiver holds the sole owner (verified for a heap-owning `T` in `channel_move_heap`).
 
-**Verified hook points** (file:line — `kama_isolate.h` + the M2 isolate seam are the copy-me analog):
+**Sendability is a structural compiler gate** (no user marker): a `T` may cross only if it does not
+transitively reach a **non-atomic shared refcount** (`Shared<X>`/`Weak<X>` in its field/base/variant/
+collection-element graph). `Owned<X>` is fine (unique — the move transfers it whole). `computeReachesSharedWeak()`
+is the Shared|Weak-only sibling of `computeReachesPointer` (same fixpoint, `Owned` excluded);
+`checkChannelSendability()` rejects an offending `channel<T>`, naming the culprit field.
 
-| Layer | File:line | What to do |
-|---|---|---|
-| Runtime ABI | **new `kama_channel.h`** (mirror `kama_isolate.h` — `#include <pthread.h>` + `"kama_runtime.h"`; no sync primitives exist in the tree yet, grep-confirmed) | `typedef struct { pthread_mutex_t mu; pthread_cond_t notEmpty, notFull; uint8_t* buf; size_t elemSize, cap, count, head, tail; int senderLive, receiverLive; } kama_channel_t;` + `static inline` `kama_channel_new(elemSize, cap)` / `_send(ch, elem)→int` / `_recv(ch, out)→int` / `_drop_sender`/`_drop_receiver` (all under `mu`; last dropper frees) |
-| Stdlib | `lib/std/concurrent/` (new `channel.kama`; the `concurrent.kama` `Isolate` pattern :23) | `extern "kama_channel.h";` + `extern fn Ptr kama_channel_new(usize elemSize, usize cap);` etc.; generic `resource Channel<T>` / `Sender<T>` / `Receiver<T>` (each a `Ptr handle`) with `~` calling the drop FFI; `export`. Generic-type syntax: `type resource Sender<T> { Ptr handle; … }` (see `prelude/std/memory/owned.kama:13`, `dynamic_array.kama:39`) |
-| Emitter — send/recv | `kama.cemit.cpp` — intercept like `emitSmartPtrCall` (:5985) / method dispatch; reuse the move seam `isolatePrep` uses (:6036/:6050) | lower `tx.send(give x)` → `kama_channel_send(handle, &x_tmp)` (memcpy the bytes; `markMoved` the source) returning bool; `rx.recv()` → an `Optional<T>` built from a `T out; kama_channel_recv(handle, &out)` (the fresh owned value). `sizeof(T)`/`cType(T)` under `_typeSubst` give the element size (`kama.cemit.cpp` :1080 sizeof, :234 cType) |
-| Emitter — sendability | `kama.cemit.cpp` new pass beside `computeReachesPointer` :6452 / `computeDestructible` :6373 | the field-walk gate of decision #2; run it where a `channel<T>`/`Sender<T>`/`Receiver<T>` is instantiated (the generic-type registration path, `registerGenericTypeInst` :4180) so the error fires at the use site |
-| Driver link | `kama.driver.cpp` — the `needsIsolate`/`-lpthread` machinery (:620 bool, :345/:387 `externsHeader`, :787 link gate) | add `needsChannel` set from `externsHeader("kama_channel.h")`, threaded through the three transpile fns like `externsIsolate`; gate `-lpthread` on `(needsIsolate \|\| needsChannel) && !wasm` (channels imply pthreads) |
-| Tests | `run_tests.sh` — the M2 `KAMA_TSAN` sweep + the `std::concurrent` wasm-skip already added | new fixtures below run under the existing `KAMA_TSAN=1`; the wasm-skip (`grep std::concurrent`) already covers `channel.kama` importers |
+**Where it lives:**
+- Runtime ABI — `kama_channel.h` (repo root; `#include <pthread.h>`, one `kama_channel_t` struct +
+  `static inline` `kama_channel_new`/`_send`/`_recv`/`_drop_sender`/`_drop_receiver`, all bodies under `mu`;
+  cap-0 is a synchronous-handoff branch in send/recv). Like `kama_isolate.h`, kept OFF `kama_runtime.h`.
+- Stdlib — `lib/std/concurrent/channel.kama` (`namespace std::concurrent`): generic `resource`
+  `Channel<T>` / `Sender<T>` / `Receiver<T>` (each a `Ptr handle`); `send`/`recv` are ordinary kama methods.
+- Compiler — `kama.cemit.cpp`: `computeReachesSharedWeak()` + `checkChannelSendability()` (beside
+  `computeReachesPointer`), the channel-family template capture (`_channelTmpl`/`_senderTmpl`/`_receiverTmpl`,
+  gated on `std__concurrent`). `kama.driver.cpp`: the isolate `-lpthread` hint broadened to `needsPthread`
+  (either `kama_isolate.h` or `kama_channel.h`). **No new AST/grammar/keyword** — channels are pure library.
+- Tests — `channel_bounded` (cross-isolate hand-off, =45), `channel_backpressure` (cap-1, in-order),
+  `channel_move_heap` (heap-owning `T`, free-once), `channel_send_owned` (`Owned<X>` IS sendable),
+  `channel_rendezvous` (cap-0 lockstep), `channel_close` (drop wakes a blocked recv → None),
+  `tests/xfail/channel_send_shared` (the sendability reject). Green on native + `KAMA_TSAN` + `KAMA_SAN`;
+  skipped on wasm (native-only until M5).
 
-**Draft M3 fixtures:** (1) **bounded producer→consumer**: spawn a producer isolate that sends N ints, `recv` them
-in main until None, assert the sum — **TSan-clean** under `KAMA_TSAN=1` (the cross-isolate hand-off proof);
-(2) **backpressure**: `capacity 1`, producer sends more than fits so `send` blocks until the consumer drains —
-assert all values arrive in order; (3) **close semantics**: producer drops its `Sender` early; `recv` returns
-`Optional::None` after draining (not a hang/crash); (4) **xfail sendability**: `channel<BadT>` where
-`BadT { Shared<X> s; }` → the field-naming sendability error (decision #2); (5) **rendezvous** (M3.3): `capacity 0`
-hand-off. All native + `KAMA_TSAN` + `KAMA_SAN` green; skipped on the wasm leg (native-only until M5).
-
-**Suggested sub-stages:** M3.1 bounded channel ABI + endpoints + emitter send/recv (fixtures 1–2) → M3.2 the
-structural sendability gate (fixture 4) → M3.3 rendezvous + close-drain polish (fixtures 3, 5).
-
-**Risks / unknowns:** (a) **destructor suppression on `send`** — the moved value must not be double-dropped;
-confirm `markMoved` on the send source fully suppresses the caller-side drop as it does for the isolate bundle
-(it should — same seam). (b) **recv of a T that owns heap** (e.g. `channel<DynamicArray<int32>>`) — the memcpy
-relocates the `{ptr,len,cap}` struct; verify the sender's source is not dropped and the receiver's copy is the
-sole owner (bitwise move is correct, but write a fixture). (c) **rendezvous handshake** (cap 0) is the fiddly bit
-— a bounded ring with `cap≥1` is the safe bring-up; don't start with rendezvous.
+**Known limitation:** items left **undelivered** in an abandoned channel (both endpoints dropped with the
+queue non-empty) have their bytes reclaimed by the C buffer free, but their kama-level destructors do **not**
+run — so a heap-owning `T` left buffered leaks. Value types never leak. The contract is *drain your channel*
+(the fixtures do). A drain-on-`~Receiver` (needs a non-blocking `try_recv`) is the clean fix — a follow-up.
 
 ## Deferred (per §6)
 
