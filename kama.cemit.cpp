@@ -6735,7 +6735,15 @@ void CEmitter::computeReachesSharedWeak()
             auto gi = _genericTypeInsts.find(kv.first);
             if (gi != _genericTypeInsts.end() && !gi->second.typeArgs.empty()) elem = cType(gi->second.typeArgs[0]);
             else { auto ci = _collections.find(kv.first); if (ci != _collections.end()) elem = ci->second.elemClass; }
-            if (!elem.empty() && deeplyImmutable(elem)) sw = false;
+            if (!elem.empty() && deeplyImmutable(elem)) {
+                sw = false;
+                // M6.2: this Shared/Weak instance is the deeply-immutable flavor -> its control block uses the
+                // atomic refcount ops. Set the flag the prelude reads via `__kama_ctrl_atomic()` (library path,
+                // this ClassInfo) and its CollectionInfo sibling (intrinsic-macro path, wired later).
+                kv.second.useAtomicRefcount = true;
+                auto ci = _collections.find(kv.first);
+                if (ci != _collections.end()) ci->second.useAtomicRefcount = true;
+            }
         }
         kv.second.reachesSharedWeak = sw;
     }

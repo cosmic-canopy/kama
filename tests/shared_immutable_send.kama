@@ -1,0 +1,37 @@
+// M6.2: the positive flip of xfail/channel_send_shared. A `Shared<T>` over a DEEPLY-IMMUTABLE `T` IS
+// shareable across isolates — immutable data is race-free even when shared, and (uniquely for the immutable
+// flavor) its control-block refcount is ATOMIC, so concurrent clones/drops of the handle don't race the
+// counter. Four isolates each hammer retain/release on the SAME shared `Leaf` a thousand times while
+// reading the (immutable) payload; the scope joins them before `a` drops. TSan-clean is the whole point:
+// were the refcount the plain non-atomic `Rc`, the concurrent strong++/strong-- would be a data race.
+// Run under KAMA_TSAN=1.
+import std::concurrent;
+
+type immutable value Leaf {
+    public int32 x; public int32 y;
+    public ctor make(int32 x, int32 y) { Leaf r; r.x = x; r.y = y; return give r; }
+}
+
+fn void reader(Shared<Leaf> s) {
+    int32 i = 0;
+    while (i < 1000) {
+        Shared<Leaf> t = s;          // concurrent RETAIN on the shared control block
+        int32 v = t.x + t.y;         // read the immutable payload (never mutated -> race-free)
+        i = i + 1;                   // `t` drops here -> concurrent RELEASE
+    }
+}
+
+fn int main() {
+    Shared<Leaf> a = new Leaf.make(x: 3i32, y: 4i32);
+    scope {
+        Shared<Leaf> c1 = a;         // retain a handle for each child (strong++)
+        spawn reader(s: give c1);
+        Shared<Leaf> c2 = a;
+        spawn reader(s: give c2);
+        Shared<Leaf> c3 = a;
+        spawn reader(s: give c3);
+        Shared<Leaf> c4 = a;
+        spawn reader(s: give c4);
+    }                                // BARRIER: all four joined; every child copy released
+    return a.x + a.y;                // 7 — the asset is intact and the refcount survived the race
+}

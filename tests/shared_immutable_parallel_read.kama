@@ -1,0 +1,40 @@
+// M6.2: cheap read-only sharing of a NON-TRIVIAL immutable asset across isolates. `Asset` nests two
+// immutable `Vec3`s (so deep-immutability is transitive — `Asset` is immutable only BECAUSE `Vec3` is), and
+// a `Shared<Asset>` lets several isolates read it ZERO-COPY: one heap payload, no per-isolate duplication,
+// with the atomic refcount keeping concurrent handle clones/drops race-free. Three isolates each scan the
+// shared asset repeatedly. Deterministic result + TSan-clean. Run under KAMA_TSAN=1.
+import std::concurrent;
+
+type immutable value Vec3 {
+    public int32 a; public int32 b; public int32 c;
+    public ctor make(int32 a, int32 b, int32 c) { Vec3 r; r.a = a; r.b = b; r.c = c; return give r; }
+}
+
+type immutable value Asset {
+    public Vec3 lo; public Vec3 hi; public int32 tag;
+    public ctor make(Vec3 lo, Vec3 hi, int32 tag) { Asset r; r.lo = lo; r.hi = hi; r.tag = tag; return give r; }
+}
+
+fn void scan(Shared<Asset> s) {
+    int32 i = 0;
+    while (i < 500) {
+        Shared<Asset> t = s;         // concurrent retain/release on the shared control block
+        int32 v = t.lo.a + t.hi.c;   // read the (nested) immutable asset, zero-copy across isolates
+        i = i + 1;
+    }
+}
+
+fn int main() {
+    Vec3 lo = Vec3.make(a: 1i32, b: 2i32, c: 3i32);
+    Vec3 hi = Vec3.make(a: 4i32, b: 5i32, c: 6i32);
+    Shared<Asset> a = new Asset.make(lo: lo, hi: hi, tag: 42i32);
+    scope {
+        Shared<Asset> c1 = a;
+        spawn scan(s: give c1);
+        Shared<Asset> c2 = a;
+        spawn scan(s: give c2);
+        Shared<Asset> c3 = a;
+        spawn scan(s: give c3);
+    }                                // all joined; every child handle released before `a` drops
+    return a.tag;                    // 42
+}
