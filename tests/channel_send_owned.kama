@@ -1,0 +1,38 @@
+// M3.2: `Owned<X>` IS sendable (the complement of the xfail sendability reject). Unlike `Shared`/`Weak`,
+// an `Owned` is a UNIQUE heap pointer — no shared refcount to race — so the move transfers it whole across
+// the channel. The producer sends an `Owned<Box>`; main relocates it out via `recv` and reads through it,
+// freeing the heap box exactly once at the match arm's end (ASan-clean under KAMA_SAN=1; TSan-clean).
+import std::concurrent::{Channel, Sender, Receiver, Isolate};
+import std::memory::{Owned};
+
+type value Box {
+    int32 v;
+    public ctor make(int32 v) { Box r; r.v = v; return give r; }
+    public fn int32 get() { return this.v; }
+}
+
+fn void producer(Sender<Owned<Box>> tx) {
+    Owned<Box> b = new Box.make(v: 42);
+    tx.send(item: give b);   // the unique box pointer relocates into the queue
+}
+
+fn int main() {
+    Channel<Owned<Box>> ch = Channel::bounded(capacity: 2);
+    Sender<Owned<Box>>   tx = ch.sender();
+    Receiver<Owned<Box>> rx = ch.receiver();
+
+    Isolate h = isolate producer(tx: give tx);
+
+    int32 got = 0;
+    bool going = true;
+    while (going) {
+        Optional<Owned<Box>> v = rx.recv();
+        match (v) {
+            case Some(b): { got = got + b.get(); }   // auto-deref through Owned; the box frees once at arm-end
+            case None:    { going = false; }
+        };
+    }
+
+    h.join();
+    return got;   // 42
+}

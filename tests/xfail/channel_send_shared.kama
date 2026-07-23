@@ -1,0 +1,18 @@
+// M3.2: the structural sendability gate. A type that transitively reaches a NON-ATOMIC shared refcount
+// (`Shared<X>` / `Weak<X>`) may not cross a channel — the refcount is plain (non-atomic), so a
+// cross-isolate copy would race it. `Bad` has a `Shared<Leaf>` field, so `Channel<Bad>` is rejected with
+// a field-naming error (the compiler computes sendability structurally, like the escape check). Using
+// `Owned<Leaf>` (unique) or sending `Leaf` by value would be fine.
+import std::concurrent::{Channel, Sender, Receiver};
+import std::memory::{Shared};
+
+type value Leaf { int32 v; }
+
+type resource Bad {
+    Shared<Leaf> s;   // a non-atomic shared refcount — not sendable
+}
+
+fn int main() {
+    Channel<Bad> ch = Channel::bounded(capacity: 2);   // ERROR: `Bad`'s field `s` shares a non-atomic refcount
+    return 0;
+}

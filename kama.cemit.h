@@ -202,6 +202,12 @@ struct ClassInfo {
     // Recurses through collection elements + owned fields, but STOPS at a pointer (doesn't recurse
     // through it). Populated by computeReachesPointer(). Consumed by the serialization lowering (Phase C+).
     bool                              reachesPointer = false;
+    // Channel-sendability gate (M3): transitively reaches a NON-ATOMIC shared refcount — a `Shared<X>`
+    // or `Weak<X>` field/base/variant-payload/collection-element. `Owned<X>` is fine (unique ownership,
+    // the move transfers it whole), so this is the Shared|Weak-only sibling of `reachesPointer`. A type
+    // that reaches one may not cross a `channel<T>` (its refcount would race across isolates). Populated
+    // by computeReachesSharedWeak(); consumed by the channel-sendability check.
+    bool                              reachesSharedWeak = false;
     // A node in a serializable object graph: either a graph root (`reachesPointer`) OR a pointee reached via
     // some graph type's Shared/Weak/Owned field (a tree type like `Leaf` that is only ever a `Shared<Leaf>`
     // target). Populated by computeGraphNodeTypes() (a closure over the smart-ptr fields, seeded by
@@ -806,6 +812,9 @@ private:
     void buildVtables();
     void computeDestructible();
     void computeReachesPointer();   // serialization mode gate — sibling of computeDestructible
+    void computeReachesSharedWeak();   // channel-sendability gate — Shared|Weak-only sibling of reachesPointer
+    void checkChannelSendability();    // reject a `channel<T>` whose T reaches a non-atomic shared refcount
+    bool isSharedOrWeakClass(const std::string& cls) const;   // an intrinsic/triad Shared or Weak (not Owned)
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);
     void emitDeserializeDefinition(ClassInfo& ci);
@@ -866,6 +875,9 @@ private:
     // A concrete-element triad instance (`Shared<Leaf>`) is an ordinary library generic instance (NOT
     // isIntrinsicColl), so pointer detection goes by template identity via `_genericTypeInstOf`.
     std::string _sharedTmpl, _ownedTmpl, _weakTmpl;
+    // std::concurrent's channel-family generic-template keys, captured at collection (like the memory
+    // triad above). Used by checkChannelSendability to find every `channel<T>` instantiation site.
+    std::string _channelTmpl, _senderTmpl, _receiverTmpl;
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
     static bool isExtern(FunctionDeclarationNode* fn);
     static bool isExposed(FunctionDeclarationNode* fn);   // `expose fn` — kama→host C-ABI boundary

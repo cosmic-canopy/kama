@@ -3521,6 +3521,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if      (sn == "Shared") _sharedTmpl = ci.name;
                 else if (sn == "Owned")  _ownedTmpl  = ci.name;
                 else if (sn == "Weak")   _weakTmpl   = ci.name;
+                else if (sn == "Channel"  && ci.scope == "std__concurrent") _channelTmpl  = ci.name;
+                else if (sn == "Sender"   && ci.scope == "std__concurrent") _senderTmpl   = ci.name;
+                else if (sn == "Receiver" && ci.scope == "std__concurrent") _receiverTmpl = ci.name;
             }
         } else {
             _classes[ci.name] = ci;
@@ -6510,6 +6513,123 @@ void CEmitter::computeReachesPointer()
             if (inst) _typeSubst.clear();
             if (r) { ci.reachesPointer = true; changed = true; }
         }
+    }
+}
+
+// An intrinsic `Shared`/`Weak` collection OR a concrete-element triad instance of one (`Shared<Leaf>`) —
+// a NON-ATOMIC shared refcount. `Owned` is deliberately excluded: it is unique, so a move transfers it
+// whole with no shared counter to race.
+bool CEmitter::isSharedOrWeakClass(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    if (it != _classes.end() && it->second.isIntrinsicColl &&
+        (it->second.collKind == CollKind::Shared || it->second.collKind == CollKind::Weak))
+        return true;
+    auto g = _genericTypeInstOf.find(cls);
+    return g != _genericTypeInstOf.end() && (g->second == _sharedTmpl || g->second == _weakTmpl);
+}
+
+// Channel-sendability gate: the Shared|Weak-only sibling of computeReachesPointer(). A clone of that
+// fixpoint that seeds ONLY `Shared`/`Weak` (a non-atomic refcount), so `reachesSharedWeak` marks exactly
+// the types that may not cross a `channel<T>`. `Owned` is sendable (unique) and does NOT seed here.
+void CEmitter::computeReachesSharedWeak()
+{
+    for (auto& kv : _classes)
+        kv.second.reachesSharedWeak = isSharedOrWeakClass(kv.first);
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto& kv : _classes) {
+            ClassInfo& ci = kv.second;
+            if (ci.reachesSharedWeak || ci.isExternStruct) continue;
+            bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
+            if (inst) {
+                const GenericTypeInst& gi = _genericTypeInsts[ci.name];
+                _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name]
+                                                            : _genericTypeCtx[gi.templateKey];
+                _typeSubst.clear();
+                const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+                for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+            } else {
+                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+            }
+            bool r = (ci.base && ci.base->reachesSharedWeak);
+            if (!r)
+                for (auto& f : ci.fields) {
+                    auto it = _classes.find(cType(f.type));
+                    if (it != _classes.end() && it->second.reachesSharedWeak) { r = true; break; }
+                }
+            if (!r)
+                for (auto& v : ci.variants) {
+                    for (auto& f : v.payload) {
+                        auto it = _classes.find(cType(f.type));
+                        if (it != _classes.end() && it->second.reachesSharedWeak) { r = true; break; }
+                    }
+                    if (r) break;
+                }
+            if (!r && ci.isIntrinsicColl) {
+                auto cit = _collections.find(ci.name);
+                if (cit != _collections.end()) {
+                    auto e = _classes.find(cit->second.elemClass);
+                    if (e != _classes.end() && e->second.reachesSharedWeak) r = true;
+                }
+            }
+            if (inst) _typeSubst.clear();
+            if (r) { ci.reachesSharedWeak = true; changed = true; }
+        }
+    }
+}
+
+// Reject every `channel<T>` (`Channel`/`Sender`/`Receiver` instance) whose element T transitively reaches
+// a non-atomic shared refcount — its cross-isolate copy would race the `Shared`/`Weak` counter. Names the
+// offending field, mirroring the escape-check style. Runs after computeReachesSharedWeak, when all channel
+// instances are registered. `Owned<X>` passes (unique); plain values / collections / resources of sendable
+// fields all pass.
+void CEmitter::checkChannelSendability()
+{
+    if (_channelTmpl.empty() && _senderTmpl.empty() && _receiverTmpl.empty()) return;   // channels unused
+    std::set<std::string> reported;   // one diagnostic per offending element type (Channel/Sender/Receiver share it)
+    for (const std::string& mangled : _genericTypeInstOrder) {
+        auto g = _genericTypeInstOf.find(mangled);
+        if (g == _genericTypeInstOf.end()) continue;
+        if (g->second != _channelTmpl && g->second != _senderTmpl && g->second != _receiverTmpl) continue;
+        const GenericTypeInst& gi = _genericTypeInsts[mangled];
+        if (gi.typeArgs.empty()) continue;
+        std::string elem = cType(gi.typeArgs[0]);
+        auto ei = _classes.find(elem);
+        if (ei == _classes.end() || !ei->second.reachesSharedWeak) continue;   // sendable
+        if (!reported.insert(elem).second) continue;
+
+        int line = gi.typeArgs[0]->line;
+        // The element type may itself BE the refcount (`channel<Shared<X>>`), or reach one through a field.
+        if (isSharedOrWeakClass(elem)) {
+            unsupported(("cannot send `" + elem + "` over a channel — it is a non-atomic shared refcount that "
+                         "would race across isolates; send the pointee by value, or use `Owned<X>` (unique)").c_str(), line);
+            continue;
+        }
+        // Name the first field whose type reaches a shared refcount (resolve the element's fields under its
+        // own binding, like the fixpoint), so the diagnostic points at the culprit.
+        ClassInfo& ci = ei->second;
+        bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
+        if (inst) {
+            const GenericTypeInst& egi = _genericTypeInsts[ci.name];
+            _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name] : _genericTypeCtx[egi.templateKey];
+            _typeSubst.clear();
+            const std::vector<std::string>& ps = _genericTypeParams[egi.templateKey];
+            for (size_t i = 0; i < ps.size() && i < egi.typeArgs.size(); ++i) _typeSubst[ps[i]] = egi.typeArgs[i];
+        } else {
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+        }
+        std::string culprit;   // "field `name` (of type `T`)"
+        for (auto& f : ci.fields) {
+            std::string fc = cType(f.type);
+            auto fi = _classes.find(fc);
+            if (fi != _classes.end() && fi->second.reachesSharedWeak) { culprit = "field `" + f.name + "` (of type `" + fc + "`)"; break; }
+        }
+        if (inst) _typeSubst.clear();
+        if (culprit.empty()) culprit = "a field";   // reached via a base / variant payload / collection element
+        unsupported(("cannot send `" + elem + "` over a channel — its " + culprit + " shares a non-atomic "
+                     "refcount across isolates; use `Owned<Y>` (unique) or send the value by copy").c_str(), line);
     }
 }
 
@@ -12472,6 +12592,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         ci.node ? ci.node->line : 0);
     }
     computeReachesPointer();   // serialization mode gate (by-value vs. graph)
+    computeReachesSharedWeak();   // channel-sendability gate (Shared|Weak-only sibling)
+    checkChannelSendability();    // reject `channel<T>` whose T reaches a non-atomic shared refcount
     computeGraphNodeTypes();   // graph node closure + Shared<T> deserialize return types (Phase D)
 
     // Contract kind-gate enforcement: a class may `implements` a contract only if its kind (value/resource)
