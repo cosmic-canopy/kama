@@ -752,6 +752,10 @@ private:
     // null when the callee isn't a `Type::Variant(args)` or a param can't be inferred (falls back to the error).
     SharedIdentifier inferInlineVariantInstance(InvocationNode* inv,
                                                 std::map<std::string, SharedIdentifier>& localTys, bool reg);
+    // The mangled tagged-union type of a value-producing `match` SUBJECT that is an inline variant ctor,
+    // OR a variant-producing ternary / nested `match` over such ctors — resolved (and its instances
+    // registered) at discovery so emitMatchSwitch, which can't re-infer it, has the subject's class. "" if none.
+    std::string inferMatchSubjInst(SharedExpression subj);
     SharedIdentifier primTypeNode(int builtInVal);          // cached synthesized primitive type node
     bool isConcreteTypeArg(SharedIdentifier t);             // a primitive/class/enum/collection (not a bare type-param)
     // Unify a generic call's args against the template's params -> a deduped instantiation.

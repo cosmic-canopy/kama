@@ -28,27 +28,28 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
 [ENGINE_READINESS.md](ENGINE_READINESS.md); the history in the git log. What remains to call the language
 **complete**:
 
-1. **Language-completeness residual (1.0 blocker — deep emitter work).** One fundamental (non-library)
-   gap in the move-tracking / ownership-lowering core; it reproduces with plain resources/collections and
-   has a clean workaround, so a "language-complete" 1.0 closes it but it doesn't block the stdlib/engine
-   work. (Reserved later-track keyword `volatile`/`hardware` stays deferred — it hard-errors, never
-   miscompiles.)
-   - **Value-producing `match`/ternary as a `match` subject** *(rare residual, clean "bind to a local first"
-     workaround)*. Target-typed inline construction works in every by-value position (initializer, `return`,
-     `operator[]` store, value-producing `match` arm, class-typed lvalue store, call-argument, variant payload,
-     string-rvalue indexing, inline `new`) — see [SPEC.md](SPEC.md). A bare **variant-constructor** subject
-     (`match (Optional::Some(x)) { … }`, x a param/local/literal) now works too: a function-level pre-scan
-     supplies the discovery pass the local types, so the instance (`Optional<T>`) is inferred + registered
-     there and reused at emit. **Still open** (much rarer): a *nested* value-producing `match` or a
-     *variant-producing ternary* directly as a subject — bind to a typed local. Documented RULES (not gaps):
+1. **Language-completeness residual ✅ CLOSED (2026-07-23).** The last two `match` subject-inference gaps
+   (nested value-producing `match`/variant-producing ternary as a subject; contract-dispatched method call as
+   a subject) are now fixed — see the two ✅ items below. The language surface is complete; what remains before
+   the 1.0 tag is the docs/naming reconcile (§3). (Reserved later-track keyword `volatile`/`hardware` stays
+   deferred — it hard-errors, never miscompiles.)
+   - **Value-producing `match`/ternary as a `match` subject ✅ DONE (2026-07-23).** Target-typed inline
+     construction works in every by-value position (initializer, `return`, `operator[]` store, value-producing
+     `match` arm, class-typed lvalue store, call-argument, variant payload, string-rvalue indexing, inline
+     `new`) — see [SPEC.md](SPEC.md). A bare **variant-constructor** subject (`match (Optional::Some(x)) { … }`)
+     already worked via a function-level pre-scan. **Now also closed:** a *nested* value-producing `match` and
+     a *variant-producing ternary* directly as a subject — the discovery pre-scan (`inferMatchSubjInst`)
+     recurses through the ternary/nested-match to infer + register the tagged-union instance, and `exprClass`
+     grew `MatchNode`/`TernaryExpressionNode` cases so call/var-valued branches resolve too. Fixtures:
+     `tests/match_nested_subject.kama`, `tests/match_ternary_subject.kama`. Documented RULES (not gaps):
      an inline `new`/value **borrowed** by a `ref`/`out` or contract parameter (an rvalue has no lvalue to
      reseat), and an inline construct in a `do/while` condition (ISO-C + `continue` semantics).
-   - **Contract-dispatched method call as a `match` subject** *(same "bind to a local first" workaround)*.
-     `match (g.method())` where `g` is a **contract value** and `method` returns an enum/`Result` fails
-     ("requires an enum subject") — a **concrete** method-call subject (`match (box.method())`) works, so the
-     gap is that match-subject inference doesn't resolve the *contract method's* declared return type through
-     fat-pointer dispatch. Found in streams M4; bind to a typed local (`Result<…> r = g.method(); match (r)`),
-     which is already the corpus-wide idiom.
+   - **Contract-dispatched method call as a `match` subject ✅ DONE (2026-07-23).** `match (g.method())` where
+     `g` is a **contract value** and `method` returns a tagged union (`Optional`/`Result`) now resolves the
+     contract method's declared return type through fat-pointer dispatch (an `isInterface` branch in
+     `exprClass` looks the method up via `contractMethods`, rendering the return type under the contract's own
+     scope with `T` bound for a generic-contract instance). Found in streams M4. Fixtures:
+     `tests/match_contract_call_subject.kama` (generic `Iterator<int32>`), `tests/match_contract_call_plain.kama`.
 2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O +
    math subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
@@ -81,10 +82,9 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
 
 ## 2. Deferred language bits (tracked)
 
-Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The only
-§1 language-completeness residual left is a *nested* value-producing `match`/*variant-producing ternary*
-directly as a `match` subject (the common bare-variant-ctor subject now works); what remains here is
-genuinely later-track or opt-in.
+Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The §1
+language-completeness residual is now **closed** (nested/ternary + contract-dispatched `match` subjects
+landed 2026-07-23); what remains here is genuinely later-track or opt-in.
 
 - **Contract refinement — two under-tested edges (tracked; clean workarounds).** `type contract Child …
   implements Parent` works for dispatch, but was only exercised with scalar-param parents until streams M4

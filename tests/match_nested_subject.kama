@@ -1,0 +1,24 @@
+// §1.1 — a NESTED value-producing `match` used DIRECTLY as the subject of an outer `match`. The inner
+// match yields an `Optional<int32>` (built with inline variant ctors); the outer matches on it. Previously
+// this hard-errored ("`match` requires an enum subject") and forced binding to a typed local first — the
+// discovery pre-scan now infers the inline instance through the nested match, and the workaround still compiles.
+enum Dir { Left, Right }
+
+fn int32 route(Dir d, int32 x) {
+    return match (match (d) { case Left: Optional::Some(value: x); case Right: Optional::None; }) {
+        case Some(v): v;
+        case None:    0 - 1;
+    };
+}
+
+fn int32 workaround(Dir d, int32 x) {   // the "bind to a local first" form still compiles
+    Optional<int32> o = match (d) { case Left: Optional::Some(value: x); case Right: Optional::None; };
+    return match (o) { case Some(v): v; case None: 0 - 1; };
+}
+
+fn int main() {
+    int32 a = route(d: Dir::Left,  x: 42);     // Some(42) -> 42
+    int32 b = route(d: Dir::Right, x: 99);     // None     -> -1
+    int32 c = workaround(d: Dir::Left, x: 1);  // Some(1)  ->  1
+    return a + b + c;                           // 42 - 1 + 1 = 42
+}

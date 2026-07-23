@@ -4993,13 +4993,11 @@ void CEmitter::scanExprForCollections(SharedExpression e)
         // recurse into a `match` — the subject and each arm (a single expression OR a block),
         // so a type used ONLY inside an arm (e.g. a block-local `Shared<T>`) is still registered.
         scanExprForCollections(mm->subject);
-        // A1: a value-producing variant ctor as the SUBJECT (`match (Optional::Some(x))`) — infer + register
-        // the instance HERE (discovery has the local types via `_scanLocalTys`) and stash the mangled name
-        // for emitMatchSwitch (which has no way to re-infer it).
-        if (auto* iv = dynamic_cast<InvocationNode*>(mm->subject.get())) {
-            SharedIdentifier inst = inferInlineVariantInstance(iv, _scanLocalTys, /*reg=*/true);
-            if (inst) _matchSubjInst[mm] = cType(inst);
-        }
+        // A1: a value-producing variant ctor as the SUBJECT (`match (Optional::Some(x))`), or a
+        // variant-producing ternary / nested `match` over such ctors — infer + register the instance HERE
+        // (discovery has the local types via `_scanLocalTys`) and stash the mangled name for emitMatchSwitch
+        // (which has no way to re-infer it).
+        { std::string inst = inferMatchSubjInst(mm->subject); if (!inst.empty()) _matchSubjInst[mm] = inst; }
         if (mm->arms) for (auto& a : *mm->arms) if (a) {
             scanExprForCollections(a->body);
             scanStmtForCollections(a->block);
@@ -5165,6 +5163,35 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
 // template params must bind (so `Result::Ok(42)` — E unbound — returns null and falls back to the "requires an
 // enum subject" error). `reg=true` (discovery) registers the instance so its C struct emits; `reg=false`
 // (emit) just rebuilds the node to recover the mangled name. Returns null for anything that isn't inferable.
+// Resolve the tagged-union class of a value-producing `match` SUBJECT (discovery time). An inline variant
+// ctor resolves directly; a variant-producing ternary or a nested `match` resolves from its first branch/arm
+// whose value is (recursively) an inline variant ctor — both branches/arms share the type. Instances are
+// registered as a side effect (via inferInlineVariantInstance's reg=true). "" if the subject isn't this shape.
+std::string CEmitter::inferMatchSubjInst(SharedExpression subj)
+{
+    if (!subj) return "";
+    if (auto* iv = dynamic_cast<InvocationNode*>(subj.get())) {
+        SharedIdentifier inst = inferInlineVariantInstance(iv, _scanLocalTys, /*reg=*/true);
+        return inst ? cType(inst) : "";
+    }
+    if (auto* tx = dynamic_cast<TernaryExpressionNode*>(subj.get())) {
+        std::string l = inferMatchSubjInst(tx->LHS);
+        return !l.empty() ? l : inferMatchSubjInst(tx->RHS);
+    }
+    if (auto* mx = dynamic_cast<MatchNode*>(subj.get())) {
+        if (mx->arms)
+            for (auto& a : *mx->arms) if (a) {
+                SharedExpression v = a->body;                          // single-expression arm
+                if (!v && a->block && a->block->statements)            // block arm: its terminal `:= expr;`
+                    for (auto& st : *a->block->statements)
+                        if (auto* av = dynamic_cast<ArmValueNode*>(st.get())) v = av->value;
+                std::string r = inferMatchSubjInst(v);
+                if (!r.empty()) return r;
+            }
+    }
+    return "";
+}
+
 SharedIdentifier CEmitter::inferInlineVariantInstance(InvocationNode* inv,
                                                       std::map<std::string, SharedIdentifier>& localTys, bool reg)
 {
@@ -9178,10 +9205,16 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         std::string mv = moveOnlySource(h->value, m->line); if (!mv.empty()) markMoved(mv);
     } else {
     // A1: pin the concrete instance so the inline variant ctor constructs `Optional_int32`, not bare `Optional`.
-    std::string pvt = _variantTargetType, pmt = _matchTargetCType;
-    if (inlineVariantSubj) { _variantTargetType = subjCls; _matchTargetCType = subjCls; }
+    // A value-producing nested `match`/variant-ternary subject needs the SAME pin: emitMatch requires a
+    // non-empty `_matchTargetCType` + a statement slot (`_hoistOK`), and a ternary's inline variant ctors
+    // need `_variantTargetType`, so the materialized owning temp is the resolved `subjCls`.
+    bool valueSubj = inlineVariantSubj
+                  || dynamic_cast<MatchNode*>(m->subject.get())
+                  || dynamic_cast<TernaryExpressionNode*>(m->subject.get());
+    std::string pvt = _variantTargetType, pmt = _matchTargetCType; bool ph = _hoistOK;
+    if (valueSubj) { _variantTargetType = subjCls; _matchTargetCType = subjCls; _hoistOK = true; }
     std::string subjExpr = emitExpression(m->subject);
-    if (inlineVariantSubj) { _variantTargetType = pvt; _matchTargetCType = pmt; }
+    if (valueSubj) { _variantTargetType = pvt; _matchTargetCType = pmt; _hoistOK = ph; }
     flushHoisted(depth);
     if (dynamic_cast<ThisAccessNode*>(m->subject.get())) {
         // `this` emits as `self`, which is ALREADY a `subjCls*` (the receiver pointer) — do NOT re-address
@@ -11929,6 +11962,24 @@ std::string CEmitter::exprClass(SharedExpression e)
                     return isClass(rc) ? rc : "";
                 }
             }
+            // A CONTRACT (fat-pointer) receiver: the method lives in _interfaces, not _classes, so the
+            // resolution above missed it. Resolve the contract method's declared return type — rendered
+            // under the CONTRACT's own name-resolution scope (its imports/type-args, like the vtbl slot,
+            // so a `Result<usize, IoError>` mangles concretely) — so `match (g.method())` on a contract
+            // value is a first-class subject / value site without binding to a typed local first. #§1.2
+            if (isInterface(cls)) {
+                InterfaceInfo& ii = _interfaces[cls];
+                for (auto& m : ii.methods) {
+                    if (m.name != method || !m.returnType) continue;
+                    NsCtx savedNs = _nsCtx;
+                    if (!ii.isGenericInst) { _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases; }
+                    std::string rc;
+                    { ContractSubst _cs(*this, ii); rc = cType(m.returnType); }   // binds T for a generic-contract instance
+                    _nsCtx = savedNs;
+                    return isClass(rc) ? rc : "";
+                }
+                return "";
+            }
             // A dot-on-type ctor call `V.of(x:…)` / `Vec3.make(…)`: the receiver NAMES a type, so `cls`
             // (exprClass of the receiver) is empty and the method-resolution above missed it. Recover the
             // constructed type — an infallible ctor returns the enclosing type by value — so an of/make
@@ -11987,6 +12038,28 @@ std::string CEmitter::exprClass(SharedExpression e)
         return operatorResultClass(pr->token, 0, pr->expression, nullptr);
     if (auto* po = dynamic_cast<PostIncrDecrNode*>(n))
         return operatorResultClass(po->token, 0, po->expression, nullptr);
+
+    // A value-producing `match`/ternary used directly as a value site (notably as another `match`'s
+    // SUBJECT, `match (inner_match) { … }` / `match (c ? A(x) : B())`): resolve to the common class of
+    // its result branches, so subject inference finds the tagged union without a bind-to-a-local first.
+    // Both branches/arms share a type; the first that resolves is representative.
+    if (auto* tx = dynamic_cast<TernaryExpressionNode*>(n)) {
+        std::string lc = exprClass(tx->LHS);
+        return !lc.empty() ? lc : exprClass(tx->RHS);
+    }
+    if (auto* mx = dynamic_cast<MatchNode*>(n)) {
+        if (mx->arms)
+            for (auto& a : *mx->arms) {
+                SharedExpression v = a->body;                        // single-expression arm
+                if (!v && a->block && a->block->statements)          // block arm: its terminal `:= expr;`
+                    for (auto& st : *a->block->statements)
+                        if (auto* av = dynamic_cast<ArmValueNode*>(st.get())) v = av->value;
+                if (!v) continue;                                    // diverging arm (return/break) — no value
+                std::string ac = exprClass(v);
+                if (!ac.empty()) return ac;
+            }
+        return "";
+    }
     return "";
 }
 

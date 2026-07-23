@@ -1,0 +1,27 @@
+// §1.2 — the same gap through a PLAIN (non-generic) contract: `match (p.classify())` where `p` is a
+// fat-pointer contract value and `classify` returns a tagged union (`Optional<int32>`). Exercises the
+// non-generic contract branch (return type rendered under the contract's own imports, no type-arg binding).
+// The concrete-receiver form is kept as a control (it always worked).
+type contract Classify for value { fn Optional<int32> classify(); }
+
+type value Cell implements Classify {
+    int32 v; bool present;
+    public ctor make(int32 v, bool present) { Cell r; r.v = v; r.present = present; return give r; }
+    public fn Optional<int32> classify() {
+        if (this.present) { return Optional::Some(value: this.v); }
+        return Optional::None;
+    }
+}
+
+fn int32 viaContract(Classify p) {                       // dynamic dispatch through the fat pointer
+    return match (p.classify()) { case Some(v): v; case None: 0; };
+}
+
+fn int32 main() {
+    Cell hit  = Cell.make(v: 42, present: true);
+    Cell miss = Cell.make(v: 9,  present: false);
+    int32 a = viaContract(p: hit);                       // 42 through the contract
+    int32 b = viaContract(p: miss);                      // 0  through the contract
+    int32 c = match (hit.classify()) { case Some(v): v; case None: 0; };   // concrete-receiver control -> 42
+    return a + b + c - 42;                               // 42 + 0 + 42 - 42 = 42
+}

@@ -1,0 +1,13 @@
+// §1.1 — a variant-producing TERNARY used DIRECTLY as a `match` subject. Both ternary branches build the
+// same tagged union (`Optional<int32>`) with inline variant ctors; the discovery pre-scan infers the instance
+// through the ternary so the outer match resolves its subject without binding to a typed local first.
+fn int32 pick(int32 x, bool some) {
+    return match (some ? Optional::Some(value: x) : Optional::None) {
+        case Some(v): v;
+        case None:    0;
+    };
+}
+
+fn int main() {
+    return pick(x: 42, some: true) + pick(x: 99, some: false);   // 42 + 0 = 42
+}

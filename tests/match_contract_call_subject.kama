@@ -1,0 +1,30 @@
+// §1.2 — a CONTRACT-dispatched method call used DIRECTLY as a `match` subject, through a GENERIC contract
+// instance (`Iterator<int32>`): `match (it.next())` dispatches via the monomorphized vtable, and the subject
+// type (`Optional<int32>`) is resolved through the contract method's declared return type — rendered under the
+// contract's own scope with `T` bound. Previously this needed a typed local first (see gencontract_value.kama,
+// which used exactly that workaround); the concrete-receiver form always worked.
+type value IntRange implements Iterator<int32> {
+    int32 cur; int32 end;
+    public ctor make(int32 start, int32 end) { IntRange r; r.cur = start; r.end = end; return give r; }
+    public fn Optional<int32> next() {
+        if (this.cur >= this.end) { return Optional::None; }
+        int32 v = this.cur; this.cur = this.cur + 1; return Optional::Some(value: v);
+    }
+}
+
+fn int32 drain(Iterator<int32> it) {                 // `it` is a fat pointer {obj, vtbl}
+    int32 total = 0;
+    bool going = true;
+    while (going) {
+        match (it.next()) {                          // §1.2: contract call DIRECTLY as the subject
+            case Some(v): { total = total + v; }
+            case None:    { going = false; }
+        };
+    }
+    return total;
+}
+
+fn int32 main() {
+    IntRange r = IntRange.make(start: 1, end: 5);    // coerced to Iterator<int32> at the call
+    return drain(it: r);                             // 1 + 2 + 3 + 4 = 10
+}
