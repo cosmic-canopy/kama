@@ -382,6 +382,12 @@ serialization, networking).
 
 ## 6. Concurrency — shared-nothing by construction (design direction)
 
+**► Kickoff prepared: [docs/design/concurrency.md](design/concurrency.md)** — verified current-state facts
+(no concurrency infra today; blocking I/O + single event loop; `std::time` absent = the cheap precondition;
+the move/`give` + prelude/module seams a channel-send would reuse) and the **design-refinement pass** to run
+FIRST (7 open questions turning this direction into a spec — the portable spawn substrate is the hard one).
+Start there.
+
 The intended concurrency model. **1.0 ships a single-threaded core**; this is the 1.x/2.0 direction, not a
 shipped feature. It earns data-race freedom the way kama earns null-safety — by making the hazard
 *unrepresentable*, not by checking it. Where Rust proves exclusivity over shared memory with a borrow
