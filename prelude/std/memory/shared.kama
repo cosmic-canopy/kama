@@ -5,6 +5,15 @@ extern "<stdlib.h>";
 extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 
+// M6.2: the refcount seam. Every strong/weak count mutation routes through kama_ctrl.h so the two flavors
+// (plain `Rc` vs Arc-correct atomic for `Shared<immutable T>`) live in one audited place. `atomic` is the
+// per-instance compile-time constant `__kama_ctrl_atomic()` (0 for an ordinary Shared -> zero overhead).
+extern "kama_ctrl.h";
+extern fn void  kama_ctrl_retain_strong(Ptr c, int32 atomic);
+extern fn int32 kama_ctrl_release_strong(Ptr c, int32 atomic);
+extern fn int32 kama_ctrl_finish_strong(Ptr c, int32 atomic);
+extern fn void  kama_ctrl_retain_weak(Ptr c, int32 atomic);
+
 // The strong/weak reference counts shared by a `Shared`/`Weak` family. Heap-allocated once at
 // `adopt`, freed when BOTH counts reach zero. Module-internal (not exported). `usize` counts match
 // the runtime `kama_ctrl` layout, so a `BindableFunctionPtr` can retain a Shared it binds.
@@ -63,27 +72,27 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     public fn Shared<T, A> copy() {                                   // Copyable -> retain, carry the allocator
-        unsafe { this.c[0].strong = this.c[0].strong + 1; }
+        unsafe { kama_ctrl_retain_strong(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()); }
         return Shared.make(p: this.p, c: this.c, alloc: this.alloc);
     }
     public fn Weak<T, A> downgrade() {
-        unsafe { this.c[0].weak = this.c[0].weak + 1; }
+        unsafe { kama_ctrl_retain_weak(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()); }
         return Weak.make(p: this.p, c: this.c, alloc: this.alloc);        // cross-type -> Weak's public ctor
     }
     ~Shared() {
         unsafe {
             if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
-                if (this.c[0].strong == 1) {                          // the LAST strong handle
-                    // Keep `strong` at 1 while the pointee dtor runs: dropping the pointee can release a
-                    // `Weak` back-edge into THIS same Ctrl (a cycle), and that `Weak` drop frees the Ctrl
-                    // when `strong == 0 && weak == 0`. Releasing strong only AFTER the dtor keeps the Ctrl
-                    // alive across the drop, so the final `weak == 0` check below never touches freed memory.
+                // release one strong ref; non-zero iff this was the LAST. The seam encapsulates both flavors:
+                // the plain path keeps `strong` at 1 across the pointee dtor (cycle-safe — dropping the
+                // pointee may release a `Weak` back-edge into THIS Ctrl), then `finish_strong` zeroes it and
+                // reports whether the Ctrl should be freed; the atomic path (deeply-immutable => acyclic)
+                // fetch_subs with a release store + acquire fence. A non-last release already decremented.
+                if (kama_ctrl_release_strong(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
                     drop(value: this.deref());                        // run the pointee's dtor once
                     this.alloc.deallocate(pointer: cast<Ptr>(this.p), bytes: sizeof(T));
-                    this.c[0].strong = 0;
-                    if (this.c[0].weak == 0) { this.alloc.deallocate(pointer: cast<Ptr>(this.c), bytes: sizeof(Ctrl)); }
-                } else {
-                    this.c[0].strong = this.c[0].strong - 1;
+                    if (kama_ctrl_finish_strong(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
+                        this.alloc.deallocate(pointer: cast<Ptr>(this.c), bytes: sizeof(Ctrl));
+                    }
                 }
             }
         }

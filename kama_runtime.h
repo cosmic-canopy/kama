@@ -105,6 +105,7 @@ static inline void NAME##__dtor(NAME* self) {                                  \
 // goes away. The control block (counts) is a SEPARATE allocation so a future
 // Weak<T> can outlive the T. `ptr` mirrors Owned's, so auto-deref is identical.
 typedef struct kama_ctrl { size_t strong; size_t weak; } kama_ctrl;   // weak: reserved for Weak<T>
+#include "kama_ctrl.h"   // M6.2: the strong/weak count ops (plain + atomic flavor) — needs kama_ctrl above
 static inline kama_ctrl* kama_ctrl_new(void) {
     kama_ctrl* c = (kama_ctrl*)kama_alloc(sizeof(kama_ctrl));
     c->strong = 1; c->weak = 0;

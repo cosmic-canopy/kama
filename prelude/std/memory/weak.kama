@@ -4,6 +4,13 @@ export { Weak };
 extern "<stdlib.h>";
 extern fn void free(Ptr p);
 
+// M6.2: the shared refcount seam (see shared.kama) — `Weak` mutates the SAME `Ctrl` counters, so it uses
+// the same flavor-selected ops. `atomic` is the per-instance compile-time constant `__kama_ctrl_atomic()`.
+extern "kama_ctrl.h";
+extern fn void  kama_ctrl_retain_weak(Ptr c, int32 atomic);
+extern fn int32 kama_ctrl_try_upgrade(Ptr c, int32 atomic);
+extern fn int32 kama_ctrl_release_weak(Ptr c, int32 atomic);
+
 // A non-owning weak handle into a `Shared<T>` family (Rust's `Weak<T>`). It holds the object alive for
 // no one — `tryUpgrade()` returns `Some(Shared)` only while a strong handle still exists, else `None`.
 // `Copyable(bare: copy)`: a bare hand-off duplicates the weak handle (weak++); `give` MOVES it. `Ctrl` and
@@ -20,13 +27,14 @@ type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable(bare: 
     A alloc;
     public ctor make(Ptr<T> p, Ptr<Ctrl> c, A alloc) { Weak<T, A> r; r.p = p; r.c = c; r.alloc = alloc; return give r; }
     public fn Weak<T, A> copy() {                                     // Copyable -> another weak handle
-        unsafe { this.c[0].weak = this.c[0].weak + 1; }
+        unsafe { kama_ctrl_retain_weak(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()); }
         return Weak.make(p: this.p, c: this.c, alloc: this.alloc);
     }
     public fn Optional<Shared<T, A>> tryUpgrade() {
         unsafe {
-            if (this.c[0].strong > 0) {
-                this.c[0].strong = this.c[0].strong + 1;
+            // atomic-safe upgrade: a CAS loop when atomic (a plain strong>0 test-then-inc would race a
+            // concurrent last drop), a guarded increment when plain. Non-zero == a strong ref was acquired.
+            if (kama_ctrl_try_upgrade(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
                 return Optional::Some(value: Shared.make(p: this.p, c: this.c, alloc: this.alloc));   // cross-type ctor
             }
         }
@@ -35,8 +43,9 @@ type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable(bare: 
     ~Weak() {
         unsafe {
             if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
-                this.c[0].weak = this.c[0].weak - 1;
-                if (this.c[0].strong == 0 && this.c[0].weak == 0) { this.alloc.deallocate(pointer: cast<Ptr>(this.c), bytes: sizeof(Ctrl)); }
+                if (kama_ctrl_release_weak(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
+                    this.alloc.deallocate(pointer: cast<Ptr>(this.c), bytes: sizeof(Ctrl));
+                }
             }
         }
     }

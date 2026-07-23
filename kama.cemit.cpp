@@ -9632,6 +9632,15 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return "(&(" + emitPlace(a) + "))";
     }
 
+    // M6.2: `__kama_ctrl_atomic()` — a per-instance COMPILE-TIME constant (0/1) that the prelude
+    // `Shared`/`Weak` refcount ops pass to the kama_ctrl.h seam. 1 iff the Shared/Weak instance being
+    // emitted is the deeply-immutable (atomic-refcount) flavor (`useAtomicRefcount`); the seam's branch on
+    // it folds at compile time, so an ordinary `Rc` keeps the non-atomic counter ops at zero cost while a
+    // `Shared<immutable T>` gets the Arc-correct atomics. Read from `_currentClass` (the instance whose
+    // method body is being emitted). Not user-facing (leading `__`); only the prelude names it.
+    if (name == "__kama_ctrl_atomic" && bareCall && (!call->args || call->args->empty()))
+        return (_currentClass && _currentClass->useAtomicRefcount) ? "1" : "0";
+
     // (A bare function name is a value — its C function pointer — so `FunctionPtr<Sig> c = fn;`
     // and passing `fn` directly bind a callable; there is no separate `funcptr(of: fn)` builtin.)
 
