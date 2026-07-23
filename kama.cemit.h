@@ -539,8 +539,11 @@ private:
                    bool isLoopBoundary = false; bool isFunctionRoot = false;
                    // Structured concurrency (M4): a `scope { }` is a task scope. `taskChildren` are the C
                    // names of the `kama_isolate_t` handles `spawn`ed inside it; emitScopeCleanup joins them
-                   // ALL before dropping any local (join-before-drop), on every exit path.
-                   bool isTaskScope = false; std::vector<std::string> taskChildren; };
+                   // ALL before dropping any local (join-before-drop), on every exit path. `borrowedRoots`
+                   // are the root locals its children `ref`-borrow (M4.2) — a second child borrowing the
+                   // same root is rejected (the same-root disjointness rule: no two tasks share a cell).
+                   bool isTaskScope = false; std::vector<std::string> taskChildren;
+                   std::set<std::string> borrowedRoots; };
     // Erase move-state for the closing scope's locals, then pop it. A name going out of scope is
     // lexically dead, so a sibling scope reusing it must start NotMoved (not inherit a stale Moved).
     void popScope();
@@ -998,11 +1001,14 @@ private:
 
     // Statements
     void emitStatement(SharedStatement stmt, int depth);
-    std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val);   // shared front half
+    std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
+                            bool& isBorrow, bool borrowOK);   // shared front half (borrow = M4.2 `ref`)
     void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)
     std::string emitIsolateExpr(IsolateNode* iso);   // `Isolate h = spawn worker(...)` — RAII handle form
     void emitScope(ScopeNode* sc, int depth);        // `scope { }` — structured concurrency + join barrier (M4)
     Scope* innermostTaskScope();                     // nearest enclosing `scope { }`, or null
+    int    innermostTaskScopeIndex();                // its _scopes index, or -1
+    int    findScopeDeclaring(const std::string& name);   // _scopes index that declares `name`, or -1 (a param)
     void emitBlock(BlockNode* block, int depth);
     void emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot);
     void emitBody(SharedStatement stmt, int depth, bool loopBoundary);  // brace-wrapped control-flow body

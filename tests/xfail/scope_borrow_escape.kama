@@ -1,0 +1,25 @@
+// M4.2 escape check: a child may only `ref`-borrow a local that OUTLIVES the scope's join barrier — the
+// scope itself or an outer scope. Here `tmp` is declared in an INNER block nested in the scope, so it is
+// destroyed at the inner block's close, BEFORE the scope joins the child — the borrowed pointer would
+// dangle. The structural root-trace rejects it (no lifetime inference). This must fail to compile.
+import std::concurrent;
+
+type value Acc {
+    int32 total;
+    int32 lo;
+    int32 hi;
+    public ctor range(int32 lo, int32 hi) { Acc a; a.total = 0; a.lo = lo; a.hi = hi; return a; }
+    public fn void run() { int32 i = this.lo; while (i < this.hi) { this.total = this.total + i; i = i + 1; } }
+}
+
+fn void accumulate(ref Acc a) { a.run(); }
+
+fn int main() {
+    scope {
+        {
+            Acc tmp = Acc::range(lo: 0, hi: 50);   // declared in an INNER block — drops before the barrier
+            spawn accumulate(a: ref tmp);          // ERROR: borrow escapes `tmp`'s lifetime
+        }
+    }
+    return 0;
+}

@@ -1242,6 +1242,24 @@ CEmitter::Scope* CEmitter::innermostTaskScope()
     return nullptr;
 }
 
+int CEmitter::innermostTaskScopeIndex()
+{
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        if (_scopes[i].isTaskScope) return i;
+    return -1;
+}
+
+// The _scopes index whose `declaredNames` lists `name`, searching innermost-out. Returns -1 when no
+// scope declares it — meaning it is a PARAMETER (params live for the whole fn, outliving any scope) or
+// unknown. `declaredNames` records EVERY local (primitives included), so this is exact for locals.
+int CEmitter::findScopeDeclaring(const std::string& name)
+{
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        for (auto& dn : _scopes[i].declaredNames)
+            if (dn == name) return i;
+    return -1;
+}
+
 // `scope { ... }` — structured concurrency (M4). Lowered like emitBlockScoped, but the scope is a TASK
 // scope: bare `spawn`s inside register their `kama_isolate_t` handles here, and emitScopeCleanup joins
 // them ALL before dropping any local (the join-before-drop barrier). A `scope` introduces exactly one
@@ -6038,48 +6056,104 @@ std::string CEmitter::lvalueMoveKey(SharedExpression lhs) const
 // and `val` (the emitted, already-move-marked argument expression). Shared-nothing by construction: the
 // entry is a BARE top-level fn (no env capture) and its one argument is MOVED (the source is marked moved
 // via the existing `give` seam, so any post-spawn use is the standard use-after-move error).
-std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::string& val)
+std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
+                                  bool& isBorrow, bool borrowOK)
 {
     // The seam header (and its `-lpthread` link) flows in via `import std::concurrent;`. Without it the
     // generated spawn call would not compile — give a clear error instead.
     if (!externsHeader("kama_isolate.h"))
-        unsupported("`isolate` requires `import std::concurrent;` (the native isolate seam)", iso->line);
+        unsupported("`spawn` requires `import std::concurrent;` (the native isolate seam)", iso->line);
 
     auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
-    // Must be a BARE top-level fn call: `isolate worker(...)`. A receiver call (`isolate obj.m(...)`) or an
+    // Must be a BARE top-level fn call: `spawn worker(...)`. A receiver call (`spawn obj.m(...)`) or an
     // indirect callee would capture/alias enclosing state — reject to keep the entry shared-nothing.
     if (!inv || !inv->identifier || !inv->identifier->value || inv->expression)
-        unsupported("`isolate` entry must be a bare top-level function call, e.g. `isolate worker(p: give x)`", iso->line);
+        unsupported("`spawn` entry must be a bare top-level function call, e.g. `spawn worker(p: give x)`", iso->line);
 
     const std::string fname = *inv->identifier->value;
     auto it = _funcs.find(resolveFunc(fname, inv->identifier->qualifier));
     if (it == _funcs.end())
-        unsupported(("`isolate` entry `" + fname + "` names no known top-level function").c_str(), iso->line);
+        unsupported(("`spawn` entry `" + fname + "` names no known top-level function").c_str(), iso->line);
     const FuncSig& sig = it->second;
 
-    // M2 shape: a `void` entry taking exactly one MOVED `resource` value (the bundle). This keeps the
-    // lowering trivial (one heap value, one trampoline) and is the shared-nothing contract; a `void`
-    // return because there is no channel to hand a result back over yet (M3). Richer signatures later.
+    // A `void` entry taking exactly one argument (the bundle) — `void` because there is no channel to
+    // hand a result back over (use an M3 channel, or a `ref` borrow's fields, for results). The single
+    // param's SHAPE selects the mode: a by-value move-only `resource` (M2/M4.1, `give`) or a `ref T`
+    // borrow of a caller-owned bundle (M4.2), sound because the scope joins before the local drops.
     if (sig.retCType != "void")
-        unsupported(("`isolate` entry `" + fname + "` must return void — M2 has no channel to return a result over").c_str(), iso->line);
+        unsupported(("`spawn` entry `" + fname + "` must return void — there is no channel to return a result over").c_str(), iso->line);
     if (sig.params.size() != 1)
-        unsupported(("`isolate` entry `" + fname + "` must take exactly one moved argument (the bundle) in M2").c_str(), iso->line);
+        unsupported(("`spawn` entry `" + fname + "` must take exactly one argument (the bundle)").c_str(), iso->line);
+    if (!inv->args || inv->args->size() != 1)
+        unsupported(("`spawn` call to `" + fname + "` needs exactly one argument").c_str(), iso->line);
 
     const ParamSig& p = sig.params[0];
     cls = p.className;
+    if (cls.empty())
+        unsupported("`spawn` entry's parameter must be a `value`/`resource` bundle type (not a primitive)", iso->line);
+    isBorrow = p.byRef;   // a `ref T` param = borrow (M4.2); a by-value param = the moved bundle (M2/M4.1)
+
+    auto* argNode = dynamic_cast<ArgumentNode*>((*inv->args)[0].get());
+
+    if (isBorrow) {
+        // ── M4.2: a `ref T` borrow of a caller-owned scope local ────────────────────────────────────
+        if (!borrowOK || !innermostTaskScope())
+            unsupported("only a bare `spawn` inside a `scope { }` may `ref`-borrow (the scope joins the "
+                        "child before the local drops); the handle form must take a moved `give` bundle", iso->line);
+        // The argument must be `ref local`. A `give`/`copy` (HandoffNode) or a bare value would not
+        // match the `ref T` parameter; and only a BARE local can be borrowed (a field/element root's
+        // lifetime we don't track), mirroring moveOnlySource's restriction on the move side.
+        bool isRef = argNode && argNode->modifier && argNode->modifier->value && *argNode->modifier->value == "ref";
+        auto* id = argNode ? dynamic_cast<IdentifierNode*>(argNode->expression.get()) : nullptr;
+        if (!isRef || !id || !id->value || (id->qualifier && !id->qualifier->empty()))
+            unsupported(("`spawn` to `" + fname + "` borrows — pass a bare local by `ref` "
+                         "(e.g. `spawn " + fname + "(b: ref myBundle)`)").c_str(), iso->line);
+        const std::string root = *id->value;
+
+        // Escape check: the borrowed root must OUTLIVE the scope's join barrier — i.e. be declared in
+        // the task scope itself or an OUTER scope (or be a parameter). A local declared in a block
+        // NESTED inside the scope drops before the barrier → it would dangle. Structural, no lifetimes.
+        int di = findScopeDeclaring(root);
+        int ti = innermostTaskScopeIndex();
+        if (di >= 0 && di > ti)
+            unsupported(("`spawn` may not borrow `" + root + "` — it is declared inside a block nested in "
+                         "the `scope`, so it is destroyed before the scope joins this child; declare it in "
+                         "the `scope` itself or an outer scope").c_str(), iso->line);
+        // Can't borrow something already moved into (or given away by) an earlier statement.
+        auto ms = _moveState.find(root);
+        if (ms != _moveState.end() && ms->second != MoveState::NotMoved)
+            unsupported(("cannot borrow `" + root + "` — it was moved (given) away").c_str(), iso->line);
+        // Same-root disjointness: no two children of one scope may borrow the SAME root (they would race
+        // on it). Distinct roots are statically disjoint; overlapping index-ranges of one buffer are M6.
+        if (!innermostTaskScope()->borrowedRoots.insert(root).second)
+            unsupported(("two children in this `scope` both borrow `" + root + "` — a shared mutable borrow "
+                         "across tasks would race; borrow distinct locals, or use an `Atomic<T>` (M6)").c_str(), iso->line);
+
+        // Borrow trampoline: `__p` IS `&local` — pass it straight through as the `ref T` (`T*`) param.
+        // No heap box, no free, no move (the caller keeps the local and drops it after the join).
+        if (_isolateTrampolines.insert(sig.cName).second) {
+            std::ostringstream tr;
+            tr << "static void* __kama_iso_" << sig.cName << "(void* __p) {\n"
+               << "    " << sig.cName << "((" << cls << "*)__p);   /* borrow: __p IS &local — no box, no free, no move */\n"
+               << "    return (void*)0;\n"
+               << "}\n";
+            _fileScopeHelpers.push_back(tr.str());
+        }
+        val = "(void*)&(" + emitExpression(argNode->expression) + ")";
+        return sig.cName;
+    }
+
+    // ── M2/M4.1: a by-value MOVED `resource` bundle ─────────────────────────────────────────────────
     // A move-only `resource` VALUE owned by the callee: ownership actually transfers across the thread
     // (a plain `value` would only be copied; a collection would need source-nulling — both deferred).
-    if (p.byRef || !isMoveOnlyValue(cls))
-        unsupported("`isolate` argument must be a moved `resource` value — the entry's parameter type is not one, in M2", iso->line);
-
-    if (!inv->args || inv->args->size() != 1)
-        unsupported(("`isolate` call to `" + fname + "` needs exactly one argument").c_str(), iso->line);
+    if (!isMoveOnlyValue(cls))
+        unsupported("`spawn` argument must be a moved `resource` value — the entry's parameter type is not one", iso->line);
     // The argument must be `give`n: a shared borrow would alias state across the thread boundary. Unwrap
     // the HandoffNode ourselves (we emit no call — just the move + spawn).
-    SharedExpression argExpr = (*inv->args)[0]->expression;
+    SharedExpression argExpr = argNode ? argNode->expression : (*inv->args)[0]->expression;
     auto* h = dynamic_cast<HandoffNode*>(argExpr.get());
     if (!h || !h->isGive)
-        unsupported("`isolate` argument must be `give`n (moved) — a borrow would alias state across the thread", iso->line);
+        unsupported("`spawn` argument must be `give`n (moved) — a borrow would alias state across the thread", iso->line);
     SharedExpression src = h->value;
 
     // Emit the per-entry trampoline once (the same worker may be spawned from several sites / both forms).
@@ -6113,20 +6187,28 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
                     "scope use the handle form `Isolate h = spawn worker(...)`", iso->line);
 
     std::string cls, val;
-    std::string cName = isolatePrep(iso, cls, val);
-    std::string arg = "__kama_iso_arg" + std::to_string(_tempCounter++);
+    bool isBorrow = false;
+    std::string cName = isolatePrep(iso, cls, val, isBorrow, /*borrowOK=*/true);
     std::string hnd = "__kama_iso" + std::to_string(_tempCounter++);
 
     line(iso->line);
-    // The handle is declared at THIS depth (the scope's own block), NOT inside the malloc sub-block, so
-    // the scope-barrier join can name it. The malloc temp stays scoped to its sub-block.
-    indent(depth);     *_out << "kama_isolate_t " << hnd << ";\n";
-    indent(depth);     *_out << "{\n";
-    indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << "));\n";
-    indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-    indent(depth + 1); *_out << "*" << arg << " = (" << val << ");\n";
-    indent(depth + 1); *_out << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << arg << ");\n";
-    indent(depth);     *_out << "}\n";
+    // The handle is declared at THIS depth (the scope's own block), NOT inside any sub-block, so the
+    // scope-barrier join can name it.
+    indent(depth); *_out << "kama_isolate_t " << hnd << ";\n";
+    if (isBorrow) {
+        // M4.2 borrow: `val` is already `(void*)&(local)` — spawn with it directly. No box, no free.
+        indent(depth); *_out << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << val << ");\n";
+    } else {
+        // M2/M4.1 move: heap the moved bundle, spawn with the box (the trampoline frees it). The malloc
+        // temp stays scoped to its sub-block.
+        std::string arg = "__kama_iso_arg" + std::to_string(_tempCounter++);
+        indent(depth);     *_out << "{\n";
+        indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << "));\n";
+        indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+        indent(depth + 1); *_out << "*" << arg << " = (" << val << ");\n";
+        indent(depth + 1); *_out << hnd << " = kama_isolate_spawn(&__kama_iso_" << cName << ", " << arg << ");\n";
+        indent(depth);     *_out << "}\n";
+    }
     // Register into the innermost scope AFTER emission (re-fetch: isolatePrep may have grown _scopes and
     // invalidated an earlier pointer). The scope joins this handle at its closing brace.
     innermostTaskScope()->taskChildren.push_back(hnd);
@@ -6138,7 +6220,8 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
 std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
 {
     std::string cls, val;
-    std::string cName = isolatePrep(iso, cls, val);
+    bool isBorrow = false;   // the handle form may outlive the scope, so borrowing is rejected in isolatePrep
+    std::string cName = isolatePrep(iso, cls, val, isBorrow, /*borrowOK=*/false);
     std::string iso_t = resolveUserName("Isolate", SharedStringList());
     if (!_classes.count(iso_t))
         unsupported("the `isolate` handle form needs `std::concurrent::Isolate` in scope — add `import std::concurrent;`", iso->line);

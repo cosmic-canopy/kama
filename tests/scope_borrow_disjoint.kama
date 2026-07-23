@@ -1,0 +1,41 @@
+// M4.2: a child BORROWS an enclosing scope local by `ref` instead of moving a bundle in. Two children
+// each accumulate a half-range into their OWN borrowed bundle (distinct root locals -> statically
+// disjoint, no race), writing the result straight into the borrowed cell. Sound with no lifetime
+// inference: the `scope` joins both children BEFORE `lower`/`upper` drop, so the borrowed pointers never
+// dangle. No move, no heap box, no `Ptr`/`unsafe` — the ergonomic payoff over M4.1. Run under KAMA_TSAN=1.
+import std::concurrent;
+
+type value Acc {
+    public int32 total;   // read by main after the scope
+    int32 lo;
+    int32 hi;
+
+    public ctor range(int32 lo, int32 hi) {
+        Acc a;
+        a.total = 0;
+        a.lo = lo;
+        a.hi = hi;
+        return a;
+    }
+
+    // Runs on the child's thread, mutating the borrowed bundle in place.
+    public fn void run() {
+        int32 i = this.lo;
+        while (i < this.hi) {
+            this.total = this.total + i;
+            i = i + 1;
+        }
+    }
+}
+
+fn void accumulate(ref Acc a) { a.run(); }   // borrows the caller's bundle (`ref`), no move
+
+fn int main() {
+    Acc lower = Acc::range(lo: 0,  hi: 50);
+    Acc upper = Acc::range(lo: 50, hi: 100);
+    scope {
+        spawn accumulate(a: ref lower);   // borrows `lower`  (root distinct from `upper`)
+        spawn accumulate(a: ref upper);   // borrows `upper`  (disjoint cell -> no race)
+    }                                     // BARRIER: both joined before `lower`/`upper` are read
+    return (lower.total + upper.total) % 256;   // sum 0..99 = 4950; 4950 % 256 = 86
+}

@@ -1,0 +1,24 @@
+// M4.2 same-root disjointness (the no-footgun guard): two children of one `scope` may not `ref`-borrow
+// the SAME root local — they would race on that cell. M4 guarantees LIFETIME (join-before-drop), not
+// EXCLUSIVITY, so the compiler forbids the overlap outright rather than trusting the programmer. Distinct
+// locals are fine (see scope_borrow_disjoint); splitting one buffer by index is M6's `splitAt`. Must fail.
+import std::concurrent;
+
+type value Acc {
+    public int32 total;
+    int32 lo;
+    int32 hi;
+    public ctor range(int32 lo, int32 hi) { Acc a; a.total = 0; a.lo = lo; a.hi = hi; return a; }
+    public fn void run() { int32 i = this.lo; while (i < this.hi) { this.total = this.total + i; i = i + 1; } }
+}
+
+fn void accumulate(ref Acc a) { a.run(); }
+
+fn int main() {
+    Acc shared = Acc::range(lo: 0, hi: 100);
+    scope {
+        spawn accumulate(a: ref shared);   // borrows `shared`
+        spawn accumulate(a: ref shared);   // ERROR: second child borrows the SAME root -> would race
+    }
+    return shared.total % 256;
+}
