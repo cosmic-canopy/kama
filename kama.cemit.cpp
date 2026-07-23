@@ -1298,6 +1298,28 @@ void CEmitter::flushHoisted(int depth)
 // An inline ctor knows its own type; a value-producing `match` needs a result type, and a condition is
 // boolean — so a DIRECTLY-`match` condition is typed `bool`. A `match` nested in a larger condition keeps
 // no target type and stays the clean "must appear in a typed position" error (bind it to a local).
+// Strip ONE redundant outer paren pair when the whole expression is already wrapped. emitExpression
+// parenthesizes every binary op, so a bare condition comes back as `(x == y)`; the enclosing
+// `if (...)`/`while (...)` then double-wraps it into `if ((x == y))`, which clang flags under
+// -Wparentheses-equality (it reads like a mistaken `if ((x = y))`). The keyword already groups, so drop
+// the outer pair — cleaner generated C, warning gone. Literal-aware: a `(` inside a string/char literal
+// never miscounts. Only strips when the FIRST `(` matches the LAST `)` (so `(a) && (b)` is left alone).
+static std::string stripRedundantOuterParens(const std::string& s)
+{
+    if (s.size() < 2 || s.front() != '(' || s.back() != ')') return s;
+    int depth = 0; bool inStr = false, inChr = false;
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (inStr) { if (c == '\\') ++i; else if (c == '"')  inStr = false; continue; }
+        if (inChr) { if (c == '\\') ++i; else if (c == '\'') inChr = false; continue; }
+        if      (c == '"')  inStr = true;
+        else if (c == '\'') inChr = true;
+        else if (c == '(')  ++depth;
+        else if (c == ')' && --depth == 0 && i != s.size() - 1) return s;   // outer pair closes early
+    }
+    return s.substr(1, s.size() - 2);
+}
+
 std::string CEmitter::emitCondition(SharedExpression cond)
 {
     if (!cond) return "";
@@ -1307,7 +1329,7 @@ std::string CEmitter::emitCondition(SharedExpression cond)
     std::string s = emitExpression(cond);
     _matchTargetCType = pmt;
     _hoistOK = ph;
-    return s;
+    return stripRedundantOuterParens(s);
 }
 
 void CEmitter::emitStatement(SharedStatement stmt, int depth)
