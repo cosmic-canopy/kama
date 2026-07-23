@@ -1285,6 +1285,324 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
     popScope();
 }
 
+// Synthesize the `View<elem>` type node the loop iterates, so the scan passes register that instance
+// (a parallel_for always iterates a View — directly, or one we auto-`.view()` from a container). (M6.3)
+SharedIdentifier CEmitter::parforViewType(SharedIdentifier elem)
+{
+    auto view = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("View"));
+    auto args = std::make_shared<IdentifierList>();
+    args->push_back(elem);
+    view->genericArgs = args;
+    view->genericArg  = elem;
+    return view;
+}
+
+// `parallel_for (ref T e in coll) { body }` — disjoint-slice data-parallel loop (M6.3), the third and
+// final safe-sharing primitive. Splits `coll` into K non-overlapping sub-Views (one per worker isolate),
+// runs the body over each in place, and joins them ALL at the closing brace (self-joining barrier — the
+// parallel_for owns its own DYNAMIC fan-out, unlike a `scope`'s static child list). Safe by disjointness:
+// two workers never touch the same element, so no lock and no data race, with no borrow checker.
+//
+// Lowering (reuses the M4.2 borrow-trampoline pattern + the foreach `ref` lowering):
+//   (a) resolve the operand to a `View<T>` (directly, or auto-`.view()` a contiguous container);
+//   (b) free-variable analysis of the body -> the captured enclosing locals (the one new pass);
+//   (c) write-through-capture gate: a written non-atomic capture is shared -> race -> rejected;
+//   (d) synthesize a worker fn `__kama_pf_bodyN(View slice, cap0*, ...)` whose body is
+//       `foreach (ref T e in slice) { <body> }` — captures thread in as `ref` params (deref via _refParams);
+//   (e) a per-site arg struct + trampoline to cross the isolate ABI's single void*;
+//   (f) at the call site: split into K disjoint slices, spawn K, join all at the brace.
+void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
+{
+    line(pf->line);
+
+    // The isolate seam header (and its `-lpthread` link + KAMA_PARFOR_WORKERS -D) flows in via
+    // `import std::concurrent;`; without it the spawn/join calls would not compile.
+    if (!externsHeader("kama_isolate.h"))
+        unsupported("`parallel_for` requires `import std::concurrent;` (the isolate seam)", pf->line);
+
+    const std::string loopVar = (pf->name && pf->name->value) ? *pf->name->value : "__e";
+    std::string elemTy = cType(pf->type);
+
+    // ── (a) Resolve the iterable to a View<T> (direct, or auto-`.view()` a contiguous container). ─────
+    std::string itCls = exprClass(pf->expression);
+    if (itCls.empty() || !_classes.count(itCls))
+        unsupported("parallel_for needs a `View<T>` or a contiguous container with `.view()` "
+                    "(DynamicArray/FixedArray) — the operand is not a collection", pf->line);
+    std::string viewCType, viewExpr;
+    if (isViewCType(itCls)) {
+        viewCType = itCls;
+        viewExpr  = emitExpression(pf->expression);
+    } else {
+        MethodInfo* viewMi = findMethod(&_classes[itCls], "view", nullptr);
+        if (!viewMi || !viewMi->params.empty()
+            || !isViewCType(cTypeInInstance(itCls, viewMi->returnType)))
+            unsupported(("parallel_for needs a `View<T>` or a contiguous container with a nullary `.view()` "
+                         "(DynamicArray/FixedArray); `" + itCls + "` is not contiguous — a non-contiguous "
+                         "collection cannot be split into disjoint slices").c_str(), pf->line);
+        viewCType = cTypeInInstance(itCls, viewMi->returnType);
+        viewExpr  = viewMi->cName + "(&(" + emitExpression(pf->expression) + "))";
+    }
+    ClassInfo* viewCI = &_classes[viewCType];
+    MethodInfo* lenMi   = findMethod(viewCI, "length", nullptr);
+    MethodInfo* sliceMi = findMethod(viewCI, "slice", nullptr);
+    if (!lenMi || !sliceMi)
+        unsupported(("parallel_for: the view type `" + viewCType + "` needs `.length()` and `.slice()`").c_str(), pf->line);
+
+    // ── (b) Free-variable capture analysis — the one genuinely new pass. ──────────────────────────────
+    // Collect enclosing locals/params the body references (skip the loop var + body-local decls). A
+    // `this`/field access is rejected (a worker runs with no receiver — shared-nothing). Reuses the
+    // enclosing emitter state (`findScopeDeclaring`/_paramNames/_localCTypes), intact at this point.
+    std::vector<std::string> capOrder;
+    std::set<std::string> capSeen;
+    std::map<std::string, bool> capWrites;   // name -> is written (assignment / incr-decr LHS root)
+    std::set<std::string> bodyLocal;
+
+    auto noteUse = [&](const std::string& nm, bool isWrite) {
+        if (nm.empty() || nm == loopVar || bodyLocal.count(nm)) return;
+        bool isLocal = (findScopeDeclaring(nm) >= 0) || _paramNames.count(nm);
+        if (!isLocal) {
+            if (_currentClass && findFieldOwner(_currentClass, nm))
+                unsupported(("parallel_for body may not access field `" + nm + "` — a worker runs with no "
+                             "receiver (shared-nothing); pass the data in as a local").c_str(), pf->line);
+            return;   // a top-level fn / type / enum name — not a capture
+        }
+        if (!capSeen.count(nm)) { capSeen.insert(nm); capOrder.push_back(nm); capWrites[nm] = false; }
+        if (isWrite) capWrites[nm] = true;
+    };
+
+    std::function<void(SharedExpression)> scanE;
+    std::function<void(SharedStatement)>  scanS;
+    scanE = [&](SharedExpression e) {
+        if (!e) return;
+        ASTNode* n = e.get();
+        if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+            std::string r = rootBinding(as->unaryExpression);
+            if (!r.empty()) noteUse(r, true);        // the LHS root is written
+            scanE(as->unaryExpression); scanE(as->expression);   // LHS sub-exprs (indices) + RHS are reads
+        } else if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+            if (id->value) noteUse(*id->value, false);
+        } else if (dynamic_cast<ThisAccessNode*>(n)) {
+            unsupported("parallel_for body may not access `this`/fields — a worker runs with no receiver "
+                        "(shared-nothing); pass the data in as a local", pf->line);
+        } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+            scanE(ma->expression);                   // the member/method name is not a capture
+        } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
+                scanE(inv->expression);              // recurse the receiver (reads)
+                // A NON-const method mutates its receiver; if the receiver root is a capture, that is a
+                // shared write across all workers -> the gate rejects it unless the capture is an Atomic.
+                std::string recvCls = exprClass(ma->expression);
+                std::string mname = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+                if (!recvCls.empty() && _classes.count(recvCls) && !mname.empty()) {
+                    MethodInfo* mi = findMethod(&_classes[recvCls], mname, nullptr);
+                    if (mi && !mi->isConst) { std::string r = rootBinding(ma->expression); if (!r.empty()) noteUse(r, true); }
+                }
+            }
+            // else: a bare free-fn call target is a global symbol, not a capture — skip the callee name.
+            if (inv->args) for (auto& a : *inv->args) if (a) {
+                // A capture passed by `ref`/`out` may be mutated by the callee -> treat as a write.
+                bool byRef = a->modifier && a->modifier->value
+                             && (*a->modifier->value == "ref" || *a->modifier->value == "out");
+                if (byRef) { std::string r = rootBinding(a->expression); if (!r.empty()) noteUse(r, true); }
+                scanE(a->expression);
+            }
+        } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+            scanE(ea->expression);
+            if (ea->expressionlist) for (auto& x : *ea->expressionlist) scanE(x);
+        } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
+            scanE(b->LHS); scanE(b->RHS);
+        } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) {
+            scanE(l->LHS); scanE(l->RHS);
+        } else if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) {
+            scanE(t->condition); scanE(t->LHS); scanE(t->RHS);
+        } else if (auto* c = dynamic_cast<CastNode*>(n)) {
+            scanE(c->unaryExpression);
+        } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+            scanE(su->expression);
+        } else if (auto* pre = dynamic_cast<PreIncrDecrNode*>(n)) {
+            std::string r = rootBinding(pre->expression); if (!r.empty()) noteUse(r, true);
+            scanE(pre->expression);
+        } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) {
+            std::string r = rootBinding(po->expression); if (!r.empty()) noteUse(r, true);
+            scanE(po->expression);
+        } else if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) {
+            if (oc->args) for (auto& a : *oc->args) if (a) scanE(a->expression);
+        }
+        // literals / other leaves: nothing to capture.
+    };
+    scanS = [&](SharedStatement s) {
+        if (!s) return;
+        ASTNode* n = s.get();
+        if (auto* blk = dynamic_cast<BlockNode*>(n)) {
+            if (blk->statements) for (auto& st : *blk->statements) scanS(st);
+        } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
+            if (d->variables) for (auto& v : *d->variables) if (v) {
+                scanE(v->initializer);
+                if (v->name && v->name->value) bodyLocal.insert(*v->name->value);
+            }
+        } else if (auto* cd = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
+            if (cd->variables) for (auto& v : *cd->variables) if (v) {
+                scanE(v->initializer);
+                if (v->name && v->name->value) bodyLocal.insert(*v->name->value);
+            }
+        } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
+            scanE(std::dynamic_pointer_cast<ExpressionNode>(s));
+        } else if (auto* f = dynamic_cast<IfNode*>(n)) {
+            scanE(f->booleanExpression); scanS(f->ifStatement); scanS(f->elseStatement);
+        } else if (auto* w = dynamic_cast<WhileNode*>(n)) {
+            scanE(w->booleanExpression); scanS(w->whileStatement);
+        } else if (auto* dw = dynamic_cast<DoWhileNode*>(n)) {
+            scanE(dw->booleanExpression); scanS(dw->doWhileStatement);
+        } else if (auto* fr = dynamic_cast<ForNode*>(n)) {
+            if (fr->initializerStatements) for (auto& st : *fr->initializerStatements) scanS(st);
+            scanE(fr->booleanExpression);
+            if (fr->iteratorStatements) for (auto& st : *fr->iteratorStatements) scanS(st);
+            scanS(fr->body);
+        } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+            scanE(fe->expression);
+            if (fe->name && fe->name->value) bodyLocal.insert(*fe->name->value);
+            scanS(fe->body);
+        } else if (auto* u = dynamic_cast<UnsafeNode*>(n)) {
+            scanS(u->body);
+        } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
+            scanE(r->expression);
+        }
+        // ponytail: this recognizes the statement/expression node kinds a parallel_for body contains
+        // today. A newly-added node kind that can name or write a local must be handled here, or its
+        // capture is missed — a loud failure (the worker fn won't compile), never a silent race.
+    };
+    scanS(pf->body);
+
+    // Snapshot each capture's C type / class / address expression from the ENCLOSING context (intact
+    // here), and apply the write-through-capture gate (c).
+    struct Cap { std::string name, cType, className, addr; };
+    std::vector<Cap> caps;
+    for (auto& nm : capOrder) {
+        Cap c;
+        c.name      = nm;
+        c.className = _localTypes.count(nm)  ? _localTypes[nm]  : "";
+        c.cType     = _localCTypes.count(nm) ? _localCTypes[nm] : c.className;
+        if (capWrites[nm] && !isAtomicClass(c.className))
+            unsupported(("parallel_for body writes to captured `" + nm + "` — a non-atomic capture is shared "
+                         "across all workers and would race; make it an `Atomic<T>`, or write only through the "
+                         "loop element `" + loopVar + "`").c_str(), pf->line);
+        c.addr = _refParams.count(nm) ? nm : ("&(" + nm + ")");   // a ref-param capture IS already a pointer
+        caps.push_back(c);
+    }
+
+    int seq = _parforSeq++;
+    std::string bodyFn  = "__kama_pf_body"  + std::to_string(seq);
+    std::string trampFn = "__kama_pf_tramp" + std::to_string(seq);
+    std::string argTy   = "__kama_pf_arg"   + std::to_string(seq);
+
+    // ── (d) Synthesize the worker fn into a buffer: iterate the disjoint sub-View over `ref T e`. ─────
+    // A worker is a fresh function context, so save/reset/restore ALL enclosing per-function state.
+    std::ostringstream body;
+    {
+        std::ostream* savedOut        = _out;
+        auto savedRefParams           = _refParams;
+        auto savedParamNames          = _paramNames;
+        auto savedLocalTypes          = _localTypes;
+        auto savedLocalCTypes         = _localCTypes;
+        auto savedLocalTypeNodes      = _localTypeNodes;
+        auto savedConstLocals         = _constLocals;
+        auto savedMoveState           = _moveState;
+        auto savedScopes              = _scopes;
+        auto savedHoisted             = _hoisted;
+        ClassInfo* savedClass         = _currentClass;
+        std::string savedRetC         = _currentReturnCType;
+        int savedTemp                 = _tempCounter;
+
+        _out = &body;
+        _refParams.clear(); _paramNames.clear();
+        _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
+        _constLocals.clear(); _moveState.clear(); _scopes.clear(); _hoisted.clear();
+        _currentClass = nullptr;
+        _currentReturnCType = "void";
+        _tempCounter = 0;
+
+        body << "static void " << bodyFn << "(" << viewCType << " __slice";
+        for (auto& c : caps) body << ", " << c.cType << "* " << c.name;
+        body << ") {\n";
+
+        _paramNames.insert("__slice");
+        _localTypes["__slice"] = viewCType; _localCTypes["__slice"] = viewCType;
+        for (auto& c : caps) {
+            _paramNames.insert(c.name);
+            _refParams.insert(c.name);                 // a `ref` param: reads/writes deref via _refParams
+            _localTypes[c.name]  = c.className;         // "" if primitive
+            _localCTypes[c.name] = c.cType;
+        }
+
+        Scope root; root.isFunctionRoot = true;
+        _scopes.push_back(root);
+
+        // Reuse the foreach `ref` lowering: `foreach (ref elemTy loopVar in __slice) { <body> }`.
+        auto sliceId = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("__slice"));
+        auto fe = std::make_shared<ForEachNode>(*_synthCtx, pf->type, pf->name, sliceId, pf->body);
+        fe->isRef = true;
+        emitForeachIterator(fe.get(), viewCType, 1);
+        emitScopeCleanup(_scopes.back(), 1);   // function-root scope (no owned locals expected)
+        body << "}\n";
+
+        _out = savedOut;
+        _refParams       = savedRefParams;   _paramNames      = savedParamNames;
+        _localTypes      = savedLocalTypes;  _localCTypes     = savedLocalCTypes;
+        _localTypeNodes  = savedLocalTypeNodes; _constLocals  = savedConstLocals;
+        _moveState       = savedMoveState;   _scopes          = savedScopes;
+        _hoisted         = savedHoisted;     _currentClass    = savedClass;
+        _currentReturnCType = savedRetC;     _tempCounter     = savedTemp;
+    }
+
+    // ── (e) Arg struct + trampoline (crosses the isolate ABI's single void*). ─────────────────────────
+    std::ostringstream helper;
+    helper << "#ifndef KAMA_PARFOR_WORKERS_DEFAULT\n#define KAMA_PARFOR_WORKERS_DEFAULT 0\n#endif\n";
+    helper << "typedef struct { " << viewCType << " slice;";
+    for (size_t i = 0; i < caps.size(); ++i) helper << " " << caps[i].cType << "* c" << i << ";";
+    helper << " } " << argTy << ";\n";
+    helper << body.str();
+    helper << "static void* " << trampFn << "(void* __p) {\n";
+    helper << "    " << argTy << "* __a = (" << argTy << "*)__p;\n";
+    helper << "    " << bodyFn << "(__a->slice";
+    for (size_t i = 0; i < caps.size(); ++i) helper << ", __a->c" << i;
+    helper << ");\n    free(__p);\n    return (void*)0;\n}\n";
+    _fileScopeHelpers.push_back(helper.str());
+
+    // ── (f) Call site: split into K disjoint slices, spawn K workers, join ALL at the brace. ──────────
+    flushHoisted(depth);
+    std::string sfx = std::to_string(seq);
+    std::string V = "__pfv"+sfx, LEN = "__pflen"+sfx, K = "__pfk"+sfx, CH = "__pfch"+sfx,
+                H = "__pfh"+sfx, SP = "__pfs"+sfx, W = "__pfw"+sfx, F = "__pff"+sfx,
+                C = "__pfc"+sfx, A = "__pfa"+sfx, J = "__pfj"+sfx;
+
+    indent(depth);   *_out << "{\n";
+    indent(depth+1); *_out << viewCType << " " << V << " = " << viewExpr << ";\n";
+    indent(depth+1); *_out << "int32_t " << LEN << " = " << lenMi->cName << "(&" << V << ");\n";
+    indent(depth+1); *_out << "int " << K << " = KAMA_PARFOR_WORKERS_DEFAULT > 0 ? KAMA_PARFOR_WORKERS_DEFAULT "
+                              ": kama_parfor_workers();\n";
+    indent(depth+1); *_out << "if (" << K << " > " << LEN << ") " << K << " = " << LEN << ";\n";
+    indent(depth+1); *_out << "if (" << K << " < 1) " << K << " = 1;\n";
+    indent(depth+1); *_out << "int32_t " << CH << " = (" << LEN << " + " << K << " - 1) / " << K << ";\n";
+    indent(depth+1); *_out << "kama_isolate_t " << H << "[" << K << "];   /* VLA: K = core count, small */\n";
+    indent(depth+1); *_out << "int " << SP << " = 0;\n";
+    indent(depth+1); *_out << "for (int " << W << " = 0; " << W << " < " << K << "; ++" << W << ") {\n";
+    indent(depth+2); *_out << "int32_t " << F << " = " << W << " * " << CH << ";\n";
+    indent(depth+2); *_out << "if (" << F << " >= " << LEN << ") break;\n";
+    indent(depth+2); *_out << "int32_t " << C << " = " << LEN << " - " << F << "; if (" << C << " > " << CH
+                           << ") " << C << " = " << CH << ";\n";
+    indent(depth+2); *_out << argTy << "* " << A << " = (" << argTy << "*)malloc(sizeof(" << argTy << "));\n";
+    indent(depth+2); *_out << "if (!" << A << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+    indent(depth+2); *_out << A << "->slice = " << sliceMi->cName << "(&" << V << ", " << F << ", " << C << ");\n";
+    for (size_t i = 0; i < caps.size(); ++i) {
+        indent(depth+2); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
+    }
+    indent(depth+2); *_out << H << "[" << SP << "++] = kama_isolate_spawn(&" << trampFn << ", " << A << ");\n";
+    indent(depth+1); *_out << "}\n";
+    indent(depth+1); *_out << "for (int " << J << " = 0; " << J << " < " << SP << "; ++" << J << ") "
+                           << "kama_isolate_join(" << H << "[" << J << "]);\n";
+    indent(depth);   *_out << "}\n";
+}
+
 // write hoisted temp statements (inline-ctor-in-arg materialization) at `depth`, then clear.
 // A leaf statement sets _hoistOK, builds its expression string (which may push here), then calls
 // this BEFORE writing its own line — so the temps appear first. Pure ISO C, no `({ … })`.
@@ -1368,6 +1686,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // inside it at the closing brace, before any local dtor (join-before-drop).
     if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
         emitScope(sc, depth);
+        return;
+    }
+
+    // `parallel_for (ref T e in coll) { ... }` — disjoint-slice data-parallel loop (M6.3): split `coll`
+    // into K non-overlapping sub-Views, run the body on each in a worker isolate, join all at the brace.
+    if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
+        emitParallelFor(pf, depth);
         return;
     }
 
@@ -4718,6 +5043,11 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         scanTypeForCollections(fe->type);
         scanExprForCollections(fe->expression);
         scanStmtForCollections(fe->body);
+    } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
+        scanTypeForCollections(pf->type);
+        scanTypeForCollections(parforViewType(pf->type));   // M6.3: the synthesized View<T> the loop iterates
+        scanExprForCollections(pf->expression);
+        scanStmtForCollections(pf->body);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForCollections(std::dynamic_pointer_cast<ExpressionNode>(s));
     }
@@ -5185,6 +5515,9 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
     } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         scanExprForGenerics(fe->expression, localTys);
         scanStmtForGenerics(fe->body, localTys);
+    } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
+        scanExprForGenerics(pf->expression, localTys);
+        scanStmtForGenerics(pf->body, localTys);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForGenerics(std::dynamic_pointer_cast<ExpressionNode>(s), localTys);
     }
@@ -8365,6 +8698,8 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body)
             walk(fr->body, false);
         } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
             scan(fe->expression); walk(fe->body, false);
+        } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
+            scan(pf->expression); walk(pf->body, false);
         } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
             scan(ret->expression);
         } else if (auto* un = dynamic_cast<UnsafeNode*>(n)) {

@@ -1,0 +1,23 @@
+// M6.3: the body READS a captured enclosing local (`dt`). Kama has no closures, so the compiler hoists
+// the body into a worker fn and threads captured locals in as `ref` params (deref'd like any `ref`). A
+// read-only capture is shared across workers race-free (M6.2: immutable reads don't race). This fixture
+// is the self-check for the free-variable capture walker: if capture analysis broke, `dt` would not be
+// threaded in and the generated C would fail to compile.
+import std::concurrent;
+import std::collections::{DynamicArray, View};
+
+fn int main() {
+    int32 dt = 3;                                    // captured, read-only, by every worker
+    DynamicArray<int32> a = DynamicArray.empty();
+    int32 i = 0;
+    while (i < 12) { a.add(item: 0i32); i = i + 1; }  // twelve 0s
+
+    parallel_for (ref int32 e in a) {
+        e = e + dt;                                  // read the capture; write only through `e`
+    }
+
+    int32 s = 0;
+    int32 j = 0;
+    while (j < a.length()) { s = s + a[j]; j = j + 1; }   // 12 * 3 = 36
+    return s % 256;                                       // 36
+}

@@ -22,6 +22,7 @@ class FunctionParameterNode;
 class BlockNode;
 class IsolateNode;
 class ScopeNode;
+class ParallelForNode;
 class VariableDeclarator;
 class LocalVariableDeclaration;
 class ConstVariableDeclarator;

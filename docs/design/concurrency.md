@@ -227,6 +227,7 @@ threads out of the *language surface* does not restrict a server scheduler.
   *(The postMessage/transferable bridge was the early framing; model 1 was chosen — see "M5 — landed".)*
 - **M6 `Atomic<T>` + the two safe-sharing primitives** — the narrow shared seams (native + wasm/SharedArrayBuffer);
   immutable-`Shared` cross-isolate; disjoint-slice `parallel_for`. The job-system library lands on top.
+  ✅ *(all landed 2026-07-23 — M6.1 `Atomic<T>`, M6.2 immutable-`Shared`, M6.3 `parallel_for`; campaign complete)*
 
 ## M2 — landed (2026-07-22)
 
@@ -478,8 +479,51 @@ Fixtures: `shared_immutable_send` (4 isolates hammer clone/drop on one `Shared<i
 `xfail/immutable_mutable_field`; the mutable-payload `xfail/channel_send_shared` still rejects. All green
 native + wasm + TSan (0 data races) + ASan.
 
-**Next: M6.3** — disjoint-slice `parallel_for` (the second safe-sharing primitive; data-parallel fan-out
-lending each task a non-overlapping mutable sub-`View`, safe by disjointness).
+## M6.3 — landed (2026-07-23)
+
+disjoint-slice `parallel_for` shipped — the third and final safe-sharing primitive (§7b), which **closes the
+concurrency campaign**. `parallel_for (ref T e in coll) { … }` splits `coll` into K non-overlapping
+sub-`View`s (one per worker isolate), runs the body over each in place through a `ref T e` binding, and joins
+them ALL at its own closing brace. **Safe by disjointness**: two workers never touch the same element, so no
+lock and no data race — the data-parallel (rayon / OpenMP) half of the model, with no borrow checker.
+
+- **Self-joining barrier.** The parallel_for owns its own **dynamic** K-way fan-out and join (unlike a
+  `scope`'s static child list) — the closing brace is the barrier, so a following statement sees every slice
+  reclaimed. Standalone-usable (no enclosing `scope` needed) and composes inside a `scope` (it joins at its
+  own brace, before the scope's). This is exactly the "dynamic N-way fan-out is really M6's parallel_for"
+  note the M4 section anticipated.
+- **Input = a `View<T>`, or any contiguous container exposing `.view()`** (`DynamicArray`/`FixedArray`
+  auto-viewed). A non-contiguous collection (a `Map`, …) has no `.view()` and is rejected — for free, no
+  special-casing. K disjoint slices are K calls to the existing `View.slice(from,count)` (zero-copy); no new
+  `split_at` primitive was needed.
+- **Worker count K = hardware cores by default** (`kama_parfor_workers()` → `sysconf`/`emscripten_num_logical_cores`),
+  capped at the collection length, overridable at build time via a `KAMA_PARFOR_WORKERS` env → driver
+  `-DKAMA_PARFOR_WORKERS_DEFAULT` (the M5 `KAMA_PTHREAD_POOL` idiom). Disjoint slices + a join barrier make K
+  a pure speed knob — never a correctness one (tests pin it for determinism).
+- **The body is HOISTED into a synthesized worker fn.** Kama has no closures (a `spawn` entry is a bare
+  capture-free fn), so the emitter runs a **free-variable analysis** of the body and threads each captured
+  enclosing local into the worker as a `ref` param — reusing the M4.2 `_refParams` deref lowering verbatim
+  (the "per-entry arg-bundle struct" the M4 note anticipated). The loop lowering itself is the existing
+  `foreach (ref …)` iterator path over the sub-`View`, reused via a synthesized `ForEachNode` — zero
+  duplication. A per-site arg struct + trampoline crosses the isolate ABI's single `void*`.
+- **Write-through-capture gate (the sole new static rule).** Writes through the disjoint element `e` are
+  always fine; a captured local may be **read** freely (immutable reads don't race, §7a) but **written** only
+  if it is an `Atomic<T>` (the sanctioned shared-mutable seam — reusing the M4.2 atomic exemption).
+  A write to a non-atomic capture (assignment, `++`, a non-`const` method call, or a `ref`/`out` arg) is
+  rejected, naming the culprit. Accessing `this`/a field is rejected (a worker runs with no receiver —
+  shared-nothing, like a `spawn` entry).
+
+Where it lives: `parallel_for` keyword (`kama.l`); `parallel_for_statement` (`kama.y`, mirrors
+`foreach_statement` but `ref` is mandatory + a `block` body); `ParallelForNode` (`kama.ast.h`/`kama.forward.h`).
+`CEmitter::emitParallelFor` + the free-variable walker (`kama.cemit.cpp`); `kama_parfor_workers()`
+(`kama_isolate.h`, native + wasm arms); the driver `-D` (`kama.driver.cpp`). No new runtime beyond the one
+helper (reuses `kama_isolate.h`'s spawn/join).
+
+Fixtures: `parfor_double` (=90, auto-view + in-place doubling), `parfor_view_direct` (=40, direct `View`),
+`parfor_capture_read` (=36, read capture — the walker's self-check), `parfor_atomic` (=100, `Atomic` reduction
+— the write-exemption), `parfor_in_scope` (=112, composition inside a `scope`);
+`xfail/parfor_write_capture` (non-atomic write), `xfail/parfor_noncontiguous` (a `Map`), `xfail/parfor_this`.
+All green native + wasm + TSan (0 data races) + ASan.
 
 ## Deferred (per §6)
 

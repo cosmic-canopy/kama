@@ -581,6 +581,7 @@ private:
     std::map<std::string, SharedIdentifier> _scanLocalTys;
     std::map<MatchNode*, std::string>       _matchSubjInst;
     int                _tempCounter = 0;
+    int                _parforSeq  = 0;   // monotonic id for parallel_for worker/arg/trampoline helper names (M6.3)
     // Temp-hoist buffer. An inline constructor in argument position materializes into an
     // ordinary local ("Cls __tmp; Cls__ctor(&__tmp, …);") pushed here and flushed by the enclosing
     // leaf statement BEFORE its own line — pure ISO C, no GNU statement-expression. `_hoistOK` gates
@@ -1035,6 +1036,8 @@ private:
     void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)
     std::string emitIsolateExpr(IsolateNode* iso);   // `Isolate h = spawn worker(...)` — RAII handle form
     void emitScope(ScopeNode* sc, int depth);        // `scope { }` — structured concurrency + join barrier (M4)
+    void emitParallelFor(ParallelForNode* pf, int depth);   // `parallel_for (ref T e in coll) { }` — disjoint-slice data-parallel (M6.3)
+    SharedIdentifier parforViewType(SharedIdentifier elem);  // synthesize the `View<elem>` type node the loop iterates (M6.3)
     Scope* innermostTaskScope();                     // nearest enclosing `scope { }`, or null
     int    innermostTaskScopeIndex();                // its _scopes index, or -1
     int    findScopeDeclaring(const std::string& name);   // _scopes index that declares `name`, or -1 (a param)

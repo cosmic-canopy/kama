@@ -1,0 +1,14 @@
+// M6.3 (reject): `parallel_for` needs a CONTIGUOUS collection it can split into disjoint sub-Views. A
+// `Map` (hash table) is not contiguous — it exposes no `.view()`, so it cannot be sliced. The error is
+// for free: the auto-`.view()` lookup fails and we reject with a clear message (no special-casing).
+import std::concurrent;
+import std::collections::{Map};
+
+fn int main() {
+    Map<int32, int32> m = Map.withCapacity(capacity: 4);
+    m.put(key: 1i32, value: 10i32);
+    parallel_for (ref int32 e in m) {      // rejected: Map is not contiguous
+        e = e + 1;
+    }
+    return 0;
+}

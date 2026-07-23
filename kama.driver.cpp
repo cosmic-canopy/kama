@@ -802,6 +802,11 @@ int main(int argc, char** argv)
             } else {
                 cmd << "-lpthread ";
             }
+            // M6.3: parallel_for's default worker count. KAMA_PARFOR_WORKERS (build-time) pins K for
+            // deterministic CI; unset => 0 => the emitted code calls kama_parfor_workers() (hw cores) at
+            // runtime. Only a *count* knob — slices are disjoint + joined, so K never changes results.
+            const char* pfw = getenv("KAMA_PARFOR_WORKERS");
+            cmd << "-DKAMA_PARFOR_WORKERS_DEFAULT=" << (pfw && *pfw ? pfw : "0") << " ";
         }
 #if defined(_WIN32)
         // std::net uses Winsock (kama_os.h). Link ws2_32 on native Windows builds; harmless (and pruned by

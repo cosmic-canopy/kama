@@ -22,7 +22,7 @@ lexer_keywords() {
 # Every bare word the TextMate grammar highlights: the alternations inside `\b(...)\b`, plus the kind words
 # in the `type <kind>` declaration rule. One word per line.
 grammar_tokens() {
-    grep -oE '\\\\b\(([a-z0-9|]+)\)' "$GRAMMAR" | sed -E 's/\\\\b\(//; s/\)//' | tr '|' '\n'
+    grep -oE '\\\\b\(([a-z0-9_|]+)\)' "$GRAMMAR" | sed -E 's/\\\\b\(//; s/\)//' | tr '|' '\n'
     # the `type (value|resource|view|contract)` declaration capture
     grep -oE '\(value\|resource\|view\|contract\)' "$GRAMMAR" | tr -d '()' | tr '|' '\n'
 }

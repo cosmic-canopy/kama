@@ -455,6 +455,28 @@ public:
     , body(body) {}
 };
 
+// `parallel_for (ref T e in coll) { ... }` — disjoint-slice data-parallel loop (M6.3). Splits `coll` into
+// K non-overlapping sub-Views, one per worker isolate, mutating each in place, and joins them ALL at the
+// closing brace (self-joining barrier). Statement-only, like ScopeNode. The binding is always `ref` (the
+// grammar forces it — disjoint mutable is the whole point), so no isRef flag is needed. The emitter hoists
+// the body into a synthesized worker fn, threading captured outer locals in as `ref` params.
+class ParallelForNode : public StatementNode {
+public:
+    SharedIdentifier type;         // element T
+    SharedIdentifier name;         // loop binding `e`
+    SharedExpression expression;   // the View<T> or a contiguous container exposing .view()
+    SharedStatement  body;         // a BlockNode (its braces are the join barrier)
+    ParallelForNode(CodeGenContext& context, SharedIdentifier type,
+                    SharedIdentifier name,
+                    SharedExpression expression,
+                    SharedStatement body)
+    : ASTNode(context),  StatementNode(context)
+    , type(type)
+    , name(name)
+    , expression(expression)
+    , body(body) {}
+};
+
 class BreakNode : public StatementNode {
 public:
     BreakNode(CodeGenContext& context) : ASTNode(context),  StatementNode(context) { }

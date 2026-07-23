@@ -1,0 +1,18 @@
+// M6.3 + M6.1: a `parallel_for` body may mutate a captured `Atomic<T>` — the ONE sanctioned shared-mutable
+// cell. Each worker reduces its disjoint slice into the same atomic via `fetchAdd`; atomicity makes the
+// cross-worker accumulation race-free (this is the write-through-capture EXEMPTION — a non-atomic capture
+// would be rejected, see xfail/parfor_write_capture). Deterministic total regardless of K. Run under TSan.
+import std::concurrent::{Atomic};
+import std::collections::{DynamicArray, View};
+
+fn int main() {
+    Atomic<int32> total = Atomic::make(value: 0i32);
+    DynamicArray<int32> a = DynamicArray.empty();
+    int32 i = 0;
+    while (i < 50) { a.add(item: 2i32); i = i + 1; }   // fifty 2s
+
+    parallel_for (ref int32 e in a) {
+        total.fetchAdd(delta: e);        // shared atomic reduction — allowed (Atomic is race-free)
+    }
+    return total.load() % 256;           // 50 * 2 = 100
+}
