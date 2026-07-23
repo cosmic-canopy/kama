@@ -138,7 +138,7 @@ struct kamayystype {
 %token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH IF IN
-%token <string> INT INT8 INT16 INT32 INT64 ISOLATE
+%token <string> INT INT8 INT16 INT32 INT64 SPAWN
 %token <string> MATCH
 %token <string> NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF
@@ -207,7 +207,7 @@ struct kamayystype {
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
-%type <statement> marked_type_declaration unsafe_statement isolate_statement arm_value_statement retroactive_impl_declaration
+%type <statement> marked_type_declaration unsafe_statement spawn_statement arm_value_statement retroactive_impl_declaration
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <namespacedeclaration> namespace_opt
@@ -702,10 +702,10 @@ variable_declarator
   ;
 variable_initializer
   : expression
-    /* `Isolate h = isolate worker(p: give x);` — the handle form: spawn now, returning an RAII `Isolate`
-       whose drop = join. Only valid as a declaration initializer (after `=`), where `isolate` is
+    /* `Isolate h = spawn worker(p: give x);` — the handle form: spawn now, returning an RAII `Isolate`
+       whose drop = join. Only valid as a declaration initializer (after `=`), where `spawn` is
        unambiguous (a keyword, never an expression start), so this adds no conflict. */
-  | ISOLATE invocation_expression   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
+  | SPAWN invocation_expression   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
   ;
 local_constant_declaration
   : CONST type constant_declarators   { $$ = std::make_shared<ConstLocalVariableDeclaration>(SCANNER_CODEGENCONTEXT, $2, $3); }
@@ -738,7 +738,7 @@ embedded_statement
   | jump_statement
   | arm_value_statement
   | unsafe_statement
-  | isolate_statement
+  | spawn_statement
   ;
 arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
@@ -748,11 +748,11 @@ arm_value_statement
 unsafe_statement
   : UNSAFE block   { $$ = std::make_shared<UnsafeNode>(SCANNER_CODEGENCONTEXT, $2); }
   ;
-  /* `isolate worker(p: give x);` — spawn a top-level fn on a fresh OS thread with a MOVED-in arg
+  /* `spawn worker(p: give x);` — spawn a top-level fn on a fresh OS thread with a MOVED-in arg
      bundle, then join (fused). Reuses `invocation_expression` for named-arg / `give` parsing; the
      emitter validates the callee is a bare top-level fn (no receiver) → shared-nothing. */
-isolate_statement
-  : ISOLATE invocation_expression SEMICOLON   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
+spawn_statement
+  : SPAWN invocation_expression SEMICOLON   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
   ;
 empty_statement
   : SEMICOLON   {  }

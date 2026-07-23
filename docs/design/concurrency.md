@@ -237,14 +237,18 @@ channels (M3), no wasm (M5), no `Atomic<T>` (M6).
 
 ```
 fn void worker(Payload p) { ... }              // entry: a top-level fn (no env capture → shared-nothing)
-isolate worker(p: give payload);               // fused: spawn on a new OS thread, then join
-Isolate h = isolate worker(p: give payload);   // handle form: spawn now; the RAII handle owns the join
+spawn worker(p: give payload);                 // fused: spawn on a new OS thread, then join
+Isolate h = spawn worker(p: give payload);     // handle form: spawn now; the RAII handle owns the join
 h.join();                                       // explicit join; ~Isolate() also joins (drop = join)
 ```
 
+> **M4 rename:** the spawn verb is **`spawn`** (was `isolate` through M3). `Isolate` remains the RAII handle
+> *type*. In M4 the bare fused `spawn f(…);` becomes **scope-only** (see the M4 section); the handle form works
+> anywhere.
+
 The `give`n bundle must be a move-only `resource` VALUE and the entry must return `void` (M2 has no channel
 to return over). Post-spawn use of the moved source is a compile error (reuses the `give` move seam — no new
-tracking). An `isolate { block }` capture form is intentionally not offered (it would close over the env).
+tracking). A `spawn { block }` capture form is intentionally not offered (it would close over the env).
 
 **Where it lives:**
 - Runtime ABI — `kama_isolate.h` (repo root; `#include <pthread.h>`, `static inline` `kama_isolate_spawn`/
@@ -277,7 +281,7 @@ fn void producer(Sender<int32> tx) { tx.send(item: give x); }   // ~Sender() clo
 Channel<int32> ch = Channel::bounded(capacity: 4);   // capacity 0 == rendezvous (synchronous hand-off)
 Sender<int32>   tx = ch.sender();
 Receiver<int32> rx = ch.receiver();
-Isolate h = isolate producer(tx: give tx);           // HANDLE form (fused would join → deadlock a producer)
+Isolate h = spawn producer(tx: give tx);             // HANDLE form (fused would join → deadlock a producer)
 Optional<int32> v = rx.recv();                        // blocks; None once drained AND all senders dropped
 ```
 

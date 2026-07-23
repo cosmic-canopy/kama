@@ -28,6 +28,6 @@ fn void worker(Payload p) {   // owns the bundle by value (the caller `give`s it
 fn int main() {
     int32 result = 0;
     Payload p = Payload::make(slot: addr(of: result), value: 42i32);
-    isolate worker(p: give p);   // spawn on a fresh OS thread with the moved bundle, then join
+    spawn worker(p: give p);   // spawn on a fresh OS thread with the moved bundle, then join
     return result;               // 42 iff the isolate ran
 }

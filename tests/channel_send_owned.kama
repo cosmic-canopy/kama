@@ -21,7 +21,7 @@ fn int main() {
     Sender<Owned<Box>>   tx = ch.sender();
     Receiver<Owned<Box>> rx = ch.receiver();
 
-    Isolate h = isolate producer(tx: give tx);
+    Isolate h = spawn producer(tx: give tx);
 
     int32 got = 0;
     bool going = true;

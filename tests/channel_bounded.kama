@@ -18,7 +18,7 @@ fn int main() {
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();
 
-    Isolate h = isolate producer(tx: give tx);   // spawn; keep running while main drains
+    Isolate h = spawn producer(tx: give tx);   // spawn; keep running while main drains
 
     int32 sum = 0;
     bool going = true;

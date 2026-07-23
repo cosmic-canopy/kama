@@ -1,12 +1,12 @@
 // M8a: a contract's `ctor` requirement is enforced like any other contract member — a type that
-// `implements Factory` but omits `ctor spawn(...)` is rejected (missing contract method).
-type contract Factory for value { ctor spawn(int32 seed); }
+// `implements Factory` but omits `ctor create(...)` is rejected (missing contract method).
+type contract Factory for value { ctor create(int32 seed); }
 
 type value Broken implements Factory {
     public int32 v;
 }
 
 fn int32 main() {
-    Broken b = Broken.spawn(seed: 1);
+    Broken b = Broken.create(seed: 1);
     return b.v;
 }

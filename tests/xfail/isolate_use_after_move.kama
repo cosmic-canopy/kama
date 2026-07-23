@@ -21,6 +21,6 @@ fn void worker(Payload p) {
 
 fn int main() {
     Payload p = Payload::make(value: 7i32);
-    isolate worker(p: give p);   // `p` is moved into the isolate here
+    spawn worker(p: give p);   // `p` is moved into the isolate here
     return p.get();              // ERROR: use of `p` after it was moved
 }

@@ -29,8 +29,8 @@ fn int main() {
     int32 b = 0;
     Payload pa = Payload::make(slot: addr(of: a), value: 10i32);
     Payload pb = Payload::make(slot: addr(of: b), value: 20i32);
-    isolate worker(p: give pa);   // disjoint slot `a`
-    isolate worker(p: give pb);   // disjoint slot `b`
+    spawn worker(p: give pa);   // disjoint slot `a`
+    spawn worker(p: give pb);   // disjoint slot `b`
     if (a == 10 && b == 20) { return 0; }
     return 1;
 }

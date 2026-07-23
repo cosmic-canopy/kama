@@ -16,7 +16,7 @@ fn int main() {
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();
 
-    Isolate h = isolate producer(tx: give tx);
+    Isolate h = spawn producer(tx: give tx);
 
     int32 expected = 1;
     int32 ok = 0;
