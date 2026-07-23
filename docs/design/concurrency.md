@@ -1,110 +1,233 @@
-# Concurrency — campaign kickoff (design-refinement pass FIRST)
+# Concurrency — specification (design pass converged 2026-07-22)
 
-**Status:** not started. **The next big direction after 1.0.** The *direction* is settled
-([ROADMAP.md §6](../ROADMAP.md) — shared-nothing by construction: isolates + ownership-transferring
-channels); what's **not** settled is the *spec*. Per the agreed plan, this campaign **opens with a
-design-refinement pass** — turn §6's direction into a concrete, kama-simple specification — **before** any
-runtime or emitter code. Prepared as a running start for a fresh session (mirrors how the SIMD campaign was
-kicked off).
+**Status: FINAL design (M0 converged).** The design-refinement pass is done; this document is now the **spec**
+(surface + lowering + runtime ABI) that the implementation milestones (M1–M6 below) build to — the same bar the
+construction-model and streams campaigns met before code. As each milestone ships, `SPEC.md` / `GOALS.md` /
+`KEYWORDS.md` / `grammar.bnf` are updated to match.
 
-## The direction (already agreed — don't relitigate, refine)
+The *direction* was settled in [ROADMAP.md §6](../ROADMAP.md) (shared-nothing by construction: isolates +
+ownership-transferring channels). This pass turned its seven open questions into concrete decisions.
+
+## The one idea
 
 Earn data-race freedom the way kama earns null-safety: make the hazard **unrepresentable**, not checked. No
-borrow checker over shared memory — **remove the shared mutable state.** The full rationale + surface sketch is
-[ROADMAP.md §6](../ROADMAP.md); the load-bearing commitments:
+borrow checker over shared memory — **remove the shared mutable state.** Where Rust proves exclusivity over
+shared memory (borrow checker, lifetimes, `Send`/`Sync`, `async` coloring, `Pin`), kama removes the shared
+mutable state so there is nothing to prove. The honest trade: less flexible for the last few percent of
+shared-mutation performance; far simpler to reason about, and **portable native↔wasm from one source** —
+which threaded C++/Rust are not.
 
-- **Isolate = shared-nothing unit of execution** (OS worker natively; Web Worker on wasm). **Channels reuse the
-  existing ownership model**: send a `value` → **copy**; send a `resource` → **`give`** (move, zero-copy; the
-  use-after-send error already falls out of move-tracking); genuinely-shared hot data → a narrow **`Atomic<T>` /
-  shared-region seam** (the concurrency analog of `unsafe {}`/`Ptr` — opt-in, greppable, atomics-only).
-- **Maps 1:1 onto wasm** (isolate→Worker, `give`→postMessage *transferable*, shared-region→SharedArrayBuffer).
-- **Structured concurrency = RAII for tasks** (a scope joins its children at exit; the no-orphan guarantee).
-- **"Proceed until ready" without function coloring** — cheap tasks that block on a channel while a scheduler
-  runs other ready work (Go/Erlang), **not** stackless `async/await`/`Pin` (kama's least-kama feature).
-- **Lock-free default; locks as expert opt-in.** Two *safe* sharing primitives recover what shared-nothing
-  costs: immutable-`Shared` read-across-isolates, and scoped disjoint-slice parallel-for (`split_at_mut`).
-- **Deferred:** co-equal general shared-memory ("hybrid") threading — reopen only if the seam can't express a
-  concrete case.
+## Model — three levels, one ownership model, three sharing seams
 
-## Current state (verified 2026-07-22 — don't re-explore)
+Coarse → fine:
 
-- **No concurrency infra of any kind exists.** No threads/isolates/atomics/channels/scheduler; the only
-  `pthread` reference is `-lpthread` for native GLFW ([kama.driver.cpp](../../kama.driver.cpp) ~772), unrelated.
-  **1.0 ships a single-threaded core** — this is a clean slate.
-- **I/O is blocking, single event loop.** `std::net` streams are blocking by default (`setNonBlocking(true)` →
-  `Err(WouldBlock)`; [lib/std/net/net.kama](../../lib/std/net/net.kama) ~34, 56–88), with a synchronous
-  select/epoll `Poller::wait(timeoutMs)` ([lib/std/net/poll.kama](../../lib/std/net/poll.kama) ~52). Wasm runs
-  one emscripten main loop (`emscripten_set_main_loop_arg`, [kama_app.h](../../kama_app.h) ~15–33); native is a
-  plain `while(tick){}`. **No emcc `-sUSE_PTHREADS`/`-sPROXY_TO_PTHREAD`, no Worker hooks** today.
-- **`std::time` does NOT exist** — the stated cheap **precondition**. Modules are directory-modules under
-  `lib/std/` (`math`, `io`, `net`, `collections`, …); `std::time` slots in as `lib/std/time/` with
-  `namespace std::time;` (native `clock_gettime`/`QueryPerformanceCounter`; wasm `emscripten_get_now`). Needed
-  for timeouts, scheduling, and any bench of the scheduler.
-- **The move/ownership seam a channel-send reuses already exists** (no new tracking needed):
-  `moveOnlySource()` extracts the named local from a `give` expression; `markMoved()` transitions it to `Moved`
-  in `_moveState`; `ownsByValue()` is the "hand-off needs `give`/`copy`" gate; `value`-vs-`resource` copy-vs-move
-  is decided from `ClassInfo::kind` ([kama.cemit.cpp](../../kama.cemit.cpp) — `moveOnlySource`/`markMoved`/
-  `ownsByValue`/`isCopyable`, ~5850–5890 + decl-init ~1776 / assign ~2134). A `chan.send(give x)` lowering hooks
-  straight into these: extract cVar → validate `ownsByValue` → `markMoved` → emit the handle move; later use of
-  `x` already errors via move-tracking.
-- **Per-isolate module state seam** (the "per-thread module isolation" interest): the prelude/module collection
-  is `preludeUnit()` + `preludeModuleUnits()` ([kama.driver.cpp](../../kama.driver.cpp) ~314–320) →
-  `setPrelude()`/`addPreludeModule()` → collected in `emitProgram()`
-  ([kama.cemit.cpp](../../kama.cemit.cpp) ~12081). **Open question this raises:** does kama have any *mutable
-  module-level/global state* today? If so, shared-nothing requires each isolate to own its own copy — a real
-  emitter concern, not just a library one.
+- **`isolate`** — a real OS thread (native) / Web Worker (wasm). Shared-nothing: its own stack, heap, and module
+  statics. *Few* of them — think ~one per core, or a handful of long-lived service isolates. Isolates
+  communicate **only** through channels and the atomic/shared-region seam. An isolate **may block** on a
+  channel; that is honest and cheap precisely because isolates are coarse.
+- **`channel<T>`** — a typed pipe between isolates. Crossing it reuses the existing ownership model: send a
+  `value` → **copy**; send a `resource` → **`give`** (move, zero-copy on native; the use-after-send error
+  already falls out of move-tracking). Blocking `recv()` parks the receiving isolate. Bounded capacity is a
+  construction parameter; capacity `0` is a rendezvous (unbuffered) channel. **One** channel type — favor one
+  way.
+- **`job` / `parallel_for`** — the fine-grained CPU-work layer, scheduled onto a pool of isolates. A job is a
+  plain function + moved args and **never blocks mid-stack** — it runs and returns. A `future<T>` is the
+  one-shot form and *is* a one-slot channel. This is the data-parallel (rayon / games task-graph) half of the
+  model; the pool + work-stealing scheduler is a **library** on top of the isolate ABI, not language.
 
-## ► The design-refinement pass (do this FIRST — the point of the kickoff)
+**Why this and not green threads / async-await.** The "proceed until ready" ergonomic has two implementations:
+stackful green threads (Go/Erlang — needs a userspace stack-switching scheduler, impossible on wasm without
+Asyncify, which *is* the coloring cost we reject) or `async`/`await` (function coloring, `Pin` — kama's
+least-kama feature). Kama takes neither into the **language**: isolates are real threads (blocking is honest
+when few) and massive parallelism comes from the never-blocking job layer. The high-connection-server ergonomic
+that green threads exist for is recovered *above* the language by a native scheduler library — see
+[§ Web/server workloads](#webserver-workloads).
 
-Settle these before writing runtime/emitter code. Each is a place §6 gives a *direction* but not a *decision*:
+### The three sharing seams (greppable, like `unsafe {}`)
 
-1. **The portable spawn substrate — the hard one.** Native = OS threads (shared address space, so `give` is a
-   pointer handoff, zero-copy); wasm = Web Workers (separate address spaces, so `give` is a postMessage
-   *transfer*, and **wasm can't spawn its own workers — the JS host must**). How does *one source* express
-   "spawn an isolate" when the wasm side needs host cooperation? Pin the runtime seam (a `kama_isolate_*` ABI in
-   the runtime header, native-threads vs JS-worker-bridge behind it) and what the emitter emits for an
-   `isolate`/`task`.
-2. **Channel type + sendability.** The channel type signature; how the type system admits only send-safe
-   payloads (`value`→copy, `resource`→`give`; **reject** raw `Ptr`/borrows/non-owning views escaping an
-   isolate). Is "sendable" a contract/marker, or purely structural from the ownership kind? Blocking vs buffered.
-3. **Per-isolate state & the prelude.** Resolve the module-global-state question above; decide whether each
-   isolate re-collects prelude modules or shares immutable code + per-isolate data.
-4. **Structured-concurrency scope = RAII for tasks.** How a concurrency scope joins children at scope-exit
-   within the existing drop/RAII model and the borrow-vs-storage rule (a task must not outlive a borrow it holds).
-5. **Scheduler / "proceed until ready."** The cooperative model (tasks block on channels; scheduler runs ready
-   work) without coloring — what's language vs a stdlib job-system library (§6: the job system is a library).
-6. **`Atomic<T>` seam.** New type + lowering (native `stdatomic.h`/`_Atomic`; wasm Atomics + SharedArrayBuffer)
-   — the minimal shared-region opt-in. Scope it to atomics-only.
-7. **The two safe-sharing primitives** — immutable-`Shared` read-across-isolates; scoped disjoint-slice
-   parallel-for. Confirm they compose with the ownership model without reintroducing shared mutability.
+| Seam | Meaning | Native | wasm | MCU |
+|---|---|---|---|---|
+| module `static` | **per-isolate** state ("each thread its own module") | `_Thread_local` (own copy per isolate) | automatic (separate Worker instance) | plain C `static`, **zero cost** (one core = one isolate) |
+| `hardware` qualifier | `volatile` MMIO + single-core ISR↔loop flag | `volatile T*` | n/a | the MCU register/ISR seam — **not** cross-isolate ([ROADMAP §5](../ROADMAP.md)) |
+| `Atomic<T>` / shared-region | the **only** cross-isolate mutable sharing | `<stdatomic.h>` / `_Atomic` | SharedArrayBuffer + Atomics | atomics if multi-core |
 
-Output of the pass: a `docs/design/concurrency.md` that is a **spec** (surface + lowering + runtime ABI), and
-a milestone plan — same bar the construction-model / streams campaigns met before implementation.
+The load-bearing rule: **a module `static` is per-isolate by construction; cross-isolate mutable sharing
+requires `Atomic<T>` / a shared-region.** A `static` therefore cannot be seen by another isolate, so it cannot
+race; to share you must reach for the greppable atomic seam. This *unifies* with the MCU story
+([MCU_READINESS.md](../MCU_READINESS.md) Tier-0): the module-statics feature MCU needs is the same feature, and
+because its default semantics are per-isolate it is automatically race-free the day it runs on a multicore
+native/wasm target. On a single-core MCU there is exactly one isolate, so a `static` is an ordinary zero-cost C
+static. This campaign **pins the semantic**; the MCU milestone **builds** statics to it.
 
-## Precondition (cheap, do first)
+## The seven questions — decided
 
-- **`std::time`** — a monotonic clock + `Duration`/`Instant` (native `clock_gettime`; wasm `emscripten_get_now`).
-  Small, independently useful, and unblocks timeouts + any scheduler benchmark. Good first commit of the campaign.
+### 1. Portable spawn substrate (the hard one)
 
-## Draft milestones (refine after the design pass)
+Pin a `kama_isolate_*` C ABI in the runtime header; the native (pthreads) and wasm (JS-worker-bridge) backends
+live behind it, and the emitter targets the ABI, never a platform directly.
 
-- **M0 Design pass** — settle the 7 questions above → a concrete spec. *(This kickoff's immediate successor.)*
-- **M1 `std::time`** — the precondition module, native + wasm, fixtures.
-- **M2 Runtime isolate seam** — `kama_isolate_*` ABI: native threads first; a single isolate that runs a task
-  and joins. No channels yet.
-- **M3 Channels** — ownership-transferring send/recv reusing `give`/`copy` + move-tracking; blocking first.
-- **M4 Structured-concurrency scope** — RAII-for-tasks join-at-exit.
-- **M5 wasm parity** — Worker + postMessage bridge; `give`→transferable; the native↔wasm portability proof.
-- **M6 `Atomic<T>` + the two safe-sharing primitives** — the narrow shared seams.
+**An isolate entry is a top-level function + a moved-in argument bundle** — *not* a closure over the enclosing
+environment. This is what makes shared-nothing hold *by construction*: there is no captured mutable state to
+share, so there is nothing to race over. The argument bundle is itself a sendable payload (§2), transferred by
+the same `give`/`copy` rule a channel uses.
+
+- **Native** = pthreads. Address space is physically shared, so `give` across an isolate is a **pointer handoff
+  (zero-copy)**. The compiler forbids exploiting the shared address space outside the seams, so the *semantics*
+  are shared-nothing even though the memory is physically shared.
+- **wasm** = a separate-instance Web Worker (its own module instance + linear memory). `give` is a postMessage
+  **transferable** (zero-copy, browser-enforced no-use-after-transfer). wasm cannot spawn its own worker — the
+  JS host must — so `kama_isolate_spawn` on wasm posts a spawn request to the host bridge; this is hidden behind
+  the ABI so **one source** expresses "spawn an isolate" on both targets.
+
+The same source works because the language semantics (shared-nothing) are a subset both substrates satisfy.
+
+```
+// runtime ABI sketch (kama_runtime.h) — native pthreads first (M2), wasm bridge behind it (M5)
+typedef void (*kama_isolate_entry)(void* arg_bundle);   // top-level fn, moved-in bundle
+kama_isolate_t  kama_isolate_spawn(kama_isolate_entry, void* arg_bundle);
+void            kama_isolate_join(kama_isolate_t);
+```
+
+### 2. Channel type + sendability = structural, compiler-computed
+
+"Sendable" is **not** a hand-written contract or marker. It is computed structurally by the compiler from the
+ownership kind + field types (the transitive closure), exactly as the escape check works today — favor
+simplicity, and it must be transitively correct (a lesson from Rust's auto-`Send`).
+
+A type `T` is **sendable** iff one of:
+- `T` is a `value` whose fields are all sendable (deep bitwise/`copy` transfer; **no smuggled non-owning refs**);
+- `T` is a `resource` (transferred by `give` / move);
+- `T` is an immutable-`Shared<U>` (the read-across-isolates primitive, §7a).
+
+**Rejected** (compile error naming the offending field, mirroring the escape check): `view` (a borrow), `Ptr`
+(raw), a bare `contract` value (a borrow), and any type transitively containing a non-sendable field.
+
+```
+type value Channel<T> where T: Sendable { ... }     // Sendable is a compiler predicate, not a user contract
+fn send(ref Channel<T> ch, give T item);            // resource -> give; value -> copy at the call
+fn Optional<T> recv(ref Channel<T> ch);             // blocking; None once the channel is closed + drained
+```
+
+Send consuming via `give` hooks straight into the existing move machinery (`moveOnlySource` extracts the named
+local, `ownsByValue` gates the hand-off, `markMoved` transitions it to `Moved`; later use of the sent local is
+already a compile error). Blocking first (M3); bounded capacity param, `0` = rendezvous.
+
+### 3. Per-isolate state & the prelude
+
+Kama has **no mutable module-level/global state today**, so isolates share immutable code + prelude and own
+their own data trivially — no per-isolate re-collection machinery is required. The single forward rule is the
+per-isolate-`static` semantic pinned above (built by the MCU milestone). Immutable prelude/module code is
+shared; per-isolate data is `_Thread_local` on native and automatic on wasm.
+
+### 4. Structured-concurrency scope = RAII for tasks
+
+A concurrency `scope` owns its child task handles; the scope's **drop joins** all children (Rust
+`std::thread::scope` + Swift/Trio structured concurrency). Deterministic task lifetimes, no orphans — the
+concurrency form of the no-leak guarantee, composed straight onto the existing drop/RAII order.
+
+Because join happens at scope exit, a child task **may safely borrow from the enclosing scope** (it is
+guaranteed alive until join) — this is exactly what makes disjoint-slice `parallel_for` (§7b) sound without a
+borrow checker. The rule: a task must not outlive a borrow it holds; the existing escape check enforces that a
+borrow captured by a task does not escape the joining scope.
+
+```
+scope {                              // structured: joins all children at the closing brace
+    parallel_for (e in entities) {   // splits entities into disjoint sub-Views, one per pool isolate
+        e.physics.step(dt);          // each isolate mutates only its slice — no locks, cannot race
+    }
+}                                    // barrier: every slice joined before we continue
+render(entities);                    // safe — the borrow is reclaimed at join
+```
+
+### 5. Scheduler / "proceed until ready"
+
+Coarse isolates *may* block on channels (honest, cheap when few). Fine-grained parallelism uses the job layer,
+which never blocks mid-stack → **no stack-switching runtime, no coloring** in the language. The pool +
+work-stealing **job system is a library** on top of the isolate ABI (per §6), not language surface. The
+"don't-waste-threads on thousands of idle connections" case is served by the existing non-blocking `Poller` on
+one isolate (and, above the language, a native fiber scheduler — see [§ Web/server](#webserver-workloads)),
+never by green threads in the language.
+
+### 6. `Atomic<T>` seam
+
+A new intrinsic type — the minimal shared-region opt-in, the concurrency analog of `unsafe {}`/`Ptr` (opt-in,
+greppable, **atomics-only**).
+
+- **Native** → `<stdatomic.h>` / `_Atomic T`; load / store / CAS / `fetch_add` etc.
+- **wasm** → JS Atomics over a SharedArrayBuffer cell.
+- Default memory ordering is **seq-cst** (favor simplicity); explicit weaker orderings are an expert opt-in
+  parameter. Scoped to atomics only — general shared mutable memory stays out of the safe surface.
+
+### 7. The two safe-sharing primitives
+
+Both recover what shared-nothing otherwise costs, without reintroducing shared mutability.
+
+**(a) immutable-`Shared` read-across-isolates.** A `Shared<T>` over a **deeply immutable** `T` is
+sendable/shareable — immutable data is race-free even when shared (cheap read-only sharing of big assets). The
+control-block refcount becomes atomic when a `Shared` is shared across isolates. On wasm the immutable payload
+lives in the shared region (below) so workers read it zero-copy.
+
+**(b) scoped disjoint-slice `parallel_for`.** A scope lends each task a **non-overlapping** mutable sub-`View`
+of one buffer and reclaims all of them at join; safe **by disjointness** (`split_at_mut` / rayon). Composes with
+the `view`/escape model — the sub-views are borrows that cannot escape the parallel scope.
+
+**wasm unification.** All three seams (`Atomic<T>`, immutable-`Shared`, disjoint slices) route through the
+**single SharedArrayBuffer region** on wasm; on native they are just the normal shared address space. The
+shared-region seam is the wasm unification point — one mechanism, three safe uses.
+
+## Web/server workloads
+
+A kama server is a **native binary** ([WEB_FRAMEWORK_READINESS.md](../WEB_FRAMEWORK_READINESS.md)); wasm is for
+**clients** (a browser cannot bind a listening socket). So the wasm-portability constraint that keeps green
+threads out of the *language surface* does not restrict a server scheduler.
+
+- Everything the web-framework gap analysis blocks on is either a **library** (HTTP/1.1 parser, router,
+  middleware via `type contract HttpHandler`, JSON, body codecs, TLS-via-FFI) or a **primitive this campaign
+  ships** (`std::time` M1, `isolate` M2, `channel` M3, atop the already-shipped non-blocking `Poller`).
+- The Node-defining async event loop / scheduler is a **library** on those primitives (§6: "the job system is a
+  library"; web doc step 2: single-thread loop + scheduler over `Poller` first, multi-core isolates later).
+- **Straight-line handler code without coloring is preserved.** Blocking-shaped `recv()`/I/O is the portable
+  surface (maps to a Worker as a real block). The "multiplex thousands of connections on a few threads"
+  ergonomic — block one handler, run another — is a **native scheduler-library** concern: it can back the *same*
+  blocking surface with fibers (native stack-switching, like Go's netpoller) with **no language change, no
+  function coloring, zero wasm impact**. Green threads are therefore an implementation detail of a native
+  library, never a language construct — which is *why* deferring them from the language is correct, not a
+  limitation. The primitives here suffice for either a fiber-backed or an explicit-task scheduler.
 
 ## Guardrails (north stars — verify every step)
 
 - **No-GC / RAII / deterministic destruction** hold across isolates and task scopes (structured concurrency IS
-  the RAII extension). Every commit **ASan/UBSan-clean** (and TSan becomes relevant once threads exist —
-  consider adding a `KAMA_TSAN` sweep alongside `KAMA_SAN`).
-- **No-null, no shared mutable state in the safe surface** — sharing is confined to the greppable `Atomic<T>` /
-  shared-region seam, exactly as raw pointers are confined to `unsafe {}`.
+  the RAII extension). Every commit **ASan/UBSan-clean**; add a **`KAMA_TSAN`** sweep once M2 lands threads.
+- **No-null, no shared mutable state in the safe surface** — sharing confined to the greppable
+  `Atomic<T>`/shared-region seam, exactly as raw pointers are confined to `unsafe {}`.
 - **Portable native↔wasm from one source** — the differentiator; the spawn/channel lowering must not fork the
-  user-facing surface. If a construct can't map to Web Workers, it doesn't ship.
-- **One way / favor simplicity** (GOALS.md) — no function coloring, no mandatory-mutex model; the cooperative
-  "proceed until ready" model is the one concurrency story.
+  user-facing surface. **If a construct can't map to Web Workers, it doesn't ship** (green-thread multiplexing
+  therefore lives in a native library, not the language).
+- **One way / favor simplicity** ([GOALS.md](../../GOALS.md)) — no function coloring, no mandatory-mutex model;
+  the cooperative isolates + jobs model is the one concurrency story.
+
+## Precondition (cheap, do first)
+
+- **`std::time`** — a monotonic clock + `Duration`/`Instant` (native `clock_gettime` /
+  `QueryPerformanceCounter`; wasm `emscripten_get_now`). Small, independently useful, unblocks timeouts +
+  scheduling + any scheduler benchmark. First code commit of the campaign.
+
+## Milestones
+
+- **M0 Design pass** — this spec. ✅ *(converged 2026-07-22)*
+- **M1 `std::time`** — the precondition module (`lib/std/time/`, `namespace std::time;`), native + wasm, fixtures.
+- **M2 Runtime isolate seam** — `kama_isolate_*` ABI; native pthreads; spawn one isolate running a top-level fn +
+  moved arg bundle and join it. `isolate` surface + emitter lowering. No channels yet. Add `KAMA_TSAN`.
+- **M3 Channels** — `channel<T>`; blocking send/recv reusing `give`/`copy` + move-tracking; structural
+  sendability check with field-naming errors; bounded + rendezvous.
+- **M4 Structured-concurrency scope** — `scope` joining children at drop (RAII-for-tasks); the
+  borrow-outlives-task rule via the escape check.
+- **M5 wasm parity** — Worker + postMessage bridge behind the M2 ABI; `give`→transferable; the native↔wasm
+  portability proof (one fixture passing identically on both).
+- **M6 `Atomic<T>` + the two safe-sharing primitives** — the narrow shared seams (native + wasm/SharedArrayBuffer);
+  immutable-`Shared` cross-isolate; disjoint-slice `parallel_for`. The job-system library lands on top.
+
+## Deferred (per §6)
+
+Co-equal general shared-memory ("hybrid") threading; an M:N green-thread runtime / `async`/`await` in the
+language. Reopen only if a concrete case the seam + poller + a native scheduler library cannot express appears.

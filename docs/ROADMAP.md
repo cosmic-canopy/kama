@@ -382,11 +382,13 @@ serialization, networking).
 
 ## 6. Concurrency — shared-nothing by construction (design direction)
 
-**► Kickoff prepared: [docs/design/concurrency.md](design/concurrency.md)** — verified current-state facts
-(no concurrency infra today; blocking I/O + single event loop; `std::time` absent = the cheap precondition;
-the move/`give` + prelude/module seams a channel-send would reuse) and the **design-refinement pass** to run
-FIRST (7 open questions turning this direction into a spec — the portable spawn substrate is the hard one).
-Start there.
+**► Spec converged: [docs/design/concurrency.md](design/concurrency.md)** — the M0 design-refinement pass is
+done; that doc is now the **spec** (surface + lowering + `kama_isolate_*` runtime ABI + structural sendability +
+the per-isolate-`static` rule) with milestones M1–M6. Decisions settled there: **execution = isolates +
+data-parallel jobs** (no language-level green threads / `async`; a native fiber scheduler for high-connection
+servers is a *library* on the primitives, since servers are native-only); **module `static` is per-isolate by
+construction** (unifies with the MCU Tier-0 statics blocker — §5 / [MCU_READINESS.md](MCU_READINESS.md)); the
+job system + event-loop scheduler are libraries, not language. Start there.
 
 The intended concurrency model. **1.0 ships a single-threaded core**; this is the 1.x/2.0 direction, not a
 shipped feature. It earns data-race freedom the way kama earns null-safety — by making the hazard
