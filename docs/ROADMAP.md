@@ -17,8 +17,8 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 - **Concurrency — shared-nothing by construction** (✅ **shipped** 2026-07-23, campaign complete): data-race
   freedom by removing shared mutable state, not a borrow checker — isolates + ownership-transferring channels +
   structured-concurrency `scope` + `Atomic<T>` + immutable-`Shared` + disjoint-slice `parallel_for`, native +
-  wasm, TSan/ASan-proven. **Next big direction: the post-concurrency readiness re-triage (§6) — MCU is the
-  front-runner.**
+  wasm, TSan/ASan-proven. **Next big direction: the MCU/embedded campaign (§5/§6) — confirmed 2026-07-23;
+  first step = module-level statics built to the per-isolate rule.**
 - **Engine track** (product north star): a portable lightweight **WebGPU** game engine, woven through
   1.x. Its Tier-0 math types are unblocked now.
 
@@ -417,14 +417,11 @@ captures threaded in as `ref` params, non-atomic captured writes rejected; K = h
 override)** have ALL landed (native TSan- + ASan-proven; concurrency green on native **and** wasm) — **the
 concurrency campaign is complete**. See the design doc's per-milestone "landed" notes.
 
-**► NEXT ACTION — the post-concurrency readiness re-triage (start here next session).** The concurrency
-campaign is **done** (M1–M6 landed), so the agreed forward step is now live: **re-triage the three READINESS
-docs — [MCU_READINESS.md](MCU_READINESS.md) · [ENGINE_READINESS.md](ENGINE_READINESS.md) ·
-[WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md)** (all refreshed 2026-07-23 to the concurrency-complete
-state) — to pick the most impactful next track. The stated goal is to **wrap up the remaining language-surface
-changes** those use-cases need.
-
-**Leaning: MCU/embedded (§5) is the front-runner** — confirm, don't re-derive. Why it wins the triage:
+**► NEXT ACTION — the MCU/embedded campaign is CONFIRMED (re-triage concluded 2026-07-23).** The post-concurrency
+re-triage across the three READINESS docs — [MCU_READINESS.md](MCU_READINESS.md) ·
+[ENGINE_READINESS.md](ENGINE_READINESS.md) · [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md) — ran and
+**MCU/embedded (§5) won**, then the last 1.0 language residual was cleared first (nested/ternary +
+contract-dispatched `match` subjects, §1 — closed 2026-07-23). Why MCU wins the triage:
 - It is the **only** track with real **language-surface** work queued: module-level statics, the `hardware`
   (MMIO/`volatile`) qualifier, ISR-entry binding, a freestanding `--target embedded` runtime, fallible
   `allocate -> Optional<Ptr>`. Engine and Web are now **library/platform** work with **no language blocker**
@@ -434,9 +431,11 @@ changes** those use-cases need.
   **per-isolate-`static`** rule (plain C `static` single-core / `_Thread_local` multicore native / automatic
   wasm), and that model is now implemented, not just designed — lowest-risk of the three.
 
-**First concrete step if MCU is confirmed:** module-level statics with deterministic zero/const init, built to
-the per-isolate rule (§5 "Globals / statics" row + [MCU_READINESS.md](MCU_READINESS.md) Tier 0 / Recommended
-sequence step 1). Then the `hardware` qualifier, then `--target embedded`.
+**First concrete step (the campaign starts here):** module-level statics with deterministic zero/const init,
+built to the per-isolate rule (§5 "Globals / statics" row + [MCU_READINESS.md](MCU_READINESS.md) Tier 0 /
+Recommended sequence step 1). Then the `hardware` qualifier, then `--target embedded`. Recommended v1 scoping
+(YAGNI): allow `value`/`Ptr`/`InlineArray` statics only — defer destructible-`resource` statics, whose at-exit /
+thread-exit teardown hook is a genuinely new seam not needed for the blink-LED north star.
 
 The concurrency model (now **shipped** — the description below is the design record it was built to). It earns
 data-race freedom the way kama earns null-safety — by making the hazard
