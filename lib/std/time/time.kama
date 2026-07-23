@@ -1,0 +1,62 @@
+namespace std::time;
+
+export { Duration, Instant, monotonicNow };
+
+// A monotonic clock and the two value types built on it. NOT wall-clock — `monotonicNow()` is only meaningful
+// as a *difference* (it never runs backward), which is exactly what timeouts, frame timing, and scheduler
+// benchmarks want. The one platform primitive lives in kama_time.h; everything here is pure kama.
+extern "kama_time.h";
+extern fn uint64 kama_now_mono_ns();
+
+// A span of time at nanosecond resolution. A `value` (stack, copied, no alloc). Signed — the delta of two
+// Instants, or a countdown, may be negative.
+@generate(of)
+type value Duration {
+    public int64 nanos;
+
+    public ctor zero()               { return Duration.of(nanos: 0i64); }
+    public ctor fromNanos(int64 n)   { return Duration.of(nanos: n); }
+    public ctor fromMicros(int64 us) { return Duration.of(nanos: us * 1000i64); }
+    public ctor fromMillis(int64 ms) { return Duration.of(nanos: ms * 1000000i64); }
+    public ctor fromSecs(int64 s)    { return Duration.of(nanos: s * 1000000000i64); }
+
+    public fn int64 asNanos()      { return this.nanos; }
+    public fn int64 asMicros()     { return this.nanos / 1000i64; }
+    public fn int64 asMillis()     { return this.nanos / 1000000i64; }
+    public fn int64 asSecs()       { return this.nanos / 1000000000i64; }
+    public fn float64 asSecsF()    { return cast<float64>(this.nanos) / 1000000000.0f64; }
+    public fn bool isNegative()    { return this.nanos < 0i64; }
+
+    public Duration operator+(Duration r) { return Duration.of(nanos: this.nanos + r.nanos); }
+    public Duration operator-(Duration r) { return Duration.of(nanos: this.nanos - r.nanos); }
+    public Duration operator-()           { return Duration.of(nanos: -this.nanos); }
+    public bool operator==(Duration r)    { return this.nanos == r.nanos; }
+    public bool operator<(Duration r)     { return this.nanos < r.nanos; }
+    public bool operator>(Duration r)     { return this.nanos > r.nanos; }
+    public bool operator<=(Duration r)    { return this.nanos <= r.nanos; }
+    public bool operator>=(Duration r)    { return this.nanos >= r.nanos; }
+}
+
+// A monotonic timestamp — an opaque counter, meaningful only relative to another Instant. A `value`.
+@generate(of)
+type value Instant {
+    public uint64 rawNanos;
+
+    // Time elapsed from an earlier Instant to this one (non-negative when `earlier` truly precedes this).
+    public fn Duration since(Instant earlier) {
+        return Duration.of(nanos: cast<int64>(this.rawNanos) - cast<int64>(earlier.rawNanos));
+    }
+    // Time from this Instant until now.
+    public fn Duration elapsed() { return monotonicNow().since(earlier: this); }
+
+    public Duration operator-(Instant earlier) { return this.since(earlier: earlier); }
+    public Instant operator+(Duration d)       { return Instant.of(rawNanos: this.rawNanos + cast<uint64>(d.nanos)); }
+    public bool operator==(Instant r)          { return this.rawNanos == r.rawNanos; }
+    public bool operator<(Instant r)           { return this.rawNanos < r.rawNanos; }
+    public bool operator>(Instant r)           { return this.rawNanos > r.rawNanos; }
+}
+
+// The current monotonic instant. Never runs backward; only differences are meaningful (not a wall clock).
+fn Instant monotonicNow() {
+    return Instant.of(rawNanos: kama_now_mono_ns());
+}
