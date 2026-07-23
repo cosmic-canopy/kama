@@ -96,6 +96,13 @@ genuinely later-track or opt-in.
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
+- **Stdlib layering — triaged, 3 LOW-prio follow-ups ([design/stdlib-layering.md](design/stdlib-layering.md)).**
+  The prelude-vs-`lib`-vs-primitive split is already principled (*contracts/syntax/intrinsics in the prelude;
+  backends opt-in* — `fmt`/serde/memory/concurrency all follow it), so nothing is mis-placed. Recorded, none
+  blocking: (a) split/MCU-promote `Atomic` so lock-free cells need no pthread runtime (MCU track, §5/§6);
+  (b) an idiomatic `std::gpu` kama module over the raw `kama_gpu.h` seam (engine track, §8); (c) confirm
+  intrinsic `Array`/`List` vs library `DynamicArray` naming against GOALS "one way" (collections revisit, §5).
+  Decided NOT to add a convenience-import of common containers — explicit per-symbol imports stay.
 - **String interpolation `"${x}"` + formatting ✅** — shipped: the `Format` contract + `Formatter` sink +
   `toString<T>` (prelude), and `${expr}` holes (identifier + `.field`/`[index]`) lowering to a compile-time,
   statically-checked `Formatter` build (see [SPEC.md](SPEC.md) "Formatting & string interpolation"). The
