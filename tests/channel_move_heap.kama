@@ -1,0 +1,35 @@
+// M3.1 (risk (b) in the design): sending a heap-OWNING value. `channel<DynamicArray<int32>>` moves the
+// array's {ptr,len,cap,alloc} struct by bitwise relocation — the sender's source is zeroed (its drop is a
+// no-op) and the receiver's `recv` produces the sole owner, which frees the heap exactly once when the
+// match arm ends. No double-free / no leak (proven under KAMA_SAN=1); TSan-clean under KAMA_TSAN=1.
+import std::concurrent::{Channel, Sender, Receiver, Isolate};
+import std::collections::{DynamicArray};
+
+fn void producer(Sender<DynamicArray<int32>> tx) {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 10);
+    a.add(item: 20);
+    a.add(item: 30);
+    tx.send(item: give a);   // the array is relocated into the queue; `a` is left zeroed (drop = no-op)
+}
+
+fn int main() {
+    Channel<DynamicArray<int32>> ch = Channel::bounded(capacity: 2);
+    Sender<DynamicArray<int32>>   tx = ch.sender();
+    Receiver<DynamicArray<int32>> rx = ch.receiver();
+
+    Isolate h = isolate producer(tx: give tx);
+
+    int32 total = 0;
+    bool going = true;
+    while (going) {
+        Optional<DynamicArray<int32>> v = rx.recv();
+        match (v) {
+            case Some(a): { total = total + a[0] + a[1] + a[2]; }   // `a` owns the array; frees once at arm-end
+            case None:    { going = false; }
+        };
+    }
+
+    h.join();
+    return total;   // 60
+}

@@ -1,0 +1,96 @@
+namespace std::concurrent;
+
+export { Channel, Sender, Receiver };
+
+// A typed, blocking channel for moving values BETWEEN isolates — the first sanctioned cross-isolate
+// shared object in the concurrency model (M3). `Channel<T>::bounded(capacity:)` creates the queue and
+// hands out a move-only `Sender<T>` / `Receiver<T>` pair; the sender moves into a spawned isolate's
+// bundle while the receiver stays (or vice-versa):
+//
+//     import std::concurrent::{Channel, Sender, Receiver};
+//     fn void producer(Sender<int32> tx) { int32 i = 0; while (i < 10) { tx.send(give i); i = i + 1; } }
+//     fn int main() {
+//         Channel<int32> ch = Channel::bounded(capacity: 4);
+//         Sender<int32>   tx = ch.sender();
+//         Receiver<int32> rx = ch.receiver();
+//         isolate producer(tx: give tx);              // reuse the M2 bundle move
+//         Optional<int32> v = rx.recv();              // blocks; None once drained AND the sender is dropped
+//         ...
+//     }
+//
+// All thread-safety lives in C (kama_channel.h): one mutex serializes send/recv/endpoint-drop, so no
+// atomics are needed. The kama side is a thin `Ptr`-handle library, exactly like the `Isolate` handle.
+extern "<string.h>";
+extern fn Ptr memset(Ptr p, int32 value, usize n);   // zero the moved-out source so its drop is a no-op
+
+extern "kama_channel.h";
+extern fn Ptr   kama_channel_new(usize elemSize, usize cap);
+extern fn int32 kama_channel_send(Ptr ch, Ptr elem);
+extern fn int32 kama_channel_recv(Ptr ch, Ptr dst);
+extern fn void  kama_channel_drop_sender(Ptr ch);
+extern fn void  kama_channel_drop_receiver(Ptr ch);
+
+// The send endpoint. Move-only; SPSC in M3 (multi-producer `clone()` is a follow-up). Dropping it
+// closes the sender side and wakes a blocked receiver, so `recv` returns `None` once drained.
+type resource Sender<T> {
+    Ptr handle;   // the shared queue; null once moved-from (drop then no-ops, INVARIANT #0)
+
+    // Wrap the shared queue handle. Called by `Channel.sender()`; not meant to be used directly.
+    public ctor make(Ptr handle) { Sender<T> s; s.handle = handle; return give s; }
+
+    // Move `item` into the channel. Blocks while the ring is full and the receiver is live; returns
+    // false if the receiver is gone. The bytes are relocated into a queue slot (the receiver's `recv`
+    // produces the sole owning copy), then the moved-in `item` is zeroed so its method-end destructor
+    // is a no-op — a zero value is drop-safe (INVARIANT #0). The caller's `give` already suppressed the
+    // caller-side drop, so exactly one owning copy survives (in the queue).
+    public fn bool send(T item) {
+        bool ok = false;
+        unsafe {
+            int32 r = kama_channel_send(ch: this.handle, elem: cast<Ptr>(addr(of: item)));
+            memset(p: cast<Ptr>(addr(of: item)), value: 0, n: sizeof(T));
+            ok = (r == 0);
+        }
+        return ok;
+    }
+
+    ~Sender() { if (this.handle != null) { kama_channel_drop_sender(ch: this.handle); } }
+}
+
+// The receive endpoint. Move-only. Dropping it closes the receiver side and wakes a blocked sender.
+type resource Receiver<T> {
+    Ptr handle;   // the shared queue; null once moved-from
+
+    public ctor make(Ptr handle) { Receiver<T> r; r.handle = handle; return give r; }
+
+    // Block for the next value. Returns `Some(v)` (v is the sole owning copy, relocated out of the
+    // queue) or `None` once the channel is closed AND drained (all senders dropped, no buffered items).
+    public fn Optional<T> recv() {
+        unsafe {
+            T dst;
+            int32 r = kama_channel_recv(ch: this.handle, dst: cast<Ptr>(addr(of: dst)));
+            if (r == 0) { return Optional::Some(value: give dst); }   // `give` suppresses dst's drop (moved into Some)
+        }
+        return Optional::None;                                  // out was untouched (zero) → its drop is a no-op
+    }
+
+    ~Receiver() { if (this.handle != null) { kama_channel_drop_receiver(ch: this.handle); } }
+}
+
+// The channel factory. `bounded(capacity:)` creates the queue (capacity >= 1 is a ring buffer). The
+// queue's lifetime is governed SOLELY by the two endpoint-liveness flags — the last of the Sender /
+// Receiver to drop frees it — so a `Channel` is a thin factory: its own drop does NOT touch the queue
+// (its handle is a non-owning copy). Extract both endpoints before discarding it.
+type resource Channel<T> {
+    Ptr handle;
+
+    public ctor bounded(usize capacity) {
+        Channel<T> c;
+        c.handle = kama_channel_new(elemSize: sizeof(T), cap: capacity);
+        return give c;
+    }
+
+    public fn Sender<T>   sender()   { return Sender::<T>.make(handle: this.handle); }
+    public fn Receiver<T> receiver() { return Receiver::<T>.make(handle: this.handle); }
+
+    ~Channel() { }   // no-op: the endpoints own the queue's lifetime (last-dropper-frees)
+}

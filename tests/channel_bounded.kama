@@ -1,0 +1,35 @@
+// M3.1: the cross-isolate hand-off proof. A producer isolate sends 1..9 over a bounded channel while
+// main drains it via `recv` until `None` (the producer dropped its `Sender` at fn-end → sender-closed).
+// The handle form of `isolate` keeps the producer running concurrently (the fused form would join
+// immediately and deadlock, since the capacity-4 ring fills before main can drain). All channel access
+// is mutex-guarded in C, so this is TSan-clean (run under KAMA_TSAN=1).
+import std::concurrent::{Channel, Sender, Receiver, Isolate};
+
+fn void producer(Sender<int32> tx) {
+    int32 i = 1;
+    while (i <= 9) {
+        tx.send(item: i);
+        i = i + 1;
+    }
+}   // ~Sender() closes the sender side → a blocked/next recv returns None once drained
+
+fn int main() {
+    Channel<int32> ch = Channel::bounded(capacity: 4);
+    Sender<int32>   tx = ch.sender();
+    Receiver<int32> rx = ch.receiver();
+
+    Isolate h = isolate producer(tx: give tx);   // spawn; keep running while main drains
+
+    int32 sum = 0;
+    bool going = true;
+    while (going) {
+        Optional<int32> v = rx.recv();
+        match (v) {
+            case Some(x): { sum = sum + x; }
+            case None:    { going = false; }
+        };
+    }
+
+    h.join();
+    return sum;   // 1+2+…+9 = 45
+}

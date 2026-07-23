@@ -346,7 +346,8 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
-    if (externsIsolate) *externsIsolate = emitter.externsHeader("kama_isolate.h");   // std::concurrent -> native -lpthread
+    if (externsIsolate) *externsIsolate = emitter.externsHeader("kama_isolate.h")     // std::concurrent seams ->
+                                       || emitter.externsHeader("kama_channel.h");    // native -lpthread (isolate OR channel)
     out.close();
     if (unsupported > 0) {
         fprintf(stderr, "kama: %d unlowered construct(s) — see the warnings above.\n", unsupported);
@@ -388,7 +389,8 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
-    if (externsIsolate) *externsIsolate = emitter.externsHeader("kama_isolate.h");   // std::concurrent -> native -lpthread
+    if (externsIsolate) *externsIsolate = emitter.externsHeader("kama_isolate.h")     // std::concurrent seams ->
+                                       || emitter.externsHeader("kama_channel.h");    // native -lpthread (isolate OR channel)
     header.close();
     for (auto& f : moduleFiles) f->close();
 
@@ -617,10 +619,10 @@ int main(int argc, char** argv)
         bool needsNetWeb = false; // set if the program `extern "kama_net_web.h";`'s (std::net::web) -> --js-library
         bool needsApp = false;    // set if the program `extern "kama_app.h";`'s (std::app) -> wasm -sEXIT_RUNTIME=1
         bool needsGpu = false;    // set if the program `extern "kama_gpu.h";`'s (WebGPU seam) -> native surface libs
-        bool needsIsolate = false;// set if the program `extern "kama_isolate.h";`'s (std::concurrent) -> native -lpthread
+        bool needsPthread = false;// set if the program uses a std::concurrent seam (`kama_isolate.h` / `kama_channel.h`) -> native -lpthread
         if (units.size() == 1) {
             std::string cPath = stripExtension(input) + ".c";
-            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsIsolate) != 0) return 1;
+            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
             genFiles.push_back(cPath);
         } else if (release && !wasm) {
@@ -634,7 +636,7 @@ int main(int argc, char** argv)
             // recovers only part of it — docs/design/simd.md § M0). Debug keeps per-module .c for faithful
             // stepping; wasm keeps its own path.
             std::string cPath = genDir + "/" + baseName(stripExtension(outPath)) + ".c";
-            if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsIsolate) != 0) return 1;
+            if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
             genFiles.push_back(cPath);
         } else {
@@ -644,7 +646,7 @@ int main(int argc, char** argv)
             std::vector<std::string> cPaths;   // one per unit; index-suffixed so distinct dirs never collide
             for (size_t i = 0; i < units.size(); ++i)
                 cPaths.push_back(genDir + "/" + stripExtension(baseName(unitPaths[i])) + "_" + std::to_string(i) + ".c");
-            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsIsolate) != 0) return 1;
+            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
             cFiles   = cPaths;
             genFiles = cPaths;
             genFiles.push_back(headerPath);
@@ -784,7 +786,7 @@ int main(int argc, char** argv)
         // Pay-for-what-you-use: link pthreads only when the program uses `isolate` (std::concurrent's
         // kama_isolate.h). Native only — wasm has no pthread link (M5 uses Web Workers). Harmless on macOS
         // (pthreads live in libc); required on Linux.
-        if (needsIsolate && !wasm) cmd << "-lpthread ";
+        if (needsPthread && !wasm) cmd << "-lpthread ";
 #if defined(_WIN32)
         // std::net uses Winsock (kama_os.h). Link ws2_32 on native Windows builds; harmless (and pruned by
         // --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.
