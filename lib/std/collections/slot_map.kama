@@ -199,9 +199,9 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     fn void growTo(int32 nc) {
         Ptr<V> nv; Ptr<uint32> ng; Ptr<int32> nf;
         unsafe {
-            nv = cast<Ptr<V>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V)));
-            ng = cast<Ptr<uint32>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32)));
-            nf = cast<Ptr<int32>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(int32)));
+            nv = cast<Ptr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
+            ng = cast<Ptr<uint32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32))));
+            nf = cast<Ptr<int32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(int32))));
         }
         int32 i = 0;
         unsafe {

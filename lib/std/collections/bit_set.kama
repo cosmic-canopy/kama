@@ -200,7 +200,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     fn void growTo(int32 nc) {
         Ptr<uint64> nw;
         unsafe {
-            nw = cast<Ptr<uint64>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64)));
+            nw = cast<Ptr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64))));
             memset(p: cast<Ptr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));
         }
         int32 i = 0;

@@ -1976,7 +1976,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     auto pa = placementAllocator(oc, n->line, /*emit=*/true);
                                     ap = "__alloc" + std::to_string(_tempCounter++);
                                     *_out << pa.second << " " << ap << " = " << pa.first << ";\n"; indent(depth);
-                                    *_out << nm << ".obj = (void*)" << pa.second << "__allocate(&" << ap << ", sizeof(" << octy << "));\n";
+                                    *_out << nm << ".obj = (void*)unwrapPtr(" << pa.second << "__allocate(&" << ap << ", sizeof(" << octy << ")));\n";
                                 } else {
                                     *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
                                 }
@@ -1999,8 +1999,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 if (smartKind(ty) == CollKind::Shared) {   // ref-counted owned interface
                                     indent(depth);
                                     if (useAlloc)   // ctrl drawn from the SAME allocator (validated == the box's A)
-                                        *_out << nm << ".ctrl = (kama_ctrl*)" << _collections[ty].allocType
-                                              << "__allocate(&" << ap << ", sizeof(kama_ctrl)); "
+                                        *_out << nm << ".ctrl = (kama_ctrl*)unwrapPtr(" << _collections[ty].allocType
+                                              << "__allocate(&" << ap << ", sizeof(kama_ctrl))); "
                                               << nm << ".ctrl->strong = 1; " << nm << ".ctrl->weak = 0;\n";
                                     else
                                         *_out << nm << ".ctrl = kama_ctrl_new();\n";
@@ -2084,7 +2084,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 }
                                 line(n->line); indent(depth);
                                 if (placed)
-                                    *_out << C << "* " << hp << " = (" << C << "*)" << pa.second << "__allocate(&" << ap << ", sizeof(" << C << "));\n";
+                                    *_out << C << "* " << hp << " = (" << C << "*)unwrapPtr(" << pa.second << "__allocate(&" << ap << ", sizeof(" << C << ")));\n";
                                 else
                                     *_out << C << "* " << hp << " = (" << C << "*)malloc(sizeof(" << C << "));\n";
                                 indent(depth); *_out << "if (!" << hp << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
@@ -9624,7 +9624,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         std::string ap = placed ? "__alloc" + std::to_string(_tempCounter++) : "";
         std::string box;
         if (placed) box  = pa.second + " " + ap + " = " + pa.first + "; "
-                         + C + "* " + hp + " = (" + C + "*)" + pa.second + "__allocate(&" + ap + ", sizeof(" + C + "));";
+                         + C + "* " + hp + " = (" + C + "*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + C + ")));";
         else        box  = C + "* " + hp + " = (" + C + "*)malloc(sizeof(" + C + "));";
         if (oc->ctorName) {
             std::string cc = newFactoryCall(C, oc, srcLine);   // move the factory result into the heap slot
@@ -9668,7 +9668,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         if (useAlloc) {
             auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
             box += " " + pa.second + " " + ap + " = " + pa.first + "; "
-                 + t + ".obj = (void*)" + pa.second + "__allocate(&" + ap + ", sizeof(" + octy + "));";
+                 + t + ".obj = (void*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + octy + ")));";
         } else {
             box += " " + t + ".obj = malloc(sizeof(" + octy + "));";
         }
@@ -9683,7 +9683,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
             box += " " + t + ".alloc = " + ap + "; " + t + ".objsize = sizeof(" + octy + ");";
         if (smartKind(targetCType) == CollKind::Shared)
             box += useAlloc
-                 ? " " + t + ".ctrl = (kama_ctrl*)" + aTy + "__allocate(&" + ap + ", sizeof(kama_ctrl)); "
+                 ? " " + t + ".ctrl = (kama_ctrl*)unwrapPtr(" + aTy + "__allocate(&" + ap + ", sizeof(kama_ctrl))); "
                    + t + ".ctrl->strong = 1; " + t + ".ctrl->weak = 0;"
                  : " " + t + ".ctrl = kama_ctrl_new();";
         _hoisted.push_back(box);
@@ -10212,7 +10212,8 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::str
     std::string name = nameOverride ? *nameOverride : mangledFunctionName(fn, isEntry);
     rejectStoredInterface(fn->returnType, "returned from a function", fn->line);
     // a place-returning `fn ref T f(…)` emits `T* f(…)` (the place); its `return e` addresses it.
-    const char* linkage = isExposed(fn) ? "KAMA_EXPORT " : (nameOverride ? "static " : "");
+    const char* linkage = isExposed(fn) ? "KAMA_EXPORT "
+                        : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
     *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
           << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ");\n";
@@ -10278,7 +10279,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // ReturnNode path, gated on `_returnIsPlace`) — same as a `fn ref T` method. The escape check
     // there requires the place to borrow a `ref`/`out` param (a free fn has no `this`), so it can't
     // dangle. `_currentReturnCType` stays the base `T` (the place path never consults it).
-    const char* linkage = isExposed(fn) ? "KAMA_EXPORT " : (nameOverride ? "static " : "");
+    const char* linkage = isExposed(fn) ? "KAMA_EXPORT "
+                        : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
     *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
           << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ")\n";
@@ -12443,7 +12445,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         if (useAlloc) {
             auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
             s += pa.second + " " + ap + " = " + pa.first + "; ";
-            s += box + ".obj = (void*)" + pa.second + "__allocate(&" + ap + ", sizeof(" + cls + ")); ";
+            s += box + ".obj = (void*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + cls + "))); ";
         } else {
             s += box + ".obj = malloc(sizeof(" + cls + ")); ";
         }
@@ -12456,8 +12458,8 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         }
         if (smartKind(S) == CollKind::Shared) {
             if (useAlloc)
-                s += box + ".ctrl = (kama_ctrl*)" + _collections[S].allocType + "__allocate(&" + ap
-                   + ", sizeof(kama_ctrl)); " + box + ".ctrl->strong = 1; " + box + ".ctrl->weak = 0; ";
+                s += box + ".ctrl = (kama_ctrl*)unwrapPtr(" + _collections[S].allocType + "__allocate(&" + ap
+                   + ", sizeof(kama_ctrl))); " + box + ".ctrl->strong = 1; " + box + ".ctrl->weak = 0; ";
             else
                 s += box + ".ctrl = kama_ctrl_new(); ";
         }
@@ -12529,7 +12531,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     s += "} else { ";
     if (placed) {
         s += pa.second + " " + ap + " = " + pa.first + "; ";
-        s += T + "* " + hp + " = (" + T + "*)" + pa.second + "__allocate(&" + ap + ", sizeof(" + T + ")); ";
+        s += T + "* " + hp + " = (" + T + "*)unwrapPtr(" + pa.second + "__allocate(&" + ap + ", sizeof(" + T + "))); ";
     } else {
         s += T + "* " + hp + " = (" + T + "*)malloc(sizeof(" + T + ")); ";
     }
@@ -13646,6 +13648,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     bool any = false;
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
+        if (u == _preludeUnit) continue;   // global-prelude free fns are header-static-inline (emitted just below)
         _nsCtx = _unitCtx[u.get()];
         for (auto& decl : *u->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
@@ -13656,6 +13659,30 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             }
     }
     if (any) *_out << "\n";
+
+    // Non-generic global-prelude free functions (e.g. `unwrapPtr`): the prelude is collect-only, so — like
+    // its types/retro-impls below — no module emits their bodies. Emit prototype + definition `static inline`
+    // in the header HERE (before the generic-fn/collection instances that call them), so a helper the
+    // collections rely on (unwrap a fallible `Optional<Ptr>` → panic-on-OOM) resolves everywhere. Generic
+    // prelude free fns ride `emitGenericInst`; extern/signature-only ones carry no body.
+    if (_preludeUnit && _preludeUnit->codeDeclarationList) {
+        _nsCtx = _unitCtx[_preludeUnit.get()];
+        _emitStaticInlineFn = true;
+        for (auto& decl : *_preludeUnit->codeDeclarationList)
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+                if (isExtern(fn) || !fn->block) continue;
+                if (fn->typeParams && !fn->typeParams->empty()) continue;   // template — instantiated below
+                emitFunctionPrototype(fn);
+            }
+        for (auto& decl : *_preludeUnit->codeDeclarationList)
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+                if (isExtern(fn) || !fn->block) continue;
+                if (fn->typeParams && !fn->typeParams->empty()) continue;
+                emitFunction(fn);
+            }
+        _emitStaticInlineFn = false;
+        *_out << "\n";
+    }
 
     // generic-function instantiations — one `static` C function per (template, type-args),
     // in the header so every module can call them (like the collection macros). Forward-declare

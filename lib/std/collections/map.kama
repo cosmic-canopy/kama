@@ -351,9 +351,9 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     fn void growTo(int32 nc) {
         Ptr<K> nk; Ptr<V> nv; Ptr<uint8> ns;
         unsafe {
-            nk = cast<Ptr<K>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K)));
-            nv = cast<Ptr<V>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V)));
-            ns = cast<Ptr<uint8>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8)));
+            nk = cast<Ptr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K))));
+            nv = cast<Ptr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
+            ns = cast<Ptr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8))));
             memset(p: cast<Ptr>(ns), value: 0, n: cast<usize>(nc) * sizeof(uint8));   // tag buffer starts all-EMPTY
         }
         int32 i = 0;

@@ -49,10 +49,13 @@ type contract Comparable for both { fn Ordering compareTo(ref This other); }
 // like the bounds above, so it lives in the global prelude — both the smart-pointer triad and the
 // collections name it, and it survives `--no-std`. `for value` (a cheap copyable handle); INSTANCE
 // methods (unlike `Hasher`'s static finalizer) because a stateful allocator mutates through its stored
-// pointer. Panic-on-OOM; a fallible `allocate -> Optional<Ptr>` rides this seam later (embedded milestone).
+// pointer. FALLIBLE seam (MCU step 5): `allocate` returns `Optional<Ptr>` — `None` on OOM/exhaustion,
+// never panics. Infallible `new`/collections unwrap-or-panic (via `unwrapPtr`) to keep pre-step-5
+// behavior; the ONE non-panic construction entry is `try new` (yields `None`). A no-heap region
+// (`@noheap`/`--no-heap`) rejects this whole path at the allocation-emission site.
 // The concrete STRATEGY types (`Arena`/`BumpAllocator`) stay in `std::collections` (opt-in, not core).
 type contract Allocator for value {
-    fn Ptr allocate(usize bytes);
+    fn Optional<Ptr> allocate(usize bytes);
     fn void deallocate(Ptr pointer, usize bytes);
 }
 // The base error contract (Model C — Kama's answer to exceptions). Every fallible constructor (eventually
@@ -360,13 +363,25 @@ type value GlobalAllocator implements Allocator {
     // may be left unassigned for the default fill rather than requiring an explicit assignment. Coexists with
     // the nameless primary until M8d removes it.
     public default ctor make() { GlobalAllocator g; return g; }
-    public fn Ptr allocate(usize bytes) {
+    public fn Optional<Ptr> allocate(usize bytes) {
         Ptr p;
         unsafe { p = malloc(n: bytes); }
-        if (cast<usize>(p) == cast<usize>(0)) { panic(msg: "GlobalAllocator: out of memory"); }
-        return p;
+        if (cast<usize>(p) == cast<usize>(0)) { return Optional::None; }
+        return Optional::Some(value: p);
     }
     public fn void deallocate(Ptr pointer, usize bytes) { unsafe { free(p: pointer); } }
+}
+
+// Infallible-allocation adapter (MCU step 5): unwrap a fallible allocation, panicking on OOM. This
+// preserves the pre-step-5 panic-on-OOM behavior for `new`/collections while the `Allocator` contract
+// itself became fallible. The ONE non-panic construction entry is `try new` (yields `None`);
+// `--no-heap`/`@noheap` reject the whole allocation path at the emission site. NON-generic on purpose:
+// it takes the already-produced `Optional<Ptr>` (a concrete type — `Ptr` is `void*`), so it monomorphizes
+// trivially and is callable from inside the generic collections (where inferring a generic `<A>` helper
+// from a type-param-typed `this.alloc` is not supported). The dead `:= cast<Ptr>(0)` after `panic`
+// satisfies the value-arm checker (`panic` traps first, so it never runs).
+fn Ptr unwrapPtr(Optional<Ptr> o) {
+    return match (o) { case Some(p): p; case None: { panic(msg: "out of memory"); := cast<Ptr>(0); } };
 }
 
 // ── std::fmt core: human-facing text rendering (language-level) ──────────────────────────────────────────

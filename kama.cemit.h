@@ -524,6 +524,7 @@ private:
     std::map<std::string, std::string>        _genericTypeInstOf;   // mangled name -> template name (construction)
     std::vector<std::string>                  _genericTypeInstOrder;// registration order (inner-first; struct-typedef emit)
     bool                                      _emitStaticClass = false;  // prefix `static` on specialized class fns (header ODR)
+    bool                                      _emitStaticInlineFn = false;// prefix `static inline` on a free fn (prelude helper body emitted in the header)
 
     // Generic CONTRACTS (`type contract Iterator<T>`) — the exact parallel of generic TYPES above. The
     // TEMPLATE is kept OUT of _interfaces (so the eager vtable-emit loop never sees its unbound `T`);

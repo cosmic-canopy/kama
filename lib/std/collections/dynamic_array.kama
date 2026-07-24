@@ -79,7 +79,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // `realloc` so every allocation flows through the allocator (matching Map/Deque's grow idiom).
     fn void growTo(int32 nc) {
         Ptr<T> nd;
-        unsafe { nd = cast<Ptr<T>>(this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T))); }
+        unsafe { nd = cast<Ptr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T)))); }
         Ptr<T> od = this.data;
         int32 i = 0;
         unsafe { while (i < this.len) { nd[i] = od[i]; i = i + 1; } }   // relocate the live prefix (raw move)

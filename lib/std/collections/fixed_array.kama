@@ -43,7 +43,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(
     fn void allocBuffer(int32 size) {
         if (size > 0) {
             unsafe {
-                this.data = cast<Ptr<T>>(this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T)));
+                this.data = cast<Ptr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T))));
                 memset(p: cast<Ptr>(this.data), value: 0, n: cast<usize>(size) * sizeof(T));
             }
         } else {

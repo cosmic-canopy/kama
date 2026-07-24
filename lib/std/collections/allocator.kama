@@ -44,8 +44,9 @@ type resource Arena {
 
 // A copyable value handle onto an `Arena`. Stores the buffer base + a raw pointer to the arena's
 // `offset` cell + the capacity, so a by-value copy still bumps the SAME arena. `allocate` bumps
-// (8-byte aligned) and panics on exhaustion; `deallocate` is a no-op (the Arena bulk-frees via
-// `reset()` / its dtor). It NEVER frees the arena buffer.
+// (8-byte aligned) and returns `None` on exhaustion (fallible seam — a `try new` into this arena
+// yields `None`); `deallocate` is a no-op (the Arena bulk-frees via `reset()` / its dtor). It NEVER
+// frees the arena buffer.
 type value BumpAllocator implements Allocator {
     Ptr<uint8> buffer; Ptr<int32> offset; int32 capacity;
 
@@ -53,13 +54,13 @@ type value BumpAllocator implements Allocator {
         BumpAllocator r; r.buffer = buffer; r.offset = offset; r.capacity = capacity; return give r;
     }
 
-    public fn Ptr allocate(usize bytes) {
+    public fn Optional<Ptr> allocate(usize bytes) {
         int32 b = cast<int32>(bytes);
         unsafe {
             int32 o = ((this.offset[0] + 7) / 8) * 8;                 // 8-byte align the bump pointer
-            if (o + b > this.capacity) { panic(msg: "BumpAllocator: arena exhausted"); }
+            if (o + b > this.capacity) { return Optional::None; }     // exhausted — fallible, never panics
             this.offset[0] = o + b;
-            return cast<Ptr>(addr(of: this.buffer[o]));
+            return Optional::Some(value: cast<Ptr>(addr(of: this.buffer[o])));
         }
     }
 
