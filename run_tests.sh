@@ -128,6 +128,12 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-syn
     if sh tools/check-syntax-drift.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# MCU step 3: `--target embedded` freestanding-build guard (emitted entry shape + libc-free object). Like
+# the drift guard, run once on the plain native pass (the SAN/WASM re-runs build the fixture hosted anyway).
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-embedded.sh ]; then
+    if sh tools/check-embedded.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # One fixture's build+run+compare, run in a background subshell. Buffers its status line(s) into
 # $TMP/$name.out and records PASS/FAIL/SKIP into $TMP/$name.res (tallied in fixture order afterward).
 test_one() {

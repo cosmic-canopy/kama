@@ -10244,12 +10244,23 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _viewParams.clear();
 
     if (isEntry) {
-        // Synthesized portable entry point. argv marshaling (argv -> a
-        // DynamicArray<string>) is not yet wired; args are currently ignored.
-        *_out << "int main(int argc, char** argv) {\n"
+        // Synthesized portable entry point. Emitted target-agnostically (the emitter has no target
+        // knowledge by design): BOTH forms are written behind a preprocessor guard, and the driver's
+        // `-DKAMA_TARGET_EMBEDDED` (`--target embedded`) selects the freestanding one — same pattern as
+        // KAMA_ISOLATE_LOCAL. Embedded: no argv (there is none on bare metal) and `main` never returns
+        // (there's nowhere to return to; a crt0 calls it and expects it to spin). Hosted: argv marshaling
+        // (argv -> a DynamicArray<string>) is not yet wired, so args are currently ignored.
+        *_out << "#if defined(KAMA_TARGET_EMBEDDED)\n"
+             << "int main(void) {\n"
+             << "    kama_main();\n"
+             << "    for (;;) {}\n"
+             << "}\n"
+             << "#else\n"
+             << "int main(int argc, char** argv) {\n"
              << "    (void)argc; (void)argv;\n"
              << "    return (int)kama_main();\n"
-             << "}\n\n";
+             << "}\n"
+             << "#endif\n\n";
     }
 }
 

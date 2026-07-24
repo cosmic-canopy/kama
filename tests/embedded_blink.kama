@@ -1,0 +1,18 @@
+// MCU step 3: the blink-LED shape — a value-only firmware skeleton that also builds `--target embedded`
+// (freestanding object). A module `static hardware Ptr<uint32>` GPIO output register, toggled in a bounded
+// loop (a real MCU loops forever; here we bound it so the SAME program runs+exits under the hosted native/
+// wasm test legs). The `#if KAMA_TARGET_EMBEDDED` entry/panic forms only differ on a real bare-metal build;
+// hosted behavior is unchanged, so this asserts a deterministic exit code like any other fixture.
+static hardware Ptr<uint32> gpio_odr;   // -> volatile uint32* : real MMIO writes, never elided
+
+fn int32 main() {
+    uint32 led = 0;                     // stands in for the peripheral register on the host
+    gpio_odr = addr(of: led);
+
+    int32 blinks = 0;
+    while (blinks < 21) {
+        unsafe { gpio_odr[0] = gpio_odr[0] ^ 1; }   // toggle the LED bit
+        blinks = blinks + 1;
+    }
+    unsafe { return cast<int32>(gpio_odr[0]) + blinks; }   // 21 toggles -> bit=1; 1 + 21 = 22
+}

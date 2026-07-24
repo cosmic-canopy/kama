@@ -53,7 +53,7 @@ mile of the no-heap story.**
 | **Module-level mutable statics** (`static` globals with deterministic zero/const init) | ✅ **SHIPPED (step 1)** — `static T name = const;`, per-isolate by construction (`KAMA_ISOLATE_LOCAL`); value/`Ptr`/`InlineArray` + const-init only in v1; TSan-clean | Firmware *lives* on module state: peripheral handles, ISR-shared flags, ring buffers, flash lookup tables. An ISR and `main` must share a flag; today there is no place to put it. **New language surface** (declaration + guaranteed zero/const init at reset). ROADMAP §5. **Build it *per-isolate by construction*** (plain C `static` on a single-core MCU → zero cost; `_Thread_local` on multicore native; automatic on wasm) so the same declaration is race-free under the threading model — cross-isolate sharing stays on the `Atomic<T>` seam. The concurrency model that pins this rule is now **shipped** (campaign complete 2026-07-23: isolates + channels + `scope` + `Atomic<T>` + `parallel_for`, [design/concurrency.md](design/concurrency.md) §"three sharing seams"), so this is **settled, proven ground** — statics are a targeted addition onto working code, not a co-design with an unbuilt system. **This makes MCU the lowest-risk next track.** | **M** |
 | **`hardware` qualifier for MMIO** | ✅ **SHIPPED (step 2).** `hardware Ptr<T>` → C `volatile T*`, `hardware` on a module `static` → `volatile T`/`volatile T*` (ISR↔loop flag/handle), `const hardware Ptr<T>` → `const volatile T*` (read-only register); mirrors the shipped `const Ptr<T>` lowering. `volatile` is no longer a keyword. Explicitly **not** a concurrency primitive. ROADMAP §5. Fixtures: `tests/hardware_*`. | done |
 | **Interrupt handlers / ISR entry** | ❌ missing — no attribute or entry-point syntax; every `fn` is an ordinary C function | An ISR is a specific symbol (vector-table slot) with a target-specific calling convention (`__attribute__((interrupt))` / AVR `ISR()` / a naked reset handler). Needs an attribute to emit it and to keep it out of the normal `main`/argv path. | **M** |
-| **Freestanding build target** (`--target embedded`: `-ffreestanding -nostdlib`, no `argc/argv` shim, `main` never returns) | 🟡 partial — the runtime is freestanding-friendly, but the driver always synthesizes a hosted `int main(int argc, char** argv)` wrapper that calls `kama_main()` and *returns* | Bare metal has no `argc`/`argv`, no `exit`, and `main` is an infinite loop (or a vendor `reset_handler`). The compiler must emit a freestanding entry (or none) and let a startup object/linker script own the vector table. | **M** |
+| **Freestanding build target** (`--target embedded`: `-ffreestanding -nostdlib`, no `argc/argv` shim, `main` never returns) | ✅ **DONE (step 3)** — `--target embedded` compiles to a `-ffreestanding -nostdlib` object; the emitter emits a guarded `int main(void){ kama_main(); for(;;){} }` (no argv, never returns) selected by `KAMA_TARGET_EMBEDDED`. Triple-agnostic (via `--cc`); the startup object + linker script own the vector table at the user's link step. | **M** |
 
 ## Tier 1 — Needed for a serious firmware (painful without)
 
@@ -62,7 +62,7 @@ mile of the no-heap story.**
 | **The no-heap story: fallible allocation + a heap-free subset** | 🟡 partial — M10/M11a route allocations through a supplied `Allocator`, but `allocate` **panics** on OOM and `string`/`Shared`/`Weak` still assume a global heap | A no-heap target needs *every* allocation routed **and** a non-panic failure path: `allocate -> Optional<Ptr>` (ROADMAP, deferred with this milestone). Plus a documented, compiler-checkable "value + `InlineArray` + `Ptr` + stack" subset that rejects `string`/smart-pointers when you opt out of the heap. | **M–L** |
 | **Linker-section / placement attributes** | ❌ missing | Const tables belong in flash (`.rodata`), ISR vectors in a fixed section, DMA buffers in a specific RAM bank; AVR needs `PROGMEM`. Needs a `@section("...")`-style attribute on statics/functions. | **M** |
 | **Inline assembly / intrinsics** | ❌ missing — no `asm` in the grammar | `WFI`/`WFE`, memory barriers (`DMB`/`DSB`), `cpsid i` (disable interrupts), and cycle-exact delays need inline asm or compiler intrinsics (or a thin `extern` shim as a stopgap). | **S–M** |
-| **Panic/trap policy hook** | 🟡 partial — the trap is already runtime-free (writes fd 2 + `__builtin_trap`/`abort`), but the destination is fixed | On an MCU there is no fd 2; a panic should be redirectable to a user handler (blink an LED, reset, breakpoint). Needs a weak/overridable panic hook rather than a hardcoded `abort`. | **S** |
+| **Panic/trap policy hook** | ✅ **DONE (step 3)** — under `KAMA_TARGET_EMBEDDED`, bounds/panic/OOM route through one overridable weak `kama_panic_handler` (default `for(;;) __builtin_trap()`); a strong user symbol redirects to blink/reset/breakpoint. No fd 2 / `abort` dependency. | **S** |
 
 ## Tier 2 — Ergonomics & toolchain (nice-to-have; much is library/FFI, not language)
 
@@ -85,8 +85,11 @@ mile of the no-heap story.**
 2. **`hardware` qualifier** — ✅ **DONE.** `hardware Ptr<T>` → `volatile T*` for MMIO and `hardware` module
    statics → `volatile T`/`volatile T*` for ISR↔loop flags/handles (`const hardware Ptr<T>` → `const volatile T*`).
    `volatile` de-reserved (no longer a keyword). Correct register access under `-O2`. Fixtures: `tests/hardware_*`.
-3. **`--target embedded`** — freestanding entry (no argv shim, `main` never returns), `-ffreestanding -nostdlib`,
-   overridable panic hook. Now a blink-LED firmware links.
+3. **`--target embedded`** — ✅ **DONE.** Compiles a value program to a `-ffreestanding -nostdlib` **object**:
+   guarded freestanding entry (`int main(void){ kama_main(); for(;;){} }` — no argv shim, `main` never returns),
+   overridable weak `kama_panic_handler`. Triple-agnostic (CPU triple via `--cc`); the board link (crt0 + linker
+   script) is the user's step. Now a value-only blink object compiles freestanding and libc-free. Fixture:
+   `tests/embedded_blink.kama`; freestanding guard `tools/check-embedded.sh`.
 4. **ISR attribute** + **section placement** — real interrupt-driven drivers.
 5. **Fallible `allocate -> Optional<Ptr>`** + the checkable no-heap subset — completes the no-heap story
    (shared with the embedded milestone in ROADMAP §5).

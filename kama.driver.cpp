@@ -2,11 +2,12 @@
 // invoking a C compiler to produce a native executable.
 //
 //   kama transpile <in.kama> [-o out.c] [--no-line]
-//   kama build     <in.kama> [-o out] [--target native|wasm] [--webgpu]
+//   kama build     <in.kama> [-o out] [--target native|wasm|embedded] [--webgpu]
 //                              [--cc <compiler>] [--no-line] [--keep-c]
 //
 // native builds invoke clang; wasm builds invoke emcc (Emscripten), keying the
-// output format off the -o extension (.html harness by default).
+// output format off the -o extension (.html harness by default); embedded builds
+// invoke clang `-ffreestanding -nostdlib -c` to a bare-metal object (.o).
 // (LLVM is gone; the backend is kama.cemit.*.)
 
 #include <cstdio>
@@ -475,7 +476,7 @@ void usage()
     fprintf(stderr,
         "usage:\n"
         "  kama transpile <in.kama> [-o out.c] [--no-line]\n"
-        "  kama build     <in.kama>... [-o out] [--target native|wasm] [--release|--debug] [--shared]\n"
+        "  kama build     <in.kama>... [-o out] [--target native|wasm|embedded] [--release|--debug] [--shared]\n"
         "                             [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
         "                  (pass multiple .kama files to build a multi-file program)\n"
         "  kama update    [--version vX.Y.Z]   self-update via the installer\n"
@@ -537,11 +538,16 @@ int main(int argc, char** argv)
     if (inputs.empty()) { fprintf(stderr, "kama: no input file\n"); usage(); return 2; }
     const std::string& input = inputs[0];   // first input drives default output naming
 
-    if (target != "native" && target != "wasm") {
-        fprintf(stderr, "kama: unknown --target '%s' (expected native|wasm)\n", target.c_str());
+    if (target != "native" && target != "wasm" && target != "embedded") {
+        fprintf(stderr, "kama: unknown --target '%s' (expected native|wasm|embedded)\n", target.c_str());
         return 2;
     }
-    const bool wasm = (target == "wasm");
+    const bool wasm     = (target == "wasm");
+    // --target embedded (MCU campaign step 3): a freestanding bare-metal build. It stops at a
+    // `-ffreestanding -nostdlib` OBJECT (.o) — the board-specific link (crt0/startup + linker script /
+    // memory map) is inherently per-chip and is the user's link step (or the turnkey step-6 toolchain),
+    // exactly as every bare-metal toolchain separates compilation from the linker-script'd final image.
+    const bool embedded = (target == "embedded");
 
     // `--shared` is a native shared-library packaging step (desktop dev-loop hot-reload). On wasm
     // the host re-instantiates the module instead of `dlopen`ing it, so `expose` alone (KAMA_EXPORT
@@ -549,6 +555,11 @@ int main(int argc, char** argv)
     if (shared && wasm) {
         fprintf(stderr, "kama: --shared is native-only; a wasm build exports `expose`d functions "
                         "directly (no --shared needed)\n");
+        return 2;
+    }
+    if (shared && embedded) {
+        fprintf(stderr, "kama: --shared is native-only; --target embedded emits a freestanding object "
+                        "you link into your firmware image\n");
         return 2;
     }
 
@@ -596,9 +607,10 @@ int main(int argc, char** argv)
 #else
         const char* sharedExt = ".so";
 #endif
-        std::string defaultOut = wasm    ? (stripExtension(input) + ".html")
-                               : shared  ? (stripExtension(input) + sharedExt)
-                                         : stripExtension(input);
+        std::string defaultOut = wasm     ? (stripExtension(input) + ".html")
+                               : embedded ? (stripExtension(input) + ".o")
+                               : shared   ? (stripExtension(input) + sharedExt)
+                                          : stripExtension(input);
         std::string outPath    = output.empty() ? defaultOut : output;
 
         // Transpile to one or more .c (multi-file emits a shared header too).
@@ -690,7 +702,7 @@ int main(int argc, char** argv)
             // --gc-sections let the linker drop unused (std)library code — the
             // "pay for what you use" pruning lever. Native also strips symbols.
             cmd << (wasm ? "-Oz " : "-O3 ") << "-DNDEBUG -ffunction-sections -fdata-sections ";
-            if (!wasm) {
+            if (!wasm && !embedded) {   // -Wl,*/-s are link-time; embedded stops at -c (see below)
 #ifdef __APPLE__
                 cmd << "-Wl,-dead_strip ";
 #else
@@ -721,6 +733,12 @@ int main(int argc, char** argv)
         // arithmetic UB in either build.
         cmd << "-fsanitize=signed-integer-overflow -fsanitize-trap=signed-integer-overflow ";
         if (release) cmd << "-fwrapv ";
+        // --target embedded: a freestanding, hosted-runtime-free compile that stops at an OBJECT. No libc
+        // (`-nostdlib`), no OS/hosting assumptions (`-ffreestanding`), and `-c` so no link is attempted —
+        // the crt0/startup + linker script are the user's per-chip link step. `-DKAMA_TARGET_EMBEDDED`
+        // selects the freestanding `main`/panic forms in the emitted C + runtime. The CPU triple
+        // (`-target thumbv*-none-eabi -mcpu=...`) is deliberately NOT baked in v1 — pass it via `--cc`.
+        if (embedded) cmd << "-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED -c ";
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
         if (!headerDir.empty()) cmd << "-I" << headerDir << " ";   // the shared generated header
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
@@ -781,10 +799,12 @@ int main(int argc, char** argv)
             cmd << "-lglfw -lX11 -ldl -lpthread ";
 #endif
         }
-        for (auto& lib : links) cmd << "-l" << lib << " ";       // FFI link flags
+        // Link-time libraries (skipped for --target embedded: it stops at `-c`, so its board link — where
+        // the user supplies startup + linker script — owns library selection).
+        if (!embedded) for (auto& lib : links) cmd << "-l" << lib << " ";   // FFI link flags
         // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm
         // FFI). Native only — wasm/emscripten bundles libm. (--gc-sections still prunes unused code.)
-        if (needsLibm && !wasm) cmd << "-lm ";
+        if (needsLibm && !wasm && !embedded) cmd << "-lm ";
         // Pay-for-what-you-use: wire up threads only when the program uses the isolate seam (std::concurrent's
         // kama_isolate.h / kama_channel.h). Native: link libpthread (harmless on macOS — pthreads live in libc;
         // required on Linux). Wasm: emscripten pthreads = Web Workers over a shared SharedArrayBuffer, so the
@@ -793,7 +813,7 @@ int main(int argc, char** argv)
         // thread). PTHREAD_POOL_SIZE pre-warms worker slots (KAMA_PTHREAD_POOL, default 0); STRICT=0 lets the
         // pool grow on demand so a `scope` with more children than the pool never stalls — pre-warm is a pure
         // latency knob, not a correctness cap.
-        if (needsPthread) {
+        if (needsPthread && !embedded) {
             if (wasm) {
                 const char* pool = getenv("KAMA_PTHREAD_POOL");   // build-time override; unset => 0 (grow on demand)
                 cmd << "-pthread -sPROXY_TO_PTHREAD "
@@ -811,7 +831,7 @@ int main(int argc, char** argv)
 #if defined(_WIN32)
         // std::net uses Winsock (kama_os.h). Link ws2_32 on native Windows builds; harmless (and pruned by
         // --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.
-        if (!wasm) cmd << "-lws2_32 ";
+        if (!wasm && !embedded) cmd << "-lws2_32 ";
 #endif
         cmd << "-o \"" << outPath << "\"";
         int rc = runCmd(cmd.str());

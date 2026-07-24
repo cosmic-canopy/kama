@@ -288,6 +288,19 @@ static inline void kama_u64_to_buf(char* buf, size_t* p, size_t v) {
     while (v) { tmp[t++] = (char)('0' + (v % 10)); v /= 10; }
     while (t) buf[(*p)++] = tmp[--t];
 }
+#if defined(KAMA_TARGET_EMBEDDED)
+// Freestanding trap policy (MCU campaign step 3). On a bare-metal target there is no fd 2 to write
+// to and no `abort` under `-nostdlib`, so every fatal condition (bounds/slice/panic/OOM) funnels
+// through one OVERRIDABLE weak hook. The default spins in a `__builtin_trap` loop (a debugger breaks
+// here / the MCU resets); a firmware author provides a strong `kama_panic_handler` to blink an SOS,
+// reset, or log over a peripheral. Weak symbols are supported by clang/gcc = the embedded toolchains.
+__attribute__((weak)) void kama_panic_handler(void) { for (;;) __builtin_trap(); }
+static inline void kama_bounds_fail(size_t i, size_t len) {
+    (void)i; (void)len;
+    kama_panic_handler();
+    for (;;) {}   // kama_panic_handler must not return; belt-and-suspenders if a user override does
+}
+#else
 static inline void kama_bounds_fail(size_t i, size_t len) {
     extern void abort(void);
     char buf[96]; size_t p = 0;
@@ -305,6 +318,7 @@ static inline void kama_bounds_fail(size_t i, size_t len) {
 #endif
     abort();
 }
+#endif
 
 // Left shift with NO undefined behavior. A signed left shift into/past the sign bit is UB in C; do the
 // shift in the matching UNSIGNED type (a defined two's-complement bitwise shift) and convert back. Unsigned
@@ -793,6 +807,12 @@ static inline kama_string kama_str_take(kama_string* s) {
 // "kama: panic: <msg>" to stderr and `abort()`s — the same clean-abort mechanism as the bounds
 // trap (no <stdio.h>, no undefined behavior). Never returns.
 static inline void kama_panic(kama_string msg) {
+#if defined(KAMA_TARGET_EMBEDDED)
+    // Freestanding: no stderr, no `abort`. Route through the overridable weak hook (see kama_bounds_fail).
+    (void)msg;
+    kama_panic_handler();
+    for (;;) {}
+#else
     extern void abort(void);
 #if defined(_WIN32)
     extern int _write(int, const void*, unsigned int);
@@ -806,6 +826,7 @@ static inline void kama_panic(kama_string msg) {
     (void)write(2, "\n", 1);
 #endif
     abort();
+#endif
 }
 
 // Tiny tracing hook for tests/debugging: a folding accumulator that records a

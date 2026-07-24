@@ -1587,7 +1587,18 @@ Result<Shared<Node>, DeError> g = decode::<Shared<Node>>(src: give wire);
 kama build app.kama                 # native debug (-g, breakpoints in .kama via #line)
 kama build app.kama --release       # optimized, stripped, NDEBUG
 kama build app.kama --target wasm   # browser: .html + .js + .wasm
+kama build app.kama --target embedded   # bare-metal: a -ffreestanding -nostdlib object (.o)
 ```
+
+**`--target embedded`** is the freestanding bare-metal build (MCU): it compiles to a `-ffreestanding
+-nostdlib` **object** rather than a linked executable. The synthesized entry becomes `int main(void) {
+kama_main(); for(;;){} }` — no `argc/argv` (there is none), and `main` never returns (a startup/crt0 calls
+it and it spins). Fatal conditions (bounds/panic/OOM) route through an overridable **weak `kama_panic_handler`**
+(default `for(;;) __builtin_trap()`) — provide a strong symbol to blink/reset/breakpoint. It is triple-agnostic:
+pass the CPU triple (e.g. `--cc "clang -target thumbv7em-none-eabi -mcpu=cortex-m4"`), and link the object with
+your chip's startup object + linker script (memory map) as a separate step — turnkey triples, linker scripts,
+and vendor HALs are a later milestone. A module `static hardware Ptr<T>` lowers to a `volatile T*` MMIO register,
+and module `static`s become plain zero-cost `static`s (one core = one isolate).
 
 Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back to `.kama`), and emit **one
 `.c` per module** (faithful stepping, readable generated code). A **`--release`** native build instead folds
