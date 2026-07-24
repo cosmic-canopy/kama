@@ -1,7 +1,12 @@
-// `alignof(T)` — the compile-time alignment of a type, as a usize (sibling to `sizeof`, for allocators).
-type value P { public int64 a; public int8 b; public ctor make(){ P r; r.a=0; r.b=0; return give r; } }
+// `alignof(T)` — the compile-time alignment of a type (sibling of `sizeof`), lowers to C `_Alignof`.
+// Aligned DMA buffers / register-block layout asserts need it; usable anywhere `sizeof` is.
+type value Blk { uint64 wide; uint8 narrow; }   // alignment 8 (widest member), size 16 (padded)
+
 fn int32 main() {
-    // sizeof(P)=16 (int64 + trailing pad), alignof(P)=8, alignof(int32)=4, alignof(int8)=1
-    return cast<int32>(sizeof(P)) + cast<int32>(alignof(P)) + cast<int32>(alignof(int32)) + cast<int32>(alignof(int8));
-    // 16 + 8 + 4 + 1 = 29
+    usize a1 = alignof(int32);      // 4
+    usize a8 = alignof(Blk);        // 8
+    usize sz = sizeof(Blk);         // 16
+    // alignof composes in const arithmetic just like sizeof
+    usize pad = sizeof(Blk) - alignof(Blk);   // 16 - 8 = 8
+    return cast<int32>(a1) + cast<int32>(a8) + cast<int32>(sz) + cast<int32>(pad);   // 4+8+16+8 = 36
 }

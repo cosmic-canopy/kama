@@ -68,7 +68,7 @@ mile of the no-heap story.**
 
 | Feature | Status | Why | Effort |
 |---|---|---|---|
-| **`alignof(T)`** | ❌ missing (`sizeof(T)` shipped) | Aligned DMA buffers, register-block layout asserts. The obvious sibling of `sizeof`. | **S** |
+| **`alignof(T)`** | ✅ **SHIPPED** (alongside `sizeof(T)`) — `alignof(T)` → C `_Alignof(cType)`, monomorphizes under substitution, and folds in const-init contexts. Fixture `tests/alignof_basic.kama`. | Aligned DMA buffers, register-block layout asserts. | done |
 | **Compile-time evaluation (const-eval)** | 🟡 partial — `const` values + const generics + `sizeof` exist; arithmetic on const params / generated lookup tables do not | Baud-rate divisors, gamma/trig tables, permutation constants baked at build time. | **M** |
 | **Soft-float mode / fixed-point** | 🟡 partial — float types exist; no soft-float intrinsics emitted, no fixed-point type | Cortex-M0/AVR have no FPU; today you pass `-msoft-float` to the C compiler and eat the libcall cost. A `Q15.16`-style fixed-point library `type value` is writable *today* (operator overloading) — this is a **library**, not a language gap. | **S (lib) / M (soft-float)** |
 | **Toolchain integration** (target triples, linker scripts, startup objects, vendor HALs: pico-sdk / Arduino core / esp-idf) | ❌ missing — the driver emits C and defers to `clang`/`zig`; cross-compile flags are all manual via `--cc`/`--link` | Turnkey `kama build --target thumbv7em-none-eabi` with a linker script and a startup shim. Mostly driver/packaging work atop the C backend. | **M** |
@@ -100,8 +100,10 @@ mile of the no-heap story.**
 5. **Fallible `allocate -> Optional<Ptr>`** + `try new` + the checkable `@noheap`/`--no-heap` subset ✅
    **SHIPPED** — completes the no-heap story (shared with the embedded milestone in ROADMAP §5). Also serves
    game-engine frame allocators / real-time audio, not only MCU.
-6. **Inline asm / intrinsics**, then **toolchain packaging** (target triples + linker scripts + vendor HALs)
-   and the const-eval / `alignof` / soft-float polish.
+6. **Inline asm / intrinsics** (the language headline — `asm("...")` inside `unsafe`, lowers to
+   `__asm__ __volatile__`; see [design/mcu-asm-intrinsics.md](design/mcu-asm-intrinsics.md)), then
+   **toolchain packaging** (target triples + linker scripts + vendor HALs) and the const-eval / soft-float
+   polish. (`alignof` already ships — see the Tier-2 row.)
 
 **Bottom line:** the *systems core* (types, FFI, RAII, no-null, no-heap value subset, pluggable allocator) is
 already here. Bare-metal readiness is a focused set of **language-surface** additions — statics, `hardware`,

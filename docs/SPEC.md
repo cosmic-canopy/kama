@@ -824,8 +824,9 @@ raw slot; a safe `Slot<T>`/`MaybeUninit` wrapper for both directions is a tracke
 The above pieces (a place-returning `operator[]`, `Ptr<T>` + `unsafe`, generics, RAII) let a `Vec`/matrix
 be written **in the language** rather than baked into the compiler. Three builtins complete the kit:
 
-- **`sizeof(T)`** — the compile-time byte size of a type (a `usize`); monomorphizes, so
-  `malloc(n: n * sizeof(T))` works in a generic `Vec<T>`.
+- **`sizeof(T)` / `alignof(T)`** — the compile-time byte size / alignment of a type (a `usize`); both
+  monomorphize, so `malloc(n: n * sizeof(T))` works in a generic `Vec<T>`, and `alignof(T)` (→ C
+  `_Alignof`) serves aligned DMA buffers / register-block layout asserts. Both fold in const-init contexts.
 - **`panic(msg: string)` / `assert(cond: bool)`** — a clean **trap** (writes the message + `abort()`, not
   UB — the user-facing form of the built-in bounds trap). For a *bug that can't continue*; recoverable
   errors use `Result<T, E>`. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.)
