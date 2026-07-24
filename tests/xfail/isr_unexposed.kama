@@ -1,0 +1,3 @@
+// `@interrupt` requires `expose` so the vector table can name the handler's bare symbol. Rejected at emit.
+@interrupt fn void h() { }
+fn int32 main() { return 0; }

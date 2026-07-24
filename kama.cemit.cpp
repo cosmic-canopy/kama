@@ -10155,6 +10155,57 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
     return s;
 }
 
+// MCU step 4 — lower `@interrupt` / `@section(".x")` declaration attributes to a C
+// `__attribute__((...))` prefix. `fn` is the function node (null for a module static, which only
+// accepts `@section`). Emits ONLY where the programmer annotated a declaration — un-annotated code
+// is byte-identical to before. Returns "" when there are no attributes.
+std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionDeclarationNode* fn, int line)
+{
+    if (!attrs || attrs->empty()) return "";
+    std::vector<std::string> parts;
+    for (auto& at : *attrs) {
+        if (!at || !at->name) continue;
+        const std::string& an = *at->name;
+        if (an == "interrupt") {
+            // `@interrupt` → Cortex-M / RISC-V / classic-ARM ISR calling convention. (AVR's
+            // `@interrupt("VECTOR")` → `ISR(VECTOR)` macro is a later step.) `used` keeps it from
+            // being dropped by `--gc-sections`; the vector table references it by symbol.
+            if (!fn)
+                unsupported("`@interrupt` applies only to a function, not a `static`", line);
+            if (at->args && !at->args->empty())
+                unsupported("`@interrupt` takes no arguments (AVR `ISR(vector)` is a later step)", line);
+            if (cType(fn->returnType) != "void")
+                unsupported("`@interrupt` handler must return `void` — an ISR takes no return path", line);
+            if (fn->parameters && !fn->parameters->empty())
+                unsupported("`@interrupt` handler must take no parameters (an ISR is `void f(void)`)", line);
+            if (!isExposed(fn))
+                unsupported("`@interrupt` requires `expose` so the vector table can reference the handler "
+                            "by its bare symbol name (a mangled ISR is unreachable from the vector table)", line);
+            parts.push_back("interrupt");
+            parts.push_back("used");
+        } else if (an == "section") {
+            // `@section(".name")` — exactly one bare string-literal arg. Valid on functions + statics.
+            std::string sec;
+            if (at->args && at->args->size() == 1) {
+                auto& a = (*at->args)[0];
+                if (a && !a->name && a->expression)
+                    if (auto* s = dynamic_cast<StringNode*>(a->expression.get()))
+                        if (s->value) sec = *s->value;
+            }
+            if (sec.empty())
+                unsupported("`@section(\"...\")` requires exactly one string-literal section name", line);
+            parts.push_back("section(\"" + sec + "\")");
+        } else {
+            unsupported(("unknown attribute `@" + an + "` here — expected `@interrupt` or `@section(\"...\")`").c_str(), line);
+        }
+    }
+    if (parts.empty()) return "";
+    std::string out = "__attribute__((";
+    for (size_t i = 0; i < parts.size(); ++i) { if (i) out += ", "; out += parts[i]; }
+    out += ")) ";
+    return out;
+}
+
 void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::string* nameOverride)
 {
     bool isEntry = false;
@@ -10162,7 +10213,8 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::str
     rejectStoredInterface(fn->returnType, "returned from a function", fn->line);
     // a place-returning `fn ref T f(…)` emits `T* f(…)` (the place); its `return e` addresses it.
     const char* linkage = isExposed(fn) ? "KAMA_EXPORT " : (nameOverride ? "static " : "");
-    *_out << linkage << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
+    *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
+          << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ");\n";
 }
 
@@ -10227,7 +10279,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // there requires the place to borrow a `ref`/`out` param (a free fn has no `this`), so it can't
     // dangle. `_currentReturnCType` stays the base `T` (the place path never consults it).
     const char* linkage = isExposed(fn) ? "KAMA_EXPORT " : (nameOverride ? "static " : "");
-    *_out << linkage << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
+    *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
+          << cType(fn->returnType) << (fn->isRef ? "*" : "") << " " << name
           << "(" << paramListC(fn->parameters, nullptr) << ")\n";
 
     _returnIsPlace = fn->isRef;
@@ -13729,11 +13782,14 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
                      + ty + "` owns memory").c_str(), mv->line);
         return;
     }
+    // `@section(".x")` places the static in a named linker section (flash const table, DMA RAM bank,
+    // ISR vector table). `@interrupt` on a static is rejected here (function-only).
+    std::string secAttr = declAttrPrefix(mv->attributes, nullptr, mv->line);
     for (auto& d : *mv->variables) {
         if (!d || !d->name || !d->name->value) continue;
         std::string cname = qualify(*d->name->value);
         line(mv->line);
-        *_out << "static KAMA_ISOLATE_LOCAL " << hw << ty << " " << cname;
+        *_out << "static " << secAttr << "KAMA_ISOLATE_LOCAL " << hw << ty << " " << cname;
         if (d->initializer) {
             if (!isConstInitExpr(d->initializer.get())) {
                 unsupported(("a module `static` initializer must be a compile-time constant (a literal, "

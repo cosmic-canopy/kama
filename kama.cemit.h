@@ -1189,6 +1189,10 @@ private:
 
     void unsupported(const char* what, int srcLine);
 
+    // MCU step 4: lower `@interrupt` / `@section(".x")` to a C `__attribute__((...))` prefix.
+    // `fn` is null for a module static (which accepts `@section` only).
+    std::string declAttrPrefix(const SharedAttributeList& attrs, FunctionDeclarationNode* fn, int line);
+
     // Multi-file: collect a whole program, then emit declarations (shared
     // header) and definitions (per module) separately.
     void collectProgram(const std::vector<SharedCompilationUnit>& units);

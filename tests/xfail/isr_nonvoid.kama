@@ -1,0 +1,3 @@
+// `@interrupt` handler must return `void` — an ISR has no return path. Rejected at emit.
+@interrupt expose fn int32 h() { return 0; }
+fn int32 main() { return 0; }

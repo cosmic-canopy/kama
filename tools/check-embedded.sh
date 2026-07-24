@@ -53,4 +53,31 @@ if command -v nm >/dev/null 2>&1; then
     fi
 fi
 
-echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object)"
+# 3. MCU STEP 4 — ISR entry attribute + linker-section placement.
+#   3a. SHAPE — transpile the ISR subject and confirm `@interrupt`/`@section` lower to the C attributes.
+#       (Not compiled here: `__attribute__((interrupt))` is the Cortex-M/RISC-V/classic-ARM ISR calling
+#        convention and the x86 CI host rejects it on a `void(void)`; the emitted-C shape is what we assert.)
+ISR="$ROOT/tests/support/embedded_isr.kama"
+isrc="$tmp/isr.c"
+if [ ! -f "$ISR" ]; then echo "check-embedded: missing $ISR" >&2; exit 1; fi
+"$KAMA" transpile "$ISR" -o "$isrc" >/dev/null
+if ! grep -q '__attribute__((interrupt, used))' "$isrc"; then
+    echo "check-embedded: FAIL — @interrupt did not lower to __attribute__((interrupt, used))" >&2; exit 1
+fi
+if ! grep -q '__attribute__((section(".isr_vector")))' "$isrc"; then
+    echo "check-embedded: FAIL — @section did not lower to __attribute__((section(...)))" >&2; exit 1
+fi
+#   3b. FREESTANDING COMPILE — a section-only program (no @interrupt) must still build to a -nostdlib object,
+#       proving `@section` placement does not break the freestanding path (the attribute is arch-agnostic).
+SEC="$ROOT/tests/support/embedded_section.kama"
+secobj="$tmp/section.o"
+if [ ! -f "$SEC" ]; then echo "check-embedded: missing $SEC" >&2; exit 1; fi
+if ! "$KAMA" build "$SEC" --target embedded -o "$secobj" >/dev/null 2>"$tmp/sec.err"; then
+    echo "check-embedded: FAIL — @section program did not compile --target embedded" >&2
+    sed 's/^/  /' "$tmp/sec.err" >&2; exit 1
+fi
+if [ ! -s "$secobj" ]; then
+    echo "check-embedded: FAIL — @section --target embedded produced no object" >&2; exit 1
+fi
+
+echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section)"

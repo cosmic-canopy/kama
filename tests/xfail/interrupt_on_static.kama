@@ -1,0 +1,3 @@
+// `@interrupt` is function-only (an ISR is an entry point); a static cannot be an interrupt. Rejected at emit.
+@interrupt static uint32 s;
+fn int32 main() { return 0; }

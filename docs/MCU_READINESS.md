@@ -52,7 +52,7 @@ mile of the no-heap story.**
 |---|---|---|---|
 | **Module-level mutable statics** (`static` globals with deterministic zero/const init) | ✅ **SHIPPED (step 1)** — `static T name = const;`, per-isolate by construction (`KAMA_ISOLATE_LOCAL`); value/`Ptr`/`InlineArray` + const-init only in v1; TSan-clean | Firmware *lives* on module state: peripheral handles, ISR-shared flags, ring buffers, flash lookup tables. An ISR and `main` must share a flag; today there is no place to put it. **New language surface** (declaration + guaranteed zero/const init at reset). ROADMAP §5. **Build it *per-isolate by construction*** (plain C `static` on a single-core MCU → zero cost; `_Thread_local` on multicore native; automatic on wasm) so the same declaration is race-free under the threading model — cross-isolate sharing stays on the `Atomic<T>` seam. The concurrency model that pins this rule is now **shipped** (campaign complete 2026-07-23: isolates + channels + `scope` + `Atomic<T>` + `parallel_for`, [design/concurrency.md](design/concurrency.md) §"three sharing seams"), so this is **settled, proven ground** — statics are a targeted addition onto working code, not a co-design with an unbuilt system. **This makes MCU the lowest-risk next track.** | **M** |
 | **`hardware` qualifier for MMIO** | ✅ **SHIPPED (step 2).** `hardware Ptr<T>` → C `volatile T*`, `hardware` on a module `static` → `volatile T`/`volatile T*` (ISR↔loop flag/handle), `const hardware Ptr<T>` → `const volatile T*` (read-only register); mirrors the shipped `const Ptr<T>` lowering. `volatile` is no longer a keyword. Explicitly **not** a concurrency primitive. ROADMAP §5. Fixtures: `tests/hardware_*`. | done |
-| **Interrupt handlers / ISR entry** | ❌ missing — no attribute or entry-point syntax; every `fn` is an ordinary C function | An ISR is a specific symbol (vector-table slot) with a target-specific calling convention (`__attribute__((interrupt))` / AVR `ISR()` / a naked reset handler). Needs an attribute to emit it and to keep it out of the normal `main`/argv path. | **M** |
+| **Interrupt handlers / ISR entry** | ✅ **SHIPPED (step 4).** `@interrupt expose fn void h()` → `__attribute__((interrupt, used))` (the Cortex-M / RISC-V / classic-ARM ISR calling convention). Enforced `void f(void)` signature; `expose` required so the vector table can name the bare symbol; `used` survives `--gc-sections`. AVR's `@interrupt("VECTOR")` → `ISR(VECTOR)` macro is a deliberately separate later step. Fixture `tests/support/embedded_isr.kama` (transpile-grep in `tools/check-embedded.sh`). | done |
 | **Freestanding build target** (`--target embedded`: `-ffreestanding -nostdlib`, no `argc/argv` shim, `main` never returns) | ✅ **DONE (step 3)** — `--target embedded` compiles to a `-ffreestanding -nostdlib` object; the emitter emits a guarded `int main(void){ kama_main(); for(;;){} }` (no argv, never returns) selected by `KAMA_TARGET_EMBEDDED`. Triple-agnostic (via `--cc`); the startup object + linker script own the vector table at the user's link step. | **M** |
 
 ## Tier 1 — Needed for a serious firmware (painful without)
@@ -60,7 +60,7 @@ mile of the no-heap story.**
 | Feature | Status | Why | Effort |
 |---|---|---|---|
 | **The no-heap story: fallible allocation + a heap-free subset** | 🟡 partial — M10/M11a route allocations through a supplied `Allocator`, but `allocate` **panics** on OOM and `string`/`Shared`/`Weak` still assume a global heap | A no-heap target needs *every* allocation routed **and** a non-panic failure path: `allocate -> Optional<Ptr>` (ROADMAP, deferred with this milestone). Plus a documented, compiler-checkable "value + `InlineArray` + `Ptr` + stack" subset that rejects `string`/smart-pointers when you opt out of the heap. | **M–L** |
-| **Linker-section / placement attributes** | ❌ missing | Const tables belong in flash (`.rodata`), ISR vectors in a fixed section, DMA buffers in a specific RAM bank; AVR needs `PROGMEM`. Needs a `@section("...")`-style attribute on statics/functions. | **M** |
+| **Linker-section / placement attributes** | ✅ **SHIPPED (step 4).** `@section(".name")` on a module static or a function → `__attribute__((section(".name")))` — const tables in flash, ISR vectors in a fixed section, DMA buffers in a RAM bank. (AVR `PROGMEM` is `@section` + the AVR toolchain, later.) Fixtures `tests/support/embedded_section.kama` (freestanding-object build) + `embedded_isr.kama`. | done |
 | **Inline assembly / intrinsics** | ❌ missing — no `asm` in the grammar | `WFI`/`WFE`, memory barriers (`DMB`/`DSB`), `cpsid i` (disable interrupts), and cycle-exact delays need inline asm or compiler intrinsics (or a thin `extern` shim as a stopgap). | **S–M** |
 | **Panic/trap policy hook** | ✅ **DONE (step 3)** — under `KAMA_TARGET_EMBEDDED`, bounds/panic/OOM route through one overridable weak `kama_panic_handler` (default `for(;;) __builtin_trap()`); a strong user symbol redirects to blink/reset/breakpoint. No fd 2 / `abort` dependency. | **S** |
 
@@ -90,7 +90,12 @@ mile of the no-heap story.**
    overridable weak `kama_panic_handler`. Triple-agnostic (CPU triple via `--cc`); the board link (crt0 + linker
    script) is the user's step. Now a value-only blink object compiles freestanding and libc-free. Fixture:
    `tests/embedded_blink.kama`; freestanding guard `tools/check-embedded.sh`.
-4. **ISR attribute** + **section placement** — real interrupt-driven drivers.
+4. **ISR attribute** + **section placement** — ✅ **DONE.** `@interrupt expose fn void h()` →
+   `__attribute__((interrupt, used))` (Cortex-M/RISC-V/classic-ARM; enforced `void()` + `expose`);
+   `@section(".x")` on statics/functions → `__attribute__((section(".x")))`. Reuses the existing
+   `@name(args)` attribute mechanism (now drives codegen, previously serialization-only). AVR
+   `@interrupt("VECTOR")` → `ISR()` deferred. Fixtures: `tests/support/embedded_{isr,section}.kama`,
+   xfail `tests/xfail/{isr_*,section_nonstring,interrupt_on_static}.kama`.
 5. **Fallible `allocate -> Optional<Ptr>`** + the checkable no-heap subset — completes the no-heap story
    (shared with the embedded milestone in ROADMAP §5).
 6. **Inline asm / intrinsics**, then **toolchain packaging** (target triples + linker scripts + vendor HALs)

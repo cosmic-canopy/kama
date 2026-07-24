@@ -1,0 +1,8 @@
+// MCU step 4 — `@section(".x")` placement on a static AND a function, with NO `@interrupt`, so it compiles
+// under `-ffreestanding -nostdlib` on the CI host (`__attribute__((section(...)))` is arch-agnostic). Built to
+// a freestanding OBJECT by tools/check-embedded.sh to prove section placement doesn't break the -nostdlib path.
+@section(".fw_config") static uint32 build_id;
+
+@section(".ramfunc") fn uint32 read_build_id() { return build_id; }
+
+fn int32 main() { return cast<int32>(read_build_id()); }

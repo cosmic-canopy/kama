@@ -1215,7 +1215,24 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
   `static` is module-private (internal C linkage). A `hardware` static (`static hardware T name`) adds the
   `volatile` qualifier for an MMIO register or single-core ISR↔loop flag — `volatile T` for a scalar,
-  `volatile T*` for a `Ptr<T>` handle. *(`.rodata`/flash placement and destructible statics are later MCU steps.)*
+  `volatile T*` for a `Ptr<T>` handle. *(Destructible statics are a later MCU step.)*
+
+**MCU codegen attributes (step 4)** — `@interrupt` and `@section(".x")` are declaration attributes (the
+existing `@name(args)` mechanism, extended from serialization to functions + statics). Each emits a C
+`__attribute__((...))` **only** on the declaration it annotates; un-annotated code is byte-identical.
+
+```kama
+@section(".isr_vector") static hardware Ptr<uint32> vtor;   // -> __attribute__((section(".isr_vector")))
+
+@interrupt expose fn void on_systick() { … }                // -> __attribute__((interrupt, used))
+```
+
+- **`@interrupt`** binds a function to an interrupt vector: it emits `__attribute__((interrupt, used))`,
+  the ISR calling convention on **Cortex-M / RISC-V / classic ARM** (`used` keeps it past `--gc-sections`).
+  The handler must be `void h()` (no params, no return path) and must be **`expose`d** so the vector table
+  can reference it by its bare symbol. AVR's `ISR(VECTOR)` macro form (`@interrupt("VECTOR")`) is a later step.
+- **`@section(".name")`** places a module static *or* a function in a named linker section — the ISR vector
+  table, a flash const table, a `.ramfunc`, or a DMA RAM bank. The board's linker script owns the addresses.
 
 **Operator overloading** — the sanctioned exception to named-args-only (a binary operator has exactly two
 operands, positional by nature). The full overloadable set is supported: arithmetic `+ - * / %`, comparison

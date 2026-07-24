@@ -1,0 +1,3 @@
+// `@section(...)` needs a string-literal section name, not a bare identifier. Rejected at emit.
+@section(bogus) fn int32 h() { return 0; }
+fn int32 main() { return 0; }

@@ -1,0 +1,1 @@
+string-literal section name

@@ -341,6 +341,7 @@ code_declaration
    const-init + value/Ptr/InlineArray legality are enforced semantically in the emitter. */
 module_variable_declaration
   : STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $3, $4); mv->isHardware = ($2 != nullptr); $$ = mv; }
+  | attribute_list STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $4, $5); mv->isHardware = ($3 != nullptr); mv->attributes = $1; $$ = mv; }   /* `@section(".x") static …` */
   ;
 
 /*------------------------------------------------------------------------------ 
@@ -607,6 +608,22 @@ function_declaration
           fn->typeBounds = std::make_shared<BoundsList>();
           fn->constParams = std::make_shared<StringList>();
           for (auto& p : *$5) if (p && p->value) {
+              fn->typeParams->push_back(p->value);
+              fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
+              if (p->isConstParam) fn->constParams->push_back(p->value);
+          }
+      }
+      $$ = fn;
+  }
+  | attribute_list function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
+      /* `@interrupt`/`@section(".x")` fn — MCU codegen attributes (mirrors the attributed-TYPE form). */
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $2, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
+      fn->attributes = $1;
+      if ($6 && !$6->empty()) {
+          fn->typeParams = std::make_shared<StringList>();
+          fn->typeBounds = std::make_shared<BoundsList>();
+          fn->constParams = std::make_shared<StringList>();
+          for (auto& p : *$6) if (p && p->value) {
               fn->typeParams->push_back(p->value);
               fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
               if (p->isConstParam) fn->constParams->push_back(p->value);
@@ -1044,6 +1061,7 @@ attr_arg_list
 attr_arg
   : IDENTIFIER                     { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), SharedExpression()); }
   | IDENTIFIER COLON expression    { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); }
+  | STRING_LITERAL                 { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1)); }   /* bare string, e.g. @section(".isr_vector") */
   ;
 variable_reference
   : expression

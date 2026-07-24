@@ -44,6 +44,17 @@ Legend for the status column:
 | `hardware` | ✅ | the MMIO/ISR qualifier (renamed from C's `volatile`, which is no longer a keyword). `hardware Ptr<T>` → `volatile T*` — a memory-mapped register, mirroring `const Ptr<T>`; on a module `static`, `hardware T` → `volatile T` (a scalar ISR↔loop flag) and `hardware Ptr<T>` → `volatile T*` (a peripheral handle). Composes with `const` (`const hardware Ptr<T>` → `const volatile T*`, a read-only status register). **Single-core MMIO/ISR only — NOT a concurrency primitive** (cross-isolate sharing is `Atomic<T>`) |
 | `expose` | ✅ | marks a **free function** for the kama→host boundary: it gets a **bare, unmangled, exported C-ABI symbol** (`KAMA_EXPORT`) a host can resolve — `dlsym` on a `kama build --shared` `.so`/`.dylib`/`.dll`, or `Module._name` on a wasm build. Signature must be C-ABI-safe (no owned-by-value `string`/collection/`Owned`/`Shared`/`Weak`; use `Ptr<T>` or an `extern` struct). Free functions only; not a member/type modifier. Distinct from `export` (module visibility) — three boundaries, three words. *Full 2.0 `expose` adds richer wasm module exports + the scripting host.* |
 
+## MCU codegen attributes (`@interrupt`, `@section`)
+
+Not keywords — declaration attributes on the existing `@name(args)` mechanism (previously
+serialization-only), extended in MCU step 4 to functions and module statics. They emit a C
+`__attribute__((...))` **only** on the exact declaration they annotate; un-annotated code is unchanged.
+
+| Attribute | On | Lowers to | Rules |
+|---|---|---|---|
+| `@interrupt` | a **function** (`@interrupt expose fn void h() { … }`) | `__attribute__((interrupt, used))` — the Cortex-M / RISC-V / classic-ARM ISR calling convention; `used` survives `--gc-sections` | Signature must be `void h()` (no params, no return); **`expose` required** so the vector table can name the bare symbol. AVR's `@interrupt("VECTOR")` → `ISR(VECTOR)` macro is a later step |
+| `@section(".name")` | a **module static** or a **function** | `__attribute__((section(".name")))` | one string-literal section name — vector table (`.isr_vector`), flash const table (`.rodata`), DMA RAM bank, `.ramfunc`. The board's linker script owns the actual addresses |
+
 ## Reserved words
 
 Every keyword above is implemented, enforced, and exercised by the fixtures in [`../tests/`](../tests/).

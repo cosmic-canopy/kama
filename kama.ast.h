@@ -291,6 +291,7 @@ public:
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
     bool isRef = false;            // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller (mirrors the method form)
+    SharedAttributeList attributes; // `@interrupt`/`@section(".x")` (null when none) — MCU codegen attributes
     FunctionDeclarationNode(CodeGenContext& context,  SharedModifier modifier, SharedIdentifier returnType, SharedIdentifier name,
                             SharedParameterList parameters, SharedBlock block, SharedStringList typeParams = SharedStringList() )
         : ASTNode(context),  StatementNode(context)
@@ -389,6 +390,7 @@ public:
     SharedIdentifier type;
     SharedVariableDeclaratorList variables;
     bool isHardware = false;    // `static hardware T name` — MMIO/ISR static, emits `volatile T`
+    SharedAttributeList attributes; // `@section(".x")` (null when none) — linker-section placement
     ModuleVariableDeclaration(CodeGenContext& context, SharedIdentifier type, SharedVariableDeclaratorList variables)
         : ASTNode(context),  StatementNode(context), type(type), variables(variables) { }
     virtual SymbolType symbolType() { return SymbolType::VARIABLE; }

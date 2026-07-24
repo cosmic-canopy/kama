@@ -1,0 +1,3 @@
+// `@interrupt` handler must take no parameters — an ISR is `void f(void)`. Rejected at emit.
+@interrupt expose fn void h(int32 x) { }
+fn int32 main() { return 0; }
