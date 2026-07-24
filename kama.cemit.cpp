@@ -1797,6 +1797,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (!d->initializer)
                         unsupported("a const must be initialized (it is immutable)", n->line);
                     _constLocals.insert(nm);
+                    // 6b-2: bind the folded value so a later local `InlineArray<T,(CAP)>` / `[v;(CAP)]`
+                    // resolves at emit time (cType/emitArrayLiteral call constValue). Declared-before-use.
+                    { int64_t cv; if (constValue(d->initializer, cv)) _constLocalVals[nm] = cv; }
                 }
 
                 // Interface-typed local: `I s = concrete;` -> a fat pointer borrowing
@@ -4057,6 +4060,10 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
     if (arg->value && !arg->genericArg) {
         auto it = _constSubst.find(*arg->value);
         if (it != _constSubst.end()) { out = it->second; return true; }
+        // 6b-2: a function-local `const` bound to a folded integer (`const int32 CAP = 8;` then
+        // `InlineArray<T,(CAP)>` / `[v;(CAP)]`). Consulted after the generic-param binding.
+        auto lv = _constLocalVals.find(*arg->value);
+        if (lv != _constLocalVals.end()) { out = lv->second; return true; }
     }
     return false;
 }
@@ -5102,6 +5109,13 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         if (d->variables) for (auto& v : *d->variables) if (v) scanExprForCollections(v->initializer);
     } else if (auto* cd = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
         scanTypeForCollections(cd->type);
+        // 6b-2: gather a foldable integer const so a LATER const-generic size in this body resolves it
+        // (`InlineArray<T,(CAP)>`). Statement-order walk = declared-before-use; runs in both the
+        // no-binding pre-pass and registerInstColls (where `_constSubst` lets `const CAP = N+1;` fold).
+        if (cd->variables) for (auto& v : *cd->variables)
+            if (v && v->name && v->name->value && v->initializer) {
+                int64_t cv; if (constValue(v->initializer, cv)) _constLocalVals[*v->name->value] = cv;
+            }
     } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
         scanExprForCollections(r->expression);
     } else if (auto* av = dynamic_cast<ArmValueNode*>(n)) {
@@ -5140,6 +5154,7 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
     // so an inline variant-ctor `match` subject (`match (Some(x))`) can infer its instance from `x`'s type.
     auto seedParams = [&](SharedParameterList params) {
         _scanLocalTys.clear();
+        _constLocalVals.clear();   // 6b-2: local const values are per-body
         if (params) for (auto& p : *params)
             if (p && p->type && p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
     };
@@ -5732,6 +5747,7 @@ void CEmitter::registerInstColls()
             else _typeSubst[pn] = gi.typeArgs[i];
         }
         _scanLocalTys.clear();
+        _constLocalVals.clear();   // 6b-2: local const values are per-body
         if (tmpl->parameters) for (auto& p : *tmpl->parameters)
             if (p && p->type && p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
         scanStmtForCollections(tmpl->block);
@@ -10391,7 +10407,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
     _paramNames.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
     _moveState.clear();   // per-function move analysis
     _pendingParamDtors.clear();
     _currentClass = nullptr;
@@ -10816,7 +10832,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _currentClass = &ci;
     _refParams.clear();
     _paramNames.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
     _currentReturnCType = "void";
     _tempCounter = 0;
     _scopes.clear();
@@ -10890,7 +10906,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _refParams.clear();
     _paramNames.clear();
     _viewParams.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
     _moveState.clear();   // per-method move analysis
     _inCtor = isCtor;   // const fields are writable only here
     if (isConstMethod) _constLocals.insert("this");   // `this` is immutable (deep)
@@ -10983,7 +10999,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _scopes.clear();
     _currentClass = nullptr;
     _refParams.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
     _inStaticMethod = false;
 }
 
