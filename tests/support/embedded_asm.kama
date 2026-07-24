@@ -1,0 +1,9 @@
+// MCU step 6a transpile-grep subject. `wfi` (wait-for-interrupt) is ARM-only — the x86 CI host can't
+// assemble it — so this is checked by shape (the emitted C), not run, mirroring @interrupt/@section.
+// The multi-instruction string also proves the emitter C-escapes the `\n` (a full memory barrier around
+// a masked critical section: mask interrupts, then a data sync barrier).
+fn int32 main() {
+    unsafe { asm("wfi"); }
+    unsafe { asm("cpsid i\n\tdsb"); }
+    return 0;
+}

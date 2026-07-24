@@ -158,6 +158,11 @@ test_one() {
         if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then
             echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return
         fi
+        # Inline asm (MCU 6a) is native/embedded-only — target-specific machine instructions have no wasm
+        # form. Skip any fixture that uses `asm(` on the wasm leg (mnemonics like `nop`/`wfi` aren't wasm).
+        if grep -q 'asm(' "$src"; then
+            echo "SKIP $name (inline asm: native/embedded only)" >"$out"; echo SKIP >"$res"; return
+        fi
     else
         if [ "$uses_net_web" = 1 ]; then
             echo "SKIP $name (web net: browser-only transport)" >"$out"; echo SKIP >"$res"; return

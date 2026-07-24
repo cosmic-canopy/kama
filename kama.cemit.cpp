@@ -770,6 +770,26 @@ std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
     return _funcs[tagKey].cName + "(&" + tv + ")";
 }
 
+// Escape a decoded string's bytes into the body of a C `"..."` literal (no surrounding quotes). Shared by
+// `StringNode` lowering and inline-asm lowering — the asm path in particular relies on `\n`/quote/backslash
+// escaping so a multi-instruction `asm("cpsid i\n\tdsb")` produces a well-formed C string.
+std::string CEmitter::cEscapeStringBody(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n";  break;
+            case '\t': out += "\\t";  break;
+            case '\r': out += "\\r";  break;
+            default:   out += c;      break;
+        }
+    }
+    return out;
+}
+
 std::string CEmitter::emitExpression(SharedExpression expr)
 {
     if (!expr) return "";
@@ -828,23 +848,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<StringNode*>(n)) {
-        // Lower to a borrowed runtime string. The lexer already produced the
-        // raw bytes; emit them as a C string literal (escaping is a later pass).
+        // Lower to a borrowed runtime string. The lexer already produced the raw bytes; emit them as a
+        // C string-literal body (shared with inline-asm lowering via cEscapeStringBody).
         const std::string& s = v->value ? *v->value : std::string();
-        std::ostringstream os;
-        os << "kama_string_lit(\"";
-        for (char c : s) {
-            switch (c) {
-                case '\\': os << "\\\\"; break;
-                case '"':  os << "\\\""; break;
-                case '\n': os << "\\n";  break;
-                case '\t': os << "\\t";  break;
-                case '\r': os << "\\r";  break;
-                default:   os << c;      break;
-            }
-        }
-        os << "\", " << s.size() << ")";
-        return os.str();
+        return "kama_string_lit(\"" + cEscapeStringBody(s) + "\", " + std::to_string(s.size()) + ")";
     }
 
     if (auto* is = dynamic_cast<InterpolatedStringNode*>(n)) return emitInterpolation(is);
@@ -1654,6 +1661,21 @@ std::string CEmitter::emitCondition(SharedExpression cond)
     return stripRedundantOuterParens(s);
 }
 
+// `asm("...")` (MCU 6a) — lower to `__asm__ __volatile__("<text>" : : : "memory")`. Always volatile (never
+// elided/reordered) and always a full memory clobber (so `cpsid i`/`dsb`/`dmb` order memory correctly by
+// default). Requires an enclosing `unsafe { }` — the same `_inUnsafe` gate as raw pointer index/store.
+void CEmitter::emitAsm(AsmNode* a, int depth)
+{
+    if (!_inUnsafe) {
+        unsupported("inline `asm(...)` must be inside an `unsafe { }` block", a->line);
+        return;
+    }
+    const std::string& s = a->code ? *a->code : std::string();
+    line(a->line);
+    indent(depth);
+    *_out << "__asm__ __volatile__(\"" << cEscapeStringBody(s) << "\" : : : \"memory\");\n";
+}
+
 void CEmitter::emitStatement(SharedStatement stmt, int depth)
 {
     if (!stmt) return;
@@ -1704,6 +1726,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // `scope { }` (M4). Scope-only; shared-nothing by construction (bare top-level entry + moved arg).
     if (auto* iso = dynamic_cast<IsolateNode*>(n)) {
         emitIsolate(iso, depth);
+        return;
+    }
+
+    // `asm("...")` — inline assembly (MCU 6a). Requires `unsafe { }` (same greppable seam as raw pointer
+    // ops); lowers to the volatile + memory-clobber form so it is never elided/reordered.
+    if (auto* a = dynamic_cast<AsmNode*>(n)) {
+        emitAsm(a, depth);
         return;
     }
 

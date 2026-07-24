@@ -1,0 +1,13 @@
+// MCU step 6a — inline assembly. `asm("...")` inside `unsafe { }` lowers to
+// `__asm__ __volatile__("..." : : : "memory")`. A `nop` is a legal x86 instruction, so this fixture
+// builds AND runs on the CI host (native/ASan legs); ARM-only mnemonics (`wfi`) are checked by the
+// transpile-grep guard in tools/check-embedded.sh instead. asm is native/embedded only — the runner
+// SKIPs it on the wasm leg.
+fn int32 main() {
+    int32 n = 0;
+    while (n < 21) {
+        unsafe { asm("nop"); }   // a harmless no-op; proves the lowering assembles + runs
+        n = n + 1;
+    }
+    return n + 1;   // 22
+}

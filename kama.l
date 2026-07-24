@@ -333,6 +333,7 @@ static struct name_value keywords [] = {
     {"abstract",    ABSTRACT},
     {"alignof",     ALIGNOF},
     {"as",          AS},
+    {"asm",         ASM},
     {"base",        BASE},
     {"bool",        BOOL},
     {"break",       BREAK},

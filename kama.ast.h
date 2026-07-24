@@ -334,6 +334,16 @@ public:
         : ASTNode(context),  StatementNode(context), body(body) { }
 };
 
+// `asm("...")` — inline assembly (MCU step 6a). Statement-only; requires an enclosing `unsafe { }`.
+// Lowers to `__asm__ __volatile__(<text> : : : "memory")` — always volatile + a full compiler memory
+// barrier (so `cpsid i`/`dsb`/`dmb` are correct by default). One literal operand; no interpolation.
+class AsmNode : public StatementNode {
+public:
+    SharedString code;   // the raw asm text (a STRING_LITERAL value); C-escaped at emit
+    AsmNode(CodeGenContext& context, SharedString code)
+        : ASTNode(context),  StatementNode(context), code(code) { }
+};
+
 // `scope { ... }` — a structured-concurrency block (M4). It owns the isolates `spawn`ed inside it and
 // JOINS them all at the closing brace, BEFORE any local destructor runs (join-before-drop). That ordering
 // is the whole point: it makes a child that borrows an enclosing local sound with no lifetime inference.

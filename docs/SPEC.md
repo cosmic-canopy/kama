@@ -819,6 +819,32 @@ carries ownership across into unsafe manual storage. An *unmarked* `slot[i] = x`
 value back *out* is manual (bitwise-copy into a local, take responsibility) — there is no `give`-out of a
 raw slot; a safe `Slot<T>`/`MaybeUninit` wrapper for both directions is a tracked design spike.
 
+### Inline assembly — `asm("...")` ✅
+
+Some operations have **no C-level equivalent**: `wfi`/`wfe` (idle-sleep), `cpsid i`/`cpsie i`
+(interrupt-masked critical sections), `dsb`/`dmb`/`isb` (memory barriers), cycle-exact delays. `asm(...)`
+emits them directly.
+
+```kama
+unsafe { asm("wfi"); }                 // -> __asm__ __volatile__("wfi" : : : "memory");
+unsafe { asm("cpsid i\n\tdsb"); }      // multiple instructions in one \n-separated string
+```
+
+- **A statement** taking exactly **one string literal** (no interpolation — the text must be literal).
+- **Requires `unsafe { }`.** Inline asm is the ultimate raw operation, so it lives in the same explicit,
+  greppable seam as raw-pointer access. `asm(...)` outside `unsafe` is a hard build error
+  (*"inline `asm(...)` must be inside an `unsafe { }` block"*).
+- **Always volatile + a memory clobber.** Every `asm(...)` lowers to `__asm__ __volatile__("…" : : :
+  "memory")` — never optimized away or reordered, and **also a full compiler memory barrier**, so
+  `cpsid i`/`dsb`/`dmb` are correct by default (without the clobber the compiler could hoist memory ops
+  across them — a silent footgun). A `nop` delay with a memory clobber is harmless. There is no
+  non-volatile / no-clobber form (one way, safe default).
+- **Portability is yours.** The text is target-specific; like FFI, `asm(...)` breaks "runs anywhere C
+  runs." It is allowed anywhere inside `unsafe` (not gated to `--target embedded`).
+- Curated named helpers (`wfi()`, `disable_interrupts()`, `barrier()`) are an ordinary **library** built
+  on this primitive — the unsafe-core / safe-API-as-library model. Extended asm with operand constraints
+  and `@naked` functions are tracked follow-ons.
+
 ### Writing a collection *in* kama — `sizeof`, `panic`/`assert`, place-returning methods ✅
 
 The above pieces (a place-returning `operator[]`, `Ptr<T>` + `unsafe`, generics, RAII) let a `Vec`/matrix

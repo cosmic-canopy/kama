@@ -23,6 +23,7 @@ class BlockNode;
 class IsolateNode;
 class ScopeNode;
 class ParallelForNode;
+class AsmNode;
 class VariableDeclarator;
 class LocalVariableDeclaration;
 class ModuleVariableDeclaration;

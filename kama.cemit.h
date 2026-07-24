@@ -1051,6 +1051,7 @@ private:
 
     // Statements
     void emitStatement(SharedStatement stmt, int depth);
+    void emitAsm(AsmNode* a, int depth);   // `asm("...")` -> `__asm__ __volatile__("..." : : : "memory")` (MCU 6a)
     std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
                             bool& isBorrow, bool borrowOK);   // shared front half (borrow = M4.2 `ref`)
     void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)
@@ -1078,6 +1079,7 @@ private:
     void emitDtorDefinition(ClassInfo& ci);
 
     // Expressions -> C expression text
+    static std::string cEscapeStringBody(const std::string& s);   // escape a string's bytes for a C `"..."` body (no quotes/wrapper)
     std::string emitExpression(SharedExpression expr);
     std::string emitInterpolation(InterpolatedStringNode* is);   // `"a ${x} b"` -> a hoisted Formatter build
     std::string emitTaggedInterpolation(InterpolatedStringNode* is);   // `tag"a ${x} b"` -> a Template + a `<tag>(ref Template)` call

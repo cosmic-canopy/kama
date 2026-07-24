@@ -80,4 +80,19 @@ if [ ! -s "$secobj" ]; then
     echo "check-embedded: FAIL — @section --target embedded produced no object" >&2; exit 1
 fi
 
-echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section)"
+# 4. MCU STEP 6a — inline assembly. `wfi`/`cpsid i`/`dsb` are ARM-only (the x86 host can't assemble them),
+#    so we assert the emitted-C SHAPE: `asm("...")` inside `unsafe { }` lowers to the volatile + memory-
+#    clobber form, with multi-instruction strings correctly C-escaped (`\n`). Same transpile-grep rationale
+#    as @interrupt above.
+ASM="$ROOT/tests/support/embedded_asm.kama"
+asmc="$tmp/asm.c"
+if [ ! -f "$ASM" ]; then echo "check-embedded: missing $ASM" >&2; exit 1; fi
+"$KAMA" transpile "$ASM" -o "$asmc" >/dev/null
+if ! grep -qF '__asm__ __volatile__("wfi" : : : "memory")' "$asmc"; then
+    echo "check-embedded: FAIL — asm(\"wfi\") did not lower to __asm__ __volatile__(\"wfi\" : : : \"memory\")" >&2; exit 1
+fi
+if ! grep -qF '__asm__ __volatile__("cpsid i\n\tdsb" : : : "memory")' "$asmc"; then
+    echo "check-embedded: FAIL — multi-instruction asm did not C-escape the newline into one volatile asm" >&2; exit 1
+fi
+
+echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm)"

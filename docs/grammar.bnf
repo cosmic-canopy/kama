@@ -449,6 +449,7 @@ embedded_statement
   | spawn_statement
   | scope_statement
   | parallel_for_statement
+  | asm_statement
   ;
 arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
@@ -457,6 +458,12 @@ arm_value_statement
   ;
 unsafe_statement
   : UNSAFE block
+  ;
+  /* `asm("wfi");` — inline assembly (MCU step 6a). One string-literal operand; lowers to
+     `__asm__ __volatile__("<text>" : : : "memory")`. The emitter requires an enclosing `unsafe `
+     (the single greppable raw-operation seam) and always emits the volatile + memory-clobber form. */
+asm_statement
+  : ASM LPAREN STRING_LITERAL RPAREN SEMICOLON
   ;
   /* `spawn worker(p: give x);` — spawn a top-level fn on a fresh OS thread with a MOVED-in arg
      bundle, then join (fused). Reuses `invocation_expression` for named-arg / `give` parsing; the

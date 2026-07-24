@@ -141,7 +141,7 @@ struct kamayystype {
 %token <string> INT INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR
 %token <string> MATCH
 %token <string> NAMESPACE
-%token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF TRY
+%token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF TRY ASM
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
 %token <string> REF RETURN STATIC STRING
 %token <string> THIS TRUE TYPE
@@ -207,7 +207,7 @@ struct kamayystype {
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
-%type <statement> marked_type_declaration unsafe_statement spawn_statement scope_statement parallel_for_statement arm_value_statement retroactive_impl_declaration
+%type <statement> marked_type_declaration unsafe_statement spawn_statement scope_statement parallel_for_statement arm_value_statement retroactive_impl_declaration asm_statement
 %type <statement> module_variable_declaration
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
@@ -767,6 +767,7 @@ embedded_statement
   | spawn_statement
   | scope_statement
   | parallel_for_statement
+  | asm_statement
   ;
 arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
@@ -775,6 +776,12 @@ arm_value_statement
   ;
 unsafe_statement
   : UNSAFE block   { $$ = std::make_shared<UnsafeNode>(SCANNER_CODEGENCONTEXT, $2); }
+  ;
+  /* `asm("wfi");` — inline assembly (MCU step 6a). One string-literal operand; lowers to
+     `__asm__ __volatile__("<text>" : : : "memory")`. The emitter requires an enclosing `unsafe { }`
+     (the single greppable raw-operation seam) and always emits the volatile + memory-clobber form. */
+asm_statement
+  : ASM LPAREN STRING_LITERAL RPAREN SEMICOLON   { $$ = std::make_shared<AsmNode>(SCANNER_CODEGENCONTEXT, $3); }
   ;
   /* `spawn worker(p: give x);` — spawn a top-level fn on a fresh OS thread with a MOVED-in arg
      bundle, then join (fused). Reuses `invocation_expression` for named-arg / `give` parsing; the

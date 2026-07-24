@@ -1,0 +1,6 @@
+// MCU step 6a — inline `asm(...)` is a raw operation and MUST be inside `unsafe { }`. Without it, the
+// emitter rejects the program (the same greppable seam as raw pointer index/store).
+fn int32 main() {
+    asm("nop");   // no enclosing `unsafe` -> rejected
+    return 0;
+}
