@@ -385,12 +385,43 @@ serialization, networking).
   | **ISR declaration** | ✅ **SHIPPED (step 4).** `@interrupt expose fn void h()` → `__attribute__((interrupt, used))` — the Cortex-M / RISC-V / classic-ARM calling convention (enforced `void f(void)`; `expose` gives the vector table a bare symbol; `used` survives `--gc-sections`). Vendor `ISR(VECTOR)` (AVR) is the later `@interrupt("VECTOR")` step. Paired with **`@section(".x")`** placement (statics + functions → `__attribute__((section(".x")))`) for the vector table / flash / DMA RAM |
   | **Toolchain / build** | target triples (`thumbv*-none-eabi`, `avr`, …), linker scripts (`-T`), startup objects, MCU flags, and linking the vendor HAL (pico-sdk / Arduino core / esp-idf) + flashing |
   | **Panic/trap handler** | ✅ **SHIPPED (step 3).** Under `KAMA_TARGET_EMBEDDED`, bounds/panic/OOM funnel through one **overridable weak `kama_panic_handler`** (default `for(;;) __builtin_trap()`); a firmware author provides a strong symbol to blink / reset / breakpoint. (Numeric traps were already runtime-free via `__builtin_trap`.) |
+  | **Inline assembly** | ✅ **SHIPPED (step 6a).** `asm("wfi");` inside `unsafe { }` → `__asm__ __volatile__("…" : : : "memory")` (always volatile + a full compiler memory barrier, so `cpsid i`/`dsb`/`dmb` order memory correctly by default). One string operand, no interpolation; `\n`-separated for multiple instructions. Native/embedded only (wasm has no register-level inline asm; the runner SKIPs it). Curated named helpers (`wfi()`, `disable_interrupts()`) are a thin follow-on **library** over this primitive; extended-asm operands + `@naked` are deferred. |
 
   **Why kama fits well:** no-GC + RAII → deterministic, no hidden pauses; allocation is explicit in the
   emitted C (greppable no-heap audit); trap lowering already dependency-free; `InlineArray<T,N>`, sized ints, and
   `unsafe`/`Ptr` FFI already exist. **North star: blink an LED** (the embedded "first triangle") — forces
   exactly the critical path and nothing else. **Start Cortex-M, not AVR** (`zig cc`/clang do `thumbv*-none-eabi`
   cleanly; pico-sdk is tidy; AVR's Harvard/`PROGMEM`/`avr-gcc`-only pain comes later).
+
+### Compile-time evaluation & platform-specific compilation (const-eval campaign — its own milestone)
+
+Motivated by both MCU (baud divisors, gamma/trig/CRC tables, `.rodata` layout) and the engine (lookup
+tables, shader/permutation specialization) — see [MCU_READINESS.md](MCU_READINESS.md) and
+[ENGINE_READINESS.md](ENGINE_READINESS.md) const-eval rows. A ladder, landed incrementally:
+
+- **6b-1 — arithmetic on const-generic params** ✅ **SHIPPED.** `constValue()` folds
+  binary/unary/cast trees, grammar accepts `InlineArray<T, (N+1)>` (parenthesized const size), and a
+  post-discovery pass (`registerInstColls`) registers const-param-derived collection sizes before the
+  collection typedefs emit. Fixture `const_generic_arith`.
+- **6b-2 — named-const references in const-init** (next checkpoint). `const int32 CAP = 64;` driving a
+  size / static initializer. **Design cut to make first:** which const forms (function-local vs a
+  top-level/class const), and how the value is gathered early enough — const-generic *sizes* resolve in
+  a pre-pass, so a named-const size needs its value gathered before that pass (the same phase-ordering
+  the 6b-1 `registerInstColls` fix navigated), plus local-const *scope* lifetime. Self-contained once
+  the const-value table + gathering phase is settled.
+- **6b-3 — compile-time function evaluation** (own campaign). A bounded AST interpreter (a sibling of
+  the emitter) over a small subset — integer/float arithmetic, locals, `if`, `for`/`while`, fixed-size
+  array writes, calls to other const fns — that bakes `static const T tbl[N] = { … }`. Needs (a) a
+  **new keyword** — `const fn` is already the const-*method* qualifier, so this is likely `comptime fn`
+  — and (b) a **step/branch budget** so a runaway const fn can't hang the compiler (as C++
+  constexpr-steps / Zig branch-quota). Tractable and well-trodden, but a new subsystem.
+- **Platform-specific compilation** — the no-`#ifdef` answer. **Design stance: favor
+  proper abstractions — platform-agnostic `contract`s implemented by per-platform types, selected by a
+  high-level tag (Go-style filename suffix / a `@target(...)` decl attribute) — NOT scattered
+  in-function `static if (arch == ...)` branching (the `#ifdef`/Zig-`comptime-if` soup we explicitly
+  reject).** Const-eval supplies the *values*; whole-decl/whole-file target selection supplies the
+  *structure*. Inline asm (6a) is the raw primitive under those abstractions. (wasm cannot do inline
+  asm at all — another reason the interface seam matters.) Design doc before implementation.
 
 ## 6. Concurrency — shared-nothing by construction (✅ SHIPPED — campaign complete 2026-07-23)
 
