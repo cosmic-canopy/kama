@@ -80,6 +80,20 @@ bool CEmitter::ctTypeInfo(SharedIdentifier type, CTValue& proto)
     return true;
 }
 
+// Shape of an `InlineArray<T, N>` type for the interpreter: the element scalar prototype, the size N, and
+// the element C type (for baking). Mirrors registerFixed's extraction. Returns false for a non-array type
+// or a non-scalar / unbound element (arrays of arrays / class elements are out of scope for v1).
+bool CEmitter::ctArrayInfo(SharedIdentifier type, CTValue& elemProto, int64_t& n, std::string& elemCType)
+{
+    if (!type || !type->value || *type->value != "InlineArray") return false;
+    auto args = type->genericArgs;
+    if (!args || args->size() != 2 || !(*args)[0] || !(*args)[1]) return false;
+    if (!ctTypeInfo((*args)[0], elemProto)) return false;   // element must be a comptime scalar
+    if (!constArgN((*args)[1], n) || n <= 0) return false;
+    elemCType = cType((*args)[0]);
+    return true;
+}
+
 // Coerce a computed value to a declared type (a typed store: the local decl, an assignment target, a
 // param bind, a return). Integer stores truncate to the target width; a float32 store rounds through float.
 void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
@@ -111,6 +125,13 @@ bool CEmitter::ctFail(const char* what, int line)
 // suffix avoided — the declared type on the LHS carries it); float as a literal; bool as true/false.
 std::string CEmitter::ctRender(const CTValue& v) const
 {
+    // Fixed array → a C initializer for the `struct { T v[N]; }` (KAMA_FIXED_TYPE) carrier: `{ .v = {…} }`.
+    if (v.isArray) {
+        std::string s = "{ .v = { ";
+        for (size_t k = 0; k < v.elems.size(); ++k) { if (k) s += ", "; s += ctRender(v.elems[k]); }
+        s += " } }";
+        return s;
+    }
     if (v.kind == CTValue::Bool)  return v.i ? "true" : "false";
     if (v.kind == CTValue::Float) {
         std::ostringstream os;
@@ -286,6 +307,22 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         return ctEvalExpr(ctAsI(cnd) != 0 ? t->LHS : t->RHS, env, out);
     }
 
+    // --- fixed-array element read `a[i]` ---
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        SharedExpression base = ea->expression ? ea->expression
+                              : (ea->identifier ? std::static_pointer_cast<ExpressionNode>(ea->identifier) : SharedExpression());
+        if (!base || !ea->expressionlist || ea->expressionlist->size() != 1)
+            return ctFail("only single-index fixed-array access is supported in a comptime fn", e->line);
+        CTValue arr; if (!ctEvalExpr(base, env, arr)) return false;
+        if (!arr.isArray) return ctFail("indexed value is not a fixed array in comptime fn", e->line);
+        CTValue idx; if (!ctEvalExpr((*ea->expressionlist)[0], env, idx)) return false;
+        int64_t i = ctAsI(idx);
+        if (i < 0 || (size_t)i >= arr.elems.size())
+            return ctFail("comptime fixed-array index out of bounds", e->line);
+        out = arr.elems[(size_t)i];
+        return true;
+    }
+
     // --- call to another comptime fn ---
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         if (!inv->identifier || !inv->identifier->value)
@@ -304,6 +341,34 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     }
 
     return ctFail("unsupported expression in comptime fn (no I/O, allocation, pointers, or strings)", e->line);
+}
+
+// Build a fixed array's element values from its initializer: `[v; N]` (fill), `[a, b, c]` (list), or
+// another array expression (a var / a comptime-fn call returning an array). Each element is a typed store.
+bool CEmitter::ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue& elemProto, size_t n, std::vector<CTValue>& out)
+{
+    auto* al = dynamic_cast<ArrayLiteralNode*>(init.get());
+    if (!al) {   // an array-valued expression
+        CTValue src; if (!ctEvalExpr(init, env, src)) return false;
+        if (!src.isArray || src.elems.size() != n) return ctFail("comptime array initializer shape mismatch", init->line);
+        out = src.elems; return true;
+    }
+    if (al->fillValue && al->fillCount) {
+        CTValue fv; if (!ctEvalExpr(al->fillValue, env, fv)) return false;
+        int64_t fc;
+        if (!constValue(al->fillCount, fc)) { CTValue c; if (!ctEvalExpr(al->fillCount, env, c)) return false; fc = ctAsI(c); }
+        if (fc < 0 || (size_t)fc != n) return ctFail("comptime array fill count does not match the declared size", init->line);
+        ctCoerce(elemProto, fv);
+        out.assign(n, fv);
+        return true;
+    }
+    if (al->elements) {
+        if (al->elements->size() != n) return ctFail("comptime array literal length does not match the declared size", init->line);
+        out.clear();
+        for (auto& el : *al->elements) { CTValue ev; if (!ctEvalExpr(el, env, ev)) return false; ctCoerce(elemProto, ev); out.push_back(ev); }
+        return true;
+    }
+    return ctFail("unsupported comptime array initializer", init->line);
 }
 
 // ---------------------------------------------------------------------------
@@ -326,8 +391,22 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     }
 
     if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
+        // Fixed-array local (`InlineArray<T,N> t = [0; N];` / `= [a, b, c];`) — the table carrier.
+        CTValue elemProto; int64_t n64; std::string elemCType;
+        if (ctArrayInfo(d->type, elemProto, n64, elemCType)) {
+            if (d->variables) for (auto& v : *d->variables) {
+                if (!v || !v->name || !v->name->value) continue;
+                CTValue arr = elemProto; arr.isArray = true; arr.elemCType = elemCType;
+                arr.elems.assign((size_t)n64, [&]{ CTValue z = elemProto; z.i = 0; z.f = 0.0; return z; }());
+                if (v->initializer) {
+                    if (!ctBuildArrayInit(v->initializer, env, elemProto, (size_t)n64, arr.elems)) return CTFlow::Fail;
+                }
+                env.vars[*v->name->value] = arr;
+            }
+            return CTFlow::Normal;
+        }
         CTValue proto;
-        if (!ctTypeInfo(d->type, proto)) { ctFail("a comptime fn local must be a scalar type (Stage 3 adds fixed arrays)", s->line); return CTFlow::Fail; }
+        if (!ctTypeInfo(d->type, proto)) { ctFail("a comptime fn local must be a scalar or fixed-array type", s->line); return CTFlow::Fail; }
         if (d->variables) for (auto& v : *d->variables) {
             if (!v || !v->name || !v->name->value) continue;
             CTValue val;
@@ -353,7 +432,25 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     }
 
     if (auto* a = dynamic_cast<AssignmentNode*>(n)) {
-        if (a->token != EQ) { ctFail("only plain `=` assignment is supported in a comptime fn (Stage 2)", s->line); return CTFlow::Fail; }
+        if (a->token != EQ) { ctFail("only plain `=` assignment is supported in a comptime fn", s->line); return CTFlow::Fail; }
+        // Fixed-array element write `t[i] = v` — the table-fill primitive.
+        if (auto* ea = dynamic_cast<ElementAccessNode*>(a->unaryExpression.get())) {
+            SharedExpression base = ea->expression ? ea->expression
+                                  : (ea->identifier ? std::static_pointer_cast<ExpressionNode>(ea->identifier) : SharedExpression());
+            auto* bid = base ? dynamic_cast<IdentifierNode*>(base.get()) : nullptr;
+            if (!bid || !bid->value) { ctFail("a comptime array-element write targets a local fixed array", s->line); return CTFlow::Fail; }
+            auto it = env.vars.find(*bid->value);
+            if (it == env.vars.end() || !it->second.isArray) { ctFail(("`" + (bid->value ? *bid->value : std::string("?")) + "` is not a fixed-array local in comptime fn").c_str(), s->line); return CTFlow::Fail; }
+            if (!ea->expressionlist || ea->expressionlist->size() != 1) { ctFail("only single-index array writes are supported in a comptime fn", s->line); return CTFlow::Fail; }
+            CTValue idx; if (!ctEvalExpr((*ea->expressionlist)[0], env, idx)) return CTFlow::Fail;
+            int64_t i = ctAsI(idx);
+            if (i < 0 || (size_t)i >= it->second.elems.size()) { ctFail("comptime fixed-array write index out of bounds", s->line); return CTFlow::Fail; }
+            CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
+            CTValue elemProto = it->second; elemProto.isArray = false; elemProto.elems.clear();   // element scalar proto
+            ctCoerce(elemProto, val);
+            it->second.elems[(size_t)i] = val;
+            return CTFlow::Normal;
+        }
         auto* tgt = dynamic_cast<IdentifierNode*>(a->unaryExpression.get());
         if (!tgt || !tgt->value) { ctFail("comptime assignment target must be a local (Stage 3 adds array-element writes)", s->line); return CTFlow::Fail; }
         auto it = env.vars.find(*tgt->value);
@@ -411,6 +508,21 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
                 CTFlow ir = ctEvalStmt(is, env, ret);
                 if (ir == CTFlow::Fail) return ir;
             }
+        }
+        return CTFlow::Normal;
+    }
+
+    if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+        if (fe->isRef) { ctFail("`foreach (ref …)` write-back is not supported in a comptime fn — use indexed `a[i] = …`", s->line); return CTFlow::Fail; }
+        CTValue arr; if (!ctEvalExpr(fe->expression, env, arr)) return CTFlow::Fail;
+        if (!arr.isArray) { ctFail("`foreach` in a comptime fn iterates a fixed array only", s->line); return CTFlow::Fail; }
+        if (!fe->name || !fe->name->value) return CTFlow::Normal;
+        const std::string& bind = *fe->name->value;
+        for (auto& elv : arr.elems) {
+            env.vars[bind] = elv;   // by value (a fresh copy per iteration)
+            CTFlow f = ctEvalStmt(fe->body, env, ret);
+            if (f == CTFlow::Return || f == CTFlow::Fail) return f;
+            if (f == CTFlow::Break) break;
         }
         return CTFlow::Normal;
     }
@@ -488,7 +600,19 @@ void CEmitter::evalComptimeConsts()
             _ctErroredConsts.insert(dc.cName);   // a precise error was emitted; suppress the emit-time duplicate
             continue;
         }
-        // Coerce to the constant's declared type, then bake.
+        // Coerce/validate against the constant's declared type, then bake.
+        CTValue elemProto; int64_t an; std::string aelem;
+        if (ctArrayInfo(dc.type, elemProto, an, aelem)) {
+            if (!v.isArray || (int64_t)v.elems.size() != an) {
+                ctFail(("a `comptime` array constant's initializer must return an `InlineArray` of the "
+                        "declared size — `" + dc.cName + "`").c_str(), dc.line);
+                _ctErroredConsts.insert(dc.cName);
+                continue;
+            }
+            v.elemCType = aelem;   // bake with the constant's declared element C type
+            _comptimeConstVals[dc.cName] = v;
+            continue;
+        }
         CTValue proto;
         if (ctTypeInfo(dc.type, proto)) ctCoerce(proto, v);
         _comptimeConstVals[dc.cName] = v;

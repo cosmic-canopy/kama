@@ -1167,6 +1167,8 @@ private:
     CTFlow ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& ret);
     bool ctResolveConst(SharedIdentifier id, CTValue& out);                       // module/type comptime const -> CTValue
     bool ctTypeInfo(SharedIdentifier type, CTValue& proto);                       // Kama scalar/array type -> CTValue shape
+    bool ctArrayInfo(SharedIdentifier type, CTValue& elemProto, int64_t& n, std::string& elemCType);  // InlineArray<T,N> shape
+    bool ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue& elemProto, size_t n, std::vector<CTValue>& out);  // [v;N] / [a,b,c]
     void ctCoerce(const CTValue& proto, CTValue& v);                              // coerce v to proto's kind/width (typed store)
     void ctTruncate(CTValue& v);                                                  // wrap an Int to its declared width
     bool ctFail(const char* what, int line);                                      // emit a comptime diagnostic, mark failed

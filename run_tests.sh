@@ -134,6 +134,12 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-emb
     if sh tools/check-embedded.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# const-eval 6b-3: `comptime fn` table-baking guard (baked static-const aggregate + comptime fn not emitted).
+# Transpile-only + host-checkable, so run once on the plain native pass like the drift/embedded guards.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-comptime.sh ]; then
+    if sh tools/check-comptime.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # MCU step 5: `--no-heap` flag guard (flag-driven rejection can't ride the no-flag xfail loop). Run once on
 # the plain native pass, like the guards above.
 if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-noheap.sh ]; then

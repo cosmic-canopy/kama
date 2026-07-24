@@ -13983,7 +13983,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _nsCtx = _unitCtx[u.get()];
         for (auto& decl : *u->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
-                if (isExtern(fn) || !fn->block) continue;   // skip extern + signature types
+                if (isExtern(fn) || !fn->block || fn->isComptime) continue;   // skip extern + signature types + comptime-only fns
                 if (fn->typeParams && !fn->typeParams->empty()) continue;   // template — instantiated below
                 emitFunctionPrototype(fn);
                 any = true;
@@ -14269,6 +14269,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
             if (fn->typeParams && !fn->typeParams->empty()) continue;   // template — instantiations live in the header
+            if (fn->isComptime) continue;   // 6b-3: a comptime fn is compile-time-only — never emitted as C
             if (!isExtern(fn) && fn->block) emitFunction(fn);   // skip signature types (no body)
         } else if (dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // emitted above
