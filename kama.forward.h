@@ -25,6 +25,7 @@ class ScopeNode;
 class ParallelForNode;
 class VariableDeclarator;
 class LocalVariableDeclaration;
+class ModuleVariableDeclaration;
 class ConstVariableDeclarator;
 class ConstLocalVariableDeclaration;
 class ExpressionStatementNode;

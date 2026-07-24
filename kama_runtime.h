@@ -25,6 +25,21 @@
   #define KAMA_EXPORT __attribute__((visibility("default"), used))
 #endif
 
+// KAMA_ISOLATE_LOCAL — the per-isolate storage class for a module-level `static` (MCU campaign step 1).
+// A module `static` is per-isolate BY CONSTRUCTION (concurrency spec, "three sharing seams"): it cannot be
+// seen by another isolate, so it cannot race; cross-isolate sharing stays on the `Atomic<T>` seam.
+//  - native   : `_Thread_local` → each isolate (pthread) gets its own const/zero-initialized copy. C11 does
+//               the per-isolate init automatically — no synthesized startup hook, because the init is const.
+//  - wasm      : `_Thread_local` too. kama's wasm isolates are emscripten pthreads (`-sPROXY_TO_PTHREAD
+//               -pthread`) that SHARE one linear memory (SharedArrayBuffer), exactly like native pthreads
+//               share an address space — so a plain `static` would be shared/racy; TLS makes it per-isolate.
+//  - embedded  : empty → one core = one isolate; a plain C `static`, zero cost (set when `--target embedded` lands).
+#if defined(KAMA_TARGET_EMBEDDED)
+  #define KAMA_ISOLATE_LOCAL
+#else
+  #define KAMA_ISOLATE_LOCAL _Thread_local
+#endif
+
 // The runtime needs a few libc functions (malloc/free/memcpy/…) for collections,
 // strings, and the bounds trap. It declares them at BLOCK scope inside these
 // wrappers, NOT via <stdlib.h>/<string.h>/<stdio.h> — so those declarations stay

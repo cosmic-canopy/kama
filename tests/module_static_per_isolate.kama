@@ -1,0 +1,26 @@
+// MCU step 1 — the race-free-by-construction proof. A module `static` is PER-ISOLATE: each spawned
+// isolate gets its own copy (`_Thread_local` native / separate Worker instance wasm). Two isolates over
+// DISJOINT moved bundles each hammer THEIR OWN copy of `box` 1000x; `main`'s copy is never touched, so the
+// result is a deterministic 7 with no shared access to race on (TSan-clean). Were a `static` shared, the
+// three threads would race on one `box` and the result would drift.
+import std::concurrent;
+
+type resource Bundle { int32 pad; public ctor make() { Bundle b; b.pad = 0; return give b; } }
+
+static int32 box = 0;
+
+fn void worker(Bundle b) {
+    int32 i = 0;
+    while (i < 1000) { box = box + 1; i = i + 1; }   // this isolate's OWN copy of box; discarded at exit
+}
+
+fn int32 main() {
+    box = 7;                        // main's own copy
+    Bundle a = Bundle.make();
+    Bundle b = Bundle.make();
+    scope {
+        spawn worker(b: give a);    // disjoint moved bundle per isolate
+        spawn worker(b: give b);
+    }                               // BARRIER: both isolates joined
+    return box;                     // still 7 — the workers never touched main's copy
+}

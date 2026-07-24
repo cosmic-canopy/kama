@@ -1188,6 +1188,34 @@ float64 d = Vec2::dot(left: a, right: b);
 A `static` method has no vtable slot (so it can't be `virtual`/`override`/`abstract`) and may not touch
 `this` or a bare field.
 
+**Module statics** — `static T name = const;` at module scope declares a module-level mutable variable
+(MCU step 1). It is firmware's home for state that outlives any one call: ISR↔`main` flags, peripheral
+handles, ring/DMA buffers, flash tables.
+
+```kama
+static uint32 tick = 0;                 // deterministic const init at reset
+static bool     data_ready;             // no initializer → zero-init
+static InlineArray<uint8, 256> rx_buf;  // a zero-initialized buffer
+static Ptr<Uart> uart;                  // a peripheral handle (null until assigned)
+
+fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolate
+```
+
+- **Per-isolate by construction.** A module `static` is *not* shared global state — each isolate gets its
+  own copy (lowered `static KAMA_ISOLATE_LOCAL T name`: `_Thread_local` on native and on wasm — emscripten
+  pthreads share one linear memory — and a plain zero-cost `static` on a single-core `--target embedded`). So
+  a `static` **cannot be seen by another isolate → cannot race**; cross-isolate mutable sharing stays on the
+  greppable `Atomic<T>` / shared-region seam (see *Concurrency*). This unifies the MCU need with the threading
+  model: the same declaration is race-free the day it runs multicore (proven ThreadSanitizer-clean).
+- **v1 scope (deliberately minimal, MCU-correct).** The type must be a **value, `Ptr`, or `InlineArray`**
+  (owns nothing, needs no teardown — v1 has no static-destructor seam); a destructible `resource`, `string`,
+  or smart pointer is rejected. The initializer must be a **compile-time constant** (a literal, `sizeof`, or
+  const arithmetic); a runtime initializer (a call / `new` / `spawn`) is rejected — **omit it to zero-init**.
+  These restrictions are not stopgaps: const-init is the deterministic reset-time init a bare-metal target
+  wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
+  `static` is module-private (internal C linkage). *(`volatile`/`hardware` on a static, `.rodata`/flash
+  placement, and destructible statics are later MCU steps.)*
+
 **Operator overloading** — the sanctioned exception to named-args-only (a binary operator has exactly two
 operands, positional by nature). The full overloadable set is supported: arithmetic `+ - * / %`, comparison
 `== != < > <= >=`, bitwise `& | ^ << >>`, unary `- ! ~`, and `++`/`--`. **Arity picks the form:**

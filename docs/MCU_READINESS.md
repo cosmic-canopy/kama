@@ -50,7 +50,7 @@ mile of the no-heap story.**
 
 | Feature | Status | Why an MCU needs it | Effort |
 |---|---|---|---|
-| **Module-level mutable statics** (`static` globals with deterministic zero/const init) | ❌ missing — no module-scope mutable variable exists in the grammar | Firmware *lives* on module state: peripheral handles, ISR-shared flags, ring buffers, flash lookup tables. An ISR and `main` must share a flag; today there is no place to put it. **New language surface** (declaration + guaranteed zero/const init at reset). ROADMAP §5. **Build it *per-isolate by construction*** (plain C `static` on a single-core MCU → zero cost; `_Thread_local` on multicore native; automatic on wasm) so the same declaration is race-free under the threading model — cross-isolate sharing stays on the `Atomic<T>` seam. The concurrency model that pins this rule is now **shipped** (campaign complete 2026-07-23: isolates + channels + `scope` + `Atomic<T>` + `parallel_for`, [design/concurrency.md](design/concurrency.md) §"three sharing seams"), so this is **settled, proven ground** — statics are a targeted addition onto working code, not a co-design with an unbuilt system. **This makes MCU the lowest-risk next track.** | **M** |
+| **Module-level mutable statics** (`static` globals with deterministic zero/const init) | ✅ **SHIPPED (step 1)** — `static T name = const;`, per-isolate by construction (`KAMA_ISOLATE_LOCAL`); value/`Ptr`/`InlineArray` + const-init only in v1; TSan-clean | Firmware *lives* on module state: peripheral handles, ISR-shared flags, ring buffers, flash lookup tables. An ISR and `main` must share a flag; today there is no place to put it. **New language surface** (declaration + guaranteed zero/const init at reset). ROADMAP §5. **Build it *per-isolate by construction*** (plain C `static` on a single-core MCU → zero cost; `_Thread_local` on multicore native; automatic on wasm) so the same declaration is race-free under the threading model — cross-isolate sharing stays on the `Atomic<T>` seam. The concurrency model that pins this rule is now **shipped** (campaign complete 2026-07-23: isolates + channels + `scope` + `Atomic<T>` + `parallel_for`, [design/concurrency.md](design/concurrency.md) §"three sharing seams"), so this is **settled, proven ground** — statics are a targeted addition onto working code, not a co-design with an unbuilt system. **This makes MCU the lowest-risk next track.** | **M** |
 | **`hardware` / `volatile` qualifier for MMIO** | ❌ missing — `volatile` is a *reserved* token; the emitter hard-errors ("reserved (embedded/MMIO) but not yet implemented", `kama.cemit.cpp`) | A memory-mapped register read/write must not be optimized away or reordered. Plan: a `hardware Ptr<T>` → C `volatile T*` (mirroring how `const Ptr<T>` already lowers), explicitly **not** a concurrency primitive. ROADMAP §5. | **M** |
 | **Interrupt handlers / ISR entry** | ❌ missing — no attribute or entry-point syntax; every `fn` is an ordinary C function | An ISR is a specific symbol (vector-table slot) with a target-specific calling convention (`__attribute__((interrupt))` / AVR `ISR()` / a naked reset handler). Needs an attribute to emit it and to keep it out of the normal `main`/argv path. | **M** |
 | **Freestanding build target** (`--target embedded`: `-ffreestanding -nostdlib`, no `argc/argv` shim, `main` never returns) | 🟡 partial — the runtime is freestanding-friendly, but the driver always synthesizes a hosted `int main(int argc, char** argv)` wrapper that calls `kama_main()` and *returns* | Bare metal has no `argc`/`argv`, no `exit`, and `main` is an infinite loop (or a vendor `reset_handler`). The compiler must emit a freestanding entry (or none) and let a startup object/linker script own the vector table. | **M** |
@@ -78,10 +78,12 @@ mile of the no-heap story.**
 
 ## Recommended sequence
 
-1. **Module-level statics with deterministic init** — the single biggest blocker; nothing real runs without
-   ISR-shared state. Design the declaration + reset-time zero/const init first.
+1. **Module-level statics with deterministic init** — ✅ **DONE.** `static T name = const;`, per-isolate by
+   construction (`static KAMA_ISOLATE_LOCAL T name`; `_Thread_local` native + wasm-pthreads, plain `static` on
+   `--target embedded`), value/`Ptr`/`InlineArray` + const-init only in v1, zero-init when the initializer is
+   omitted. Race-free proven TSan-clean. Fixtures: `tests/module_static_*` (+ `xfail/module_static_*`).
 2. **`hardware` qualifier** (rename the reserved `volatile`) → `volatile T*` for MMIO — small, unblocks correct
-   register access under `-O2`.
+   register access under `-O2`. **← NEXT.**
 3. **`--target embedded`** — freestanding entry (no argv shim, `main` never returns), `-ffreestanding -nostdlib`,
    overridable panic hook. Now a blink-LED firmware links.
 4. **ISR attribute** + **section placement** — real interrupt-driven drivers.

@@ -77,6 +77,13 @@ code_declaration
   : function_declaration
   | type_declaration
   | retroactive_impl_declaration
+  | module_variable_declaration
+  ;
+
+/* MCU step 1: a module-level mutable `static`. Per-isolate by construction; value/Ptr/InlineArray + const
+   init only, enforced semantically in the emitter (the grammar reuses `variable_declarators`). */
+module_variable_declaration
+  : STATIC type variable_declarators SEMICOLON
   ;
 
 /*------------------------------------------------------------------------------

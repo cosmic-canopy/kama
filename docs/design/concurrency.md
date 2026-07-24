@@ -47,7 +47,7 @@ that green threads exist for is recovered *above* the language by a native sched
 
 | Seam | Meaning | Native | wasm | MCU |
 |---|---|---|---|---|
-| module `static` | **per-isolate** state ("each thread its own module") | `_Thread_local` (own copy per isolate) | automatic (separate Worker instance) | plain C `static`, **zero cost** (one core = one isolate) |
+| module `static` | **per-isolate** state ("each thread its own module") | `_Thread_local` (own copy per isolate) | `_Thread_local` (emscripten pthreads share one linear memory, so TLS — not a plain `static` — is what makes it per-isolate) | plain C `static`, **zero cost** (one core = one isolate) |
 | `hardware` qualifier | `volatile` MMIO + single-core ISR↔loop flag | `volatile T*` | n/a | the MCU register/ISR seam — **not** cross-isolate ([ROADMAP §5](../ROADMAP.md)) |
 | `Atomic<T>` / shared-region | the **only** cross-isolate mutable sharing | `<stdatomic.h>` / `_Atomic` | SharedArrayBuffer + Atomics | atomics if multi-core |
 
@@ -57,7 +57,11 @@ race; to share you must reach for the greppable atomic seam. This *unifies* with
 ([MCU_READINESS.md](../MCU_READINESS.md) Tier-0): the module-statics feature MCU needs is the same feature, and
 because its default semantics are per-isolate it is automatically race-free the day it runs on a multicore
 native/wasm target. On a single-core MCU there is exactly one isolate, so a `static` is an ordinary zero-cost C
-static. This campaign **pins the semantic**; the MCU milestone **builds** statics to it.
+static. This campaign **pins the semantic**; the MCU milestone (step 1, ✅ shipped) **builds** statics to it —
+`static T name = const;` lowering to `static KAMA_ISOLATE_LOCAL T name` (`_Thread_local` on native + wasm, empty
+on `--target embedded`). Note the wasm detail: kama's wasm isolates are emscripten pthreads sharing **one**
+linear memory (like native pthreads share an address space), so per-isolate `static`s need `_Thread_local`
+there too — a plain wasm `static` would be shared and racy.
 
 ## The seven questions — decided
 

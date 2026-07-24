@@ -899,6 +899,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (!_localTypes.count(nm)) {
             auto fit = _funcs.find(resolveFunc(nm, v->qualifier));
             if (fit != _funcs.end()) return fit->second.cName;
+            // A bare name that is a module-level `static` (MCU step 1) → its qualified C symbol.
+            if (_moduleStatics.count(qualify(nm))) return qualify(nm);
         }
         checkNotMoved(nm, v->line);   // reject reading a moved-from `resource` value
         return nm;
@@ -3073,6 +3075,15 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
     for (auto& decl : *unit->codeDeclarationList) {
+        // Module-level `static T name …` (MCU step 1): register each name's qualified C symbol so
+        // references in any body of this module resolve to it. Legality is checked at emission.
+        if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
+            if (mv->variables)
+                for (auto& d : *mv->variables)
+                    if (d && d->name && d->name->value)
+                        _moduleStatics[qualify(*d->name->value)] = mv->type;
+            continue;
+        }
         auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
         if (!fn || !fn->name || !fn->name->value) continue;
 
@@ -5063,7 +5074,9 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             if (p && p->type && p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
     };
     for (auto& decl : *unit->codeDeclarationList) {
-        if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+        if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
+            scanTypeForCollections(mv->type);   // register e.g. `InlineArray<uint8,256>` used only by a static
+        } else if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
             scanTypeForCollections(fn->returnType);
             if (fn->parameters) for (auto& p : *fn->parameters) if (p) scanTypeForCollections(p->type);
             seedParams(fn->parameters);
@@ -11845,6 +11858,12 @@ std::string CEmitter::exprClass(SharedExpression e)
         if (!id->value) return "";
         auto it = _localTypes.find(*id->value);
         if (it != _localTypes.end()) return it->second;
+        // A module-level `static` (MCU step 1): resolve its class type (InlineArray / value struct) so
+        // element access and method dispatch work — but a local of the same name shadows it (checked first).
+        if (!_localTypes.count(*id->value)) {
+            auto ms = _moduleStatics.find(qualify(*id->value));
+            if (ms != _moduleStatics.end()) { std::string ct = cType(ms->second); if (isClass(ct)) return ct; }
+        }
         if (_currentClass) {
             ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
             if (owner)
@@ -13649,6 +13668,68 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
 // This file's DEFINITIONS: its classes' vtable instances + interface vtables +
 // method/ctor/dtor bodies, then its free-function bodies. Prototypes for anything
 // referenced across files live in the shared header.
+// MCU step 1: a module `static` initializer must be a C constant expression (deterministic reset-time init,
+// no synthesized startup hook). Structural check — no const-eval engine exists. Allow literals, `sizeof`, and
+// unary/binary/cast/logical combinations thereof; reject everything runtime (calls, `new`, `spawn`, refs,
+// aggregates). An aggregate (InlineArray / value struct) is served by omitting the initializer (zero-init).
+static bool isConstInitExpr(ExpressionNode* e)
+{
+    if (!e) return false;
+    if (dynamic_cast<Int8Node*>(e)  || dynamic_cast<Int16Node*>(e)  || dynamic_cast<Int32Node*>(e)
+     || dynamic_cast<Int64Node*>(e) || dynamic_cast<UInt8Node*>(e)  || dynamic_cast<UInt16Node*>(e)
+     || dynamic_cast<UInt32Node*>(e)|| dynamic_cast<UInt64Node*>(e) || dynamic_cast<CharNode*>(e)
+     || dynamic_cast<Float32Node*>(e)|| dynamic_cast<Float64Node*>(e)|| dynamic_cast<BooleanNode*>(e)
+     || dynamic_cast<NullNode*>(e)  || dynamic_cast<SizeofNode*>(e))
+        return true;
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(e)) return isConstInitExpr(u->expression.get());
+    if (auto* c = dynamic_cast<CastNode*>(e))                  return isConstInitExpr(c->unaryExpression.get());
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(e))
+        return isConstInitExpr(b->LHS.get()) && isConstInitExpr(b->RHS.get());
+    if (auto* l = dynamic_cast<LogicalAndOrNode*>(e))
+        return isConstInitExpr(l->LHS.get()) && isConstInitExpr(l->RHS.get());
+    return false;
+}
+
+// MCU step 1: emit a module-level `static T name …`. Per-isolate by construction — the KAMA_ISOLATE_LOCAL
+// macro (kama_runtime.h) is `_Thread_local` on native, empty on wasm/embedded. Value/Ptr/InlineArray only;
+// no RAII/move tracking (contrast the local-decl path). Emitted before bodies (file-scope def-before-use).
+void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
+{
+    if (!mv || !mv->type || !mv->variables) return;
+    std::string ty = cType(mv->type);
+    bool isPtr = mv->type->value && *mv->type->value == "Ptr";
+    // Type gate: value / Ptr / InlineArray only. Reject anything that owns memory or needs teardown (v1 has
+    // no static-dtor seam). `InlineArray`/`FixedArray` are `isIntrinsicColl` but own no heap (collKind Fixed,
+    // a value array) — allow them; reject heap collections, smart pointers, destructible and move-only values.
+    bool isValueArray = _classes.count(ty) && _classes[ty].collKind == CollKind::Fixed;
+    if (!isPtr && !isValueArray && _classes.count(ty)
+        && (_classes[ty].destructible || _classes[ty].isIntrinsicColl
+            || isSmartPtrClass(ty) || isMoveOnlyValue(ty))) {
+        unsupported(("a module `static` must be a value, Ptr, or InlineArray (no destructible resources yet) — `"
+                     + ty + "` owns memory").c_str(), mv->line);
+        return;
+    }
+    for (auto& d : *mv->variables) {
+        if (!d || !d->name || !d->name->value) continue;
+        std::string cname = qualify(*d->name->value);
+        line(mv->line);
+        *_out << "static KAMA_ISOLATE_LOCAL " << ty << " " << cname;
+        if (d->initializer) {
+            if (!isConstInitExpr(d->initializer.get())) {
+                unsupported(("a module `static` initializer must be a compile-time constant (a literal, "
+                             "`sizeof`, or const arithmetic) — `" + *d->name->value
+                             + "` has a runtime initializer; omit it to zero-init").c_str(), mv->line);
+                *_out << " = {0}";
+            } else {
+                *_out << " = " << emitExpression(d->initializer);
+            }
+        } else {
+            *_out << " = {0}";   // deterministic reset-time zero init
+        }
+        *_out << ";\n";
+    }
+}
+
 void CEmitter::emitModuleContent(SharedCompilationUnit unit)
 {
     _nsCtx = _unitCtx[unit.get()];   // resolve this file's body references in its scope
@@ -13664,6 +13745,15 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // to _out FIRST — a body takes the address of its trampoline, which C requires defined earlier in the TU.
     std::ostringstream moduleBody;
     std::ostream* savedModuleOut = _out; _out = &moduleBody;
+    // MCU step 1: module-level `static`s into their own buffer — flushed to _out BEFORE bodies, since C
+    // requires a file-scope definition to precede its use.
+    std::ostringstream moduleStatics;
+    {
+        std::ostream* svd = _out; _out = &moduleStatics;
+        for (auto& decl : *unit->codeDeclarationList)
+            if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) emitModuleStaticDecl(mv);
+        _out = svd;
+    }
     // vtable instances + interface vtables first (referenced by ctor bodies).
     for (auto& decl : *unit->codeDeclarationList)
         if (ClassInfo* ci = classOf(decl.get())) emitVtableInstance(*ci);
@@ -13725,6 +13815,8 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         } else if (dynamic_cast<RetroactiveImplNode*>(decl.get())) {
             // `implements C for T { … }` — its methods were injected into T's ClassInfo (applyRetroactive
             // pass) and emit with T's other methods; nothing to emit at this top-level site.
+        } else if (dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
+            // MCU step 1: module-level `static` — already emitted into `moduleStatics` (flushed before bodies).
         } else if (decl) {
             unsupported("top-level declaration", decl->line);
             *_out << "\n";
@@ -13733,6 +13825,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // Restore the real stream, emit any `isolate` trampolines this module produced (they must precede the
     // bodies that reference them), then the buffered bodies.
     _out = savedModuleOut;
+    *_out << moduleStatics.str();   // file-scope statics precede the bodies that reference them
     for (auto& h : _fileScopeHelpers) *_out << h;
     _fileScopeHelpers.clear();
     *_out << moduleBody.str();

@@ -1,0 +1,10 @@
+// MCU step 1: an `InlineArray` static (a zero-initialized ring/DMA buffer) — the value aggregate case.
+static InlineArray<int32, 4> buf;
+
+fn int32 main() {
+    buf[0] = 10;
+    buf[1] = 11;
+    buf[2] = 21;
+    // buf[3] stays 0 (zero-init)
+    return buf[0] + buf[1] + buf[2] + buf[3];   // 42
+}

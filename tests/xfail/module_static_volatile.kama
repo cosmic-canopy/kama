@@ -1,0 +1,5 @@
+// `volatile` (to be renamed `hardware`, MCU step 2) is not accepted on a module `static` in step 1 —
+// the grammar allows no modifier between `static` and the type. Rejected (a syntax error). When step 2
+// lands the `hardware` qualifier, replace this with the accepted form.
+static volatile int32 reg = 0;
+fn int32 main() { return 0; }

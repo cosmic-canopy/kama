@@ -1,0 +1,14 @@
+// MCU step 1: a module-level `static` shared between `main` and a helper function (same isolate).
+// Proves the declaration, program-wide reference resolution, and mutation.
+static int32 counter = 0;
+static uint32 step = 10;
+
+fn void bump() { counter = counter + cast<int32>(step); }
+
+fn int32 main() {
+    bump();
+    bump();
+    bump();
+    counter = counter + 12;   // 3*10 + 12 = 42
+    return counter;
+}

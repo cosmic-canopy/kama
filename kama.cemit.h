@@ -423,6 +423,10 @@ private:
 
     std::map<std::string, FuncSig> _funcs;   // kama function name -> signature
     std::map<std::string, SigInfo> _sigs;    // function-pointer signature types
+    std::map<std::string, SharedIdentifier> _moduleStatics;   // qualified C symbol -> type node of each
+                                             // module-level `static` (MCU step 1). A bare ref resolves to the
+                                             // symbol (name) and its type (element access / method dispatch)
+                                             // when the name is not a local/param/field/func.
     bool isSigType(const std::string& name) const { return _sigs.count(name) != 0; }
     std::set<std::string> _refParams;        // by-ref params of the function being emitted
     std::set<std::string> _paramNames;       // parameter names of the function being emitted — a local
@@ -1189,6 +1193,7 @@ private:
     void collectProgram(const std::vector<SharedCompilationUnit>& units);
     void emitHeaderContent(const std::vector<SharedCompilationUnit>& units);  // typedefs/structs/protos/macros
     void emitModuleContent(SharedCompilationUnit unit);                       // this file's vtables + defs
+    void emitModuleStaticDecl(ModuleVariableDeclaration* mv);                 // MCU step 1: module-level `static`
 };
 
 #endif // __KAMA_CEMIT_H__

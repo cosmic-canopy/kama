@@ -380,6 +380,18 @@ public:
     virtual SymbolType symbolType() { return SymbolType::VARIABLE; }
 };
 
+// A module-level `static T name = const-expr;` (MCU campaign step 1). Per-isolate by construction —
+// lowered `static KAMA_ISOLATE_LOCAL T …`. Reuses VariableDeclarator; const-init + value/Ptr/InlineArray
+// legality are enforced semantically in the emitter (there is no grammar-level const check).
+class ModuleVariableDeclaration : public StatementNode {
+public:
+    SharedIdentifier type;
+    SharedVariableDeclaratorList variables;
+    ModuleVariableDeclaration(CodeGenContext& context, SharedIdentifier type, SharedVariableDeclaratorList variables)
+        : ASTNode(context),  StatementNode(context), type(type), variables(variables) { }
+    virtual SymbolType symbolType() { return SymbolType::VARIABLE; }
+};
+
 class ConstLocalVariableDeclaration : public StatementNode {
 public:
     SharedIdentifier type;

@@ -208,6 +208,7 @@ struct kamayystype {
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
 %type <statement> marked_type_declaration unsafe_statement spawn_statement scope_statement parallel_for_statement arm_value_statement retroactive_impl_declaration
+%type <statement> module_variable_declaration
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <namespacedeclaration> namespace_opt
@@ -332,6 +333,14 @@ code_declaration
   : function_declaration
   | type_declaration
   | retroactive_impl_declaration
+  | module_variable_declaration
+  ;
+
+/* Module-level mutable static (MCU campaign step 1). `STATIC` is a unique prefix at top level
+   (fn/type/retro-impl don't start with it), so no conflict. Reuses `variable_declarators`;
+   const-init + value/Ptr/InlineArray legality are enforced semantically in the emitter. */
+module_variable_declaration
+  : STATIC type variable_declarators SEMICOLON   { $$ = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $2, $3); }
   ;
 
 /*------------------------------------------------------------------------------ 

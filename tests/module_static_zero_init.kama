@@ -1,0 +1,9 @@
+// MCU step 1: a `static` with no initializer is deterministically zero-initialized at reset.
+static int32 z;
+static bool flag;
+
+fn int32 main() {
+    int32 r = z + 42;              // z == 0
+    if (flag == false) { r = r; } // flag == false (zero)
+    return r;                     // 42
+}

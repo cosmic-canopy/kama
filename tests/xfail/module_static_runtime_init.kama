@@ -1,0 +1,4 @@
+// A module static initializer must be a compile-time constant — a call is a runtime initializer.
+fn int32 compute() { return 5; }
+static int32 val = compute();
+fn int32 main() { return val; }
