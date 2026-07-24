@@ -780,6 +780,7 @@ private:
     bool explicitGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedIdentifierList typeArgs,
                              int line, GenericInst& out);
     void emitGenericInst(const GenericInst& gi, bool prototypeOnly);
+    void registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
 
     // Smart pointers (Owned, Shared). If `cls` is a smart-pointer type,
     // rewrite `cls` -> pointee T and `recvExpr` -> "(recv).ptr" (a T*) (auto-deref).

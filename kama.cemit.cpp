@@ -4012,6 +4012,38 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
     if (auto* v = dynamic_cast<UInt32Node*>(n)) { out = v->value; return true; }
     if (auto* v = dynamic_cast<UInt64Node*>(n)) { out = (int64_t)v->value; return true; }
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) return constArgN(std::static_pointer_cast<IdentifierNode>(e), out);
+
+    // MCU 6b-1: fold const arithmetic when every operand resolves, so a const-generic param can drive a
+    // computed size (`Fixed<T, N+1>`, `2*N`). Recurses through the same shape `isConstInitExpr` permits.
+    if (auto* c = dynamic_cast<CastNode*>(n))
+        return constValue(c->unaryExpression, out);   // integer casts are value-preserving for the int64 fold
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        int64_t v;
+        if (!constValue(u->expression, v)) return false;
+        switch (u->token) {
+            case PLUS:  out = v;   return true;
+            case MINUS: out = -v;  return true;
+            case TILDE: out = ~v;  return true;
+            default:    return false;   // `!` etc. — not an integer fold
+        }
+    }
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
+        int64_t l, r;
+        if (!constValue(b->LHS, l) || !constValue(b->RHS, r)) return false;
+        switch (b->token) {
+            case PLUS:    out = l + r; return true;
+            case MINUS:   out = l - r; return true;
+            case STAR:    out = l * r; return true;
+            case SLASH:   if (r == 0 || (l == INT64_MIN && r == -1)) return false; out = l / r; return true;
+            case PERCENT: if (r == 0 || (l == INT64_MIN && r == -1)) return false; out = l % r; return true;
+            case LTLT:    if (r < 0 || r >= 64) return false; out = (int64_t)((uint64_t)l << r); return true;
+            case GTGT:    if (r < 0 || r >= 64) return false; out = l >> r; return true;
+            case AMP:     out = l & r; return true;
+            case BAR:     out = l | r; return true;
+            case CARET:   out = l ^ r; return true;
+            default:      return false;   // comparisons/logical — not an integer size fold
+        }
+    }
     return false;
 }
 
@@ -5667,6 +5699,43 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     if (prototypeOnly) emitFunctionPrototype(tmpl, &gi.mangledName);   // emits `static` via nameOverride
     else               emitFunction(tmpl, &gi.mangledName);
 
+    _typeSubst.clear();
+    _constSubst.clear();
+    _nsCtx = savedCtx;
+}
+
+// MCU 6b-1: after generic instantiations are discovered, register any collection whose size DERIVES from a
+// const param (`InlineArray<T, (N+1)>`) by binding each instantiation's const args so `constValue` folds
+// the size. The whole-program pre-pass (collectCollections) ran with NO bindings, so it could only register
+// sizes reachable from literals; a const-param-derived size registers only here. Must run BEFORE
+// emitCollectionDefs so the concrete instance gets its C typedef. Mirrors emitGenericInst's binding.
+void CEmitter::registerInstColls()
+{
+    NsCtx savedCtx = _nsCtx;
+    for (auto& kv : _genericInsts) {
+        const GenericInst& gi = kv.second;
+        auto tit = _generics.find(gi.templateKey);
+        if (tit == _generics.end()) continue;
+        FunctionDeclarationNode* tmpl = tit->second;
+        if (!tmpl || !tmpl->block || !tmpl->typeParams) continue;
+        auto cit = _genericCtx.find(gi.templateKey);
+        _nsCtx = (cit != _genericCtx.end()) ? cit->second : savedCtx;
+        std::set<std::string> cps;
+        if (tmpl->constParams) for (auto& cp : *tmpl->constParams) if (cp) cps.insert(*cp);
+        _typeSubst.clear();
+        _constSubst.clear();
+        for (size_t i = 0; i < tmpl->typeParams->size() && i < gi.typeArgs.size(); ++i) {
+            if (!(*tmpl->typeParams)[i]) continue;
+            const std::string& pn = *(*tmpl->typeParams)[i];
+            int64_t v;
+            if (cps.count(pn) && constArgN(gi.typeArgs[i], v)) _constSubst[pn] = v;
+            else _typeSubst[pn] = gi.typeArgs[i];
+        }
+        _scanLocalTys.clear();
+        if (tmpl->parameters) for (auto& p : *tmpl->parameters)
+            if (p && p->type && p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
+        scanStmtForCollections(tmpl->block);
+    }
     _typeSubst.clear();
     _constSubst.clear();
     _nsCtx = savedCtx;
@@ -13542,6 +13611,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
+    registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
+                           // now that every instantiation is known — before the collection typedefs emit.
     computeDestructible();
     // A `type view` borrows and owns nothing, so it must not be destructible — a destructible view means
     // it has an owning/resource field (a `DynamicArray`, `Owned`/`Shared`, `string`, …) that its (absent)

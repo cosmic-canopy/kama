@@ -444,6 +444,7 @@ type_or_value_arg
   : type
   | IDENTIFIER COLON type   { $3->argName = $1; $$ = $3; }   /* NAMED override: `A: Arena` skips an earlier default */
   | literal   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, SharedString()); id->constArgValue = $1; $$ = id; }
+  | LPAREN expression RPAREN   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, SharedString()); id->constArgValue = $2; $$ = id; }   /* MCU 6b-1: const arithmetic size `InlineArray<T, (N+1)>` — parens keep `>`/`>>` unambiguous vs generic close; folded by constValue() at instantiation */
   ;
 
 qualified_identifier_no_generic
