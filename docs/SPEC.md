@@ -1274,6 +1274,55 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   `volatile` qualifier for an MMIO register or single-core ISR↔loop flag — `volatile T` for a scalar,
   `volatile T*` for a `Ptr<T>` handle. *(Destructible statics are a later MCU step.)*
 
+### Compile-time constants — `comptime` ✅
+
+A `comptime` declaration is a **named compile-time constant** (const-eval 6b-2). Three keywords name three
+orthogonal axes: `const` = *runtime immutability*, `static` = *runtime associated storage*, `comptime` =
+*computed at compile time* (and therefore also immutable and associated — those fall out). Unlike Rust's
+`const` (which fuses immutable + compile-time), Kama keeps them separate: `const` may bind a runtime value
+(`const Box b = Box.make(...)`), while `comptime` must fold before the program runs.
+
+One keyword, three scopes:
+
+```kama
+comptime int32 CAP = 64;                 // module scope — a shared named constant
+comptime int32 CAP2 = CAP + 1;           // may reference an earlier comptime (folds to 65)
+
+type value Palette {
+    public comptime int32 SIZE = 4;      // type-associated — read `Palette::SIZE`
+    comptime int32 SEED = 100;           // private (default for a `value`) — internal use only
+}
+
+fn void demo() {
+    comptime int32 N = 8;                            // local (function or block scope)
+    InlineArray<int32, (N)> a = [0; (N)];            // drives a const-generic size and fill
+    InlineArray<int32, (Palette::SIZE)> b = [0; (Palette::SIZE)];
+}
+```
+
+- **Where it lives sets how it's reached.** A **module** `comptime` is a module-level named constant
+  (subject to the module `export { }` surface). A **type** `comptime` is read as **`Type::NAME`** — via `::`
+  (the associated-item operator, like an enum variant `Result::Ok` or a static factory `Deque::withAllocator`);
+  `.` stays reserved for constructors and instance access. A type `comptime` obeys **member visibility**
+  (`public`/`private`/`protected`, default private for a `value`) — a private one is usable only inside the
+  type's own code, the same rule and diagnostic as a private field. A **local** `comptime` is scoped to its
+  function or block.
+- **Initializer must fold** — a literal, `sizeof`/`alignof`, const arithmetic, or another `comptime`. A
+  `comptime` whose initializer can't fold is an error **at the declaration** (a `comptime` local's message
+  points you back to `const` for a runtime-initialized immutable). A plain `const` *local* whose initializer
+  happens to fold is *opportunistically* usable in a compile-time position too (mirroring C++ `const` vs
+  `constexpr`: `const` works when it can, `comptime` guarantees it); at module and type scope there is no
+  runtime init point, so `comptime` is the only named-constant form.
+- **Lowering — real storage, baked references.** A `comptime` emits a genuine `static const T` symbol, so it
+  is addressable and `@section`/flash-placeable (an MCU `.rodata` table). But a reference from *another*
+  constant's initializer (`CAP2 = CAP + 1`) or a const-generic size is **baked to a literal** in the emitted
+  C. That sidesteps C's "initializer element is not constant" rule and, more importantly, means **there is no
+  static-initialization-order dependency** — Kama has no dynamic global init to order (the C++ init-order
+  fiasco cannot occur here). Constant references resolve in **declaration order**; a forward or cyclic
+  reference is a clean compile error, not undefined behavior.
+- *(Compile-time **functions** — `comptime fn`, for baking lookup tables — are a separate later campaign;
+  a comptime function is necessarily `static`, since it has no runtime `this` to read.)*
+
 **MCU codegen attributes (step 4)** — `@interrupt` and `@section(".x")` are declaration attributes (the
 existing `@name(args)` mechanism, extended from serialization to functions + statics). Each emits a C
 `__attribute__((...))` **only** on the declaration it annotates; un-annotated code is byte-identical.

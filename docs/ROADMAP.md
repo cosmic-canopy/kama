@@ -403,18 +403,26 @@ tables, shader/permutation specialization) — see [MCU_READINESS.md](MCU_READIN
   binary/unary/cast trees, grammar accepts `InlineArray<T, (N+1)>` (parenthesized const size), and a
   post-discovery pass (`registerInstColls`) registers const-param-derived collection sizes before the
   collection typedefs emit. Fixture `const_generic_arith`.
-- **6b-2 — named-const references in const-init** (next checkpoint). `const int32 CAP = 64;` driving a
-  size / static initializer. **Design cut to make first:** which const forms (function-local vs a
-  top-level/class const), and how the value is gathered early enough — const-generic *sizes* resolve in
-  a pre-pass, so a named-const size needs its value gathered before that pass (the same phase-ordering
-  the 6b-1 `registerInstColls` fix navigated), plus local-const *scope* lifetime. Self-contained once
-  the const-value table + gathering phase is settled.
-- **6b-3 — compile-time function evaluation** (own campaign). A bounded AST interpreter (a sibling of
-  the emitter) over a small subset — integer/float arithmetic, locals, `if`, `for`/`while`, fixed-size
-  array writes, calls to other const fns — that bakes `static const T tbl[N] = { … }`. Needs (a) a
-  **new keyword** — `const fn` is already the const-*method* qualifier, so this is likely `comptime fn`
-  — and (b) a **step/branch budget** so a runaway const fn can't hang the compiler (as C++
-  constexpr-steps / Zig branch-quota). Tractable and well-trodden, but a new subsystem.
+- **6b-2 — named compile-time constants (`comptime`)** ✅ **SHIPPED.** A named constant at three scopes,
+  one keyword: **local/block** (`comptime T N = <expr>;`, explicit — errors at the decl if it can't fold;
+  a plain `const` local still folds opportunistically, C++ `const`/`constexpr`-style), **module**
+  (`comptime T NAME = <expr>;`), and **type** (`comptime T NAME` read `Type::NAME`, member-visibility-
+  controlled). Three orthogonal axes settled: `const` = runtime-immutable, `static` = runtime-associated,
+  `comptime` = compile-time. Values fold via `constValue` (registries `_constLocalVals` / `_moduleConsts`
+  / `_typeConsts`, gathered before the collection pre-pass); lowers to a real `static const` symbol
+  (addressable / `@section`-able) with **cross-constant references baked to literals** → no C static-init-
+  order dependency (the fiasco cannot occur; forward/cyclic refs are a clean error). Fixtures
+  `comptime_local` / `comptime_module` / `comptime_type` (+ `const_local_size` for the opportunistic path).
+- **6b-3 — compile-time function evaluation (`comptime fn`)** (own campaign). A bounded AST interpreter (a
+  sibling of the emitter) over a small subset — integer/float arithmetic, locals, `if`, `for`/`while`,
+  fixed-size array writes, calls to other comptime fns — that bakes `static const T tbl[N] = { … }`. The
+  keyword direction is settled: **`comptime fn`** (extends the 6b-2 `comptime` axis; `const fn` is already
+  the const-*method* qualifier, and a comptime function is necessarily `static` — no runtime `this` to
+  read — so no separate marker is needed). The real work is (a) a **purity check** (no I/O, no mutable-
+  global reads, deterministic → reproducible builds) and (b) a **step/branch budget** so a runaway comptime
+  fn can't hang the compiler (as C++ constexpr-steps / Zig `@setEvalBranchQuota`). Likely dual-use
+  (comptime-evaluated when args are constant, ordinary runtime fn otherwise), matching C++ `constexpr`.
+  Tractable and well-trodden, but a new subsystem.
 - **Platform-specific compilation** — the no-`#ifdef` answer, and **decided in direction: tag TYPES to
   force an abstraction boundary, do NOT add in-function branching.** A platform-agnostic `contract`
   defines the seam; per-platform concrete types implement it and carry a **`@target(...)`-style tag**;
