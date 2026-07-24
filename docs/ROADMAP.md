@@ -415,13 +415,16 @@ tables, shader/permutation specialization) — see [MCU_READINESS.md](MCU_READIN
   **new keyword** — `const fn` is already the const-*method* qualifier, so this is likely `comptime fn`
   — and (b) a **step/branch budget** so a runaway const fn can't hang the compiler (as C++
   constexpr-steps / Zig branch-quota). Tractable and well-trodden, but a new subsystem.
-- **Platform-specific compilation** — the no-`#ifdef` answer. **Design stance: favor
-  proper abstractions — platform-agnostic `contract`s implemented by per-platform types, selected by a
-  high-level tag (Go-style filename suffix / a `@target(...)` decl attribute) — NOT scattered
-  in-function `static if (arch == ...)` branching (the `#ifdef`/Zig-`comptime-if` soup we explicitly
-  reject).** Const-eval supplies the *values*; whole-decl/whole-file target selection supplies the
-  *structure*. Inline asm (6a) is the raw primitive under those abstractions. (wasm cannot do inline
-  asm at all — another reason the interface seam matters.) Design doc before implementation.
+- **Platform-specific compilation** — the no-`#ifdef` answer, and **decided in direction: tag TYPES to
+  force an abstraction boundary, do NOT add in-function branching.** A platform-agnostic `contract`
+  defines the seam; per-platform concrete types implement it and carry a **`@target(...)`-style tag**;
+  the toolchain selects the tagged implementation for the active target. There is deliberately **no
+  `static if (arch == ...)`** and no scattered branching — that ifdef/`comptime-if` soup is explicitly
+  rejected as ugly, and forcing the impl behind a type/interface keeps the boundary clean. This is
+  expected to be **simpler** than a branching model (a decl-level tag + selection, not an evaluator).
+  Const-eval supplies compile-time *values*; type-tagging supplies the *structure*. Inline asm (6a) is
+  the raw primitive under those per-platform types. (wasm cannot do inline asm at all — another reason
+  the interface seam matters.) Short design doc (tag syntax + selection rule) before implementation.
 
 ## 6. Concurrency — shared-nothing by construction (✅ SHIPPED — campaign complete 2026-07-23)
 
