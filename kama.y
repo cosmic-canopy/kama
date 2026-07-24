@@ -141,7 +141,7 @@ struct kamayystype {
 %token <string> INT INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR
 %token <string> MATCH
 %token <string> NAMESPACE
-%token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF
+%token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF TRY
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
 %token <string> REF RETURN STATIC STRING
 %token <string> THIS TRUE TYPE
@@ -1082,6 +1082,11 @@ new_expression
   ;
 object_creation_expression
   : NEW type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $2, $4 ); }
+    /* `try new T(...)` / `try new T.name(...)` (M-step5): the ONE non-panic construction entry — yields
+       `Optional<Owned<T>>`, `None` on OOM instead of trapping. No placement variant (a follow-on). The named
+       form is the norm under the M8 construction model (a named-ctor type rejects the bare `new`). */
+  | TRY NEW type LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $3, $5); n->isTry = true; $$ = n; }
+  | TRY NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $3, $7); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5); n->isTry = true; $$ = n; }
   | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $5, $7, $3 ); }
   | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $2, $6); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4); $$ = n; }
   | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $5, $9, $3); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7); $$ = n; }

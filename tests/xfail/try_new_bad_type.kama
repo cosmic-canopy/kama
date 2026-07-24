@@ -1,0 +1,7 @@
+// `try new` yields `Optional<Owned<T>>` (None on OOM) — assigning it to a bare `Owned<T>` must be rejected.
+import std::memory::{Owned};
+type resource Box { int32 v; public ctor make(int32 v) { Box b; b.v = v; return give b; } public fn int32 get() { return this.v; } }
+fn int32 main() {
+    Owned<Box> b = try new Box.make(v: 7);   // ERROR: must be Optional<Owned<Box>>
+    return b.get();
+}

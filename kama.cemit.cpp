@@ -1931,6 +1931,17 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // keep the two in sync (esp. the Shared ctrl asymmetry: iface path emits
                     // kama_ctrl_new(), the library-adopt path lets `adopt` allocate it).
                     std::string octy = cType(oc->type);
+                    // `try new T(...)` (M-step5): the non-panic entry — build `Optional<Owned<T>>`, `None` on
+                    // OOM instead of `kama_panic`. `nm` is assigned by both branches (declared/RAII-tracked
+                    // above). Mirrors the `ctorIsFallible` shape just below (wrap-a-box-in-a-sum-type).
+                    if (oc->isTry) {
+                        line(n->line);
+                        bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
+                        std::string s = emitTryNewBox(ty, nm, oc, n->line);
+                        _hoistOK = ph; flushHoisted(depth);
+                        if (!s.empty()) { indent(depth); *_out << s << "\n"; }
+                        return;
+                    }
                     // M4b: a fallible (`Result`-returning) named ctor via `new` builds `Result<Owned<T>,E>` —
                     // box the `Ok` payload, propagate `Err` with no allocation. `nm` (already declared +
                     // RAII-tracked at the top of this declarator) is assigned by both branches.
@@ -12540,6 +12551,78 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     std::string adoptCall = adoptM->cName + "(" + hp + (placed ? ", " + ap : "") + ")";
     s +=   lval + " = (" + target + "){ .tag = " + target + "_Ok, .u.Ok = { ." + okName + " = "
              + adoptCall + " } }; ";
+    s += "}";
+    return s;
+}
+
+// `try new T(args)` (M-step5): the ONE non-panic construction entry. Mirrors the infallible bare-`new` into
+// a library `Owned<T>` (~2033-2110) but yields `Optional<Owned<T>>` — `None` when the raw allocation fails,
+// instead of `kama_panic`. Scoped to the BARE form (no placement / named ctor — those are a follow-on). The
+// `Some`/`None` compound literal mirrors emitWeakTryUpgrade; the malloc/ctor/adopt mirrors the library-adopt
+// path in emitFallibleNewBox. `lval` (declared + RAII-tracked by the caller) is assigned on both branches.
+std::string CEmitter::emitTryNewBox(const std::string& target, const std::string& lval,
+                                    ObjectCreationNode* oc, int srcLine)
+{
+    const std::string cls = cType(oc->type);
+    std::string disp = (oc->type && oc->type->value) ? *oc->type->value : cls;
+    if (oc->placement && !oc->placement->empty()) {
+        unsupported(("`try new` has no placement form yet — `try new(allocator: …)` is a follow-on; use the "
+                     "bare `try new " + disp + "(...)` / `try new " + disp + ".name(...)`").c_str(), srcLine);
+        return "";
+    }
+    // The declared result must be `Optional<Owned<T>>` — read the `Some` payload type off the monomorphized
+    // Optional ClassInfo (substituted-concrete), like emitFallibleNewBox reads its `Ok`/`Err`.
+    ClassInfo* rc = _classes.count(target) ? &_classes[target] : nullptr;
+    VariantCase* someV = nullptr;
+    if (rc && rc->isVariant)
+        for (auto& v : rc->variants) if (v.name == "Some") { someV = &v; break; }
+    if (!someV || someV->payload.empty()) {
+        unsupported(("`try new " + disp + "(...)` must be assigned to an `Optional<Owned<" + disp
+                     + ">>` — it yields the owned value or `None` on OOM").c_str(), srcLine);
+        return "";
+    }
+    std::string S = cTypeInInstance(target, someV->payload[0].type);   // the inner Owned/Shared instance
+    const std::string someName = someV->payload[0].name;              // "value"
+    if (isSmartPtrClass(S)) {   // interface-element handle — a follow-on (bare concrete `Owned<T>` only)
+        unsupported(("`try new` into an interface handle `" + S + "` is a follow-on — box a concrete `Owned<"
+                     + disp + ">`").c_str(), srcLine);
+        return "";
+    }
+    std::string T = heapOwnerTarget(S);
+    if (T.empty() || T != cls) {
+        unsupported(("`try new " + disp + "(...)` must be assigned to an `Optional<Owned<" + disp
+                     + ">>` (an owning handle over `" + disp + "`)").c_str(), srcLine);
+        return "";
+    }
+    if (isClass(cls) && _classes[cls].isAbstractClass) {
+        unsupported(("cannot instantiate abstract class '" + cls + "'").c_str(), srcLine);
+        return "";
+    }
+    // A bare `try new` uses the default allocator (libc malloc) + `adopt` (a stateful-A box is unreachable in
+    // the bare form). `adopt` allocates nothing beyond the pointee; the box frees through GlobalAllocator.
+    ClassInfo* ao = nullptr;
+    MethodInfo* adoptM = findMethod(&_classes[S], "adopt", &ao);
+    if (!adoptM) {
+        unsupported(("`" + S + "` implements `HeapOwner` but has no `adopt` — cannot box a `try new`").c_str(), srcLine);
+        return "";
+    }
+    std::string hp = "__theap" + std::to_string(_tempCounter++);
+    // Construct the object at `hp`: a named ctor (`try new T.make(...)`, the M8 norm) MOVES a factory result
+    // into the slot; a bare positional ctor constructs in place; a ctor-less struct leaves malloc's default.
+    std::string ctorStmt;
+    if (oc->ctorName) {
+        std::string fc = newFactoryCall(cls, oc, srcLine);   // `T__make(...)`; rejects a fallible/unknown ctor
+        if (fc.empty()) return "";                            // diagnostic already emitted
+        ctorStmt = "*(" + hp + ") = " + fc + "; ";
+    } else if (_classes.count(cls) && _classes[cls].hasCtor) {
+        ctorStmt = emitReorderedCall(cls + "__ctor", hp, _classes[cls].ctorParams, oc->args, srcLine) + "; ";
+    }
+    std::string s;
+    s  = cls + "* " + hp + " = (" + cls + "*)malloc(sizeof(" + cls + ")); ";
+    s += "if (!" + hp + ") { " + lval + " = (" + target + "){ .tag = " + target + "_None }; } else { ";
+    s += ctorStmt;
+    s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
+             + adoptM->cName + "(" + hp + ") } }; ";
     s += "}";
     return s;
 }

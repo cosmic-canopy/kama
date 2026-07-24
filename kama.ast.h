@@ -708,6 +708,7 @@ public:
     SharedArgumentList args;
     SharedArgumentList placement;   // null for bare `new`; carries the placement `allocator: expr` list
     SharedIdentifier ctorName;      // null for `new Type(...)`; the named ctor for `new Type.name(...)` (M4)
+    bool isTry = false;             // `try new T(...)` (M-step5): non-panic construction -> Optional<Owned<T>> (None on OOM)
     ObjectCreationNode(CodeGenContext& context, SharedIdentifier type, SharedArgumentList args,
                        SharedArgumentList placement = SharedArgumentList())
         : ASTNode(context),  ExpressionStatementNode(context)
