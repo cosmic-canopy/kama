@@ -953,6 +953,7 @@ class_member_declaration
   ;
 constant_declaration
   : modifiers_opt CONST type constant_declarators SEMICOLON
+  | modifiers_opt COMPTIME type constant_declarators SEMICOLON      /* `comptime T NAME` — a type-associated compile-time constant, read `Type::NAME` (6b-2) */
   ;
 field_declaration
   : modifiers_opt type variable_declarators SEMICOLON

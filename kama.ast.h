@@ -844,6 +844,7 @@ public:
     SharedModifierList modifiers;
     SharedIdentifier type;
     SharedConstVariableDeclaratorList declarators;
+    bool isComptime = false;    // `comptime T NAME` (6b-2) — type-associated compile-time constant (`Type::NAME`), not a per-instance field
     ClassConstDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
             SharedIdentifier type,
             SharedConstVariableDeclaratorList declarators) 

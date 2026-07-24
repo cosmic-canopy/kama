@@ -1,0 +1,19 @@
+// 6b-2: a type-associated `comptime` constant — one per type, read as `Type::NAME` (via `::`, like an
+// enum variant / static factory; `.` stays for ctors/instances). It sizes / fills a const-generic array
+// and is member-visibility-controlled: a `public` one is reachable anywhere, a private one only inside
+// the type's own code (same rule as a private field).
+type value Palette {
+    public comptime int32 MAX  = 255;
+    public comptime int32 SIZE = 4;
+    comptime int32 SEED = 100;                 // private (default for a `value`) — internal use only
+    int32 v;
+    public ctor make(int32 v) { Palette r; r.v = v; return give r; }
+    public const fn int32 seeded() { return this.v + Palette::SEED; }   // private const OK inside the type
+}
+fn int32 main() {
+    InlineArray<int32, (Palette::SIZE)> buf = [Palette::MAX; (Palette::SIZE)];   // 4 slots, each 255
+    int32 t = 0;
+    foreach (int32 e in buf) { t = t + e; }        // 1020
+    Palette p = Palette.make(v: 5);
+    return t - 1000 + p.seeded();                  // 20 + (5 + 100) = 125
+}

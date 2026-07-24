@@ -1121,7 +1121,10 @@ private:
     // Const-correctness (deep): a const binding is immutable.
     std::set<std::string> _constLocals;                       // const local names in scope
     std::map<std::string, int64_t> _constLocalVals;           // 6b-2: local `const` name -> folded int (comptime uses: sizes/fills)
-    std::map<std::string, int64_t> _moduleConsts;             // 6b-2: module `const static` qualified name -> folded int
+    std::map<std::string, int64_t> _moduleConsts;             // 6b-2: module `comptime` qualified name -> folded int
+    // 6b-2: a type-associated `comptime` constant (`Type::NAME`). Keyed "<qualifiedClass>::<name>".
+    struct TypeConstInfo { bool hasValue; int64_t value; Visibility visibility; std::string owner; std::string cName; SharedIdentifier type; SharedExpression initializer; int line; };
+    std::map<std::string, TypeConstInfo> _typeConsts;
     std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a

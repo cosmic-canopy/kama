@@ -1299,6 +1299,7 @@ class_member_declaration
   ;
 constant_declaration
   : modifiers_opt CONST type constant_declarators SEMICOLON   { $$ = std::make_shared<ClassConstDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4); }
+  | modifiers_opt COMPTIME type constant_declarators SEMICOLON   { auto k = std::make_shared<ClassConstDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4); k->isComptime = true; $$ = k; }   /* `comptime T NAME` — a type-associated compile-time constant, read `Type::NAME` (6b-2) */
   ;
 field_declaration
   : modifiers_opt type variable_declarators SEMICOLON   { $$ = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }

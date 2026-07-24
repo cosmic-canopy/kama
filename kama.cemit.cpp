@@ -873,6 +873,16 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 for (auto& vc : vt->variants)
                     if (vc.name == nm)
                         return emitVariantConstruction(*vt, nm, SharedArgumentList(), v->line);
+            // 6b-2: `Type::NAME` -> a type-associated `comptime` constant. Access-checked (public/private,
+            // same as a field), then read through its real `static const` symbol.
+            {
+                auto tc = _typeConsts.find(en + "::" + nm);
+                if (tc != _typeConsts.end()) {
+                    auto oc = _classes.find(tc->second.owner);
+                    canAccess(oc != _classes.end() ? &oc->second : nullptr, tc->second.visibility, nm, v->line);
+                    return tc->second.cName;
+                }
+            }
             // Object field access `obj.field[.field…]` (qualifier=[obj,…], value=field).
             const std::string& head = *(*v->qualifier)[0];
             if (_localTypes.count(head) && !_localTypes[head].empty()) {
@@ -3818,8 +3828,20 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     Visibility kvis = fieldVisibility(ci, kd->modifiers, kd->line);
                     if (kd->declarators)
                         for (auto& d : *kd->declarators) {
+                            std::string fn = (d->name && d->name->value) ? *d->name->value : "";
+                            // 6b-2: a `comptime` member is a type-ASSOCIATED compile-time constant (`Type::NAME`),
+                            // NOT a per-instance field. Fold it (declaration order, so a later `B = A+1` resolves
+                            // an earlier one via _typeConsts) and register it for `Type::NAME` reads / sizes.
+                            if (kd->isComptime) {
+                                TypeConstInfo tc;
+                                tc.hasValue = d->initializer && constValue(d->initializer, tc.value);
+                                tc.visibility = kvis; tc.owner = ci.name; tc.cName = ci.name + "__" + fn;
+                                tc.type = kd->type; tc.initializer = d->initializer; tc.line = kd->line;
+                                _typeConsts[ci.name + "::" + fn] = tc;
+                                continue;
+                            }
                             FieldInfo fi;
-                            fi.name        = (d->name && d->name->value) ? *d->name->value : "";
+                            fi.name        = fn;
                             fi.type        = kd->type;
                             fi.initializer = d->initializer;
                             fi.visibility  = kvis;
@@ -4075,6 +4097,17 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
 {
     if (!arg) return false;
     if (arg->constArgValue) return constValue(arg->constArgValue, out);
+    // 6b-2: `Type::NAME` -> a type-associated `comptime` constant. Resolve the type name (last qualifier
+    // segment, through the file's scope) and look up its folded value. Access control is checked at the
+    // read site (emitPrimary), not here — a size position is always within the same compile.
+    if (arg->value && arg->qualifier && !arg->qualifier->empty()) {
+        auto tq = std::make_shared<StringList>();
+        for (size_t i = 0; i + 1 < arg->qualifier->size(); ++i) tq->push_back((*arg->qualifier)[i]);
+        std::string en = resolveUserName(*arg->qualifier->back(), tq);
+        auto tc = _typeConsts.find(en + "::" + *arg->value);
+        if (tc != _typeConsts.end() && tc->second.hasValue) { out = tc->second.value; return true; }
+        return false;
+    }
     if (arg->value && !arg->genericArg) {
         auto it = _constSubst.find(*arg->value);
         if (it != _constSubst.end()) { out = it->second; return true; }
@@ -4082,7 +4115,7 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
         // `InlineArray<T,(CAP)>` / `[v;(CAP)]`). Consulted after the generic-param binding.
         auto lv = _constLocalVals.find(*arg->value);
         if (lv != _constLocalVals.end()) { out = lv->second; return true; }
-        // 6b-2: a module `const static NAME` (qualified in the current scope). Same-module bare refs
+        // 6b-2: a module `comptime NAME` (qualified in the current scope). Same-module bare refs
         // resolve via `qualify`; `_nsCtx` is set per unit/generic so the key matches its registration.
         auto mc = _moduleConsts.find(qualify(*arg->value));
         if (mc != _moduleConsts.end()) { out = mc->second; return true; }
@@ -13946,6 +13979,24 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 emitFunction(fn);
             }
         _emitStaticInlineFn = false;
+        *_out << "\n";
+    }
+
+    // 6b-2: type-associated `comptime` constants (`Type::NAME`) — one `static const` global each, emitted
+    // once in the header before any body reads them. A folded value bakes to a literal (no C init-order
+    // dependency); a non-integer literal const falls back to its constant initializer.
+    if (!_typeConsts.empty()) {
+        for (auto& kv : _typeConsts) {
+            TypeConstInfo& tc = kv.second;
+            auto oc = _classes.find(tc.owner);
+            if (oc != _classes.end()) scopeOf(oc->second.scope, oc->second.usings, oc->second.symbolAliases);
+            *_out << "static const " << cType(tc.type) << " " << tc.cName << " = ";
+            if (tc.hasValue) *_out << tc.value;
+            else if (tc.initializer && isConstInitExpr(tc.initializer.get())) *_out << emitExpression(tc.initializer);
+            else { unsupported(("a `comptime` constant must be a compile-time constant (a literal, `sizeof`, "
+                               "`alignof`, or const arithmetic) — `" + kv.first + "`").c_str(), tc.line); *_out << "{0}"; }
+            *_out << ";\n";
+        }
         *_out << "\n";
     }
 
