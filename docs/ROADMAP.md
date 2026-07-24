@@ -448,7 +448,11 @@ tables, shader/permutation specialization) — see [MCU_READINESS.md](MCU_READIN
   expected to be **simpler** than a branching model (a decl-level tag + selection, not an evaluator).
   Const-eval supplies compile-time *values*; type-tagging supplies the *structure*. Inline asm (6a) is
   the raw primitive under those per-platform types. (wasm cannot do inline asm at all — another reason
-  the interface seam matters.) Short design doc (tag syntax + selection rule) before implementation.
+  the interface seam matters.) **► Design of record: [docs/design/conditional-compilation.md](design/conditional-compilation.md)**
+  — prepared 2026-07-24 (the campaign after const-eval). Key realization there: build-mode (`DEBUG`/`RELEASE`)
+  and platform are **one primitive** — a decl-level keep/drop gate (`@when(FLAG)`); "platform" is that gate on
+  contract impls (the tag-type seam), not a second mechanism. One attribute + one prune pass; no `#ifdef`
+  reaches the emitted C.
 
 ## 6. Concurrency — shared-nothing by construction (✅ SHIPPED — campaign complete 2026-07-23)
 
