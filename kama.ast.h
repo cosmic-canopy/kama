@@ -400,7 +400,7 @@ public:
     SharedIdentifier type;
     SharedVariableDeclaratorList variables;
     bool isHardware = false;    // `static hardware T name` — MMIO/ISR static, emits `volatile T`
-    bool isConst = false;       // `const static T NAME` (6b-2) — a named module constant (immutable, comptime init)
+    bool isComptime = false;    // `comptime T NAME = <expr>` (6b-2) — a named compile-time constant (immutable, folded)
     SharedAttributeList attributes; // `@section(".x")` (null when none) — linker-section placement
     ModuleVariableDeclaration(CodeGenContext& context, SharedIdentifier type, SharedVariableDeclaratorList variables)
         : ASTNode(context),  StatementNode(context), type(type), variables(variables) { }
@@ -411,6 +411,7 @@ class ConstLocalVariableDeclaration : public StatementNode {
 public:
     SharedIdentifier type;
     SharedConstVariableDeclaratorList variables;
+    bool isComptime = false;    // `comptime T NAME = <expr>` (6b-2) — explicit compile-time local (vs plain `const`)
     ConstLocalVariableDeclaration(CodeGenContext& context, SharedIdentifier type, SharedConstVariableDeclaratorList variables)
         : ASTNode(context),  StatementNode(context), type(type), variables(variables) { }
 };

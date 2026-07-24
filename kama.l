@@ -340,6 +340,7 @@ static struct name_value keywords [] = {
     {"case",        CASE},
     {"cast",        CAST},
     {"char",        CHAR},
+    {"comptime",    COMPTIME},
     {"const",       CONST},
     {"continue",    CONTINUE},
     {"copy",        COPY},

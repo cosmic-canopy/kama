@@ -13,6 +13,7 @@
 // ---------------------------------------------------------------------------
 
 static bool isStableStringRef(ASTNode* n);   // defined below; used by string-index materialization
+static bool isConstInitExpr(ExpressionNode* e);   // defined below; used by the `comptime` local-decl check
 
 CEmitter::CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives)
     : _out(&out)
@@ -1799,7 +1800,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     _constLocals.insert(nm);
                     // 6b-2: bind the folded value so a later local `InlineArray<T,(CAP)>` / `[v;(CAP)]`
                     // resolves at emit time (cType/emitArrayLiteral call constValue). Declared-before-use.
+                    // Plain `const` folds opportunistically (works as a size when it can); `comptime` is the
+                    // explicit form — if it can't fold to a compile-time constant, that's an error AT the decl.
                     { int64_t cv; if (constValue(d->initializer, cv)) _constLocalVals[nm] = cv; }
+                    if (cvd && cvd->isComptime && d->initializer) {
+                        int64_t cv;
+                        if (!constValue(d->initializer, cv) && !isConstInitExpr(d->initializer.get()))
+                            unsupported(("a `comptime` local must have a compile-time-constant initializer "
+                                         "(a literal, `sizeof`, `alignof`, or const arithmetic) — `" + nm
+                                         + "`; use `const` for a runtime-initialized immutable").c_str(), n->line);
+                    }
                 }
 
                 // Interface-typed local: `I s = concrete;` -> a fat pointer borrowing
@@ -3129,11 +3139,11 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                 for (auto& d : *mv->variables)
                     if (d && d->name && d->name->value) {
                         _moduleStatics[qualify(*d->name->value)] = mv->type;
-                        // 6b-2: a `const static NAME` with a foldable integer initializer is a named
+                        // 6b-2: a `comptime NAME` with a foldable integer initializer is a named
                         // compile-time constant — record its value (qualified key) so const-generic sizes
-                        // and later `const static` initializers resolve it. Declaration-order fold: an
+                        // and later `comptime` initializers resolve it. Declaration-order fold: an
                         // earlier const is already recorded, so `B = A + 1` folds here (constValue -> _moduleConsts).
-                        if (mv->isConst && d->initializer) {
+                        if (mv->isComptime && d->initializer) {
                             int64_t cv; if (constValue(d->initializer, cv)) _moduleConsts[qualify(*d->name->value)] = cv;
                         }
                     }
@@ -14071,16 +14081,16 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
         if (!d || !d->name || !d->name->value) continue;
         std::string cname = qualify(*d->name->value);
         line(mv->line);
-        // 6b-2: a `const static NAME` is an immutable, comptime-initialized named constant. Emit plain
+        // 6b-2: a `comptime NAME` is an immutable, compile-time-folded named constant. Emit plain
         // `static const` — NOT KAMA_ISOLATE_LOCAL: an immutable value is race-free to share across isolates,
         // so it needs no per-isolate copy. A mutable `static` keeps the isolate-local storage class.
-        if (mv->isConst)
+        if (mv->isComptime)
             *_out << "static const " << secAttr << hw << ty << " " << cname;
         else
             *_out << "static " << secAttr << "KAMA_ISOLATE_LOCAL " << hw << ty << " " << cname;
-        if (mv->isConst) {
+        if (mv->isComptime) {
             if (!d->initializer) {
-                unsupported(("a `const static` must be initialized (it is immutable) — `" + *d->name->value
+                unsupported(("a `comptime` constant must be initialized — `" + *d->name->value
                              + "`").c_str(), mv->line);
                 *_out << " = {0}";
             } else {
@@ -14091,8 +14101,8 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
                 else if (isConstInitExpr(d->initializer.get()))
                     *_out << " = " << emitExpression(d->initializer);   // non-integer literal const (float/bool/char)
                 else {
-                    unsupported(("a `const static` initializer must be a compile-time constant (a literal, "
-                                 "`sizeof`, or const arithmetic) — `" + *d->name->value + "`").c_str(), mv->line);
+                    unsupported(("a `comptime` initializer must be a compile-time constant (a literal, "
+                                 "`sizeof`, `alignof`, or const arithmetic) — `" + *d->name->value + "`").c_str(), mv->line);
                     *_out << " = {0}";
                 }
             }

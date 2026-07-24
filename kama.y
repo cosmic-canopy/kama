@@ -134,7 +134,7 @@ struct kamayystype {
 
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BREAK
-%token <string> CASE CAST CONST CONTINUE CTOR DEFAULT
+%token <string> CASE CAST COMPTIME CONST CONTINUE CTOR DEFAULT
 %token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
@@ -342,8 +342,8 @@ code_declaration
 module_variable_declaration
   : STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $3, $4); mv->isHardware = ($2 != nullptr); $$ = mv; }
   | attribute_list STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $4, $5); mv->isHardware = ($3 != nullptr); mv->attributes = $1; $$ = mv; }   /* `@section(".x") static …` */
-  | CONST STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $4, $5); mv->isHardware = ($3 != nullptr); mv->isConst = true; $$ = mv; }   /* `const static NAME` — a named module constant (6b-2) */
-  | attribute_list CONST STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $5, $6); mv->isHardware = ($4 != nullptr); mv->isConst = true; mv->attributes = $1; $$ = mv; }
+  | COMPTIME type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $2, $3); mv->isComptime = true; $$ = mv; }   /* `comptime NAME = <expr>` — a named compile-time constant (6b-2) */
+  | attribute_list COMPTIME type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $3, $4); mv->isComptime = true; mv->attributes = $1; $$ = mv; }   /* `@section(".flash") comptime …` */
   ;
 
 /*------------------------------------------------------------------------------ 
@@ -738,6 +738,7 @@ variable_initializer
   ;
 local_constant_declaration
   : CONST type constant_declarators   { $$ = std::make_shared<ConstLocalVariableDeclaration>(SCANNER_CODEGENCONTEXT, $2, $3); }
+  | COMPTIME type constant_declarators   { auto d = std::make_shared<ConstLocalVariableDeclaration>(SCANNER_CODEGENCONTEXT, $2, $3); d->isComptime = true; $$ = d; }   /* `comptime T NAME = <expr>` — explicit compile-time local (6b-2) */
   ;
 constant_declarators
   : constant_declarator   { $$ = std::make_shared<ConstVariableDeclaratorList>(); $$->push_back($1); }
