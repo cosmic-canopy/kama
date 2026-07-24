@@ -328,6 +328,10 @@ std::vector<SharedCompilationUnit> preludeModuleUnits()
     return units;
 }
 
+// `--no-heap` (MCU step 5): reject every emitter-visible heap allocation program-wide (the no-heap
+// subset). Threaded to each CEmitter via `setNoHeap`. File-scope like the other build config, set in main.
+static bool g_noHeap = false;
+
 // Emit an already-parsed unit to a single `.c` (`srcPath` drives #line). Returns 0 on success.
 int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
                         const std::string& outPath, bool emitLines, bool* externsMathH = nullptr,
@@ -341,6 +345,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     }
     CEmitter emitter(out, srcPath, emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
+    emitter.setNoHeap(g_noHeap);         // `--no-heap`: reject heap allocation program-wide
     for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
     int unsupported = emitter.emit(unit);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
@@ -384,6 +389,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
 
     CEmitter emitter(header, "", emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
+    emitter.setNoHeap(g_noHeap);         // `--no-heap`: reject heap allocation program-wide
     for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
@@ -477,7 +483,7 @@ void usage()
         "usage:\n"
         "  kama transpile <in.kama> [-o out.c] [--no-line]\n"
         "  kama build     <in.kama>... [-o out] [--target native|wasm|embedded] [--release|--debug] [--shared]\n"
-        "                             [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
+        "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
         "                  (pass multiple .kama files to build a multi-file program)\n"
         "  kama update    [--version vX.Y.Z]   self-update via the installer\n"
         "  kama --version\n");
@@ -527,6 +533,7 @@ int main(int argc, char** argv)
         else if (a == "--keep-c")                 keepC = true;
         else if (a == "--webgpu")                 webgpu = true;
         else if (a == "--shared")                 shared = true;
+        else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
         else if (a == "--release")                release = true;
         else if (a == "--debug")                  release = false;
         else if (!a.empty() && a[0] == '-') {

@@ -1,0 +1,3 @@
+// String interpolation builds a heap `Formatter` buffer — `@noheap` must reject it.
+@noheap fn int32 hot(int32 x) { string s = "v=${x}"; return cast<int32>(s.length()); }
+fn int32 main() { return hot(x: 7); }

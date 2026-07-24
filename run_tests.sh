@@ -134,6 +134,12 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-emb
     if sh tools/check-embedded.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# MCU step 5: `--no-heap` flag guard (flag-driven rejection can't ride the no-flag xfail loop). Run once on
+# the plain native pass, like the guards above.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-noheap.sh ]; then
+    if sh tools/check-noheap.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # One fixture's build+run+compare, run in a background subshell. Buffers its status line(s) into
 # $TMP/$name.out and records PASS/FAIL/SKIP into $TMP/$name.res (tallied in fixture order afterward).
 test_one() {

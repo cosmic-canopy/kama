@@ -657,6 +657,7 @@ std::string CEmitter::emitInterpolation(InterpolatedStringNode* is)
     // from the default Formatter lowering below.
     if (is->tag) return emitTaggedInterpolation(is);
 
+    rejectIfNoHeap("string interpolation builds a heap `Formatter` buffer", is->line);   // no-heap gate
     std::string fv = "__fmt" + std::to_string(_tempCounter++);
     _hoisted.push_back("Formatter " + fv + " = Formatter__make();");
     recordDestructibleLocal(fv, "Formatter");
@@ -1316,6 +1317,7 @@ SharedIdentifier CEmitter::parforViewType(SharedIdentifier elem)
 void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 {
     line(pf->line);
+    rejectIfNoHeap("parallel_for heaps a per-worker argument bundle", pf->line);   // no-heap gate
 
     // The isolate seam header (and its `-lpthread` link + KAMA_PARFOR_WORKERS -D) flows in via
     // `import std::concurrent;`; without it the spawn/join calls would not compile.
@@ -1922,6 +1924,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(init.get())) {
                     checkNamelessNewBanned(oc, n->line);   // M8 Phase E: no nameless `new Type(...)`
+                    rejectIfNoHeap(oc->isTry ? "try new" : "new", n->line);   // no-heap gate (covers try/fallible new below)
                     // `new` is the HEAP operator — it boxes a value into a smart
                     // pointer (Owned/Shared/Weak), naming the element type directly:
                     // `Owned<Box> p = new Box(...)`. (BindableFunctionPtr keeps `new` for
@@ -6620,6 +6623,7 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
     } else {
         // M2/M4.1 move: heap the moved bundle, spawn with the box (the trampoline frees it). The malloc
         // temp stays scoped to its sub-block.
+        rejectIfNoHeap("spawn heaps the moved argument bundle", iso->line);   // no-heap gate
         std::string arg = "__kama_iso_arg" + std::to_string(_tempCounter++);
         indent(depth);     *_out << "{\n";
         indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)malloc(sizeof(" << cls << "));\n";
@@ -9574,6 +9578,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
     checkNamelessNewBanned(oc, srcLine);   // M8 Phase E: no nameless `new Type(...)`
     auto cit = _classes.find(targetCType);
     if (cit == _classes.end()) return "";
+    rejectIfNoHeap("new", srcLine);   // no-heap gate — value-position `new` (return/arg/payload)
     std::string octy = cType(oc->type);
     // one precise diagnostic + a declared degenerate temp (see header) — suppresses the caller's gate.
     auto reject = [&](const std::string& msg) -> std::string {
@@ -10206,8 +10211,18 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             if (sec.empty())
                 unsupported("`@section(\"...\")` requires exactly one string-literal section name", line);
             parts.push_back("section(\"" + sec + "\")");
+        } else if (an == "noheap") {
+            // `@noheap` (MCU step 5): a CHECKER flag, not codegen — the body rejects every emitter-visible
+            // heap allocation (activated per-body in emitFunction via `_noHeapActive`). Contributes NO
+            // `__attribute__`. Function-only, no args. Guarantees this region (an ISR, a game-engine frame
+            // tick, a real-time audio callback) allocates nothing.
+            if (!fn)
+                unsupported("`@noheap` applies only to a function, not a `static`", line);
+            if (at->args && !at->args->empty())
+                unsupported("`@noheap` takes no arguments", line);
+            // no parts.push_back — emits nothing
         } else {
-            unsupported(("unknown attribute `@" + an + "` here — expected `@interrupt` or `@section(\"...\")`").c_str(), line);
+            unsupported(("unknown attribute `@" + an + "` here — expected `@interrupt`, `@section(\"...\")`, or `@noheap`").c_str(), line);
         }
     }
     if (parts.empty()) return "";
@@ -10215,6 +10230,31 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
     for (size_t i = 0; i < parts.size(); ++i) { if (i) out += ", "; out += parts[i]; }
     out += ")) ";
     return out;
+}
+
+// Does this function carry `@noheap`? (Activates the per-body no-heap gate.)
+bool CEmitter::fnHasNoHeap(FunctionDeclarationNode* fn) const
+{
+    if (!fn || !fn->attributes) return false;
+    for (auto& at : *fn->attributes)
+        if (at && at->name && *at->name == "noheap") return true;
+    return false;
+}
+
+// The ONE no-heap gate (MCU step 5): reject an emitter-visible heap allocation under `--no-heap`
+// (program-wide) or inside a `@noheap` function body. Every allocation-emitting site funnels through here
+// — `new`/`try new`, the parallel_for/isolate/enum boxing, and string interpolation's Formatter buffer —
+// so the guarantee is one gate, not a dozen scattered checks. `unsupported()` makes it a hard compile
+// error (the driver's error count fails the build). `what` names the construct for the diagnostic.
+// NOTE: collection *methods* (e.g. `DynamicArray.add` growth) allocate in library C the emitter can't see
+// per-call, so a `@noheap` fn may still call a pre-built collection that grows — the guarantee covers
+// emitter-visible allocation. Build the collection outside the no-heap region (or use a fixed capacity).
+void CEmitter::rejectIfNoHeap(const char* what, int line)
+{
+    if (!_noHeapProgram && !_noHeapActive) return;
+    unsupported((std::string("heap allocation (") + what + ") is forbidden here — this code is "
+                 "`@noheap`/`--no-heap`; use a stack value, a fixed buffer, or a fixed-capacity arena "
+                 "with no dynamic growth").c_str(), line);
 }
 
 void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::string* nameOverride)
@@ -10297,12 +10337,15 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
           << "(" << paramListC(fn->parameters, nullptr) << ")\n";
 
     _returnIsPlace = fn->isRef;
+    bool prevNoHeap = _noHeapActive;
+    if (fnHasNoHeap(fn)) _noHeapActive = true;   // `@noheap`: gate every allocation in this body
     if (fn->block) {
         checkDefiniteAssignment(fn->block);   // owning LOCAL read-before-assign is a compile error (free fn)
         emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
     } else {
         *_out << "{\n}";
     }
+    _noHeapActive = prevNoHeap;
     _returnIsPlace = false;
     *_out << "\n\n";
 
@@ -12635,6 +12678,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
 std::string CEmitter::emitEnumBoxIntoContract(const std::string& ownedCType, const std::string& enumCType,
                                               const std::string& enumValExpr, int srcLine)
 {
+    rejectIfNoHeap("boxing an error into an `Owned<Error>` handle", srcLine);   // no-heap gate
     const std::string& contract = _classes[ownedCType].collElemClass;
     std::string t = "__kama_ebox" + std::to_string(_tempCounter++);
     std::string s = ownedCType + " " + t + " = {0}; ";

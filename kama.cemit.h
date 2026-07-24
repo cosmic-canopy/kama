@@ -379,6 +379,12 @@ public:
     // with a global namespace, so its templates register but emit nothing unless instantiated.
     void setPrelude(SharedCompilationUnit u) { _preludeUnit = u; }
 
+    // `--no-heap` (MCU step 5): reject every emitter-visible heap allocation program-wide (the no-heap
+    // subset — also serves game-engine hot paths / real-time audio, not just bare metal). Composes with
+    // `--target embedded`. Per-region `@noheap` on a fn is handled per-body; both funnel through
+    // `rejectIfNoHeap`. Set from the driver before emission.
+    void setNoHeap(bool on) { _noHeapProgram = on; }
+
     // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
     // code under its own `namespace`/`export`, plus an implicit `using` so its names are always in
     // scope. Like the prelude, its generic templates emit nothing unless instantiated.
@@ -525,6 +531,8 @@ private:
     std::vector<std::string>                  _genericTypeInstOrder;// registration order (inner-first; struct-typedef emit)
     bool                                      _emitStaticClass = false;  // prefix `static` on specialized class fns (header ODR)
     bool                                      _emitStaticInlineFn = false;// prefix `static inline` on a free fn (prelude helper body emitted in the header)
+    bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide
+    bool                                      _noHeapActive  = false;    // inside a `@noheap` fn: reject heap allocation in this body
 
     // Generic CONTRACTS (`type contract Iterator<T>`) — the exact parallel of generic TYPES above. The
     // TEMPLATE is kept OUT of _interfaces (so the eager vtable-emit loop never sees its unbound `T`);
@@ -1195,6 +1203,8 @@ private:
     // MCU step 4: lower `@interrupt` / `@section(".x")` to a C `__attribute__((...))` prefix.
     // `fn` is null for a module static (which accepts `@section` only).
     std::string declAttrPrefix(const SharedAttributeList& attrs, FunctionDeclarationNode* fn, int line);
+    bool fnHasNoHeap(FunctionDeclarationNode* fn) const;                 // does this fn carry `@noheap`?
+    void rejectIfNoHeap(const char* what, int line);                    // the ONE no-heap gate (`--no-heap`/`@noheap`)
 
     // Multi-file: collect a whole program, then emit declarations (shared
     // header) and definitions (per module) separately.
