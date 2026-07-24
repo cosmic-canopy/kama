@@ -3127,8 +3127,16 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
             if (mv->variables)
                 for (auto& d : *mv->variables)
-                    if (d && d->name && d->name->value)
+                    if (d && d->name && d->name->value) {
                         _moduleStatics[qualify(*d->name->value)] = mv->type;
+                        // 6b-2: a `const static NAME` with a foldable integer initializer is a named
+                        // compile-time constant — record its value (qualified key) so const-generic sizes
+                        // and later `const static` initializers resolve it. Declaration-order fold: an
+                        // earlier const is already recorded, so `B = A + 1` folds here (constValue -> _moduleConsts).
+                        if (mv->isConst && d->initializer) {
+                            int64_t cv; if (constValue(d->initializer, cv)) _moduleConsts[qualify(*d->name->value)] = cv;
+                        }
+                    }
             continue;
         }
         auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
@@ -4064,6 +4072,10 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
         // `InlineArray<T,(CAP)>` / `[v;(CAP)]`). Consulted after the generic-param binding.
         auto lv = _constLocalVals.find(*arg->value);
         if (lv != _constLocalVals.end()) { out = lv->second; return true; }
+        // 6b-2: a module `const static NAME` (qualified in the current scope). Same-module bare refs
+        // resolve via `qualify`; `_nsCtx` is set per unit/generic so the key matches its registration.
+        auto mc = _moduleConsts.find(qualify(*arg->value));
+        if (mc != _moduleConsts.end()) { out = mc->second; return true; }
     }
     return false;
 }
@@ -14059,8 +14071,32 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
         if (!d || !d->name || !d->name->value) continue;
         std::string cname = qualify(*d->name->value);
         line(mv->line);
-        *_out << "static " << secAttr << "KAMA_ISOLATE_LOCAL " << hw << ty << " " << cname;
-        if (d->initializer) {
+        // 6b-2: a `const static NAME` is an immutable, comptime-initialized named constant. Emit plain
+        // `static const` — NOT KAMA_ISOLATE_LOCAL: an immutable value is race-free to share across isolates,
+        // so it needs no per-isolate copy. A mutable `static` keeps the isolate-local storage class.
+        if (mv->isConst)
+            *_out << "static const " << secAttr << hw << ty << " " << cname;
+        else
+            *_out << "static " << secAttr << "KAMA_ISOLATE_LOCAL " << hw << ty << " " << cname;
+        if (mv->isConst) {
+            if (!d->initializer) {
+                unsupported(("a `const static` must be initialized (it is immutable) — `" + *d->name->value
+                             + "`").c_str(), mv->line);
+                *_out << " = {0}";
+            } else {
+                int64_t cv;
+                if (constValue(d->initializer, cv))
+                    *_out << " = " << cv;   // baked literal: folds cross-const refs (`B = A + 1`) and sidesteps
+                                            // C's "initializer element is not constant" for a const-referencing-const
+                else if (isConstInitExpr(d->initializer.get()))
+                    *_out << " = " << emitExpression(d->initializer);   // non-integer literal const (float/bool/char)
+                else {
+                    unsupported(("a `const static` initializer must be a compile-time constant (a literal, "
+                                 "`sizeof`, or const arithmetic) — `" + *d->name->value + "`").c_str(), mv->line);
+                    *_out << " = {0}";
+                }
+            }
+        } else if (d->initializer) {
             if (!isConstInitExpr(d->initializer.get())) {
                 unsupported(("a module `static` initializer must be a compile-time constant (a literal, "
                              "`sizeof`, or const arithmetic) — `" + *d->name->value

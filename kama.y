@@ -342,6 +342,8 @@ code_declaration
 module_variable_declaration
   : STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $3, $4); mv->isHardware = ($2 != nullptr); $$ = mv; }
   | attribute_list STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $4, $5); mv->isHardware = ($3 != nullptr); mv->attributes = $1; $$ = mv; }   /* `@section(".x") static …` */
+  | CONST STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $4, $5); mv->isHardware = ($3 != nullptr); mv->isConst = true; $$ = mv; }   /* `const static NAME` — a named module constant (6b-2) */
+  | attribute_list CONST STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $5, $6); mv->isHardware = ($4 != nullptr); mv->isConst = true; mv->attributes = $1; $$ = mv; }
   ;
 
 /*------------------------------------------------------------------------------ 

@@ -400,6 +400,7 @@ public:
     SharedIdentifier type;
     SharedVariableDeclaratorList variables;
     bool isHardware = false;    // `static hardware T name` — MMIO/ISR static, emits `volatile T`
+    bool isConst = false;       // `const static T NAME` (6b-2) — a named module constant (immutable, comptime init)
     SharedAttributeList attributes; // `@section(".x")` (null when none) — linker-section placement
     ModuleVariableDeclaration(CodeGenContext& context, SharedIdentifier type, SharedVariableDeclaratorList variables)
         : ASTNode(context),  StatementNode(context), type(type), variables(variables) { }
