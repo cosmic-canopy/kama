@@ -1213,8 +1213,9 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   const arithmetic); a runtime initializer (a call / `new` / `spawn`) is rejected — **omit it to zero-init**.
   These restrictions are not stopgaps: const-init is the deterministic reset-time init a bare-metal target
   wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
-  `static` is module-private (internal C linkage). *(`volatile`/`hardware` on a static, `.rodata`/flash
-  placement, and destructible statics are later MCU steps.)*
+  `static` is module-private (internal C linkage). A `hardware` static (`static hardware T name`) adds the
+  `volatile` qualifier for an MMIO register or single-core ISR↔loop flag — `volatile T` for a scalar,
+  `volatile T*` for a `Ptr<T>` handle. *(`.rodata`/flash placement and destructible statics are later MCU steps.)*
 
 **Operator overloading** — the sanctioned exception to named-args-only (a binary operator has exactly two
 operands, positional by nature). The full overloadable set is supported: arithmetic `+ - * / %`, comparison
@@ -1600,14 +1601,14 @@ traps (`integer-divide-by-zero`, `shift-exponent`, `float-cast-overflow`, `signe
 
 ## Reserved keywords not yet implemented 🚧
 
-Two keywords are **reserved but not yet implemented** — using either today is a **hard error** (never a
-silent no-op), pending its future scope:
+One keyword has **reserved surface not yet implemented** — using it is a **hard error** (never a silent no-op):
 
-- **`volatile`** 🚧 — reserved for the embedded/MMIO scope (ISR↔loop shared flags, peripheral registers);
-  implemented when kama targets embedded.
-- **`expose`** 🚧 — reserved for the kama→host boundary (WASM module exports, scripting host interface),
-  distinct from in-language `public`/`private` (member access) and `export` (the module public-surface
-  manifest — `export { … };`, which ships today).
+- **`expose`** 🚧 — the minimal free-function C-ABI symbol ships today; its **full** 2.0 surface (richer WASM
+  module exports, the scripting-host interface) remains reserved, distinct from in-language `public`/`private`
+  (member access) and `export` (the module public-surface manifest — `export { … };`, which ships today).
+
+`volatile` is **not** a keyword: C's `volatile` is spelled `hardware` (emits C `volatile` for MMIO registers
+and single-core ISR↔loop flags — see *Module-level statics* and ROADMAP §5).
 
 ## Known limitations (tracked → [ROADMAP.md](ROADMAP.md) §1)
 

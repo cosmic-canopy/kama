@@ -1,0 +1,12 @@
+// MCU step 2: a `hardware` scalar static — the single-core ISR<->main-loop flag. Emits `volatile bool`
+// so the loop re-reads it instead of caching it in a register (composes with step 1's KAMA_ISOLATE_LOCAL).
+static hardware bool ready;
+static hardware int32 value = 0;
+
+fn void isr() { value = 42; ready = true; }   // stands in for an interrupt handler
+
+fn int32 main() {
+    isr();
+    if (ready) { return value; }
+    return 0;
+}

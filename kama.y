@@ -137,7 +137,7 @@ struct kamayystype {
 %token <string> CASE CAST CONST CONTINUE CTOR DEFAULT
 %token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
-%token <string> FN FNPTR FOR FOREACH IF IMMUTABLE IN
+%token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
 %token <string> INT INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR
 %token <string> MATCH
 %token <string> NAMESPACE
@@ -147,7 +147,7 @@ struct kamayystype {
 %token <string> THIS TRUE TYPE
 %token <string> UINT8 UINT16 UINT32 UINT64
 %token <string> UNSAFE VIRTUAL VOID
-%token <string> VOLATILE WHILE
+%token <string> WHILE
 
 /* PUNCTUATION AND SINGLE CHARACTER OPERATORS */
 %token <token> COMMA ","
@@ -251,7 +251,7 @@ struct kamayystype {
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
 %type <constructordeclarator> constructor_declarator
 %type <constructorinitializer> constructor_initializer_opt constructor_initializer
-%type <string> const_opt method_name
+%type <string> const_opt hardware_opt method_name
 
 %start compilation_unit
 
@@ -340,7 +340,7 @@ code_declaration
    (fn/type/retro-impl don't start with it), so no conflict. Reuses `variable_declarators`;
    const-init + value/Ptr/InlineArray legality are enforced semantically in the emitter. */
 module_variable_declaration
-  : STATIC type variable_declarators SEMICOLON   { $$ = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $2, $3); }
+  : STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $3, $4); mv->isHardware = ($2 != nullptr); $$ = mv; }
   ;
 
 /*------------------------------------------------------------------------------ 
@@ -569,7 +569,6 @@ modifier
   | STATIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | DEFAULT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | VOLATILE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | IMMUTABLE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* `immutable value T` — deeply-immutable, shareable across isolates (M6.2) */
   ;
 
@@ -679,10 +678,10 @@ parameter_list
   | parameter_list COMMA parameter   { $1->push_back($3); }
   ;
 parameter
-  : const_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $2, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4)); p->isConst = ($1 != nullptr); $$ = p; }
+  : const_opt hardware_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); $$ = p; }
   ;
 parameter_modifier_opt
-  : /* Nothing */ {  }
+  : /* Nothing */ { $$ = SharedModifier(); }
   | REF   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | OUT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   ;
@@ -1298,6 +1297,12 @@ method_name
 const_opt
   : /* Nothing */   { $$ = SharedString(); }
   | CONST           { $$ = $1; }
+  ;
+/* `hardware T` — the MCU/MMIO qualifier (emits C `volatile`). A dedicated slot (not a general
+   modifier) so it appears only where it is meaningful: a module `static` and a `Ptr<T>` parameter. */
+hardware_opt
+  : /* Nothing */   { $$ = SharedString(); }
+  | HARDWARE        { $$ = $1; }
   ;
 method_body
   : block

@@ -21,6 +21,7 @@ struct ParamSig {
     bool        byRef;        // ref/out => passed as a pointer (call site emits &arg)
     std::string className;    // class type (for ref upcast at call sites), "" if primitive
     bool        isConst = false;   // `const` param — emits `const T*` for FFI pointers
+    bool        isHardware = false; // `hardware Ptr<T>` param — emits `volatile T*` for MMIO
 };
 
 struct FuncSig {

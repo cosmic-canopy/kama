@@ -1,0 +1,10 @@
+// MCU step 2: a `hardware Ptr<T>` static — a peripheral register handle. Emits `volatile uint32*`
+// so reads/writes through it are real MMIO accesses.
+static hardware Ptr<uint32> reg;
+
+fn int32 main() {
+    uint32 cell = 7;
+    reg = addr(of: cell);
+    unsafe { reg[0] = 42; }
+    unsafe { return cast<int32>(reg[0]); }   // 42
+}

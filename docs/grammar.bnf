@@ -83,7 +83,13 @@ code_declaration
 /* MCU step 1: a module-level mutable `static`. Per-isolate by construction; value/Ptr/InlineArray + const
    init only, enforced semantically in the emitter (the grammar reuses `variable_declarators`). */
 module_variable_declaration
-  : STATIC type variable_declarators SEMICOLON
+  : STATIC hardware_opt type variable_declarators SEMICOLON
+  ;
+/* `hardware` (MCU/MMIO): emits C `volatile`. Only where meaningful — a module `static` and a `Ptr<T>`
+   parameter (a dedicated slot, not a general modifier). `volatile` is not a keyword. */
+hardware_opt
+  : /* Nothing */
+  | HARDWARE
   ;
 
 /*------------------------------------------------------------------------------
@@ -298,7 +304,6 @@ modifier
   | STATIC
   | DEFAULT      /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL
-  | VOLATILE
   ;
 
 friend_declaration
@@ -373,7 +378,7 @@ parameter_list
   | parameter_list COMMA parameter
   ;
 parameter
-  : const_opt parameter_modifier_opt type IDENTIFIER
+  : const_opt hardware_opt parameter_modifier_opt type IDENTIFIER
   ;
 parameter_modifier_opt
   : /* Nothing */

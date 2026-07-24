@@ -31,8 +31,8 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine capability matrix
 1. **Language-completeness residual ✅ CLOSED (2026-07-23).** The last two `match` subject-inference gaps
    (nested value-producing `match`/variant-producing ternary as a subject; contract-dispatched method call as
    a subject) are now fixed — see the two ✅ items below. The language surface is complete; what remains before
-   the 1.0 tag is the docs/naming reconcile (§3). (Reserved later-track keyword `volatile`/`hardware` stays
-   deferred — it hard-errors, never miscompiles.)
+   the 1.0 tag is the docs/naming reconcile (§3). (The `hardware` qualifier — MCU step 2 — has since shipped;
+   `volatile` is no longer a keyword.)
    - **Value-producing `match`/ternary as a `match` subject ✅ DONE (2026-07-23).** Target-typed inline
      construction works in every by-value position (initializer, `return`, `operator[]` store, value-producing
      `match` arm, class-typed lvalue store, call-argument, variant payload, string-rvalue indexing, inline
@@ -155,11 +155,11 @@ landed 2026-07-23); what remains here is genuinely later-track or opt-in.
 - **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (see
   [SPEC.md](SPEC.md) + §5); the **full `expose`** — richer wasm module exports + the scripting host
   interface — stays **2.0** (§7).
-- **`hardware` keyword** (renamed from the reserved `volatile`, to shed the C threading-confusion legacy) —
-  reserved → **1.x embedded** (§5 embedded milestone): emits C `volatile` for MMIO registers
-  (`hardware Ptr<T>` → `volatile T*`, mirroring `const Ptr<T>`) and single-core ISR↔loop flags.
-  **Explicitly NOT a concurrency primitive** — cross-thread sharing is §6 atomics. Reserved-then-lit like
-  before; the token stays a hard error until the embedded target ships.
+- **`hardware` keyword** ✅ **SHIPPED (MCU step 2)** (renamed from C's `volatile`, which is no longer a
+  keyword, to shed the threading-confusion legacy): emits C `volatile` for MMIO registers
+  (`hardware Ptr<T>` → `volatile T*`, mirroring `const Ptr<T>`; composes with `const` → `const volatile T*`)
+  and single-core ISR↔loop flags (`hardware` on a module `static` → `volatile T`/`volatile T*`).
+  **Explicitly NOT a concurrency primitive** — cross-thread sharing is §6 atomics.
 - **Opt-in `Equatable` derive (auto `==` for `value` types) — post-1.0 minor nicety.** Deferred into the
   construction-model campaign's broader derive story (`Equatable`/`Hashable`/`Copyable` as one consistent
   opt-in `@generate` surface, not three ad-hoc ones) — see `docs/design/construction-model.md` §8c. Kama today
@@ -345,7 +345,7 @@ serialization, networking).
 - **Browser networking transports** — native TCP ships (`std::net`); the browser has no raw sockets, so the
   wasm path needs **WebRTC DataChannels** (unreliable) / **WebSockets** (reliable) via a host FFI shim (a
   real wasm nuance). Native UDP/DNS and the rest of the stdlib reach are the §1 follow-ups.
-- **Embedded / MCU target** — globals/statics for ISR flags, `volatile` *emit*, ISR attributes, no-heap
+- **Embedded / MCU target** — globals/statics for ISR flags ✅ (step 1), `hardware`/`volatile` *emit* ✅ (step 2), ISR attributes, no-heap
   mode, avr/arm toolchains.
 - **Native dispatch devirtualization** *(optimization, not a gap).* On a *monomorphic* call site clang
   does not devirtualize the emitted C vtable while rustc does — a clang-vs-rustc optimizer gap (hand-written
@@ -379,7 +379,7 @@ serialization, networking).
   | **Freestanding runtime** | `--target embedded` (`-ffreestanding -nostdlib`); `kama_runtime.h` stops assuming hosted libc; entry contract (`main()`+loop, or Arduino `setup()`/`loop()`) — no `argc/argv` shim, `main` never returns |
   | **No-heap / pluggable allocator** | the big one — `Owned`/`Shared`/`DynamicArray`/`string` are malloc-backed. Either a no-heap subset (`value` + `InlineArray<T,N>` + `Ptr` + stack) **or** bring-your-own allocator so those ride a static arena/pool. **Ties directly to the planned "allocator passed to every collection" work** — the same seam serves embedded no-heap and engine arena pools |
   | **Globals / statics** | ✅ **SHIPPED (MCU step 1).** `static T name = const;` at module scope — deterministic zero/const init at reset, **per-isolate by construction** (`static KAMA_ISOLATE_LOCAL T name`: `_Thread_local` on native + wasm-pthreads which share one linear memory, plain `static` on a single-core `--target embedded`). v1 scope: **value / `Ptr` / `InlineArray`** only (owns nothing, no teardown seam) with **compile-time-const** initializers (omitted = zero-init); destructible-resource statics + runtime init are deferred (YAGNI — blink-LED needs ISR flags + handles + buffers, not heap). Race-free-by-construction, proven TSan-clean (a `static` cannot be seen by another isolate; sharing stays on the `Atomic<T>` seam). Still open here — **`const` data in flash** (`.rodata`; **AVR** Harvard `PROGMEM`): that's linker-section placement (a later step), not the statics declaration itself |
-  | **`hardware` qualifier** | the renamed `volatile` — `hardware Ptr<T>` → `volatile T*` for MMIO registers, and `hardware` on an ISR↔loop global; mirrors the shipped `const Ptr<T>` → `const T*`. **MMIO + single-core ISR only — NOT a concurrency primitive** (that's §6 atomics) |
+  | **`hardware` qualifier** | ✅ **SHIPPED (step 2).** The renamed `volatile` (no longer a keyword) — `hardware Ptr<T>` → `volatile T*` for MMIO registers, `hardware` on a module `static` → `volatile T`/`volatile T*` for an ISR↔loop flag/handle, and `const hardware Ptr<T>` → `const volatile T*` for a read-only register; mirrors the shipped `const Ptr<T>` → `const T*`. **MMIO + single-core ISR only — NOT a concurrency primitive** (that's §6 atomics) |
   | **ISR declaration** | bind a function to an interrupt vector with the right calling convention (`__attribute__((interrupt))` / vendor `ISR()` macro) |
   | **Toolchain / build** | target triples (`thumbv*-none-eabi`, `avr`, …), linker scripts (`-T`), startup objects, MCU flags, and linking the vendor HAL (pico-sdk / Arduino core / esp-idf) + flashing |
   | **Panic/trap handler** | make a bounds/overflow trap configurable (halt / reset / blink). The trap lowering is **already runtime-free** (`__builtin_trap`) — works freestanding today ✓ |

@@ -308,6 +308,7 @@ public:
     SharedIdentifier type;
     SharedIdentifier identifier;
     bool isConst = false;   // `const [ref] T x` — immutable param
+    bool isHardware = false; // `hardware Ptr<T> x` — MMIO register pointer, emits `volatile T*`
     FunctionParameterNode(CodeGenContext& context, SharedModifier modifier, SharedIdentifier type, SharedIdentifier identifier)
         : ASTNode(context),  ExpressionNode(context), modifier(modifier), type(type), identifier(identifier) { }
 };
@@ -387,6 +388,7 @@ class ModuleVariableDeclaration : public StatementNode {
 public:
     SharedIdentifier type;
     SharedVariableDeclaratorList variables;
+    bool isHardware = false;    // `static hardware T name` — MMIO/ISR static, emits `volatile T`
     ModuleVariableDeclaration(CodeGenContext& context, SharedIdentifier type, SharedVariableDeclaratorList variables)
         : ASTNode(context),  StatementNode(context), type(type), variables(variables) { }
     virtual SymbolType symbolType() { return SymbolType::VARIABLE; }

@@ -362,6 +362,7 @@ static struct name_value keywords [] = {
     {"foreach",     FOREACH},
     {"friend",      FRIEND},
     {"give",        GIVE},
+    {"hardware",    HARDWARE},
     {"if",          IF},
     {"immutable",   IMMUTABLE},
     {"implements",  IMPLEMENTS},
@@ -400,7 +401,6 @@ static struct name_value keywords [] = {
     {"unsafe",      UNSAFE},
     {"virtual",     VIRTUAL},
     {"void",        VOID},
-    {"volatile",    VOLATILE},
     {"when",        WHEN},
     {"while",       WHILE},
   };

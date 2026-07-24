@@ -1,5 +1,5 @@
-// `volatile` (to be renamed `hardware`, MCU step 2) is not accepted on a module `static` in step 1 —
-// the grammar allows no modifier between `static` and the type. Rejected (a syntax error). When step 2
-// lands the `hardware` qualifier, replace this with the accepted form.
+// `volatile` is not a Kama keyword — the MMIO/ISR qualifier is spelled `hardware` (emits C `volatile`).
+// `static volatile int32 reg` is a plain syntax error (the accepted forms are in
+// tests/hardware_static_{flag,ptr}.kama). This guards that `volatile` is never silently accepted.
 static volatile int32 reg = 0;
 fn int32 main() { return 0; }

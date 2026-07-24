@@ -1,0 +1,1 @@
+applies only to a `Ptr<T>` parameter

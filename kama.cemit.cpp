@@ -3060,6 +3060,7 @@ std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
             ps.name  = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             ps.byRef = paramByRef(p.get());
             ps.isConst = p->isConst;
+            ps.isHardware = p->isHardware;
             // Store the C type spelling; whether it's a class is checked at the
             // call site (paramSigsOf may run before the class table is built).
             ps.className = p->type ? cType(p->type) : "";
@@ -3494,8 +3495,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (mv == "immutable") ci.isImmutableQualified = true;   // M6.2: deep-immutability verified in computeDeeplyImmutable
                 else if (mv == "expose")
                     unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", cd->line);
-                else if (mv == "volatile")
-                    unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", cd->line);
             }
         // A plain `value`/`resource` type is sealed: only virtual/abstract/final classes may extend a base.
         // (The base must itself be extensible — checked in linkBases once names resolve.)
@@ -3515,8 +3514,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     if (fd->modifiers)
                         for (auto& mod : *fd->modifiers) {
                             if (!mod->value) continue;
-                            if (*mod->value == "volatile")
-                                unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", fd->line);
                             if (*mod->value == "expose")
                                 unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", fd->line);
                         }
@@ -3616,8 +3613,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (*mod->value == "static")   mi.isStatic = true;   // no implicit `self`
                                 if (*mod->value == "expose")
                                     unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", md->line);
-                                if (*mod->value == "volatile")
-                                    unsupported("`volatile` is reserved (embedded/MMIO) but not yet implemented", md->line);
                             }
                         // Construction-model: a named constructor (`ctor name(…)`) is a static factory
                         // returning the enclosing type (infallible — no return type written) or `Result<This,E>`
@@ -10135,6 +10130,11 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
             // pointers — to match C const callback/API signatures). Only pointer types:
             // a `const ref <class>` stays plain (its methods take a non-const `self`).
             bool constPtr = p->isConst && p->type && p->type->value && *p->type->value == "Ptr";
+            // `hardware Ptr<T>` emits `volatile T*` — a pointer to an MMIO register (mirrors `const Ptr<T>`).
+            // `const hardware Ptr<T>` → `const volatile T*` (a read-only status register). Ptr-only.
+            bool hwPtr = p->isHardware && p->type && p->type->value && *p->type->value == "Ptr";
+            if (p->isHardware && !hwPtr)
+                unsupported("`hardware` applies only to a `Ptr<T>` parameter (a pointer to an MMIO register)", p->line);
             // a `ref`/`const ref` parameter may not name a smart pointer — you borrow
             // the OBJECT (`ref T`), or transfer ownership by value (`give`/`copy`). Borrowing
             // the handle never makes sense (and would make `ref p` ambiguous). `out` producing
@@ -10147,7 +10147,7 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
                              + "') — borrow the object with `ref "
                              + (libElem.empty() ? _classes[pct].collElemClass : libElem)
                              + "`, or transfer ownership by value (`give`/`copy`)").c_str(), p->line);
-            s += std::string(constPtr ? "const " : "") + cType(p->type)
+            s += std::string(constPtr ? "const " : "") + std::string(hwPtr ? "volatile " : "") + cType(p->type)
                + (paramByRef(p.get()) ? "* " : " ") + nm;
         }
     }
@@ -13430,7 +13430,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             // const pointer params -> `const T*` (FFI). className already ends
             // in `*` for a Ptr<T>/Ptr; a const-ref class param keeps its self mutable.
             bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*';
-            *_out << (i ? ", " : "") << (constPtr ? "const " : "") << p.className << (p.byRef ? "*" : "");
+            bool hwPtr    = p.isHardware && !p.className.empty() && p.className.back() == '*';
+            *_out << (i ? ", " : "") << (constPtr ? "const " : "") << (hwPtr ? "volatile " : "") << p.className << (p.byRef ? "*" : "");
         }
         *_out << ");\n";
     }
@@ -13698,6 +13699,14 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
     if (!mv || !mv->type || !mv->variables) return;
     std::string ty = cType(mv->type);
     bool isPtr = mv->type->value && *mv->type->value == "Ptr";
+    // `hardware` (MMIO/ISR) is valid on a scalar value (`volatile T`) or a `Ptr<T>` handle (`volatile T*`).
+    // An InlineArray/collection static with `hardware` has murky element-volatility — reject it in v1.
+    if (mv->isHardware && !isPtr && _classes.count(ty) && _classes[ty].isIntrinsicColl) {
+        unsupported("`hardware` applies only to a scalar value or a `Ptr<T>` static (an MMIO register or ISR flag)",
+                    mv->line);
+        return;
+    }
+    std::string hw = mv->isHardware ? "volatile " : "";
     // Type gate: value / Ptr / InlineArray only. Reject anything that owns memory or needs teardown (v1 has
     // no static-dtor seam). `InlineArray`/`FixedArray` are `isIntrinsicColl` but own no heap (collKind Fixed,
     // a value array) — allow them; reject heap collections, smart pointers, destructible and move-only values.
@@ -13713,7 +13722,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
         if (!d || !d->name || !d->name->value) continue;
         std::string cname = qualify(*d->name->value);
         line(mv->line);
-        *_out << "static KAMA_ISOLATE_LOCAL " << ty << " " << cname;
+        *_out << "static KAMA_ISOLATE_LOCAL " << hw << ty << " " << cname;
         if (d->initializer) {
             if (!isConstInitExpr(d->initializer.get())) {
                 unsupported(("a module `static` initializer must be a compile-time constant (a literal, "

@@ -1,0 +1,9 @@
+// MCU step 2: a `hardware Ptr<T>` parameter lowers to `volatile T*` — the driver-fn idiom for writing
+// a memory-mapped register (the write must not be optimized away or reordered under -O2).
+fn void poke(hardware Ptr<uint32> reg, uint32 v) { unsafe { reg[0] = v; } }
+
+fn int32 main() {
+    uint32 cell = 0;
+    poke(reg: addr(of: cell), v: 42);
+    return cast<int32>(cell);   // 42
+}
