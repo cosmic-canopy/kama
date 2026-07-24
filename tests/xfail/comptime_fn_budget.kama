@@ -1,0 +1,10 @@
+// const-eval 6b-3: a `comptime fn` must terminate quickly — a runaway loop hits the step budget and is
+// rejected cleanly, so it can never hang the compiler (cf. C++ constexpr-step limit / Zig eval quota).
+comptime fn int32 spin() {
+    int32 x = 0;
+    for (int32 i = 0; i < 100000000; i = i + 1) { x = x + 1; }
+    return x;
+}
+comptime int32 BAD = spin();
+
+fn int main() { return BAD; }

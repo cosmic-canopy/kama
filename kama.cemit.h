@@ -1132,6 +1132,47 @@ private:
     bool isComptimeFnName(const std::string& name, SharedStringList qualifier, std::string& outKey) const;  // runtime-call rejection
     // Purity is enforced structurally at evaluation time (the interpreter has no case for an impure
     // node → a clean "unsupported in comptime fn" diagnostic), the C++ constexpr model. See kama.comptime.cpp.
+
+    // --- const-eval 6b-3: the comptime interpreter (kama.comptime.cpp) -----------------------------
+    // A compile-time value the interpreter computes. Integers are held in int64 (like constValue) with a
+    // width/sign tag so wrap happens on cast + typed store, exactly as the emitted C would (see ctTruncate).
+    struct CTValue {
+        enum Kind { Int, Float, Bool } kind = Int;
+        int64_t i = 0;        // Int / Bool payload
+        int     width = 32;   // Int declared width in bits (8/16/32/64) — drives wrap on store/cast
+        bool    isSigned = true;
+        double  f = 0.0;      // Float payload
+        bool    isF32 = false;
+        std::vector<CTValue> elems;   // Stage 3: InlineArray<T,N> element values (kind is unused when set)
+        bool isArray = false;         // Stage 3: this value is a fixed array (elems holds the elements)
+        std::string elemCType;        // Stage 3: element C type, for baking `static const T name[N] = {…}`
+    };
+    struct CTEnv { std::map<std::string, CTValue> vars; };   // one comptime-fn call frame (its locals)
+    enum class CTFlow { Normal, Return, Break, Continue, Fail };
+    long _ctSteps = 0;      // step budget consumed by the current top-level comptime evaluation
+    int  _ctDepth = 0;      // comptime-fn call-recursion depth
+    bool _ctFailed = false; // a comptime diagnostic was already emitted this evaluation
+    static const long CT_STEP_BUDGET = 1000000;   // runaway guard (cf. C++ constexpr-step limit)
+    static const int  CT_MAX_DEPTH   = 256;
+    // Baked comptime-fn-derived constant values, keyed by qualified cName; consulted at the const emit site.
+    std::map<std::string, CTValue> _comptimeConstVals;
+    std::set<std::string> _ctErroredConsts;   // consts whose interpreter eval already errored (suppress a duplicate emit-time diagnostic)
+    // Module `comptime` consts whose fold needed the interpreter (a `comptime fn` call), in declaration order.
+    struct CTDeferredConst { std::string cName; SharedIdentifier type; SharedExpression init; NsCtx ctx; int line; };
+    std::vector<CTDeferredConst> _ctDeferredConsts;
+
+    void evalComptimeConsts();                                                    // the deferred-const evaluation pass
+    bool ctEvalCall(FunctionDeclarationNode* fn, const std::vector<CTValue>& args, int line, CTValue& out);
+    bool ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out);
+    CTFlow ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& ret);
+    bool ctResolveConst(SharedIdentifier id, CTValue& out);                       // module/type comptime const -> CTValue
+    bool ctTypeInfo(SharedIdentifier type, CTValue& proto);                       // Kama scalar/array type -> CTValue shape
+    void ctCoerce(const CTValue& proto, CTValue& v);                              // coerce v to proto's kind/width (typed store)
+    void ctTruncate(CTValue& v);                                                  // wrap an Int to its declared width
+    bool ctFail(const char* what, int line);                                      // emit a comptime diagnostic, mark failed
+    std::string ctRender(const CTValue& v) const;                                 // scalar -> C initializer text
+    static double ctAsF(const CTValue& v);
+    static int64_t ctAsI(const CTValue& v);
     std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a

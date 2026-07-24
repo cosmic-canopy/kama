@@ -3154,7 +3154,12 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                         // and later `comptime` initializers resolve it. Declaration-order fold: an
                         // earlier const is already recorded, so `B = A + 1` folds here (constValue -> _moduleConsts).
                         if (mv->isComptime && d->initializer) {
-                            int64_t cv; if (constValue(d->initializer, cv)) _moduleConsts[qualify(*d->name->value)] = cv;
+                            int64_t cv;
+                            if (constValue(d->initializer, cv)) _moduleConsts[qualify(*d->name->value)] = cv;
+                            // 6b-3: a fold miss (a `comptime fn` call, or a ref chain the folder can't do)
+                            // is deferred to the interpreter pass (evalComptimeConsts), which runs after all
+                            // comptime fns are registered and before const-generic sizes register.
+                            else _ctDeferredConsts.push_back({ qualify(*d->name->value), mv->type, d->initializer, _nsCtx, mv->line });
                         }
                     }
             continue;
@@ -13708,6 +13713,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
+    evalComptimeConsts();  // const-eval 6b-3: run `comptime fn`-initialized module constants now that all
+                           // comptime fns are registered — before const-generic sizes so a baked scalar can size an array.
     registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
                            // now that every instantiation is known — before the collection typedefs emit.
     computeDestructible();
@@ -14172,11 +14179,16 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
                 *_out << " = {0}";
             } else {
                 int64_t cv;
-                if (constValue(d->initializer, cv))
+                auto ctv = _comptimeConstVals.find(cname);
+                if (ctv != _comptimeConstVals.end())
+                    *_out << " = " << ctRender(ctv->second);   // 6b-3: a `comptime fn`-computed scalar, baked
+                else if (constValue(d->initializer, cv))
                     *_out << " = " << cv;   // baked literal: folds cross-const refs (`B = A + 1`) and sidesteps
                                             // C's "initializer element is not constant" for a const-referencing-const
                 else if (isConstInitExpr(d->initializer.get()))
                     *_out << " = " << emitExpression(d->initializer);   // non-integer literal const (float/bool/char)
+                else if (_ctErroredConsts.count(cname))
+                    *_out << " = {0}";   // 6b-3: interpreter eval already reported a precise error — no duplicate
                 else {
                     unsupported(("a `comptime` initializer must be a compile-time constant (a literal, "
                                  "`sizeof`, `alignof`, or const arithmetic) — `" + *d->name->value + "`").c_str(), mv->line);

@@ -1,0 +1,30 @@
+// const-eval 6b-3 Stage 2: a `comptime fn` is RUN at compile time and its scalar result baked into a
+// `comptime` constant (a `static const` literal — zero runtime cost). Exercises: a call with an argument,
+// a loop, narrow-integer wrap on cast (the int64-fold caveat), and a bool result.
+
+comptime fn int32 square(int32 x) { return x * x; }
+
+comptime fn int32 fib(int32 n) {
+    int32 a = 0;
+    int32 b = 1;
+    for (int32 i = 0; i < n; i = i + 1) {
+        int32 t = a + b;
+        a = b;
+        b = t;
+    }
+    return a;
+}
+
+comptime fn uint8 wrap8() { return cast<uint8>(300); }   // 300 & 0xFF == 44 — wraps exactly as runtime C
+comptime fn bool  isBig() { return 100 > 5; }
+
+comptime int32 NINE = square(x: 3);   // 9
+comptime int32 FIB  = fib(n: 10);     // 55
+comptime uint8 W    = wrap8();        // 44
+comptime bool  BIG  = isBig();        // true
+
+fn int main() {
+    int32 t = NINE + FIB + cast<int32>(W);   // 9 + 55 + 44 = 108
+    if (BIG) { t = t + 1; }                   // 109
+    return t;
+}
