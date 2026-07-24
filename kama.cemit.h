@@ -1129,6 +1129,11 @@ private:
     // fns are keyed by qualified name; type-associated ones as "<qualifiedClass>::<name>". NOT in _funcs:
     // a comptime fn is never emitted as a C symbol (comptime-only model). Populated in collect passes.
     std::map<std::string, FunctionDeclarationNode*> _comptimeFns;
+    // Type-associated `comptime fn` (`Type::name()`), keyed "<qualifiedClass>::<name>", with its visibility
+    // (default private — a comptime fn is scoped/access-restricted by default) and owning type.
+    struct ComptimeMethod { ClassMethodDeclarationNode* node; Visibility vis; std::string owner; };
+    std::map<std::string, ComptimeMethod> _comptimeMethods;
+    std::string _ctCurrentOwner;   // type whose comptime fn body is evaluating (for private-visibility checks)
     bool isComptimeFnName(const std::string& name, SharedStringList qualifier, std::string& outKey) const;  // runtime-call rejection
     // Purity is enforced structurally at evaluation time (the interpreter has no case for an impure
     // node → a clean "unsupported in comptime fn" diagnostic), the C++ constexpr model. See kama.comptime.cpp.
@@ -1163,6 +1168,8 @@ private:
 
     void evalComptimeConsts();                                                    // the deferred-const evaluation pass
     bool ctEvalCall(FunctionDeclarationNode* fn, const std::vector<CTValue>& args, int line, CTValue& out);
+    bool ctEvalBody(SharedParameterList params, SharedBlock body, SharedIdentifier retType,
+                    const std::vector<CTValue>& args, int line, CTValue& out);    // shared core for free fns + methods
     bool ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out);
     CTFlow ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& ret);
     bool ctResolveConst(SharedIdentifier id, CTValue& out);                       // module/type comptime const -> CTValue

@@ -1,0 +1,10 @@
+// const-eval 6b-3: a type-associated `comptime fn` is access-restricted (default private, like any member).
+// Calling a private one from another scope is rejected — mark it `public` to expose it.
+type value Secret {
+    int32 dummy;
+    comptime fn int32 hidden() { return 42; }   // private by default
+}
+
+comptime int32 BAD = Secret::hidden();   // ERROR: private comptime fn called from module scope
+
+fn int main() { return BAD; }

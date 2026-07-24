@@ -3666,10 +3666,15 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         }
                     }
                 } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
-                    // const-eval 6b-3: a type-associated `comptime fn` is compile-time-only — keep it OUT of
-                    // the class method table so it is never emitted as C nor runtime-callable. Its interpreter
-                    // registration (`Type::name` in _comptimeFns) + evaluation land in Stage 4.
-                    if (md->isComptime) continue;
+                    // const-eval 6b-3: a type-associated `comptime fn` is compile-time-only — register it for
+                    // the interpreter (`Type::name`, with its visibility; default private = access-restricted)
+                    // and keep it OUT of the class method table so it is never emitted as C nor runtime-callable.
+                    if (md->isComptime) {
+                        if (md->name && md->name->value)
+                            _comptimeMethods[ci.name + "::" + *md->name->value] =
+                                { md, visibilityOf(md->modifiers, Visibility::Private, md->line), ci.name };
+                        continue;
+                    }
                     if (md->name && md->name->value) {
                         MethodInfo mi;
                         mi.cName      = ci.name + "__" + *md->name->value;
@@ -10284,7 +10289,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 unsupported(("`" + typeName + "::" + name + "` names a non-static method — call it on an instance (`obj." + name + "(...)`)").c_str(), call->line);
         }
         // const-eval 6b-3: a type-associated `comptime fn` (`Type::table()`) runs only at compile time.
-        if (_comptimeFns.count(typeName + "::" + name)) {
+        if (_comptimeMethods.count(typeName + "::" + name)) {
             unsupported(("`" + typeName + "::" + name + "` is a `comptime fn` — it runs only at compile time; "
                          "assign its result to a `comptime` constant and use that").c_str(), call->line);
             return "0";

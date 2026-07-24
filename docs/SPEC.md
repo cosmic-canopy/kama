@@ -1320,8 +1320,54 @@ fn void demo() {
   static-initialization-order dependency** — Kama has no dynamic global init to order (the C++ init-order
   fiasco cannot occur here). Constant references resolve in **declaration order**; a forward or cyclic
   reference is a clean compile error, not undefined behavior.
-- *(Compile-time **functions** — `comptime fn`, for baking lookup tables — are a separate later campaign;
-  a comptime function is necessarily `static`, since it has no runtime `this` to read.)*
+### Compile-time functions — `comptime fn` ✅
+
+A **`comptime fn`** is a function the compiler RUNS at compile time to bake its result into a `static const`
+scalar or **table** — a CRC / gamma / trig lookup table computed once, sitting in `.rodata`/flash with zero
+runtime cost (const-eval 6b-3). It extends the `comptime` axis to *computation*: `comptime` constants name a
+compile-time *value*; a `comptime fn` produces one. A comptime function is necessarily `static` (it has no
+runtime `this` to read), so the bare `comptime fn` form is the whole story — no extra marker.
+
+```kama
+comptime fn InlineArray<uint8, 256> crcTable() {           // top-level compile-time function
+    InlineArray<uint8, 256> t = [0; 256];
+    for (int32 i = 0; i < 256; i = i + 1) {
+        uint8 c = cast<uint8>(i);
+        for (int32 k = 0; k < 8; k = k + 1)
+            c = ((c & 1) != 0) ? cast<uint8>((c >> 1) ^ 0x8C) : cast<uint8>(c >> 1);
+        t[i] = c;
+    }
+    return t;
+}
+comptime InlineArray<uint8, 256> CRC = crcTable();   // baked → static const InlineArray_uint8_256 CRC = {.v={…}};
+
+type value Palette {
+    comptime fn int32 sq(int32 x) { return x * x; }             // private (default) — internal helper
+    public comptime fn InlineArray<int32, 8> squares() { … }    // read `Palette::squares()`
+}
+```
+
+- **Comptime-only.** A `comptime fn` is a compile-time symbol; it is **never emitted as C**. It may be
+  *called* only from a comptime context — a `comptime` constant initializer, a const-generic argument, or
+  another `comptime fn`. A runtime-position call is a clean error pointing at the `comptime` constant form.
+  (This is a strict subset of a future dual-use / `constexpr`-style relaxation, so it can widen later without
+  breaking anything.)
+- **Both scopes, member visibility.** A top-level `comptime fn` is a module-level compile-time function; a
+  **type-associated** one is read `Type::name()` and obeys member visibility — **default private** (scoped
+  and access-restricted, like any member), callable from outside only when marked `public`. A private
+  type-associated comptime fn is callable from within its own type's comptime fns.
+- **The subset.** Integer (all widths — narrow-int wrap happens on cast + typed store, so a `uint8` table
+  entry wraps at 256 exactly as the emitted C would), `float32`/`float64`, `bool`, `char`, and fixed
+  `InlineArray<T, N>`. Statements: local + `const` decls, `=` assignment, fixed-array element writes
+  (`t[i] = …`), `if`/`else`, `for`/`while`/`do`, `foreach` over a fixed array, `return`. Expressions:
+  arithmetic / bitwise / comparison / logical (short-circuit) / ternary / cast, array index reads, and
+  calls to other comptime fns.
+- **Purity → reproducible builds.** A comptime fn is deterministic and effect-free: no I/O, no `new`/`spawn`,
+  no FFI, no reads of mutable `static`s, no pointers/strings, and it may call **only** another `comptime fn`.
+  These are enforced structurally — anything outside the subset is a clean "unsupported in comptime fn"
+  diagnostic — so the same inputs always bake the same output.
+- **Bounded.** A step budget (and call-depth cap) guarantees a runaway comptime fn can't hang the compiler
+  (as C++ constexpr-steps / Zig `@setEvalBranchQuota`); exceeding it is a clean diagnostic naming the fn.
 
 **MCU codegen attributes (step 4)** — `@interrupt` and `@section(".x")` are declaration attributes (the
 existing `@name(args)` mechanism, extended from serialization to functions + statics). Each emits a C

@@ -1,0 +1,1 @@
+may call only another `comptime fn`

@@ -413,16 +413,32 @@ tables, shader/permutation specialization) — see [MCU_READINESS.md](MCU_READIN
   (addressable / `@section`-able) with **cross-constant references baked to literals** → no C static-init-
   order dependency (the fiasco cannot occur; forward/cyclic refs are a clean error). Fixtures
   `comptime_local` / `comptime_module` / `comptime_type` (+ `const_local_size` for the opportunistic path).
-- **6b-3 — compile-time function evaluation (`comptime fn`)** (own campaign). A bounded AST interpreter (a
-  sibling of the emitter) over a small subset — integer/float arithmetic, locals, `if`, `for`/`while`,
-  fixed-size array writes, calls to other comptime fns — that bakes `static const T tbl[N] = { … }`. The
-  keyword direction is settled: **`comptime fn`** (extends the 6b-2 `comptime` axis; `const fn` is already
-  the const-*method* qualifier, and a comptime function is necessarily `static` — no runtime `this` to
-  read — so no separate marker is needed). The real work is (a) a **purity check** (no I/O, no mutable-
-  global reads, deterministic → reproducible builds) and (b) a **step/branch budget** so a runaway comptime
-  fn can't hang the compiler (as C++ constexpr-steps / Zig `@setEvalBranchQuota`). Likely dual-use
-  (comptime-evaluated when args are constant, ordinary runtime fn otherwise), matching C++ `constexpr`.
-  Tractable and well-trodden, but a new subsystem.
+- **6b-3 — compile-time function evaluation (`comptime fn`)** ✅ **SHIPPED.** A bounded AST interpreter
+  (`kama.comptime.cpp` — a sibling of the emitter that produces *values*, not C text) RUNS a `comptime fn`
+  at compile time and bakes its result into a `static const` scalar or **table** (`InlineArray_T_N X =
+  {.v={…}}`) — zero runtime cost, sits in `.rodata`/flash. Subset: integer (int64 lane + width/sign, so
+  narrow-int wrap happens on cast/store exactly as the emitted C) / float / bool / char + fixed
+  `InlineArray<T,N>`; locals, `if`/`while`/`do`/`for`/`foreach`, `=` assignment, array-element writes
+  `t[i]=…`, ternary, and calls to other comptime fns. **Both forms**: top-level `comptime fn` and
+  **type-associated** `comptime fn` (read `Type::name()`, member-visibility-controlled — default private,
+  a private one callable only from within its own type's comptime fns). **Comptime-only** (decided, not
+  dual-use): a comptime fn is never emitted as C; a runtime-position call is a clean error pointing at the
+  `comptime` constant form (relaxing to dual-use later is backward-compatible). Two safety rails: **purity**
+  is structural (any node the interpreter has no eval case for — `new`/`spawn`/`unsafe`/`asm`/FFI/strings/
+  pointers/mutable-static reads — is a clean "unsupported in comptime fn" diagnostic, the C++ constexpr
+  model) and a **step budget** (1e6) + call-depth cap so a runaway can't hang the compiler. Evaluated in a
+  post-collection `evalComptimeConsts` pass (before `registerInstColls`, so a baked scalar can size a
+  const-generic array). Flagship fixture `comptime_fn_crc` (a 256-entry CRC-8 LUT baked at compile time,
+  asserted bit-identical to a runtime recompute) + `tools/check-comptime.sh` transpile-grep; `comptime_fn_scalar`,
+  `comptime_fn_type_assoc`; negatives `xfail/comptime_fn_{runtime_call,impure,budget,visibility}`.
+  Deferred (nice-to-haves, not blocking): `sizeof`/`alignof` and named-arg reorder *inside* a comptime fn
+  body; a **local** `comptime T X = f();` initialized by a comptime-fn call (module + type-associated const
+  forms ship); a per-fn `@steps(…)` budget override; and dual-use fallback emission.
+- **Known rough edge (backlog):** `foreach` over a `static const` fixed array (a `comptime` array constant)
+  emits a C `const`-discard warning — the foreach lowering takes a non-`const` receiver pointer
+  (`kama.cemit.cpp` ~2570) and the by-value + `ref` paths share it, so a blanket `const` would break
+  `ref`-foreach write-back. Benign (the loop only reads) and index access (`X.get(index: i)`) is warning-free;
+  fix is a const-correct foreach lowering (const receiver pointer + `const`-element `get` on the by-value path).
 - **Platform-specific compilation** — the no-`#ifdef` answer, and **decided in direction: tag TYPES to
   force an abstraction boundary, do NOT add in-function branching.** A platform-agnostic `contract`
   defines the seam; per-platform concrete types implement it and carry a **`@target(...)`-style tag**;

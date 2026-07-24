@@ -1,0 +1,10 @@
+// const-eval 6b-3: a `comptime fn` must be pure — it may call only another `comptime fn`. Calling an
+// ordinary (runtime) function is rejected structurally by the interpreter, so the compile-time result
+// stays deterministic (reproducible builds).
+fn int32 runtimeHelper() { return 7; }
+
+comptime fn int32 impure() { return runtimeHelper(); }   // ERROR: calls a non-comptime fn
+
+comptime int32 BAD = impure();
+
+fn int main() { return BAD; }

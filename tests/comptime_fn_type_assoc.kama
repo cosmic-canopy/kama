@@ -1,0 +1,34 @@
+// const-eval 6b-3 Stage 4 — type-associated `comptime fn` (`Type::name()`) and calls between comptime fns.
+// A comptime fn inside a type is scoped and access-restricted (default private, like a member); mark it
+// `public` to call it from another scope. Here a public table-builder pairs a LUT with the type that owns
+// it, and a public wrapper reaches a private sibling comptime fn (a same-type private call is allowed).
+
+type value Squares {
+    int32 dummy;
+
+    // private helper — callable only from within Squares' own comptime fns
+    comptime fn int32 sq(int32 x) { return x * x; }
+
+    // public: builds an 8-entry table of squares, calling the private helper per entry (inter-fn calls)
+    public comptime fn InlineArray<int32, 8> table() {
+        InlineArray<int32, 8> t = [0; 8];
+        for (int32 i = 0; i < 8; i = i + 1) { t[i] = Squares::sq(x: i); }
+        return t;
+    }
+
+    // public scalar comptime fn
+    public comptime fn int32 sumTo(int32 n) {
+        int32 s = 0;
+        for (int32 i = 0; i <= n; i = i + 1) { s = s + i; }
+        return s;
+    }
+}
+
+comptime InlineArray<int32, 8> SQ = Squares::table();   // baked: 0,1,4,9,16,25,36,49
+comptime int32 SUM7 = Squares::sumTo(n: 7);             // 28
+
+fn int main() {
+    int32 acc = 0;
+    for (int32 i = 0; i < 8; i = i + 1) { acc = acc + SQ.get(index: i); }   // 0+1+4+9+16+25+36+49 = 140
+    return acc - SUM7 - 39;                                                  // 140 - 28 - 39 = 73
+}

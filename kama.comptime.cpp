@@ -323,21 +323,46 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         return true;
     }
 
-    // --- call to another comptime fn ---
+    // --- call to another comptime fn (free `f()` or type-associated `Type::name()`) ---
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         if (!inv->identifier || !inv->identifier->value)
             return ctFail("a comptime fn may call only another `comptime fn` by name", e->line);
+        auto evalArgs = [&](std::vector<CTValue>& args) -> bool {
+            if (inv->args) for (auto& a : *inv->args) {
+                CTValue av; if (!a || !ctEvalExpr(a->expression, env, av)) return false;
+                args.push_back(av);
+            }
+            return true;
+        };
+        // Type-associated `Type::name()` — resolve the owner type, honor visibility (private is callable
+        // only from within the same type's comptime fns).
+        if (inv->identifier->qualifier && !inv->identifier->qualifier->empty()) {
+            auto tq = std::make_shared<StringList>();
+            for (size_t i = 0; i + 1 < inv->identifier->qualifier->size(); ++i) tq->push_back((*inv->identifier->qualifier)[i]);
+            std::string owner = resolveUserName(*inv->identifier->qualifier->back(), tq);
+            std::string disp = *inv->identifier->qualifier->back() + "::" + *inv->identifier->value;   // source-written name
+            auto mit = _comptimeMethods.find(owner + "::" + *inv->identifier->value);
+            if (mit == _comptimeMethods.end())
+                return ctFail(("a comptime fn may call only another `comptime fn` — `" + disp + "` is not one").c_str(), e->line);
+            if (mit->second.vis == Visibility::Private && _ctCurrentOwner != owner)
+                return ctFail(("`" + disp + "` is a private `comptime fn` — not accessible here; "
+                               "mark it `public` to call it from another scope").c_str(), e->line);
+            std::vector<CTValue> args; if (!evalArgs(args)) return false;
+            std::string saved = _ctCurrentOwner; _ctCurrentOwner = owner;
+            bool ok = ctEvalBody(mit->second.node->params, mit->second.node->body, mit->second.node->returnType, args, e->line, out);
+            _ctCurrentOwner = saved;
+            return ok;
+        }
+        // Free `comptime fn`.
         std::string key;
         if (!isComptimeFnName(*inv->identifier->value, inv->identifier->qualifier, key))
             return ctFail(("a comptime fn may call only another `comptime fn` — `" + *inv->identifier->value
                            + "` is not one").c_str(), e->line);
-        FunctionDeclarationNode* fn = _comptimeFns[key];
-        std::vector<CTValue> args;
-        if (inv->args) for (auto& a : *inv->args) {
-            CTValue av; if (!a || !ctEvalExpr(a->expression, env, av)) return false;
-            args.push_back(av);
-        }
-        return ctEvalCall(fn, args, e->line, out);
+        std::vector<CTValue> args; if (!evalArgs(args)) return false;
+        std::string saved = _ctCurrentOwner; _ctCurrentOwner.clear();   // a free fn has no owning type
+        bool ok = ctEvalCall(_comptimeFns[key], args, e->line, out);
+        _ctCurrentOwner = saved;
+        return ok;
     }
 
     return ctFail("unsupported expression in comptime fn (no I/O, allocation, pointers, or strings)", e->line);
@@ -554,15 +579,23 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
 
 bool CEmitter::ctEvalCall(FunctionDeclarationNode* fn, const std::vector<CTValue>& args, int line, CTValue& out)
 {
-    if (!fn || !fn->block) return ctFail("comptime fn has no body", line);
+    if (!fn) return ctFail("comptime fn has no body", line);
+    return ctEvalBody(fn->parameters, fn->block, fn->returnType, args, line, out);
+}
+
+// Shared call core: bind args to params (each a typed store), walk the body, coerce the return value.
+// Used by both free `comptime fn`s and type-associated ones (whose params/body/returnType have the same shape).
+bool CEmitter::ctEvalBody(SharedParameterList params, SharedBlock body, SharedIdentifier retType,
+                          const std::vector<CTValue>& args, int line, CTValue& out)
+{
+    if (!body) return ctFail("comptime fn has no body", line);
     if (++_ctDepth > CT_MAX_DEPTH) { _ctDepth--; return ctFail("comptime fn recursion too deep", line); }
 
     CTEnv env;
-    // Bind parameters (positional; a named arg binds to its own param slot). Each bind is a typed store.
-    size_t np = fn->parameters ? fn->parameters->size() : 0;
+    size_t np = params ? params->size() : 0;
     if (args.size() != np) { _ctDepth--; return ctFail("comptime fn called with the wrong number of arguments", line); }
     for (size_t i = 0; i < np; ++i) {
-        auto& p = (*fn->parameters)[i];
+        auto& p = (*params)[i];
         if (!p || !p->identifier || !p->identifier->value || !p->type) { _ctDepth--; return ctFail("malformed comptime fn parameter", line); }
         CTValue proto;
         if (!ctTypeInfo(p->type, proto)) { _ctDepth--; return ctFail("a comptime fn parameter must be a scalar type", line); }
@@ -571,14 +604,13 @@ bool CEmitter::ctEvalCall(FunctionDeclarationNode* fn, const std::vector<CTValue
     }
 
     CTValue ret;
-    CTFlow f = ctEvalStmt(fn->block, env, ret);
+    CTFlow f = ctEvalStmt(body, env, ret);
     _ctDepth--;
     if (f == CTFlow::Fail) return false;
     if (f != CTFlow::Return) return ctFail("a comptime fn must return a value on every path", line);
 
-    // Coerce the return value to the declared return type.
     CTValue proto;
-    if (ctTypeInfo(fn->returnType, proto)) ctCoerce(proto, ret);
+    if (ctTypeInfo(retType, proto)) ctCoerce(proto, ret);   // scalar return coercion (arrays pass through)
     out = ret;
     return true;
 }
@@ -591,7 +623,7 @@ void CEmitter::evalComptimeConsts()
     NsCtx saved = _nsCtx;
     for (auto& dc : _ctDeferredConsts) {
         _nsCtx = dc.ctx;
-        _ctSteps = 0; _ctDepth = 0; _ctFailed = false;
+        _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
         CTEnv env; CTValue v;
         if (!ctEvalExpr(dc.init, env, v)) {
             if (!_ctFailed)
