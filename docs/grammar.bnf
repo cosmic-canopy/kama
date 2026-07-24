@@ -331,6 +331,8 @@ function_declaration
 
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
+  | COMPTIME FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
+
   | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
   | attribute_list function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
@@ -960,7 +962,8 @@ field_declaration
   | attribute_list modifiers_opt type variable_declarators SEMICOLON      /* `@field … type name;` */
   ;
 method_declaration
-  : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
+  : modifiers_opt COMPTIME FN type method_name LPAREN parameter_list_opt RPAREN block      /* `comptime fn T name(…)` — a type-associated compile-time-only function (6b-3), read `Type::name()` */
+  | modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
   | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
   | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body      /* `fn ref T at(…)` — a place-returning method */
   ;

@@ -3162,6 +3162,14 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
         if (!fn || !fn->name || !fn->name->value) continue;
 
+        // const-eval 6b-3: a `comptime fn` is a compile-time-only function. Register it for the
+        // interpreter (NOT in _funcs — it is never emitted as a C symbol) and reject an impure body
+        // now. It is monomorphic in v1 (the grammar admits no type/const params or `expose`).
+        if (fn->isComptime) {
+            _comptimeFns[qualify(*fn->name->value)] = fn;
+            continue;
+        }
+
         if (isExposed(fn)) {
             // The kama→host boundary needs ONE concrete, C-ABI-callable symbol. A generic
             // template has none (its `T` is unbound), and a `fn ref T` place-return has no
@@ -3653,6 +3661,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         }
                     }
                 } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
+                    // const-eval 6b-3: a type-associated `comptime fn` is compile-time-only — keep it OUT of
+                    // the class method table so it is never emitted as C nor runtime-callable. Its interpreter
+                    // registration (`Type::name` in _comptimeFns) + evaluation land in Stage 4.
+                    if (md->isComptime) continue;
                     if (md->name && md->name->value) {
                         MethodInfo mi;
                         mi.cName      = ci.name + "__" + *md->name->value;
@@ -10266,6 +10278,12 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             if (mi && !mi->isStatic)
                 unsupported(("`" + typeName + "::" + name + "` names a non-static method — call it on an instance (`obj." + name + "(...)`)").c_str(), call->line);
         }
+        // const-eval 6b-3: a type-associated `comptime fn` (`Type::table()`) runs only at compile time.
+        if (_comptimeFns.count(typeName + "::" + name)) {
+            unsupported(("`" + typeName + "::" + name + "` is a `comptime fn` — it runs only at compile time; "
+                         "assign its result to a `comptime` constant and use that").c_str(), call->line);
+            return "0";
+        }
         auto fit = _funcs.find(resolveFunc(name, qual));
         if (fit != _funcs.end())
             return placeWrap(emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line),
@@ -10277,6 +10295,14 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // Free-function call — resolve the name through the file's scope + usings.
     auto it = _funcs.find(resolveFunc(name, call->identifier->qualifier));
     if (it == _funcs.end()) {
+        // const-eval 6b-3: a `comptime fn` is not a runtime symbol — reject a runtime-position call
+        // with a diagnostic that points at the `comptime` constant form.
+        std::string ck;
+        if (isComptimeFnName(name, call->identifier->qualifier, ck)) {
+            unsupported(("`" + name + "` is a `comptime fn` — it runs only at compile time; assign its "
+                         "result to a `comptime` constant and use that").c_str(), call->line);
+            return "0";
+        }
         unsupported("call to unknown function (args kept in source order)", call->line);
         std::string s = cFunctionName(name) + "(";
         bool first = true;

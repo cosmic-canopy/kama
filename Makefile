@@ -23,6 +23,7 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.parser.o \
             kama.ast.o    \
             kama.cemit.o  \
+            kama.comptime.o \
             kama.driver.o \
             kama.prelude.gen.o)
 
@@ -52,7 +53,7 @@ HEADERS = kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h
 $(OBJECTS): $(HEADERS)
 
 # Generated-header dependencies.
-$(BUILD)/kama.lexer.o $(BUILD)/kama.parser.o $(BUILD)/kama.driver.o $(BUILD)/kama.cemit.o: $(BUILD)/kama.parser.hpp
+$(BUILD)/kama.lexer.o $(BUILD)/kama.parser.o $(BUILD)/kama.driver.o $(BUILD)/kama.cemit.o $(BUILD)/kama.comptime.o: $(BUILD)/kama.parser.hpp
 $(BUILD)/kama.lexer.o $(BUILD)/kama.driver.o: $(BUILD)/kama.lexer.hpp
 
 # Bison emits `int yynerrs` set-but-never-read. It's generated code (never edit it), so

@@ -1,0 +1,7 @@
+// const-eval 6b-3: a `comptime fn` runs ONLY at compile time. Calling it from a runtime
+// (function-body) position must be rejected with a diagnostic pointing at the `comptime` constant form.
+comptime fn int32 answer() { return 42; }
+
+fn int main() {
+    return answer();   // ERROR: runtime call to a comptime fn
+}

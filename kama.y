@@ -603,6 +603,13 @@ function_declaration
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
       $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, SharedBlock() );
    }
+  | COMPTIME FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block   {
+      /* `comptime fn T name(…)` — a compile-time-only free function (const-eval 6b-3). Monomorphic in v1
+         (no type/const params, no `expose` — it is never emitted as a C symbol). */
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8 );
+      fn->isComptime = true;
+      $$ = fn;
+  }
   | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $7, $9 );
       /* Split `<T, K: I + J>` into parallel typeParams (names) + typeBounds (contract lists). */
@@ -1306,7 +1313,8 @@ field_declaration
   | attribute_list modifiers_opt type variable_declarators SEMICOLON   { auto f = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $3, $4); f->attributes = $1; $$ = f; }   /* `@field … type name;` */
   ;
 method_declaration
-  : modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
+  : modifiers_opt COMPTIME FN type method_name LPAREN parameter_list_opt RPAREN block   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isComptime = true; $$ = m; }   /* `comptime fn T name(…)` — a type-associated compile-time-only function (6b-3), read `Type::name()` */
+  | modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
   | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
   | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11); m->isConst = ($2 != nullptr); m->isRef = true; if ($10) { m->whenParams = $10->whenParams; m->whenBounds = $10->whenBounds; } $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
   ;

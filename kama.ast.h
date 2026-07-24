@@ -291,6 +291,7 @@ public:
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
     bool isRef = false;            // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller (mirrors the method form)
+    bool isComptime = false;       // `comptime fn …` — a compile-time-only function (const-eval 6b-3); never emitted as C
     SharedAttributeList attributes; // `@interrupt`/`@section(".x")` (null when none) — MCU codegen attributes
     FunctionDeclarationNode(CodeGenContext& context,  SharedModifier modifier, SharedIdentifier returnType, SharedIdentifier name,
                             SharedParameterList parameters, SharedBlock block, SharedStringList typeParams = SharedStringList() )
@@ -880,6 +881,7 @@ public:
     bool isRef = false;     // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller
     bool isCtor = false;    // `ctor name(…)` — a named constructor (static factory returning the enclosing
                             // type / `Result<This,E>`); reuses the method pipeline. returnType null => infallible.
+    bool isComptime = false; // `comptime fn …` — a type-associated compile-time-only function (6b-3); read `Type::name()`
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     SharedIdentifierList whenParams;
     SharedIdentifierList whenBounds;

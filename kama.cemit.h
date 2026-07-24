@@ -1125,6 +1125,13 @@ private:
     // 6b-2: a type-associated `comptime` constant (`Type::NAME`). Keyed "<qualifiedClass>::<name>".
     struct TypeConstInfo { bool hasValue; int64_t value; Visibility visibility; std::string owner; std::string cName; SharedIdentifier type; SharedExpression initializer; int line; };
     std::map<std::string, TypeConstInfo> _typeConsts;
+    // const-eval 6b-3: `comptime fn` registry — compile-time-only functions the interpreter runs. Free
+    // fns are keyed by qualified name; type-associated ones as "<qualifiedClass>::<name>". NOT in _funcs:
+    // a comptime fn is never emitted as a C symbol (comptime-only model). Populated in collect passes.
+    std::map<std::string, FunctionDeclarationNode*> _comptimeFns;
+    bool isComptimeFnName(const std::string& name, SharedStringList qualifier, std::string& outKey) const;  // runtime-call rejection
+    // Purity is enforced structurally at evaluation time (the interpreter has no case for an impure
+    // node → a clean "unsupported in comptime fn" diagnostic), the C++ constexpr model. See kama.comptime.cpp.
     std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a
