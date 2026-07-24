@@ -80,16 +80,12 @@ code_declaration
   | module_variable_declaration
   ;
 
-/* MCU step 1: a module-level mutable `static`. Per-isolate by construction; value/Ptr/InlineArray + const
-   init only, enforced semantically in the emitter (the grammar reuses `variable_declarators`). */
+/* Module-level mutable static (MCU campaign step 1). `STATIC` is a unique prefix at top level
+   (fn/type/retro-impl don't start with it), so no conflict. Reuses `variable_declarators`;
+   const-init + value/Ptr/InlineArray legality are enforced semantically in the emitter. */
 module_variable_declaration
   : STATIC hardware_opt type variable_declarators SEMICOLON
-  ;
-/* `hardware` (MCU/MMIO): emits C `volatile`. Only where meaningful — a module `static` and a `Ptr<T>`
-   parameter (a dedicated slot, not a general modifier). `volatile` is not a keyword. */
-hardware_opt
-  : /* Nothing */
-  | HARDWARE
+  | attribute_list STATIC hardware_opt type variable_declarators SEMICOLON      /* `@section(".x") static …` */
   ;
 
 /*------------------------------------------------------------------------------
@@ -304,6 +300,7 @@ modifier
   | STATIC
   | DEFAULT      /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL
+  | IMMUTABLE      /* `immutable value T` — deeply-immutable, shareable across isolates (M6.2) */
   ;
 
 friend_declaration
@@ -332,6 +329,8 @@ function_declaration
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
   | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
+
+  | attribute_list function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
   | function_modifier_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
@@ -411,6 +410,10 @@ variable_declarator
   ;
 variable_initializer
   : expression
+    /* `Isolate h = spawn worker(p: give x);` — the handle form: spawn now, returning an RAII `Isolate`
+       whose drop = join. Only valid as a declaration initializer (after `=`), where `spawn` is
+       unambiguous (a keyword, never an expression start), so this adds no conflict. */
+  | SPAWN invocation_expression
   ;
 local_constant_declaration
   : CONST type constant_declarators
@@ -443,6 +446,9 @@ embedded_statement
   | jump_statement
   | arm_value_statement
   | unsafe_statement
+  | spawn_statement
+  | scope_statement
+  | parallel_for_statement
   ;
 arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
@@ -451,6 +457,25 @@ arm_value_statement
   ;
 unsafe_statement
   : UNSAFE block
+  ;
+  /* `spawn worker(p: give x);` — spawn a top-level fn on a fresh OS thread with a MOVED-in arg
+     bundle, then join (fused). Reuses `invocation_expression` for named-arg / `give` parsing; the
+     emitter validates the callee is a bare top-level fn (no receiver) → shared-nothing. */
+spawn_statement
+  : SPAWN invocation_expression SEMICOLON
+  ;
+  /* `scope ` — a structured-concurrency block (M4): bare `spawn`s inside it are deferred-join
+     children joined at the closing brace, before any local dtor. Block-bodied keyword, exactly like
+     `unsafe`. */
+scope_statement
+  : SCOPE block
+  ;
+  /* `parallel_for (ref T e in coll) ` — disjoint-slice data-parallel loop (M6.3): splits `coll`
+     into K non-overlapping sub-Views, one per worker, mutates each in place, and joins them ALL at its
+     own closing brace (self-joining barrier). `ref` is mandatory (disjoint mutable is the whole point);
+     the body is a `block` because those braces ARE the barrier (like `scope `). */
+parallel_for_statement
+  : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression RPAREN block
   ;
 empty_statement
   : SEMICOLON
@@ -703,6 +728,7 @@ attr_arg_list
 attr_arg
   : IDENTIFIER
   | IDENTIFIER COLON expression
+  | STRING_LITERAL                    /* bare string, e.g. @section(".isr_vector") */
   ;
 variable_reference
   : expression
@@ -723,6 +749,11 @@ new_expression
   ;
 object_creation_expression
   : NEW type LPAREN argument_list_opt RPAREN
+    /* `try new T(...)` / `try new T.name(...)` (M-step5): the ONE non-panic construction entry — yields
+       `Optional<Owned<T>>`, `None` on OOM instead of trapping. No placement variant (a follow-on). The named
+       form is the norm under the M8 construction model (a named-ctor type rejects the bare `new`). */
+  | TRY NEW type LPAREN argument_list_opt RPAREN
+  | TRY NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
   | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN
   | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
   | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
@@ -943,6 +974,12 @@ method_name
 const_opt
   : /* Nothing */
   | CONST
+  ;
+/* `hardware T` — the MCU/MMIO qualifier (emits C `volatile`). A dedicated slot (not a general
+   modifier) so it appears only where it is meaningful: a module `static` and a `Ptr<T>` parameter. */
+hardware_opt
+  : /* Nothing */
+  | HARDWARE
   ;
 method_body
   : block

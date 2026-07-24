@@ -375,7 +375,7 @@ stay in `std::collections`.
 
 ```kama
 type contract Allocator for value {
-    fn Ptr allocate(usize bytes);            // null -> panic (panic-on-OOM)
+    fn Optional<Ptr> allocate(usize bytes);  // None on OOM/exhaustion — fallible seam (never panics)
     fn void deallocate(Ptr pointer, usize bytes);
 }
 ```
@@ -399,10 +399,40 @@ Map<int32, int32, A: BumpAllocator> m = Map::withAllocator(allocator: arena.hand
 // ... fill/use; xs and m draw from the one arena; their deallocate is a no-op; the Arena frees the buffer.
 ```
 
-**Panic-on-OOM** today; a **fallible** `allocate -> Optional<Ptr>` is deferred to the embedded no-heap
-milestone (it rides this same seam). Coverage is the direct-`malloc` containers (`DynamicArray`, `Map`, `Set`,
-`Deque`, `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet` B-tree
-(via allocator-aware `new`).
+**Fallible seam (✅ shipped, MCU step 5).** `allocate` returns `Optional<Ptr>` — `None` on OOM/exhaustion,
+never panics. Infallible `new` and the direct-`malloc` containers (`DynamicArray`, `Map`, `Set`, `Deque`,
+`FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet` B-tree keep the
+pre-step-5 **panic-on-OOM** behavior (they unwrap the `Optional` via the prelude `unwrapPtr`, panicking on
+`None`). The ONE non-panic construction entry is **`try new`** (below); user code that calls `allocate`
+directly can `match` on `None` (e.g. a bump/arena that stops at exhaustion instead of trapping — the
+game-engine frame-allocator / real-time pattern, not only MCU).
+
+#### `try new` — non-panic construction ✅ (MCU step 5)
+
+`try new T.make(...)` (and the bare `try new T(...)` for positional-ctor types) yields
+`Optional<Owned<T>>` — `None` when the allocation fails, instead of panicking. It is the single fallible
+construction entry (`new` stays the infallible sugar that unwraps-or-panics); there is no parallel
+`tryAllocate`. Scoped to a typed local-variable initializer; a placement `try new(allocator: …)` is a
+follow-on.
+
+```kama
+Optional<Owned<Box>> b = try new Box.make(v: 7);
+match (b) { case Some(x): use(x); case None: /* OOM — recover, don't trap */ }
+```
+
+#### No-heap subset ✅ (MCU step 5)
+
+A per-region **`@noheap`** function attribute and a whole-program **`--no-heap`** build flag make every
+emitter-visible heap allocation a **compile error** — `new`/`try new`, `parallel_for`/`spawn` argument
+boxing, error-boxing into `Owned<Error>`, and string interpolation's `Formatter` buffer all funnel through
+one gate. Target-independent (composes with `--target embedded`), so it also guarantees a game-engine frame
+tick or a real-time audio callback allocates nothing. Collection *methods* allocate in library C the
+emitter can't see per-call, so a `@noheap` fn may still call a pre-built growing collection — the guarantee
+covers emitter-visible allocation; build the collection (or size it) outside the no-heap region.
+
+```kama
+@noheap fn int32 tick(int32 n) { /* new / "${x}" / spawn here is a compile error */ ... }
+```
 
 ### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅
 

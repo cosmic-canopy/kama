@@ -59,7 +59,7 @@ mile of the no-heap story.**
 
 | Feature | Status | Why | Effort |
 |---|---|---|---|
-| **The no-heap story: fallible allocation + a heap-free subset** | 🟡 partial — M10/M11a route allocations through a supplied `Allocator`, but `allocate` **panics** on OOM and `string`/`Shared`/`Weak` still assume a global heap | A no-heap target needs *every* allocation routed **and** a non-panic failure path: `allocate -> Optional<Ptr>` (ROADMAP, deferred with this milestone). Plus a documented, compiler-checkable "value + `InlineArray` + `Ptr` + stack" subset that rejects `string`/smart-pointers when you opt out of the heap. | **M–L** |
+| **The no-heap story: fallible allocation + a heap-free subset** | ✅ **SHIPPED (step 5).** The `Allocator` seam is **fallible** (`allocate -> Optional<Ptr>`, `None` on OOM — never panics); `new`/collections unwrap-or-panic (prelude `unwrapPtr`), **`try new -> Optional<Owned<T>>`** is the non-panic construction entry, and direct `allocate` callers `match` on `None`. The compiler-checkable subset is a per-region **`@noheap`** fn attribute + a whole-program **`--no-heap`** flag: every emitter-visible allocation is a compile error via one gate (`rejectIfNoHeap`). Fixtures: `tests/alloc_frame_arena.kama` (graceful arena exhaustion + `@noheap` hot loop), `tests/noheap_ok.kama`, `tests/xfail/noheap_{new,try_new,interp}.kama`, `tools/check-noheap.sh`. | done |
 | **Linker-section / placement attributes** | ✅ **SHIPPED (step 4).** `@section(".name")` on a module static or a function → `__attribute__((section(".name")))` — const tables in flash, ISR vectors in a fixed section, DMA buffers in a RAM bank. (AVR `PROGMEM` is `@section` + the AVR toolchain, later.) Fixtures `tests/support/embedded_section.kama` (freestanding-object build) + `embedded_isr.kama`. | done |
 | **Inline assembly / intrinsics** | ❌ missing — no `asm` in the grammar | `WFI`/`WFE`, memory barriers (`DMB`/`DSB`), `cpsid i` (disable interrupts), and cycle-exact delays need inline asm or compiler intrinsics (or a thin `extern` shim as a stopgap). | **S–M** |
 | **Panic/trap policy hook** | ✅ **DONE (step 3)** — under `KAMA_TARGET_EMBEDDED`, bounds/panic/OOM route through one overridable weak `kama_panic_handler` (default `for(;;) __builtin_trap()`); a strong user symbol redirects to blink/reset/breakpoint. No fd 2 / `abort` dependency. | **S** |
@@ -97,8 +97,9 @@ mile of the no-heap story.**
    `@name(args)` attribute mechanism (now drives codegen, previously serialization-only). AVR
    `@interrupt("VECTOR")` → `ISR()` deferred. Fixtures: `tests/support/embedded_{isr,section}.kama`,
    xfail `tests/xfail/{isr_*,section_nonstring,interrupt_on_static}.kama`.
-5. **Fallible `allocate -> Optional<Ptr>`** + the checkable no-heap subset — completes the no-heap story
-   (shared with the embedded milestone in ROADMAP §5).
+5. **Fallible `allocate -> Optional<Ptr>`** + `try new` + the checkable `@noheap`/`--no-heap` subset ✅
+   **SHIPPED** — completes the no-heap story (shared with the embedded milestone in ROADMAP §5). Also serves
+   game-engine frame allocators / real-time audio, not only MCU.
 6. **Inline asm / intrinsics**, then **toolchain packaging** (target triples + linker scripts + vendor HALs)
    and the const-eval / `alignof` / soft-float polish.
 

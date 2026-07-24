@@ -338,15 +338,17 @@ serialization, networking).
     *because* the allocator handle is already lightweight — and the common default-`GlobalAllocator` handle
     fatness is already covered by zero-size-field elision above. Revisit as a whole-family refactor gated on
     profiling, bundled with that elision pass.
-  - **Fallible allocation — deferred with the embedded milestone.** `allocate -> Optional<Ptr>` (vs today's
-    panic-on-OOM) is what a no-heap embedded target needs; it colors the mutating APIs with failure
-    propagation. It rides the same `Allocator` seam non-breakingly, and is one of the two remaining gates
-    (with globals/statics) for a true no-heap embedded build.
+  - **Fallible allocation ✅ shipped (MCU step 5).** `allocate -> Optional<Ptr>` (`None` on OOM, never
+    panics) rides the `Allocator` seam non-breakingly: `new`/collections unwrap-or-panic (prelude
+    `unwrapPtr`) to keep pre-step-5 behavior, `try new -> Optional<Owned<T>>` is the non-panic construction
+    entry, and direct `allocate` callers `match` on `None` (graceful arena exhaustion). Not MCU-only — the
+    same seam is the game-engine frame-allocator / real-time-audio pattern.
 - **Browser networking transports** — native TCP ships (`std::net`); the browser has no raw sockets, so the
   wasm path needs **WebRTC DataChannels** (unreliable) / **WebSockets** (reliable) via a host FFI shim (a
   real wasm nuance). Native UDP/DNS and the rest of the stdlib reach are the §1 follow-ups.
-- **Embedded / MCU target** — globals/statics for ISR flags ✅ (step 1), `hardware`/`volatile` *emit* ✅ (step 2), ISR attributes, no-heap
-  mode, avr/arm toolchains.
+- **Embedded / MCU target** — globals/statics for ISR flags ✅ (step 1), `hardware`/`volatile` *emit* ✅ (step 2),
+  `--target embedded` ✅ (step 3), `@interrupt`/`@section` ✅ (step 4), fallible `allocate` + `try new` +
+  `@noheap`/`--no-heap` no-heap subset ✅ (step 5); avr/arm toolchains remain.
 - **Native dispatch devirtualization** *(optimization, not a gap).* On a *monomorphic* call site clang
   does not devirtualize the emitted C vtable while rustc does — a clang-vs-rustc optimizer gap (hand-written
   C is equally behind), not a kama defect. kama can still win where it *sees* the concrete type by emitting
@@ -377,7 +379,7 @@ serialization, networking).
   | Piece | What's needed |
   |---|---|
   | **Freestanding runtime** | ✅ **SHIPPED (step 3).** `--target embedded` compiles a value program to a **`-ffreestanding -nostdlib` object** (`.o`): the emitter emits a guarded entry (`#if KAMA_TARGET_EMBEDDED` → `int main(void){ kama_main(); for(;;){} }` — no `argc/argv`, never returns; hosted `main(argc,argv)` otherwise) and `KAMA_ISOLATE_LOCAL`/panic collapse to their freestanding forms. Triple-agnostic (pass `-target thumbv*-none-eabi` via `--cc`); the board link — crt0/startup + linker script — is the user's step (turnkey triples/scripts/HALs are the "Toolchain / build" row below). Arduino `setup()`/`loop()` is a later HAL nicety |
-  | **No-heap / pluggable allocator** | the big one — `Owned`/`Shared`/`DynamicArray`/`string` are malloc-backed. Either a no-heap subset (`value` + `InlineArray<T,N>` + `Ptr` + stack) **or** bring-your-own allocator so those ride a static arena/pool. **Ties directly to the planned "allocator passed to every collection" work** — the same seam serves embedded no-heap and engine arena pools |
+  | **No-heap / pluggable allocator** | ✅ **SHIPPED (step 5).** The `Allocator` seam is now **fallible** (`allocate -> Optional<Ptr>`, `None` on OOM — never panics); `new`/collections unwrap-or-panic (prelude `unwrapPtr`), **`try new -> Optional<Owned<T>>`** is the non-panic construction entry, and direct `allocate` callers `match` on `None` (graceful arena exhaustion). The **no-heap subset** is a per-region **`@noheap`** fn attribute + a whole-program **`--no-heap`** flag: every emitter-visible allocation (`new`/`try new`, `parallel_for`/`spawn` boxing, `Owned<Error>` boxing, interpolation) becomes a compile error via one gate. Target-independent — **the same seam serves embedded no-heap AND engine frame/arena pools + real-time audio** (`tests/alloc_frame_arena.kama` demos both). (Bring-your-own allocator per collection was already shipped, M10/M11.) |
   | **Globals / statics** | ✅ **SHIPPED (MCU step 1).** `static T name = const;` at module scope — deterministic zero/const init at reset, **per-isolate by construction** (`static KAMA_ISOLATE_LOCAL T name`: `_Thread_local` on native + wasm-pthreads which share one linear memory, plain `static` on a single-core `--target embedded`). v1 scope: **value / `Ptr` / `InlineArray`** only (owns nothing, no teardown seam) with **compile-time-const** initializers (omitted = zero-init); destructible-resource statics + runtime init are deferred (YAGNI — blink-LED needs ISR flags + handles + buffers, not heap). Race-free-by-construction, proven TSan-clean (a `static` cannot be seen by another isolate; sharing stays on the `Atomic<T>` seam). **`const` data in flash** (`.rodata`; **AVR** Harvard `PROGMEM`) is now covered by the **`@section(".x")`** placement attribute — ✅ **SHIPPED (step 4)**, on both statics and functions (AVR `PROGMEM` is `@section` + the AVR toolchain, later) |
   | **`hardware` qualifier** | ✅ **SHIPPED (step 2).** The renamed `volatile` (no longer a keyword) — `hardware Ptr<T>` → `volatile T*` for MMIO registers, `hardware` on a module `static` → `volatile T`/`volatile T*` for an ISR↔loop flag/handle, and `const hardware Ptr<T>` → `const volatile T*` for a read-only register; mirrors the shipped `const Ptr<T>` → `const T*`. **MMIO + single-core ISR only — NOT a concurrency primitive** (that's §6 atomics) |
   | **ISR declaration** | ✅ **SHIPPED (step 4).** `@interrupt expose fn void h()` → `__attribute__((interrupt, used))` — the Cortex-M / RISC-V / classic-ARM calling convention (enforced `void f(void)`; `expose` gives the vector table a bare symbol; `used` survives `--gc-sections`). Vendor `ISR(VECTOR)` (AVR) is the later `@interrupt("VECTOR")` step. Paired with **`@section(".x")`** placement (statics + functions → `__attribute__((section(".x")))`) for the vector table / flash / DMA RAM |
@@ -422,9 +424,11 @@ re-triage across the three READINESS docs — [MCU_READINESS.md](MCU_READINESS.m
 [ENGINE_READINESS.md](ENGINE_READINESS.md) · [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md) — ran and
 **MCU/embedded (§5) won**, then the last 1.0 language residual was cleared first (nested/ternary +
 contract-dispatched `match` subjects, §1 — closed 2026-07-23). Why MCU wins the triage:
-- It is the **only** track with real **language-surface** work queued: module-level statics, the `hardware`
-  (MMIO/`volatile`) qualifier, ISR-entry binding, a freestanding `--target embedded` runtime, fallible
-  `allocate -> Optional<Ptr>`. Engine and Web are now **library/platform** work with **no language blocker**
+- It **was** the **only** track with real **language-surface** work queued: module-level statics ✅, the
+  `hardware` (MMIO/`volatile`) qualifier ✅, ISR-entry binding ✅, a freestanding `--target embedded`
+  runtime ✅, fallible `allocate -> Optional<Ptr>` + `try new` + the `@noheap`/`--no-heap` no-heap subset ✅
+  (steps 1–5 all shipped 2026-07-23; only avr/arm toolchain packaging + HAL remain, which are
+  build/library, not language). Engine and Web are now **library/platform** work with **no language blocker**
   (Engine: WebGPU/`std::gpu` + the job-system *library* on the shipped `parallel_for`; Web: the event-loop
   *scheduler library* over `Poller` on the shipped isolate/channel primitives + `std::time`).
 - Its **#1 blocker builds onto settled, shipped ground**: module statics lower to the concurrency model's
