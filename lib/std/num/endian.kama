@@ -1,0 +1,51 @@
+namespace std::num;
+
+// Byte-order reversal (endian swap) for the unsigned integer widths and the floats. A `byteswap*` is a
+// pure VALUE transform — it reverses the byte lanes of the number, independent of host endianness — so it
+// is the portable building block for reading/writing a fixed on-the-wire byte order (network big-endian,
+// a little-endian file format) over a `DynamicArray<uint8>`. The FLOAT swaps go through `bitcast` (a
+// same-width bit reinterpret, no value conversion): reinterpret to the integer of equal width, reverse the
+// bytes, reinterpret back — the one correct way to serialize an IEEE-754 float in a chosen byte order.
+//
+// Host-order helpers (`htole`/`htobe`) are deliberately NOT here: whether the host is little- or big-endian
+// is a memory-layout fact that pure kama arithmetic cannot observe, so they need a compile-time endianness
+// flag (a small future `@compileFor`-style facility). Every target kama ships on today is little-endian, so
+// `byteswap*` composed with a known target order covers serialization now.
+export { byteswapU16, byteswapU32, byteswapU64, byteswapF32, byteswapF64 };
+
+fn uint16 byteswapU16(uint16 x) {
+    uint32 v = cast<uint32>(x);
+    return cast<uint16>(((v & 255ui32) << 8) | ((v >> 8) & 255ui32));   // low byte <-> high byte
+}
+
+fn uint32 byteswapU32(uint32 x) {
+    uint32 b0 = (x >> 24) & 255ui32;
+    uint32 b1 = (x >> 16) & 255ui32;
+    uint32 b2 = (x >> 8)  & 255ui32;
+    uint32 b3 =  x        & 255ui32;
+    return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
+}
+
+fn uint64 byteswapU64(uint64 x) {
+    uint64 b0 = (x >> 56) & 255ui64;
+    uint64 b1 = (x >> 48) & 255ui64;
+    uint64 b2 = (x >> 40) & 255ui64;
+    uint64 b3 = (x >> 32) & 255ui64;
+    uint64 b4 = (x >> 24) & 255ui64;
+    uint64 b5 = (x >> 16) & 255ui64;
+    uint64 b6 = (x >> 8)  & 255ui64;
+    uint64 b7 =  x        & 255ui64;
+    return (b7 << 56) | (b6 << 48) | (b5 << 40) | (b4 << 32) | (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
+}
+
+// The floats ride the integer swap through `bitcast` — reinterpret, reverse bytes, reinterpret back.
+// (`bitcast`'s operand must be a variable/field whose scalar type is statically known, so the swapped
+// bits are bound to a local before the final reinterpret.)
+fn float32 byteswapF32(float32 x) {
+    uint32 swapped = byteswapU32(x: bitcast<uint32>(x));
+    return bitcast<float32>(swapped);
+}
+fn float64 byteswapF64(float64 x) {
+    uint64 swapped = byteswapU64(x: bitcast<uint64>(x));
+    return bitcast<float64>(swapped);
+}

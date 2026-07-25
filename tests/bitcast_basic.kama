@@ -1,0 +1,27 @@
+// `bitcast<T>(x)` — a same-width bit reinterpret of a numeric scalar (no value conversion, unlike
+// `cast<T>`). The keystone for binary formats / hashing / IEEE-754 bit twiddling. Lowers to a no-UB
+// ISO-C11 union type-pun; source + target must be equal-width numeric scalars.
+fn int32 main() {
+    // float32 <-> uint32: the IEEE-754 bit pattern of 1.0f is 0x3F800000 = 1065353216.
+    float32 f  = 1.0f32;
+    uint32  fb = bitcast<uint32>(f);
+    int32   ok1 = (fb == cast<uint32>(1065353216)) ? 1 : 0;
+
+    // reinterpreting the bits back recovers the exact float (round-trip identity).
+    float32 g   = bitcast<float32>(fb);
+    int32   ok2 = (g == 1.0f32) ? 1 : 0;
+
+    // int32 <-> uint32: -1 reinterprets to 0xFFFFFFFF and back to -1 (bits unchanged).
+    int32   i   = -1;
+    uint32  u   = bitcast<uint32>(i);
+    int32   j   = bitcast<int32>(u);
+    int32   ok3 = (j == -1) ? 1 : 0;
+
+    // float64 <-> uint64: reinterpret round-trips at 64-bit width too.
+    float64 d   = 1.0;
+    uint64  db  = bitcast<uint64>(d);
+    float64 e   = bitcast<float64>(db);
+    int32   ok4 = (e == 1.0) ? 1 : 0;
+
+    return ok1 + ok2 * 2 + ok3 * 4 + ok4 * 8;   // 15 when every reinterpret is correct
+}

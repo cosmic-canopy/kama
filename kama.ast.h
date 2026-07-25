@@ -636,6 +636,20 @@ public:
         , unaryExpression(unaryExpression) { }
 };
 
+// `bitcast<T>(expr)` — a same-size *reinterpret* of a numeric scalar's bits (e.g. `bitcast<uint32>(f)`
+// exposes a `float32`'s IEEE-754 bits). Unlike `cast<T>` (a value conversion) it changes no bits; source
+// and target must be equal-width numeric scalars (`intN`/`uintN`/`floatN`). Lowers to a no-UB union
+// type-pun (ISO C11 §6.5.2.3). Mirrors `CastNode`'s shape.
+class BitcastNode : public ExpressionNode {
+public:
+    SharedIdentifier type;
+    SharedExpression unaryExpression;
+    BitcastNode(CodeGenContext& context, SharedIdentifier type, SharedExpression unaryExpression)
+        : ASTNode(context),  ExpressionNode(context)
+        , type(type)
+        , unaryExpression(unaryExpression) { }
+};
+
 // `expr.as<T>()` — Model C runtime downcast of a boxed poly-dispatch error (an `Owned<Error>` or a borrowing
 // `Error`) to a concrete implementing enum `T`. Yields `Optional<T>`: `Some(<the enum by value>)` if the
 // box's vtbl is `T`'s, else `None` (a vtbl-pointer compare — no type-id table). Borrows the operand (peek +

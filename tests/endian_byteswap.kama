@@ -1,0 +1,23 @@
+// `std::num` byte-order swaps — the portable serialization primitive. The float variants ride `bitcast`
+// (reinterpret -> integer swap -> reinterpret back), the one correct way to write an IEEE-754 float in a
+// chosen byte order.
+import std::num::{byteswapU16, byteswapU32, byteswapU64, byteswapF32, byteswapF64};
+
+fn int32 main() {
+    uint32 a   = byteswapU32(x: cast<uint32>(16909060));   // 0x01020304 -> 0x04030201 = 67305985
+    int32  ok1 = (a == cast<uint32>(67305985)) ? 1 : 0;
+
+    uint16 b   = byteswapU16(x: cast<uint16>(4660));       // 0x1234 -> 0x3412 = 13330
+    int32  ok2 = (b == cast<uint16>(13330)) ? 1 : 0;
+
+    uint64 c0  = cast<uint64>(1234567890123);              // swapping twice is the identity
+    int32  ok3 = (byteswapU64(x: byteswapU64(x: c0)) == c0) ? 1 : 0;
+
+    float32 f  = 3.5f32;                                   // float swap round-trips (via bitcast)
+    int32  ok4 = (byteswapF32(x: byteswapF32(x: f)) == f) ? 1 : 0;
+
+    float64 d  = 2.25;
+    int32  ok5 = (byteswapF64(x: byteswapF64(x: d)) == d) ? 1 : 0;
+
+    return ok1 + ok2 * 2 + ok3 * 4 + ok4 * 8 + ok5 * 16;   // 31 when every swap is correct
+}

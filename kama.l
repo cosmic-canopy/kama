@@ -335,6 +335,7 @@ static struct name_value keywords [] = {
     {"as",          AS},
     {"asm",         ASM},
     {"base",        BASE},
+    {"bitcast",     BITCAST},
     {"bool",        BOOL},
     {"break",       BREAK},
     {"case",        CASE},

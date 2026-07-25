@@ -1,0 +1,7 @@
+// `bitcast<T>` is a *same-width* reinterpret — a width mismatch is a compile error (use `cast<T>` for a
+// value conversion). Here a 4-byte float32 to an 8-byte float64 must be rejected.
+fn int32 main() {
+    float32 f = 1.0f32;
+    float64 d = bitcast<float64>(f);   // 4 bytes -> 8 bytes: rejected
+    return (d == 1.0) ? 0 : 1;
+}

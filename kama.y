@@ -134,7 +134,7 @@ struct kamayystype {
 
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BREAK
-%token <string> CASE CAST COMPTIME CONST CONTINUE CTOR DEFAULT
+%token <string> CASE CAST BITCAST COMPTIME CONST CONTINUE CTOR DEFAULT
 %token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
@@ -193,7 +193,7 @@ struct kamayystype {
 %type <expression> expression expression_opt literal boolean_literal variable_initializer
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
 %type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis array_literal
-%type <expression> postfix_expression cast_expression sizeof_expression member_access element_access this_access
+%type <expression> postfix_expression cast_expression bitcast_expression sizeof_expression member_access element_access this_access
 %type <expression> as_downcast_expression interp_expr interp_hole
 %type <interpstring> interp_body
 %type <expressionlist> interp_index
@@ -1123,6 +1123,7 @@ unary_expression
   | EXCLAMATION unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
   | TILDE unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
   | cast_expression
+  | bitcast_expression
   | sizeof_expression
   | PLUS unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
   | MINUS unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
@@ -1153,6 +1154,11 @@ cast_expression
        operand is a full `expression` (like a parenthesized primary) so `cast<T>(a + b)` needs no inner
        parens — the surrounding `( … )` already delimits it. */
   : CAST LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN expression RPAREN   { $$ = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $4, $8 ); }
+  ;
+bitcast_expression
+    /* `bitcast<T>(expr)` — a same-width bit reinterpret, parsed exactly like `cast<T>(...)` (the mid-rules
+       track genericDepth across the `<…>`); the equal-width + numeric-scalar checks are enforced at emit. */
+  : BITCAST LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN expression RPAREN   { $$ = std::make_shared<BitcastNode>(SCANNER_CODEGENCONTEXT,  $4, $8 ); }
   ;
 sizeof_expression
   /* `sizeof(T)` / `alignof(T)` — the compile-time byte size / alignment of a type as a `usize`

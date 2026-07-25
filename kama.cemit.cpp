@@ -1096,6 +1096,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return "((" + cType(v->type) + ")(" + emitExpression(v->unaryExpression) + "))";
     }
 
+    if (auto* v = dynamic_cast<BitcastNode*>(n)) return emitBitcast(v);
+
     if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) return emitAsDowncast(ad);
 
     // `sizeof(T)`/`alignof(T)` -> C `sizeof(<cType>)`/`_Alignof(<cType>)` (a compile-time `size_t`/
@@ -12939,6 +12941,55 @@ std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
     return "((" + op + ".vtbl == &" + enumC + "__as_" + contract + ") ? "
          + "(" + optC + "){ .tag = " + optC + "_Some, .u.Some = { .value = *(" + enumC + "*)" + op + ".obj } } : "
          + "(" + optC + "){ .tag = " + optC + "_None })";
+}
+
+// `bitcast<T>(expr)` — reinterpret the bits of a numeric scalar as an equal-width numeric scalar `T`, with
+// NO value conversion (`cast<T>` is the value conversion). Lowers to an ISO-C11 union type-pun (§6.5.2.3)
+// inside a compound literal — an rvalue, no UB, no strict-aliasing violation. Source and target must be
+// equal-width numeric scalars (`int8..int64`/`uint8..uint64`/`float32`/`float64`); a user type, `bool`/
+// `char`, a width mismatch, or an operand whose scalar type can't be resolved (e.g. a bare literal or an
+// unresolved generic) is a clean compile error. Endianness / composite reinterpret build on this in library.
+std::string CEmitter::emitBitcast(BitcastNode* v)
+{
+    // (byte width, C scalar type) for a supported numeric-scalar token; width 0 => unsupported.
+    auto scalar = [](int tok) -> std::pair<int, std::string> {
+        switch (tok) {
+            case IDENTIFIER_INT8_VAL:    return {1, "int8_t"};
+            case IDENTIFIER_INT16_VAL:   return {2, "int16_t"};
+            case IDENTIFIER_INT32_VAL:   return {4, "int32_t"};
+            case IDENTIFIER_INT64_VAL:   return {8, "int64_t"};
+            case IDENTIFIER_UINT8_VAL:   return {1, "uint8_t"};
+            case IDENTIFIER_UINT16_VAL:  return {2, "uint16_t"};
+            case IDENTIFIER_UINT32_VAL:  return {4, "uint32_t"};
+            case IDENTIFIER_UINT64_VAL:  return {8, "uint64_t"};
+            case IDENTIFIER_FLOAT32_VAL: return {4, "float"};
+            case IDENTIFIER_FLOAT64_VAL: return {8, "double"};
+            default:                     return {0, ""};
+        }
+    };
+    int toTok = (v->type && !v->type->genericArg) ? v->type->builtInVal : 0;
+    auto to   = scalar(toTok);
+    auto fr   = scalar(holeBuiltinType(v->unaryExpression));
+    std::string tname = (v->type && v->type->value) ? *v->type->value : "T";
+    if (to.first == 0) {
+        unsupported(("bitcast<" + tname + ">(x) — the target `" + tname + "` must be a numeric scalar "
+                     "(`int8..int64`/`uint8..uint64`/`float32`/`float64`)").c_str(), v->line);
+        return "0";
+    }
+    if (fr.first == 0) {
+        unsupported(("bitcast<" + tname + ">(x) — the operand's type isn't a resolvable numeric scalar "
+                     "(need a variable/field of `int8..int64`/`uint8..uint64`/`float32`/`float64`)").c_str(), v->line);
+        return "0";
+    }
+    if (to.first != fr.first) {
+        unsupported(("bitcast<" + tname + ">(x) requires equal width — the operand is " + std::to_string(fr.first)
+                     + " bytes but `" + tname + "` is " + std::to_string(to.first)
+                     + " (use `cast<" + tname + ">` for a value conversion)").c_str(), v->line);
+        return "0";
+    }
+    // ISO C11 union type-pun via a compound literal: store the source member, read the target member.
+    return "(((union { " + fr.second + " __f; " + to.second + " __t; }){ .__f = ("
+         + emitExpression(v->unaryExpression) + ") }).__t)";
 }
 
 std::string CEmitter::variantExprEnumCType(SharedExpression e)

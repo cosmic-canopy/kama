@@ -930,6 +930,7 @@ private:
     std::string emitStickyErrBox(int depth, const std::string& enumType = "DeError",
                                  const std::string& errExpr = "r.vtbl->errorCode(r.obj)");
     std::string emitAsDowncast(AsDowncastNode* ad);           // Model C `expr.as<T>()` -> Optional<T> (vtbl compare)
+    std::string emitBitcast(BitcastNode* v);                  // `bitcast<T>(expr)` -> no-UB same-width union type-pun
     std::vector<std::string> _graphNodeOrder;       // graphNodeTypes in a stable order (for driver dispatch chains)
     // Contracts used as a graph edge element (`Shared<Shape>`): each gets a runtime-dispatch resolver pair.
     std::set<std::string> _polyContracts;

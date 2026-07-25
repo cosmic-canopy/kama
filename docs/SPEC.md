@@ -900,6 +900,13 @@ be written **in the language** rather than baked into the compiler. Three builti
 - **`sizeof(T)` / `alignof(T)`** — the compile-time byte size / alignment of a type (a `usize`); both
   monomorphize, so `malloc(n: n * sizeof(T))` works in a generic `Vec<T>`, and `alignof(T)` (→ C
   `_Alignof`) serves aligned DMA buffers / register-block layout asserts. Both fold in const-init contexts.
+- **`bitcast<T>(x)`** — a **same-width bit reinterpret** of a numeric scalar, distinct from `cast<T>` (a
+  *value* conversion): `bitcast<uint32>(f)` exposes a `float32`'s IEEE-754 bits, `bitcast<float64>(u)` builds
+  a double from a `uint64`. Source and target must be **equal-width numeric scalars** (`int8..int64`/
+  `uint8..uint64`/`float32`/`float64`); a width mismatch, a non-scalar, or an operand whose scalar type isn't
+  statically known (bind it to a local first) is a compile error. Lowers to a no-UB ISO-C11 union type-pun.
+  It is the safe-surface primitive for binary formats / hashing / endianness (`std::num` `byteswapF32` rides
+  it); raw-memory reinterpret of composites stays behind `unsafe`/`Ptr`.
 - **`panic(msg: string)` / `assert(cond: bool)`** — a clean **trap** (writes the message + `abort()`, not
   UB — the user-facing form of the built-in bounds trap). For a *bug that can't continue*; recoverable
   errors use `Result<T, E>`. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.)

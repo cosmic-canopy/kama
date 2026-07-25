@@ -91,7 +91,7 @@
       "patterns": [
         { "name": "keyword.control.kama", "match": "\\b(if|else|match|case|while|do|for|foreach|parallel_for|break|continue|return|spawn)\\b" },
         { "name": "keyword.other.modifier.kama", "match": "\\b(abstract|override|virtual|final|static|default|private|protected|public|friend|const|comptime|hardware|immutable|ref|out|in|extern|export|expose)\\b" },
-        { "name": "keyword.other.kama", "match": "\\b(fn|fnptr|ctor|type|namespace|using|import|extends|implements|operator|unsafe|asm|scope|give|copy|cast|as|when|sizeof|alignof)\\b" },
+        { "name": "keyword.other.kama", "match": "\\b(fn|fnptr|ctor|type|namespace|using|import|extends|implements|operator|unsafe|asm|scope|give|copy|cast|bitcast|as|when|sizeof|alignof)\\b" },
         { "name": "keyword.operator.new.kama", "match": "\\b(new|try)\\b" },
         { "name": "variable.language.kama", "match": "\\b(this|base)\\b" }
       ]
@@ -126,7 +126,7 @@
       "match": "\\b(true|false|null)\\b"
     },
     "cast": {
-      "match": "\\b(cast)\\s*<\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*>",
+      "match": "\\b(bitcast|cast)\\s*<\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*>",
       "captures": {
         "1": { "name": "keyword.operator.cast.kama" },
         "2": { "name": "entity.name.type.kama" }
