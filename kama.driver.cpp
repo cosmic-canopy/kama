@@ -20,6 +20,7 @@
 #include <sstream>
 #include <vector>
 #include <set>
+#include <map>
 #include <algorithm>
 
 #include <limits.h>
@@ -30,6 +31,7 @@
   // enum (BOOL, CHAR, CONST, INT8, VOID, …) collides with windows.h typedefs/macros. mingw-w64's POSIX
   // dirent/stat cover everything the driver needs, so windows.h is unnecessary.
   #include <stdlib.h>           // _fullpath, _MAX_PATH
+  #include <direct.h>           // _mkdir (package view materialization)
   #ifndef PATH_MAX
     #define PATH_MAX _MAX_PATH
   #endif
@@ -49,6 +51,8 @@
 #endif
 
 namespace {
+
+int runCmd(const std::string& cmd);   // fwd decl (defined below) — used by linkDir on Windows
 
 std::string absolutePath(const std::string& path)
 {
@@ -192,6 +196,20 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
 
+// The project's resolved-dependency view (`<projectDir>/.kama/deps`), or "" if there is no project
+// manifest or the view has not been materialized. `kama install` populates it (package-name -> store
+// or path source); the build only READS it — a pure, reproducible resolution with no fetch at build
+// time. Discovered like the manifest: next to the first input, else the CWD.
+std::string projectDepsView(const std::vector<std::string>& inputs)
+{
+    std::string dir;
+    if (!inputs.empty()) { std::string d = dirName(inputs[0]); if (fileExists(d + "/kama.json")) dir = d; }
+    if (dir.empty() && fileExists("kama.json")) dir = ".";
+    if (dir.empty()) return "";
+    std::string view = dir + "/.kama/deps";
+    return dirExists(view) ? view : "";
+}
+
 
 bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* argv0,
                       std::vector<SharedCompilationUnit>& units,
@@ -199,6 +217,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
 {
     std::string stdlibDir = resolveStdlibDir(argv0);
     std::vector<std::string> extraRoots = splitSearchPath(getenv("KAMA_PATH"));
+    std::string depsView = projectDepsView(cliInputs);   // resolved package roots (`kama install`), or ""
     // A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
     auto nsKey = [](SharedCompilationUnit u) -> std::string {
         if (!u || !u->nameSpace || !u->nameSpace->name) return "";
@@ -234,7 +253,14 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             if (provided.count(key)) continue;                // already in the compilation (CLI input / earlier import)
             bool reserved = (segs[0] == "std" || segs[0] == "core");
             std::vector<std::string> roots;
-            if (!reserved) { roots.push_back(here); for (auto& r : extraRoots) roots.push_back(r); }
+            if (!reserved) {
+                roots.push_back(here);
+                for (auto& r : extraRoots) roots.push_back(r);
+                // Declared package deps resolve via the materialized view — and ONLY via it, so an
+                // undeclared `import` misses the view and hits the missing-module error below (the
+                // phantom-dependency guarantee falls out for free — no extra check).
+                if (!depsView.empty()) roots.push_back(depsView);
+            }
             roots.push_back(stdlibDir);
             auto files = resolveModuleFiles(segs, roots);
             if (files.empty()) {
@@ -346,12 +372,24 @@ static bool g_strictFlags = false;
 // reject malformed JSON with a message. Deliberately NOT a general JSON library — the language's own
 // JSON serialization (lib/std/serialization/json) is kama-level runtime code and cannot parse the
 // compiler's own build-time config (different layer).
+// One `dependencies` entry from `kama.json`. Exactly one source of {path, git, url} is set;
+// `rev`/`integrity`/`version` refine it. The map key (not stored here) is the import-root segment.
+struct DepSpec {
+    std::string path;       // local directory (relative to the manifest) — no fetch, no store
+    std::string git;        // repo URL (+ rev)
+    std::string url;        // tarball URL (+ integrity)
+    std::string rev;        // git tag/branch/commit
+    std::string integrity;  // "sha256-<hex>" for a url dep
+    std::string version;    // optional metadata (resolver's single-version-per-major check)
+};
+
 struct ManifestReader {
     const std::string& s;
     size_t i = 0;
     std::string err;
     std::set<std::string>& declared;
     std::set<std::string>& defaults;
+    std::map<std::string, DepSpec>* deps = nullptr;   // set to capture `dependencies` (else it's skipped)
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -424,6 +462,45 @@ struct ManifestReader {
         return true;
     }
 
+    bool depsObject() {   // { "name": { "git":.., "rev":.., "url":.., "integrity":.., "path":.., "version":.. }, ... }
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`dependencies` must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string name; if (!str(name)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a dependency name");
+            ++i; ws();
+            if (i >= s.size() || s[i] != '{') return fail("a dependency value must be an object");
+            ++i; ws();
+            DepSpec spec;
+            if (i < s.size() && s[i] == '}') ++i;
+            else while (true) {
+                std::string k; if (!str(k)) return false;
+                ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a dependency body");
+                ++i; ws();
+                std::string v;
+                if (i < s.size() && s[i] == '"') { if (!str(v)) return false; }
+                else if (!skipValue()) return false;         // tolerate a non-string value (ignored)
+                if      (k == "path")      spec.path = v;
+                else if (k == "git")       spec.git = v;
+                else if (k == "url")       spec.url = v;
+                else if (k == "rev")       spec.rev = v;
+                else if (k == "integrity") spec.integrity = v;
+                else if (k == "version")   spec.version = v;
+                // unknown keys ignored (forward-compat)
+                ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == '}') { ++i; break; }
+                return fail("expected ',' or '}' in a dependency body");
+            }
+            if (deps) (*deps)[name] = spec;
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `dependencies`");
+        }
+        return true;
+    }
+
     bool parse() {
         ws(); if (i >= s.size() || s[i] != '{') return fail("manifest must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
@@ -432,6 +509,7 @@ struct ManifestReader {
             ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a key");
             ++i;
             if (key == "flags") { if (!flagsObject()) return false; }
+            else if (key == "dependencies" && deps) { if (!depsObject()) return false; }
             else if (!skipValue()) return false;         // name / version / future package keys
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -454,6 +532,97 @@ static bool loadManifestFlags(const std::string& path,
     ManifestReader r(src, declared, defaults);
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
+}
+
+// Load a `kama.json` manifest's `dependencies` (name -> DepSpec). Reuses ManifestReader (unknown keys
+// tolerated), so this is orthogonal to the flag load. Returns false + sets `err` on malformed JSON.
+static bool loadManifestDeps(const std::string& path, std::map<std::string, DepSpec>& deps, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.deps = &deps;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// One resolved package in `kama.lock`. The lock is what the build's view is materialized from — the
+// reproducibility record: (source, pinned identity, integrity, transitive deps).
+struct LockEntry {
+    std::string source;                     // "path" | "git" | "url"
+    std::string path, git, url, rev, commit, integrity;
+    std::vector<std::string> dependencies;  // transitive dep names (serialized so the build never re-reads a dep's manifest)
+};
+
+static std::string jsonEscape(const std::string& s)
+{
+    std::string o;
+    for (char c : s) switch (c) {
+        case '"':  o += "\\\""; break;  case '\\': o += "\\\\"; break;
+        case '\n': o += "\\n";  break;  case '\t': o += "\\t";  break;
+        case '\r': o += "\\r";  break;  default:   o += c;
+    }
+    return o;
+}
+
+// Write `kama.lock` deterministically (sorted std::map => byte-stable => reproducible re-install).
+static bool writeLockFile(const std::string& path, const std::map<std::string, LockEntry>& pkgs)
+{
+    std::ofstream out(path);
+    if (!out) return false;
+    out << "{\n  \"lockVersion\": 1,\n  \"packages\": {";
+    bool first = true;
+    for (auto& kv : pkgs) {
+        const LockEntry& e = kv.second;
+        out << (first ? "\n" : ",\n"); first = false;
+        out << "    \"" << jsonEscape(kv.first) << "\": { \"source\": \"" << jsonEscape(e.source) << "\"";
+        if (!e.path.empty())      out << ", \"path\": \""      << jsonEscape(e.path)      << "\"";
+        if (!e.git.empty())       out << ", \"git\": \""       << jsonEscape(e.git)       << "\"";
+        if (!e.url.empty())       out << ", \"url\": \""       << jsonEscape(e.url)       << "\"";
+        if (!e.rev.empty())       out << ", \"rev\": \""       << jsonEscape(e.rev)       << "\"";
+        if (!e.commit.empty())    out << ", \"commit\": \""    << jsonEscape(e.commit)    << "\"";
+        if (!e.integrity.empty()) out << ", \"integrity\": \"" << jsonEscape(e.integrity) << "\"";
+        out << ", \"dependencies\": [";
+        for (size_t j = 0; j < e.dependencies.size(); ++j)
+            out << (j ? ", " : "") << "\"" << jsonEscape(e.dependencies[j]) << "\"";
+        out << "] }";
+    }
+    out << (first ? "" : "\n  ") << "}\n}\n";
+    return true;
+}
+
+// mkdir -p (POSIX + mingw): create `path` and any missing parents. Returns true if `path` is a dir after.
+static bool makeDirs(const std::string& path)
+{
+    for (size_t i = 0; i < path.size(); ) {
+        size_t slash = path.find('/', i);
+        std::string part = (slash == std::string::npos) ? path : path.substr(0, slash);
+        if (!part.empty() && !dirExists(part))
+#ifdef _WIN32
+            _mkdir(part.c_str());
+#else
+            mkdir(part.c_str(), 0755);
+#endif
+        if (slash == std::string::npos) break;
+        i = slash + 1;
+    }
+    return dirExists(path);
+}
+
+// Symlink a directory `linkPath` -> `target` (absolute). Windows: a directory junction (mklink /J).
+// Replaces an existing link. This is how the per-project view points at a store/path source (pnpm
+// model) — zero-copy, no duplication.
+static bool linkDir(const std::string& target, const std::string& linkPath)
+{
+#ifdef _WIN32
+    runCmd("cmd /c rmdir \"" + linkPath + "\" 2>nul");
+    return runCmd("cmd /c mklink /J \"" + linkPath + "\" \"" + target + "\"") == 0;
+#else
+    unlink(linkPath.c_str());
+    return symlink(target.c_str(), linkPath.c_str()) == 0;
+#endif
 }
 
 // Emit an already-parsed unit to a single `.c` (`srcPath` drives #line). Returns 0 on success.
@@ -603,6 +772,63 @@ int cmdUpdate(const std::string& pinned)
     return runCmd(cmd);   // the installer prints old->new; verify with `kama --version`
 }
 
+// `kama install [<dir>]` (M2.0): materialize the per-project dependency view from `kama.json` into
+// `<project>/.kama/deps/` and write a deterministic `kama.lock`. This milestone handles `path` deps
+// only (git/url + the content-addressed store arrive in M2.1). No arbitrary code ever runs — packages
+// are kama source the consumer compiles; there is no install-script hook (the npm postinstall footgun).
+int cmdInstall(const std::string& projectDir)
+{
+    std::string base = projectDir.empty() ? "." : projectDir;
+    std::string manifest = base + "/kama.json";
+    if (!fileExists(manifest)) {
+        fprintf(stderr, "kama install: no kama.json in %s\n", base.c_str());
+        return 2;
+    }
+    std::map<std::string, DepSpec> deps; std::string err;
+    if (!loadManifestDeps(manifest, deps, err)) {
+        fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str());
+        return 2;
+    }
+    if (deps.empty()) { fprintf(stderr, "kama: no dependencies to install\n"); return 0; }
+
+    // Rebuild the view from scratch (rm + relink) so it can never drift from the manifest/lock.
+    std::string viewDir = base + "/.kama/deps";
+#ifdef _WIN32
+    runCmd("cmd /c rmdir /s /q \"" + viewDir + "\" 2>nul");
+#else
+    runCmd("rm -rf \"" + viewDir + "\"");
+#endif
+    if (!makeDirs(viewDir)) { fprintf(stderr, "kama install: cannot create %s\n", viewDir.c_str()); return 1; }
+
+    std::map<std::string, LockEntry> lock;
+    for (auto& kv : deps) {
+        const std::string& name = kv.first; const DepSpec& d = kv.second;
+        if (!d.path.empty()) {
+            std::string target = absolutePath(base + "/" + d.path);
+            if (!dirExists(target)) {
+                fprintf(stderr, "kama install: path dependency '%s' not found at %s\n", name.c_str(), target.c_str());
+                return 1;
+            }
+            if (!linkDir(target, viewDir + "/" + name)) {
+                fprintf(stderr, "kama install: cannot link dependency '%s'\n", name.c_str());
+                return 1;
+            }
+            LockEntry e; e.source = "path"; e.path = d.path;   // path deps: no integrity (local, mutable)
+            lock[name] = e;
+        } else {
+            fprintf(stderr, "kama install: dependency '%s' uses a git/url source, which arrives in the next "
+                            "milestone (M2.1) — use a `path` dependency for now\n", name.c_str());
+            return 2;
+        }
+    }
+    if (!writeLockFile(base + "/kama.lock", lock)) {
+        fprintf(stderr, "kama install: cannot write %s/kama.lock\n", base.c_str());
+        return 1;
+    }
+    fprintf(stderr, "kama: installed %zu package(s) into %s\n", lock.size(), viewDir.c_str());
+    return 0;
+}
+
 void usage()
 {
     fprintf(stderr,
@@ -611,6 +837,7 @@ void usage()
         "  kama build     <in.kama>... [-o out] [--target native|wasm|embedded] [--release|--debug] [--shared]\n"
         "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
         "                  (pass multiple .kama files to build a multi-file program)\n"
+        "  kama install   [<dir>]              resolve `kama.json` dependencies into .kama/deps + kama.lock\n"
         "  kama update    [--version vX.Y.Z]   self-update via the installer\n"
         "  kama --version\n");
 }
@@ -635,6 +862,17 @@ int main(int argc, char** argv)
             else { fprintf(stderr, "kama update: unexpected arg '%s'\n", a.c_str()); return 2; }
         }
         return cmdUpdate(pinned);
+    }
+
+    if (subcommand == "install") {
+        std::string dir;
+        for (int i = 2; i < argc; ++i) {
+            std::string a = argv[i];
+            if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama install: unexpected option '%s'\n", a.c_str()); return 2; }
+            else if (dir.empty()) dir = a;
+            else { fprintf(stderr, "kama install: unexpected arg '%s'\n", a.c_str()); return 2; }
+        }
+        return cmdInstall(dir);
     }
 
     std::vector<std::string> inputs;      // one or more .kama source files
@@ -724,6 +962,19 @@ int main(int argc, char** argv)
             g_declaredFlags = declared;
             g_strictFlags   = true;
             for (auto& d : defaults) g_activeFlags.insert(d);
+
+            // Package deps (M2): if the manifest declares dependencies, the resolved view must already
+            // be materialized. The build is a pure, reproducible READ of the view — it never fetches —
+            // so a missing view is a user error pointing at `kama install`, not a silent build.
+            std::map<std::string, DepSpec> deps; std::string derr;
+            if (loadManifestDeps(manifest, deps, derr) && !deps.empty()) {
+                std::string view = dirName(manifest) + "/.kama/deps";
+                if (!dirExists(view)) {
+                    fprintf(stderr, "kama: %s declares dependencies but %s is missing — run `kama install`\n",
+                            manifest.c_str(), view.c_str());
+                    return 2;
+                }
+            }
         }
     }
 

@@ -1,0 +1,6 @@
+// The `geo` package is declared as a `path` dependency in kama.json and lives under vendor/ —
+// unreachable from this file's own directory, so it resolves ONLY through the materialized
+// `.kama/deps` view. Proves package imports wire into the module search path.
+import geo::{area};
+
+fn int32 main() { return area(); }   // 30

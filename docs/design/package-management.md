@@ -1,9 +1,23 @@
 # Kama toolchain & package management — design of record (kickoff)
 
-**Status: PREPARED, not built.** Kickoff brief for a fresh session — the campaign after conditional
-compilation (`@compileFor`, ✅ shipped 2026-07-24). Goal of this doc: capture the vision, what already
-exists to build on, distilled prior art, per-pillar leans, and the open questions — so the next session
-can start designing, not re-deriving. Nothing here is implemented yet.
+**Status: M2 (per-project packages) IN PROGRESS.** Kickoff brief for the campaign after conditional
+compilation (`@compileFor`, ✅ shipped 2026-07-24). The user chose to build **M2 first**; the executable
+plan for it is the design of record for the build. This doc keeps the vision, seam map, prior art, and
+open questions.
+
+**Implementation progress:**
+- **M2.0 — path deps + lockfile + import wiring ✅ shipped.** `kama.json` `dependencies` (path/git/url
+  schema, `path` fetched) → `ManifestReader::depsObject()`; deterministic `kama.lock` writer
+  (`writeLockFile`); `kama install [<dir>]` materializes `<project>/.kama/deps/` (directory symlinks,
+  `linkDir`) + writes the lock; the build appends the resolved view to the import roots
+  (`projectDepsView` → `loadProgramUnits`), so declared deps resolve and undeclared imports fail
+  (phantom-dep guarantee). Build guards a missing view with "run `kama install`". Fixtures:
+  `tests/pkg_path_dep.d` (resolves via the view only), `tests/xfail/pkg_undeclared_import`. Native +
+  wasm green. (The lock *reader* / `parseLock` is deferred to M2.2 where the resolver makes honoring a
+  pinned lock meaningfully differ from re-resolving — path deps re-resolve identically, so the
+  deterministic writer alone holds the reproducibility spine.)
+- M2.1 (content-addressed store + integrity + git/url fetch), M2.2 (resolver + `add`/`remove`/`update`),
+  M2.3 (`run` + docs) — pending.
 
 ## Scope — four pillars (user, 2026-07-24)
 
