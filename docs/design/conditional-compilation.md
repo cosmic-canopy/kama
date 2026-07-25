@@ -1,10 +1,35 @@
-# Conditional compilation via decl-level tags (`@when`) — design of record
+# Conditional compilation via decl-level tags (`@compileFor`) — design of record
 
-**Status: PREPARED, not built.** Kickoff brief for a fresh session, the campaign after const-eval (6a/6b
-all shipped — [[next-session-const-eval]]). This is the **structure** axis that pairs with const-eval's
-**value** axis: const-eval bakes compile-time *values* (tables, sizes); this feature selects which whole
-*declarations* exist for a given build. Roadmap of record: ROADMAP.md §5 (the "Platform-specific
-compilation" bullet).
+**Status: ✅ SHIPPED 2026-07-24.** All three stages landed green (native 752 / ASan 735 / wasm). This is
+the **structure** axis that pairs with const-eval's **value** axis: const-eval bakes compile-time *values*
+(tables, sizes); this feature selects which whole *declarations* exist for a given build. Roadmap of
+record: ROADMAP.md §5 (the "Conditional / platform-specific compilation" bullet); user reference:
+SPEC.md *Conditional compilation* + KEYWORDS.md *Conditional-compilation attribute*.
+
+**As-shipped deltas from the brief below** (the brief is preserved as the design rationale):
+- **Attribute is `@compileFor(FLAG)`**, not `@when`. Chosen to sidestep the `when`-keyword collision
+  entirely (it lexes cleanly as `AT IDENTIFIER` — no grammar tweak) and to read naturally for both
+  platform and build-mode. Open-Q1 resolved in favor of a fresh name over the `fn … when` parallel.
+- **Flag config is `kama.json`** (a user-project manifest, auto-discovered next to the source or via
+  `--config PATH`), not a kama-native `flags { }` block. It declares the valid flag universe and turns on
+  strict typo-validation; no manifest = permissive. Parsed by a tiny C++ reader in the driver (the
+  compiler is C++, not self-hosted, so it cannot use the kama-level `std::serialization::json` library).
+  `kama.json` is deliberately the seed of the future package-management manifest. Resolves open-Q2/Q4.
+- **`--define` + `--undefine`** (repeatable) for user flags; built-ins from `--target`/`--release`.
+- **Logic**: membership + leading `!` + comma-AND (open-Q3 as leaned). Negation `!FLAG` is encoded in the
+  grammar (`attr_arg : EXCLAMATION IDENTIFIER`) as a `SimpleUnaryExpressionNode` — no AST change.
+- **Implementation**: a single `pruneInactiveDecls` pass at the top of `collectProgram` drops inactive
+  decls AND **strips `@compileFor` from kept decls**, so no downstream pass (declAttrPrefix, collect,
+  emit) ever sees it — cleaner than teaching each site. v1 gates top-level decls (fn/type/enum/static);
+  class members / `implements` blocks are a later stage (open-Q5 as leaned). No `@target` alias (open-Q6).
+- Fixtures: `compilefor_mode`, `compilefor_manifest.d`, `compilefor_platform`, `xfail/compilefor_dangling`,
+  guard `tools/check-compilefor.sh`. Seams: kama.y `attr_arg`; kama.driver.cpp (`--define`/`--undefine`/
+  `--config` + `ManifestReader`); kama.cemit.{h,cpp} (`setBuildFlags`, `_activeFlags`/`_declaredFlags`/
+  `_strictFlags`, `compileForActive`, `pruneInactiveDecls`).
+
+---
+
+_Original kickoff brief (design rationale; `@when` was the working name, now `@compileFor`):_
 
 ## The one hard constraint (user, sharpened 2026-07-24)
 

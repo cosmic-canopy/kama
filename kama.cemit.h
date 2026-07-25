@@ -385,6 +385,16 @@ public:
     // `rejectIfNoHeap`. Set from the driver before emission.
     void setNoHeap(bool on) { _noHeapProgram = on; }
 
+    // `@compileFor(FLAG)` conditional compilation: the active build-flag set (built-ins from
+    // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), and whether
+    // strict validation is on (a manifest was loaded). Set from the driver before emission; consumed by
+    // `pruneInactiveDecls` at the top of `collectProgram` — inactive decls are dropped, and the
+    // `@compileFor` attribute is stripped from kept decls so no downstream pass ever sees it.
+    void setBuildFlags(const std::set<std::string>& active,
+                       const std::set<std::string>& declared,
+                       bool strict)
+    { _activeFlags = active; _declaredFlags = declared; _strictFlags = strict; }
+
     // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
     // code under its own `namespace`/`export`, plus an implicit `using` so its names are always in
     // scope. Like the prelude, its generic templates emit nothing unless instantiated.
@@ -533,6 +543,9 @@ private:
     bool                                      _emitStaticInlineFn = false;// prefix `static inline` on a free fn (prelude helper body emitted in the header)
     bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide
     bool                                      _noHeapActive  = false;    // inside a `@noheap` fn: reject heap allocation in this body
+    std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
+    std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
+    bool                                      _strictFlags   = false;    // a manifest was loaded -> validate `@compileFor`/`--define` names
 
     // Generic CONTRACTS (`type contract Iterator<T>`) — the exact parallel of generic TYPES above. The
     // TEMPLATE is kept OUT of _interfaces (so the eager vtable-emit loop never sees its unbound `T`);
@@ -617,6 +630,11 @@ private:
     void indent(int depth);
 
     // Pre-pass
+    // `@compileFor(FLAG)` conditional compilation: drop every top-level decl whose flag gate is
+    // inactive (as if never written), and strip the `@compileFor` attribute from kept decls so no
+    // downstream pass sees it. Runs at the top of `collectProgram`, before any collect pass.
+    void pruneInactiveDecls(SharedCompilationUnit unit);
+    bool compileForActive(const SharedAttributeList& attrs, int line);   // eval the gate (true = keep)
     void collectSignatures(SharedCompilationUnit unit);
     void collectInterfaces(SharedCompilationUnit unit);
     void collectEnums(SharedCompilationUnit unit);

@@ -332,6 +332,130 @@ std::vector<SharedCompilationUnit> preludeModuleUnits()
 // subset). Threaded to each CEmitter via `setNoHeap`. File-scope like the other build config, set in main.
 static bool g_noHeap = false;
 
+// `@compileFor(FLAG)` conditional compilation (the "structure" axis): the active build-flag set
+// (built-ins derived from `--target`/`--release`, plus `--define`), the declared-flag universe (from
+// `kama.json`, Stage 2), and whether strict flag-name validation is on. File-scope like `g_noHeap`,
+// populated in main, threaded to each CEmitter via `setBuildFlags`.
+static std::set<std::string> g_activeFlags;
+static std::set<std::string> g_declaredFlags;
+static bool g_strictFlags = false;
+
+// Minimal purpose-built reader for the `kama.json` project manifest. v1 needs only the declared flag
+// NAMES and which carry `"default": true`; every other key (`name`/`version`/… — the future
+// package-management surface) is skipped generically. Tolerant of unknown fields, strict enough to
+// reject malformed JSON with a message. Deliberately NOT a general JSON library — the language's own
+// JSON serialization (lib/std/serialization/json) is kama-level runtime code and cannot parse the
+// compiler's own build-time config (different layer).
+struct ManifestReader {
+    const std::string& s;
+    size_t i = 0;
+    std::string err;
+    std::set<std::string>& declared;
+    std::set<std::string>& defaults;
+    ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
+        : s(src), declared(d), defaults(df) {}
+
+    void ws() { while (i < s.size() && (s[i]==' '||s[i]=='\t'||s[i]=='\n'||s[i]=='\r')) ++i; }
+    bool fail(const char* m) { if (err.empty()) err = m; return false; }
+
+    bool str(std::string& out) {
+        ws(); if (i >= s.size() || s[i] != '"') return fail("expected a string");
+        ++i; out.clear();
+        while (i < s.size() && s[i] != '"') {
+            char c = s[i++];
+            if (c == '\\' && i < s.size()) { char e = s[i++];
+                switch (e) { case 'n':c='\n';break; case 't':c='\t';break; case 'r':c='\r';break;
+                             case '"':c='"';break; case '\\':c='\\';break; case '/':c='/';break; default:c=e; } }
+            out.push_back(c);
+        }
+        if (i >= s.size()) return fail("unterminated string");
+        ++i; return true;
+    }
+
+    bool skipValue() {   // string | number | true/false/null | balanced object/array
+        ws(); if (i >= s.size()) return fail("unexpected end of manifest");
+        char c = s[i];
+        if (c == '"') { std::string t; return str(t); }
+        if (c == '{' || c == '[') {
+            char open = c, close = (c == '{') ? '}' : ']'; int depth = 0; bool inStr = false;
+            while (i < s.size()) {
+                char d = s[i++];
+                if (inStr)            { if (d == '\\' && i < s.size()) ++i; else if (d == '"') inStr = false; }
+                else if (d == '"')      inStr = true;
+                else if (d == open)     ++depth;
+                else if (d == close)  { if (--depth == 0) return true; }
+            }
+            return fail("unbalanced brackets in manifest");
+        }
+        while (i < s.size() && s[i]!=','&&s[i]!='}'&&s[i]!=']'&&s[i]!=' '&&s[i]!='\t'&&s[i]!='\n'&&s[i]!='\r') ++i;
+        return true;
+    }
+
+    bool flagsObject() {   // { "NAME": { "default": true }, "OTHER": {}, ... }
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`flags` must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string name; if (!str(name)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a flag name");
+            ++i; declared.insert(name); ws();
+            if (i < s.size() && s[i] == '{') {           // inner object: look for "default": true
+                ++i; ws();
+                if (i < s.size() && s[i] == '}') ++i;
+                else while (true) {
+                    std::string k; if (!str(k)) return false;
+                    ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a flag body");
+                    ++i; ws();
+                    if (k == "default") {
+                        if      (s.compare(i, 4, "true")  == 0) { defaults.insert(name); i += 4; }
+                        else if (s.compare(i, 5, "false") == 0) { i += 5; }
+                        else if (!skipValue()) return false;
+                    } else if (!skipValue()) return false;
+                    ws();
+                    if (i < s.size() && s[i] == ',') { ++i; continue; }
+                    if (i < s.size() && s[i] == '}') { ++i; break; }
+                    return fail("expected ',' or '}' in a flag body");
+                }
+            } else if (!skipValue()) return false;       // tolerate a non-object flag value
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `flags`");
+        }
+        return true;
+    }
+
+    bool parse() {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("manifest must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string key; if (!str(key)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a key");
+            ++i;
+            if (key == "flags") { if (!flagsObject()) return false; }
+            else if (!skipValue()) return false;         // name / version / future package keys
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' at top level");
+        }
+        return true;
+    }
+};
+
+// Load a `kama.json` manifest → declared flag names + defaults. Returns false + sets `err` on failure.
+static bool loadManifestFlags(const std::string& path,
+                              std::set<std::string>& declared,
+                              std::set<std::string>& defaults,
+                              std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    ManifestReader r(src, declared, defaults);
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
 // Emit an already-parsed unit to a single `.c` (`srcPath` drives #line). Returns 0 on success.
 int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
                         const std::string& outPath, bool emitLines, bool* externsMathH = nullptr,
@@ -346,6 +470,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     CEmitter emitter(out, srcPath, emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
     emitter.setNoHeap(g_noHeap);         // `--no-heap`: reject heap allocation program-wide
+    emitter.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
     for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
     int unsupported = emitter.emit(unit);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
@@ -390,6 +515,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     CEmitter emitter(header, "", emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
     emitter.setNoHeap(g_noHeap);         // `--no-heap`: reject heap allocation program-wide
+    emitter.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
     for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
@@ -521,6 +647,9 @@ int main(int argc, char** argv)
     bool        webgpu     = false;
     bool        release    = false;        // debug by default
     bool        shared     = false;        // --shared: build a native .so/.dylib/.dll (expose entry points)
+    std::vector<std::string> defines;      // --define NAME: activate a `@compileFor` flag (repeatable)
+    std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
+    std::string configPath;                // --config PATH: explicit kama.json (else auto-discovered)
 
     // Options may appear in any order, before or after the input file.
     for (int i = 2; i < argc; ++i) {
@@ -536,6 +665,9 @@ int main(int argc, char** argv)
         else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
         else if (a == "--release")                release = true;
         else if (a == "--debug")                  release = false;
+        else if (a == "--define" && i + 1 < argc)   defines.push_back(argv[++i]);    // `@compileFor` flag on
+        else if (a == "--undefine" && i + 1 < argc) undefines.push_back(argv[++i]);  // `@compileFor` flag off
+        else if (a == "--config" && i + 1 < argc)   configPath = argv[++i];          // explicit kama.json
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
@@ -555,6 +687,59 @@ int main(int argc, char** argv)
     // memory map) is inherently per-chip and is the user's link step (or the turnkey step-6 toolchain),
     // exactly as every bare-metal toolchain separates compilation from the linker-script'd final image.
     const bool embedded = (target == "embedded");
+
+    // Build the active `@compileFor` flag set (the "structure" axis — reproducible, from the explicit
+    // build invocation, never ambient env). Built-ins are auto-derived: NATIVE/WASM/EMBEDDED from
+    // `--target`, DEBUG/RELEASE from `--release`. User flags come from `--define` (a `kama.json`
+    // manifest layers declared defaults in on top — Stage 2). `--undefine` then removes.
+    g_activeFlags.insert(embedded ? "EMBEDDED" : (wasm ? "WASM" : "NATIVE"));
+    g_activeFlags.insert(release ? "RELEASE" : "DEBUG");
+
+    // Load the `kama.json` manifest if present (explicit `--config`, else auto-discovered next to the
+    // input file, else CWD). It DECLARES the valid user-flag universe — enabling STRICT validation of
+    // `@compileFor`/`--define` names (a typo like `WINODWS` is then rejected, not silently dropped) —
+    // and may mark flags `"default": true` (active unless `--undefine`'d). No manifest -> permissive:
+    // undeclared flags are simply inactive, so bare per-file builds need no config.
+    {
+        std::string manifest = configPath;
+        if (manifest.empty()) {
+            std::string dir; size_t slash = input.find_last_of('/');
+            if (slash != std::string::npos) dir = input.substr(0, slash + 1);
+            if      (std::ifstream(dir + "kama.json").good()) manifest = dir + "kama.json";
+            else if (std::ifstream("kama.json").good())       manifest = "kama.json";
+        }
+        if (!manifest.empty()) {
+            std::set<std::string> declared, defaults; std::string err;
+            if (!loadManifestFlags(manifest, declared, defaults, err)) {
+                fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str());
+                return 2;
+            }
+            // Built-in flags (from --target/--release) are always valid and must not be redeclared.
+            for (const char* r : {"NATIVE","WASM","EMBEDDED","DEBUG","RELEASE"})
+                if (declared.count(r)) {
+                    fprintf(stderr, "kama: %s: `%s` is a built-in flag (set by --target/--release) and "
+                                    "cannot be declared in `flags`\n", manifest.c_str(), r);
+                    return 2;
+                }
+            g_declaredFlags = declared;
+            g_strictFlags   = true;
+            for (auto& d : defaults) g_activeFlags.insert(d);
+        }
+    }
+
+    // User flags: under strict mode (a manifest was loaded) validate names against the declared
+    // universe before applying. `--define` adds; `--undefine` removes (e.g. turning off a default).
+    {
+        static const std::set<std::string> builtinFlags = {"NATIVE","WASM","EMBEDDED","DEBUG","RELEASE"};
+        auto validate = [&](const std::string& name, const char* what) -> bool {
+            if (!g_strictFlags || builtinFlags.count(name) || g_declaredFlags.count(name)) return true;
+            fprintf(stderr, "kama: %s references undeclared flag `%s` (add it to the `flags` object in "
+                            "kama.json)\n", what, name.c_str());
+            return false;
+        };
+        for (auto& d : defines)   { if (!validate(d, "--define"))   return 2; g_activeFlags.insert(d); }
+        for (auto& u : undefines) { if (!validate(u, "--undefine")) return 2; g_activeFlags.erase(u); }
+    }
 
     // `--shared` is a native shared-library packaging step (desktop dev-loop hot-reload). On wasm
     // the host re-instantiates the module instead of `dlopen`ing it, so `expose` alone (KAMA_EXPORT

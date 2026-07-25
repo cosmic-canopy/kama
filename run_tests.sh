@@ -146,6 +146,13 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-noh
     if sh tools/check-noheap.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# Conditional compilation: `@compileFor(FLAG)` decl-gate guard — builds the same fixture DEBUG vs
+# RELEASE and asserts (via transpile-grep) the gated body reaches the emitted C in exactly one build
+# (Kama-level selection, no #ifdef). Transpile+build, so run once on the plain native pass.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-compilefor.sh ]; then
+    if sh tools/check-compilefor.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # One fixture's build+run+compare, run in a background subshell. Buffers its status line(s) into
 # $TMP/$name.out and records PASS/FAIL/SKIP into $TMP/$name.res (tallied in fixture order afterward).
 test_one() {

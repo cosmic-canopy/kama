@@ -1,0 +1,13 @@
+// `kama.json` manifest + `@compileFor` (Stage 2). The manifest (this dir's kama.json) DECLARES the
+// user flags WINDOWS/LINUX/TELEMETRY and marks TELEMETRY `"default": true`. It is auto-discovered next
+// to this source, which enables strict validation (an undeclared flag would be rejected — see the
+// guard tools/check-compilefor.sh). This is a default (debug / native) build with no --define, so:
+//   TELEMETRY -> on (default)   WINDOWS -> off (declared, not activated)
+// giving 40 + 2 = 42. Both sides of each gate are defined, so every build resolves the call.
+@compileFor(TELEMETRY)  fn int32 tel()  { return 40; }
+@compileFor(!TELEMETRY) fn int32 tel()  { return 0; }
+
+@compileFor(WINDOWS)    fn int32 plat() { return 99; }
+@compileFor(!WINDOWS)   fn int32 plat() { return 2; }
+
+fn int32 main() { return tel() + plat(); }

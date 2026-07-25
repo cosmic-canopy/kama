@@ -1,0 +1,11 @@
+// `@compileFor(FLAG)` conditional compilation — the decl-level keep/drop gate.
+// `bonus` has two gated definitions: the DEBUG build keeps the first (a distinctive 251), the
+// RELEASE build drops it and keeps the same-named fallback (7). Both sides are gated on complementary
+// flags, so every build resolves `bonus` — the dropped decl's symbol simply never exists.
+//   default (debug) build -> 251     `--release` build -> 7
+// The transpile-grep guard (tools/check-compilefor.sh) proves the drop happens in the Kama compiler
+// (only one body ever reaches the emitted C — a C `#ifdef` would emit both).
+@compileFor(DEBUG)  fn int32 bonus() { return 251; }
+@compileFor(!DEBUG) fn int32 bonus() { return 7; }
+
+fn int32 main() { return bonus(); }

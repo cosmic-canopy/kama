@@ -1,0 +1,8 @@
+// `@compileFor` drop is literal: a gated-out decl's symbol never exists, so a reference from KEPT
+// code to a dropped decl is a normal unresolved-symbol error — the user must gate both sides (or
+// provide a same-named fallback for the complementary flag, as tests/compilefor_mode.kama does).
+// Here `onlyRelease` exists only under RELEASE, but the ungated `main` calls it; the default (debug)
+// build drops `onlyRelease` and the call dangles.
+@compileFor(RELEASE) fn int32 onlyRelease() { return 1; }
+
+fn int32 main() { return onlyRelease(); }

@@ -439,20 +439,35 @@ tables, shader/permutation specialization) — see [MCU_READINESS.md](MCU_READIN
   (`kama.cemit.cpp` ~2570) and the by-value + `ref` paths share it, so a blanket `const` would break
   `ref`-foreach write-back. Benign (the loop only reads) and index access (`X.get(index: i)`) is warning-free;
   fix is a const-correct foreach lowering (const receiver pointer + `const`-element `get` on the by-value path).
-- **Platform-specific compilation** — the no-`#ifdef` answer, and **decided in direction: tag TYPES to
-  force an abstraction boundary, do NOT add in-function branching.** A platform-agnostic `contract`
-  defines the seam; per-platform concrete types implement it and carry a **`@target(...)`-style tag**;
-  the toolchain selects the tagged implementation for the active target. There is deliberately **no
-  `static if (arch == ...)`** and no scattered branching — that ifdef/`comptime-if` soup is explicitly
-  rejected as ugly, and forcing the impl behind a type/interface keeps the boundary clean. This is
-  expected to be **simpler** than a branching model (a decl-level tag + selection, not an evaluator).
-  Const-eval supplies compile-time *values*; type-tagging supplies the *structure*. Inline asm (6a) is
-  the raw primitive under those per-platform types. (wasm cannot do inline asm at all — another reason
-  the interface seam matters.) **► Design of record: [docs/design/conditional-compilation.md](design/conditional-compilation.md)**
-  — prepared 2026-07-24 (the campaign after const-eval). Key realization there: build-mode (`DEBUG`/`RELEASE`)
-  and platform are **one primitive** — a decl-level keep/drop gate (`@when(FLAG)`); "platform" is that gate on
-  contract impls (the tag-type seam), not a second mechanism. One attribute + one prune pass; no `#ifdef`
-  reaches the emitted C.
+- **Conditional / platform-specific compilation — `@compileFor(FLAG)`** ✅ **SHIPPED** (2026-07-24, the
+  campaign after const-eval). The no-`#ifdef` answer: **tag a whole declaration; the compiler keeps or
+  drops it for the active build** — decl-level only, NO in-function branching, no `static if`, no
+  `#ifdef`/`comptime-if` soup (explicitly rejected as ugly). The key realization: **build-mode
+  (`DEBUG`/`RELEASE`) and platform (`WASM`/`NATIVE`/`WINDOWS`/…) are ONE primitive** — a decl-level
+  keep/drop gate. "Platform" is that same gate applied to *impls behind a contract* (a platform-agnostic
+  `contract` + per-target `@compileFor`-gated `type` impls; exactly one survives), so it is one mechanism,
+  not two. Const-eval supplies compile-time *values*; `@compileFor` supplies the *structure*. Shipped:
+  - **The gate** — `@compileFor(FLAG)` on any top-level decl (fn / `type` / `enum` / module `static`);
+    membership + leading `!` (`@compileFor(!RELEASE)`) + comma-AND (`@compileFor(WINDOWS, DEBUG)`). A
+    single **prune pass** (`pruneInactiveDecls`, at the top of `collectProgram`) drops inactive decls
+    and strips the attribute from kept ones — nothing downstream needs to know the feature exists. A
+    dropped decl's symbol never exists (a dangling reference is a normal unresolved-symbol error; gate
+    both sides / provide a same-named fallback for the complementary flag).
+  - **Flags** — reproducible, from the explicit build invocation (never ambient env). Built-ins:
+    `NATIVE`/`WASM`/`EMBEDDED` from `--target`, `DEBUG`/`RELEASE` from `--release`. User flags via
+    repeatable `--define NAME` / `--undefine NAME`.
+  - **`kama.json` project manifest** — a user-project file (auto-discovered next to the source, or
+    `--config PATH`) that DECLARES the valid user-flag universe (`"flags": { "WINDOWS": {}, "TELEMETRY":
+    { "default": true } }`) and enables STRICT validation (an undeclared `@compileFor`/`--define` name is
+    rejected — typo protection). No manifest → permissive. Parsed by a tiny C++ reader in the driver
+    (the compiler is C++, not self-hosted, so it can't use the kama-level JSON library); `kama.json` is
+    deliberately the **seed of the future package-management manifest** (name/version/deps).
+  - Fixtures: `compilefor_mode` (debug vs release), `compilefor_manifest.d` (manifest + strict),
+    `compilefor_platform` (contract seam, native+wasm), `xfail/compilefor_dangling`, and the transpile-grep
+    guard `tools/check-compilefor.sh` (proves selection happens in the Kama compiler — no `#ifdef` in the
+    emitted C). Inline asm (6a) remains the raw primitive under per-platform types (wasm cannot do inline
+    asm — another reason the contract seam matters). **► Design of record:
+    [docs/design/conditional-compilation.md](design/conditional-compilation.md).**
 
 ## 6. Concurrency — shared-nothing by construction (✅ SHIPPED — campaign complete 2026-07-23)
 

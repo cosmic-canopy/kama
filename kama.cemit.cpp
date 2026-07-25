@@ -10426,6 +10426,10 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             if (at->args && !at->args->empty())
                 unsupported("`@noheap` takes no arguments", line);
             // no parts.push_back — emits nothing
+        } else if (an == "compileFor") {
+            // `@compileFor(FLAG)` is consumed by the conditional-compilation prune pass
+            // (pruneInactiveDecls) and stripped from kept decls before emission — reaching here means a
+            // kept decl still carries it (defensive). It is a build-time gate, not a C attribute: no parts.
         } else {
             unsupported(("unknown attribute `@" + an + "` here — expected `@interrupt`, `@section(\"...\")`, or `@noheap`").c_str(), line);
         }
@@ -13448,6 +13452,98 @@ std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, Share
 
 // Whole-program symbol table: run the collect passes for every unit (they append
 // to the shared maps), then resolve inheritance/vtables/destructibility once.
+// ---------------------------------------------------------------------------
+// `@compileFor(FLAG)` conditional compilation — the "structure" axis (decl-level keep/drop)
+// ---------------------------------------------------------------------------
+
+// Evaluate a decl's `@compileFor(...)` gate against the active build-flag set. Returns true (KEEP)
+// when there is no `@compileFor`, or when every gate arg holds. Args are ANDed: a bare `FLAG` holds
+// iff FLAG is active; a negated `!FLAG` holds iff FLAG is inactive. Membership + `!` + comma-AND is
+// v1's deliberately-small logic (full `&&`/`||`/parens are a later comptime-bool fold, out of scope).
+// Under strict mode (a `kama.json` manifest was loaded) every referenced flag must be a built-in or
+// declared in `flags` — a typo like `@compileFor(WINODWS)` is then rejected rather than silently
+// dropping the decl.
+bool CEmitter::compileForActive(const SharedAttributeList& attrs, int line)
+{
+    if (!attrs) return true;
+    static const std::set<std::string> builtinFlags = {"NATIVE","WASM","EMBEDDED","DEBUG","RELEASE"};
+    auto validate = [&](const std::string& name) {
+        if (!_strictFlags) return;
+        if (builtinFlags.count(name) || _declaredFlags.count(name)) return;
+        unsupported(("`@compileFor` references undeclared flag `" + name +
+                     "` (add it to the `flags` object in kama.json)").c_str(), line);
+    };
+    for (auto& at : *attrs) {
+        if (!at || !at->name || *at->name != "compileFor") continue;
+        if (!at->args || at->args->empty()) {
+            unsupported("`@compileFor(...)` requires at least one flag name", line);
+            continue;
+        }
+        for (auto& arg : *at->args) {
+            if (!arg) continue;
+            // bare `FLAG` — an identifier name with no value expression.
+            if (arg->name && arg->name->value && !arg->expression) {
+                validate(*arg->name->value);
+                if (!_activeFlags.count(*arg->name->value)) return false;
+                continue;
+            }
+            // negated `!FLAG` — a unary-not (EXCLAMATION) over an identifier (see kama.y attr_arg).
+            if (arg->expression) {
+                auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(arg->expression.get());
+                if (su && su->token == EXCLAMATION && su->expression) {
+                    if (auto* id = dynamic_cast<IdentifierNode*>(su->expression.get()))
+                        if (id->value) {
+                            validate(*id->value);
+                            if (_activeFlags.count(*id->value)) return false;
+                            continue;
+                        }
+                }
+            }
+            unsupported("`@compileFor(...)` takes bare flag names or `!FLAG` (e.g. "
+                        "`@compileFor(DEBUG)`, `@compileFor(!RELEASE)`)", line);
+        }
+    }
+    return true;
+}
+
+// Drop every top-level decl whose `@compileFor` gate is inactive (as if never written), and strip
+// the `@compileFor` attribute from each KEPT decl so no downstream pass (declAttrPrefix, the collect
+// passes, emit) ever encounters it. This single seam runs before all collection, so nothing else
+// needs per-pass gate guarding. v1 covers the top-level decl kinds that carry an `attributes` list;
+// class members / `implements` blocks are a later stage.
+void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
+{
+    if (!unit || !unit->codeDeclarationList) return;
+
+    // The `attributes` member lives on each concrete top-level decl kind; return a pointer so the
+    // gate can be read and `@compileFor` stripped in place from a kept decl.
+    auto attrsOf = [](ASTNode* d) -> SharedAttributeList* {
+        if (auto* f = dynamic_cast<FunctionDeclarationNode*>(d))   return &f->attributes;
+        if (auto* c = dynamic_cast<ClassDeclarationNode*>(d))      return &c->attributes;
+        if (auto* e = dynamic_cast<EnumDeclarationNode*>(d))       return &e->attributes;
+        if (auto* m = dynamic_cast<ModuleVariableDeclaration*>(d)) return &m->attributes;
+        return nullptr;
+    };
+
+    StatementList kept;
+    kept.reserve(unit->codeDeclarationList->size());
+    for (auto& decl : *unit->codeDeclarationList) {
+        SharedAttributeList* ap = decl ? attrsOf(decl.get()) : nullptr;
+        if (!ap || !*ap) { kept.push_back(decl); continue; }
+        if (!compileForActive(*ap, decl->line)) continue;   // gate inactive -> decl never exists
+        // KEEP: rebuild the attribute list without any `@compileFor` entry.
+        SharedAttributeList filtered;
+        for (auto& at : **ap) {
+            if (at && at->name && *at->name == "compileFor") continue;
+            if (!filtered) filtered = std::make_shared<AttributeList>();
+            filtered->push_back(at);
+        }
+        *ap = filtered;   // null when `@compileFor` was the only attribute (declAttrPrefix tolerates null)
+        kept.push_back(decl);
+    }
+    unit->codeDeclarationList->swap(kept);
+}
+
 void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnits)
 {
     // the prelude (Optional/Result) is collected FIRST, in the global namespace (empty scope),
@@ -13460,6 +13556,12 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // implicit `using std::memory` (added in ctxOf) also makes their names resolve unqualified everywhere.
     for (auto& m : _preludeModuleUnits) if (m) units.push_back(m);
     for (auto& u : userUnits) units.push_back(u);
+
+    // `@compileFor(FLAG)` conditional compilation: prune inactive top-level decls (and strip the gate
+    // attribute from kept ones) BEFORE any name pre-registration or collection — so a dropped decl's
+    // symbol never exists and no downstream pass needs to know the feature exists. Prelude/built-in
+    // units carry no `@compileFor`, so pruning them is a harmless no-op.
+    for (auto& u : units) pruneInactiveDecls(u);
 
     // Assign each file its namespace context (public namespace or _F<idx> private)
     // and register public namespaces, before any name resolution.

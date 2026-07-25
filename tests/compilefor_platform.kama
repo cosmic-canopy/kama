@@ -1,0 +1,28 @@
+// Platform selection via the tag-type contract seam — the SECOND flavor of `@compileFor`, and proof
+// that build-mode and platform are ONE mechanism. A platform-agnostic `contract Clock` defines the
+// seam; two concrete impls are each gated for a target; exactly one survives per build. The caller
+// goes through the same-named, per-target `platformTick` factory, so nothing dangles. There is NO
+// in-body branching and NO `#ifdef` — the Kama compiler drops the other target's impl outright.
+//
+// Both impls return 42 so the single .expect (42) holds on BOTH the native and the wasm test legs —
+// the wasm leg doubles as the platform test (it builds with WasmClock while NativeClock is dropped).
+// tools/check-compilefor.sh greps the native transpile to prove NativeClock is present and WasmClock
+// is absent, i.e. the selection happens in the compiler.
+type contract Clock for both { fn int32 tick(); }
+
+@compileFor(NATIVE)
+type value NativeClock implements Clock {
+    public ctor make() { NativeClock c; return give c; }
+    public fn int32 tick() { return 42; }
+}
+
+@compileFor(WASM)
+type value WasmClock implements Clock {
+    public ctor make() { WasmClock c; return give c; }
+    public fn int32 tick() { return 42; }
+}
+
+@compileFor(NATIVE) fn int32 platformTick() { NativeClock c = NativeClock.make(); return c.tick(); }
+@compileFor(WASM)   fn int32 platformTick() { WasmClock   c = WasmClock.make();   return c.tick(); }
+
+fn int32 main() { return platformTick(); }

@@ -1078,6 +1078,7 @@ attr_arg_list
   ;
 attr_arg
   : IDENTIFIER                     { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), SharedExpression()); }
+  | EXCLAMATION IDENTIFIER         { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2))); }   /* negated flag, e.g. @compileFor(!RELEASE) */
   | IDENTIFIER COLON expression    { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); }
   | STRING_LITERAL                 { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1)); }   /* bare string, e.g. @section(".isr_vector") */
   ;

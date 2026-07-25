@@ -60,6 +60,15 @@ C `__attribute__((...))` **only** on the exact declaration they annotate; `@nohe
 | `@section(".name")` | a **module static** or a **function** | `__attribute__((section(".name")))` | one string-literal section name — vector table (`.isr_vector`), flash const table (`.rodata`), DMA RAM bank, `.ramfunc`. The board's linker script owns the actual addresses |
 | `@noheap` | a **function** (`@noheap fn int32 tick() { … }`) | **nothing** — a *checker* flag, not codegen | Makes every emitter-visible heap allocation in the body a **compile error** (`new`/`try new`, `parallel_for`/`spawn` boxing, `Owned<Error>` boxing, string interpolation's `Formatter`). No args. Target-independent — guarantees an ISR / game frame-tick / real-time audio callback allocates nothing. The whole-program equivalent is the `--no-heap` build flag. Collection *methods* allocate in library C the emitter can't see per-call, so a pre-built growing collection called from a `@noheap` fn is not caught — the guarantee covers emitter-visible allocation |
 
+## Conditional-compilation attribute (`@compileFor`)
+
+Also on the `@name(args)` mechanism, but **not MCU-specific and not codegen** — a build-time keep/drop
+gate. See [SPEC.md](SPEC.md) *Conditional compilation* and [ROADMAP.md](ROADMAP.md) §5.
+
+| Attribute | On | Effect | Rules |
+|---|---|---|---|
+| `@compileFor(FLAG…)` | any **top-level decl** — `fn`, `type`, `enum`, module `static` | The decl is **kept iff its flag gate is active**, else dropped before any collect/emit pass (its symbol never exists; **no `#ifdef` reaches the emitted C**). The attribute is stripped from kept decls | Flags: `NATIVE`/`WASM`/`EMBEDDED` (from `--target`), `DEBUG`/`RELEASE` (from `--release`), plus user flags via `--define`/`--undefine`. Logic is **membership + leading `!` + comma-AND** (`@compileFor(!RELEASE)`, `@compileFor(WINDOWS, DEBUG)`) — not an expression language. Build-mode and platform are one primitive; platform = the gate on per-target `type` impls behind a `contract`. A `kama.json` manifest (a user-project file) declares the valid flag universe and makes an undeclared name a hard error |
+
 ## Reserved words
 
 Every keyword above is implemented, enforced, and exercised by the fixtures in [`../tests/`](../tests/).

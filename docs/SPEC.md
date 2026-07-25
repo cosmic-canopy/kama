@@ -845,6 +845,53 @@ unsafe { asm("cpsid i\n\tdsb"); }      // multiple instructions in one \n-separa
   on this primitive — the unsafe-core / safe-API-as-library model. Extended asm with operand constraints
   and `@naked` functions are tracked follow-ons.
 
+### Conditional compilation — `@compileFor(FLAG)` ✅
+
+Tag a whole **declaration**; the compiler keeps or drops it for the active build. There is **no
+in-body branching** — no `static if`, no `#ifdef`/`comptime-if` soup. Build-mode (`DEBUG`/`RELEASE`)
+and platform (`WASM`/`NATIVE`/`WINDOWS`/…) are the **same primitive**: a decl-level keep/drop gate.
+
+```kama
+@compileFor(DEBUG)   fn void traceState(int32 s) { ... }   // gone entirely in a release build
+@compileFor(!RELEASE) static int32 assertsRun;             // present in any non-release build
+@compileFor(WINDOWS, TELEMETRY) fn void ping() { ... }     // comma = AND (both flags active)
+```
+
+- **Where** — any top-level decl: `fn`, `type`, `enum`, module `static`. (Class methods / `implements`
+  blocks individually are a later stage; gating a whole `type` already drops everything inside it.)
+- **Logic** — flag-set membership, a leading `!` (negation), and comma = AND. Full `&&`/`||`/parens are
+  deliberately out (this is *tagging*, not an expression language).
+- **Drop is literal** — a gated-out decl's symbol never exists; **no `#ifdef` reaches the emitted C**,
+  the Kama compiler does the selection. A reference from kept code to a dropped decl is a normal
+  unresolved-symbol error — gate both sides, or provide a same-named fallback for the complementary flag.
+- **Platform via the contract seam** — a platform-agnostic `contract` + per-target `@compileFor`-gated
+  `type` impls; exactly one survives per build. This is the tag-type abstraction boundary — one
+  mechanism, not a second platform system.
+
+```kama
+type contract Clock for both { fn int32 tick(); }
+@compileFor(NATIVE) type value NativeClock implements Clock { ... }   // native build keeps this
+@compileFor(WASM)   type value WasmClock   implements Clock { ... }   // wasm build keeps this
+```
+
+**Flags** are reproducible — from the explicit build invocation, never ambient environment:
+
+- **Built-in**: `NATIVE`/`WASM`/`EMBEDDED` from `--target`; `DEBUG`/`RELEASE` from `--release`.
+- **User**: repeatable `--define NAME` / `--undefine NAME`.
+- **`kama.json` manifest** (a *user-project* file, auto-discovered next to the source or via `--config
+  PATH`) DECLARES the valid user-flag universe and turns on **strict validation** — an undeclared
+  `@compileFor`/`--define` name is then rejected (typo protection). Without a manifest, builds are
+  permissive (an undeclared flag is simply inactive), so bare single-file builds need no config.
+
+```json
+{ "name": "myapp", "version": "0.1.0",
+  "flags": { "WINDOWS": {}, "MAC": {}, "LINUX": {}, "TELEMETRY": { "default": true } } }
+```
+
+`kama.json` is the seed of the future package-management manifest (deps/versions). It is parsed by the
+compiler driver (C++), not by the language's own JSON library — the compiler is not self-hosted, so its
+build-time config can't run kama-level code.
+
 ### Writing a collection *in* kama — `sizeof`, `panic`/`assert`, place-returning methods ✅
 
 The above pieces (a place-returning `operator[]`, `Ptr<T>` + `unsafe`, generics, RAII) let a `Vec`/matrix
