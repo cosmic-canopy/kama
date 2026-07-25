@@ -391,7 +391,8 @@ struct DepSpec {
     std::string url;        // tarball URL (+ integrity)
     std::string rev;        // git tag/branch/commit
     std::string integrity;  // "sha256-<hex>" for a url dep
-    std::string version;    // optional metadata (resolver's single-version-per-major check)
+    std::string version;    // git-range: a SemVer range; registry dep: the range against the index
+    std::string registry;   // optional explicit registry base URI (else the configured/default registry)
 };
 
 // Two dependency specs name "the same package" iff every identity-bearing field matches. For a
@@ -532,6 +533,15 @@ static bool isRangeDep(const DepSpec& d)
 {
     return !d.git.empty() && d.rev.empty() && !d.version.empty();
 }
+
+// A registry dependency (M3.1) opts in by naming a version range and NO explicit source (git/url/path).
+// The package is resolved through a registry index (an explicit `registry` base, else the configured
+// default); the chosen version's index entry yields a tarball URI + integrity, so it reduces to a url
+// dep for the fetch. A name is a git-range XOR a registry dep XOR an exact pin — never a mix.
+static bool isRegistryDep(const DepSpec& d)
+{
+    return d.git.empty() && d.url.empty() && d.path.empty() && !d.version.empty();
+}
 // ---------------------------------------------------------------------------------------------
 
 struct ManifestReader {
@@ -544,6 +554,8 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
     std::string* mainOut = nullptr;                       // set to capture the `main` entry field (else skipped)
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
+    std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
+    std::string* versionOut = nullptr;                    // set to capture the `version` (else skipped) — `kama publish`
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -640,6 +652,7 @@ struct ManifestReader {
                 else if (k == "rev")       spec.rev = v;
                 else if (k == "integrity") spec.integrity = v;
                 else if (k == "version")   spec.version = v;
+                else if (k == "registry")  spec.registry = v;
                 // unknown keys ignored (forward-compat)
                 ws();
                 if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -651,6 +664,24 @@ struct ManifestReader {
                 err = "dependency '" + name + "': a git dependency takes either \"rev\" (an exact "
                       "tag/branch/commit) or \"version\" (a range), not both";
                 return false;
+            }
+            // A name is a git-range XOR a registry dep XOR an exact pin (git/url/path). A registry dep is
+            // a bare `version` with no source; an explicit `registry` base is only meaningful for it.
+            {
+                int nsrc = (!spec.git.empty()) + (!spec.url.empty()) + (!spec.path.empty());
+                if (nsrc > 1) {
+                    err = "dependency '" + name + "': give exactly one of \"git\"/\"url\"/\"path\"";
+                    return false;
+                }
+                if (!spec.registry.empty() && nsrc != 0) {
+                    err = "dependency '" + name + "': \"registry\" pins a registry dependency (a bare "
+                          "\"version\"), so it cannot combine with git/url/path";
+                    return false;
+                }
+                if (!spec.registry.empty() && spec.version.empty()) {
+                    err = "dependency '" + name + "': \"registry\" requires a \"version\" range";
+                    return false;
+                }
             }
             if (target) (*target)[name] = spec;
             ws();
@@ -673,6 +704,8 @@ struct ManifestReader {
             else if (key == "dev-dependencies" && devDeps) { if (!depsObject(devDeps)) return false; }
             else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
             else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
+            else if (key == "name" && nameOut) { if (!str(*nameOut)) return false; }
+            else if (key == "version" && versionOut) { if (!str(*versionOut)) return false; }
             else if (!skipValue()) return false;         // name / version / future package keys
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -743,12 +776,28 @@ static bool loadManifestToolchain(const std::string& path, std::string& tcOut, s
     return true;
 }
 
+// Load a manifest's `name` + `version` (both empty if absent). Reused by `kama publish`. Returns false +
+// `err` only on malformed JSON.
+static bool loadManifestNameVersion(const std::string& path, std::string& nameOut, std::string& versionOut,
+                                    std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.nameOut = &nameOut; r.versionOut = &versionOut;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
 // One resolved package in `kama.lock`. The lock is what the build's view is materialized from — the
 // reproducibility record: (source, pinned identity, integrity, transitive deps).
 struct LockEntry {
-    std::string source;                     // "path" | "git" | "url"
+    std::string source;                     // "path" | "git" | "url" | "registry"
     std::string path, git, url, rev, commit, integrity;
-    std::string version;                    // resolved concrete SemVer for a range dep (git+version); else empty
+    std::string registry;                   // registry dep: the base URI the version was resolved from
+    std::string version;                    // resolved concrete SemVer for a range dep (git+version / registry); else empty
     std::string treeHash;                   // the store dir key "sha256-<treehash>" (== integrity for git; the
                                             // canonical unpacked-tree hash for url, whose integrity is the tarball)
     bool dev = false;                       // a dev-dependency (top-level view only, never propagated transitively)
@@ -780,6 +829,7 @@ static bool writeLockFile(const std::string& path, const std::map<std::string, L
         if (!e.path.empty())      out << ", \"path\": \""      << jsonEscape(e.path)      << "\"";
         if (!e.git.empty())       out << ", \"git\": \""       << jsonEscape(e.git)       << "\"";
         if (!e.url.empty())       out << ", \"url\": \""       << jsonEscape(e.url)       << "\"";
+        if (!e.registry.empty())  out << ", \"registry\": \""  << jsonEscape(e.registry)  << "\"";
         if (!e.rev.empty())       out << ", \"rev\": \""       << jsonEscape(e.rev)       << "\"";
         if (!e.version.empty())   out << ", \"version\": \""   << jsonEscape(e.version)   << "\"";
         if (!e.commit.empty())    out << ", \"commit\": \""    << jsonEscape(e.commit)    << "\"";
@@ -846,6 +896,7 @@ struct LockReader {
             else if (k == "path")      { if (!str(e.path))      return false; }
             else if (k == "git")       { if (!str(e.git))       return false; }
             else if (k == "url")       { if (!str(e.url))       return false; }
+            else if (k == "registry")  { if (!str(e.registry))  return false; }
             else if (k == "rev")       { if (!str(e.rev))       return false; }
             else if (k == "version")   { if (!str(e.version))   return false; }
             else if (k == "commit")    { if (!str(e.commit))    return false; }
@@ -1342,7 +1393,9 @@ static bool resolveOne(const std::string& name, const DepSpec& spec, const std::
         const LockEntry& L = it->second;
         bool unchanged =
             (!spec.git.empty() && L.source == "git" && L.git == spec.git && L.rev == spec.rev) ||
-            (!spec.url.empty() && L.source == "url" && L.url == spec.url &&
+            // a registry dep reaches here already pinned to its resolved tarball URI (`spec.url`), so it
+            // reuses the url identity — its "registry" source is preserved by `out = L` below.
+            (!spec.url.empty() && (L.source == "url" || L.source == "registry") && L.url == spec.url &&
                 (spec.integrity.empty() || spec.integrity == L.integrity));
         if (unchanged) {
             std::string key = L.treeHash.empty() ? L.integrity : L.treeHash;   // the store dir hash
@@ -1417,6 +1470,138 @@ static bool selectHighestTag(const std::vector<std::pair<SemVer, std::string>>& 
     return found;
 }
 
+// ---- registry (M3.1) -------------------------------------------------------------------------
+// The built-in default registry base URI. A compile constant (overridable per-project by a
+// `registries.default`, M3.1b). Empty until M3.3 wires a live host — so an unconfigured, unscoped
+// registry dep errors clearly rather than silently reaching a dead URL.
+static const char* kDefaultRegistry = "";
+
+// Join a registry base and a relative path into one URI. An absolute `rel` (has a scheme, or is an
+// absolute path) is returned unchanged, so an index may point its tarballs at a different host.
+static std::string joinUri(const std::string& base, const std::string& rel)
+{
+    if (rel.find("://") != std::string::npos || (!rel.empty() && rel[0] == '/')) return rel;
+    std::string b = base;
+    while (!b.empty() && b.back() == '/') b.pop_back();
+    return b + "/" + rel;
+}
+
+// One published version in a package's registry index. `dependencies` are recorded in the index (for
+// protocol conformance + other clients) but the resolver reads the fetched tarball's own manifest, so
+// they are parsed-and-ignored here. `signature`/`key` are M3.2a (absent in an unsigned registry).
+struct IndexEntry {
+    std::string version, integrity, tarball, signature, key;
+};
+
+// Parse a `<base>/<name>/index.json` document (writeIndex's schema) into version entries. A dedicated
+// hand-parser mirroring LockReader: minimal + tolerant (unknown keys skipped, every field optional).
+struct IndexReader {
+    const std::string& s; size_t i = 0; std::string err;
+    IndexReader(const std::string& src) : s(src) {}
+    void ws() { while (i < s.size() && (s[i]==' '||s[i]=='\t'||s[i]=='\n'||s[i]=='\r')) ++i; }
+    bool fail(const char* m) { if (err.empty()) err = m; return false; }
+    bool str(std::string& out) {
+        ws(); if (i >= s.size() || s[i] != '"') return fail("expected a string");
+        ++i; out.clear();
+        while (i < s.size() && s[i] != '"') {
+            char c = s[i++];
+            if (c == '\\' && i < s.size()) { char e = s[i++];
+                switch (e) { case 'n':c='\n';break; case 't':c='\t';break; case 'r':c='\r';break;
+                             case '"':c='"';break; case '\\':c='\\';break; case '/':c='/';break; default:c=e; } }
+            out.push_back(c);
+        }
+        if (i >= s.size()) return fail("unterminated string"); ++i; return true;
+    }
+    bool skipValue() {
+        ws(); if (i >= s.size()) return fail("unexpected end of index");
+        char c = s[i];
+        if (c == '"') { std::string t; return str(t); }
+        if (c == '{' || c == '[') {
+            char open = c, close = (c == '{') ? '}' : ']'; int depth = 0; bool inStr = false;
+            while (i < s.size()) { char d = s[i++];
+                if (inStr)          { if (d == '\\' && i < s.size()) ++i; else if (d == '"') inStr = false; }
+                else if (d == '"')    inStr = true;
+                else if (d == open)   ++depth;
+                else if (d == close){ if (--depth == 0) return true; } }
+            return fail("unbalanced brackets in index");
+        }
+        while (i < s.size() && s[i]!=','&&s[i]!='}'&&s[i]!=']'&&s[i]!=' '&&s[i]!='\t'&&s[i]!='\n'&&s[i]!='\r') ++i;
+        return true;
+    }
+    bool version(IndexEntry& e) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("an index version must be an object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in an index version"); ++i; ws();
+            if      (k == "version")   { if (!str(e.version))   return false; }
+            else if (k == "integrity") { if (!str(e.integrity)) return false; }
+            else if (k == "tarball")   { if (!str(e.tarball))   return false; }
+            else if (k == "signature") { if (!str(e.signature)) return false; }
+            else if (k == "key")       { if (!str(e.key))       return false; }
+            else if (!skipValue()) return false;   // dependencies / unknown (forward-compat)
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in an index version");
+        }
+        return true;
+    }
+    bool parse(std::vector<IndexEntry>& out) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("index must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string key; if (!str(key)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a key"); ++i;
+            if (key == "versions") {
+                ws(); if (i >= s.size() || s[i] != '[') return fail("`versions` must be an array");
+                ++i; ws();
+                if (i < s.size() && s[i] == ']') ++i;
+                else while (true) {
+                    IndexEntry e; if (!version(e)) return false; out.push_back(e); ws();
+                    if (i < s.size() && s[i] == ',') { ++i; continue; }
+                    if (i < s.size() && s[i] == ']') { ++i; break; }
+                    return fail("expected ',' or ']' in `versions`");
+                }
+            } else if (!skipValue()) return false;   // name / future keys
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' at top level");
+        }
+        return true;
+    }
+};
+
+// Fetch + parse a package's registry index (network-free against a file:// base; curl speaks both).
+// Returns false + `err` on fetch/parse failure or an empty index.
+static bool fetchRegistryIndex(const std::string& base, const std::string& name,
+                               std::vector<IndexEntry>& out, std::string& err)
+{
+    std::string url = joinUri(base, name + "/index.json");
+    int rc = 0;
+    std::string body = runCmdCapture("curl -fsSL \"" + url + "\" 2>/dev/null", &rc);
+    if (rc != 0 || body.empty()) { err = "cannot fetch registry index for '" + name + "' from " + url; return false; }
+    IndexReader r(body);
+    if (!r.parse(out)) { err = "malformed registry index for '" + name + "' (" + url + "): " + r.err; return false; }
+    if (out.empty())   { err = "registry index for '" + name + "' (" + url + ") lists no versions"; return false; }
+    return true;
+}
+
+// The highest index version satisfying `req`. Returns false when none matches.
+static bool selectHighestIndex(const std::vector<IndexEntry>& entries, const VersionReq& req,
+                               SemVer& vOut, IndexEntry& entryOut)
+{
+    bool found = false;
+    for (auto& e : entries) {
+        SemVer v; if (!parseSemVer(e.version, v)) continue;   // skip non-SemVer / pre-release entries
+        if (!satisfies(req, v)) continue;
+        if (!found || cmpSemVer(v, vOut) > 0) { vOut = v; entryOut = e; found = true; }
+    }
+    return found;
+}
+// ---------------------------------------------------------------------------------------------
+
 // The resolver core: a two-phase transitive BFS from the ROOT manifest, honoring `oldLock` per node. Phase 1
 // (prod) seeds `dependencies` and follows each fetched package's own `dependencies`; phase 2 (dev) seeds the
 // root's `dev-dependencies` (a package needed in prod is never demoted to dev — prod wins) and follows their
@@ -1441,6 +1626,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
     // Tag enumeration is memoized across attempts (`tagCache`); a warm `oldLock` avoids it entirely.
     std::map<std::string, VersionReq> seeded;                                  // constraints carried across restarts
     std::map<std::string, std::vector<std::pair<SemVer, std::string>>> tagCache;   // git url -> parseable version tags
+    std::map<std::string, std::vector<IndexEntry>> regCache;                       // "base\nname" -> registry index versions
     const int RESTART = -1;
     const int MAX_ATTEMPTS = 256;   // defensive: names + versions are finite, so this is never reached
 
@@ -1460,6 +1646,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         std::map<std::string, std::string> chosenVer; // range deps: name -> resolved concrete "x.y.z"
         std::map<std::string, VersionReq>  accReq;    // range deps: name -> intersected range so far
         std::map<std::string, std::string> reqStr;    // range deps: name -> first requestor's range text
+        std::map<std::string, std::string> regBaseOf; // registry deps: name -> resolved registry base URI
         std::map<std::string, LockEntry> lock;        // output
         bool madeDevDir = false;
 
@@ -1475,10 +1662,56 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
             tags = &it->second; return true;
         };
 
+        // The registry base a registry dep resolves through: an explicit `registry` pin, else the
+        // built-in default. (M3.1b layers `registries` config on top of this.)
+        auto registryBaseFor = [&](const DepSpec& spec) -> std::string {
+            return spec.registry.empty() ? std::string(kDefaultRegistry) : spec.registry;
+        };
+
+        // Fetch + parse a registry package's index once, memoized across attempts (by base+name).
+        auto ensureIndex = [&](const std::string& base, const std::string& name,
+                               std::vector<IndexEntry>*& idx, std::string& terr) -> bool {
+            std::string key = base + "\n" + name;
+            auto it = regCache.find(key);
+            if (it == regCache.end()) {
+                std::vector<IndexEntry> v;
+                if (!fetchRegistryIndex(base, name, v, terr)) return false;
+                it = regCache.emplace(key, std::move(v)).first;
+            }
+            idx = &it->second; return true;
+        };
+
+        // Select the highest version of `name` satisfying `req` from its source (git tags OR a registry
+        // index). On success fills `sv` and one of {tag} (git) / {url,integrity,regBase} (registry). A
+        // false return with `matched=false` means "no version satisfies"; with `terr` set means a hard
+        // error (unreachable source / no configured registry).
+        struct VerPick { std::string tag, url, integrity, regBase; };
+        auto selectVersion = [&](const std::string& name, const DepSpec& spec, const VersionReq& req,
+                                 bool& matched, SemVer& sv, VerPick& pick, std::string& terr) -> bool {
+            matched = false;
+            if (isRegistryDep(spec)) {
+                std::string base = registryBaseFor(spec);
+                if (base.empty()) {
+                    terr = "no registry configured for '" + name + "' — set \"registry\" on the "
+                           "dependency or a \"registries\" default"; return false;
+                }
+                std::vector<IndexEntry>* idx = nullptr;
+                if (!ensureIndex(base, name, idx, terr)) return false;
+                IndexEntry e;
+                matched = selectHighestIndex(*idx, req, sv, e);
+                if (matched) { pick.url = joinUri(base, e.tarball); pick.integrity = e.integrity; pick.regBase = base; }
+                return true;
+            }
+            std::vector<std::pair<SemVer, std::string>>* tags = nullptr;
+            if (!ensureTags(spec.git, tags, terr)) return false;
+            matched = selectHighestTag(*tags, req, sv, pick.tag);
+            return true;
+        };
+
         auto drain = [&](std::deque<Req>& q) -> int {
             while (!q.empty()) {
                 Req r = q.front(); q.pop_front();
-                bool incomingRange = isRangeDep(r.spec);
+                bool incomingRange = isRangeDep(r.spec) || isRegistryDep(r.spec);   // a versioned dep (git range or registry)
 
                 auto ci = chosen.find(r.name);
                 if (ci != chosen.end()) {
@@ -1498,10 +1731,11 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                             return 1;
                         }
                         VersionReq merged = intersect(accReq[r.name], req);
-                        std::vector<std::pair<SemVer, std::string>>* tags = nullptr; std::string terr;
-                        if (!ensureTags(r.spec.git, tags, terr)) { fprintf(stderr, "kama install: %s\n", terr.c_str()); return 1; }
-                        SemVer sv; std::string tag;
-                        if (!selectHighestTag(*tags, merged, sv, tag)) {
+                        SemVer sv; VerPick pick; bool matched = false; std::string terr;
+                        if (!selectVersion(r.name, r.spec, merged, matched, sv, pick, terr)) {
+                            fprintf(stderr, "kama install: %s\n", terr.c_str()); return 1;
+                        }
+                        if (!matched) {
                             fprintf(stderr, "kama install: dependency conflict on '%s': %s requires \"%s\" and %s "
                                     "requires \"%s\" — no published version satisfies both\n",
                                     r.name.c_str(), chosenBy[r.name].c_str(), reqStr[r.name].c_str(),
@@ -1530,9 +1764,11 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     return 1;
                 }
 
-                // First encounter of a range dep: fold in any seeded (restart) constraint, then pin the
-                // highest satisfying tag — from the lock if it still fits (offline), else via ls-remote.
+                // First encounter of a versioned dep (git range or registry): fold in any seeded (restart)
+                // constraint, then pin the highest satisfying version — from the lock if it still fits
+                // (offline, no ls-remote / no index fetch), else from the source (git tags / registry index).
                 if (incomingRange) {
+                    bool isReg = isRegistryDep(r.spec);
                     VersionReq req;
                     if (!parseVersionReq(r.spec.version, req)) {
                         fprintf(stderr, "kama install: dependency '%s' (required by %s) has an invalid "
@@ -1542,27 +1778,43 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     auto sd = seeded.find(r.name);
                     if (sd != seeded.end()) req = intersect(req, sd->second);
 
-                    SemVer sv; std::string tag; bool reused = false;
+                    SemVer sv; VerPick pick; bool reused = false;
+                    std::string regBase = isReg ? registryBaseFor(r.spec) : "";
+                    if (isReg && regBase.empty()) {
+                        fprintf(stderr, "kama install: no registry configured for '%s' (required by %s) — set "
+                                "\"registry\" on the dependency or a \"registries\" default\n",
+                                r.name.c_str(), r.requestor.c_str());
+                        return 1;
+                    }
                     auto lk = oldLock.find(r.name);
-                    if (lk != oldLock.end() && !lk->second.version.empty() && lk->second.source == "git"
-                            && lk->second.git == r.spec.git) {
+                    if (lk != oldLock.end() && !lk->second.version.empty()) {
                         SemVer lv;
-                        if (parseSemVer(lk->second.version, lv) && satisfies(req, lv)) {
-                            sv = lv; tag = lk->second.rev; reused = true;   // honor the lock — no ls-remote
+                        bool sameSrc = isReg ? (lk->second.source == "registry" && lk->second.registry == regBase)
+                                             : (lk->second.source == "git"      && lk->second.git == r.spec.git);
+                        if (sameSrc && parseSemVer(lk->second.version, lv) && satisfies(req, lv)) {
+                            sv = lv; reused = true;   // honor the lock — no ls-remote / no index fetch
+                            if (isReg) { pick.url = lk->second.url; pick.integrity = lk->second.integrity; pick.regBase = regBase; }
+                            else       { pick.tag = lk->second.rev; }
                         }
                     }
                     if (!reused) {
-                        std::vector<std::pair<SemVer, std::string>>* tags = nullptr; std::string terr;
-                        if (!ensureTags(r.spec.git, tags, terr)) { fprintf(stderr, "kama install: %s\n", terr.c_str()); return 1; }
-                        if (!selectHighestTag(*tags, req, sv, tag)) {
-                            fprintf(stderr, "kama install: dependency '%s' (required by %s): no version tag of %s "
+                        bool matched = false; std::string terr;
+                        if (!selectVersion(r.name, r.spec, req, matched, sv, pick, terr)) {
+                            fprintf(stderr, "kama install: %s\n", terr.c_str()); return 1;
+                        }
+                        if (!matched) {
+                            fprintf(stderr, "kama install: dependency '%s' (required by %s): no %s version "
                                     "satisfies \"%s\"\n", r.name.c_str(), r.requestor.c_str(),
-                                    r.spec.git.c_str(), r.spec.version.c_str());
+                                    isReg ? "registry" : "git tag", r.spec.version.c_str());
                             return 1;
                         }
                     }
                     accReq[r.name] = req; reqStr[r.name] = r.spec.version; chosenVer[r.name] = semVerStr(sv);
-                    r.spec.rev = tag;   // pin: resolveOne now treats it as an exact git dep (tag → commit)
+                    if (isReg) {                      // pin: resolveOne now treats it as an exact url dep
+                        r.spec.url = pick.url; r.spec.integrity = pick.integrity; regBaseOf[r.name] = pick.regBase;
+                    } else {
+                        r.spec.rev = pick.tag;        // pin: resolveOne now treats it as an exact git dep (tag → commit)
+                    }
                 }
 
                 chosen[r.name] = r.spec; chosenBy[r.name] = r.requestor;
@@ -1572,6 +1824,9 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     fprintf(stderr, "kama install: %s\n", ferr.c_str()); return 1;
                 }
                 if (incomingRange) e.version = chosenVer[r.name];   // record what the range resolved to
+                if (regBaseOf.count(r.name)) {                       // a registry dep: overwrite the url source
+                    e.source = "registry"; e.registry = regBaseOf[r.name];
+                }
                 e.dev = r.dev;
                 if (r.dev && !madeDevDir) {
                     if (!makeDirs(devViewDir)) { fprintf(stderr, "kama install: cannot create %s\n", devViewDir.c_str()); return 1; }
@@ -1722,7 +1977,8 @@ static std::string depEntryValue(const DepSpec& d)   // the "{ ... }" value for 
     std::string f;
     auto add = [&](const char* k, const std::string& v){ if (!v.empty()) { if (!f.empty()) f += ", ";
         f += std::string("\"") + k + "\": \"" + jsonEscape(v) + "\""; } };
-    add("path", d.path); add("git", d.git); add("url", d.url); add("rev", d.rev); add("integrity", d.integrity);
+    add("path", d.path); add("git", d.git); add("url", d.url); add("registry", d.registry);
+    add("rev", d.rev); add("version", d.version); add("integrity", d.integrity);
     return "{ " + f + " }";
 }
 
@@ -1834,6 +2090,134 @@ int cmdPkgRemove(const std::string& base, const std::string& name)
     return cmdInstall(base);
 }
 
+// ---- kama publish (M3.1) ---------------------------------------------------------------------
+// Map a `--registry` argument to a local directory. M3.1 publishes to a `file://`/dir registry (the
+// network-free path that also mirrors an air-gapped self-host); a remote-transport publish is M3.3.
+static bool registryDirFromArg(const std::string& arg, std::string& dir, std::string& err)
+{
+    const std::string scheme = "file://";
+    if (arg.compare(0, scheme.size(), scheme) == 0) { dir = arg.substr(scheme.size()); return true; }
+    if (arg.find("://") != std::string::npos) {
+        err = "publishing to a remote registry (" + arg + ") is not supported yet — publish to a "
+              "file:// or local-directory registry (a remote-transport publish is M3.3)";
+        return false;
+    }
+    dir = arg; return true;   // a plain local path
+}
+
+// Splice a new version entry into `<name>/index.json` (create it if absent), preserving every existing
+// entry verbatim. The new entry becomes the first element of `versions`. Immutability (refusing to
+// overwrite an existing version) is enforced by the caller before this runs.
+static bool appendIndexEntry(const std::string& indexPath, const std::string& name,
+                             const std::string& entryJson, std::string& err)
+{
+    if (!fileExists(indexPath)) {
+        std::ofstream o(indexPath, std::ios::binary | std::ios::trunc);
+        if (!o) { err = "cannot write '" + indexPath + "'"; return false; }
+        o << "{\n  \"name\": \"" << jsonEscape(name) << "\",\n  \"versions\": [\n    "
+          << entryJson << "\n  ]\n}\n";
+        return true;
+    }
+    std::ifstream in(indexPath, std::ios::binary);
+    if (!in) { err = "cannot open '" + indexPath + "'"; return false; }
+    std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
+    size_t vk = s.find("\"versions\"");
+    size_t br = (vk == std::string::npos) ? std::string::npos : s.find('[', vk);
+    if (br == std::string::npos) { err = "malformed registry index '" + indexPath + "' (no versions array)"; return false; }
+    size_t j = br + 1; while (j < s.size() && (s[j]==' '||s[j]=='\t'||s[j]=='\n'||s[j]=='\r')) ++j;
+    bool hasExisting = (j < s.size() && s[j] != ']');
+    std::string out = s.substr(0, br + 1) + "\n    " + entryJson + (hasExisting ? "," : "") + s.substr(br + 1);
+    std::ofstream o(indexPath, std::ios::binary | std::ios::trunc);
+    if (!o) { err = "cannot write '" + indexPath + "'"; return false; }
+    o << out; return true;
+}
+
+// `kama publish --registry <dir-or-file-uri>`: tar the project sources, hash them, and record the new
+// version in the registry's `<name>/index.json` (write-once — refuses to overwrite an existing version).
+// A published registry dep reduces to a url dep on install, so the tarball IS the url-dep format.
+int cmdPublish(const std::string& base, const std::string& registryArg)
+{
+    std::string manifest = base + "/kama.json";
+    if (!fileExists(manifest)) { fprintf(stderr, "kama publish: no kama.json in %s\n", base.c_str()); return 2; }
+    if (registryArg.empty())   { fprintf(stderr, "kama publish: --registry <dir-or-file-uri> is required\n"); return 2; }
+
+    std::string name, version, err;
+    if (!loadManifestNameVersion(manifest, name, version, err)) {
+        fprintf(stderr, "kama publish: %s: %s\n", manifest.c_str(), err.c_str()); return 2;
+    }
+    if (name.empty() || version.empty()) {
+        fprintf(stderr, "kama publish: %s needs a \"name\" and a \"version\"\n", manifest.c_str()); return 2;
+    }
+    SemVer sv;
+    if (!parseSemVer(version, sv)) {
+        fprintf(stderr, "kama publish: version \"%s\" is not a MAJOR.MINOR.PATCH SemVer\n", version.c_str()); return 2;
+    }
+    std::map<std::string, DepSpec> deps;
+    if (!loadManifestDeps(manifest, deps, err)) { fprintf(stderr, "kama publish: %s: %s\n", manifest.c_str(), err.c_str()); return 2; }
+
+    std::string regDir;
+    if (!registryDirFromArg(registryArg, regDir, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 2; }
+
+    std::string pkgDir = regDir + "/" + name;
+    std::string indexPath = pkgDir + "/index.json";
+    if (fileExists(indexPath)) {   // immutability: refuse to overwrite an already-published version
+        std::ifstream f(indexPath, std::ios::binary);
+        std::string idx((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::vector<IndexEntry> existing; IndexReader ir(idx);
+        if (!ir.parse(existing)) { fprintf(stderr, "kama publish: malformed %s: %s\n", indexPath.c_str(), ir.err.c_str()); return 1; }
+        for (auto& e : existing) if (e.version == version) {
+            fprintf(stderr, "kama publish: %s@%s is already published (versions are immutable — bump the "
+                    "version)\n", name.c_str(), version.c_str());
+            return 1;
+        }
+    }
+
+    // Stage a wrapper dir named after the package (so install's `--strip-components=1` peels exactly one
+    // level), copying the sources but excluding VCS/build/lock cruft, then gzip it. `sha256Of` is the
+    // tarball integrity a consumer re-verifies.
+    std::string tmp = regDir + "/.tmp-publish-" + std::to_string((long)getpid());
+    runCmd(rmRfCmd(tmp));
+    if (!makeDirs(tmp + "/" + name)) { fprintf(stderr, "kama publish: cannot stage the package\n"); runCmd(rmRfCmd(tmp)); return 1; }
+    std::string copyCmd = "tar -c -C \"" + base + "\" --exclude=./.git --exclude=./.kama --exclude=./build "
+                          "--exclude=./kama.lock -f - . | tar -x -C \"" + tmp + "/" + name + "\" -f -";
+    if (runCmd(copyCmd) != 0) { fprintf(stderr, "kama publish: cannot copy sources (is tar available?)\n"); runCmd(rmRfCmd(tmp)); return 1; }
+    std::string tarball = tmp + "/pkg.tar.gz";
+    if (runCmd("tar -czf \"" + tarball + "\" -C \"" + tmp + "\" \"" + name + "\"") != 0) {
+        fprintf(stderr, "kama publish: cannot create the tarball\n"); runCmd(rmRfCmd(tmp)); return 1;
+    }
+    std::string integrity = sha256Of(tarball);
+    if (integrity.empty()) { fprintf(stderr, "kama publish: cannot hash the tarball (is sha256sum/shasum available?)\n"); runCmd(rmRfCmd(tmp)); return 1; }
+
+    if (!makeDirs(pkgDir)) { fprintf(stderr, "kama publish: cannot create %s\n", pkgDir.c_str()); runCmd(rmRfCmd(tmp)); return 1; }
+    std::string finalTarball = pkgDir + "/" + version + ".tar.gz";
+    runCmd(rmRfCmd(finalTarball));
+    if (rename(tarball.c_str(), finalTarball.c_str()) != 0) {
+        // rename can fail across volumes; fall back to a copy.
+        if (runCmd("cp \"" + tarball + "\" \"" + finalTarball + "\"") != 0) {
+            fprintf(stderr, "kama publish: cannot place the tarball at %s\n", finalTarball.c_str()); runCmd(rmRfCmd(tmp)); return 1;
+        }
+    }
+    runCmd(rmRfCmd(tmp));
+
+    // Build the index entry. `dependencies` are recorded for protocol conformance (the resolver reads the
+    // fetched manifest, so this is informational metadata) — a name → its declared version range.
+    std::string depsJson;
+    for (auto& kv : deps) {   // sorted map => deterministic
+        if (!depsJson.empty()) depsJson += ", ";
+        depsJson += "\"" + jsonEscape(kv.first) + "\": {";
+        if (!kv.second.version.empty()) depsJson += " \"version\": \"" + jsonEscape(kv.second.version) + "\" ";
+        depsJson += "}";
+    }
+    std::string entry = "{ \"version\": \"" + jsonEscape(version) + "\", \"integrity\": \"" + jsonEscape(integrity)
+                      + "\", \"tarball\": \"" + jsonEscape(name + "/" + version + ".tar.gz") + "\"";
+    if (!depsJson.empty()) entry += ", \"dependencies\": { " + depsJson + " }";
+    entry += " }";
+
+    if (!appendIndexEntry(indexPath, name, entry, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
+    fprintf(stderr, "kama: published %s@%s (%s) to %s\n", name.c_str(), version.c_str(), integrity.c_str(), regDir.c_str());
+    return 0;
+}
+
 void usage()
 {
     fprintf(stderr,
@@ -1845,9 +2229,11 @@ void usage()
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
         "                  (build the entry .kama — explicit <file>, else the manifest \"main\" — and run it; native-only)\n"
         "  kama pkg install [<dir>]            resolve `kama.json` (dev-)dependencies into .kama/{deps,dev-deps} + kama.lock\n"
-        "  kama pkg add   [--dev] <name> (--git U [--rev R] | --url U [--integrity H] | --path P)\n"
+        "  kama pkg add   [--dev] <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
+        "                                --version V [--registry BASE])   (bare --version = a registry dependency)\n"
         "  kama pkg remove <name>\n"
         "  kama pkg update [<pkg>]             re-resolve pins (advance a branch pin) and rewrite the lock\n"
+        "  kama publish [<dir>] --registry <dir-or-file-uri>   tarball the project + record it in the registry index\n"
         "  kama toolchain list                 installed versions (+ the default and what the cwd resolves to)\n"
         "  kama toolchain install <v>          install version <v> into ~/.kama/versions/<v>\n"
         "  kama toolchain uninstall <v>        remove an installed version\n"
@@ -1862,7 +2248,8 @@ void pkgUsage()
     fprintf(stderr,
         "usage:\n"
         "  kama pkg install [<dir>]            resolve dependencies into .kama/{deps,dev-deps} + kama.lock\n"
-        "  kama pkg add   [--dev] <name> (--git U [--rev R] | --url U [--integrity H] | --path P)\n"
+        "  kama pkg add   [--dev] <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
+        "                                --version V [--registry BASE])\n"
         "  kama pkg remove <name>\n"
         "  kama pkg update [<pkg>]             re-resolve pins and rewrite the lock\n");
 }
@@ -2130,6 +2517,18 @@ int main(int argc, char** argv)
         return cmdUpdate(pinned);
     }
 
+    if (subcommand == "publish") {
+        std::string registry, dir;
+        for (int i = 2; i < argc; ++i) {
+            std::string a = argv[i];
+            if      (a == "--registry" && i + 1 < argc) registry = argv[++i];
+            else if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama publish: unknown option '%s'\n", a.c_str()); return 2; }
+            else if (dir.empty()) dir = a;
+            else { fprintf(stderr, "kama publish: unexpected arg '%s'\n", a.c_str()); return 2; }
+        }
+        return cmdPublish(dir.empty() ? "." : dir, registry);
+    }
+
     if (subcommand == "pkg") {
         if (argc < 3) { pkgUsage(); return 2; }
         std::string verb = argv[2];
@@ -2154,7 +2553,7 @@ int main(int argc, char** argv)
             return cmdPkgUpdate("", pkg);
         }
         if (verb == "add") {
-            bool dev = false; std::string name; DepSpec d; std::string rev, integ;
+            bool dev = false; std::string name; DepSpec d; std::string rev, integ, ver, registry;
             for (int i = 3; i < argc; ++i) {
                 std::string a = argv[i];
                 if      (a == "--dev")                     dev = true;
@@ -2163,16 +2562,25 @@ int main(int argc, char** argv)
                 else if (a == "--path" && i + 1 < argc)    d.path = argv[++i];
                 else if (a == "--rev" && i + 1 < argc)     rev = argv[++i];
                 else if (a == "--integrity" && i + 1 < argc) integ = argv[++i];
+                else if (a == "--version" && i + 1 < argc)   ver = argv[++i];
+                else if (a == "--registry" && i + 1 < argc)  registry = argv[++i];
                 else if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg add: unknown option '%s'\n", a.c_str()); return 2; }
                 else if (name.empty()) name = a;
                 else { fprintf(stderr, "kama pkg add: unexpected arg '%s'\n", a.c_str()); return 2; }
             }
             if (name.empty()) { fprintf(stderr, "kama pkg add: missing <name>\n"); return 2; }
             int nsrc = (!d.git.empty()) + (!d.url.empty()) + (!d.path.empty());
-            if (nsrc != 1) { fprintf(stderr, "kama pkg add: exactly one of --git/--url/--path is required\n"); return 2; }
+            if (nsrc > 1) { fprintf(stderr, "kama pkg add: at most one of --git/--url/--path\n"); return 2; }
+            if (nsrc == 0 && ver.empty()) {
+                fprintf(stderr, "kama pkg add: give a source (--git/--url/--path) or a --version (registry dependency)\n"); return 2;
+            }
             if (!rev.empty()   && d.git.empty()) { fprintf(stderr, "kama pkg add: --rev is only valid with --git\n"); return 2; }
             if (!integ.empty() && d.url.empty()) { fprintf(stderr, "kama pkg add: --integrity is only valid with --url\n"); return 2; }
-            d.rev = rev; d.integrity = integ;
+            if (!registry.empty() && nsrc != 0)  { fprintf(stderr, "kama pkg add: --registry is only valid for a registry dependency (no --git/--url/--path)\n"); return 2; }
+            if (!ver.empty() && (!d.url.empty() || !d.path.empty())) {
+                fprintf(stderr, "kama pkg add: --version applies to a git range (--git) or a registry dependency, not --url/--path\n"); return 2;
+            }
+            d.rev = rev; d.integrity = integ; d.version = ver; d.registry = registry;
             return cmdPkgAdd(".", name, d, dev);
         }
         if (verb == "remove") {

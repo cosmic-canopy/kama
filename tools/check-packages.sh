@@ -424,4 +424,80 @@ if ! "$KAMA" pkg install "$off" >"$tmp/offb.out" 2>&1 || ! cmp -s "$tmp/off.lock
     sed 's/^/  /' "$tmp/offb.out" >&2; diff "$tmp/off.lock" "$off/kama.lock" >&2 || true; mv "$gv.hidden" "$gv"; exit 1; fi
 mv "$gv.hidden" "$gv"
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline)"
+# ==== M3.1a: registry protocol + `kama publish` (network-free, a file:// dir registry) ================
+# `kama publish` writes a static registry (<name>/index.json + <name>/<version>.tar.gz); a registry dep
+# (a bare `version` range + a `registry` base) resolves the highest version FROM the index and reduces to
+# a url dep for the fetch. Everything runs against a `file://` dir — nothing needs a live host.
+reg="$tmp/reg"; mkdir -p "$reg"
+
+# publish two versions of `rg` (area() returns a version-distinguishing value) by dogfooding `kama publish`.
+pub_rg() {   # pub_rg <version> <area-return>
+    d="$tmp/rg-src-$1"; mkdir -p "$d"
+    printf '{ "name": "rg", "version": "%s" }\n' "$1" > "$d/kama.json"
+    printf 'namespace rg;\nexport { area };\nfn int32 area() { return %s; }\n' "$2" > "$d/rg.kama"
+    ( cd "$d" && "$KAMA" publish --registry "file://$reg" )
+}
+# 19. publish → index + tarball + integrity; a second publish of the same version FAILS (immutability).
+if ! pub_rg 1.0.0 10 >"$tmp/pub.out" 2>&1; then echo "check-packages: FAIL — publish 1.0.0 errored:" >&2; sed 's/^/  /' "$tmp/pub.out" >&2; exit 1; fi
+if ! pub_rg 1.2.0 12 >>"$tmp/pub.out" 2>&1; then echo "check-packages: FAIL — publish 1.2.0 errored:" >&2; sed 's/^/  /' "$tmp/pub.out" >&2; exit 1; fi
+[ -f "$reg/rg/index.json" ] && [ -f "$reg/rg/1.0.0.tar.gz" ] && [ -f "$reg/rg/1.2.0.tar.gz" ] \
+    || { echo "check-packages: FAIL — publish did not populate the registry (index/tarballs)" >&2; ls -R "$reg" >&2; exit 1; }
+grep -q '"integrity": "sha256-' "$reg/rg/index.json" \
+    || { echo "check-packages: FAIL — index.json has no integrity" >&2; cat "$reg/rg/index.json" >&2; exit 1; }
+if pub_rg 1.2.0 99 >"$tmp/repub.out" 2>&1; then echo "check-packages: FAIL — republishing 1.2.0 was allowed (immutability):" >&2; sed 's/^/  /' "$tmp/repub.out" >&2; exit 1; fi
+grep -qi "immutable" "$tmp/repub.out" || { echo "check-packages: FAIL — republish rejection message unclear:" >&2; sed 's/^/  /' "$tmp/repub.out" >&2; exit 1; }
+
+# a consumer with a registry dep + a caret range resolves the HIGHEST version (1.2.0), fetches into the
+# store, links the view, records source:"registry" + version + integrity, and the built program runs (=12).
+rc1="$tmp/rc1"; mkdir -p "$rc1"
+cat > "$rc1/kama.json" <<JSON
+{ "name": "rc1", "version": "0.1.0",
+  "dependencies": { "rg": { "version": "^1.0.0", "registry": "file://$reg" } } }
+JSON
+printf 'import rg::{area};\nfn int32 main() { return area(); }\n' > "$rc1/main.kama"
+if ! "$KAMA" pkg install "$rc1" >"$tmp/rc1.out" 2>&1; then echo "check-packages: FAIL — registry install errored:" >&2; sed 's/^/  /' "$tmp/rc1.out" >&2; exit 1; fi
+lock="$rc1/kama.lock"
+grep -q '"source": "registry"' "$lock" && grep -q '"version": "1.2.0"' "$lock" && grep -q '"integrity": "sha256-' "$lock" \
+    || { echo "check-packages: FAIL — registry lock missing source/version/integrity:" >&2; sed 's/^/  /' "$lock" >&2; exit 1; }
+case "$(readlink "$rc1/.kama/deps/rg" 2>/dev/null || true)" in
+    "$KAMA_STORE"/rg-*) : ;;
+    *) echo "check-packages: FAIL — .kama/deps/rg does not link into the store" >&2; exit 1 ;;
+esac
+if "$KAMA" build "$rc1/main.kama" -o "$tmp/rcapp" >"$tmp/rc1b.out" 2>&1; then
+    if "$tmp/rcapp"; then rrc=0; else rrc=$?; rc=$rrc; fi
+    [ "$rc" = 12 ] || { echo "check-packages: FAIL — registry consumer returned $rc, expected 12 (highest = 1.2.0)" >&2; exit 1; }
+else echo "check-packages: FAIL — build of the registry consumer failed:" >&2; sed 's/^/  /' "$tmp/rc1b.out" >&2; exit 1; fi
+
+# 20. transitive from a registry: `hi` (registry) depends on `rg` (registry); a consumer of `hi` resolves
+# both from the fetched manifest (child deps read from the tarball, exactly like a url dep).
+hi="$tmp/hi-src"; mkdir -p "$hi"
+cat > "$hi/kama.json" <<JSON
+{ "name": "hi", "version": "1.0.0",
+  "dependencies": { "rg": { "version": "^1.0.0", "registry": "file://$reg" } } }
+JSON
+printf 'namespace hi;\nimport rg::{area};\nexport { total };\nfn int32 total() { return area() + 8; }\n' > "$hi/hi.kama"
+if ! ( cd "$hi" && "$KAMA" publish --registry "file://$reg" ) >"$tmp/hipub.out" 2>&1; then echo "check-packages: FAIL — publish hi errored:" >&2; sed 's/^/  /' "$tmp/hipub.out" >&2; exit 1; fi
+rc2="$tmp/rc2"; mkdir -p "$rc2"
+cat > "$rc2/kama.json" <<JSON
+{ "name": "rc2", "version": "0.1.0",
+  "dependencies": { "hi": { "version": "^1.0.0", "registry": "file://$reg" } } }
+JSON
+printf 'import hi::{total};\nfn int32 main() { return total(); }\n' > "$rc2/main.kama"
+if ! "$KAMA" pkg install "$rc2" >"$tmp/rc2.out" 2>&1; then echo "check-packages: FAIL — transitive registry install errored:" >&2; sed 's/^/  /' "$tmp/rc2.out" >&2; exit 1; fi
+grep -q '"hi"' "$rc2/kama.lock" && grep -q '"rg"' "$rc2/kama.lock" \
+    || { echo "check-packages: FAIL — transitive registry install did not resolve both hi and rg:" >&2; sed 's/^/  /' "$rc2/kama.lock" >&2; exit 1; }
+if "$KAMA" build "$rc2/main.kama" -o "$tmp/rc2app" >"$tmp/rc2b.out" 2>&1; then
+    if "$tmp/rc2app"; then rc=0; else rc=$?; fi
+    [ "$rc" = 20 ] || { echo "check-packages: FAIL — transitive consumer returned $rc, expected 20 (12 + 8)" >&2; exit 1; }
+else echo "check-packages: FAIL — build of the transitive consumer failed:" >&2; sed 's/^/  /' "$tmp/rc2b.out" >&2; exit 1; fi
+
+# 21. offline byte-identical re-install: remove the registry dir; a warm store + lock resolves with NO
+# index fetch (the registry-dep analog of the git-range offline path).
+cp "$rc2/kama.lock" "$tmp/rc2.lock"
+mv "$reg" "$reg.hidden"                         # registry unreachable — the lock + warm store must suffice
+if ! "$KAMA" pkg install "$rc2" >"$tmp/rc2off.out" 2>&1 || ! cmp -s "$tmp/rc2.lock" "$rc2/kama.lock"; then
+    echo "check-packages: FAIL — registry offline re-install not reproducible (lock changed or index hit):" >&2
+    sed 's/^/  /' "$tmp/rc2off.out" >&2; diff "$tmp/rc2.lock" "$rc2/kama.lock" >&2 || true; mv "$reg.hidden" "$reg"; exit 1; fi
+mv "$reg.hidden" "$reg"
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline)"
