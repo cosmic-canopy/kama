@@ -266,3 +266,79 @@ M2.2 = resolver (transitive BFS, `parseLock` reader, lock-honoring, git sha pinn
 with a strict `--dev` boundary + the `kama pkg` command tree (`install`/`add`/`remove`/`update`) — **✅
 shipped 2026-07-24** (see the M2.2 as-shipped bullet in the implementation-progress list at the top).
 M2.3 = `kama run` + `main` field + docs. See the staged plan above.
+
+---
+
+## M2.3 — implementation kickoff (`kama run` + manifest entry field + user docs)
+
+**Status: PREPARED, not built.** The final per-project-packages slice (pillar 4), closing the campaign's
+first pillar. Everything below is a settled lean to confirm at the top of the build session; the seams are
+verified in code. This is a small, mechanical milestone (a thin `run` wrapper over the existing build path
++ one manifest field + a docs page) — the interesting work is the design confirmations, not the code.
+
+### Goal
+
+`kama run [<file>] [-- <args>]` — build the project's entry `.kama` and **execute it in one step**,
+forwarding the program's exit code. Add a `main` entry field to `kama.json` so `kama run` with no file
+works from a project dir. Ship a user-facing quickstart tying the whole `kama pkg` flow together. Nothing
+about the reproducibility model changes — `run` is `build` + `exec`.
+
+### Where the seams are (`kama.driver.cpp`)
+
+- **`main` dispatch** — add `if (subcommand == "run")` next to `build`/`transpile`/`pkg`. **Reuse the SAME
+  option parser + build pipeline** (`loadProgramUnits` → transpile → `cc` → native binary). `run` = the
+  native build branch, then an exec of the produced binary.
+- The **build branch already produces a native executable** at `output` (a default/temp name when unset).
+  `run` builds to a temp path, execs it, forwards the exit code, unlinks. Do **not** `execv`-replace the
+  process (so it can clean up the temp and return the child's code — `fork`+`exec`+`waitpid`, or `system()`
+  with `WEXITSTATUS`, mirroring the existing `runCmd`).
+- **`ManifestReader`** (today `name`/`version` are `skipValue`'d, [~505]) — capture a `main` string (the
+  entry `.kama`, relative to the manifest). Add a tiny `loadManifestMain(path, out, err)` (or extend the
+  reader with a `std::string* mainOut`), same idiom as the `dev-dependencies` add in M2.2.
+- **Manifest/entry discovery** — `projectDepsView`/the build already find the project dir from the first
+  input; for `kama run` with no `<file>`, discover `kama.json` in CWD → read `main` → that path is the input.
+
+### What to add
+
+1. `kama run [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]`.
+   **Native-only**: reject `--target wasm|embedded` with a clear message (wasm needs node/a browser;
+   embedded emits a freestanding object) — point at `kama build`.
+2. **Entry resolution**: explicit `<file>` wins; else the manifest `main` field; else error
+   (`"no input file and kama.json has no \"main\""`).
+3. **Build → exec → forward exit → clean up.** Build into a temp binary (as the `.d` test harness names
+   outputs), run it, propagate `WEXITSTATUS`, remove the temp.
+4. **`main` manifest field** — a string, entry `.kama` relative to `kama.json`; reserved-and-ignored today,
+   now read by `run`.
+
+### Decisions (leans — confirm, don't re-derive)
+
+- **Field name = `main`** (npm-familiar; kama's entry fn is already `fn int32 main()`). Alt considered:
+  `entry`/`bin`. Lean `main`.
+- **Arg passthrough is forward-looking only.** kama's `main` takes **no args** and argv marshaling is
+  explicitly **not wired yet** (see the synthesized entry point in `kama.cemit.cpp` ~10570: hosted `main`
+  does `(void)argc; (void)argv;`). So `-- <args>` forwarded to the child process is **inert until argv
+  lands** (a separate language feature). Lean: **accept + forward `-- <args>` anyway** (zero cost, ready for
+  when argv is wired) — or drop the `--` syntax until then. Confirm.
+- **Always build fresh** for M2.3 (simple, reproducible); up-to-date-skip caching is a later optimization.
+- **Temp binary, removed after exec** (no new persistent artifact surface) — vs a kept `.kama/bin/<name>`.
+  Lean temp.
+- **`run` only** — do NOT also make `build`/`transpile` fall back to `main` when given no input (keep those
+  explicit); revisit if users ask.
+- **Docs**: a new `docs/packages.md` (user-facing quickstart) + a README pointer. Confirm the location.
+
+### Testing — extend `tools/check-packages.sh` (network-free, native-only)
+
+- Project with a `main` field + a `file://` git dep: `kama run` (no file) builds + runs + **forwards a known
+  non-zero exit code**; and the explicit `kama run <file>` form.
+- `kama run --dev` resolves a dev-dep-importing entry; `kama run` (no `--dev`) **fails to resolve** it
+  (the `--dev` boundary composes with `run`).
+- `kama run --target wasm` → clean **native-only** error.
+- No input + no `main` → clear error.
+
+### Then
+
+M2.3 closes **pillar 4** (per-project packages). The remaining, currently-unscheduled milestones:
+**M1** — toolchain store + PATH shim + `kama toolchain` + project pin (pillars 1–3); **M3** — hosted
+registry + `kama publish` + namespacing/signing + SemVer range resolution (extends `docs/PUBLISHING.md`;
+the M2.2 resolver's one-spec-per-name check is where range-intersection slots in); **M4** — multi-modal
+(scripting-runtime versions in the same store). See the staged plan above.
