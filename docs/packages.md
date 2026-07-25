@@ -115,6 +115,85 @@ packages request the same dependency with different ranges, the resolver interse
 the one highest version satisfying both; if no version satisfies all requestors, it's a hard error
 naming both ranges.
 
+## Registry dependencies
+
+A **registry dependency** names just a `version` range — no `git`/`url`/`path`. It resolves through a
+**registry**: a package index that lists published versions and their tarballs. Give it an explicit
+`registry` base, or configure one (see below):
+
+```json
+{
+  "dependencies": {
+    "geo": { "version": "^1.2.0", "registry": "file:///srv/kama-registry" }
+  }
+}
+```
+
+Install fetches the registry's index for `geo`, runs the same range engine as git-tag ranges over the
+listed versions, picks the **highest satisfying** one, and fetches its tarball into the content-addressed
+store — so a registry dep behaves exactly like a url dep once resolved, and the lock pins the concrete
+version + integrity. `kama pkg add geo --version ^1.2.0 --registry <base>` writes one for you.
+
+A registry base is transport-agnostic — `file://` (self-host / air-gap / offline testing) or `https://`.
+The registry is a plain static file tree, so any file host serves it.
+
+### Publishing
+
+`kama publish` packages the current project and records it in a registry:
+
+```sh
+kama publish --registry file:///srv/kama-registry
+```
+
+It tarballs the sources (excluding `.git/`, `.kama/`, `build/`, and `kama.lock`), hashes them, and adds a
+version entry to `<registry>/<name>/index.json` alongside the tarball. **Published versions are
+immutable** — re-publishing an existing version is refused; bump the `version` in `kama.json` instead.
+
+### Scopes and the `registries` config
+
+A package name may be **scoped** as `@scope/name`. A scoped dependency **imports under its bare last
+segment** — `@acme/geo` is `import geo::{…}` in your code — the scope only selects which registry serves
+it. Bind scopes (and the default) with a top-level `registries` object:
+
+```json
+{
+  "registries": {
+    "default": "https://packages.example.com",
+    "@acme":   "file:///srv/acme-registry"
+  },
+  "dependencies": {
+    "@acme/geo": { "version": "^1.0.0" },
+    "mathx":     { "version": "^2.0.0" }
+  }
+}
+```
+
+- A **scoped** name (`@acme/geo`) resolves through its bound registry; an **unscoped** name (`mathx`)
+  resolves through `default`.
+- A value may be an **ordered array** of bases to **layer** sources — lookup walks them in priority order
+  and the first base that has a satisfying version wins (a private registry shadows a public one).
+- `"default": false` **drops** the default entirely — a fully-private / air-gapped setup where an unscoped
+  name with no other source is simply unresolvable.
+- Two scopes cannot expose the **same** bare name in one project (both would import as `name`) — that's a
+  hard error; alias one by renaming.
+
+Because the lock pins **content identity (the integrity), not the URL**, a scope can be **re-pointed** to a
+mirror by editing `registries`: a mirror serving the same bytes re-resolves identically. A mirror serving
+**different** bytes under the same `name@version` is rejected (the dependency-confusion guard).
+
+### Signing (optional)
+
+`kama publish --key <ssh-key>` signs the tarball with an SSH key (via `ssh-keygen -Y`, the same SSHSIG
+mechanism `git commit -S` uses) and records the signature + signer public key in the index. On the
+consuming side:
+
+```sh
+kama pkg install            # warn-only: a bad signature warns, the install proceeds
+kama pkg install --verify   # enforced: a signature must be present and verify, else it fails
+```
+
+Verification needs `ssh-keygen` on `PATH`; where it's absent, signing and verification skip gracefully.
+
 ## Dev-dependencies
 
 Dependencies needed only for development (test kits, fixtures, tooling) go under
@@ -149,9 +228,10 @@ depend on never drags *its* dev-dependencies into your build.
 - Fetched packages live in a **content-addressed store** (`~/.kama/store`, overridable with
   `$KAMA_STORE`), keyed by the hash of their unpacked contents and shared across projects.
   `.kama/deps/<name>` links into the store.
-- Integrity is verified on fetch: git deps pin the commit and the tree hash; url deps verify
-  the tarball's sha256 (trust-on-first-use when no `integrity` is given, hard-fail on
-  mismatch thereafter).
+- Integrity is verified on fetch: git deps pin the commit and the tree hash; url and registry
+  deps verify the tarball's sha256 (trust-on-first-use when no `integrity` is given, hard-fail on
+  mismatch thereafter). A registry dep records the base it resolved from, but the lock pins the
+  **integrity**, not the URL — so a scope can be re-pointed to a mirror without invalidating it.
 - **Builds never fetch.** They read the already-materialized `.kama/deps` view. A build that
   finds declared dependencies but no resolved view tells you to run `kama pkg install` — it
   never silently reaches the network. Once a project is installed, everything works offline.
@@ -192,10 +272,11 @@ run `kama toolchain install <v>` — it never silently falls back to another ver
 |---|---|
 | `kama run [<file>] [-- <args>]` | Build the entry (explicit file, else manifest `"main"`) and run it; native-only. |
 | `kama build <file>… [--dev]` | Build a native/wasm/embedded artifact. |
-| `kama pkg install [<dir>]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`. |
-| `kama pkg add [--dev] <name> (--git U [--rev R] \| --url U [--integrity H] \| --path P)` | Add a dependency and install. |
+| `kama pkg install [<dir>] [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |
+| `kama pkg add [--dev] <name> (--git U [--rev R \| --version V] \| --url U [--integrity H] \| --path P \| --version V [--registry BASE])` | Add a dependency and install (bare `--version` = a registry dep). |
 | `kama pkg remove <name>` | Drop a dependency and install. |
 | `kama pkg update [<pkg>]` | Re-resolve pins and rewrite the lock. |
+| `kama publish [<dir>] --registry <base> [--key <ssh-key>]` | Tarball the project + record (and optionally sign) it in the registry index. |
 | `kama toolchain list` | Installed versions, the global default, and what the current dir resolves to. |
 | `kama toolchain install <v>` | Install version `<v>` into `~/.kama/versions/<v>` (alongside; keeps the default). |
 | `kama toolchain uninstall <v>` | Remove an installed version (refuses the current default). |

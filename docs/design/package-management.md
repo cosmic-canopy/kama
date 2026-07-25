@@ -94,6 +94,51 @@ record for its build. This doc keeps the vision, seam map, prior art, and open q
   disjoint→hard-fail naming both ranges, offline byte-identical re-install). **Deferred within M3**:
   hosted registry, `kama publish`, namespacing `@scope/name`, signing/provenance, pre-release ordering
   (SemVer §11), compound/hyphen/`||` ranges, multiple versions of one package, url-dep ranges.
+- **M3.1a — registry protocol + `kama publish` + registry deps ✅ shipped 2026-07-25.** A **registry
+  dependency reduces to a url dependency once resolved**, so it is mostly reuse. The registry is a static
+  file tree (Go `GOPROXY` / cargo sparse-index shape): `<base>/<name>/index.json` lists versions
+  (`{version, integrity, tarball, dependencies}`), and `tarball` is a URI relative to the base (or
+  absolute). A **registry dep** = a bare `version` range with no `git`/`url`/`path` (`isRegistryDep`,
+  the sibling gate to `isRangeDep`); an optional per-dep `registry` pins the base. A small hand-parser
+  (`IndexReader`, mirroring `LockReader`) reads the index; the resolver's version machinery is unified
+  behind `selectVersion` (git ranges enumerate tags, registry deps enumerate the index) so intersection,
+  the restart fixpoint, and lock-honoring offline reuse all carry over. A resolved registry dep pins to
+  its tarball URI + index integrity and flows through the **existing** `fetchToStore` url path verbatim;
+  the lock records `source:"registry"` + base + version + integrity. `kama publish [<dir>] --registry
+  <dir-or-file-uri>` tarballs the sources (excluding `.git`/`.kama`/`build`/`kama.lock` into a
+  single-component wrapper), hashes them, and splices a **write-once** version entry into the index
+  (immutable — refuses to overwrite). `kama pkg add <name> --version <range> [--registry <base>]` writes a
+  registry dep. **Network-free** against a `file://` registry; remote-transport publish is M3.3. Guard
+  cases 19–21 (publish + immutability, resolve/build/run picking the highest version, transitive from the
+  registry, offline byte-identical). Native 756 green; driver ASan/UBSan-clean.
+- **M3.1b — scopes + `registries` config + dependency-confusion guard ✅ shipped 2026-07-25.** Scoped
+  names `@acme/foo` **import under their bare last segment** (`foo`, the Go/Cargo model) — scope is
+  registry-routing metadata only, so the import syntax and view mechanism are unchanged; two scopes
+  exposing the same bare name collide on one view link → an explicit hard error (`importNameOf`; the
+  store labels a scoped dir with `/`→`_`). A new top-level **`registries`** object (`{ "default":
+  <base|[bases]|false>, "@scope": <base|[bases]> }`) configures sources: an explicit per-dep `registry`
+  wins, else the scope chain, else the default chain, else the built-in default (a compile constant, not
+  wired live until M3.3). Ordered arrays **layer** sources in priority order (the first base with a
+  satisfying version wins — a private registry shadows a public one); `default: false` **opts out** of the
+  built-in (air-gapped). The **confusion guard** rides the "lock pins content identity, not the URI"
+  guarantee: re-pointing a scope to a mirror serving the **same** bytes re-resolves with an unchanged
+  integrity; a mirror serving **different** bytes under the same name@version is a hard error (registry
+  offline reuse requires the locked base to still be an active candidate, forcing the cross-check on a
+  re-point). Guard cases 22–24 (scoped routing + opt-out, re-point same/different bytes, collision).
+  Native 756 green; ASan/UBSan-clean.
+- **M3.2a — sign-on-publish / verify-on-install ✅ shipped 2026-07-25.** First signing bits via
+  **`ssh-keygen -Y` (SSHSIG)** — the mechanism `git commit -S` uses under `gpg.format=ssh`: ed25519,
+  namespaced (`kama-registry`), cross-platform, detect-and-skip like git/curl/sha256. `kama publish --key
+  <ssh-key>` signs the tarball and records the SSHSIG blob + signer public key in the index entry.
+  Verification runs in `fetchToStore` while the tarball still exists (`ssh-keygen -Y check-novalidate`);
+  it is **warn-only by default** (a present-but-invalid signature only warns — mechanism before policy)
+  and **enforced under `kama pkg install --verify`** (a present signature must verify; a missing one is a
+  hard error). The signature + key ride from the index into the resolved spec; offline reuse trusts the
+  already-verified store. A configured trust set (TOFU / allowed-signers) is a later M3.2 slice. Guard
+  case 25 (signed publish records signature+key; `--verify` passes a signed package, fails a tampered one,
+  and warns without it; skips if ssh-keygen is absent). Native 756 green; ASan/UBSan-clean. **Leaves M3.3**
+  (deploy the host + wire the live base URI — ops) and the **rest of M3.2** (mandatory verification + the
+  trust model) as the only package-management work gated on hosted services.
 
 ## Scope — four pillars (user, 2026-07-24)
 
@@ -203,7 +248,8 @@ Kama should answer the ecosystem question so users don't roll their own. Opt-in,
   Sliced (like M2) because it mixes self-contained compiler work with real hosted-service/ops work:
   - **M3.0 — SemVer parsing + version-range resolution (git-tag deps). ✅ shipped 2026-07-25** (see the
     as-shipped bullet above). No registry/hosting; the range engine every later slice reuses.
-  - **M3.1 — registry *protocol* + `kama publish` (static-first, URI-abstracted).** The registry is a
+  - **M3.1 — registry *protocol* + `kama publish` (static-first, URI-abstracted). ✅ SHIPPED 2026-07-25
+    (M3.1a + M3.1b; see the as-shipped entries above).** The registry is a
     handful of well-known URIs behind a **base URI** (the Go `GOPROXY` / cargo sparse-index model): an
     index (`name → [{version, tarball-uri, integrity, dependencies}]`) + integrity-hashed tarballs. A
     `registry` dep in `kama.json` resolves by fetching the index, running the M3.0 range engine over the
@@ -237,9 +283,11 @@ Kama should answer the ecosystem question so users don't roll their own. Opt-in,
       scope, builds verify the same hashes; (b) **isolated / air-gapped dev** — point scopes (or drop the
       default) at a `file://` mirror so `install` never touches remotes (composes with the existing
       "builds never fetch" guarantee — only `install` fetches, and it can be pointed fully offline).
-  - **M3.2 — signing / provenance.** Two credible models: Go's checksum-transparency log vs npm/PyPI's
-    sigstore/OIDC provenance attestations. Shell-out signing (like the existing sha256 shell-out); publish
-    signs, install verifies. Decide the model here.
+  - **M3.2 — signing / provenance.** **M3.2a ✅ SHIPPED 2026-07-25** (sign-on-publish / verify-on-install
+    via `ssh-keygen -Y` SSHSIG, warn-only + `--verify` enforcement; see the as-shipped entry above). The
+    **rest of M3.2** picks the trust model — two credible ones: Go's checksum-transparency log vs npm/PyPI's
+    sigstore/OIDC provenance attestations — and makes verification mandatory. Shell-out signing (like the
+    existing sha256 shell-out); publish signs, install verifies.
   - **M3.3 — hosted deployment (ops; gated on the site being live + repo public).** Stand up the real
     registry host (Cloudflare Pages static index + GitHub Releases/R2 tarballs), wire the default base URI,
     extend PUBLISHING.md. Pure ops — no compiler change; may be preceded by finishing the website. A
@@ -593,11 +641,21 @@ store key seeded here).
 
 ## M3.1 + M3.2 — implementation kickoff (registry protocol + `kama publish` + first signing bits)
 
-**Status: PREPARED, not built (kickoff for the next session).** M3.0 (SemVer ranges, ✅ shipped `19ebadf`)
-is the range engine this reuses. The line anchors below are fresh as of that commit; re-verify at the top
-of the session. Everything here is buildable + verifiable **network-free against a `file://` registry** —
-**nothing is gated on the website.** Only M3.3 (deploying the real host + wiring the default base URI to a
-live URL) waits on the site being up / the repo public; that's pure ops, no compiler change.
+**Status: ✅ SHIPPED 2026-07-25 (M3.1a `2d18348`, M3.1b `c8c9444`, M3.2a `144d422`).** The as-shipped
+summaries are in the milestone list near the top of this doc; this section is retained as the design of
+record (the leans below were confirmed as built, with only minor deviations noted inline). M3.0 (SemVer
+ranges, `19ebadf`) is the range engine this reused. Everything here was built + verified **network-free
+against a `file://` registry** — **nothing was gated on the website.** Only M3.3 (deploying the real host +
+wiring the default base URI to a live URL) waits on the site / the repo being public; that's pure ops, no
+compiler change.
+
+**As-built deviations from the leans below:** transitive resolution reads the fetched tarball's own
+manifest (the url-dep path) rather than the index `dependencies` — kama's greedy highest-version BFS never
+downloads a non-chosen candidate, so the index-metadata optimization wasn't needed for resolution; the
+index still *records* `dependencies` for protocol conformance. Registry-package addressing at a base uses
+the **full** (scoped) name (`<base>/@acme/foo/index.json`), while the **import name + view link + store
+label** use the bare last segment. Signing settled on `ssh-keygen -Y check-novalidate` for the crypto
+check (a configured trust set is deferred to the rest of M3.2).
 
 ### The core idea (why this is mostly reuse)
 
