@@ -1,9 +1,11 @@
 # Kama toolchain & package management — design of record (kickoff)
 
-**Status: M2 (per-project packages) IN PROGRESS.** Kickoff brief for the campaign after conditional
-compilation (`@compileFor`, ✅ shipped 2026-07-24). The user chose to build **M2 first**; the executable
-plan for it is the design of record for the build. This doc keeps the vision, seam map, prior art, and
-open questions.
+**Status: M2 (per-project packages / pillar 4) ✅ COMPLETE 2026-07-24 (M2.0–M2.3). NEXT = M1 (toolchain
+version management, pillars 1–3) — kickoff PREPARED (see the "M1 — implementation kickoff" section below).**
+Kickoff brief for the campaign after conditional compilation (`@compileFor`, ✅ shipped 2026-07-24). The
+user chose to build **M2 first**, then **M1**; the executable plan for each milestone is the design of
+record for its build. This doc keeps the vision, seam map, prior art, and open questions. North star
+(user): **kama is its own opt-in version manager** — never wrap nvm/pyenv/rustup around it.
 
 **Implementation progress:**
 - **M2.0 — path deps + lockfile + import wiring ✅ shipped.** `kama.json` `dependencies` (path/git/url
@@ -354,3 +356,131 @@ M2.3 closes **pillar 4** (per-project packages). The remaining, currently-unsche
 registry + `kama publish` + namespacing/signing + SemVer range resolution (extends `docs/PUBLISHING.md`;
 the M2.2 resolver's one-spec-per-name check is where range-intersection slots in); **M4** — multi-modal
 (scripting-runtime versions in the same store). See the staged plan above.
+
+---
+
+## M1 — implementation kickoff (toolchain store + selector + `kama toolchain` + project pin)
+
+**Status: PREPARED, not built.** The next milestone (pillars 1–3, chosen after pillar 4 shipped). The
+guiding north star, from the user: **kama is its own version manager — opt-in.** You should never have to
+wrap `nvm`/`pyenv`/`rustup` *around* kama; kama itself offers multi-version management, and a bare
+single-file `kama build foo.kama` needs none of it. Everything below is a settled lean to confirm at the
+top of the build session; the seams are verified in code.
+
+### The key enabling property (already true in code — this is why M1 is small)
+
+The versioned store mostly **"just works" with near-zero resolver surgery**, because every support-dir
+resolver is already **exe-relative**, and the package store is already **version-independent**:
+
+- `resolveRuntimeDir` / `resolveStdlibDir` / `resolveCCompiler` ([kama.driver.cpp:101/134/155]) resolve
+  `../include`, `../lib/kama`, `../libexec/zig` **relative to the running binary**. So a binary living at
+  `~/.kama/versions/<v>/bin/kama` finds *that version's* runtime, stdlib, and bundled zig with no change.
+- `storeDir()` ([kama.driver.cpp:1054]) is `$HOME/.kama/store` — **already shared across versions**,
+  independent of the exe. Packages resolve once, for all toolchains. No change.
+- `KAMA_VERSION` is **compile-stamped** from the `VERSION` file (`-DKAMA_VERSION` in the Makefile), so each
+  binary **knows its own identity** — the guard that stops a selector re-exec loop.
+
+So M1 is: a **versioned store layout**, a **selector** that execs the right version per directory, the
+**`kama toolchain`** command surface, a **project pin**, and **installer changes** — *not* a compiler
+rewrite. ⚠️ The one real snag is the `KAMA_HOME`-first override inside the two resolvers (see Decisions).
+
+### Goal
+
+`kama toolchain install <v> | uninstall <v> | list | default <v>` manages multiple compiler versions in
+`~/.kama/versions/<v>/`. The `kama` on `PATH` becomes a thin **selector**: it resolves *which* version to
+run per directory — **project pin → `KAMA_VERSION` env → global default** — and execs it, with **no
+activate step** (the "cleaner than python venvs" bar). A project pins its toolchain in `kama.json`, making
+the toolchain version one of the reproducible build inputs *(source, kama.json, kama.lock, toolchain)*.
+
+### Where the seams are
+
+- **Install layout, `install.sh` / `install.ps1`.** Today a *flat* prefix: `tar --strip-components=1` into
+  `$PREFIX` → `~/.kama/{bin/kama, lib/kama, include, libexec/zig, store}`. M1 changes the target to
+  `~/.kama/versions/<version>/…` and lays down the selector at `~/.kama/bin/kama` (the only thing on PATH).
+  Windows already moves a running `.exe` aside to self-overwrite ([install.ps1:36]) — **the versioned store
+  sidesteps this entirely** (a new version is a new dir; the running binary is never overwritten).
+- **`cmdUpdate`** ([kama.driver.cpp:919]) — self-update = re-run the canonical installer via curl/irm,
+  honoring `KAMA_VERSION`. M1 keeps `kama update` (updates the *default* / selector) and adds `kama
+  toolchain install <v>` as the per-version fetch (same installer, `KAMA_VERSION=<v>`, into the store).
+- **The resolvers** ([kama.driver.cpp:101/134]) — exe-relative already (good); the `if (getenv("KAMA_HOME"))
+  return …` first branch is the snag (see Decisions).
+- **Dispatch** — insert `if (subcommand == "toolchain")` between the `update` branch ([kama.driver.cpp:1534])
+  and the `pkg` branch ([kama.driver.cpp:1544]); mirror the `pkg` two-level verb dispatch + a `toolchainUsage()`.
+- **Manifest** — `ManifestReader` ([kama.driver.cpp:401]) tolerates unknown keys; add a `toolchain` string
+  capture (same idiom as the M2.3 `mainOut` field) for the project pin.
+- **Version identity** — `KAMA_VERSION` macro + `kama --version` ([kama.driver.cpp:1526]); the selector
+  compares the resolved pin against a candidate binary's `--version` (or its store dir name) to pick/guard.
+
+### What to add
+
+1. **Versioned store** `~/.kama/versions/<v>/{bin,include,lib,libexec}` + a **migration** of today's flat
+   `~/.kama` install into `versions/<current>/` on first M1-aware run (keep back-compat).
+2. **Selector** on `PATH` at `~/.kama/bin/kama`: read the pin (project → `KAMA_VERSION` → default), resolve
+   the store dir, and exec `versions/<v>/bin/kama` with the original argv. Guard against re-exec loops via
+   the compile-stamped `KAMA_VERSION`. Fast path: unpinned + already-default = no re-exec.
+3. **`kama toolchain`**: `list` (installed versions + which is default + what the CWD resolves to),
+   `install <v>` (installer with `KAMA_VERSION=<v>` into the store; skip if present), `uninstall <v>`,
+   `default <v>` (record the global default).
+4. **Project pin** — read a `toolchain` field from `kama.json`; `kama toolchain pin <v>` (or reuse
+   `default --project`?) writes it via the same byte-preserving splice the M2.2 `kama pkg add` uses.
+5. **Global default record** — a tiny `~/.kama/default` (or `~/.kama/settings.json`) the selector reads.
+6. **Installer changes** — install into the versioned path, drop the selector on PATH, set the default.
+
+### Decisions (leans — confirm at the top of the session, don't re-derive)
+
+- **Store layout** = `~/.kama/versions/<v>/{bin,include,lib,libexec}`; the shared **package** store stays
+  at `~/.kama/store` (unchanged); a `~/.kama/bin/` holds the selector. **Modality-aware key** for M4:
+  `versions/<kind>-<v>/` (kind=`compiler` today) so scripting runtimes share the store later.
+- **Selector = self-re-exec (lean), not a separate shim binary.** Fits the "kama is its own manager"
+  north star (one artifact). `~/.kama/bin/kama` is a copy of (or symlink to) a real version whose `main`,
+  before dispatch, resolves the pin and `execv`s the correct `versions/<v>/bin/kama` if it isn't itself;
+  the compile-stamped `KAMA_VERSION` is the loop guard. **Alternative:** a tiny dedicated `kama-shim` (the
+  rustup model — smaller, never needs the compiler). ⚠️ **This is the #1 confirm** (design-doc open Q2).
+- **Pin lives in `kama.json`** as `"toolchain": "<v>"` — one manifest, one source of truth, and it makes
+  the toolchain a first-class reproducible input (vs a separate `.kama-version` file, rustup-style). ⚠️
+  Confirm (design-doc open Q1). The selector must read just that one key cheaply *before* running a compiler.
+- **`KAMA_HOME` reconciliation (must settle — it's the one real code snag).** The resolvers return
+  `$KAMA_HOME` / `$KAMA_HOME/lib` *first*, which would defeat per-version exe-relative resolution if a user
+  has `KAMA_HOME` exported. Lean: **demote `KAMA_HOME` to an explicit dev/override escape hatch only** (or
+  drop the first branch and rely on exe-relative + a separate `KAMA_VERSIONS_DIR`/store root). The installer
+  never exports `KAMA_HOME` today (it only reads it as the install prefix), so real installs are unaffected —
+  but this must be explicit so a set `KAMA_HOME` doesn't silently pin every version to one lib tree.
+- **Resolution order** = **project pin (`kama.json` `toolchain`) → `KAMA_VERSION` env → global default**;
+  **no activate step**, ever.
+- **Native first.** Windows: the versioned store means installs never overwrite a running exe (a real win);
+  the selector still needs a Windows exec path (`_execv` / spawn+wait). Symlink vs copy for `~/.kama/bin/kama`
+  on Windows (junctions don't apply to files) — lean **copy**.
+- **Reuse the installer for per-version fetch** (`KAMA_VERSION=<v>` into the store) rather than a new
+  download path — one canonical fetch/verify code path, slim-vs-bundled flavor auto-detected as today.
+
+### Open questions (settle at the top of the session)
+
+1. **Selector architecture** — self-re-exec (lean) vs separate `kama-shim` binary. (Doc open Q2.)
+2. **Pin location** — `kama.json` `toolchain` field (lean) vs a `.kama-version` file. (Doc open Q1.)
+3. **`KAMA_HOME` semantics** — demote to dev-override vs repurpose as the store root vs drop.
+4. **Global default record** — a bare `~/.kama/default` file vs a small `~/.kama/settings.json`.
+5. **`kama update` vs `kama toolchain`** — does `update` become "install-latest + set-default", or stay the
+   self-update-in-place seed and defer entirely to `toolchain`? Avoid two ways to do one thing (GOALS).
+6. **Migration** — auto-migrate the existing flat `~/.kama` into `versions/<current>/` on first run, or
+   require a re-install? (Lean: auto-migrate, it's a one-time move.)
+
+### Testing — `tools/check-toolchain.sh` (network-free, native-only; model on `check-packages.sh`)
+
+The live installer hits GitHub, so the guard must **not** fetch. Point `HOME` (or a `KAMA_VERSIONS_DIR`, if
+introduced) at a tmp dir, hand-populate a fake versioned store with two stub `kama` binaries that just
+print their own version, and prove the *selector + resolution*, not the download:
+
+- Two fake versions installed; `kama toolchain list` shows both + the default.
+- `default <v>` switches which version an unpinned dir resolves to.
+- A project with `"toolchain": "<vA>"` in `kama.json` resolves to `<vA>` even when the default is `<vB>`.
+- `KAMA_VERSION=<vB>` overrides the default but **not** a project pin (precedence order).
+- A pin/selection to a missing version → a clear error (naming the version + `kama toolchain install`).
+- Skip gracefully where a needed tool is absent; never touch the real `~/.kama`.
+
+### Then
+
+M1 closes pillars 1–3 — kama is a self-contained, opt-in toolchain + package manager. Remaining: **M3**
+(hosted registry + `kama publish` + namespacing/signing + SemVer range resolution — the M2.2 resolver's
+one-spec-per-name check is the range-intersection seam; extends `docs/PUBLISHING.md`) and **M4**
+(multi-modal — scripting-runtime versions in the same store, pillar 3's full form via the modality-aware
+store key seeded here).
