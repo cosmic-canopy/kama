@@ -148,3 +148,81 @@ Kama should answer the ecosystem question so users don't roll their own. Opt-in,
 - `docs/PUBLISHING.md` — release/distribution (registry extends it).
 - `GOALS.md` — one way / explicit / simplicity, and the reproducibility ethos const-eval and
   `@compileFor` established.
+
+---
+
+## M2.1 — implementation kickoff (content-addressed store + integrity + git/url fetch)
+
+**Status: PREPARED, not built.** Next slice after M2.0 (✅ shipped). Start building from here — the
+decisions below are settled (approved plan); the seams are verified in code. Everything stays a pure
+function of *(source, `kama.json`, `kama.lock`, toolchain)*; no arbitrary code ever runs on install.
+
+### Goal
+
+Make `kama install` fetch **git** and **url** dependencies (M2.0 only did `path`) into a shared
+**content-addressed store** at `~/.kama/store/`, verify **sha256 integrity**, and record the pinned
+identity + integrity in `kama.lock`. The per-project view (`.kama/deps/<name>` symlinks, M2.0) then
+points into the store instead of at a local path. Build/import wiring is unchanged (already reads the
+view). Prove it with a network-free guard script.
+
+### Where M2.0 left the seams (fresh anchors, `kama.driver.cpp`)
+
+- `struct DepSpec` (377) — already carries `path/git/url/rev/integrity/version`. No change needed.
+- `struct LockEntry` (553) — already has `source/path/git/url/rev/commit/integrity/dependencies`.
+- `writeLockFile` (571) + `jsonEscape` — already emit every LockEntry field. **No writer change** — just
+  populate `git/url/rev/commit/integrity` in the entries (M2.0 only set `path`).
+- `makeDirs` (597), `linkDir` (617) — reuse as-is (linkDir already does symlink→junction→(copy TODO)).
+- `cmdInstall` (779) — the git/url branch is currently the stub at ~819 (`"uses a git/url source …"`).
+  **Replace that stub** with fetch→hash→store→link. The `path` branch (816) stays.
+- Dispatch `if (subcommand == "install")` (867) — unchanged.
+
+### What to add (all shell-outs via existing `runCmd`, 605)
+
+1. **`sha256Of(path)`** — no C/C++ hasher exists in-repo, so shell out: `sha256sum` (Linux/container)
+   → `shasum -a 256` (macOS) → `certutil -hashfile <f> SHA256` (Windows). Parse the first hex field.
+   Return `"sha256-<hex>"`.
+2. **`treeHashOf(dir)`** — the store identity = sha256 of the **canonical unpacked source tree** (NOT
+   the raw tarball/clone: git adds `.git/`, tarballs vary in wrapper/compression). List all files
+   sorted, hash `path\0` + file-bytes in sorted order → one digest. Simplest impl: shell out
+   `find <dir> -type f | sort | while read f; do printf '%s\0' "${f#dir/}"; cat "$f"; done | sha256sum`
+   (or build the concatenation in C++ and hash once). Keep it dead simple; cache = the store dir name.
+3. **`storeDir()`** → `$KAMA_HOME/store` (else `<exe>/../store`, mirroring `resolveStdlibDir` at 128).
+4. **Fetch, in the cmdInstall git/url branch:**
+   - **git:** `git clone --depth 1 --branch <rev> <url> <staging>`; `git -C <staging> rev-parse HEAD` →
+     `commit`; `rm -rf <staging>/.git`; `treeHashOf(staging)` → hash; `rename()` staging →
+     `store/<name>-<hash>/` (dedup: skip fetch if it already exists). Lock entry:
+     `source="git", git, rev, commit, integrity=sha256-<hash>`.
+   - **url:** `curl -fsSL <url> -o <staging>.tgz`; if manifest `integrity` given, verify `sha256Of` ==
+     it → **hard error + non-zero exit on mismatch, nothing enters the store**; else trust-on-first-use
+     and write the computed hash to the lock. `tar -xzf` into `<staging>/`, strip one wrapper dir;
+     `treeHashOf`; `rename()` into store. Lock entry: `source="url", url, integrity`.
+   - **Staging:** `store/.tmp-<pid>/`, atomic `rename()` into the content-addressed path only after the
+     hash is known — a killed fetch never leaves a half-populated `<name>-<hash>`.
+   - **View:** `linkDir(store/<name>-<hash>, .kama/deps/<name>)` (git/url) — same call as path deps.
+5. **`.gitignore`** — add `.kama/` guidance (or leave to M2.3 docs).
+
+### Decisions (settled — don't re-litigate)
+
+- Store hash = canonical unpacked **tree**, not the artifact. Linking = symlink (junction/copy on
+  Windows). sha256 = shell out (no vendored crypto). Integrity mismatch = hard fail. Dedup by
+  `<name>-<hash>`. No SemVer ranges yet (git pins `rev`, url pins `url`+integrity). No postinstall.
+
+### Testing — `tools/check-packages.sh` (model on `tools/check-compilefor.sh`, 92 lines)
+
+The `.d/` harness only runs `kama build`, never `kama install`, so install/store/integrity go in a
+guard script run once on the plain native leg (see `run_tests.sh` 127-154; register a
+`[ -f tools/check-packages.sh ] && sh tools/check-packages.sh` block next to the others). It must:
+1. Make a throwaway project in a tmp dir with a **`file://` git repo** and/or a **local tarball** dep
+   (create both under the tmp dir — **no live network**, mirroring how net tests gate on
+   `KAMA_WASM`/`KAMA_BROWSER`). `git init` a tiny package, commit, tag `v1.0.0`, use `file://$PWD/...`.
+2. `kama install` → assert `kama.lock` has the `commit`/`integrity`; assert `.kama/deps/<name>` links
+   into `~/.kama/store/<name>-<hash>`; assert the built program runs.
+3. Re-`install` offline (store populated) → **byte-identical `kama.lock`** (reproducibility) + exit 0.
+4. Tamper test: corrupt the tarball or pass a wrong `integrity` → install **fails** non-zero.
+5. Skip gracefully if `git`/`sha256sum` absent (they ship on the base image; be defensive). Set
+   `KAMA_HOME` to a tmp store so the check never pollutes the real `~/.kama`.
+
+### Then
+
+M2.2 = resolver (transitive BFS, single-version-per-major, `parseLock` reader) + `add`/`remove`/
+`update`. M2.3 = `kama run` + `main` field + docs. See the staged plan above.
