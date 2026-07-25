@@ -588,3 +588,156 @@ M1 closes pillars 1–3 — kama is a self-contained, opt-in toolchain + package
 one-spec-per-name check is the range-intersection seam; extends `docs/PUBLISHING.md`) and **M4**
 (multi-modal — scripting-runtime versions in the same store, pillar 3's full form via the modality-aware
 store key seeded here).
+
+---
+
+## M3.1 + M3.2 — implementation kickoff (registry protocol + `kama publish` + first signing bits)
+
+**Status: PREPARED, not built (kickoff for the next session).** M3.0 (SemVer ranges, ✅ shipped `19ebadf`)
+is the range engine this reuses. The line anchors below are fresh as of that commit; re-verify at the top
+of the session. Everything here is buildable + verifiable **network-free against a `file://` registry** —
+**nothing is gated on the website.** Only M3.3 (deploying the real host + wiring the default base URI to a
+live URL) waits on the site being up / the repo public; that's pure ops, no compiler change.
+
+### The core idea (why this is mostly reuse)
+
+A **registry dependency reduces to a url dependency once resolved.** Resolution = fetch the package's
+index → run the **M3.0 range engine** over the listed versions → the chosen version's index entry yields a
+**tarball URI + integrity**, which feeds the *existing* url path of `fetchToStore` (`kama.driver.cpp:1287`,
+curl + `tar --strip-components=1` + `treeHashOf` + integrity verify + content-addressed store) **verbatim**.
+So the new surface is small: registry-base resolution (config), index fetch+parse, a `registry` source kind
+on `DepSpec`/`LockEntry`, and `kama publish` (which is the inverse — tarball a project + write an index
+entry). The transitive BFS + range intersection + restart fixpoint + lock-honoring offline reuse all carry
+over unchanged.
+
+### Staging (small, committable checkpoints — mirror the M2/M3.0 rhythm)
+
+- **M3.1a — protocol + unscoped registry deps + resolution + `kama publish` (to a `file://`/dir registry).**
+  The spine. No scopes yet, no signing yet.
+- **M3.1b — namespacing `@scope/name` + `registries` config (default + per-scope binding + priority-order
+  layering + opt-out-of-default) + the dependency-confusion guard + re-pointable scopes.** The settled
+  decisions live in the M3.1 registry-sources notes above — implement them here.
+- **M3.2a — first signing bits: sign-on-publish + verify-on-install (local keys).** The rest of M3.2
+  (trust model: transparency-log vs sigstore/OIDC provenance) is a later slice.
+
+### The registry protocol (settle the schema first)
+
+A base URI + a handful of well-known, **static-serveable** paths (Go `GOPROXY` / cargo sparse-index model;
+a dumb file tree or a dynamic service satisfy the identical shape; `file://` works for tests + air-gap):
+
+- **Index (metadata):** `<base>/<name>/index.json` — the published versions of one package:
+  ```json
+  { "name": "geo", "versions": [
+      { "version": "1.2.0", "integrity": "sha256-<tarball-hash>",
+        "tarball": "geo/1.2.0.tar.gz", "dependencies": { "mathx": { "version": "^1.0.0" } } }
+  ] }
+  ```
+  `tarball` is a URI **relative to `<base>`** (or absolute), so metadata and artifacts can live on
+  different hosts (e.g. index on Pages, tarballs on GitHub Releases/R2 — matches the existing infra).
+  `dependencies` are recorded in the index so a consumer resolves the transitive graph from metadata
+  **without downloading every candidate** (same discipline as the lock's serialized `dependencies[]`).
+- **Artifact:** whatever `tarball` points at — a gzipped tar of the package sources (the `url`-dep format).
+
+Immutability: a published `<name>@<version>` is write-once (its integrity is pinned forever). `publish`
+**refuses to overwrite** an existing version — a re-publish requires a version bump. This is the
+lockfile-drift / dependency-confusion guarantee at the source.
+
+### Where the seams are (`kama.driver.cpp`, anchors fresh at `19ebadf`)
+
+- `struct DepSpec` (388) — add a `registry` source kind. A dep with `version` + neither `git`/`url`/`path`
+  → a **registry dep** (resolved via configured registries). Optional explicit `"registry": "<base>"` to
+  pin a source. (`isRangeDep`, 573, is the M3.0 opt-in gate — the registry path is its sibling.)
+- `bool depsObject` (619) — parse the new `registry` key; the mutual-exclusion validation lives here
+  (registry dep = version, no git/url/path).
+- `struct LockEntry` (748) — add `source == "registry"`: record `registry` (base), `version`, `integrity`,
+  `tarball`, `dependencies[]`. Writer/reader mirror the git/url fields (byte-identical discipline).
+- `fetchToStore` (1256) — **no change needed**: a resolved registry dep is handed to it as a `url` dep
+  (`d.url = <resolved tarball URI>`, `d.integrity = <index integrity>`). Reuses curl/tar/hash/store as-is.
+- `resolveOne` (1330) / `resolveProject` (1426) — add a `registry` branch parallel to `isRangeDep`: resolve
+  the base(s) → fetch+parse index → select highest satisfying version (reuse `parseVersionReq`/`satisfies`/
+  a `selectHighest`-over-index-versions analog of `selectHighestTag`, 1290-region) → set the tarball
+  `url`+`integrity` → existing fetch. Intersection/restart/lock-honoring all reuse M3.0. Offline reuse: a
+  registry dep whose locked `version` still satisfies the range is reused verbatim (no index fetch), exactly
+  like the M3.0 git-range offline path (`resolveProject`, the `oldLock` reuse block).
+- Index fetch/parse — a small new hand-parser (mirror `LockReader`, 802) or reuse `ManifestReader`'s idioms;
+  fetch via `runCmdCapture("curl -fsSL …")` or curl-to-file (both already used).
+- `kama publish` — a new subcommand next to `pkg`/`toolchain`/`run` dispatch (`subcommand == "pkg"`, 2133).
+  Reuse: `treeHashOf`/`sha256Of` (1201/1165), `tar -czf` (the test harness already does this), `makeDirs`,
+  the manifest reader for `name`/`version`/`dependencies`. Refuse to overwrite an existing index version.
+- `registries` config — read from `kama.json` (a new top-level object; `ManifestReader`, add a capture like
+  `mainOut`/`toolchainOut`). Re-pointing a scope = the byte-preserving `manifestSetTopString`/`manifestAddDep`
+  splice family (1753/1929). A built-in default base URI is a compile constant (overridable) — like
+  `KAMA_VERSION`; **do not** wire it to a live URL until M3.3.
+
+### `kama publish` (M3.1a shape)
+
+`kama publish --registry <dir-or-file-uri>` (remote-transport publish deferred to M3.3):
+1. Read `kama.json` → `name`, `version`, `dependencies`.
+2. `tar -czf` the project sources into a wrapper dir (exclude `.kama/`, `.git/`, build artifacts) → compute
+   `sha256Of` (tarball integrity).
+3. Refuse if `<registry>/<name>/index.json` already lists `version` (immutability).
+4. Copy the tarball to `<registry>/<name>/<version>.tar.gz`; append the version entry (version, integrity,
+   tarball, dependencies) to `<registry>/<name>/index.json` (create it if absent), written deterministically.
+
+This makes "resolve latest from the default registry → mirror those exact packages into an internal
+`file://`/dir registry → repoint the scope" a pure file operation, and the whole loop is testable offline.
+
+### M3.2a — first signing bits (leans)
+
+- **Mechanism = shell-out** (like `sha256Of`): sign the tarball (or its integrity string) on `publish`,
+  verify on `install`. Candidate tools, in order of availability on the base image: `ssh-keygen -Y sign`/
+  `-Y verify` (OpenSSH, usually present) or `minisign` (tiny, ed25519, the cleanest UX) — **detect and skip
+  gracefully** in the guard (like git/curl/sha256). Settle the tool at kickoff.
+- **Index carries** `signature` + a key id per version entry; `publish` signs with a publisher key;
+  `install` verifies against a trusted key (TOFU first, a configured trust set later). Start **warn-only or
+  opt-in** enforcement so the mechanism lands before the policy; a later M3.2 slice makes it mandatory +
+  picks the trust model (transparency-log vs sigstore/OIDC provenance).
+
+### Decisions (leans — confirm at the top of the session, don't re-derive)
+
+- **`registry` dep = `version` with no git/url/path** (registry is the default source for a bare
+  versioned name). Explicit `"registry": "<base>"` pins one. One way: a name is a git-range dep XOR a
+  registry dep XOR an exact pin — mixing is a hard error (extends the M3.0 `rev`+`version` rule).
+- **Index entry carries `dependencies`** so transitive resolution reads metadata, not tarballs.
+- **Immutable versions**; `publish` refuses overwrite.
+- **Default base URI = a compile constant**, overridable by `registries.default`; **not** wired live until
+  M3.3. Layering/opt-out/scope-binding + confusion guard per the M3.1 registry-sources notes above.
+- **Publish targets a `file://`/dir registry in M3.1**; remote-transport publish is M3.3.
+- **Namespacing staged to M3.1b** — M3.1a ships unscoped names to keep the first slice small. The
+  `@scope/name` import-path question (does `@acme/foo` import as `foo`, and how two scopes with the same
+  name disambiguate) is a real cut to settle in M3.1b.
+
+### Open questions (settle at the top of the session)
+
+1. **Index granularity** — one `index.json` per package (sparse, lean) vs a single registry-wide index.
+   Lean: per-package (static-serveable, scales, matches cargo sparse).
+2. **`registries` schema** — object with `default` + `@scope` keys (values a base URI or an ordered array
+   for layering; `default: false`/omit to drop it) vs a list of `{match, uri}` rules. Lean: the object form.
+3. **`@scope/name` import path** (M3.1b) — bare last segment vs `scope::name`; collision disambiguation.
+4. **Signing tool** — `ssh-keygen -Y` (present) vs `minisign` (cleaner). Lean: whichever is on the base
+   image; detect + skip in the guard.
+5. **Publish auth** for the eventual remote (M3.3) — token model; out of scope for M3.1/M3.2a.
+
+### Testing — extend `tools/check-packages.sh` (network-free, `file://` registry)
+
+Model on the M3.0 cases (a local `gv` repo + `file://`). Build a `file://` **static registry** as a dir
+tree (`reg/<name>/index.json` + `reg/<name>/<version>.tar.gz`) — either hand-written or produced by `kama
+publish` (dogfood it):
+- **M3.1a:** `publish` a package to a dir registry → assert `index.json` + tarball exist, integrity recorded,
+  immutability (a second `publish` of the same version fails). A consumer with a `registry` dep + a range
+  resolves the highest version from the index, fetches the tarball into the store, links the view, and the
+  built program runs; the lock records `source:"registry"`, version, integrity. Transitive: a published
+  package depending on another registry package resolves both from metadata. Offline: re-install with the
+  registry dir removed but the store warm + lock kept → byte-identical, no fetch.
+- **M3.1b:** a scoped `@acme/foo` resolves via its bound registry, not the default; opt-out-of-default makes
+  an unscoped name unresolvable; re-pointing a scope to a mirror serving the same integrity re-resolves
+  byte-identically; a mirror serving *different* bytes under the same name+version → integrity hard-fail
+  (the confusion guard).
+- **M3.2a:** a signed `publish` + a verifying `install` pass; a tampered signature fails (skip gracefully if
+  the signing tool is absent).
+
+### Then
+
+M3.1+M3.2a leave only **M3.3** (deploy the real registry host + wire the default base URI — ops, gated on
+the site/public repo) and the **rest of M3.2** (mandatory verification + the chosen trust model). **M4**
+(multi-modal) stays deferred until the scripting runtime exists.
