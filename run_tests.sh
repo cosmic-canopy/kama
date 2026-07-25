@@ -134,6 +134,13 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-emb
     if sh tools/check-embedded.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# MCU end-to-end: build a kama program into Cortex-M firmware and RUN it on emulated silicon (QEMU). SKIPs
+# (still counts as a pass) when the cross toolchain is absent, so this only truly exercises under the opt-in
+# `kama-mcu` image; on the base image it's a no-op. Native pass only (like the guards above).
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-mcu.sh ]; then
+    if sh tools/check-mcu.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # const-eval 6b-3: `comptime fn` table-baking guard (baked static-const aggregate + comptime fn not emitted).
 # Transpile-only + host-checkable, so run once on the plain native pass like the drift/embedded guards.
 if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-comptime.sh ]; then

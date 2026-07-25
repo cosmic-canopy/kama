@@ -5,6 +5,7 @@
 # /work so edits on the host are visible in the container with no image rebuild.
 #
 #   tools/cdev build-image          build the kama-dev toolchain image
+#   tools/cdev build-image-mcu      build the kama-mcu cross image (arm-none-eabi + qemu; opt-in)
 #   tools/cdev make [args...]       run `make` in the container (build kama)
 #   tools/cdev test                 run ./run_tests.sh in the container
 #   tools/cdev exec <cmd...>        run an arbitrary command in the container
@@ -31,9 +32,10 @@ run_it() { "$ENGINE" run --rm -it -v "$ROOT:/work" -w /work "$IMAGE" "$@"; }
 cmd="${1:-}"; shift || true
 case "$cmd" in
   build-image) "$ENGINE" build -t "$IMAGE" "$ROOT" ;;
+  build-image-mcu) "$ENGINE" build -t "${KAMA_MCU_IMAGE:-kama-mcu}" -f "$ROOT/tools/Dockerfile.mcu" "$ROOT" ;;
   make)        run_ni make "$@" ;;
   test)        run_ni ./run_tests.sh "$@" ;;
   exec)        [ "$#" -gt 0 ] || { echo "cdev exec: missing command" >&2; exit 2; }; run_ni "$@" ;;
   sh|shell)    run_it bash ;;
-  *) echo "usage: cdev {build-image|make|test|exec <cmd...>|sh}" >&2; exit 2 ;;
+  *) echo "usage: cdev {build-image|build-image-mcu|make|test|exec <cmd...>|sh}" >&2; exit 2 ;;
 esac

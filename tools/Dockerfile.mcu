@@ -1,0 +1,22 @@
+# kama MCU / bare-metal cross-toolchain image (OPT-IN — kept separate from the base `kama-dev` so the
+# everyday image stays lean, matching kama's opt-in philosophy). Extends the base with:
+#   - gcc-arm-none-eabi + libnewlib-arm-none-eabi — the standard ARM bare-metal cross toolchain: a Cortex-M
+#     C compiler/linker, crt0 startup, and newlib-nano with SEMIHOSTING specs (rdimon) so a freestanding
+#     program's `exit()`/console I/O ride the debugger channel — exactly what QEMU emulates.
+#   - qemu-system-arm — runs the linked Cortex-M ELF headless (`-M mps2-an385`/`lm3s6965evb -semihosting`)
+#     so the whole chain (kama -> C -> object -> link with script+startup -> boots on Cortex-M -> runs ->
+#     exits) is verifiable in CI with NO real board.
+#
+# Build:  tools/cdev build-image-mcu           (or: KAMA_IMAGE=kama-mcu tools/cdev build-image-mcu)
+# Use:    KAMA_IMAGE=kama-mcu tools/cdev exec <cmd...>
+#         tools/check-mcu.sh runs under it.
+FROM kama-dev
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      gcc-arm-none-eabi \
+      libnewlib-arm-none-eabi \
+      qemu-system-arm \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
