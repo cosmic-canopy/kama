@@ -1,10 +1,13 @@
 # MCU step 6 — inline assembly, intrinsics, const-eval (design of record)
 
-**Status: KICKOFF / not yet built.** This is the design-of-record brief for the *language-surface* half of
-MCU step 6, prepared for a fresh implementation session. Steps 1–5 shipped 2026-07-23
-([MCU_READINESS.md](../MCU_READINESS.md), [ROADMAP.md](../ROADMAP.md) §5). Step 6 splits into **language
-work** (this doc) and **build/library work** (toolchain triples, linker scripts, vendor HALs, soft-float,
-AVR — *not* language, tracked in MCU_READINESS Tier 2 + ROADMAP §5).
+**Status: 6a SHIPPED (2026-07-24, `4811d23`).** Inline assembly (the language-surface headline of MCU
+step 6) is built: `asm("…")` inside `unsafe { }` → `__asm__ __volatile__("…" : : : "memory")`; fixtures
+`tests/asm_nop.kama` + `tests/support/embedded_asm.kama` (transpile-grep in `tools/check-embedded.sh`).
+`alignof(T)` was already shipped (fixture added). This remains the design-of-record brief; the sections
+below describe as-built for 6a and design-of-record for the deferred 6b const-eval extensions. Steps 1–5
+shipped 2026-07-23 ([MCU_READINESS.md](../MCU_READINESS.md), [ROADMAP.md](../ROADMAP.md) §5). Step 6 splits
+into **language work** (this doc) and **build/library work** (toolchain triples, linker scripts, vendor
+HALs, soft-float, AVR — *not* language, tracked in MCU_READINESS Tier 2 + ROADMAP §5).
 
 ## Scope — what is actually language work
 

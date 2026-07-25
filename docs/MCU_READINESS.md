@@ -71,7 +71,7 @@ mile of the no-heap story.**
 | **`alignof(T)`** | ✅ **SHIPPED** (alongside `sizeof(T)`) — `alignof(T)` → C `_Alignof(cType)`, monomorphizes under substitution, and folds in const-init contexts. Fixture `tests/alignof_basic.kama`. | Aligned DMA buffers, register-block layout asserts. | done |
 | **Compile-time evaluation (const-eval)** | 🟢 shipped — `const` values + const generics + `sizeof`/`alignof`, **const-param arithmetic (6b-1)**, **named `comptime` constants at local/module/type scope (6b-2)**, and **compile-time *functions* `comptime fn` (6b-3)** all ship. A `comptime fn` RUNS at build time and bakes a `static const` scalar or **table** into `.rodata`/flash — a baud divisor, gamma/trig/CRC LUT, or permutation constant computed once by the compiler, zero runtime cost. Bounded (step budget) + pure (deterministic → reproducible builds); comptime-only; both top-level and type-associated (`Type::name()`). Fixtures `comptime_fn_crc` (baked 256-entry CRC-8 LUT, asserted bit-identical to a runtime recompute) + `tools/check-comptime.sh`, `comptime_fn_scalar`/`_type_assoc`. | Baud-rate divisors, gamma/trig tables, permutation constants baked at build time. | **M** |
 | **Soft-float mode / fixed-point** | 🟡 partial — float types exist; no soft-float intrinsics emitted, no fixed-point type | Cortex-M0/AVR have no FPU; today you pass `-msoft-float` to the C compiler and eat the libcall cost. A `Q15.16`-style fixed-point library `type value` is writable *today* (operator overloading) — this is a **library**, not a language gap. | **S (lib) / M (soft-float)** |
-| **Toolchain integration** (target triples, linker scripts, startup objects, vendor HALs: pico-sdk / Arduino core / esp-idf) | ❌ missing — the driver emits C and defers to `clang`/`zig`; cross-compile flags are all manual via `--cc`/`--link` | Turnkey `kama build --target thumbv7em-none-eabi` with a linker script and a startup shim. Mostly driver/packaging work atop the C backend. | **M** |
+| **Toolchain integration** (target triples, linker scripts, startup objects, vendor HALs: pico-sdk / Arduino core / esp-idf) | 🟢 **turnkey Cortex-M path shipped + QEMU-proven** — an opt-in cross image (`tools/Dockerfile.mcu`: arm-none-eabi-gcc + qemu; `tools/cdev build-image-mcu`), a bundled reference startup/vector-table (`mcu/startup.c`) + board linker script (`mcu/boards/lm3s6965evb/linker.ld`), and one-command `mcu/build.sh <in.kama>` (kama object → linked ELF) + `mcu/run-qemu.sh`. `tools/check-mcu.sh` builds `embedded_blink` into Cortex-M firmware, **boots it on QEMU** and asserts exit 22 (skips when the cross toolchain is absent). See [mcu.md](mcu.md). **Remaining:** more boards (STM32/Pico presets) + vendor-HAL glue + a real-hardware flash pass (docs cover the integration recipe). | Turnkey `kama build` → flashable image. Driver/packaging atop the C backend. | ✅ core done (QEMU); real-HW + more boards follow |
 | **AVR (Harvard) target family** — the deliberately-deferred bucket (Arduino Uno/Nano/Mega, ATmega/ATtiny) | ❌ deferred (Cortex-M/RISC-V shipped first) | Three AVR-specific pieces, each distinct from the shipped path: **(1) ISR** — `@interrupt("VECTOR")` → the `ISR(VECTOR)` macro (`<avr/interrupt.h>`), not the parameterless `__attribute__((interrupt))` (step 4); **(2) Harvard `PROGMEM`** — flash const data needs `PROGMEM` + `pgm_read_*` accessors (a flash pointer can't be plain-deref'd), so `@section` alone doesn't cover it; **(3) toolchain** — `avr-gcc`-only (clang/zig don't target AVR cleanly), so the `--cc` triple-agnostic story misses it (needs avr-gcc + `-mmcu=`). Cortex-M/RISC-V cover the common hobbyist boards (RP2040/Pico, STM32, ESP32-C3); AVR is a bounded follow-on when demand warrants. | **M** |
 | **MMIO register FFI** | ✅ have — `extern value` register structs + `Ptr` + `addr(of:)` + `unsafe` | The keystone for peripheral drivers — already shipped; a `hardware Ptr<T>` (Tier 0) makes it correct under optimization. | done |
 
@@ -100,10 +100,17 @@ mile of the no-heap story.**
 5. **Fallible `allocate -> Optional<Ptr>`** + `try new` + the checkable `@noheap`/`--no-heap` subset ✅
    **SHIPPED** — completes the no-heap story (shared with the embedded milestone in ROADMAP §5). Also serves
    game-engine frame allocators / real-time audio, not only MCU.
-6. **Inline asm / intrinsics** (the language headline — `asm("...")` inside `unsafe`, lowers to
-   `__asm__ __volatile__`; see [design/mcu-asm-intrinsics.md](design/mcu-asm-intrinsics.md)), then
-   **toolchain packaging** (target triples + linker scripts + vendor HALs) and the const-eval / soft-float
-   polish. (`alignof` already ships — see the Tier-2 row.)
+6. **Inline asm / intrinsics** — ✅ **SHIPPED (step 6a, `4811d23`).** `asm("...")` inside `unsafe { }`
+   lowers to `__asm__ __volatile__("..." : : : "memory")` (always volatile + a full compiler memory
+   barrier); fixtures `tests/asm_nop.kama` + `tests/support/embedded_asm.kama` (transpile-grep in
+   `tools/check-embedded.sh`). See [design/mcu-asm-intrinsics.md](design/mcu-asm-intrinsics.md).
+   **Toolchain packaging — turnkey Cortex-M path ✅ shipped + QEMU-proven** (opt-in `kama-mcu` cross image +
+   bundled startup/linker script + `mcu/build.sh`/`run-qemu.sh` + `tools/check-mcu.sh` booting firmware on
+   emulated silicon; see [mcu.md](mcu.md)). **Remaining (all build/library, not language):** more board presets
+   (STM32/Pico) + vendor-HAL glue + a real-hardware flash pass, then soft-float and AVR follow-ons. (`alignof` already
+   ships — see the Tier-2 row.) Related, shipped separately: decl-level conditional compilation via
+   **`@compileFor(FLAG)`** (`68b41ff`) — the platform/build-mode gate for per-target driver code (see
+   [design/conditional-compilation.md](design/conditional-compilation.md)).
 
 **Bottom line:** the *systems core* (types, FFI, RAII, no-null, no-heap value subset, pluggable allocator) is
 already here. Bare-metal readiness is a focused set of **language-surface** additions — statics, `hardware`,
