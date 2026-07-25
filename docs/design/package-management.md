@@ -16,8 +16,24 @@ open questions.
   wasm green. (The lock *reader* / `parseLock` is deferred to M2.2 where the resolver makes honoring a
   pinned lock meaningfully differ from re-resolving — path deps re-resolve identically, so the
   deterministic writer alone holds the reproducibility spine.)
-- M2.1 (content-addressed store + integrity + git/url fetch), M2.2 (resolver + `add`/`remove`/`update`),
-  M2.3 (`run` + docs) — pending.
+- **M2.1 — content-addressed store + integrity + git/url fetch ✅ shipped.** `kama install` now fetches
+  `git` (shallow `--branch <rev>` clone → `rev-parse HEAD` for the commit) and `url` (curl tarball,
+  `tar --strip-components=1`) deps into a shared content-addressed store, then links the per-project view
+  into it. Store id = sha256 of the canonical unpacked **tree** (`treeHashOf`: sorted `relpath\0`+bytes,
+  built in C++, hashed once) → `store/<name>-<hash>/`; staging is atomic (`rename()` only after the hash
+  is known). Integrity: git lock entry records `commit` + `integrity=sha256-<treehash>`; url records the
+  **tarball** sha256 (verified against the manifest's `integrity`, hard-fail on mismatch, else
+  trust-on-first-use). **sha256 = shell out** (`sha256sum`→`shasum -a 256`→`certutil`) via the new
+  `runCmdCapture` (popen) — no vendored crypto/HTTP, same subprocess model as git/curl/tar. Store root =
+  `~/.kama/store` with a `KAMA_STORE` override (NOT `KAMA_HOME`, which selects the read-only stdlib root).
+  New seams in `kama.driver.cpp`: `runCmdCapture`/`rmRfCmd`/`firstSha256Hex`/`sha256Of`/`collectFilesRel`/
+  `treeHashOf`/`storeDir`/`fetchToStore`; `cmdInstall` git/url branch rewired (writer/`LockEntry`/`DepSpec`
+  unchanged). Guard: `tools/check-packages.sh` (network-free `file://` git repo + local tarball — store+
+  view+lock+run, byte-identical re-install, url TOFU, tamper→hard-fail), registered on the plain native
+  leg of `run_tests.sh`. Native 755 / wasm 725 green; install path ASan/UBSan-clean. **Known limit:** git
+  `rev` supports tag/branch only (a raw commit sha can't ride `--depth 1 --branch`) — full sha pinning is
+  a candidate for M2.2's resolver.
+- M2.2 (resolver + `parseLock` reader + `add`/`remove`/`update`), M2.3 (`run` + docs) — pending.
 
 ## Scope — four pillars (user, 2026-07-24)
 

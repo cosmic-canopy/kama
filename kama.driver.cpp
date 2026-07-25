@@ -32,6 +32,7 @@
   // dirent/stat cover everything the driver needs, so windows.h is unnecessary.
   #include <stdlib.h>           // _fullpath, _MAX_PATH
   #include <direct.h>           // _mkdir (package view materialization)
+  #include <process.h>          // _getpid (staging dir name for the package store)
   #ifndef PATH_MAX
     #define PATH_MAX _MAX_PATH
   #endif
@@ -772,10 +773,189 @@ int cmdUpdate(const std::string& pinned)
     return runCmd(cmd);   // the installer prints old->new; verify with `kama --version`
 }
 
-// `kama install [<dir>]` (M2.0): materialize the per-project dependency view from `kama.json` into
-// `<project>/.kama/deps/` and write a deterministic `kama.lock`. This milestone handles `path` deps
-// only (git/url + the content-addressed store arrive in M2.1). No arbitrary code ever runs — packages
-// are kama source the consumer compiles; there is no install-script hook (the npm postinstall footgun).
+// Run `cmd` and capture its stdout, trimmed of trailing newlines; *exitCode (if given) receives the
+// child's exit status. "" if the process can't be spawned. This is the one place the driver needs a
+// subprocess's OUTPUT (a hasher's hex digest, a git commit), not just its status like runCmd.
+std::string runCmdCapture(const std::string& cmd, int* exitCode = nullptr)
+{
+#ifdef _WIN32
+    FILE* p = _popen(cmd.c_str(), "r");
+#else
+    FILE* p = popen(cmd.c_str(), "r");
+#endif
+    if (!p) { if (exitCode) *exitCode = -1; return ""; }
+    std::string out; char buf[4096]; size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), p)) > 0) out.append(buf, n);
+#ifdef _WIN32
+    int rc = _pclose(p);
+#else
+    int st = pclose(p); int rc = (st == -1) ? -1 : WEXITSTATUS(st);
+#endif
+    if (exitCode) *exitCode = rc;
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    return out;
+}
+
+// Cross-platform recursive delete of `p` (staging cleanup / dedup). Same shell-out as cmdInstall's
+// view rebuild.
+static std::string rmRfCmd(const std::string& p)
+{
+#ifdef _WIN32
+    return "cmd /c rmdir /s /q \"" + p + "\" 2>nul";
+#else
+    return "rm -rf \"" + p + "\"";
+#endif
+}
+
+// Pull the digest out of a hasher's output: sha256sum/shasum print "<64hex>  <file>"; certutil prints
+// a header line, then the digest (older versions space-separate the bytes), then a status line. Scan
+// for the first run of >=64 hex chars (spaces within a line don't break the run), take exactly 64.
+static std::string firstSha256Hex(const std::string& s)
+{
+    auto isHex = [](char c){ return (c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F'); };
+    std::string run;
+    for (char c : s) {
+        if (isHex(c)) { run += c; if (run.size() == 64) return run; }
+        else if (c == ' ' || c == '\t') continue;   // certutil may split the digest with spaces
+        else run.clear();
+    }
+    return "";
+}
+
+// sha256 of one file's bytes, as "sha256-<hex>". Shells out to the platform hasher — no vendored crypto
+// or HTTP anywhere in the package manager: the same subprocess model as git/curl/tar, and the hasher
+// CLI ships on every target next to them. "" if no hasher is available (caller hard-errors).
+std::string sha256Of(const std::string& path)
+{
+    std::string q = "\"" + path + "\"";
+    std::vector<std::string> cmds;
+#ifdef _WIN32
+    cmds.push_back("certutil -hashfile " + q + " SHA256");
+#else
+    cmds.push_back("sha256sum " + q + " 2>/dev/null");    // Linux / container
+    cmds.push_back("shasum -a 256 " + q + " 2>/dev/null"); // macOS
+#endif
+    for (auto& c : cmds) {
+        int rc = 0; std::string hex = firstSha256Hex(runCmdCapture(c, &rc));
+        if (rc == 0 && hex.size() == 64) return "sha256-" + hex;
+    }
+    return "";
+}
+
+// Collect every file under `root` as paths RELATIVE to root (recursively), for a deterministic tree hash.
+static void collectFilesRel(const std::string& root, const std::string& rel, std::vector<std::string>& out)
+{
+    std::string dir = rel.empty() ? root : root + "/" + rel;
+    if (DIR* d = opendir(dir.c_str())) {
+        while (struct dirent* e = readdir(d)) {
+            std::string n = e->d_name;
+            if (n == "." || n == "..") continue;
+            std::string childRel = rel.empty() ? n : rel + "/" + n;
+            if (dirExists(root + "/" + childRel)) collectFilesRel(root, childRel, out);
+            else out.push_back(childRel);
+        }
+        closedir(d);
+    }
+}
+
+// The store identity: sha256 of the canonical unpacked source TREE (not the raw clone/tarball — git
+// adds .git/, tarballs vary in wrapper/compression). Sorted files, each hashed as `relpath\0` + bytes.
+// Built in C++ (robust to newlines-in-filenames, unlike a find|cat pipe) into a temp, then hashed once.
+std::string treeHashOf(const std::string& dir)
+{
+    std::vector<std::string> files;
+    collectFilesRel(dir, "", files);
+    std::sort(files.begin(), files.end());
+    std::string tmp = dir + ".hashinput";
+    std::ofstream out(tmp, std::ios::binary);
+    if (!out) return "";
+    for (auto& rel : files) {
+        out.write(rel.data(), rel.size()); out.put('\0');
+        std::ifstream f(dir + "/" + rel, std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        out.write(bytes.data(), bytes.size());
+    }
+    out.close();
+    std::string h = sha256Of(tmp);
+    remove(tmp.c_str());
+    return h;
+}
+
+// The shared content-addressed store root. `~/.kama/store` (user-mutable, install-independent) with a
+// `KAMA_STORE` override for isolation (the guard test points it at a tmp dir so it never touches the
+// real store — and NOT KAMA_HOME, which selects the read-only install root/stdlib).
+std::string storeDir()
+{
+    if (const char* s = getenv("KAMA_STORE")) return s;
+#ifdef _WIN32
+    if (const char* u = getenv("USERPROFILE")) return std::string(u) + "/.kama/store";
+#else
+    if (const char* h = getenv("HOME")) return std::string(h) + "/.kama/store";
+#endif
+    return ".kama/store";   // degenerate fallback (no HOME): project-local, still functional
+}
+
+// M2.1: fetch a `git`/`url` dependency into the content-addressed store, verify sha256 integrity, and
+// fill `out` (lock entry) + `storePath` (target for the view symlink). Staging is atomic — nothing
+// enters `store/<name>-<hash>` until the tree hash is known, so a killed fetch leaves no half entry.
+static bool fetchToStore(const std::string& name, const DepSpec& d,
+                         LockEntry& out, std::string& storePath, std::string& err)
+{
+    std::string store = storeDir();
+    if (!makeDirs(store)) { err = "cannot create store at " + store; return false; }
+    std::string staging = store + "/.tmp-" + std::to_string((long)getpid()) + "-" + name;
+    runCmd(rmRfCmd(staging));   // clear any stale staging from a prior crash
+
+    std::string commit, lockIntegrity;
+    if (!d.git.empty()) {
+        // tag/branch pin via a shallow clone (a raw commit sha isn't supported by --depth 1 --branch yet).
+        std::string branch = d.rev.empty() ? "" : (" --branch \"" + d.rev + "\"");
+        if (runCmd("git clone --depth 1" + branch + " \"" + d.git + "\" \"" + staging + "\" 2>/dev/null") != 0) {
+            err = "git clone failed for '" + name + "' (" + d.git + ")"; runCmd(rmRfCmd(staging)); return false;
+        }
+        commit = runCmdCapture("git -C \"" + staging + "\" rev-parse HEAD");
+        runCmd(rmRfCmd(staging + "/.git"));   // exclude VCS metadata from the canonical tree
+    } else {
+        std::string tgz = staging + ".tgz";
+        if (runCmd("curl -fsSL \"" + d.url + "\" -o \"" + tgz + "\"") != 0) {
+            err = "download failed for '" + name + "' (" + d.url + ")"; runCmd(rmRfCmd(tgz)); return false;
+        }
+        std::string tarballHash = sha256Of(tgz);   // the artifact identity a re-download can re-verify
+        if (tarballHash.empty()) { err = "cannot hash tarball for '" + name + "'"; runCmd(rmRfCmd(tgz)); return false; }
+        if (!d.integrity.empty() && d.integrity != tarballHash) {
+            err = "integrity mismatch for '" + name + "': expected " + d.integrity + ", got " + tarballHash;
+            runCmd(rmRfCmd(tgz)); return false;   // hard fail — nothing enters the store
+        }
+        lockIntegrity = tarballHash;   // trust-on-first-use when the manifest omits `integrity`
+        if (!makeDirs(staging)) { err = "cannot stage '" + name + "'"; runCmd(rmRfCmd(tgz)); return false; }
+        if (runCmd("tar -xzf \"" + tgz + "\" -C \"" + staging + "\" --strip-components=1") != 0) {
+            err = "cannot unpack '" + name + "'"; runCmd(rmRfCmd(staging)); runCmd(rmRfCmd(tgz)); return false;
+        }
+        runCmd(rmRfCmd(tgz));
+    }
+
+    std::string hash = treeHashOf(staging);   // "sha256-<hex>" — the store dir name + dedup key
+    if (hash.empty()) { err = "cannot hash '" + name + "' (is sha256sum/shasum available?)"; runCmd(rmRfCmd(staging)); return false; }
+    if (!d.git.empty()) lockIntegrity = hash;   // git has no artifact; the tree hash IS its integrity
+
+    std::string finalDir = store + "/" + name + "-" + hash.substr(sizeof("sha256-") - 1);
+    if (dirExists(finalDir)) runCmd(rmRfCmd(staging));   // dedup: identical content already stored
+    else if (rename(staging.c_str(), finalDir.c_str()) != 0) {
+        err = "cannot finalize store entry for '" + name + "'"; runCmd(rmRfCmd(staging)); return false;
+    }
+
+    storePath = finalDir;
+    out.source = d.git.empty() ? "url" : "git";
+    if (d.git.empty()) out.url = d.url;
+    else { out.git = d.git; out.rev = d.rev; out.commit = commit; }
+    out.integrity = lockIntegrity;
+    return true;
+}
+
+// `kama install [<dir>]`: materialize the per-project dependency view from `kama.json` into
+// `<project>/.kama/deps/` and write a deterministic `kama.lock`. `path` deps link a local dir; `git`/
+// `url` deps fetch into the content-addressed store (M2.1) and link that. No arbitrary code ever runs —
+// packages are kama source the consumer compiles; there is no install-script hook (npm's postinstall footgun).
 int cmdInstall(const std::string& projectDir)
 {
     std::string base = projectDir.empty() ? "." : projectDir;
@@ -815,9 +995,19 @@ int cmdInstall(const std::string& projectDir)
             }
             LockEntry e; e.source = "path"; e.path = d.path;   // path deps: no integrity (local, mutable)
             lock[name] = e;
+        } else if (!d.git.empty() || !d.url.empty()) {
+            LockEntry e; std::string storePath, ferr;
+            if (!fetchToStore(name, d, e, storePath, ferr)) {
+                fprintf(stderr, "kama install: %s\n", ferr.c_str());
+                return 1;
+            }
+            if (!linkDir(storePath, viewDir + "/" + name)) {
+                fprintf(stderr, "kama install: cannot link dependency '%s'\n", name.c_str());
+                return 1;
+            }
+            lock[name] = e;
         } else {
-            fprintf(stderr, "kama install: dependency '%s' uses a git/url source, which arrives in the next "
-                            "milestone (M2.1) — use a `path` dependency for now\n", name.c_str());
+            fprintf(stderr, "kama install: dependency '%s' has no path/git/url source\n", name.c_str());
             return 2;
         }
     }
