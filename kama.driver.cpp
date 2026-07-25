@@ -21,6 +21,7 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <deque>
 #include <algorithm>
 
 #include <limits.h>
@@ -201,24 +202,28 @@ SharedCompilationUnit parseString(const char* src, const std::string& name);   /
 // manifest or the view has not been materialized. `kama install` populates it (package-name -> store
 // or path source); the build only READS it — a pure, reproducible resolution with no fetch at build
 // time. Discovered like the manifest: next to the first input, else the CWD.
-std::string projectDepsView(const std::vector<std::string>& inputs)
+std::string projectDepsView(const std::vector<std::string>& inputs, const char* leaf = ".kama/deps")
 {
     std::string dir;
     if (!inputs.empty()) { std::string d = dirName(inputs[0]); if (fileExists(d + "/kama.json")) dir = d; }
     if (dir.empty() && fileExists("kama.json")) dir = ".";
     if (dir.empty()) return "";
-    std::string view = dir + "/.kama/deps";
+    std::string view = dir + "/" + leaf;
     return dirExists(view) ? view : "";
 }
 
 
 bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* argv0,
                       std::vector<SharedCompilationUnit>& units,
-                      std::vector<std::string>& paths)
+                      std::vector<std::string>& paths,
+                      bool includeDevDeps = false)
 {
     std::string stdlibDir = resolveStdlibDir(argv0);
     std::vector<std::string> extraRoots = splitSearchPath(getenv("KAMA_PATH"));
-    std::string depsView = projectDepsView(cliInputs);   // resolved package roots (`kama install`), or ""
+    std::string depsView = projectDepsView(cliInputs);   // resolved package roots (`kama pkg install`), or ""
+    // dev-dependencies are a SEPARATE view, only on the import path under `--dev` — so production code can
+    // never import a dev-dep (the phantom-dep guarantee makes this a hard resolve error), at any opt level.
+    std::string devDepsView = includeDevDeps ? projectDepsView(cliInputs, ".kama/dev-deps") : "";
     // A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
     auto nsKey = [](SharedCompilationUnit u) -> std::string {
         if (!u || !u->nameSpace || !u->nameSpace->name) return "";
@@ -261,6 +266,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 // undeclared `import` misses the view and hits the missing-module error below (the
                 // phantom-dependency guarantee falls out for free — no extra check).
                 if (!depsView.empty()) roots.push_back(depsView);
+                if (!devDepsView.empty()) roots.push_back(devDepsView);   // `--dev` only
             }
             roots.push_back(stdlibDir);
             auto files = resolveModuleFiles(segs, roots);
@@ -384,13 +390,22 @@ struct DepSpec {
     std::string version;    // optional metadata (resolver's single-version-per-major check)
 };
 
+// Two dependency specs name "the same package" iff every identity-bearing field matches. With no SemVer
+// yet, this IS the whole conflict test: identical -> dedup in the resolver, divergent -> hard error.
+static bool sameSpec(const DepSpec& a, const DepSpec& b)
+{
+    return a.path == b.path && a.git == b.git && a.url == b.url
+        && a.rev == b.rev && a.integrity == b.integrity;
+}
+
 struct ManifestReader {
     const std::string& s;
     size_t i = 0;
     std::string err;
     std::set<std::string>& declared;
     std::set<std::string>& defaults;
-    std::map<std::string, DepSpec>* deps = nullptr;   // set to capture `dependencies` (else it's skipped)
+    std::map<std::string, DepSpec>* deps = nullptr;      // set to capture `dependencies` (else it's skipped)
+    std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -463,7 +478,7 @@ struct ManifestReader {
         return true;
     }
 
-    bool depsObject() {   // { "name": { "git":.., "rev":.., "url":.., "integrity":.., "path":.., "version":.. }, ... }
+    bool depsObject(std::map<std::string, DepSpec>* target) {   // { "name": { "git":.., "rev":.., "url":.., "integrity":.., "path":.., "version":.. }, ... }
         ws(); if (i >= s.size() || s[i] != '{') return fail("`dependencies` must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
         while (true) {
@@ -493,7 +508,7 @@ struct ManifestReader {
                 if (i < s.size() && s[i] == '}') { ++i; break; }
                 return fail("expected ',' or '}' in a dependency body");
             }
-            if (deps) (*deps)[name] = spec;
+            if (target) (*target)[name] = spec;
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
             if (i < s.size() && s[i] == '}') { ++i; break; }
@@ -510,7 +525,8 @@ struct ManifestReader {
             ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a key");
             ++i;
             if (key == "flags") { if (!flagsObject()) return false; }
-            else if (key == "dependencies" && deps) { if (!depsObject()) return false; }
+            else if (key == "dependencies" && deps) { if (!depsObject(deps)) return false; }
+            else if (key == "dev-dependencies" && devDeps) { if (!depsObject(devDeps)) return false; }
             else if (!skipValue()) return false;         // name / version / future package keys
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -537,7 +553,8 @@ static bool loadManifestFlags(const std::string& path,
 
 // Load a `kama.json` manifest's `dependencies` (name -> DepSpec). Reuses ManifestReader (unknown keys
 // tolerated), so this is orthogonal to the flag load. Returns false + sets `err` on malformed JSON.
-static bool loadManifestDeps(const std::string& path, std::map<std::string, DepSpec>& deps, std::string& err)
+static bool loadManifestDeps(const std::string& path, std::map<std::string, DepSpec>& deps, std::string& err,
+                             std::map<std::string, DepSpec>* devDeps = nullptr)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
@@ -545,6 +562,7 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
     r.deps = &deps;
+    r.devDeps = devDeps;   // optional: also capture `dev-dependencies` (M2.2)
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -554,7 +572,10 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
 struct LockEntry {
     std::string source;                     // "path" | "git" | "url"
     std::string path, git, url, rev, commit, integrity;
-    std::vector<std::string> dependencies;  // transitive dep names (serialized so the build never re-reads a dep's manifest)
+    std::string treeHash;                   // the store dir key "sha256-<treehash>" (== integrity for git; the
+                                            // canonical unpacked-tree hash for url, whose integrity is the tarball)
+    bool dev = false;                       // a dev-dependency (top-level view only, never propagated transitively)
+    std::vector<std::string> dependencies;  // direct dep names (serialized so the build never re-reads a dep's manifest)
 };
 
 static std::string jsonEscape(const std::string& s)
@@ -585,12 +606,130 @@ static bool writeLockFile(const std::string& path, const std::map<std::string, L
         if (!e.rev.empty())       out << ", \"rev\": \""       << jsonEscape(e.rev)       << "\"";
         if (!e.commit.empty())    out << ", \"commit\": \""    << jsonEscape(e.commit)    << "\"";
         if (!e.integrity.empty()) out << ", \"integrity\": \"" << jsonEscape(e.integrity) << "\"";
+        // treeHash == the store dir key; omit when it equals integrity (git) so those entries stay byte-
+        // identical to M2.1 — it only appears for url deps (whose integrity is the tarball, not the tree).
+        if (!e.treeHash.empty() && e.treeHash != e.integrity)
+                                  out << ", \"treeHash\": \""  << jsonEscape(e.treeHash)  << "\"";
+        if (e.dev)                out << ", \"dev\": true";
         out << ", \"dependencies\": [";
         for (size_t j = 0; j < e.dependencies.size(); ++j)
             out << (j ? ", " : "") << "\"" << jsonEscape(e.dependencies[j]) << "\"";
         out << "] }";
     }
     out << (first ? "" : "\n  ") << "}\n}\n";
+    return true;
+}
+
+// Parse a `kama.lock` we wrote (writeLockFile's exact schema) back into name -> LockEntry. A dedicated
+// hand-parser mirroring the writer (the lock schema differs from `kama.json` — commit/treeHash/dev/
+// dependencies[] — so it does NOT share ManifestReader). Minimal + tolerant: unknown keys skipped, every
+// field optional (the writer omits empties), only structural JSON errors fail. `str()` is the inverse of
+// jsonEscape, so it round-trips exactly. Returns false + sets `err` on malformed JSON.
+struct LockReader {
+    const std::string& s; size_t i = 0; std::string err;
+    LockReader(const std::string& src) : s(src) {}
+    void ws() { while (i < s.size() && (s[i]==' '||s[i]=='\t'||s[i]=='\n'||s[i]=='\r')) ++i; }
+    bool fail(const char* m) { if (err.empty()) err = m; return false; }
+    bool str(std::string& out) {
+        ws(); if (i >= s.size() || s[i] != '"') return fail("expected a string");
+        ++i; out.clear();
+        while (i < s.size() && s[i] != '"') {
+            char c = s[i++];
+            if (c == '\\' && i < s.size()) { char e = s[i++];
+                switch (e) { case 'n':c='\n';break; case 't':c='\t';break; case 'r':c='\r';break;
+                             case '"':c='"';break; case '\\':c='\\';break; case '/':c='/';break; default:c=e; } }
+            out.push_back(c);
+        }
+        if (i >= s.size()) return fail("unterminated string"); ++i; return true;
+    }
+    bool skipValue() {   // string | number | true/false/null | balanced object/array (== ManifestReader's)
+        ws(); if (i >= s.size()) return fail("unexpected end of lock");
+        char c = s[i];
+        if (c == '"') { std::string t; return str(t); }
+        if (c == '{' || c == '[') {
+            char open = c, close = (c == '{') ? '}' : ']'; int depth = 0; bool inStr = false;
+            while (i < s.size()) { char d = s[i++];
+                if (inStr)          { if (d == '\\' && i < s.size()) ++i; else if (d == '"') inStr = false; }
+                else if (d == '"')    inStr = true;
+                else if (d == open)   ++depth;
+                else if (d == close){ if (--depth == 0) return true; } }
+            return fail("unbalanced brackets in lock");
+        }
+        while (i < s.size() && s[i]!=','&&s[i]!='}'&&s[i]!=']'&&s[i]!=' '&&s[i]!='\t'&&s[i]!='\n'&&s[i]!='\r') ++i;
+        return true;
+    }
+    bool entry(LockEntry& e) {   // { "source":.., "path":.., ..., "dev": true, "dependencies": [..] }
+        ws(); if (i >= s.size() || s[i] != '{') return fail("a lock entry must be an object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a lock entry"); ++i; ws();
+            if      (k == "source")    { if (!str(e.source))    return false; }
+            else if (k == "path")      { if (!str(e.path))      return false; }
+            else if (k == "git")       { if (!str(e.git))       return false; }
+            else if (k == "url")       { if (!str(e.url))       return false; }
+            else if (k == "rev")       { if (!str(e.rev))       return false; }
+            else if (k == "commit")    { if (!str(e.commit))    return false; }
+            else if (k == "integrity") { if (!str(e.integrity)) return false; }
+            else if (k == "treeHash")  { if (!str(e.treeHash))  return false; }
+            else if (k == "dev")       { if (s.compare(i,4,"true")==0) { e.dev = true; i += 4; }
+                                         else if (s.compare(i,5,"false")==0) { i += 5; }
+                                         else if (!skipValue()) return false; }
+            else if (k == "dependencies") {
+                ws(); if (i >= s.size() || s[i] != '[') return fail("`dependencies` must be an array");
+                ++i; ws();
+                if (i < s.size() && s[i] == ']') ++i;
+                else while (true) {
+                    std::string dep; if (!str(dep)) return false; e.dependencies.push_back(dep); ws();
+                    if (i < s.size() && s[i] == ',') { ++i; continue; }
+                    if (i < s.size() && s[i] == ']') { ++i; break; }
+                    return fail("expected ',' or ']' in `dependencies`");
+                }
+            }
+            else if (!skipValue()) return false;   // unknown key (forward-compat)
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in a lock entry");
+        }
+        return true;
+    }
+    bool parse(std::map<std::string, LockEntry>& pkgs) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("lock must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string key; if (!str(key)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a key"); ++i;
+            if (key == "packages") {
+                ws(); if (i >= s.size() || s[i] != '{') return fail("`packages` must be a JSON object");
+                ++i; ws();
+                if (i < s.size() && s[i] == '}') ++i;
+                else while (true) {
+                    std::string name; if (!str(name)) return false;
+                    ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a package name"); ++i;
+                    LockEntry e; if (!entry(e)) return false; pkgs[name] = e; ws();
+                    if (i < s.size() && s[i] == ',') { ++i; continue; }
+                    if (i < s.size() && s[i] == '}') { ++i; break; }
+                    return fail("expected ',' or '}' in `packages`");
+                }
+            } else if (!skipValue()) return false;   // lockVersion / future keys
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' at top level");
+        }
+        return true;
+    }
+};
+
+// Read a kama.lock into name -> LockEntry (empty file / `{}` -> empty map + true). Caller does fileExists.
+static bool parseLockFile(const std::string& path, std::map<std::string, LockEntry>& pkgs, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    LockReader r(src);
+    if (!r.parse(pkgs)) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
 
@@ -807,6 +946,17 @@ static std::string rmRfCmd(const std::string& p)
 #endif
 }
 
+// A full git object name: exactly 40 hex chars. Distinguishes a pinned commit sha (fetch the object
+// directly — `--depth 1 --branch` can't ride a sha) from a tag/branch rev. Short shas are NOT accepted:
+// the lock always stores the full 40-char commit, and a shorter manifest rev harmlessly rides the branch
+// path and fails loudly as an unknown ref — the right nudge to pin fully.
+static bool isSha1Hex(const std::string& s)
+{
+    if (s.size() != 40) return false;
+    for (char c : s) if (!((c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F'))) return false;
+    return true;
+}
+
 // Pull the digest out of a hasher's output: sha256sum/shasum print "<64hex>  <file>"; certutil prints
 // a header line, then the digest (older versions space-separate the bytes), then a status line. Scan
 // for the first run of >=64 hex chars (spaces within a line don't break the run), take exactly 64.
@@ -908,12 +1058,26 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
 
     std::string commit, lockIntegrity;
     if (!d.git.empty()) {
-        // tag/branch pin via a shallow clone (a raw commit sha isn't supported by --depth 1 --branch yet).
-        std::string branch = d.rev.empty() ? "" : (" --branch \"" + d.rev + "\"");
-        if (runCmd("git clone --depth 1" + branch + " \"" + d.git + "\" \"" + staging + "\" 2>/dev/null") != 0) {
-            err = "git clone failed for '" + name + "' (" + d.git + ")"; runCmd(rmRfCmd(staging)); return false;
+        if (isSha1Hex(d.rev)) {
+            // Raw commit sha: --depth 1 --branch can't ride a sha, so init + fetch the object directly.
+            // This is also the mechanism the lock-honoring re-fetch uses (by the recorded `commit`), so a
+            // branch-pinned dep reproduces its exact tree offline.
+            if (runCmd("git init -q \"" + staging + "\"") != 0 ||
+                runCmd("git -C \"" + staging + "\" remote add origin \"" + d.git + "\"") != 0 ||
+                runCmd("git -C \"" + staging + "\" fetch -q --depth 1 origin " + d.rev) != 0 ||
+                runCmd("git -C \"" + staging + "\" checkout -q FETCH_HEAD") != 0) {
+                err = "git fetch of pinned commit " + d.rev + " failed for '" + name + "' (" + d.git + ")";
+                runCmd(rmRfCmd(staging)); return false;
+            }
+            commit = d.rev;   // we asked for exactly this object; FETCH_HEAD is it (no rev-parse needed)
+        } else {
+            // tag/branch pin via a shallow clone.
+            std::string branch = d.rev.empty() ? "" : (" --branch \"" + d.rev + "\"");
+            if (runCmd("git clone --depth 1" + branch + " \"" + d.git + "\" \"" + staging + "\" 2>/dev/null") != 0) {
+                err = "git clone failed for '" + name + "' (" + d.git + ")"; runCmd(rmRfCmd(staging)); return false;
+            }
+            commit = runCmdCapture("git -C \"" + staging + "\" rev-parse HEAD");
         }
-        commit = runCmdCapture("git -C \"" + staging + "\" rev-parse HEAD");
         runCmd(rmRfCmd(staging + "/.git"));   // exclude VCS metadata from the canonical tree
     } else {
         std::string tgz = staging + ".tgz";
@@ -949,13 +1113,149 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
     if (d.git.empty()) out.url = d.url;
     else { out.git = d.git; out.rev = d.rev; out.commit = commit; }
     out.integrity = lockIntegrity;
+    out.treeHash  = hash;   // the store dir key; == integrity for git, differs for url (tarball integrity)
     return true;
 }
 
-// `kama install [<dir>]`: materialize the per-project dependency view from `kama.json` into
-// `<project>/.kama/deps/` and write a deterministic `kama.lock`. `path` deps link a local dir; `git`/
-// `url` deps fetch into the content-addressed store (M2.1) and link that. No arbitrary code ever runs —
-// packages are kama source the consumer compiles; there is no install-script hook (npm's postinstall footgun).
+// Resolve ONE dependency node → `out` (lock entry) + `storePath` (view-link target). Honors `oldLock`
+// (cargo model): a git/url dep whose manifest spec is unchanged reuses the pinned identity — a warm store
+// links with ZERO fetch (offline), a cold store re-fetches by the recorded `commit`/`integrity` and asserts
+// the tree hash still matches. A new/changed spec resolves fresh via fetchToStore. path deps always relink
+// the local dir. The caller sets out.dev / out.dependencies.
+static bool resolveOne(const std::string& name, const DepSpec& spec, const std::string& base,
+                       const std::map<std::string, LockEntry>& oldLock,
+                       LockEntry& out, std::string& storePath, std::string& err)
+{
+    if (!spec.path.empty()) {
+        std::string target = absolutePath(base + "/" + spec.path);
+        if (!dirExists(target)) { err = "path dependency '" + name + "' not found at " + target; return false; }
+        out = LockEntry(); out.source = "path"; out.path = spec.path; storePath = target;
+        return true;
+    }
+    auto it = oldLock.find(name);
+    if (it != oldLock.end()) {
+        const LockEntry& L = it->second;
+        bool unchanged =
+            (!spec.git.empty() && L.source == "git" && L.git == spec.git && L.rev == spec.rev) ||
+            (!spec.url.empty() && L.source == "url" && L.url == spec.url &&
+                (spec.integrity.empty() || spec.integrity == L.integrity));
+        if (unchanged) {
+            std::string key = L.treeHash.empty() ? L.integrity : L.treeHash;   // the store dir hash
+            std::string finalDir;
+            if (key.size() > sizeof("sha256-") - 1)
+                finalDir = storeDir() + "/" + name + "-" + key.substr(sizeof("sha256-") - 1);
+            if (!finalDir.empty() && dirExists(finalDir)) {   // offline hit — link the pinned tree, no fetch
+                out = L; storePath = finalDir; return true;
+            }
+            // cold store — re-fetch by the pinned identity (git: the recorded commit sha via the sha path).
+            DepSpec pinned;
+            if (L.source == "git") { pinned.git = L.git; pinned.rev = L.commit; }
+            else                   { pinned.url = L.url; pinned.integrity = L.integrity; }
+            LockEntry fetched;
+            if (!fetchToStore(name, pinned, fetched, storePath, err)) return false;
+            if (!key.empty() && fetched.treeHash != key) {
+                err = "lock integrity drift for '" + name + "': lock has " + key +
+                      ", re-fetch produced " + fetched.treeHash; return false;
+            }
+            out = L; return true;   // keep the lock's recorded fields verbatim
+        }
+    }
+    return fetchToStore(name, spec, out, storePath, err);   // new dep or changed spec — fresh
+}
+
+// The resolver core: a two-phase transitive BFS from the ROOT manifest, honoring `oldLock` per node. Phase 1
+// (prod) seeds `dependencies` and follows each fetched package's own `dependencies`; phase 2 (dev) seeds the
+// root's `dev-dependencies` (a package needed in prod is never demoted to dev — prod wins) and follows their
+// prod deps only — dev is strictly non-transitive. Rebuilds `.kama/deps` (prod) + `.kama/dev-deps` (dev)
+// from scratch and writes a deterministic kama.lock. Shared by `pkg install` (oldLock = the current lock)
+// and `pkg update` (oldLock = the current lock minus the pins being refreshed). No arbitrary code ever runs.
+static int resolveProject(const std::string& base, const std::map<std::string, LockEntry>& oldLock)
+{
+    std::string manifest = base + "/kama.json";
+    std::map<std::string, DepSpec> deps, devDeps; std::string err;
+    if (!loadManifestDeps(manifest, deps, err, &devDeps)) {
+        fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str()); return 2;
+    }
+
+    // Rebuild both views from scratch so they can never drift from the manifest/lock.
+    std::string viewDir    = base + "/.kama/deps";
+    std::string devViewDir = base + "/.kama/dev-deps";
+    runCmd(rmRfCmd(viewDir));
+    runCmd(rmRfCmd(devViewDir));
+    if (!makeDirs(viewDir)) { fprintf(stderr, "kama install: cannot create %s\n", viewDir.c_str()); return 1; }
+
+    struct Req { std::string name; DepSpec spec; std::string requestor; bool dev; };
+    std::map<std::string, DepSpec> chosen;        // name -> the one resolved spec (conflict guard)
+    std::map<std::string, std::string> chosenBy;  // name -> first requestor (conflict diagnostics)
+    std::map<std::string, LockEntry> lock;        // output
+    bool madeDevDir = false;
+
+    auto drain = [&](std::deque<Req>& q) -> int {
+        while (!q.empty()) {
+            Req r = q.front(); q.pop_front();
+            auto ci = chosen.find(r.name);
+            if (ci != chosen.end()) {
+                if (!sameSpec(ci->second, r.spec)) {
+                    fprintf(stderr, "kama install: dependency conflict on '%s': %s and %s require different "
+                            "sources (no version reconciliation yet — pin both to the same git/rev or url)\n",
+                            r.name.c_str(), chosenBy[r.name].c_str(), r.requestor.c_str());
+                    return 1;
+                }
+                continue;   // dedup (diamond / prod-wins-over-dev)
+            }
+            if (!r.spec.path.empty() && r.requestor != "<root manifest>") {
+                fprintf(stderr, "kama install: path dependency '%s' (required by %s) is only allowed at the "
+                        "top level — a fetched package cannot reference a local path reproducibly\n",
+                        r.name.c_str(), r.requestor.c_str());
+                return 1;
+            }
+            chosen[r.name] = r.spec; chosenBy[r.name] = r.requestor;
+
+            LockEntry e; std::string storePath, ferr;
+            if (!resolveOne(r.name, r.spec, base, oldLock, e, storePath, ferr)) {
+                fprintf(stderr, "kama install: %s\n", ferr.c_str()); return 1;
+            }
+            e.dev = r.dev;
+            if (r.dev && !madeDevDir) {
+                if (!makeDirs(devViewDir)) { fprintf(stderr, "kama install: cannot create %s\n", devViewDir.c_str()); return 1; }
+                madeDevDir = true;
+            }
+            if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + r.name)) {
+                fprintf(stderr, "kama install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
+            }
+            // Read THIS package's own prod deps → record (serialized so the build never re-reads) + enqueue.
+            std::string childManifest = storePath + "/kama.json";
+            std::vector<std::string> directNames;
+            if (fileExists(childManifest)) {
+                std::map<std::string, DepSpec> childDeps; std::string cerr;
+                if (!loadManifestDeps(childManifest, childDeps, cerr)) {
+                    fprintf(stderr, "kama install: %s: %s\n", childManifest.c_str(), cerr.c_str()); return 2;
+                }
+                for (auto& ck : childDeps) { directNames.push_back(ck.first);
+                    q.push_back({ck.first, ck.second, r.name, r.dev}); }
+                std::sort(directNames.begin(), directNames.end());   // deterministic dependencies[] order
+            }
+            e.dependencies = directNames;
+            lock[r.name] = e;
+        }
+        return 0;
+    };
+
+    std::deque<Req> prodQ, devQ;
+    for (auto& kv : deps)    prodQ.push_back({kv.first, kv.second, "<root manifest>", false});
+    for (auto& kv : devDeps) devQ.push_back({kv.first, kv.second, "<root manifest>", true});
+    if (int rc = drain(prodQ)) return rc;   // phase 1 (prod) drains fully before phase 2 → prod wins on shared names
+    if (int rc = drain(devQ))  return rc;   // phase 2 (dev)
+
+    if (!writeLockFile(base + "/kama.lock", lock)) {
+        fprintf(stderr, "kama install: cannot write %s/kama.lock\n", base.c_str()); return 1;
+    }
+    fprintf(stderr, "kama: installed %zu package(s) into %s\n", lock.size(), base.c_str());
+    return 0;
+}
+
+// `kama pkg install [<dir>]`: materialize the per-project dependency view from `kama.json` into
+// `<project>/.kama/{deps,dev-deps}/` and write a deterministic `kama.lock`, honoring an existing lock.
 int cmdInstall(const std::string& projectDir)
 {
     std::string base = projectDir.empty() ? "." : projectDir;
@@ -964,72 +1264,240 @@ int cmdInstall(const std::string& projectDir)
         fprintf(stderr, "kama install: no kama.json in %s\n", base.c_str());
         return 2;
     }
-    std::map<std::string, DepSpec> deps; std::string err;
-    if (!loadManifestDeps(manifest, deps, err)) {
-        fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str());
-        return 2;
-    }
-    if (deps.empty()) { fprintf(stderr, "kama: no dependencies to install\n"); return 0; }
-
-    // Rebuild the view from scratch (rm + relink) so it can never drift from the manifest/lock.
-    std::string viewDir = base + "/.kama/deps";
-#ifdef _WIN32
-    runCmd("cmd /c rmdir /s /q \"" + viewDir + "\" 2>nul");
-#else
-    runCmd("rm -rf \"" + viewDir + "\"");
-#endif
-    if (!makeDirs(viewDir)) { fprintf(stderr, "kama install: cannot create %s\n", viewDir.c_str()); return 1; }
-
-    std::map<std::string, LockEntry> lock;
-    for (auto& kv : deps) {
-        const std::string& name = kv.first; const DepSpec& d = kv.second;
-        if (!d.path.empty()) {
-            std::string target = absolutePath(base + "/" + d.path);
-            if (!dirExists(target)) {
-                fprintf(stderr, "kama install: path dependency '%s' not found at %s\n", name.c_str(), target.c_str());
-                return 1;
-            }
-            if (!linkDir(target, viewDir + "/" + name)) {
-                fprintf(stderr, "kama install: cannot link dependency '%s'\n", name.c_str());
-                return 1;
-            }
-            LockEntry e; e.source = "path"; e.path = d.path;   // path deps: no integrity (local, mutable)
-            lock[name] = e;
-        } else if (!d.git.empty() || !d.url.empty()) {
-            LockEntry e; std::string storePath, ferr;
-            if (!fetchToStore(name, d, e, storePath, ferr)) {
-                fprintf(stderr, "kama install: %s\n", ferr.c_str());
-                return 1;
-            }
-            if (!linkDir(storePath, viewDir + "/" + name)) {
-                fprintf(stderr, "kama install: cannot link dependency '%s'\n", name.c_str());
-                return 1;
-            }
-            lock[name] = e;
-        } else {
-            fprintf(stderr, "kama install: dependency '%s' has no path/git/url source\n", name.c_str());
+    std::map<std::string, LockEntry> oldLock;
+    std::string lockPath = base + "/kama.lock";
+    if (fileExists(lockPath)) {
+        std::string lerr;
+        if (!parseLockFile(lockPath, oldLock, lerr)) {
+            fprintf(stderr, "kama install: %s: %s\n", lockPath.c_str(), lerr.c_str());
             return 2;
         }
     }
-    if (!writeLockFile(base + "/kama.lock", lock)) {
-        fprintf(stderr, "kama install: cannot write %s/kama.lock\n", base.c_str());
-        return 1;
+    return resolveProject(base, oldLock);
+}
+
+// `kama pkg update [<pkg>]`: re-resolve pins and rewrite the lock; never touches kama.json. No arg → every
+// node re-resolves fresh (empty oldLock: a git branch advances to its newest commit, a url re-downloads).
+// A <pkg> arg → drop only that pin (and its now-unreferenced subtree, which the manifest-driven BFS simply
+// won't revisit); every other pin stays honored.
+int cmdPkgUpdate(const std::string& projectDir, const std::string& onlyPkg)
+{
+    std::string base = projectDir.empty() ? "." : projectDir;
+    std::string manifest = base + "/kama.json";
+    if (!fileExists(manifest)) { fprintf(stderr, "kama pkg update: no kama.json in %s\n", base.c_str()); return 2; }
+
+    std::map<std::string, LockEntry> oldLock;
+    if (!onlyPkg.empty()) {
+        std::string lockPath = base + "/kama.lock", lerr;
+        if (fileExists(lockPath) && !parseLockFile(lockPath, oldLock, lerr)) {
+            fprintf(stderr, "kama pkg update: %s: %s\n", lockPath.c_str(), lerr.c_str()); return 2;
+        }
+        std::map<std::string, DepSpec> d, dd; std::string err;   // <pkg> must be a declared (dev-)dependency
+        if (!loadManifestDeps(manifest, d, err, &dd)) { fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str()); return 2; }
+        if (!d.count(onlyPkg) && !dd.count(onlyPkg)) {
+            fprintf(stderr, "kama pkg update: '%s' is not a dependency in %s\n", onlyPkg.c_str(), manifest.c_str());
+            return 2;
+        }
+        oldLock.erase(onlyPkg);   // drop just this pin → it (and any now-orphaned subtree) re-resolves fresh
     }
-    fprintf(stderr, "kama: installed %zu package(s) into %s\n", lock.size(), viewDir.c_str());
-    return 0;
+    return resolveProject(base, oldLock);   // onlyPkg empty → empty oldLock → everything fresh
+}
+
+// ---- kama.json manifest mutation (pkg add / remove) --------------------------------------------------
+// Byte-preserving splice: everything OUTSIDE the target `dependencies`/`dev-dependencies` section (name,
+// version, flags, unknown keys, formatting) is kept verbatim; only that one section is re-emitted (each
+// dep's own value text is preserved, just the block layout normalized — the section is machine-managed).
+
+// Match the bracket at s[open] ('{' or '['); set `close` to its partner index. Respects strings.
+static bool matchBrace(const std::string& s, size_t open, size_t& close)
+{
+    char oc = s[open], cc = (oc == '{') ? '}' : ']'; int depth = 0; bool inStr = false;
+    for (size_t k = open; k < s.size(); ++k) { char c = s[k];
+        if (inStr)          { if (c == '\\') ++k; else if (c == '"') inStr = false; }
+        else if (c == '"')    inStr = true;
+        else if (c == oc)     ++depth;
+        else if (c == cc)   { if (--depth == 0) { close = k; return true; } } }
+    return false;
+}
+
+// The indentation (leading spaces/tabs) of the line containing byte `pos`.
+static std::string indentBefore(const std::string& s, size_t pos)
+{
+    size_t start = (pos == 0) ? 0 : s.rfind('\n', pos - 1);
+    start = (start == std::string::npos) ? 0 : start + 1;
+    std::string ind;
+    for (size_t k = start; k < pos && (s[k] == ' ' || s[k] == '\t'); ++k) ind += s[k];
+    return ind;
+}
+
+// Walk the members of the JSON object whose '{' is at `objOpen`, appending (key, rawValueText) in order.
+// rawValueText is the value's exact bytes (object/array/string/number). Also, if `findKey` is non-null and
+// matches, sets *keyPos/*valEnd to that member's span. Returns false only on malformed structure.
+static bool walkMembers(const std::string& s, size_t objOpen,
+                        std::vector<std::pair<std::string,std::string>>& out,
+                        const std::string* findKey = nullptr, size_t* keyPos = nullptr, size_t* valEnd = nullptr)
+{
+    size_t i = objOpen + 1;
+    auto ws = [&]{ while (i < s.size() && (s[i]==' '||s[i]=='\t'||s[i]=='\n'||s[i]=='\r')) ++i; };
+    ws(); if (i < s.size() && s[i] == '}') return true;   // empty object
+    while (i < s.size()) {
+        ws(); if (i >= s.size() || s[i] != '"') return false;
+        size_t kp = i; std::string k; ++i;
+        while (i < s.size() && s[i] != '"') { if (s[i]=='\\' && i+1<s.size()) { k += s[i+1]; i += 2; } else { k += s[i]; ++i; } }
+        ++i; ws(); if (i >= s.size() || s[i] != ':') return false; ++i; ws();
+        size_t vstart = i, vend;
+        if (i < s.size() && (s[i] == '{' || s[i] == '[')) { size_t cl; if (!matchBrace(s, i, cl)) return false; vend = cl + 1; i = vend; }
+        else if (i < s.size() && s[i] == '"') { ++i; while (i < s.size() && s[i] != '"') { if (s[i]=='\\' && i+1<s.size()) ++i; ++i; } ++i; vend = i; }
+        else { while (i < s.size() && s[i]!=','&&s[i]!='}'&&s[i]!=' '&&s[i]!='\t'&&s[i]!='\n'&&s[i]!='\r') ++i; vend = i; }
+        out.push_back({k, s.substr(vstart, vend - vstart)});
+        if (findKey && k == *findKey) { if (keyPos) *keyPos = kp; if (valEnd) *valEnd = vend; }
+        ws(); if (i < s.size() && s[i] == ',') { ++i; continue; }
+        break;
+    }
+    return true;
+}
+
+static std::string depEntryValue(const DepSpec& d)   // the "{ ... }" value for one dependency
+{
+    std::string f;
+    auto add = [&](const char* k, const std::string& v){ if (!v.empty()) { if (!f.empty()) f += ", ";
+        f += std::string("\"") + k + "\": \"" + jsonEscape(v) + "\""; } };
+    add("path", d.path); add("git", d.git); add("url", d.url); add("rev", d.rev); add("integrity", d.integrity);
+    return "{ " + f + " }";
+}
+
+static std::string reemitSection(const std::vector<std::pair<std::string,std::string>>& mem, const std::string& baseInd)
+{
+    if (mem.empty()) return "{}";
+    std::string mi = baseInd + "  ", out = "{\n";
+    for (size_t k = 0; k < mem.size(); ++k)
+        out += mi + "\"" + jsonEscape(mem[k].first) + "\": " + mem[k].second + (k + 1 < mem.size() ? ",\n" : "\n");
+    return out + baseInd + "}";
+}
+
+// Locate the top-level object and a `section` member's object span. Returns true if the section exists.
+static bool findSection(const std::string& s, const std::string& section,
+                        size_t& topOpen, size_t& keyPos, size_t& objOpen, size_t& objClose)
+{
+    topOpen = s.find('{');
+    if (topOpen == std::string::npos) return false;
+    std::vector<std::pair<std::string,std::string>> top; size_t kp = 0, ve = 0;
+    if (!walkMembers(s, topOpen, top, &section, &kp, &ve) || kp == 0) return false;
+    keyPos = kp;
+    // the value starts at the first '{' at/after the ':' following keyPos — find it from the raw value.
+    size_t colon = s.find(':', keyPos); objOpen = s.find('{', colon);
+    if (objOpen == std::string::npos || !matchBrace(s, objOpen, objClose)) return false;
+    return true;
+}
+
+static bool manifestAddDep(const std::string& path, const std::string& name, const DepSpec& d,
+                           bool dev, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
+    std::string section = dev ? "dev-dependencies" : "dependencies";
+    std::string val = depEntryValue(d);
+
+    size_t topOpen, keyPos, objOpen, objClose;
+    std::string out;
+    if (findSection(s, section, topOpen, keyPos, objOpen, objClose)) {
+        std::vector<std::pair<std::string,std::string>> mem;
+        if (!walkMembers(s, objOpen, mem)) { err = "malformed `" + section + "` in " + path; return false; }
+        bool replaced = false;
+        for (auto& m : mem) if (m.first == name) { m.second = val; replaced = true; break; }
+        if (!replaced) mem.push_back({name, val});
+        std::string sec = reemitSection(mem, indentBefore(s, keyPos));
+        out = s.substr(0, objOpen) + sec + s.substr(objClose + 1);
+    } else {
+        topOpen = s.find('{');
+        if (topOpen == std::string::npos) { err = "manifest is not a JSON object"; return false; }
+        size_t topClose; if (!matchBrace(s, topOpen, topClose)) { err = "malformed manifest " + path; return false; }
+        // top-level member indent (first member's line indent, else two spaces)
+        std::vector<std::pair<std::string,std::string>> top; walkMembers(s, topOpen, top);
+        std::string topInd = "  ";
+        { size_t f = s.find('"', topOpen + 1); if (f != std::string::npos && f < topClose) topInd = indentBefore(s, f); }
+        std::string secText = "\"" + section + "\": " + reemitSection({{name, val}}, topInd);
+        bool empty = top.empty();
+        if (empty) out = s.substr(0, topOpen) + "{\n" + topInd + secText + "\n}" + s.substr(topClose + 1);
+        else       out = s.substr(0, topOpen + 1) + "\n" + topInd + secText + "," + s.substr(topOpen + 1);
+    }
+    std::ofstream o(path, std::ios::binary | std::ios::trunc);
+    if (!o) { err = "cannot write '" + path + "'"; return false; }
+    o << out; return true;
+}
+
+// Remove `name` from whichever section holds it. Returns true even if absent (idempotent); sets *found.
+static bool manifestRemoveDep(const std::string& path, const std::string& name, std::string& err, bool* found = nullptr)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
+    if (found) *found = false;
+    for (const char* section : {"dependencies", "dev-dependencies"}) {
+        size_t topOpen, keyPos, objOpen, objClose;
+        if (!findSection(s, section, topOpen, keyPos, objOpen, objClose)) continue;
+        std::vector<std::pair<std::string,std::string>> mem;
+        if (!walkMembers(s, objOpen, mem)) { err = std::string("malformed `") + section + "` in " + path; return false; }
+        bool here = false;
+        std::vector<std::pair<std::string,std::string>> kept;
+        for (auto& m : mem) { if (m.first == name) here = true; else kept.push_back(m); }
+        if (!here) continue;
+        std::string sec = reemitSection(kept, indentBefore(s, keyPos));
+        std::string out = s.substr(0, objOpen) + sec + s.substr(objClose + 1);
+        std::ofstream o(path, std::ios::binary | std::ios::trunc);
+        if (!o) { err = "cannot write '" + path + "'"; return false; }
+        o << out; if (found) *found = true; return true;
+    }
+    return true;   // not present anywhere — idempotent no-op
+}
+
+// `kama pkg add [--dev] <name> (--git U [--rev R] | --url U [--integrity H] | --path P)` — mutate the
+// manifest, then install (lock + view update in one shot).
+int cmdPkgAdd(const std::string& base, const std::string& name, const DepSpec& d, bool dev)
+{
+    std::string manifest = base + "/kama.json";
+    if (!fileExists(manifest)) { fprintf(stderr, "kama pkg add: no kama.json in %s\n", base.c_str()); return 2; }
+    std::string err;
+    if (!manifestAddDep(manifest, name, d, dev, err)) { fprintf(stderr, "kama pkg add: %s\n", err.c_str()); return 1; }
+    return cmdInstall(base);
+}
+
+// `kama pkg remove <name>` — drop it from the manifest (idempotent), then install.
+int cmdPkgRemove(const std::string& base, const std::string& name)
+{
+    std::string manifest = base + "/kama.json";
+    if (!fileExists(manifest)) { fprintf(stderr, "kama pkg remove: no kama.json in %s\n", base.c_str()); return 2; }
+    std::string err; bool found = false;
+    if (!manifestRemoveDep(manifest, name, err, &found)) { fprintf(stderr, "kama pkg remove: %s\n", err.c_str()); return 1; }
+    if (!found) fprintf(stderr, "kama pkg remove: '%s' is not a dependency (nothing to do)\n", name.c_str());
+    return cmdInstall(base);
 }
 
 void usage()
 {
     fprintf(stderr,
         "usage:\n"
-        "  kama transpile <in.kama> [-o out.c] [--no-line]\n"
+        "  kama transpile <in.kama> [-o out.c] [--no-line] [--dev]\n"
         "  kama build     <in.kama>... [-o out] [--target native|wasm|embedded] [--release|--debug] [--shared]\n"
-        "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c]\n"
-        "                  (pass multiple .kama files to build a multi-file program)\n"
-        "  kama install   [<dir>]              resolve `kama.json` dependencies into .kama/deps + kama.lock\n"
-        "  kama update    [--version vX.Y.Z]   self-update via the installer\n"
+        "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
+        "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
+        "  kama pkg install [<dir>]            resolve `kama.json` (dev-)dependencies into .kama/{deps,dev-deps} + kama.lock\n"
+        "  kama pkg add   [--dev] <name> (--git U [--rev R] | --url U [--integrity H] | --path P)\n"
+        "  kama pkg remove <name>\n"
+        "  kama pkg update [<pkg>]             re-resolve pins (advance a branch pin) and rewrite the lock\n"
+        "  kama update    [--version vX.Y.Z]   self-update the toolchain via the installer\n"
         "  kama --version\n");
+}
+
+void pkgUsage()
+{
+    fprintf(stderr,
+        "usage:\n"
+        "  kama pkg install [<dir>]            resolve dependencies into .kama/{deps,dev-deps} + kama.lock\n"
+        "  kama pkg add   [--dev] <name> (--git U [--rev R] | --url U [--integrity H] | --path P)\n"
+        "  kama pkg remove <name>\n"
+        "  kama pkg update [<pkg>]             re-resolve pins and rewrite the lock\n");
 }
 
 } // namespace
@@ -1054,15 +1522,63 @@ int main(int argc, char** argv)
         return cmdUpdate(pinned);
     }
 
-    if (subcommand == "install") {
-        std::string dir;
-        for (int i = 2; i < argc; ++i) {
-            std::string a = argv[i];
-            if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama install: unexpected option '%s'\n", a.c_str()); return 2; }
-            else if (dir.empty()) dir = a;
-            else { fprintf(stderr, "kama install: unexpected arg '%s'\n", a.c_str()); return 2; }
+    if (subcommand == "pkg") {
+        if (argc < 3) { pkgUsage(); return 2; }
+        std::string verb = argv[2];
+        if (verb == "install") {
+            std::string dir;
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg install: unexpected option '%s'\n", a.c_str()); return 2; }
+                else if (dir.empty()) dir = a;
+                else { fprintf(stderr, "kama pkg install: unexpected arg '%s'\n", a.c_str()); return 2; }
+            }
+            return cmdInstall(dir);
         }
-        return cmdInstall(dir);
+        if (verb == "update") {
+            std::string pkg;
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg update: unexpected option '%s'\n", a.c_str()); return 2; }
+                else if (pkg.empty()) pkg = a;
+                else { fprintf(stderr, "kama pkg update: unexpected arg '%s'\n", a.c_str()); return 2; }
+            }
+            return cmdPkgUpdate("", pkg);
+        }
+        if (verb == "add") {
+            bool dev = false; std::string name; DepSpec d; std::string rev, integ;
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if      (a == "--dev")                     dev = true;
+                else if (a == "--git" && i + 1 < argc)     d.git = argv[++i];
+                else if (a == "--url" && i + 1 < argc)     d.url = argv[++i];
+                else if (a == "--path" && i + 1 < argc)    d.path = argv[++i];
+                else if (a == "--rev" && i + 1 < argc)     rev = argv[++i];
+                else if (a == "--integrity" && i + 1 < argc) integ = argv[++i];
+                else if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg add: unknown option '%s'\n", a.c_str()); return 2; }
+                else if (name.empty()) name = a;
+                else { fprintf(stderr, "kama pkg add: unexpected arg '%s'\n", a.c_str()); return 2; }
+            }
+            if (name.empty()) { fprintf(stderr, "kama pkg add: missing <name>\n"); return 2; }
+            int nsrc = (!d.git.empty()) + (!d.url.empty()) + (!d.path.empty());
+            if (nsrc != 1) { fprintf(stderr, "kama pkg add: exactly one of --git/--url/--path is required\n"); return 2; }
+            if (!rev.empty()   && d.git.empty()) { fprintf(stderr, "kama pkg add: --rev is only valid with --git\n"); return 2; }
+            if (!integ.empty() && d.url.empty()) { fprintf(stderr, "kama pkg add: --integrity is only valid with --url\n"); return 2; }
+            d.rev = rev; d.integrity = integ;
+            return cmdPkgAdd(".", name, d, dev);
+        }
+        if (verb == "remove") {
+            std::string name;
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg remove: unexpected option '%s'\n", a.c_str()); return 2; }
+                else if (name.empty()) name = a;
+                else { fprintf(stderr, "kama pkg remove: unexpected arg '%s'\n", a.c_str()); return 2; }
+            }
+            if (name.empty()) { fprintf(stderr, "kama pkg remove: missing <name>\n"); return 2; }
+            return cmdPkgRemove(".", name);
+        }
+        fprintf(stderr, "kama pkg: unknown command '%s'\n", verb.c_str()); pkgUsage(); return 2;
     }
 
     std::vector<std::string> inputs;      // one or more .kama source files
@@ -1078,6 +1594,7 @@ int main(int argc, char** argv)
     std::vector<std::string> defines;      // --define NAME: activate a `@compileFor` flag (repeatable)
     std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
     std::string configPath;                // --config PATH: explicit kama.json (else auto-discovered)
+    bool        devBuild   = false;        // --dev: also put .kama/dev-deps on the import path (dev-dependencies)
 
     // Options may appear in any order, before or after the input file.
     for (int i = 2; i < argc; ++i) {
@@ -1096,6 +1613,7 @@ int main(int argc, char** argv)
         else if (a == "--define" && i + 1 < argc)   defines.push_back(argv[++i]);    // `@compileFor` flag on
         else if (a == "--undefine" && i + 1 < argc) undefines.push_back(argv[++i]);  // `@compileFor` flag off
         else if (a == "--config" && i + 1 < argc)   configPath = argv[++i];          // explicit kama.json
+        else if (a == "--dev")                      devBuild = true;                 // also resolve dev-dependencies
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
@@ -1155,13 +1673,19 @@ int main(int argc, char** argv)
 
             // Package deps (M2): if the manifest declares dependencies, the resolved view must already
             // be materialized. The build is a pure, reproducible READ of the view — it never fetches —
-            // so a missing view is a user error pointing at `kama install`, not a silent build.
-            std::map<std::string, DepSpec> deps; std::string derr;
-            if (loadManifestDeps(manifest, deps, derr) && !deps.empty()) {
-                std::string view = dirName(manifest) + "/.kama/deps";
-                if (!dirExists(view)) {
-                    fprintf(stderr, "kama: %s declares dependencies but %s is missing — run `kama install`\n",
-                            manifest.c_str(), view.c_str());
+            // so a missing view is a user error pointing at `kama pkg install`, not a silent build. Under
+            // `--dev` the dev-dependency view must exist too (else the dev build silently misses them).
+            std::map<std::string, DepSpec> deps, devDeps; std::string derr;
+            if (loadManifestDeps(manifest, deps, derr, &devDeps)) {
+                std::string mdir = dirName(manifest);
+                if (!deps.empty() && !dirExists(mdir + "/.kama/deps")) {
+                    fprintf(stderr, "kama: %s declares dependencies but %s/.kama/deps is missing — run `kama pkg install`\n",
+                            manifest.c_str(), mdir.c_str());
+                    return 2;
+                }
+                if (devBuild && !devDeps.empty() && !dirExists(mdir + "/.kama/dev-deps")) {
+                    fprintf(stderr, "kama: %s declares dev-dependencies but %s/.kama/dev-deps is missing — run `kama pkg install`\n",
+                            manifest.c_str(), mdir.c_str());
                     return 2;
                 }
             }
@@ -1210,7 +1734,7 @@ int main(int argc, char** argv)
         std::string outPath = output.empty() ? (stripExtension(input) + ".c") : output;
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
-        if (!loadProgramUnits(inputs, argv[0], units, unitPaths)) return 1;
+        if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
         int rc = (units.size() == 1)
                ? transpileUnitToFile(units[0], unitPaths[0], outPath, emitLines)
                : transpileProgramToSingleFile(units, unitPaths, outPath, emitLines);
@@ -1258,7 +1782,7 @@ int main(int argc, char** argv)
         // that drags in more units (multiple inputs, or `import`s) uses the multi-file path.
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
-        if (!loadProgramUnits(inputs, argv[0], units, unitPaths)) return 1;
+        if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
 
         bool needsLibm = false;   // set if the program `extern "<math.h>";`'s (std::math / libm) -> link -lm
         bool needsNetWeb = false; // set if the program `extern "kama_net_web.h";`'s (std::net::web) -> --js-library

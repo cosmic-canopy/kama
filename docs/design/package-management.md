@@ -33,7 +33,29 @@ open questions.
   leg of `run_tests.sh`. Native 755 / wasm 725 green; install path ASan/UBSan-clean. **Known limit:** git
   `rev` supports tag/branch only (a raw commit sha can't ride `--depth 1 --branch`) — full sha pinning is
   a candidate for M2.2's resolver.
-- M2.2 (resolver + `parseLock` reader + `add`/`remove`/`update`), M2.3 (`run` + docs) — pending.
+- **M2.2 — resolver + `parseLock` + `kama pkg` tree + dev-dependencies ✅ shipped.** Lock **reader**
+  (`parseLockFile`/`LockReader`, mirrors the writer exactly) → lock-honoring install (cargo model): a git/url
+  dep whose manifest spec is unchanged reuses the pin — a **warm store links with ZERO fetch (offline)**, a
+  **cold store re-fetches by the recorded `commit`/`integrity`** and asserts the tree hash still matches
+  (hard-fail on drift). Git **raw-commit-sha pinning** (`isSha1Hex` → `git init`+`fetch --depth 1 origin
+  <sha>`+`checkout FETCH_HEAD`) — also the mechanism that reproduces a branch-pinned dep by its `commit`.
+  **Transitive BFS resolver**: reads each fetched package's own `kama.json` and closes the graph; conflict
+  policy (no SemVer yet) = one spec per name, identical dedups, divergent **hard-errors** naming both
+  requestors; `LockEntry.dependencies[]` now records each package's direct deps (deterministic sorted).
+  **`dev-dependencies`** with a strict **`--dev` build boundary**: dev-deps link into a separate
+  `.kama/dev-deps/` view that is on the import path ONLY under `kama build --dev` (decoupled from
+  `--release`), so production code physically can't import a test-only dep (the phantom-dep guarantee makes
+  it a resolve error at any opt level); dev is strictly **non-transitive** (a fetched package's dev-deps are
+  never pulled; prod-reachable names win over dev). A `treeHash` lock field closes the url offline gap (url's
+  `integrity` is the tarball, its store key is the tree; git omits it since integrity == tree). New CLI
+  namespace **`kama pkg install|add|remove|update`** (opt-in; the former `kama install` moved under it, no
+  alias; resolves the collision with toolchain `kama update`): `add [--dev] <name> --git/--url/--path` +
+  `remove` mutate `kama.json` via a **byte-preserving textual splice** (name/version/flags/unknown keys kept
+  verbatim; only the target section re-emitted); `update [<pkg>]` re-resolves pins (advance a branch pin)
+  without touching the manifest. Guard `tools/check-packages.sh` extended (cases 5–10: transitive + dev-dep
+  non-propagation, sha pin, offline/cold-store honor, dev `--dev` boundary, add/remove round-trip, conflict
+  hard-fail). Native 755 / ASan 737 / wasm 725 green; install/resolver path ASan+UBSan-clean.
+- M2.3 (`kama run` + `main`/entry field + user docs) — pending.
 
 ## Scope — four pillars (user, 2026-07-24)
 
@@ -240,5 +262,7 @@ guard script run once on the plain native leg (see `run_tests.sh` 127-154; regis
 
 ### Then
 
-M2.2 = resolver (transitive BFS, single-version-per-major, `parseLock` reader) + `add`/`remove`/
-`update`. M2.3 = `kama run` + `main` field + docs. See the staged plan above.
+M2.2 = resolver (transitive BFS, `parseLock` reader, lock-honoring, git sha pinning) + `dev-dependencies`
+with a strict `--dev` boundary + the `kama pkg` command tree (`install`/`add`/`remove`/`update`) — **✅
+shipped 2026-07-24** (see the M2.2 as-shipped bullet in the implementation-progress list at the top).
+M2.3 = `kama run` + `main` field + docs. See the staged plan above.
