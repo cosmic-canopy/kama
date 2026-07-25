@@ -369,6 +369,11 @@ std::vector<SharedCompilationUnit> preludeModuleUnits()
 // subset). Threaded to each CEmitter via `setNoHeap`. File-scope like the other build config, set in main.
 static bool g_noHeap = false;
 
+// `--verify` (M3.2a): enforce registry-package signatures on install — a present-but-invalid signature
+// and a missing signature both become hard errors. Off by default (warn-only: a present signature is
+// checked and a failure only warns), so the signing mechanism lands before the enforcement policy.
+static bool g_verifySignatures = false;
+
 // `@compileFor(FLAG)` conditional compilation (the "structure" axis): the active build-flag set
 // (built-ins derived from `--target`/`--release`, plus `--define`), the declared-flag universe (from
 // `kama.json`, Stage 2), and whether strict flag-name validation is on. File-scope like `g_noHeap`,
@@ -393,6 +398,8 @@ struct DepSpec {
     std::string integrity;  // "sha256-<hex>" for a url dep
     std::string version;    // git-range: a SemVer range; registry dep: the range against the index
     std::string registry;   // optional explicit registry base URI (else the configured/default registry)
+    std::string signature;  // registry dep (internal): the SSHSIG blob from the index (verified at fetch)
+    std::string sigKey;     // registry dep (internal): the signer public key from the index
 };
 
 // The `registries` config (M3.1b): where registry deps resolve from. `default` is the base chain for
@@ -1309,6 +1316,47 @@ std::string sha256Of(const std::string& path)
     return "";
 }
 
+// ---- signing (M3.2a): SSHSIG via ssh-keygen -Y ------------------------------------------------
+// A fixed SSHSIG namespace (a signature is bound to it, so a kama signature can't be replayed elsewhere).
+static const char* kSigNamespace = "kama-registry";
+
+// Is `ssh-keygen` on PATH? Signing/verification skip gracefully when it's absent (like git/curl/sha256).
+static bool hasSshKeygen()
+{
+    int rc = 0; runCmdCapture("command -v ssh-keygen 2>/dev/null", &rc); return rc == 0;
+}
+
+// Sign `file` with the SSH private key `keyPath` (`ssh-keygen -Y sign` writes `<file>.sig`). On success
+// fills `sigOut` (the armored SSHSIG) + `pubKeyOut` (the signer public key line, from `<keyPath>.pub`).
+static bool sshSign(const std::string& file, const std::string& keyPath,
+                    std::string& sigOut, std::string& pubKeyOut, std::string& err)
+{
+    std::string sigfile = file + ".sig";
+    runCmd(rmRfCmd(sigfile));
+    int rc = runCmd("ssh-keygen -Y sign -f \"" + keyPath + "\" -n " + kSigNamespace + " \"" + file + "\" >/dev/null 2>&1");
+    if (rc != 0) { err = "ssh-keygen -Y sign failed (is the key '" + keyPath + "' an SSH private key?)"; return false; }
+    { std::ifstream f(sigfile, std::ios::binary); sigOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
+    { std::ifstream f(keyPath + ".pub", std::ios::binary); pubKeyOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
+    runCmd(rmRfCmd(sigfile));
+    // trim a trailing newline on the public key line (keeps the index tidy)
+    while (!pubKeyOut.empty() && (pubKeyOut.back() == '\n' || pubKeyOut.back() == '\r')) pubKeyOut.pop_back();
+    if (sigOut.empty()) { err = "ssh-keygen produced no signature"; return false; }
+    return true;
+}
+
+// Verify that `signature` is a valid SSHSIG over `file`'s bytes (`ssh-keygen -Y check-novalidate` — a
+// cryptographic check against the signature's embedded key; a configured trust set is a later M3.2 slice).
+static bool sshVerify(const std::string& file, const std::string& signature, const std::string& stagingDir)
+{
+    std::string sigTmp = stagingDir + ".sig";
+    { std::ofstream o(sigTmp, std::ios::binary); if (!o) return false; o << signature; }
+    int rc = runCmd("ssh-keygen -Y check-novalidate -n " + std::string(kSigNamespace) +
+                    " -s \"" + sigTmp + "\" < \"" + file + "\" >/dev/null 2>&1");
+    runCmd(rmRfCmd(sigTmp));
+    return rc == 0;
+}
+// -----------------------------------------------------------------------------------------------
+
 // Collect every file under `root` as paths RELATIVE to root (recursively), for a deterministic tree hash.
 static void collectFilesRel(const std::string& root, const std::string& rel, std::vector<std::string>& out)
 {
@@ -1424,6 +1472,23 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
         if (!d.integrity.empty() && d.integrity != tarballHash) {
             err = "integrity mismatch for '" + name + "': expected " + d.integrity + ", got " + tarballHash;
             runCmd(rmRfCmd(tgz)); return false;   // hard fail — nothing enters the store
+        }
+        // M3.2a: verify the tarball signature while the tgz still exists (SSHSIG is over its bytes).
+        // Enforced under `--verify`; otherwise warn-only. Skips gracefully if ssh-keygen is absent.
+        if (!d.signature.empty()) {
+            if (!hasSshKeygen()) {
+                if (g_verifySignatures) { err = "cannot verify '" + name + "': ssh-keygen not available"; runCmd(rmRfCmd(tgz)); return false; }
+            } else if (!sshVerify(tgz, d.signature, staging)) {
+                if (g_verifySignatures) {
+                    err = "signature verification failed for '" + name + "' (" + d.url + ")";
+                    runCmd(rmRfCmd(tgz)); return false;
+                }
+                fprintf(stderr, "kama: warning: signature check failed for '%s' — continuing (verification "
+                        "is not enforced; pass --verify to require it)\n", name.c_str());
+            }
+        } else if (g_verifySignatures) {
+            err = "'" + name + "' is unsigned but --verify requires a signature";
+            runCmd(rmRfCmd(tgz)); return false;
         }
         lockIntegrity = tarballHash;   // trust-on-first-use when the manifest omits `integrity`
         if (!makeDirs(staging)) { err = "cannot stage '" + name + "'"; runCmd(rmRfCmd(tgz)); return false; }
@@ -1775,7 +1840,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         // index). On success fills `sv` and one of {tag} (git) / {url,integrity,regBase} (registry). A
         // false return with `matched=false` means "no version satisfies"; with `terr` set means a hard
         // error (unreachable source / no configured registry).
-        struct VerPick { std::string tag, url, integrity, regBase; };
+        struct VerPick { std::string tag, url, integrity, regBase, signature, sigKey; };
         auto selectVersion = [&](const std::string& name, const DepSpec& spec, const VersionReq& req,
                                  bool& matched, SemVer& sv, VerPick& pick, std::string& terr) -> bool {
             matched = false;
@@ -1795,6 +1860,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     if (selectHighestIndex(*idx, req, sv, e)) {
                         matched = true;
                         pick.url = joinUri(base, e.tarball); pick.integrity = e.integrity; pick.regBase = base;
+                        pick.signature = e.signature; pick.sigKey = e.key;
                         break;
                     }
                 }
@@ -1927,6 +1993,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     accReq[r.name] = req; reqStr[r.name] = r.spec.version; chosenVer[r.name] = semVerStr(sv);
                     if (isReg) {                      // pin: resolveOne now treats it as an exact url dep
                         r.spec.url = pick.url; r.spec.integrity = pick.integrity; regBaseOf[r.name] = pick.regBase;
+                        r.spec.signature = pick.signature; r.spec.sigKey = pick.sigKey;   // verified at fetch (M3.2a)
                     } else {
                         r.spec.rev = pick.tag;        // pin: resolveOne now treats it as an exact git dep (tag → commit)
                     }
@@ -2261,11 +2328,12 @@ static bool appendIndexEntry(const std::string& indexPath, const std::string& na
 // `kama publish --registry <dir-or-file-uri>`: tar the project sources, hash them, and record the new
 // version in the registry's `<name>/index.json` (write-once — refuses to overwrite an existing version).
 // A published registry dep reduces to a url dep on install, so the tarball IS the url-dep format.
-int cmdPublish(const std::string& base, const std::string& registryArg)
+int cmdPublish(const std::string& base, const std::string& registryArg, const std::string& keyPath)
 {
     std::string manifest = base + "/kama.json";
     if (!fileExists(manifest)) { fprintf(stderr, "kama publish: no kama.json in %s\n", base.c_str()); return 2; }
     if (registryArg.empty())   { fprintf(stderr, "kama publish: --registry <dir-or-file-uri> is required\n"); return 2; }
+    if (!keyPath.empty() && !hasSshKeygen()) { fprintf(stderr, "kama publish: --key needs ssh-keygen (not found on PATH)\n"); return 2; }
 
     std::string name, version, err;
     if (!loadManifestNameVersion(manifest, name, version, err)) {
@@ -2315,6 +2383,13 @@ int cmdPublish(const std::string& base, const std::string& registryArg)
     std::string integrity = sha256Of(tarball);
     if (integrity.empty()) { fprintf(stderr, "kama publish: cannot hash the tarball (is sha256sum/shasum available?)\n"); runCmd(rmRfCmd(tmp)); return 1; }
 
+    // M3.2a: optionally sign the tarball. The SSHSIG blob + signer public key go into the index entry.
+    std::string signature, sigKey;
+    if (!keyPath.empty()) {
+        std::string serr;
+        if (!sshSign(tarball, keyPath, signature, sigKey, serr)) { fprintf(stderr, "kama publish: %s\n", serr.c_str()); runCmd(rmRfCmd(tmp)); return 1; }
+    }
+
     if (!makeDirs(pkgDir)) { fprintf(stderr, "kama publish: cannot create %s\n", pkgDir.c_str()); runCmd(rmRfCmd(tmp)); return 1; }
     std::string finalTarball = pkgDir + "/" + version + ".tar.gz";
     runCmd(rmRfCmd(finalTarball));
@@ -2338,10 +2413,12 @@ int cmdPublish(const std::string& base, const std::string& registryArg)
     std::string entry = "{ \"version\": \"" + jsonEscape(version) + "\", \"integrity\": \"" + jsonEscape(integrity)
                       + "\", \"tarball\": \"" + jsonEscape(name + "/" + version + ".tar.gz") + "\"";
     if (!depsJson.empty()) entry += ", \"dependencies\": { " + depsJson + " }";
+    if (!signature.empty()) entry += ", \"signature\": \"" + jsonEscape(signature) + "\", \"key\": \"" + jsonEscape(sigKey) + "\"";
     entry += " }";
 
     if (!appendIndexEntry(indexPath, name, entry, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
-    fprintf(stderr, "kama: published %s@%s (%s) to %s\n", name.c_str(), version.c_str(), integrity.c_str(), regDir.c_str());
+    fprintf(stderr, "kama: published %s@%s (%s%s) to %s\n", name.c_str(), version.c_str(), integrity.c_str(),
+            signature.empty() ? "" : ", signed", regDir.c_str());
     return 0;
 }
 
@@ -2355,12 +2432,13 @@ void usage()
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
         "                  (build the entry .kama — explicit <file>, else the manifest \"main\" — and run it; native-only)\n"
-        "  kama pkg install [<dir>]            resolve `kama.json` (dev-)dependencies into .kama/{deps,dev-deps} + kama.lock\n"
+        "  kama pkg install [<dir>] [--verify] resolve `kama.json` (dev-)dependencies into .kama/{deps,dev-deps} + kama.lock\n"
+        "                                      (--verify: require + check registry-package signatures)\n"
         "  kama pkg add   [--dev] <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
         "                                --version V [--registry BASE])   (bare --version = a registry dependency)\n"
         "  kama pkg remove <name>\n"
         "  kama pkg update [<pkg>]             re-resolve pins (advance a branch pin) and rewrite the lock\n"
-        "  kama publish [<dir>] --registry <dir-or-file-uri>   tarball the project + record it in the registry index\n"
+        "  kama publish [<dir>] --registry <dir-or-file-uri> [--key <ssh-key>]   tarball + record (+ sign) in the index\n"
         "  kama toolchain list                 installed versions (+ the default and what the cwd resolves to)\n"
         "  kama toolchain install <v>          install version <v> into ~/.kama/versions/<v>\n"
         "  kama toolchain uninstall <v>        remove an installed version\n"
@@ -2374,7 +2452,7 @@ void pkgUsage()
 {
     fprintf(stderr,
         "usage:\n"
-        "  kama pkg install [<dir>]            resolve dependencies into .kama/{deps,dev-deps} + kama.lock\n"
+        "  kama pkg install [<dir>] [--verify] resolve dependencies into .kama/{deps,dev-deps} + kama.lock\n"
         "  kama pkg add   [--dev] <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
         "                                --version V [--registry BASE])\n"
         "  kama pkg remove <name>\n"
@@ -2645,15 +2723,16 @@ int main(int argc, char** argv)
     }
 
     if (subcommand == "publish") {
-        std::string registry, dir;
+        std::string registry, dir, key;
         for (int i = 2; i < argc; ++i) {
             std::string a = argv[i];
             if      (a == "--registry" && i + 1 < argc) registry = argv[++i];
+            else if (a == "--key" && i + 1 < argc)      key = argv[++i];
             else if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama publish: unknown option '%s'\n", a.c_str()); return 2; }
             else if (dir.empty()) dir = a;
             else { fprintf(stderr, "kama publish: unexpected arg '%s'\n", a.c_str()); return 2; }
         }
-        return cmdPublish(dir.empty() ? "." : dir, registry);
+        return cmdPublish(dir.empty() ? "." : dir, registry, key);
     }
 
     if (subcommand == "pkg") {
@@ -2663,7 +2742,8 @@ int main(int argc, char** argv)
             std::string dir;
             for (int i = 3; i < argc; ++i) {
                 std::string a = argv[i];
-                if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg install: unexpected option '%s'\n", a.c_str()); return 2; }
+                if (a == "--verify") g_verifySignatures = true;   // M3.2a: enforce registry signatures
+                else if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg install: unexpected option '%s'\n", a.c_str()); return 2; }
                 else if (dir.empty()) dir = a;
                 else { fprintf(stderr, "kama pkg install: unexpected arg '%s'\n", a.c_str()); return 2; }
             }

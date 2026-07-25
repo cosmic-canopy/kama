@@ -20,7 +20,10 @@ RUN apt-get update \
       make \
       clang \
       libclang-rt-18-dev \
+      openssh-client \
  && rm -rf /var/lib/apt/lists/*
+# openssh-client provides `ssh-keygen -Y sign/verify` (SSHSIG) for `kama publish --key` + `--verify`
+# (M3.2a package signing). Absent it, signing/verification skip gracefully.
 # libclang-rt-18-dev ships the compiler-rt runtime (libclang_rt.asan/ubsan.*) that the bare
 # `clang` metapackage omits on arm64 — without it `-fsanitize=address,undefined` fails to LINK.
 # It tracks the clang version above (18 here); bump the suffix if the base image's clang moves.

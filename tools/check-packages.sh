@@ -571,4 +571,45 @@ JSON
 if "$KAMA" pkg install "$colp" >"$tmp/colp.out" 2>&1; then echo "check-packages: FAIL — import-name collision was not rejected" >&2; exit 1; fi
 grep -qi "collision" "$tmp/colp.out" || { echo "check-packages: FAIL — collision message unclear:" >&2; sed 's/^/  /' "$tmp/colp.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision)"
+# ==== M3.2a: sign-on-publish / verify-on-install (SSHSIG via ssh-keygen -Y) ============================
+# `kama publish --key` signs the tarball; the index carries the signature + signer key. `--verify` on
+# install enforces (a present signature must verify; a missing one is an error); the default is warn-only.
+if command -v ssh-keygen >/dev/null 2>&1; then
+    sreg="$tmp/sreg"; mkdir -p "$sreg"
+    ssh-keygen -t ed25519 -f "$tmp/pubkey" -N "" -q
+    sg="$tmp/sg-src"; mkdir -p "$sg"
+    printf '{ "name": "sg", "version": "1.0.0" }\n' > "$sg/kama.json"
+    printf 'namespace sg;\nexport { val };\nfn int32 val() { return 5; }\n' > "$sg/sg.kama"
+    if ! ( cd "$sg" && "$KAMA" publish --registry "file://$sreg" --key "$tmp/pubkey" ) >"$tmp/sgpub.out" 2>&1; then
+        echo "check-packages: FAIL — signed publish errored:" >&2; sed 's/^/  /' "$tmp/sgpub.out" >&2; exit 1; fi
+    grep -q '"signature"' "$sreg/sg/index.json" && grep -q '"key"' "$sreg/sg/index.json" \
+        || { echo "check-packages: FAIL — signed publish did not record signature+key in the index" >&2; exit 1; }
+    sgp="$tmp/sgp"; mkdir -p "$sgp"
+    cat > "$sgp/kama.json" <<JSON
+{ "name": "sgp", "version": "0.1.0",
+  "dependencies": { "sg": { "version": "^1.0.0", "registry": "file://$sreg" } } }
+JSON
+    printf 'import sg::{val};\nfn int32 main() { return val(); }\n' > "$sgp/main.kama"
+    # 25a. --verify install of a signed package passes.
+    if ! "$KAMA" pkg install "$sgp" --verify >"$tmp/sv.out" 2>&1; then
+        echo "check-packages: FAIL — --verify install of a signed package errored:" >&2; sed 's/^/  /' "$tmp/sv.out" >&2; exit 1; fi
+    # 25b. tamper the signature blob in the index → --verify FAILS (cold store forces a re-fetch+re-verify).
+    rm -rf "$KAMA_STORE" "$sgp/kama.lock" "$sgp/.kama"
+    awk '{ if (!done && index($0,"BEGIN SSH SIGNATURE")>0) { done=1 } print }' "$sreg/sg/index.json" >/dev/null
+    # flip a character inside the armored signature body (the line after the BEGIN marker)
+    sed 's/\(BEGIN SSH SIGNATURE-----\\n\)./\1Z/' "$sreg/sg/index.json" > "$tmp/idx.bad" && mv "$tmp/idx.bad" "$sreg/sg/index.json"
+    if "$KAMA" pkg install "$sgp" --verify >"$tmp/svbad.out" 2>&1; then
+        echo "check-packages: FAIL — --verify accepted a tampered signature:" >&2; sed 's/^/  /' "$tmp/svbad.out" >&2; exit 1; fi
+    grep -qi "signature verification failed" "$tmp/svbad.out" || { echo "check-packages: FAIL — tampered-signature message unclear:" >&2; sed 's/^/  /' "$tmp/svbad.out" >&2; exit 1; }
+    # 25c. the same tampered signature WITHOUT --verify is warn-only: install succeeds, a warning is printed.
+    rm -rf "$KAMA_STORE" "$sgp/kama.lock" "$sgp/.kama"
+    if ! "$KAMA" pkg install "$sgp" >"$tmp/svwarn.out" 2>&1; then
+        echo "check-packages: FAIL — warn-only install (bad sig, no --verify) errored:" >&2; sed 's/^/  /' "$tmp/svwarn.out" >&2; exit 1; fi
+    grep -qi "signature check failed" "$tmp/svwarn.out" || { echo "check-packages: FAIL — warn-only did not warn on a bad signature:" >&2; sed 's/^/  /' "$tmp/svwarn.out" >&2; exit 1; }
+    SIGNOTE="signed publish/verify/tamper/warn-only"
+else
+    echo "check-packages: NOTE — ssh-keygen absent, skipping M3.2a signing cases"
+    SIGNOTE="signing skipped (no ssh-keygen)"
+fi
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; $SIGNOTE)"
