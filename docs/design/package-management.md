@@ -69,6 +69,31 @@ record for its build. This doc keeps the vision, seam map, prior art, and open q
   `tools/check-packages.sh` extended (cases 11–14: `main`-field run + explicit run forwarding a non-zero exit,
   the `--dev` boundary composed with run, native-only rejection, no-input/no-`main` errors). Native 755 /
   wasm 725 green; run/driver path ASan+UBSan-clean. **Closes pillar 4 (per-project packages).**
+- **M3.0 — SemVer parsing + version-range resolution (git-tag deps) ✅ shipped 2026-07-25.** The first
+  M3 slice, and the spine every later slice reuses — no registry or hosting needed. A git dep opts into
+  ranges with `git` + `version` + **no** `rev` (`isRangeDep`): install runs `git ls-remote --tags`,
+  parses tags as `MAJOR.MINOR.PATCH` (leading `v` stripped; pre-release/build-metadata tags skipped, not
+  mis-ordered; annotated-tag `^{}` derefs stripped+deduped), and pins the **highest tag satisfying** the
+  range. Operators: exact, caret `^` (incl. the correct `^0.x` narrowing), tilde `~`, comparators
+  `>=`/`>`/`<=`/`<`, wildcard `*`. All inline in `kama.driver.cpp` (`SemVer`/`VersionReq` normalized to
+  one lower/upper bound → `satisfies` is a single interval test; `parseSemVer`/`parseVersionReq`/
+  `intersect`/`gitVersionTags`/`selectHighestTag`, ~130 lines, no new file). **Conflict policy**: two
+  requestors of one name **intersect** their ranges and take the one highest version satisfying both;
+  disjoint → hard error naming both ranges (the existing `sameSpec` exact-source check stays for
+  non-range deps; mixing an exact pin and a range for one name is a hard error). The resolver stays a
+  flat single-version-per-name BFS but gained a **restart-with-seeded-constraint fixpoint**: because it
+  resolves each node on first sight, a later tighter requestor that would pick a *lower* version restarts
+  resolution with the tightened range pre-seeded (bounded — a name's chosen version only ever decreases).
+  **Lock**: a new optional `LockEntry.version` records the resolved concrete version (`rev` = selected
+  tag, `commit` = sha); emitted only when non-empty so existing entries stay byte-identical. **Offline &
+  reproducible**: a range dep whose locked `version` still satisfies the manifest range is reused verbatim
+  — **no `ls-remote`, no clone** (warm store links offline; cold store re-fetches by the pinned commit);
+  `kama pkg update` re-enumerates and can advance. `rev`+`version` together is rejected at manifest parse
+  (explicit over implicit). Guard `tools/check-packages.sh` extended (cases 15–18: highest-satisfying
+  across ^/~/comparator/*, intersection, a transitive-range **downgrade** exercising the restart path,
+  disjoint→hard-fail naming both ranges, offline byte-identical re-install). **Deferred within M3**:
+  hosted registry, `kama publish`, namespacing `@scope/name`, signing/provenance, pre-release ordering
+  (SemVer §11), compound/hyphen/`||` ranges, multiple versions of one package, url-dep ranges.
 
 ## Scope — four pillars (user, 2026-07-24)
 
@@ -174,9 +199,56 @@ Kama should answer the ecosystem question so users don't roll their own. Opt-in,
 - **M1 — toolchain store + shim + `kama toolchain` + project pin** (pillars 1–3). Native first.
 - **M2 — manifest deps + `kama.lock` + content-addressed store + resolver** (pillar 4); Git/URL deps +
   integrity; `kama add/install/run`. **No registry yet.**
-- **M3 — hosted registry + `kama publish` + namespacing/signing.** Extends PUBLISHING.md.
+- **M3 — hosted registry + `kama publish` + namespacing/signing + SemVer ranges.** Extends PUBLISHING.md.
+  Sliced (like M2) because it mixes self-contained compiler work with real hosted-service/ops work:
+  - **M3.0 — SemVer parsing + version-range resolution (git-tag deps). ✅ shipped 2026-07-25** (see the
+    as-shipped bullet above). No registry/hosting; the range engine every later slice reuses.
+  - **M3.1 — registry *protocol* + `kama publish` (static-first, URI-abstracted).** The registry is a
+    handful of well-known URIs behind a **base URI** (the Go `GOPROXY` / cargo sparse-index model): an
+    index (`name → [{version, tarball-uri, integrity, dependencies}]`) + integrity-hashed tarballs. A
+    `registry` dep in `kama.json` resolves by fetching the index, running the M3.0 range engine over the
+    listed versions, and fetching the chosen tarball into the *existing* content-addressed store. `kama
+    publish` packages the project + emits the index entry + tarball. **A static file host AND a dynamic
+    service satisfy the identical protocol** — build the static emitter first; self-hosting either kind is
+    just a base URI. Fully testable against a `file://` static registry (no live service). Namespacing
+    `@scope/name` is a naming convention in the index (this slice or its own sub-slice).
+    - **Registry sources — default + layered per-project overrides (user, 2026-07-25).** kama ships a
+      **default primary** registry base URI (the official host). A project may declare `registries` in
+      `kama.json` as an ordered list to **layer** additional sources; lookup walks them in **priority
+      order** (first match wins), and a project can **opt out of the default** (omit/exclude it) for a
+      fully-private or air-gapped setup. A base URI is transport-agnostic — `file://` (self-host /
+      air-gap / the network-free M3.1 tests), `https://`, etc. — the client only knows the base URI, so
+      the same layering works whether a source is a static host or a dynamic service. Mirrors cargo's
+      `[registries]` + source-replacement and pip's `--index-url`/`--extra-index-url`, with the default
+      being removable. ⚠️ **Dependency-confusion note:** priority-order-first-match means a source
+      earlier in the list can shadow a name in a later one; the robust guard is per-scope pinning
+      (`@scope/name` → a specific registry, npm-style) so a private scope can't be shadowed by the
+      public default. Fold the scope→registry binding into the namespacing sub-slice.
+    - **Scope→registry binding is re-pointable, not baked into identity (user, 2026-07-25).** The
+      per-scope registry pin is plain `kama.json` config — editable by hand or a `kama pkg`-style
+      byte-preserving splice command — so a scope can be **moved to a different registry later** without
+      re-resolving. This works because the **lock pins content identity (the integrity hash), not the
+      registry URI** — a registry is only *where to fetch the same bytes*. Re-pointing a scope to a
+      mirror re-fetches identical content (verified by the existing integrity check) and lands in the
+      **same content-addressed store entry** (keyed by tree hash, already location-independent), so the
+      lock stays valid and byte-identical. This is cargo source-replacement / Go GOPROXY-mirror. Two
+      workflows it enables: (a) **pull-then-self-host** — resolve latest from the default registry, mirror
+      those exact packages (name + version + integrity) into an internal static registry, repoint the
+      scope, builds verify the same hashes; (b) **isolated / air-gapped dev** — point scopes (or drop the
+      default) at a `file://` mirror so `install` never touches remotes (composes with the existing
+      "builds never fetch" guarantee — only `install` fetches, and it can be pointed fully offline).
+  - **M3.2 — signing / provenance.** Two credible models: Go's checksum-transparency log vs npm/PyPI's
+    sigstore/OIDC provenance attestations. Shell-out signing (like the existing sha256 shell-out); publish
+    signs, install verifies. Decide the model here.
+  - **M3.3 — hosted deployment (ops; gated on the site being live + repo public).** Stand up the real
+    registry host (Cloudflare Pages static index + GitHub Releases/R2 tarballs), wire the default base URI,
+    extend PUBLISHING.md. Pure ops — no compiler change; may be preceded by finishing the website. A
+    dynamic (Workers/KV/R2 or Node) service is an *optional* drop-in speaking the M3.1 protocol.
 - **M4 — multi-modal**: scripting-runtime versions in the store; per-modality env resolution (pillar 3's
-  full form).
+  full form). **Deferred until the kama scripting runtime (ROADMAP 2.0 dual-mode scripting) actually
+  exists** — until there's a second modality to install, M4 has nothing to version. The store key is
+  already modality-aware-seeded (`versions/<kind>-<v>/`, `kind=compiler` today) so no rework is needed
+  when a scripting runtime lands.
 
 ## Open questions for the kickoff session
 

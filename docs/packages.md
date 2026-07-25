@@ -88,6 +88,33 @@ Other manifest surgery: `kama pkg remove <name>` drops a dependency; `kama pkg u
 [<pkg>]` re-resolves pins (e.g. advances a branch) and rewrites the lock without touching
 the manifest.
 
+### Version ranges (git tags)
+
+A git dependency can pin a **version range** instead of an exact `rev`. Give it a `version`
+and no `rev`, and install resolves the **highest tag** that satisfies the range (tags are read
+as SemVer, an optional leading `v` stripped):
+
+```json
+{
+  "dependencies": {
+    "geo": { "git": "https://example.com/geo.git", "version": "^1.2.0" }
+  }
+}
+```
+
+Supported ranges: exact `1.2.3`; caret `^1.2.3` (compatible-with — up to the next major, or the
+next minor/patch for `^0.x`); tilde `~1.2.3` (up to the next minor); the comparators `>=` `>`
+`<=` `<`; and `*` (any). Only `MAJOR.MINOR.PATCH` tags are candidates — pre-release/build-metadata
+tags (e.g. `v1.3.0-rc1`) are ignored.
+
+The lock pins the **concrete** version and commit the range resolved to, so builds stay
+reproducible and offline — re-installing an unchanged project reuses the locked version without
+contacting the remote. `kama pkg update` re-resolves and can advance to a newer satisfying tag. A
+git dependency takes **either** `rev` (exact) **or** `version` (a range), never both. When two
+packages request the same dependency with different ranges, the resolver intersects them and picks
+the one highest version satisfying both; if no version satisfies all requestors, it's a hard error
+naming both ranges.
+
 ## Dev-dependencies
 
 Dependencies needed only for development (test kits, fixtures, tooling) go under

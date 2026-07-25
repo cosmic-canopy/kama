@@ -300,4 +300,128 @@ if ( cd "$t14" && "$KAMA" run ) >"$tmp/r14b.out" 2>&1; then
     echo "check-packages: FAIL — kama run with no \"main\" was not rejected" >&2; exit 1; fi
 grep -qi 'no "main"' "$tmp/r14b.out" || { echo "check-packages: FAIL — no-main run error unclear:" >&2; sed 's/^/  /' "$tmp/r14b.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only)"
+# ---- M3.0: SemVer version ranges (git+version, no rev) -----------------------------------------------
+# A single repo tagged across several versions; each tagged commit returns a version-distinguishable value
+# from area() so the built program's EXIT CODE proves which tag the resolver selected. A pre-release
+# (v1.3.0-rc1) and a non-SemVer alias (nightly) must be ignored — never selected.
+gv="$tmp/gv-src"; mkdir -p "$gv"
+printf '{ "name": "gv", "version": "0.0.0" }\n' > "$gv/kama.json"
+git -C "$gv" init -q
+gvtag() {   # $1 = return value baked into area(); $2 = tag name
+    printf 'namespace gv;\nexport { area };\nfn int32 area() { return %s; }\n' "$1" > "$gv/gv.kama"
+    git -C "$gv" add -A; git -C "$gv" commit -qm "$2"; git -C "$gv" tag "$2"
+}
+gvtag 100 v1.0.0
+gvtag 110 v1.1.0
+gvtag 120 v1.2.0
+gvtag 130 v1.3.0-rc1        # pre-release: not a candidate
+gvtag 200 v2.0.0
+git -C "$gv" tag nightly    # non-SemVer alias on the newest commit: not a candidate
+
+CRDIR=""
+check_range() {   # $1 = range, $2 = expected exit code, $3 = unique suffix
+    d="$tmp/cr$3"; mkdir -p "$d"; CRDIR="$d"
+    cat > "$d/kama.json" <<J
+{ "name": "cr$3", "version": "0.1.0", "dependencies": { "gv": { "git": "file://$gv", "version": "$1" } } }
+J
+    printf 'import gv::{area};\nfn int32 main() { return area(); }\n' > "$d/main.kama"
+    if ! "$KAMA" pkg install "$d" >"$tmp/cr$3.out" 2>&1; then
+        echo "check-packages: FAIL — range '$1' install errored:" >&2; sed 's/^/  /' "$tmp/cr$3.out" >&2; exit 1; fi
+    if "$KAMA" build "$d/main.kama" -o "$tmp/crapp$3" >"$tmp/crb$3.out" 2>&1; then run "$tmp/crapp$3"
+        [ "$RC" = "$2" ] || { echo "check-packages: FAIL — range '$1' selected the wrong version (app returned $RC, expected $2)" >&2; exit 1; }
+    else echo "check-packages: FAIL — range '$1' consumer build failed:" >&2; sed 's/^/  /' "$tmp/crb$3.out" >&2; exit 1; fi
+}
+
+# 15. highest-satisfying selection across caret / tilde / comparator / wildcard.
+check_range "^1.0.0" 120 15a     # >=1.0.0 <2.0.0 -> 1.2.0 (NOT the 1.3.0-rc1 pre-release, NOT 2.0.0)
+grep -q '"version": "1.2.0"' "$CRDIR/kama.lock" \
+    || { echo "check-packages: FAIL — ^1.0.0 did not record the resolved concrete version in the lock:" >&2; sed 's/^/  /' "$CRDIR/kama.lock" >&2; exit 1; }
+grep -q '"rev": "v1.2.0"' "$CRDIR/kama.lock" \
+    || { echo "check-packages: FAIL — ^1.0.0 lock did not pin the selected tag v1.2.0:" >&2; sed 's/^/  /' "$CRDIR/kama.lock" >&2; exit 1; }
+check_range "~1.1.0" 110 15b     # >=1.1.0 <1.2.0 -> 1.1.0
+check_range "<2.0.0" 120 15c     # comparator upper bound -> 1.2.0
+check_range "*"      200 15d     # wildcard -> the absolute highest, 2.0.0
+
+# 16. range INTERSECTION across two requestors (compatible): root wants >=1.1.0, midv wants ^1.0.0 ->
+#     >=1.1.0 <2.0.0 -> a single flat gv at 1.2.0.
+midv="$tmp/midv"; mkdir -p "$midv"
+cat > "$midv/kama.json" <<J
+{ "name": "midv", "dependencies": { "gv": { "git": "file://$gv", "version": "^1.0.0" } } }
+J
+printf 'namespace midv;\nimport gv::{area};\nexport { mv };\nfn int32 mv() { return area(); }\n' > "$midv/midv.kama"
+git -C "$midv" init -q; git -C "$midv" add -A; git -C "$midv" commit -qm init; git -C "$midv" tag v1.0.0
+t16="$tmp/t16"; mkdir -p "$t16"
+cat > "$t16/kama.json" <<J
+{ "name": "t16", "dependencies": {
+    "gv":   { "git": "file://$gv",   "version": ">=1.1.0" },
+    "midv": { "git": "file://$midv", "rev": "v1.0.0" } } }
+J
+printf 'import gv::{area};\nimport midv::{mv};\nfn int32 main() { return area() + mv()*0; }\n' > "$t16/main.kama"
+if ! "$KAMA" pkg install "$t16" >"$tmp/t16.out" 2>&1; then
+    echo "check-packages: FAIL — intersection install errored:" >&2; sed 's/^/  /' "$tmp/t16.out" >&2; exit 1; fi
+grep -q '"version": "1.2.0"' "$t16/kama.lock" \
+    || { echo "check-packages: FAIL — range intersection did not resolve gv to 1.2.0:" >&2; sed 's/^/  /' "$t16/kama.lock" >&2; exit 1; }
+if "$KAMA" build "$t16/main.kama" -o "$tmp/a16" >"$tmp/b16.out" 2>&1; then run "$tmp/a16"
+    [ "$RC" = 120 ] || { echo "check-packages: FAIL — intersection app returned $RC, expected 120" >&2; exit 1; }
+else echo "check-packages: FAIL — intersection build failed:" >&2; sed 's/^/  /' "$tmp/b16.out" >&2; exit 1; fi
+
+# 16b. intersection forcing a DOWNGRADE: root picks 1.2.0 for <=1.2.0, then midlo's <=1.1.0 tightens it ->
+#      the resolver re-resolves to 1.1.0 (the restart-with-seeded-constraint path).
+midlo="$tmp/midlo"; mkdir -p "$midlo"
+cat > "$midlo/kama.json" <<J
+{ "name": "midlo", "dependencies": { "gv": { "git": "file://$gv", "version": "<=1.1.0" } } }
+J
+printf 'namespace midlo;\nimport gv::{area};\nexport { ml };\nfn int32 ml() { return area(); }\n' > "$midlo/midlo.kama"
+git -C "$midlo" init -q; git -C "$midlo" add -A; git -C "$midlo" commit -qm init; git -C "$midlo" tag v1.0.0
+t16b="$tmp/t16b"; mkdir -p "$t16b"
+cat > "$t16b/kama.json" <<J
+{ "name": "t16b", "dependencies": {
+    "gv":    { "git": "file://$gv",    "version": "<=1.2.0" },
+    "midlo": { "git": "file://$midlo", "rev": "v1.0.0" } } }
+J
+printf 'import gv::{area};\nimport midlo::{ml};\nfn int32 main() { return area() + ml()*0; }\n' > "$t16b/main.kama"
+if ! "$KAMA" pkg install "$t16b" >"$tmp/t16b.out" 2>&1; then
+    echo "check-packages: FAIL — downgrade install errored:" >&2; sed 's/^/  /' "$tmp/t16b.out" >&2; exit 1; fi
+grep -q '"version": "1.1.0"' "$t16b/kama.lock" \
+    || { echo "check-packages: FAIL — a tighter transitive range did not downgrade gv to 1.1.0:" >&2; sed 's/^/  /' "$t16b/kama.lock" >&2; exit 1; }
+if "$KAMA" build "$t16b/main.kama" -o "$tmp/a16b" >"$tmp/b16b.out" 2>&1; then run "$tmp/a16b"
+    [ "$RC" = 110 ] || { echo "check-packages: FAIL — downgrade app returned $RC, expected 110" >&2; exit 1; }
+else echo "check-packages: FAIL — downgrade build failed:" >&2; sed 's/^/  /' "$tmp/b16b.out" >&2; exit 1; fi
+
+# 17. DISJOINT ranges -> hard fail naming both requestors: midhi needs >=1.2.0, midlo2 needs <1.2.0.
+for m in midhi:'>=1.2.0' midlo2:'<1.2.0'; do
+    name=${m%%:*}; rng=${m#*:}; d="$tmp/$name"; mkdir -p "$d"
+    cat > "$d/kama.json" <<J
+{ "name": "$name", "dependencies": { "gv": { "git": "file://$gv", "version": "$rng" } } }
+J
+    printf 'namespace %s;\nimport gv::{area};\nexport { v };\nfn int32 v() { return area(); }\n' "$name" > "$d/$name.kama"
+    git -C "$d" init -q; git -C "$d" add -A; git -C "$d" commit -qm init; git -C "$d" tag v1.0.0
+done
+t17="$tmp/t17"; mkdir -p "$t17"
+cat > "$t17/kama.json" <<J
+{ "name": "t17", "dependencies": {
+    "midhi":  { "git": "file://$tmp/midhi",  "rev": "v1.0.0" },
+    "midlo2": { "git": "file://$tmp/midlo2", "rev": "v1.0.0" } } }
+J
+if "$KAMA" pkg install "$t17" >"$tmp/e17" 2>&1; then
+    echo "check-packages: FAIL — disjoint version ranges were not detected as a conflict" >&2; exit 1; fi
+grep -qi "conflict" "$tmp/e17" || { echo "check-packages: FAIL — disjoint conflict not reported clearly:" >&2; sed 's/^/  /' "$tmp/e17" >&2; exit 1; }
+grep -q '>=1.2.0' "$tmp/e17" && grep -q '<1.2.0' "$tmp/e17" \
+    || { echo "check-packages: FAIL — disjoint conflict did not name both ranges:" >&2; sed 's/^/  /' "$tmp/e17" >&2; exit 1; }
+
+# 18. offline byte-identical re-install: a range dep reuses the locked concrete version WITHOUT ls-remote.
+off="$tmp/off"; mkdir -p "$off"
+cat > "$off/kama.json" <<J
+{ "name": "off", "dependencies": { "gv": { "git": "file://$gv", "version": "^1.0.0" } } }
+J
+printf 'import gv::{area};\nfn int32 main() { return area(); }\n' > "$off/main.kama"
+if ! "$KAMA" pkg install "$off" >"$tmp/off.out" 2>&1; then
+    echo "check-packages: FAIL — range offline setup install errored:" >&2; sed 's/^/  /' "$tmp/off.out" >&2; exit 1; fi
+cp "$off/kama.lock" "$tmp/off.lock"
+mv "$gv" "$gv.hidden"                          # repo unreachable — a warm store + lock must resolve offline
+if ! "$KAMA" pkg install "$off" >"$tmp/offb.out" 2>&1 || ! cmp -s "$tmp/off.lock" "$off/kama.lock"; then
+    echo "check-packages: FAIL — range offline re-install not reproducible (lock changed or ls-remote hit):" >&2
+    sed 's/^/  /' "$tmp/offb.out" >&2; diff "$tmp/off.lock" "$off/kama.lock" >&2 || true; mv "$gv.hidden" "$gv"; exit 1; fi
+mv "$gv.hidden" "$gv"
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline)"

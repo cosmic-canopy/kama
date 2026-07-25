@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <cctype>               // isdigit / isspace (SemVer range parsing)
 #include <memory>
 #include <string>
 #include <fstream>
@@ -393,13 +394,145 @@ struct DepSpec {
     std::string version;    // optional metadata (resolver's single-version-per-major check)
 };
 
-// Two dependency specs name "the same package" iff every identity-bearing field matches. With no SemVer
-// yet, this IS the whole conflict test: identical -> dedup in the resolver, divergent -> hard error.
+// Two dependency specs name "the same package" iff every identity-bearing field matches. For a
+// non-range dep this IS the whole conflict test: identical -> dedup in the resolver, divergent ->
+// hard error. Range (git+version, no rev) deps take the SemVer path below instead.
 static bool sameSpec(const DepSpec& a, const DepSpec& b)
 {
     return a.path == b.path && a.git == b.git && a.url == b.url
         && a.rev == b.rev && a.integrity == b.integrity;
 }
+
+// ---- SemVer (M3.0) ---------------------------------------------------------------------------
+// A deliberately minimal MAJOR.MINOR.PATCH engine: no pre-release/build ordering (a tag carrying a
+// `-pre`/`+build` suffix simply isn't a candidate), no compound/hyphen/`||` ranges. It exists so a
+// git dependency can pin a *range* (`"version": "^1.2.0"`) and resolve to the highest matching tag;
+// the lock then pins the concrete version + commit, so builds stay reproducible and offline.
+struct SemVer { int major = 0, minor = 0, patch = 0; };
+
+// Parse strict "MAJOR.MINOR.PATCH" (optional leading 'v'). Rejects pre-release/build metadata, extra
+// components, leading '+'/signs, and empties. Never throws; returns false on anything non-conforming.
+static bool parseSemVer(const std::string& in, SemVer& out)
+{
+    std::string s = in;
+    if (!s.empty() && (s[0] == 'v' || s[0] == 'V')) s = s.substr(1);
+    if (s.find('-') != std::string::npos || s.find('+') != std::string::npos) return false;  // pre/build
+    int part[3]; size_t p = 0;
+    for (int k = 0; k < 3; ++k) {
+        if (p >= s.size() || !isdigit((unsigned char)s[p])) return false;
+        long v = 0;
+        while (p < s.size() && isdigit((unsigned char)s[p])) { v = v * 10 + (s[p] - '0'); ++p;
+            if (v > 1000000000L) return false; }
+        part[k] = (int)v;
+        if (k < 2) { if (p >= s.size() || s[p] != '.') return false; ++p; }
+    }
+    if (p != s.size()) return false;   // trailing junk (a 4th component, etc.)
+    out.major = part[0]; out.minor = part[1]; out.patch = part[2];
+    return true;
+}
+
+static int cmpSemVer(const SemVer& a, const SemVer& b)
+{
+    if (a.major != b.major) return a.major < b.major ? -1 : 1;
+    if (a.minor != b.minor) return a.minor < b.minor ? -1 : 1;
+    if (a.patch != b.patch) return a.patch < b.patch ? -1 : 1;
+    return 0;
+}
+
+// A range normalized to an optional lower + optional upper bound, so `satisfies` is one interval
+// test regardless of the surface operator. No bound at all (`*`/`x`/empty) matches anything.
+struct VersionReq {
+    bool hasLo = false, loInclusive = true; SemVer lo;
+    bool hasHi = false, hiInclusive = false; SemVer hi;
+};
+
+// Operators: exact `1.2.3`; caret `^1.2.3`; tilde `~1.2.3`; comparators `>=` `>` `<=` `<`;
+// wildcard `*`/`x`/empty. Returns false on anything else (compound ranges, hyphen ranges, `||`).
+static bool parseVersionReq(const std::string& in, VersionReq& out)
+{
+    // trim surrounding whitespace
+    size_t a = 0, b = in.size();
+    while (a < b && isspace((unsigned char)in[a])) ++a;
+    while (b > a && isspace((unsigned char)in[b - 1])) --b;
+    std::string s = in.substr(a, b - a);
+    out = VersionReq();
+    if (s.empty() || s == "*" || s == "x" || s == "X") return true;   // matches anything
+
+    auto compat = [&](const SemVer& v, char kind) {   // caret/tilde upper bound
+        // caret: next incompatible release. ^1.2.3 -> <2.0.0; ^0.2.3 -> <0.3.0; ^0.0.3 -> <0.0.4.
+        // tilde: next minor.            ~1.2.3 -> <1.3.0; ~0.2.3 -> <0.3.0.
+        SemVer hi;
+        if (kind == '^') {
+            if (v.major != 0)      { hi.major = v.major + 1; hi.minor = 0; hi.patch = 0; }
+            else if (v.minor != 0) { hi.major = 0; hi.minor = v.minor + 1; hi.patch = 0; }
+            else                   { hi.major = 0; hi.minor = 0; hi.patch = v.patch + 1; }
+        } else { // '~'
+            hi.major = v.major; hi.minor = v.minor + 1; hi.patch = 0;
+        }
+        out.hasLo = true; out.loInclusive = true; out.lo = v;
+        out.hasHi = true; out.hiInclusive = false; out.hi = hi;
+    };
+
+    if (s[0] == '^' || s[0] == '~') {
+        SemVer v; if (!parseSemVer(s.substr(1), v)) return false;
+        compat(v, s[0]); return true;
+    }
+    if (s[0] == '>' || s[0] == '<') {
+        bool eq = s.size() > 1 && s[1] == '=';
+        SemVer v; if (!parseSemVer(s.substr(eq ? 2 : 1), v)) return false;
+        if (s[0] == '>') { out.hasLo = true; out.loInclusive = eq; out.lo = v; }
+        else             { out.hasHi = true; out.hiInclusive = eq; out.hi = v; }
+        return true;
+    }
+    // bare version => exact
+    SemVer v; if (!parseSemVer(s, v)) return false;
+    out.hasLo = out.hasHi = true; out.loInclusive = out.hiInclusive = true; out.lo = out.hi = v;
+    return true;
+}
+
+static bool satisfies(const VersionReq& r, const SemVer& v)
+{
+    if (r.hasLo) { int c = cmpSemVer(v, r.lo); if (c < 0 || (c == 0 && !r.loInclusive)) return false; }
+    if (r.hasHi) { int c = cmpSemVer(v, r.hi); if (c > 0 || (c == 0 && !r.hiInclusive)) return false; }
+    return true;
+}
+
+// The intersection of two normalized ranges: the tighter of each bound. The authoritative
+// "is it empty" check is "does any real tag satisfy the result" (done at the call site over the
+// enumerated tags), so this never needs to reason about emptiness itself.
+static VersionReq intersect(const VersionReq& a, const VersionReq& b)
+{
+    VersionReq r;
+    if (a.hasLo || b.hasLo) {
+        if (!a.hasLo)      { r.hasLo = true; r.lo = b.lo; r.loInclusive = b.loInclusive; }
+        else if (!b.hasLo) { r.hasLo = true; r.lo = a.lo; r.loInclusive = a.loInclusive; }
+        else {
+            int c = cmpSemVer(a.lo, b.lo);
+            if (c > 0)      { r.hasLo = true; r.lo = a.lo; r.loInclusive = a.loInclusive; }
+            else if (c < 0) { r.hasLo = true; r.lo = b.lo; r.loInclusive = b.loInclusive; }
+            else            { r.hasLo = true; r.lo = a.lo; r.loInclusive = a.loInclusive && b.loInclusive; }
+        }
+    }
+    if (a.hasHi || b.hasHi) {
+        if (!a.hasHi)      { r.hasHi = true; r.hi = b.hi; r.hiInclusive = b.hiInclusive; }
+        else if (!b.hasHi) { r.hasHi = true; r.hi = a.hi; r.hiInclusive = a.hiInclusive; }
+        else {
+            int c = cmpSemVer(a.hi, b.hi);
+            if (c < 0)      { r.hasHi = true; r.hi = a.hi; r.hiInclusive = a.hiInclusive; }
+            else if (c > 0) { r.hasHi = true; r.hi = b.hi; r.hiInclusive = b.hiInclusive; }
+            else            { r.hasHi = true; r.hi = a.hi; r.hiInclusive = a.hiInclusive && b.hiInclusive; }
+        }
+    }
+    return r;
+}
+
+// A git dependency opts into range resolution iff it names a repo and a version range but NO fixed
+// rev. (`rev` + `version` together is rejected earlier as ambiguous — pick one.)
+static bool isRangeDep(const DepSpec& d)
+{
+    return !d.git.empty() && d.rev.empty() && !d.version.empty();
+}
+// ---------------------------------------------------------------------------------------------
 
 struct ManifestReader {
     const std::string& s;
@@ -513,6 +646,12 @@ struct ManifestReader {
                 if (i < s.size() && s[i] == '}') { ++i; break; }
                 return fail("expected ',' or '}' in a dependency body");
             }
+            // A git dep pins EITHER an exact `rev` OR a `version` range — never both (ambiguous).
+            if (!spec.git.empty() && !spec.rev.empty() && !spec.version.empty()) {
+                err = "dependency '" + name + "': a git dependency takes either \"rev\" (an exact "
+                      "tag/branch/commit) or \"version\" (a range), not both";
+                return false;
+            }
             if (target) (*target)[name] = spec;
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -609,6 +748,7 @@ static bool loadManifestToolchain(const std::string& path, std::string& tcOut, s
 struct LockEntry {
     std::string source;                     // "path" | "git" | "url"
     std::string path, git, url, rev, commit, integrity;
+    std::string version;                    // resolved concrete SemVer for a range dep (git+version); else empty
     std::string treeHash;                   // the store dir key "sha256-<treehash>" (== integrity for git; the
                                             // canonical unpacked-tree hash for url, whose integrity is the tarball)
     bool dev = false;                       // a dev-dependency (top-level view only, never propagated transitively)
@@ -641,6 +781,7 @@ static bool writeLockFile(const std::string& path, const std::map<std::string, L
         if (!e.git.empty())       out << ", \"git\": \""       << jsonEscape(e.git)       << "\"";
         if (!e.url.empty())       out << ", \"url\": \""       << jsonEscape(e.url)       << "\"";
         if (!e.rev.empty())       out << ", \"rev\": \""       << jsonEscape(e.rev)       << "\"";
+        if (!e.version.empty())   out << ", \"version\": \""   << jsonEscape(e.version)   << "\"";
         if (!e.commit.empty())    out << ", \"commit\": \""    << jsonEscape(e.commit)    << "\"";
         if (!e.integrity.empty()) out << ", \"integrity\": \"" << jsonEscape(e.integrity) << "\"";
         // treeHash == the store dir key; omit when it equals integrity (git) so those entries stay byte-
@@ -706,6 +847,7 @@ struct LockReader {
             else if (k == "git")       { if (!str(e.git))       return false; }
             else if (k == "url")       { if (!str(e.url))       return false; }
             else if (k == "rev")       { if (!str(e.rev))       return false; }
+            else if (k == "version")   { if (!str(e.version))   return false; }
             else if (k == "commit")    { if (!str(e.commit))    return false; }
             else if (k == "integrity") { if (!str(e.integrity)) return false; }
             else if (k == "treeHash")  { if (!str(e.treeHash))  return false; }
@@ -1226,6 +1368,55 @@ static bool resolveOne(const std::string& name, const DepSpec& spec, const std::
     return fetchToStore(name, spec, out, storePath, err);   // new dep or changed spec — fresh
 }
 
+static std::string semVerStr(const SemVer& v)
+{
+    return std::to_string(v.major) + "." + std::to_string(v.minor) + "." + std::to_string(v.patch);
+}
+
+// Enumerate a git repo's SemVer tags (network-free against file:// repos). `git ls-remote --tags <url>`
+// prints "<sha>\trefs/tags/<tag>"; an annotated tag ALSO emits a "<tag>^{}" deref line — strip the
+// "^{}" and dedupe so a tag isn't counted twice (the classic silent double-candidate bug). Non-SemVer
+// and pre-release tags are silently skipped (not candidates). Returns false + `err` on command failure
+// or zero parseable version tags.
+static bool gitVersionTags(const std::string& gitUrl,
+                           std::vector<std::pair<SemVer, std::string>>& out, std::string& err)
+{
+    int rc = 0;
+    std::string res = runCmdCapture("git ls-remote --tags \"" + gitUrl + "\" 2>/dev/null", &rc);
+    if (rc != 0) { err = "cannot list tags of git repo '" + gitUrl + "'"; return false; }
+    std::set<std::string> seen;
+    std::istringstream ss(res);
+    std::string line;
+    const std::string prefix = "refs/tags/";
+    while (std::getline(ss, line)) {
+        size_t tab = line.find('\t');
+        if (tab == std::string::npos) continue;
+        std::string ref = line.substr(tab + 1);
+        if (ref.compare(0, prefix.size(), prefix) != 0) continue;
+        std::string tag = ref.substr(prefix.size());
+        if (tag.size() >= 3 && tag.compare(tag.size() - 3, 3, "^{}") == 0)
+            tag = tag.substr(0, tag.size() - 3);          // annotated-tag deref
+        if (!seen.insert(tag).second) continue;           // dedupe
+        SemVer v;
+        if (parseSemVer(tag, v)) out.push_back({v, tag});
+    }
+    if (out.empty()) { err = "git repo '" + gitUrl + "' has no SemVer version tags"; return false; }
+    return true;
+}
+
+// The highest tag satisfying `req`. Returns false when none matches (the caller turns that into the
+// right message: a disjoint conflict, or "no tag satisfies the range").
+static bool selectHighestTag(const std::vector<std::pair<SemVer, std::string>>& tags,
+                             const VersionReq& req, SemVer& vOut, std::string& tagOut)
+{
+    bool found = false;
+    for (auto& t : tags) {
+        if (!satisfies(req, t.first)) continue;
+        if (!found || cmpSemVer(t.first, vOut) > 0) { vOut = t.first; tagOut = t.second; found = true; }
+    }
+    return found;
+}
+
 // The resolver core: a two-phase transitive BFS from the ROOT manifest, honoring `oldLock` per node. Phase 1
 // (prod) seeds `dependencies` and follows each fetched package's own `dependencies`; phase 2 (dev) seeds the
 // root's `dev-dependencies` (a package needed in prod is never demoted to dev — prod wins) and follows their
@@ -1240,81 +1431,187 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str()); return 2;
     }
 
-    // Rebuild both views from scratch so they can never drift from the manifest/lock.
     std::string viewDir    = base + "/.kama/deps";
     std::string devViewDir = base + "/.kama/dev-deps";
-    runCmd(rmRfCmd(viewDir));
-    runCmd(rmRfCmd(devViewDir));
-    if (!makeDirs(viewDir)) { fprintf(stderr, "kama install: cannot create %s\n", viewDir.c_str()); return 1; }
 
-    struct Req { std::string name; DepSpec spec; std::string requestor; bool dev; };
-    std::map<std::string, DepSpec> chosen;        // name -> the one resolved spec (conflict guard)
-    std::map<std::string, std::string> chosenBy;  // name -> first requestor (conflict diagnostics)
-    std::map<std::string, LockEntry> lock;        // output
-    bool madeDevDir = false;
+    // Range deps (git+version) select the highest matching tag. Because the BFS resolves each node on
+    // first sight, a *later*, tighter requestor of the same name can invalidate an already-fetched tag.
+    // We handle that by RESTARTING resolution with the now-known constraint pre-seeded — bounded, since
+    // each restart only ever tightens a name's range (so its chosen version monotonically decreases).
+    // Tag enumeration is memoized across attempts (`tagCache`); a warm `oldLock` avoids it entirely.
+    std::map<std::string, VersionReq> seeded;                                  // constraints carried across restarts
+    std::map<std::string, std::vector<std::pair<SemVer, std::string>>> tagCache;   // git url -> parseable version tags
+    const int RESTART = -1;
+    const int MAX_ATTEMPTS = 256;   // defensive: names + versions are finite, so this is never reached
 
-    auto drain = [&](std::deque<Req>& q) -> int {
-        while (!q.empty()) {
-            Req r = q.front(); q.pop_front();
-            auto ci = chosen.find(r.name);
-            if (ci != chosen.end()) {
-                if (!sameSpec(ci->second, r.spec)) {
-                    fprintf(stderr, "kama install: dependency conflict on '%s': %s and %s require different "
-                            "sources (no version reconciliation yet — pin both to the same git/rev or url)\n",
-                            r.name.c_str(), chosenBy[r.name].c_str(), r.requestor.c_str());
+    for (int attempt = 0; ; ++attempt) {
+        if (attempt >= MAX_ATTEMPTS) {
+            fprintf(stderr, "kama install: version resolution did not converge (too many range conflicts)\n");
+            return 1;
+        }
+        // Rebuild both views from scratch so they can never drift from the manifest/lock.
+        runCmd(rmRfCmd(viewDir));
+        runCmd(rmRfCmd(devViewDir));
+        if (!makeDirs(viewDir)) { fprintf(stderr, "kama install: cannot create %s\n", viewDir.c_str()); return 1; }
+
+        struct Req { std::string name; DepSpec spec; std::string requestor; bool dev; };
+        std::map<std::string, DepSpec> chosen;        // name -> the one resolved (tag-pinned) spec
+        std::map<std::string, std::string> chosenBy;  // name -> first requestor (conflict diagnostics)
+        std::map<std::string, std::string> chosenVer; // range deps: name -> resolved concrete "x.y.z"
+        std::map<std::string, VersionReq>  accReq;    // range deps: name -> intersected range so far
+        std::map<std::string, std::string> reqStr;    // range deps: name -> first requestor's range text
+        std::map<std::string, LockEntry> lock;        // output
+        bool madeDevDir = false;
+
+        // Enumerate a git repo's version tags once, memoized across attempts.
+        auto ensureTags = [&](const std::string& gitUrl,
+                              std::vector<std::pair<SemVer, std::string>>*& tags, std::string& terr) -> bool {
+            auto it = tagCache.find(gitUrl);
+            if (it == tagCache.end()) {
+                std::vector<std::pair<SemVer, std::string>> t;
+                if (!gitVersionTags(gitUrl, t, terr)) return false;
+                it = tagCache.emplace(gitUrl, std::move(t)).first;
+            }
+            tags = &it->second; return true;
+        };
+
+        auto drain = [&](std::deque<Req>& q) -> int {
+            while (!q.empty()) {
+                Req r = q.front(); q.pop_front();
+                bool incomingRange = isRangeDep(r.spec);
+
+                auto ci = chosen.find(r.name);
+                if (ci != chosen.end()) {
+                    bool chosenRange = accReq.count(r.name) > 0;
+                    if (chosenRange != incomingRange) {   // one is an exact/url/path pin, the other a range
+                        fprintf(stderr, "kama install: dependency conflict on '%s': %s and %s mix an exact pin "
+                                "and a version range — use the same form\n",
+                                r.name.c_str(), chosenBy[r.name].c_str(), r.requestor.c_str());
+                        return 1;
+                    }
+                    if (chosenRange) {
+                        // Intersect the two ranges and re-select the highest tag satisfying both.
+                        VersionReq req;
+                        if (!parseVersionReq(r.spec.version, req)) {
+                            fprintf(stderr, "kama install: dependency '%s' (required by %s) has an invalid "
+                                    "version range \"%s\"\n", r.name.c_str(), r.requestor.c_str(), r.spec.version.c_str());
+                            return 1;
+                        }
+                        VersionReq merged = intersect(accReq[r.name], req);
+                        std::vector<std::pair<SemVer, std::string>>* tags = nullptr; std::string terr;
+                        if (!ensureTags(r.spec.git, tags, terr)) { fprintf(stderr, "kama install: %s\n", terr.c_str()); return 1; }
+                        SemVer sv; std::string tag;
+                        if (!selectHighestTag(*tags, merged, sv, tag)) {
+                            fprintf(stderr, "kama install: dependency conflict on '%s': %s requires \"%s\" and %s "
+                                    "requires \"%s\" — no published version satisfies both\n",
+                                    r.name.c_str(), chosenBy[r.name].c_str(), reqStr[r.name].c_str(),
+                                    r.requestor.c_str(), r.spec.version.c_str());
+                            return 1;
+                        }
+                        accReq[r.name] = merged;
+                        if (semVerStr(sv) != chosenVer[r.name]) {   // chosen version no longer highest — restart
+                            seeded[r.name] = merged;
+                            return RESTART;
+                        }
+                        continue;   // chosen version still satisfies the tighter range → dedup
+                    }
+                    if (!sameSpec(ci->second, r.spec)) {
+                        fprintf(stderr, "kama install: dependency conflict on '%s': %s and %s require different "
+                                "sources (no version reconciliation yet — pin both to the same git/rev or url)\n",
+                                r.name.c_str(), chosenBy[r.name].c_str(), r.requestor.c_str());
+                        return 1;
+                    }
+                    continue;   // dedup (diamond / prod-wins-over-dev)
+                }
+                if (!r.spec.path.empty() && r.requestor != "<root manifest>") {
+                    fprintf(stderr, "kama install: path dependency '%s' (required by %s) is only allowed at the "
+                            "top level — a fetched package cannot reference a local path reproducibly\n",
+                            r.name.c_str(), r.requestor.c_str());
                     return 1;
                 }
-                continue;   // dedup (diamond / prod-wins-over-dev)
-            }
-            if (!r.spec.path.empty() && r.requestor != "<root manifest>") {
-                fprintf(stderr, "kama install: path dependency '%s' (required by %s) is only allowed at the "
-                        "top level — a fetched package cannot reference a local path reproducibly\n",
-                        r.name.c_str(), r.requestor.c_str());
-                return 1;
-            }
-            chosen[r.name] = r.spec; chosenBy[r.name] = r.requestor;
 
-            LockEntry e; std::string storePath, ferr;
-            if (!resolveOne(r.name, r.spec, base, oldLock, e, storePath, ferr)) {
-                fprintf(stderr, "kama install: %s\n", ferr.c_str()); return 1;
-            }
-            e.dev = r.dev;
-            if (r.dev && !madeDevDir) {
-                if (!makeDirs(devViewDir)) { fprintf(stderr, "kama install: cannot create %s\n", devViewDir.c_str()); return 1; }
-                madeDevDir = true;
-            }
-            if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + r.name)) {
-                fprintf(stderr, "kama install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
-            }
-            // Read THIS package's own prod deps → record (serialized so the build never re-reads) + enqueue.
-            std::string childManifest = storePath + "/kama.json";
-            std::vector<std::string> directNames;
-            if (fileExists(childManifest)) {
-                std::map<std::string, DepSpec> childDeps; std::string cerr;
-                if (!loadManifestDeps(childManifest, childDeps, cerr)) {
-                    fprintf(stderr, "kama install: %s: %s\n", childManifest.c_str(), cerr.c_str()); return 2;
+                // First encounter of a range dep: fold in any seeded (restart) constraint, then pin the
+                // highest satisfying tag — from the lock if it still fits (offline), else via ls-remote.
+                if (incomingRange) {
+                    VersionReq req;
+                    if (!parseVersionReq(r.spec.version, req)) {
+                        fprintf(stderr, "kama install: dependency '%s' (required by %s) has an invalid "
+                                "version range \"%s\"\n", r.name.c_str(), r.requestor.c_str(), r.spec.version.c_str());
+                        return 1;
+                    }
+                    auto sd = seeded.find(r.name);
+                    if (sd != seeded.end()) req = intersect(req, sd->second);
+
+                    SemVer sv; std::string tag; bool reused = false;
+                    auto lk = oldLock.find(r.name);
+                    if (lk != oldLock.end() && !lk->second.version.empty() && lk->second.source == "git"
+                            && lk->second.git == r.spec.git) {
+                        SemVer lv;
+                        if (parseSemVer(lk->second.version, lv) && satisfies(req, lv)) {
+                            sv = lv; tag = lk->second.rev; reused = true;   // honor the lock — no ls-remote
+                        }
+                    }
+                    if (!reused) {
+                        std::vector<std::pair<SemVer, std::string>>* tags = nullptr; std::string terr;
+                        if (!ensureTags(r.spec.git, tags, terr)) { fprintf(stderr, "kama install: %s\n", terr.c_str()); return 1; }
+                        if (!selectHighestTag(*tags, req, sv, tag)) {
+                            fprintf(stderr, "kama install: dependency '%s' (required by %s): no version tag of %s "
+                                    "satisfies \"%s\"\n", r.name.c_str(), r.requestor.c_str(),
+                                    r.spec.git.c_str(), r.spec.version.c_str());
+                            return 1;
+                        }
+                    }
+                    accReq[r.name] = req; reqStr[r.name] = r.spec.version; chosenVer[r.name] = semVerStr(sv);
+                    r.spec.rev = tag;   // pin: resolveOne now treats it as an exact git dep (tag → commit)
                 }
-                for (auto& ck : childDeps) { directNames.push_back(ck.first);
-                    q.push_back({ck.first, ck.second, r.name, r.dev}); }
-                std::sort(directNames.begin(), directNames.end());   // deterministic dependencies[] order
+
+                chosen[r.name] = r.spec; chosenBy[r.name] = r.requestor;
+
+                LockEntry e; std::string storePath, ferr;
+                if (!resolveOne(r.name, r.spec, base, oldLock, e, storePath, ferr)) {
+                    fprintf(stderr, "kama install: %s\n", ferr.c_str()); return 1;
+                }
+                if (incomingRange) e.version = chosenVer[r.name];   // record what the range resolved to
+                e.dev = r.dev;
+                if (r.dev && !madeDevDir) {
+                    if (!makeDirs(devViewDir)) { fprintf(stderr, "kama install: cannot create %s\n", devViewDir.c_str()); return 1; }
+                    madeDevDir = true;
+                }
+                if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + r.name)) {
+                    fprintf(stderr, "kama install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
+                }
+                // Read THIS package's own prod deps → record (serialized so the build never re-reads) + enqueue.
+                std::string childManifest = storePath + "/kama.json";
+                std::vector<std::string> directNames;
+                if (fileExists(childManifest)) {
+                    std::map<std::string, DepSpec> childDeps; std::string cerr;
+                    if (!loadManifestDeps(childManifest, childDeps, cerr)) {
+                        fprintf(stderr, "kama install: %s: %s\n", childManifest.c_str(), cerr.c_str()); return 2;
+                    }
+                    for (auto& ck : childDeps) { directNames.push_back(ck.first);
+                        q.push_back({ck.first, ck.second, r.name, r.dev}); }
+                    std::sort(directNames.begin(), directNames.end());   // deterministic dependencies[] order
+                }
+                e.dependencies = directNames;
+                lock[r.name] = e;
             }
-            e.dependencies = directNames;
-            lock[r.name] = e;
+            return 0;
+        };
+
+        std::deque<Req> prodQ, devQ;
+        for (auto& kv : deps)    prodQ.push_back({kv.first, kv.second, "<root manifest>", false});
+        for (auto& kv : devDeps) devQ.push_back({kv.first, kv.second, "<root manifest>", true});
+        int rc = drain(prodQ);                       // phase 1 (prod) drains fully before phase 2 → prod wins
+        if (rc == 0) rc = drain(devQ);               // phase 2 (dev)
+        if (rc == RESTART) continue;                 // a tighter range surfaced — re-resolve with it seeded
+        if (rc != 0) return rc;
+
+        if (!writeLockFile(base + "/kama.lock", lock)) {
+            fprintf(stderr, "kama install: cannot write %s/kama.lock\n", base.c_str()); return 1;
         }
+        fprintf(stderr, "kama: installed %zu package(s) into %s\n", lock.size(), base.c_str());
         return 0;
-    };
-
-    std::deque<Req> prodQ, devQ;
-    for (auto& kv : deps)    prodQ.push_back({kv.first, kv.second, "<root manifest>", false});
-    for (auto& kv : devDeps) devQ.push_back({kv.first, kv.second, "<root manifest>", true});
-    if (int rc = drain(prodQ)) return rc;   // phase 1 (prod) drains fully before phase 2 → prod wins on shared names
-    if (int rc = drain(devQ))  return rc;   // phase 2 (dev)
-
-    if (!writeLockFile(base + "/kama.lock", lock)) {
-        fprintf(stderr, "kama install: cannot write %s/kama.lock\n", base.c_str()); return 1;
     }
-    fprintf(stderr, "kama: installed %zu package(s) into %s\n", lock.size(), base.c_str());
-    return 0;
 }
 
 // `kama pkg install [<dir>]`: materialize the per-project dependency view from `kama.json` into
