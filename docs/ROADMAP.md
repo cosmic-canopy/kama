@@ -53,6 +53,47 @@ reinterpret both landed (see SPEC). What remains before the tag:
 3. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
    (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`).
 
+### Near-term execution order (ready to start cold)
+
+The concrete sequence to a production-ready 1.0 and its first steps past the tag. **None of the pre-1.0
+items need new language surface** — they are library + toolchain + one runtime-floor addition. Each lists its
+scope + acceptance so a fresh session can start immediately.
+
+1. **Soft-float + fixed-point (no-FPU MCU / DSP math) — library + toolchain, NO language work.** Closes the
+   one remaining MCU_READINESS 🟡. Two independent pieces:
+   - *Fixed-point (library).* A `std::num` fixed-point `type value` — start concrete with `Q16_16`
+     (16.16 signed), operators `+ - * /` (mul/div widen through `int64` then re-scale), `fromInt`/`toInt`/
+     `fromFloat`/`toFloat`, and saturating variants; consider a later generic `Fixed<intBits, fracBits>` via
+     const generics. Pure library (operator overloading already ships) + exact-value fixtures. The no-FPU
+     answer for audio/DSP/sensor math.
+   - *Soft-float (toolchain, not kama).* kama emits `float` ops as ordinary C `+`/`*`; a cross-compiler
+     targeting a no-FPU core (`-mfloat-abi=soft`, e.g. `-mcpu=cortex-m0plus`) lowers them to libgcc/
+     compiler-rt libcalls automatically. Make it turnkey: add a no-FPU **board preset** (a Cortex-M0+ board:
+     triple `thumbv6m-none-eabi`, `-mcpu=cortex-m0plus`) to `mcu/build.sh` + `run-qemu.sh` (QEMU `microbit`
+     is a Cortex-M0 target) and a float-math fixture that runs on the emulated M0.
+   - *Acceptance:* MCU_READINESS "Soft-float mode / fixed-point" row 🟡 → ✅; fixed-point + soft-float fixtures
+     green (native + QEMU M0).
+2. **argv / env in the prelude floor — the one remaining runtime-floor language bit.** Design is settled in §2
+   ("Command-line args / environment access"): the mandatory runtime shim stashes `argc/argv` into a runtime
+   global; a small always-in-scope prelude surface (a free `args()` / an `Args` view — spelling TBD) reads it;
+   the user's `fn int32 main()` signature is unchanged; `#if KAMA_TARGET_EMBEDDED`-guarded (freestanding has
+   no argv). Lands in the baked-in floor (survives `--no-std`), NOT an importable `std::env`. *Acceptance:* a
+   program reads its own argv + env on native; the embedded guard still compiles; the inert
+   `kama run -- <args>` (package-management M2.3) now delivers args.
+3. **`std::process` — subprocess handling (library over FFI + the concurrency seams).** Spawn/exec a child,
+   wire its stdio, wait for exit. Builds on shipped FFI (`posix_spawn` / `CreateProcess`), the `scope`
+   structured-lifetime model (wait-on-exit at scope end → no orphans), and the `std::net::Poller` substrate
+   (non-blocking reads of child stdout/stderr). Depends on (2) for clean arg passing. **Design of record:
+   [design/std-process.md](design/std-process.md).** *Acceptance:* run a child, capture its stdout + exit
+   code, on POSIX + Windows, RAII-clean (no zombie/leaked handles), ASan-clean.
+
+**With (1)–(3) + the docs reconcile, the language is production-ready — tag 1.0.**
+
+**Post-1.0 — the flagship next campaign: the scripting / dual-mode system (§7).** The polymorphic-emitter →
+direct-wasm → bytecode-VM arc. First concrete step: refactor the C emitter behind an abstract backend
+interface (C as the first impl), the shared lowering in the base — low risk, and it proves the seam before any
+new backend. Design already laid out in §7.
+
 ## 2. Deferred language bits (tracked)
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
