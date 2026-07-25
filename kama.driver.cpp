@@ -395,6 +395,40 @@ struct DepSpec {
     std::string registry;   // optional explicit registry base URI (else the configured/default registry)
 };
 
+// The `registries` config (M3.1b): where registry deps resolve from. `default` is the base chain for
+// unscoped (and unmapped-scope) names; `scopes["@acme"]` is the chain for `@acme/*`. Each value is an
+// ordered list of base URIs (priority order — the first that has the package wins). `default: false`
+// drops the built-in default entirely (a fully-private / air-gapped setup). The lock pins content
+// identity (the integrity), not the URI, so a scope can be re-pointed to a mirror without re-resolving.
+struct RegConfig {
+    std::vector<std::string> defaultBases;                        // explicit `default` chain (empty => built-in)
+    bool defaultSet = false;                                       // a `default` key was present
+    bool defaultDisabled = false;                                  // `default: false`
+    std::map<std::string, std::vector<std::string>> scopes;        // "@scope" -> ordered base chain
+};
+
+// A scoped package `@acme/foo` imports under its BARE last segment (`foo`) — the scope is registry
+// routing only. Two scopes exposing the same bare name collide (a hard error, detected at link time).
+static std::string importNameOf(const std::string& name)
+{
+    if (!name.empty() && name[0] == '@') { size_t s = name.rfind('/'); if (s != std::string::npos) return name.substr(s + 1); }
+    return name;
+}
+// The scope of a package name (`@acme` for `@acme/foo`), or "" for an unscoped name.
+static std::string scopeOf(const std::string& name)
+{
+    if (!name.empty() && name[0] == '@') { size_t s = name.find('/'); if (s != std::string::npos) return name.substr(0, s); }
+    return "";
+}
+// A filesystem-safe label for the content-addressed store dir (`<label>-<hash>`). The hash is the real
+// identity; this is only a human-readable prefix, so a scoped name's '/' is flattened to '_'.
+static std::string storeLabel(const std::string& name)
+{
+    std::string s = name;
+    for (char& c : s) if (c == '/') c = '_';
+    return s;
+}
+
 // Two dependency specs name "the same package" iff every identity-bearing field matches. For a
 // non-range dep this IS the whole conflict test: identical -> dedup in the resolver, divergent ->
 // hard error. Range (git+version, no rev) deps take the SemVer path below instead.
@@ -556,6 +590,7 @@ struct ManifestReader {
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
     std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
     std::string* versionOut = nullptr;                    // set to capture the `version` (else skipped) — `kama publish`
+    RegConfig* registriesOut = nullptr;                   // set to capture the `registries` config (M3.1b)
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -692,6 +727,48 @@ struct ManifestReader {
         return true;
     }
 
+    // Parse a base-URI value: one string, or an array of strings (a priority-ordered chain), into `out`.
+    bool baseList(std::vector<std::string>& out) {
+        ws();
+        if (i < s.size() && s[i] == '"') { std::string v; if (!str(v)) return false; out.push_back(v); return true; }
+        if (i < s.size() && s[i] == '[') {
+            ++i; ws();
+            if (i < s.size() && s[i] == ']') { ++i; return true; }
+            while (true) {
+                std::string v; if (!str(v)) return false; out.push_back(v); ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == ']') { ++i; break; }
+                return fail("expected ',' or ']' in a registry base list");
+            }
+            return true;
+        }
+        return fail("a registry base must be a string or an array of strings");
+    }
+
+    bool registriesObject(RegConfig* cfg) {   // { "default": <base|[bases]|false>, "@scope": <base|[bases]>, ... }
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`registries` must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string key; if (!str(key)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a registry key"); ++i; ws();
+            if (key == "default") {
+                cfg->defaultSet = true;
+                if (s.compare(i, 5, "false") == 0) { cfg->defaultDisabled = true; i += 5; }
+                else if (s.compare(i, 4, "true") == 0) { i += 4; }   // tolerate `true` (== use built-in)
+                else if (!baseList(cfg->defaultBases)) return false;
+            } else {
+                std::vector<std::string> bases;
+                if (!baseList(bases)) return false;
+                cfg->scopes[key] = bases;
+            }
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `registries`");
+        }
+        return true;
+    }
+
     bool parse() {
         ws(); if (i >= s.size() || s[i] != '{') return fail("manifest must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
@@ -702,6 +779,7 @@ struct ManifestReader {
             if (key == "flags") { if (!flagsObject()) return false; }
             else if (key == "dependencies" && deps) { if (!depsObject(deps)) return false; }
             else if (key == "dev-dependencies" && devDeps) { if (!depsObject(devDeps)) return false; }
+            else if (key == "registries" && registriesOut) { if (!registriesObject(registriesOut)) return false; }
             else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
             else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
             else if (key == "name" && nameOut) { if (!str(*nameOut)) return false; }
@@ -733,7 +811,7 @@ static bool loadManifestFlags(const std::string& path,
 // Load a `kama.json` manifest's `dependencies` (name -> DepSpec). Reuses ManifestReader (unknown keys
 // tolerated), so this is orthogonal to the flag load. Returns false + sets `err` on malformed JSON.
 static bool loadManifestDeps(const std::string& path, std::map<std::string, DepSpec>& deps, std::string& err,
-                             std::map<std::string, DepSpec>* devDeps = nullptr)
+                             std::map<std::string, DepSpec>* devDeps = nullptr, RegConfig* reg = nullptr)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
@@ -742,6 +820,7 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
     ManifestReader r(src, declared, defaults);
     r.deps = &deps;
     r.devDeps = devDeps;   // optional: also capture `dev-dependencies` (M2.2)
+    r.registriesOut = reg; // optional: also capture `registries` config (M3.1b)
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -1309,7 +1388,7 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
 {
     std::string store = storeDir();
     if (!makeDirs(store)) { err = "cannot create store at " + store; return false; }
-    std::string staging = store + "/.tmp-" + std::to_string((long)getpid()) + "-" + name;
+    std::string staging = store + "/.tmp-" + std::to_string((long)getpid()) + "-" + storeLabel(name);
     runCmd(rmRfCmd(staging));   // clear any stale staging from a prior crash
 
     std::string commit, lockIntegrity;
@@ -1358,7 +1437,7 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
     if (hash.empty()) { err = "cannot hash '" + name + "' (is sha256sum/shasum available?)"; runCmd(rmRfCmd(staging)); return false; }
     if (!d.git.empty()) lockIntegrity = hash;   // git has no artifact; the tree hash IS its integrity
 
-    std::string finalDir = store + "/" + name + "-" + hash.substr(sizeof("sha256-") - 1);
+    std::string finalDir = store + "/" + storeLabel(name) + "-" + hash.substr(sizeof("sha256-") - 1);
     if (dirExists(finalDir)) runCmd(rmRfCmd(staging));   // dedup: identical content already stored
     else if (rename(staging.c_str(), finalDir.c_str()) != 0) {
         err = "cannot finalize store entry for '" + name + "'"; runCmd(rmRfCmd(staging)); return false;
@@ -1401,7 +1480,7 @@ static bool resolveOne(const std::string& name, const DepSpec& spec, const std::
             std::string key = L.treeHash.empty() ? L.integrity : L.treeHash;   // the store dir hash
             std::string finalDir;
             if (key.size() > sizeof("sha256-") - 1)
-                finalDir = storeDir() + "/" + name + "-" + key.substr(sizeof("sha256-") - 1);
+                finalDir = storeDir() + "/" + storeLabel(name) + "-" + key.substr(sizeof("sha256-") - 1);
             if (!finalDir.empty() && dirExists(finalDir)) {   // offline hit — link the pinned tree, no fetch
                 out = L; storePath = finalDir; return true;
             }
@@ -1612,7 +1691,8 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
 {
     std::string manifest = base + "/kama.json";
     std::map<std::string, DepSpec> deps, devDeps; std::string err;
-    if (!loadManifestDeps(manifest, deps, err, &devDeps)) {
+    RegConfig regCfg;
+    if (!loadManifestDeps(manifest, deps, err, &devDeps, &regCfg)) {
         fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str()); return 2;
     }
 
@@ -1647,6 +1727,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         std::map<std::string, VersionReq>  accReq;    // range deps: name -> intersected range so far
         std::map<std::string, std::string> reqStr;    // range deps: name -> first requestor's range text
         std::map<std::string, std::string> regBaseOf; // registry deps: name -> resolved registry base URI
+        std::map<std::string, std::string> importUsedBy; // import (bare) name -> the scoped name that claimed it
         std::map<std::string, LockEntry> lock;        // output
         bool madeDevDir = false;
 
@@ -1662,10 +1743,19 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
             tags = &it->second; return true;
         };
 
-        // The registry base a registry dep resolves through: an explicit `registry` pin, else the
-        // built-in default. (M3.1b layers `registries` config on top of this.)
-        auto registryBaseFor = [&](const DepSpec& spec) -> std::string {
-            return spec.registry.empty() ? std::string(kDefaultRegistry) : spec.registry;
+        // The priority-ordered registry base chain a registry dep resolves through: an explicit
+        // `registry` pin wins outright; else the `@scope` chain (for a scoped name), else the `default`
+        // chain, else the built-in default. `default: false` drops the built-in (air-gapped). Empty =>
+        // no registry configured (a hard error at the call site). The lock pins the integrity, not the
+        // URI, so a scope can be re-pointed to a mirror in this config without changing what's fetched.
+        auto registryBasesFor = [&](const std::string& name, const DepSpec& spec) -> std::vector<std::string> {
+            if (!spec.registry.empty()) return { spec.registry };
+            std::string sc = scopeOf(name);
+            if (!sc.empty()) { auto it = regCfg.scopes.find(sc); if (it != regCfg.scopes.end()) return it->second; }
+            if (regCfg.defaultDisabled) return {};
+            if (!regCfg.defaultBases.empty()) return regCfg.defaultBases;
+            if (kDefaultRegistry[0]) return { std::string(kDefaultRegistry) };
+            return {};
         };
 
         // Fetch + parse a registry package's index once, memoized across attempts (by base+name).
@@ -1690,16 +1780,24 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                                  bool& matched, SemVer& sv, VerPick& pick, std::string& terr) -> bool {
             matched = false;
             if (isRegistryDep(spec)) {
-                std::string base = registryBaseFor(spec);
-                if (base.empty()) {
+                std::vector<std::string> bases = registryBasesFor(name, spec);
+                if (bases.empty()) {
                     terr = "no registry configured for '" + name + "' — set \"registry\" on the "
                            "dependency or a \"registries\" default"; return false;
                 }
-                std::vector<IndexEntry>* idx = nullptr;
-                if (!ensureIndex(base, name, idx, terr)) return false;
-                IndexEntry e;
-                matched = selectHighestIndex(*idx, req, sv, e);
-                if (matched) { pick.url = joinUri(base, e.tarball); pick.integrity = e.integrity; pick.regBase = base; }
+                // Priority order: the first base that HAS a satisfying version wins (a higher-priority
+                // private registry shadows a lower-priority public one). A base whose index is missing or
+                // lacks a satisfying version is skipped (not a hard error).
+                for (const std::string& base : bases) {
+                    std::vector<IndexEntry>* idx = nullptr; std::string ferr;
+                    if (!ensureIndex(base, name, idx, ferr)) continue;
+                    IndexEntry e;
+                    if (selectHighestIndex(*idx, req, sv, e)) {
+                        matched = true;
+                        pick.url = joinUri(base, e.tarball); pick.integrity = e.integrity; pick.regBase = base;
+                        break;
+                    }
+                }
                 return true;
             }
             std::vector<std::pair<SemVer, std::string>>* tags = nullptr;
@@ -1779,8 +1877,8 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     if (sd != seeded.end()) req = intersect(req, sd->second);
 
                     SemVer sv; VerPick pick; bool reused = false;
-                    std::string regBase = isReg ? registryBaseFor(r.spec) : "";
-                    if (isReg && regBase.empty()) {
+                    std::vector<std::string> regBases = isReg ? registryBasesFor(r.name, r.spec) : std::vector<std::string>{};
+                    if (isReg && regBases.empty()) {
                         fprintf(stderr, "kama install: no registry configured for '%s' (required by %s) — set "
                                 "\"registry\" on the dependency or a \"registries\" default\n",
                                 r.name.c_str(), r.requestor.c_str());
@@ -1789,11 +1887,15 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     auto lk = oldLock.find(r.name);
                     if (lk != oldLock.end() && !lk->second.version.empty()) {
                         SemVer lv;
-                        bool sameSrc = isReg ? (lk->second.source == "registry" && lk->second.registry == regBase)
+                        // Registry offline reuse requires the locked base to still be an active candidate —
+                        // a re-pointed scope drops out of the chain and forces a fresh resolve (+ the
+                        // confusion cross-check below).
+                        bool baseStillActive = std::find(regBases.begin(), regBases.end(), lk->second.registry) != regBases.end();
+                        bool sameSrc = isReg ? (lk->second.source == "registry" && baseStillActive)
                                              : (lk->second.source == "git"      && lk->second.git == r.spec.git);
                         if (sameSrc && parseSemVer(lk->second.version, lv) && satisfies(req, lv)) {
                             sv = lv; reused = true;   // honor the lock — no ls-remote / no index fetch
-                            if (isReg) { pick.url = lk->second.url; pick.integrity = lk->second.integrity; pick.regBase = regBase; }
+                            if (isReg) { pick.url = lk->second.url; pick.integrity = lk->second.integrity; pick.regBase = lk->second.registry; }
                             else       { pick.tag = lk->second.rev; }
                         }
                     }
@@ -1806,6 +1908,19 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                             fprintf(stderr, "kama install: dependency '%s' (required by %s): no %s version "
                                     "satisfies \"%s\"\n", r.name.c_str(), r.requestor.c_str(),
                                     isReg ? "registry" : "git tag", r.spec.version.c_str());
+                            return 1;
+                        }
+                        // Dependency-confusion guard: a name@version is a fixed content identity. If the
+                        // lock already pinned this exact version, a freshly-resolved DIFFERENT integrity
+                        // (e.g. a mirror serving different bytes under the same version) is a hard error.
+                        if (isReg && lk != oldLock.end() && lk->second.source == "registry"
+                                && lk->second.version == semVerStr(sv) && !lk->second.integrity.empty()
+                                && lk->second.integrity != pick.integrity) {
+                            fprintf(stderr, "kama install: dependency confusion on '%s'@%s: the lock pinned "
+                                    "integrity %s (from %s) but %s serves %s — refusing to install different "
+                                    "bytes under the same version\n",
+                                    r.name.c_str(), semVerStr(sv).c_str(), lk->second.integrity.c_str(),
+                                    lk->second.registry.c_str(), pick.regBase.c_str(), pick.integrity.c_str());
                             return 1;
                         }
                     }
@@ -1828,11 +1943,22 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     e.source = "registry"; e.registry = regBaseOf[r.name];
                 }
                 e.dev = r.dev;
+                // A scoped `@acme/foo` imports under its bare last segment (`foo`). Two distinct packages
+                // resolving to the same bare name would collide on one view link — a hard error (alias one).
+                std::string importName = importNameOf(r.name);
+                auto iu = importUsedBy.find(importName);
+                if (iu != importUsedBy.end() && iu->second != r.name) {
+                    fprintf(stderr, "kama install: import-name collision on '%s': both '%s' and '%s' import as "
+                            "'%s' — two scopes cannot expose the same name\n",
+                            importName.c_str(), iu->second.c_str(), r.name.c_str(), importName.c_str());
+                    return 1;
+                }
+                importUsedBy[importName] = r.name;
                 if (r.dev && !madeDevDir) {
                     if (!makeDirs(devViewDir)) { fprintf(stderr, "kama install: cannot create %s\n", devViewDir.c_str()); return 1; }
                     madeDevDir = true;
                 }
-                if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + r.name)) {
+                if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + importName)) {
                     fprintf(stderr, "kama install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
                 }
                 // Read THIS package's own prod deps → record (serialized so the build never re-reads) + enqueue.
@@ -2176,13 +2302,14 @@ int cmdPublish(const std::string& base, const std::string& registryArg)
     // level), copying the sources but excluding VCS/build/lock cruft, then gzip it. `sha256Of` is the
     // tarball integrity a consumer re-verifies.
     std::string tmp = regDir + "/.tmp-publish-" + std::to_string((long)getpid());
+    std::string wrapper = importNameOf(name);   // a single path component (a scoped name has a '/')
     runCmd(rmRfCmd(tmp));
-    if (!makeDirs(tmp + "/" + name)) { fprintf(stderr, "kama publish: cannot stage the package\n"); runCmd(rmRfCmd(tmp)); return 1; }
+    if (!makeDirs(tmp + "/" + wrapper)) { fprintf(stderr, "kama publish: cannot stage the package\n"); runCmd(rmRfCmd(tmp)); return 1; }
     std::string copyCmd = "tar -c -C \"" + base + "\" --exclude=./.git --exclude=./.kama --exclude=./build "
-                          "--exclude=./kama.lock -f - . | tar -x -C \"" + tmp + "/" + name + "\" -f -";
+                          "--exclude=./kama.lock -f - . | tar -x -C \"" + tmp + "/" + wrapper + "\" -f -";
     if (runCmd(copyCmd) != 0) { fprintf(stderr, "kama publish: cannot copy sources (is tar available?)\n"); runCmd(rmRfCmd(tmp)); return 1; }
     std::string tarball = tmp + "/pkg.tar.gz";
-    if (runCmd("tar -czf \"" + tarball + "\" -C \"" + tmp + "\" \"" + name + "\"") != 0) {
+    if (runCmd("tar -czf \"" + tarball + "\" -C \"" + tmp + "\" \"" + wrapper + "\"") != 0) {
         fprintf(stderr, "kama publish: cannot create the tarball\n"); runCmd(rmRfCmd(tmp)); return 1;
     }
     std::string integrity = sha256Of(tarball);

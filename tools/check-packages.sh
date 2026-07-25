@@ -500,4 +500,75 @@ if ! "$KAMA" pkg install "$rc2" >"$tmp/rc2off.out" 2>&1 || ! cmp -s "$tmp/rc2.lo
     sed 's/^/  /' "$tmp/rc2off.out" >&2; diff "$tmp/rc2.lock" "$rc2/kama.lock" >&2 || true; mv "$reg.hidden" "$reg"; exit 1; fi
 mv "$reg.hidden" "$reg"
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline)"
+# ==== M3.1b: scopes + `registries` config + dependency-confusion guard =================================
+# A scoped `@acme/foo` imports under its BARE last segment (`foo`); the scope only selects which registry
+# routes the fetch (via `registries` config). The lock pins content identity (the integrity), not the URI.
+
+# 22. scoped routing + opt-out-of-default. Publish `@acme/sc` to a scope registry; a consumer routes
+# `@acme` to it (and drops the default), imports it as `sc`, builds, and runs.
+areg="$tmp/areg"; mkdir -p "$areg"
+sc="$tmp/sc-src"; mkdir -p "$sc"
+printf '{ "name": "@acme/sc", "version": "1.0.0" }\n' > "$sc/kama.json"
+printf 'namespace sc;\nexport { val };\nfn int32 val() { return 7; }\n' > "$sc/sc.kama"
+if ! ( cd "$sc" && "$KAMA" publish --registry "file://$areg" ) >"$tmp/scpub.out" 2>&1; then echo "check-packages: FAIL — publish @acme/sc errored:" >&2; sed 's/^/  /' "$tmp/scpub.out" >&2; exit 1; fi
+[ -f "$areg/@acme/sc/index.json" ] || { echo "check-packages: FAIL — scoped publish path wrong (no @acme/sc/index.json)" >&2; find "$areg" >&2; exit 1; }
+scp="$tmp/scp"; mkdir -p "$scp"
+cat > "$scp/kama.json" <<JSON
+{ "name": "scp", "version": "0.1.0",
+  "registries": { "default": false, "@acme": "file://$areg" },
+  "dependencies": { "@acme/sc": { "version": "^1.0.0" } } }
+JSON
+printf 'import sc::{val};\nfn int32 main() { return val(); }\n' > "$scp/main.kama"
+if ! "$KAMA" pkg install "$scp" >"$tmp/scp.out" 2>&1; then echo "check-packages: FAIL — scoped install errored:" >&2; sed 's/^/  /' "$tmp/scp.out" >&2; exit 1; fi
+[ -L "$scp/.kama/deps/sc" ] || { echo "check-packages: FAIL — scoped dep did not import under its bare name (.kama/deps/sc)" >&2; ls "$scp/.kama/deps" >&2; exit 1; }
+if "$KAMA" build "$scp/main.kama" -o "$tmp/scapp" >"$tmp/scb.out" 2>&1; then
+    if "$tmp/scapp"; then rc=0; else rc=$?; fi
+    [ "$rc" = 7 ] || { echo "check-packages: FAIL — scoped consumer returned $rc, expected 7" >&2; exit 1; }
+else echo "check-packages: FAIL — build of the scoped consumer failed:" >&2; sed 's/^/  /' "$tmp/scb.out" >&2; exit 1; fi
+# opt-out: an UNSCOPED name with `default:false` and no source is unresolvable (a clean hard error).
+opo="$tmp/opo"; mkdir -p "$opo"
+cat > "$opo/kama.json" <<JSON
+{ "name": "opo", "version": "0.1.0", "registries": { "default": false },
+  "dependencies": { "sc": { "version": "^1.0.0" } } }
+JSON
+if "$KAMA" pkg install "$opo" >"$tmp/opo.out" 2>&1; then echo "check-packages: FAIL — opt-out did not make an unscoped dep unresolvable" >&2; exit 1; fi
+grep -qi "no registry configured" "$tmp/opo.out" || { echo "check-packages: FAIL — opt-out error message unclear:" >&2; sed 's/^/  /' "$tmp/opo.out" >&2; exit 1; }
+
+# 23. re-pointable scope + the confusion guard. `cf` published with the SAME bytes to two registries and
+# DIFFERENT bytes (same version) to a third. Re-pointing to the same-bytes mirror re-resolves with an
+# unchanged integrity; re-pointing to the different-bytes mirror is a hard error.
+ra="$tmp/cf-a"; rb="$tmp/cf-b"; rc_="$tmp/cf-c"; mkdir -p "$ra" "$rb" "$rc_"
+mkcf() { d="$tmp/cf-src-$1"; mkdir -p "$d"; printf '{ "name": "cf", "version": "1.0.0" }\n' > "$d/kama.json"; printf 'namespace cf;\nexport { val };\nfn int32 val() { return %s; }\n' "$2" > "$d/cf.kama"; echo "$d"; }
+csame=$(mkcf same 3); cdiff=$(mkcf diff 4)
+( cd "$csame" && "$KAMA" publish --registry "file://$ra" ) >/dev/null 2>&1
+( cd "$csame" && "$KAMA" publish --registry "file://$rb" ) >/dev/null 2>&1
+( cd "$cdiff" && "$KAMA" publish --registry "file://$rc_" ) >/dev/null 2>&1
+cfp="$tmp/cfp"; mkdir -p "$cfp"
+cfjson() { cat > "$cfp/kama.json" <<JSON
+{ "name": "cfp", "version": "0.1.0", "registries": { "default": "file://$1" },
+  "dependencies": { "cf": { "version": "^1.0.0" } } }
+JSON
+}
+cfjson "$ra"; "$KAMA" pkg install "$cfp" >/dev/null 2>&1
+int_a=$(grep -o 'sha256-[0-9a-f]*' "$cfp/kama.lock" | head -1)
+cfjson "$rb"
+if ! "$KAMA" pkg install "$cfp" >"$tmp/cfb.out" 2>&1; then echo "check-packages: FAIL — re-point to same-bytes mirror errored:" >&2; sed 's/^/  /' "$tmp/cfb.out" >&2; exit 1; fi
+int_b=$(grep -o 'sha256-[0-9a-f]*' "$cfp/kama.lock" | head -1)
+[ "$int_a" = "$int_b" ] || { echo "check-packages: FAIL — re-point to same bytes changed the integrity ($int_a -> $int_b)" >&2; exit 1; }
+cfjson "$rc_"
+if "$KAMA" pkg install "$cfp" >"$tmp/cfc.out" 2>&1; then echo "check-packages: FAIL — confusion guard let a different-bytes mirror install" >&2; exit 1; fi
+grep -qi "confusion" "$tmp/cfc.out" || { echo "check-packages: FAIL — confusion-guard message unclear:" >&2; sed 's/^/  /' "$tmp/cfc.out" >&2; exit 1; }
+
+# 24. import-name collision: two DIFFERENT scopes exposing the same bare name -> a hard error (alias one).
+creg="$tmp/creg"; mkdir -p "$creg"
+for scp2 in acme other; do d="$tmp/col-$scp2"; mkdir -p "$d"; printf '{ "name": "@%s/cn", "version": "1.0.0" }\n' "$scp2" > "$d/kama.json"; printf 'namespace cn;\nexport { val };\nfn int32 val() { return 1; }\n' > "$d/cn.kama"; ( cd "$d" && "$KAMA" publish --registry "file://$creg" ) >/dev/null 2>&1; done
+colp="$tmp/colp"; mkdir -p "$colp"
+cat > "$colp/kama.json" <<JSON
+{ "name": "colp", "version": "0.1.0",
+  "registries": { "default": false, "@acme": "file://$creg", "@other": "file://$creg" },
+  "dependencies": { "@acme/cn": { "version": "^1.0.0" }, "@other/cn": { "version": "^1.0.0" } } }
+JSON
+if "$KAMA" pkg install "$colp" >"$tmp/colp.out" 2>&1; then echo "check-packages: FAIL — import-name collision was not rejected" >&2; exit 1; fi
+grep -qi "collision" "$tmp/colp.out" || { echo "check-packages: FAIL — collision message unclear:" >&2; sed 's/^/  /' "$tmp/colp.out" >&2; exit 1; }
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision)"
