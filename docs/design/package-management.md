@@ -361,11 +361,11 @@ the M2.2 resolver's one-spec-per-name check is where range-intersection slots in
 
 ## M1 — implementation kickoff (toolchain store + selector + `kama toolchain` + project pin)
 
-**Status: PREPARED, not built.** The next milestone (pillars 1–3, chosen after pillar 4 shipped). The
-guiding north star, from the user: **kama is its own version manager — opt-in.** You should never have to
-wrap `nvm`/`pyenv`/`rustup` *around* kama; kama itself offers multi-version management, and a bare
-single-file `kama build foo.kama` needs none of it. Everything below is a settled lean to confirm at the
-top of the build session; the seams are verified in code.
+**Status: ✅ SHIPPED.** Pillars 1–3 (after pillar 4). The guiding north star, from the user: **kama is its
+own version manager — opt-in.** You never wrap `nvm`/`pyenv`/`rustup` *around* kama; kama itself offers
+multi-version management, and a bare single-file `kama build foo.kama` needs none of it. The as-shipped
+summary — including how the six open questions resolved — is in **"As shipped"** at the end of this section;
+the narrative below is the original kickoff brief. User docs: [../packages.md](../packages.md) §"Toolchain versions".
 
 ### The key enabling property (already true in code — this is why M1 is small)
 
@@ -476,6 +476,38 @@ print their own version, and prove the *selector + resolution*, not the download
 - `KAMA_VERSION=<vB>` overrides the default but **not** a project pin (precedence order).
 - A pin/selection to a missing version → a clear error (naming the version + `kama toolchain install`).
 - Skip gracefully where a needed tool is absent; never touch the real `~/.kama`.
+
+### As shipped (the six open questions, resolved)
+
+All native (Linux/macOS branches compiled; Windows branches present, native-first per the plan). Landed in
+`kama.driver.cpp`, `install.sh`, `install.ps1`, `tools/check-toolchain.sh` (wired into `run_tests.sh`).
+
+1. **Selector = self-re-exec** (not a separate shim). But the loop-guard is *not* the version stamp — it's
+   **"am I the selector binary?"**: `maybeReExec` compares `selfExePath()` (`/proc/self/exe` on Linux,
+   `_NSGetExecutablePath` on macOS, `_get_pgmptr` on Windows — argv[0] is unreliable via PATH) against
+   `~/.kama/bin/kama`. Only the selector re-execs; a per-version binary — or a dev/repo `./kama` — runs in
+   place. This is both the loop-stopper (the re-exec target is a different path) and what stops a dev build
+   from silently handing off to an installed toolchain. The selector is *only* ever a hand-off (it has no
+   sibling `include`/`lib`), so it always execs the versioned location. ⚠️ **The re-exec must set
+   `argv[0] = versionBin(v)`** — the versioned compiler resolves its runtime/stdlib exe-relative from
+   `argv[0]`, so passing the selector's argv[0] made it look in `~/.kama/include` (nonexistent) and every
+   build failed. Caught only by a *real*-compiler end-to-end (stubs can't surface it).
+2. **Pin = `kama.json` `"toolchain"`** — read via `loadManifestToolchain` (mirrors the `main` idiom),
+   written by `kama toolchain pin` via a byte-preserving top-level-string splice (`manifestSetTopString`,
+   reusing the pkg-add helpers). Resolution walks up from the cwd to find the manifest.
+3. **`KAMA_HOME` resolver override — DROPPED** (not demoted). Nothing used it (the store isolates via
+   `KAMA_STORE`; dev/container builds are exe-relative), and it was a hazard (a stray export would pin every
+   version to one lib tree). `KAMA_HOME` survives *only* as the installer's install-prefix knob.
+4. **Global default = a bare one-line `~/.kama/default`** (not a settings.json).
+5. **`kama update` = install-latest + set-default.** `runInstaller(version, makeDefault)` is the one fetch
+   path; `update` passes `makeDefault=true`, `toolchain install` passes `false`. The installer refreshes the
+   selector + default on `KAMA_SET_DEFAULT=1` **or** the first-ever install (so there's always a default).
+6. **Migration — none.** No kama in the wild yet, so the installer just lays down the versioned layout fresh.
+   `toolchain default` does *not* refresh the selector (the always-hand-off design makes matching pointless);
+   only the installer / `kama update` refresh it.
+
+`KAMA_VERSION` keeps three coherent faces: the compile-stamped macro (identity / `--version`), the installer
+env ("install this release"), and the selector's middle tier ("run this, just this once").
 
 ### Then
 

@@ -2,9 +2,10 @@
 # kama installer:  curl -fsSL https://kama-lang.org/install.sh | sh
 #
 # Detects OS/arch and whether a C compiler is present, then installs the matching
-# release into ~/.kama. Re-running updates in place.
+# release into ~/.kama/versions/<version>/. The `kama` on PATH is a thin selector.
 #   --no-std / KAMA_NO_STD=1   skip the bundled standard library
 #   KAMA_VERSION=vX.Y.Z        install a specific release (default: latest)
+#   KAMA_SET_DEFAULT=1         make this version the global default (else set only on first install)
 #   KAMA_HOME=<dir>            install prefix (default: ~/.kama)
 set -eu
 REPO="cosmic-canopy/kama"
@@ -54,12 +55,23 @@ else
   say "warning: no checksum published — skipping verification"
 fi
 
-mkdir -p "$PREFIX"
-tar xzf "$tmp/$ASSET" -C "$PREFIX" --strip-components=1
-[ -n "$NOSTD" ] && { rm -rf "$PREFIX/lib/kama"; say "skipped stdlib (--no-std)"; }
+# Versioned store: each toolchain lives in its own dir; the shared package store ($PREFIX/store) is untouched.
+VDIR="$PREFIX/versions/$VERSION"
+mkdir -p "$VDIR"
+tar xzf "$tmp/$ASSET" -C "$VDIR" --strip-components=1
+[ -n "$NOSTD" ] && { rm -rf "$VDIR/lib/kama"; say "skipped stdlib (--no-std)"; }
+say "installed kama $VERSION to $VDIR"
 
+# The PATH selector + global default: refreshed when explicitly requested (`kama update`), or on the
+# first-ever install (so there is always a default to resolve to). Otherwise this is an add-alongside.
 BIN="$PREFIX/bin"
-say "installed kama $VERSION to $BIN"
+if [ "${KAMA_SET_DEFAULT:-}" = 1 ] || [ ! -f "$PREFIX/default" ]; then
+  mkdir -p "$BIN"
+  cp -f "$VDIR/bin/kama" "$BIN/kama"           # the selector = a copy of the default version's binary
+  printf '%s\n' "$VERSION" > "$PREFIX/default"
+  say "default is now kama $VERSION"
+fi
+
 case ":$PATH:" in
   *":$BIN:"*) : ;;
   *) say "add to your shell profile:  export PATH=\"$BIN:\$PATH\"" ;;

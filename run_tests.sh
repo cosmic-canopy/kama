@@ -160,6 +160,13 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-pac
     if sh tools/check-packages.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# M1 toolchain selector: a versioned store + a PATH selector that resolves which toolchain to run per
+# directory (project pin > KAMA_VERSION > global default). Network-free (stub versioned binaries) — proves
+# resolution/precedence, not the download; plain native pass only.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-toolchain.sh ]; then
+    if sh tools/check-toolchain.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # One fixture's build+run+compare, run in a background subshell. Buffers its status line(s) into
 # $TMP/$name.out and records PASS/FAIL/SKIP into $TMP/$name.res (tallied in fixture order afterward).
 test_one() {

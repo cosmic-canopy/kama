@@ -40,6 +40,9 @@
 #else
   #include <unistd.h>
   #include <sys/wait.h>         // WEXITSTATUS
+  #ifdef __APPLE__
+    #include <mach-o/dyld.h>    // _NSGetExecutablePath (the selector needs its own true path)
+  #endif
 #endif
 
 #include "kama.parser.hpp"
@@ -96,11 +99,11 @@ bool fileExists(const std::string& p)
 }
 
 // Where kama_runtime.h lives, resolved so an INSTALLED binary finds it from any
-// cwd: $KAMA_HOME, else <exeDir>/../include (bin/kama -> ../include), else
-// <exeDir> (repo root layout), else ".".
+// cwd: <exeDir>/../include (bin/kama -> ../include), else <exeDir> (repo root
+// layout), else ".". Always exe-relative — so a per-version toolchain at
+// ~/.kama/versions/<v>/bin/kama finds *its own* runtime, never an ambient one.
 std::string resolveRuntimeDir(const char* argv0)
 {
-    if (const char* home = getenv("KAMA_HOME")) return home;
     std::string exeDir = dirName(absolutePath(argv0 ? argv0 : "kama"));
     if (fileExists(exeDir + "/../include/kama_runtime.h")) return exeDir + "/../include";
     if (fileExists(exeDir + "/kama_runtime.h"))            return exeDir;
@@ -128,12 +131,12 @@ std::vector<std::string> listKamaFiles(const std::string& dir)
     return out;
 }
 
-// The stdlib root, resolved from the binary like resolveRuntimeDir: $KAMA_HOME/lib,
-// else <exeDir>/../lib/kama (installed, bin/kama -> ../lib/kama), else <exeDir>/lib
-// (repo/dev layout), else "lib". The stdlib ships INSIDE the install; `std::*` resolves here.
+// The stdlib root, resolved from the binary like resolveRuntimeDir: <exeDir>/../lib/kama
+// (installed, bin/kama -> ../lib/kama), else <exeDir>/lib (repo/dev layout), else "lib".
+// The stdlib ships INSIDE each install; `std::*` resolves here — exe-relative, so a
+// per-version toolchain uses its own stdlib, never an ambient one.
 std::string resolveStdlibDir(const char* argv0)
 {
-    if (const char* home = getenv("KAMA_HOME")) return std::string(home) + "/lib";
     std::string exeDir = dirName(absolutePath(argv0 ? argv0 : "kama"));
     if (dirExists(exeDir + "/../lib/kama")) return exeDir + "/../lib/kama";
     if (dirExists(exeDir + "/lib"))          return exeDir + "/lib";
@@ -407,6 +410,7 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* deps = nullptr;      // set to capture `dependencies` (else it's skipped)
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
     std::string* mainOut = nullptr;                       // set to capture the `main` entry field (else skipped)
+    std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -529,6 +533,7 @@ struct ManifestReader {
             else if (key == "dependencies" && deps) { if (!depsObject(deps)) return false; }
             else if (key == "dev-dependencies" && devDeps) { if (!depsObject(devDeps)) return false; }
             else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
+            else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
             else if (!skipValue()) return false;         // name / version / future package keys
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -580,6 +585,21 @@ static bool loadManifestMain(const std::string& path, std::string& mainOut, std:
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
     r.mainOut = &mainOut;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// Load a `kama.json` manifest's `toolchain` pin (the version the selector should run for this project).
+// `tcOut` is left empty if the field is absent. Returns false + sets `err` only on malformed JSON. Reused by
+// the PATH selector — a cheap read of one key, done *before* any compiler runs. (M1.)
+static bool loadManifestToolchain(const std::string& path, std::string& tcOut, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.toolchainOut = &tcOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -914,20 +934,28 @@ int runCmd(const std::string& cmd)
 #endif
 }
 
-// `kama update [--version vX.Y.Z]` — self-update by re-running the canonical installer,
-// which re-detects a C compiler (slim vs bundled zig) so the install flavor stays consistent.
-int cmdUpdate(const std::string& pinned)
+// Fetch `version` ("" = latest) into the versioned store via the canonical installer, which re-detects a C
+// compiler (slim vs bundled zig) so the flavor stays consistent. `makeDefault` tells the installer to also
+// refresh the PATH selector + the global default to that version (the installer always sets the default on a
+// first-ever install regardless). Used by `kama update` (makeDefault) and `kama toolchain install` (not).
+int runInstaller(const std::string& version, bool makeDefault)
 {
 #ifdef _WIN32
-    std::string env = pinned.empty() ? "" : "$env:KAMA_VERSION='" + pinned + "'; ";
-    std::string cmd = "powershell -NoProfile -Command \"" + env +
-                      "irm https://kama-lang.org/install.ps1 | iex\"";
+    std::string env;
+    if (!version.empty()) env += "$env:KAMA_VERSION='" + version + "'; ";
+    if (makeDefault)      env += "$env:KAMA_SET_DEFAULT='1'; ";
+    std::string cmd = "powershell -NoProfile -Command \"" + env + "irm https://kama-lang.org/install.ps1 | iex\"";
 #else
-    std::string env = pinned.empty() ? "" : "KAMA_VERSION=" + pinned + " ";
+    std::string env;
+    if (!version.empty()) env += "KAMA_VERSION=" + version + " ";
+    if (makeDefault)      env += "KAMA_SET_DEFAULT=1 ";
     std::string cmd = env + "curl -fsSL https://kama-lang.org/install.sh | sh";
 #endif
     return runCmd(cmd);   // the installer prints old->new; verify with `kama --version`
 }
+
+// `kama update [--version vX.Y.Z]` — install the latest (or a pinned version) and make it the global default.
+int cmdUpdate(const std::string& pinned) { return runInstaller(pinned, /*makeDefault=*/true); }
 
 // Run `cmd` and capture its stdout, trimmed of trailing newlines; *exitCode (if given) receives the
 // child's exit status. "" if the process can't be spawned. This is the one place the driver needs a
@@ -1048,19 +1076,37 @@ std::string treeHashOf(const std::string& dir)
     return h;
 }
 
+// The kama home root: `~/.kama` (`%USERPROFILE%\.kama` on Windows). Holds the versioned toolchains
+// (`versions/<v>/`), the PATH selector (`bin/kama`), the global-default record (`default`), and the shared
+// package store (`store/`). NOT overridable at runtime — a per-version toolchain must resolve its own
+// support dirs exe-relative, never via an ambient env var. (`KAMA_HOME` is only the *installer's* prefix.)
+std::string kamaHome()
+{
+#ifdef _WIN32
+    if (const char* u = getenv("USERPROFILE")) return std::string(u) + "/.kama";
+#else
+    if (const char* h = getenv("HOME")) return std::string(h) + "/.kama";
+#endif
+    return ".kama";   // degenerate fallback (no HOME): project-local, still functional
+}
+
 // The shared content-addressed store root. `~/.kama/store` (user-mutable, install-independent) with a
 // `KAMA_STORE` override for isolation (the guard test points it at a tmp dir so it never touches the
-// real store — and NOT KAMA_HOME, which selects the read-only install root/stdlib).
+// real store — and NOT KAMA_HOME, which is only the installer prefix).
 std::string storeDir()
 {
     if (const char* s = getenv("KAMA_STORE")) return s;
-#ifdef _WIN32
-    if (const char* u = getenv("USERPROFILE")) return std::string(u) + "/.kama/store";
-#else
-    if (const char* h = getenv("HOME")) return std::string(h) + "/.kama/store";
-#endif
-    return ".kama/store";   // degenerate fallback (no HOME): project-local, still functional
+    return kamaHome() + "/store";
 }
+
+// M1 toolchain-management paths, all under kamaHome(). `versions/<v>/` is one self-contained install;
+// `bin/kama` is the PATH selector (a copy of the default version's binary); `default` records the global
+// default version (one line). These are shared across every installed toolchain.
+std::string versionsDir()        { return kamaHome() + "/versions"; }
+std::string defaultVersionFile() { return kamaHome() + "/default"; }
+std::string selectorPath()       { return kamaHome() + "/bin/kama"; }
+std::string versionDir(const std::string& v) { return versionsDir() + "/" + v; }
+std::string versionBin(const std::string& v) { return versionDir(v) + "/bin/kama"; }
 
 // M2.1: fetch a `git`/`url` dependency into the content-addressed store, verify sha256 integrity, and
 // fill `out` (lock entry) + `storePath` (target for the view symlink). Staging is atomic — nothing
@@ -1505,7 +1551,12 @@ void usage()
         "  kama pkg add   [--dev] <name> (--git U [--rev R] | --url U [--integrity H] | --path P)\n"
         "  kama pkg remove <name>\n"
         "  kama pkg update [<pkg>]             re-resolve pins (advance a branch pin) and rewrite the lock\n"
-        "  kama update    [--version vX.Y.Z]   self-update the toolchain via the installer\n"
+        "  kama toolchain list                 installed versions (+ the default and what the cwd resolves to)\n"
+        "  kama toolchain install <v>          install version <v> into ~/.kama/versions/<v>\n"
+        "  kama toolchain uninstall <v>        remove an installed version\n"
+        "  kama toolchain default <v>          set the global default version\n"
+        "  kama toolchain pin <v>              pin this project's toolchain in kama.json\n"
+        "  kama update    [--version vX.Y.Z]   install the latest (or <v>) and make it the default\n"
         "  kama --version\n");
 }
 
@@ -1519,6 +1570,218 @@ void pkgUsage()
         "  kama pkg update [<pkg>]             re-resolve pins and rewrite the lock\n");
 }
 
+// ---- M1: toolchain version management (selector + `kama toolchain`) ----------------------------------
+
+void toolchainUsage()
+{
+    fprintf(stderr,
+        "usage:\n"
+        "  kama toolchain list                 installed versions (+ the default and what the cwd resolves to)\n"
+        "  kama toolchain install <v>          install version <v> into ~/.kama/versions/<v>\n"
+        "  kama toolchain uninstall <v>        remove an installed version\n"
+        "  kama toolchain default <v>          set the global default version\n"
+        "  kama toolchain pin <v>              pin this project's toolchain in kama.json\n");
+}
+
+// Read a file's contents, trimmed of surrounding whitespace ("" if absent/empty). Used for the one-line
+// `~/.kama/default` record.
+static std::string readTrimmedFile(const std::string& path)
+{
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return "";
+    std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    while (!s.empty() && (s.back()=='\n'||s.back()=='\r'||s.back()==' '||s.back()=='\t')) s.pop_back();
+    size_t b = 0; while (b < s.size() && (s[b]==' '||s[b]=='\t'||s[b]=='\n'||s[b]=='\r')) ++b;
+    return s.substr(b);
+}
+
+// The nearest `kama.json` walking up from the cwd ("" if none). The selector reads its `toolchain` pin —
+// a project rooted in any subdirectory still resolves its pin, like git/cargo find their root.
+static std::string findManifestUpward()
+{
+    char buf[PATH_MAX];
+    if (!getcwd(buf, sizeof(buf))) return "";
+    std::string dir = buf;
+    for (;;) {
+        if (fileExists(dir + "/kama.json")) return dir + "/kama.json";
+        size_t slash = dir.find_last_of("/\\");
+        if (slash == std::string::npos) break;
+        std::string parent = dir.substr(0, slash);
+        if (parent.empty()) parent = "/";     // parent of "/foo" is "/"
+        if (parent == dir) break;             // reached the root — no progress
+        dir = parent;
+    }
+    return "";
+}
+
+// The version the PATH selector should run in the cwd: project pin (nearest kama.json `toolchain`) →
+// `KAMA_VERSION` env → global default (`~/.kama/default`). "" ⇒ no preference (run this binary as-is).
+static std::string resolvePin()
+{
+    std::string manifest = findManifestUpward();
+    if (!manifest.empty()) {
+        std::string tc, err;
+        if (loadManifestToolchain(manifest, tc, err) && !tc.empty()) return tc;
+    }
+    if (const char* v = getenv("KAMA_VERSION")) { if (*v) return v; }
+    return readTrimmedFile(defaultVersionFile());
+}
+
+// Set a top-level string member `key` = `value` in a kama.json, byte-preserving (everything else verbatim;
+// inserts the member if absent). Reuses the pkg-add splice helpers. Used by `kama toolchain pin`.
+static bool manifestSetTopString(const std::string& path, const std::string& key,
+                                 const std::string& value, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
+    size_t topOpen = s.find('{');
+    if (topOpen == std::string::npos) { err = "manifest is not a JSON object"; return false; }
+    std::vector<std::pair<std::string,std::string>> top; size_t kp = 0, ve = 0;
+    if (!walkMembers(s, topOpen, top, &key, &kp, &ve)) { err = "malformed manifest " + path; return false; }
+    std::string quoted = "\"" + jsonEscape(value) + "\"";
+    std::string out;
+    if (kp != 0) {                            // key present — replace just its value span
+        size_t colon = s.find(':', kp);
+        size_t vstart = colon + 1;
+        while (vstart < s.size() && (s[vstart]==' '||s[vstart]=='\t'||s[vstart]=='\n'||s[vstart]=='\r')) ++vstart;
+        out = s.substr(0, vstart) + quoted + s.substr(ve);
+    } else {                                  // absent — insert as a new first member
+        size_t topClose; if (!matchBrace(s, topOpen, topClose)) { err = "malformed manifest " + path; return false; }
+        std::string topInd = "  ";
+        { size_t f = s.find('"', topOpen + 1); if (f != std::string::npos && f < topClose) topInd = indentBefore(s, f); }
+        std::string member = "\"" + key + "\": " + quoted;
+        if (top.empty()) out = s.substr(0, topOpen) + "{\n" + topInd + member + "\n}" + s.substr(topClose + 1);
+        else             out = s.substr(0, topOpen + 1) + "\n" + topInd + member + "," + s.substr(topOpen + 1);
+    }
+    std::ofstream o(path, std::ios::binary | std::ios::trunc);
+    if (!o) { err = "cannot write '" + path + "'"; return false; }
+    o << out; return true;
+}
+
+// `kama toolchain list` — installed versions, the global default, and what the cwd resolves to.
+int cmdToolchainList()
+{
+    std::vector<std::string> versions;
+    if (DIR* d = opendir(versionsDir().c_str())) {
+        while (struct dirent* e = readdir(d)) {
+            std::string n = e->d_name;
+            if (n == "." || n == "..") continue;
+            if (dirExists(versionDir(n))) versions.push_back(n);
+        }
+        closedir(d);
+    }
+    std::sort(versions.begin(), versions.end());
+    std::string def = readTrimmedFile(defaultVersionFile());
+    std::string resolved = resolvePin();
+    if (versions.empty()) {
+        printf("no toolchains installed (install one with `kama toolchain install <v>`)\n");
+    } else {
+        for (const std::string& v : versions)
+            printf("%s %s\n", (v == def ? "*" : " "), v.c_str());
+        printf("\n* = global default (%s)\n", def.empty() ? "unset" : def.c_str());
+    }
+    if (!resolved.empty()) printf("this directory resolves to: %s\n", resolved.c_str());
+    return 0;
+}
+
+// `kama toolchain install <v>` — fetch version <v> into ~/.kama/versions/<v> via the canonical installer
+// (KAMA_VERSION=<v>). Idempotent: a no-op if already present. The installer lays down the versioned dir.
+int cmdToolchainInstall(const std::string& v)
+{
+    if (dirExists(versionDir(v))) { printf("kama %s already installed\n", v.c_str()); return 0; }
+    return runInstaller(v, /*makeDefault=*/false);   // add alongside; don't disturb the current default
+}
+
+// `kama toolchain uninstall <v>` — remove ~/.kama/versions/<v>. Refuses to remove the current default.
+int cmdToolchainUninstall(const std::string& v)
+{
+    if (!dirExists(versionDir(v))) { fprintf(stderr, "kama toolchain uninstall: '%s' is not installed\n", v.c_str()); return 1; }
+    if (readTrimmedFile(defaultVersionFile()) == v) {
+        fprintf(stderr, "kama toolchain uninstall: '%s' is the default — set another default first\n", v.c_str());
+        return 1;
+    }
+    if (runCmd(rmRfCmd(versionDir(v))) != 0) { fprintf(stderr, "kama toolchain uninstall: failed to remove '%s'\n", v.c_str()); return 1; }
+    printf("removed kama %s\n", v.c_str());
+    return 0;
+}
+
+// `kama toolchain default <v>` — record the global default (the version an unpinned directory resolves to).
+// The PATH selector is unchanged: it always hands off to the versioned location, so it needn't match the
+// default — the installer lays it down once, and `kama update` refreshes it.
+int cmdToolchainDefault(const std::string& v)
+{
+    if (!fileExists(versionBin(v))) {
+        fprintf(stderr, "kama toolchain default: '%s' is not installed — run `kama toolchain install %s`\n", v.c_str(), v.c_str());
+        return 1;
+    }
+    std::ofstream o(defaultVersionFile(), std::ios::binary | std::ios::trunc);
+    if (!o) { fprintf(stderr, "kama toolchain default: cannot write %s\n", defaultVersionFile().c_str()); return 1; }
+    o << v << "\n";
+    printf("default is now kama %s\n", v.c_str());
+    return 0;
+}
+
+// `kama toolchain pin <v>` — write `"toolchain": "<v>"` into ./kama.json (byte-preserving).
+int cmdToolchainPin(const std::string& v)
+{
+    std::string manifest = "./kama.json";
+    if (!fileExists(manifest)) { fprintf(stderr, "kama toolchain pin: no kama.json in the current directory\n"); return 2; }
+    std::string err;
+    if (!manifestSetTopString(manifest, "toolchain", v, err)) { fprintf(stderr, "kama toolchain pin: %s\n", err.c_str()); return 1; }
+    printf("pinned this project to kama %s\n", v.c_str());
+    return 0;
+}
+
+// This process's own executable path (argv[0] is unreliable — a PATH lookup passes the bare name). The
+// selector uses it to recognize itself; falls back to argv[0] where the OS query is unavailable.
+static std::string selfExePath(const char* argv0)
+{
+#if defined(_WIN32)
+    char* p = nullptr;
+    if (_get_pgmptr(&p) == 0 && p) return p;   // full path of the running .exe (no windows.h needed)
+#elif defined(__linux__)
+    char buf[PATH_MAX]; ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n > 0) { buf[n] = '\0'; return buf; }
+#elif defined(__APPLE__)
+    char buf[PATH_MAX]; uint32_t sz = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &sz) == 0) return buf;
+#endif
+    return argv0 ? argv0 : "kama";
+}
+
+// The PATH selector: before dispatch, resolve which version this directory wants and re-exec THAT version's
+// binary. Only the selector at `~/.kama/bin/kama` selects — a per-version binary (or a dev/repo build) runs
+// in place, which is both the loop-stopper (the re-exec target is a different path, so it won't select
+// again) and what keeps a dev `./kama` from silently handing off to an installed toolchain. The selector is
+// only ever a hand-off: it never compiles itself (it has no sibling include/lib), so it always execs the
+// versioned location where the support dirs live. `toolchain`/`update` manage the install and stay put.
+void maybeReExec(char** argv, const std::string& subcommand)
+{
+    if (getenv("KAMA_NO_SELECT")) return;                              // explicit escape hatch
+    if (subcommand == "toolchain" || subcommand == "update") return;  // these manage the install in place
+    if (absolutePath(selfExePath(argv[0])) != absolutePath(selectorPath())) return;   // only the selector selects
+    std::string v = resolvePin();
+    if (v.empty()) return;                                            // no default/pin — run in place
+    std::string bin = versionBin(v);
+    if (!fileExists(bin)) {
+        fprintf(stderr, "kama: toolchain '%s' is not installed — run `kama toolchain install %s`\n", v.c_str(), v.c_str());
+        exit(1);
+    }
+    argv[0] = const_cast<char*>(bin.c_str());   // so the versioned compiler resolves its runtime/stdlib from
+                                                // its OWN location (exe-relative), not the selector's ~/.kama/bin
+#ifdef _WIN32
+    _putenv_s("KAMA_NO_SELECT", "1");
+    intptr_t rc = _spawnv(_P_WAIT, bin.c_str(), argv);               // Windows can't exec-in-place; spawn + forward exit
+    exit(rc < 0 ? 1 : (int)rc);
+#else
+    setenv("KAMA_NO_SELECT", "1", 1);
+    execv(bin.c_str(), argv);                                        // replaces this process on success
+    fprintf(stderr, "kama: failed to exec %s\n", bin.c_str());
+    exit(1);
+#endif
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -1530,6 +1793,35 @@ int main(int argc, char** argv)
     if (argc < 2) { usage(); return 2; }
 
     std::string subcommand = argv[1];
+
+    maybeReExec(argv, subcommand);   // PATH selector: hand off to the version this directory pins (M1)
+
+    if (subcommand == "toolchain") {
+        if (argc < 3) { toolchainUsage(); return 2; }
+        std::string verb = argv[2];
+        auto oneArg = [&](const char* cmd) -> std::string {
+            std::string v;
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama toolchain %s: unexpected option '%s'\n", cmd, a.c_str()); return "\x01"; }
+                else if (v.empty()) v = a;
+                else { fprintf(stderr, "kama toolchain %s: unexpected arg '%s'\n", cmd, a.c_str()); return "\x01"; }
+            }
+            return v;
+        };
+        if (verb == "list") {
+            if (argc > 3) { fprintf(stderr, "kama toolchain list: takes no arguments\n"); return 2; }
+            return cmdToolchainList();
+        }
+        std::string v = oneArg(verb.c_str());
+        if (v == "\x01") return 2;                     // an option/extra-arg error was already printed
+        if (v.empty()) { fprintf(stderr, "kama toolchain %s: missing <version>\n", verb.c_str()); return 2; }
+        if (verb == "install")   return cmdToolchainInstall(v);
+        if (verb == "uninstall") return cmdToolchainUninstall(v);
+        if (verb == "default")   return cmdToolchainDefault(v);
+        if (verb == "pin")       return cmdToolchainPin(v);
+        fprintf(stderr, "kama toolchain: unknown command '%s'\n", verb.c_str()); toolchainUsage(); return 2;
+    }
 
     if (subcommand == "update") {
         std::string pinned;
@@ -1780,7 +2072,7 @@ int main(int argc, char** argv)
     if (release) emitLines = false;
 
     // Where kama_runtime.h lives — resolved so an installed binary works from any
-    // cwd ($KAMA_HOME, else <exe>/../include, else <exe>, else ".").
+    // cwd (exe-relative: <exe>/../include, else <exe>, else ".").
     std::string runtimeDir = resolveRuntimeDir(argv[0]);
 
     if (subcommand == "transpile") {

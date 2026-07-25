@@ -129,6 +129,36 @@ depend on never drags *its* dev-dependencies into your build.
   finds declared dependencies but no resolved view tells you to run `kama pkg install` — it
   never silently reaches the network. Once a project is installed, everything works offline.
 
+## Toolchain versions
+
+kama is its own version manager — there's no `nvm`/`pyenv`/`rustup` to wrap around it. Each
+installed compiler version lives in its own directory under `~/.kama/versions/<v>/`, and the
+`kama` on your `PATH` is a thin **selector**: every command resolves *which* version to run for
+the current directory and hands off to it. There is no `activate` step.
+
+Resolution order, highest priority first:
+
+1. **Project pin** — a `"toolchain"` field in the project's `kama.json` (found by walking up from
+   the current directory). This makes the toolchain version a reproducible build input, alongside
+   the source, `kama.json`, and `kama.lock`.
+2. **`KAMA_VERSION`** environment variable — a one-off override for the current command, without
+   editing any file (handy for a project that has no pin, or to test a build under another version).
+3. **Global default** — recorded in `~/.kama/default`, used when nothing else applies.
+
+```sh
+kama toolchain list              # installed versions, the default (*), and what this dir resolves to
+kama toolchain install 1.3.0     # add a version alongside (doesn't change the default)
+kama toolchain default 1.3.0     # set the global default
+kama toolchain pin 1.3.0         # pin THIS project — writes "toolchain": "1.3.0" into kama.json
+kama toolchain uninstall 1.2.0   # remove a version (refuses to remove the current default)
+
+kama update                      # install the latest and make it the default
+kama update --version 1.3.0      # install a specific version and make it the default
+```
+
+A pin or selection to a version you don't have installed fails with a clear message telling you to
+run `kama toolchain install <v>` — it never silently falls back to another version.
+
 ## Command reference
 
 | Command | What it does |
@@ -139,3 +169,9 @@ depend on never drags *its* dev-dependencies into your build.
 | `kama pkg add [--dev] <name> (--git U [--rev R] \| --url U [--integrity H] \| --path P)` | Add a dependency and install. |
 | `kama pkg remove <name>` | Drop a dependency and install. |
 | `kama pkg update [<pkg>]` | Re-resolve pins and rewrite the lock. |
+| `kama toolchain list` | Installed versions, the global default, and what the current dir resolves to. |
+| `kama toolchain install <v>` | Install version `<v>` into `~/.kama/versions/<v>` (alongside; keeps the default). |
+| `kama toolchain uninstall <v>` | Remove an installed version (refuses the current default). |
+| `kama toolchain default <v>` | Set the global default version. |
+| `kama toolchain pin <v>` | Pin this project's toolchain in `kama.json`. |
+| `kama update [--version <v>]` | Install the latest (or `<v>`) and make it the default. |
