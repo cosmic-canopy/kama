@@ -99,6 +99,19 @@ landed 2026-07-23); what remains here is genuinely later-track or opt-in.
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
+- **Command-line args / environment access — in the PRELUDE FLOOR, not the opt-out stdlib (post-1.0).**
+  A program can't read its argv/env today (`kama_main()` takes no args; the synthesized hosted
+  `main(argc,argv)` wrapper receives and *discards* them — `kama.cemit.cpp` ~3108). When scheduled, this
+  lands in the **baked-in prelude / runtime floor that survives `--no-std`** — the tier of
+  `Optional`/`Result`/`Deref`/`HeapOwner` + the allocator triad + smart pointers ([SPEC.md](SPEC.md) "stdlib
+  optional on disk") — **NOT** an importable `std::env` module. Rationale: args enter through the *mandatory*
+  runtime shim / compiler-synthesized `main` wrapper, so a `--no-std` / bring-your-own-stdlib user cannot
+  reimplement them (unlike `std::math`); a core, non-reimplementable capability belongs in the floor.
+  Shape: the shim stashes `argc/argv` into a runtime global; a small always-in-scope prelude surface (a free
+  `args()` / an `Args` view — spelling TBD) reads it; the user's `fn int32 main()` signature never changes.
+  Embedded: reuse the *existing* entry-point guard (freestanding `main(void)` has no argv — §5 embedded row),
+  `#if KAMA_TARGET_EMBEDDED`-guarding the surface exactly as the entry already is. This is the eventual
+  consumer of the (currently inert) `kama run -- <args>` passthrough shipped in package-management M2.3.
 - **Stdlib layering — triaged, 3 LOW-prio follow-ups ([design/stdlib-layering.md](design/stdlib-layering.md)).**
   The prelude-vs-`lib`-vs-primitive split is already principled (*contracts/syntax/intrinsics in the prelude;
   backends opt-in* — `fmt`/serde/memory/concurrency all follow it), so nothing is mis-placed. Recorded, none

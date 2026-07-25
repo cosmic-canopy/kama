@@ -406,6 +406,7 @@ struct ManifestReader {
     std::set<std::string>& defaults;
     std::map<std::string, DepSpec>* deps = nullptr;      // set to capture `dependencies` (else it's skipped)
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
+    std::string* mainOut = nullptr;                       // set to capture the `main` entry field (else skipped)
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -527,6 +528,7 @@ struct ManifestReader {
             if (key == "flags") { if (!flagsObject()) return false; }
             else if (key == "dependencies" && deps) { if (!depsObject(deps)) return false; }
             else if (key == "dev-dependencies" && devDeps) { if (!depsObject(devDeps)) return false; }
+            else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
             else if (!skipValue()) return false;         // name / version / future package keys
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -563,6 +565,21 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
     ManifestReader r(src, declared, defaults);
     r.deps = &deps;
     r.devDeps = devDeps;   // optional: also capture `dev-dependencies` (M2.2)
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// Load a `kama.json` manifest's `main` entry field (the entry `.kama`, relative to the manifest). Reuses
+// ManifestReader; `mainOut` is left empty if the field is absent. Returns false + sets `err` on malformed
+// JSON. (M2.3 — read by `kama run` to resolve the entry when no file is passed.)
+static bool loadManifestMain(const std::string& path, std::string& mainOut, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.mainOut = &mainOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -1482,6 +1499,8 @@ void usage()
         "  kama build     <in.kama>... [-o out] [--target native|wasm|embedded] [--release|--debug] [--shared]\n"
         "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
+        "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
+        "                  (build the entry .kama — explicit <file>, else the manifest \"main\" — and run it; native-only)\n"
         "  kama pkg install [<dir>]            resolve `kama.json` (dev-)dependencies into .kama/{deps,dev-deps} + kama.lock\n"
         "  kama pkg add   [--dev] <name> (--git U [--rev R] | --url U [--integrity H] | --path P)\n"
         "  kama pkg remove <name>\n"
@@ -1595,11 +1614,14 @@ int main(int argc, char** argv)
     std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
     std::string configPath;                // --config PATH: explicit kama.json (else auto-discovered)
     bool        devBuild   = false;        // --dev: also put .kama/dev-deps on the import path (dev-dependencies)
+    const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
+    std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
 
     // Options may appear in any order, before or after the input file.
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "-o" && i + 1 < argc)            output = argv[++i];
+        if (a == "--") { for (++i; i < argc; ++i) progArgs.push_back(argv[i]); break; }   // rest are program args
+        else if (a == "-o" && i + 1 < argc)       output = argv[++i];
         else if (a == "--cc" && i + 1 < argc)     cc = argv[++i];
         else if (a == "--link" && i + 1 < argc)   links.push_back(argv[++i]);
         else if (a == "--target" && i + 1 < argc) target = argv[++i];
@@ -1620,6 +1642,32 @@ int main(int argc, char** argv)
         else                                      inputs.push_back(a);
     }
 
+    // `-- <args>` are forwarded to the program `kama run` launches; they mean nothing to build/transpile.
+    if (!runMode && !progArgs.empty()) {
+        fprintf(stderr, "kama: `-- <args>` is only meaningful for `kama run`\n"); usage(); return 2;
+    }
+
+    // `kama run` with no file resolves the entry from the manifest `main` field (discovered via --config,
+    // else kama.json in CWD). Explicit files still win. Do this before the empty-input check below.
+    if (runMode && inputs.empty()) {
+        std::string manifest = configPath;
+        if (manifest.empty() && std::ifstream("kama.json").good()) manifest = "kama.json";
+        if (manifest.empty()) {
+            fprintf(stderr, "kama run: no input file and no kama.json in this directory\n"); return 2;
+        }
+        std::string mainRel, merr;
+        if (!loadManifestMain(manifest, mainRel, merr)) {
+            fprintf(stderr, "kama run: %s: %s\n", manifest.c_str(), merr.c_str()); return 2;
+        }
+        if (mainRel.empty()) {
+            fprintf(stderr, "kama run: %s has no \"main\" entry (add \"main\": \"src/app.kama\") or pass a file\n",
+                    manifest.c_str());
+            return 2;
+        }
+        std::string mdir = dirName(manifest);
+        inputs.push_back(mdir == "." ? mainRel : mdir + "/" + mainRel);
+    }
+
     if (inputs.empty()) { fprintf(stderr, "kama: no input file\n"); usage(); return 2; }
     const std::string& input = inputs[0];   // first input drives default output naming
 
@@ -1633,6 +1681,14 @@ int main(int argc, char** argv)
     // memory map) is inherently per-chip and is the user's link step (or the turnkey step-6 toolchain),
     // exactly as every bare-metal toolchain separates compilation from the linker-script'd final image.
     const bool embedded = (target == "embedded");
+
+    // `kama run` is native-only: it builds a hosted executable and execs it. wasm needs node/a browser;
+    // embedded emits a freestanding object with no runnable entry — point those at `kama build`.
+    if (runMode && (wasm || embedded)) {
+        fprintf(stderr, "kama run is native-only (wasm needs node/a browser; embedded emits a freestanding "
+                        "object) — use `kama build --target %s`\n", target.c_str());
+        return 2;
+    }
 
     // Build the active `@compileFor` flag set (the "structure" axis — reproducible, from the explicit
     // build invocation, never ambient env). Built-ins are auto-derived: NATIVE/WASM/EMBEDDED from
@@ -1742,7 +1798,16 @@ int main(int argc, char** argv)
         return rc;
     }
 
-    if (subcommand == "build") {
+    if (subcommand == "build" || runMode) {
+        // `kama run` reuses the whole native build path, but builds into a throwaway binary it execs and
+        // removes afterward (mirrors the store staging name at fetchToStore). Force the output there so any
+        // stray `-o` can't leave an artifact behind.
+        if (runMode) {
+            const char* td = getenv("TMPDIR");
+            std::string tmpDir = (td && *td) ? td : "/tmp";
+            if (!tmpDir.empty() && tmpDir.back() == '/') tmpDir.pop_back();
+            output = tmpDir + "/kama-run-" + std::to_string((long)getpid());
+        }
         // Compiler: native uses a bundled `zig cc` if present else system clang; wasm uses
         // emcc (emcc keys output format off the -o extension). --cc / $EMCC override.
         std::string compiler = cc;
@@ -1997,6 +2062,16 @@ int main(int argc, char** argv)
         if (rc != 0) {
             fprintf(stderr, "kama: %s failed (exit %d)\n", compiler.c_str(), rc);
             return rc;
+        }
+        // `kama run`: exec the freshly built binary, forward its exit code, then remove the temp. `-- <args>`
+        // are forwarded (quoted) — inert until argv marshaling lands, but wired at the process boundary now.
+        if (runMode) {
+            std::ostringstream run;
+            run << "\"" << outPath << "\"";
+            for (auto& pa : progArgs) run << " \"" << pa << "\"";
+            int prc = runCmd(run.str());   // system() -> WEXITSTATUS: the child's exit code
+            remove(outPath.c_str());
+            return prc;
         }
         fprintf(stderr, "kama: built %s\n", outPath.c_str());
         return 0;

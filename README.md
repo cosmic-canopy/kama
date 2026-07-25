@@ -104,10 +104,16 @@ kama build hello.kama --target wasm -o app.js  # -> app.js + app.wasm (headless:
 
 # Optimized release build (stripped, NDEBUG, no #line):
 kama build hello.kama --release
+
+# Build the project entry (from kama.json "main") and run it in one step:
+kama run                      # native-only; `kama run <file>` also works
 ```
 
 Options: `--release`/`--debug` (default debug: `-g -O0`), `--target native|wasm`, `--webgpu`
 (link Emscripten's WebGPU port), `--cc <compiler>`, `--no-line` (omit `#line`), `--keep-c`.
+
+For multi-file / dependency projects — a `kama.json` manifest, `kama pkg add`/`install`,
+the lockfile, and `kama run` — see the **[packages quickstart](docs/packages.md)**.
 
 ## Debugging
 

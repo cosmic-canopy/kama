@@ -55,7 +55,18 @@ open questions.
   without touching the manifest. Guard `tools/check-packages.sh` extended (cases 5–10: transitive + dev-dep
   non-propagation, sha pin, offline/cold-store honor, dev `--dev` boundary, add/remove round-trip, conflict
   hard-fail). Native 755 / ASan 737 / wasm 725 green; install/resolver path ASan+UBSan-clean.
-- M2.3 (`kama run` + `main`/entry field + user docs) — pending.
+- **M2.3 — `kama run` + manifest `main` field + user docs ✅ shipped.** `kama run [<file>] [-- <args>]`
+  builds the entry `.kama` to a temp native binary, execs it, forwards the exit code, and removes the temp —
+  a thin wrapper that **reuses the whole build branch** (`if (subcommand == "build" || runMode)`) rather than
+  duplicating it. Entry resolution: explicit `<file>` wins, else the manifest **`main`** field (captured by a
+  new `ManifestReader::mainOut` / `loadManifestMain`; discovered via `--config` else `kama.json` in CWD),
+  else a clear error. **Native-only** (wasm/embedded rejected pointing at `kama build`). `-- <args>` are
+  accepted + forwarded at the OS process boundary but **inert today** — kama's `main` takes no args (argv
+  marshaling is deferred; see ROADMAP §2 "command-line args / env in the PRELUDE FLOOR", the eventual
+  consumer). Docs: user-facing **`docs/packages.md`** quickstart + a README pointer. Guard
+  `tools/check-packages.sh` extended (cases 11–14: `main`-field run + explicit run forwarding a non-zero exit,
+  the `--dev` boundary composed with run, native-only rejection, no-input/no-`main` errors). Native 755 /
+  wasm 725 green; run/driver path ASan+UBSan-clean. **Closes pillar 4 (per-project packages).**
 
 ## Scope — four pillars (user, 2026-07-24)
 
@@ -271,10 +282,11 @@ M2.3 = `kama run` + `main` field + docs. See the staged plan above.
 
 ## M2.3 — implementation kickoff (`kama run` + manifest entry field + user docs)
 
-**Status: PREPARED, not built.** The final per-project-packages slice (pillar 4), closing the campaign's
-first pillar. Everything below is a settled lean to confirm at the top of the build session; the seams are
-verified in code. This is a small, mechanical milestone (a thin `run` wrapper over the existing build path
-+ one manifest field + a docs page) — the interesting work is the design confirmations, not the code.
+**Status: ✅ SHIPPED 2026-07-24** (see the M2.2/M2.3 as-shipped bullets in the implementation-progress list
+at the top). The final per-project-packages slice (pillar 4), closing the campaign's first pillar. The
+leans below were all confirmed as written, with one refinement: the eventual argv/env consumer belongs in
+the **prelude/runtime floor, not an opt-out `std::env`** (a non-reimplementable, runtime-owned capability —
+ROADMAP §2). The `-- <args>` passthrough was kept (accepted + forwarded, inert today).
 
 ### Goal
 

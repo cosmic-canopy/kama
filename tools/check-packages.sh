@@ -255,4 +255,49 @@ if "$KAMA" pkg install "$t10" >"$tmp/e10" 2>&1; then
     echo "check-packages: FAIL — a dependency conflict was not detected" >&2; exit 1; fi
 grep -qi "conflict" "$tmp/e10" || { echo "check-packages: FAIL — conflict not reported clearly:" >&2; sed 's/^/  /' "$tmp/e10" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected)"
+# 11. kama run: a project with a `main` field + a git dep. `run` (no file) discovers kama.json in CWD, reads
+#     `main`, builds + execs it, and FORWARDS the exit code. The explicit `run <file>` form does the same.
+t11="$tmp/t11"; mkdir -p "$t11/src"
+cat > "$t11/kama.json" <<J
+{ "name": "t11", "version": "0.1.0", "main": "src/app.kama",
+  "dependencies": { "geo": { "git": "file://$geo", "rev": "v1.0.0" } } }
+J
+printf 'import geo::{area};\nfn int32 main() { return area(); }\n' > "$t11/src/app.kama"   # 30
+if ! "$KAMA" pkg install "$t11" >"$tmp/t11.out" 2>&1; then
+    echo "check-packages: FAIL — run project install errored:" >&2; sed 's/^/  /' "$tmp/t11.out" >&2; exit 1; fi
+if ( cd "$t11" && "$KAMA" run ) >"$tmp/r11.out" 2>&1; then RC=0; else RC=$?; fi
+[ "$RC" = 30 ] || { echo "check-packages: FAIL — kama run (no file) returned $RC, expected 30" >&2; sed 's/^/  /' "$tmp/r11.out" >&2; exit 1; }
+if ( cd "$t11" && "$KAMA" run src/app.kama ) >"$tmp/r11b.out" 2>&1; then RC=0; else RC=$?; fi
+[ "$RC" = 30 ] || { echo "check-packages: FAIL — kama run <file> returned $RC, expected 30" >&2; sed 's/^/  /' "$tmp/r11b.out" >&2; exit 1; }
+
+# 12. kama run + the --dev boundary: a dev-dep-importing entry runs under --dev and FAILS to resolve without.
+t12="$tmp/t12"; mkdir -p "$t12/src"
+cat > "$t12/kama.json" <<J
+{ "name": "t12", "version": "0.1.0", "main": "src/app.kama",
+  "dev-dependencies": { "testkit": { "git": "file://$tk", "rev": "v1.0.0" } } }
+J
+printf 'import testkit::{helper};\nfn int32 main() { return helper(); }\n' > "$t12/src/app.kama"   # 7
+if ! "$KAMA" pkg install "$t12" >"$tmp/t12.out" 2>&1; then
+    echo "check-packages: FAIL — run --dev install errored:" >&2; sed 's/^/  /' "$tmp/t12.out" >&2; exit 1; fi
+if ( cd "$t12" && "$KAMA" run --dev ) >"$tmp/r12.out" 2>&1; then RC=0; else RC=$?; fi
+[ "$RC" = 7 ] || { echo "check-packages: FAIL — kama run --dev returned $RC, expected 7" >&2; sed 's/^/  /' "$tmp/r12.out" >&2; exit 1; }
+if ( cd "$t12" && "$KAMA" run ) >"$tmp/r12b.out" 2>&1; then
+    echo "check-packages: FAIL — kama run (no --dev) imported a dev-dependency" >&2; exit 1; fi
+grep -qi "cannot resolve module" "$tmp/r12b.out" || { echo "check-packages: FAIL — run (no --dev) failed with the wrong error:" >&2; sed 's/^/  /' "$tmp/r12b.out" >&2; exit 1; }
+
+# 13. kama run is native-only: --target wasm|embedded is a clean error, not a confusing downstream failure.
+if ( cd "$t11" && "$KAMA" run --target wasm ) >"$tmp/r13.out" 2>&1; then
+    echo "check-packages: FAIL — kama run --target wasm was not rejected" >&2; exit 1; fi
+grep -qi "native-only" "$tmp/r13.out" || { echo "check-packages: FAIL — run --target wasm error unclear:" >&2; sed 's/^/  /' "$tmp/r13.out" >&2; exit 1; }
+
+# 14. kama run with no file and no resolvable entry → a clear error (no kama.json; and kama.json without `main`).
+t14="$tmp/t14"; mkdir -p "$t14"
+if ( cd "$t14" && "$KAMA" run ) >"$tmp/r14a.out" 2>&1; then
+    echo "check-packages: FAIL — kama run in an empty dir was not rejected" >&2; exit 1; fi
+grep -qi "no kama.json" "$tmp/r14a.out" || { echo "check-packages: FAIL — no-manifest run error unclear:" >&2; sed 's/^/  /' "$tmp/r14a.out" >&2; exit 1; }
+printf '{ "name": "t14", "version": "0.1.0" }\n' > "$t14/kama.json"
+if ( cd "$t14" && "$KAMA" run ) >"$tmp/r14b.out" 2>&1; then
+    echo "check-packages: FAIL — kama run with no \"main\" was not rejected" >&2; exit 1; fi
+grep -qi 'no "main"' "$tmp/r14b.out" || { echo "check-packages: FAIL — no-main run error unclear:" >&2; sed 's/^/  /' "$tmp/r14b.out" >&2; exit 1; }
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only)"
