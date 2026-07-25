@@ -740,6 +740,30 @@ near-parity on `alloc`/`dispatch`.
   distribute without vendoring — the point at which the **orphan rule** (§3, retroactive conformance) stops
   being a nicety and becomes load-bearing (separately-compiled packages can no longer be globally
   dedup-checked at once). Gates a real third-party ecosystem.
+  **► Status (2026-07-25): campaign nearly complete — all self-contained compiler work has shipped; only
+  hosted-services/ops work remains.** Design of record: [docs/design/package-management.md](design/package-management.md)
+  (per-milestone as-shipped); user docs: [docs/packages.md](packages.md). Shipped on `dev`:
+  - **M1** toolchain version manager (`4a1e672`), **M2** per-project packages + lockfile + content-addressed
+    store (M2.0–M2.3, 2026-07-24), **M3.0** SemVer git-tag range resolution (`19ebadf`).
+  - **M3.1a** registry protocol + `kama publish` (`2d18348`), **M3.1b** `@scope/name` (imports as the bare
+    segment) + `registries` config (default/scope chains, priority-order layering, `default:false` opt-out) +
+    dependency-confusion guard (`c8c9444`), **M3.2a** sign-on-publish / verify-on-install via `ssh-keygen -Y`
+    SSHSIG (`--key` / `--verify`, warn-only default) (`144d422`). All network-free against `file://`
+    registries; a registry dep reduces to a url dep once resolved.
+  - **REMAINING — both gated on hosted services / the repo being public + the website staged (want these
+    wrapped before go-live):**
+    - **M3.3 — hosted deployment (pure ops, no compiler change).** Stand up the real registry host
+      (Cloudflare Pages static index + GitHub Releases/R2 tarballs), wire the built-in default base URI
+      (`kDefaultRegistry`, deliberately **empty** today so an unconfigured registry dep errors rather than
+      reaching a dead URL) to the live URL, add publish auth (a token model — the one M3.1/M3.2a open
+      question left for the remote), and extend a PUBLISHING.md release process. A dynamic
+      Workers/KV/R2-or-Node service is an *optional* drop-in speaking the same M3.1 protocol.
+    - **Rest of M3.2 — mandatory verification + the trust model.** Promote signature verification from
+      warn-only/`--verify`-opt-in to enforced, and pick the trust model: Go-style checksum-transparency log
+      vs npm/PyPI sigstore/OIDC provenance attestations (TOFU / a configured allowed-signers set is the
+      near-term step; the transparency/provenance choice is the larger cut).
+  - **M4 (multi-modal — scripting-runtime versions in the store) deferred** until the kama scripting runtime
+    (§7) exists — no second modality to version until then.
 - **Longer-term — a "node.js-class" application framework in kama.** A fast, low-overhead server/app
   framework (HTTP already dogfooded via `examples/httpd`), aiming to beat the Node/Deno overhead profile on
   the no-GC/AOT (or VM-scripted) runtime — the flagship *application* of the language + package manager +
