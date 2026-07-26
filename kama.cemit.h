@@ -385,6 +385,10 @@ public:
     // `rejectIfNoHeap`. Set from the driver before emission.
     void setNoHeap(bool on) { _noHeapProgram = on; }
 
+    // `--release`: strips `debugAssert(...)` (dev-only checks) at emit time, mirroring C's `NDEBUG` /
+    // Rust's `debug_assert!`. `assert(...)` stays always-on. Set from the driver before emission.
+    void setRelease(bool on) { _release = on; }
+
     // `@compileFor(FLAG)` conditional compilation: the active build-flag set (built-ins from
     // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), and whether
     // strict validation is on (a manifest was loaded). Set from the driver before emission; consumed by
@@ -542,6 +546,7 @@ private:
     bool                                      _emitStaticClass = false;  // prefix `static` on specialized class fns (header ODR)
     bool                                      _emitStaticInlineFn = false;// prefix `static inline` on a free fn (prelude helper body emitted in the header)
     bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide
+    bool                                      _release = false;          // `--release`: strip `debugAssert`
     bool                                      _noHeapActive  = false;    // inside a `@noheap` fn: reject heap allocation in this body
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
@@ -1258,6 +1263,11 @@ private:
     std::string mangledFunctionName(FunctionDeclarationNode* fn, bool& isEntryPoint);
     std::string binaryOperator(int token);
     std::string assignmentOperator(int token);
+    // Render an expression back to READABLE KAMA source text (not C) for diagnostic messages — the
+    // auto-stringified condition in `assert(cond: …)`. Pure (no emitter side effects, never calls
+    // emitExpression); covers the forms that appear in conditions and returns "" for anything else so
+    // the caller degrades to a bare "assertion failed". Reusable for future compiler diagnostics.
+    std::string unparseExpr(SharedExpression expr);
     // Operator overloading. `operatorMangle` maps a token + arity-class (0=unary, ≥1=binary)
     // to a stable C-safe method name (`op_add`, `op_neg`, …), "" if the op has no such form.
     // `operatorParamList` synthesizes a ParameterList from an operator declarator's param1/param2 so

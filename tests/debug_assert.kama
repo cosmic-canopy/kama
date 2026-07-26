@@ -1,0 +1,10 @@
+// `assert` is always-on; `debugAssert` is the `--release`-stripped variant (dev-only checks). Both take a
+// mandatory `msg:`. Here both conditions hold, so it just returns 7 in every build mode. The distinctive
+// message strings ("keepcheck" / "dbgcheck") let tools/check-debug-assert.sh prove on the transpiled C
+// that `--release` strips ONLY the debugAssert.
+fn int32 main() {
+    int32 x = 5;
+    assert(cond: x > 0, msg: "keepcheck");
+    debugAssert(cond: x > 0, msg: "dbgcheck");
+    return 7;
+}

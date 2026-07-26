@@ -829,6 +829,63 @@ static inline void kama_panic(kama_string msg) {
 #endif
 }
 
+// --- Fatal diagnostics with source location (panic / assert) -----------------
+// Compose a message + " (file:line)" into a stack buffer, write it to stderr, and terminate — the same
+// clean-abort discipline as kama_panic (no <stdio.h>, no UB, never returns). On embedded there is no
+// stderr/abort, so route through the overridable weak kama_panic_handler (see kama_bounds_fail). Every
+// append is bounded by `cap`, so an over-long condition/message/path truncates rather than overruns.
+static inline void kama_fail_emit(const char* buf, size_t n) {
+#if defined(KAMA_TARGET_EMBEDDED)
+    (void)buf; (void)n;
+    kama_panic_handler();
+    for (;;) {}
+#else
+    extern void abort(void);
+#if defined(_WIN32)
+    extern int _write(int, const void*, unsigned int);
+    (void)_write(2, buf, (unsigned int)n);
+    (void)_write(2, "\n", 1);
+#else
+    extern long write(int, const void*, size_t);
+    (void)write(2, buf, n);
+    (void)write(2, "\n", 1);
+#endif
+    abort();
+#endif
+}
+static inline void kama_fail_puts(char* buf, size_t* p, size_t cap, const char* s) {
+    while (s && *s && *p < cap) buf[(*p)++] = *s++;
+}
+static inline void kama_fail_loc(char* buf, size_t* p, size_t cap, const char* file, int line) {
+    kama_fail_puts(buf, p, cap, " (");
+    kama_fail_puts(buf, p, cap, file);
+    if (*p < cap) buf[(*p)++] = ':';
+    char lb[24]; size_t lp = 0; kama_u64_to_buf(lb, &lp, (size_t)(line < 0 ? 0 : line));
+    for (size_t i = 0; i < lp && *p < cap; ++i) buf[(*p)++] = lb[i];
+    if (*p < cap) buf[(*p)++] = ')';
+}
+// `panic(msg:)` → "kama: panic: <msg> (file:line)".
+static inline void kama_panic_at(kama_string msg, const char* file, int line) {
+    char buf[1024]; size_t p = 0; const size_t cap = sizeof buf;
+    kama_fail_puts(buf, &p, cap, "kama: panic: ");
+    for (size_t i = 0; i < msg.len && p < cap; ++i) buf[p++] = ((const char*)msg.data)[i];
+    kama_fail_loc(buf, &p, cap, file, line);
+    kama_fail_emit(buf, p);
+}
+// A failed `assert`/`debugAssert` → "assertion failed: <cond>[ — <msg>] (file:line)". `cond` is the
+// auto-stringified condition text (may be ""); `msg` is the user message (may be "").
+static inline void kama_assert_fail(const char* cond, kama_string msg, const char* file, int line) {
+    char buf[1024]; size_t p = 0; const size_t cap = sizeof buf;
+    kama_fail_puts(buf, &p, cap, "assertion failed");
+    if (cond && *cond) { kama_fail_puts(buf, &p, cap, ": "); kama_fail_puts(buf, &p, cap, cond); }
+    if (msg.len) {
+        kama_fail_puts(buf, &p, cap, " \xE2\x80\x94 ");   // em dash (U+2014), UTF-8
+        for (size_t i = 0; i < msg.len && p < cap; ++i) buf[p++] = ((const char*)msg.data)[i];
+    }
+    kama_fail_loc(buf, &p, cap, file, line);
+    kama_fail_emit(buf, p);
+}
+
 // Tiny tracing hook for tests/debugging: a folding accumulator that records a
 // sequence of integer events (e.g. constructor/destructor order). Declare in
 // kama with `extern void kama_trace(int code);` / `extern int kama_trace_get();`.

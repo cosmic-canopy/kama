@@ -369,6 +369,10 @@ std::vector<SharedCompilationUnit> preludeModuleUnits()
 // subset). Threaded to each CEmitter via `setNoHeap`. File-scope like the other build config, set in main.
 static bool g_noHeap = false;
 
+// `--release`: strip `debugAssert(...)` at emit time (dev-only checks; `assert` stays always-on). File-scope
+// like g_noHeap so the emitter-setup helpers can read it; set in main from the `--release`/`--debug` flags.
+static bool g_release = false;
+
 // `--verify` (M3.2a): enforce registry-package signatures on install — a present-but-invalid signature
 // and a missing signature both become hard errors. Off by default (warn-only: a present signature is
 // checked and a failure only warns), so the signing mechanism lands before the enforcement policy.
@@ -1095,6 +1099,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     CEmitter emitter(out, srcPath, emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
     emitter.setNoHeap(g_noHeap);         // `--no-heap`: reject heap allocation program-wide
+    emitter.setRelease(g_release);       // `--release`: strip `debugAssert`
     emitter.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
     for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
     int unsupported = emitter.emit(unit);
@@ -1140,6 +1145,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     CEmitter emitter(header, "", emitLines);
     emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
     emitter.setNoHeap(g_noHeap);         // `--no-heap`: reject heap allocation program-wide
+    emitter.setRelease(g_release);       // `--release`: strip `debugAssert`
     emitter.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
     for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
@@ -2900,6 +2906,7 @@ int main(int argc, char** argv)
     // manifest layers declared defaults in on top — Stage 2). `--undefine` then removes.
     g_activeFlags.insert(embedded ? "EMBEDDED" : (wasm ? "WASM" : "NATIVE"));
     g_activeFlags.insert(release ? "RELEASE" : "DEBUG");
+    g_release = release;   // `--release` also strips `debugAssert` (threaded to the emitter via setRelease)
 
     // Load the `kama.json` manifest if present (explicit `--config`, else auto-discovered next to the
     // input file, else CWD). It DECLARES the valid user-flag universe — enabling STRICT validation of

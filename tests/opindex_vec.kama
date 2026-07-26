@@ -14,7 +14,7 @@ type resource Vec<T> {
      return give r; }
     public ref T operator[](int32 i) {
         if (i < 0) { panic(msg: "Vec: negative index"); }
-        assert(cond: i < this.len);
+        assert(cond: i < this.len, msg: "");
         unsafe { return this.data[i]; }
     }
     public fn int32 length() { return this.len; }

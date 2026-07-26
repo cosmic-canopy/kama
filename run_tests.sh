@@ -176,6 +176,12 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-com
     if sh tools/check-compilefor.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# `debugAssert` strip: proves on the transpiled C that `--release` drops the dev-only debugAssert while the
+# always-on assert survives (Kama-level strip, not a C #ifdef). Transpile-grep, so plain native pass only.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-debug-assert.sh ]; then
+    if sh tools/check-debug-assert.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # M2.1 package store: `kama install` fetches git/url deps into the content-addressed store, verifies
 # sha256 integrity, and writes a reproducible lock. Network-free (file:// git repo + local tarball). The
 # `.d/` harness only runs `kama build`, so install/store/integrity ride here — plain native pass only.

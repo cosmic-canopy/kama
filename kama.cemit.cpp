@@ -340,6 +340,77 @@ std::string CEmitter::binaryOperator(int token)
     }
 }
 
+// Render an expression back to readable KAMA text for a diagnostic message (the auto-stringified
+// `assert` condition). Pure and self-contained: it never calls emitExpression (so no emitter side
+// effects / no C leak like `this->x`), and returns "" for any form it doesn't handle so the caller
+// falls back to a bare "assertion failed". Covers what actually appears in conditions.
+std::string CEmitter::unparseExpr(SharedExpression expr)
+{
+    if (!expr) return "";
+    ASTNode* n = expr.get();
+
+    if (auto* v = dynamic_cast<IdentifierNode*>(n)) {
+        std::string s;
+        if (v->qualifier) for (auto& q : *v->qualifier) if (q) s += *q + ".";
+        return s + (v->value ? *v->value : "");
+    }
+    if (dynamic_cast<ThisAccessNode*>(n)) return "this";
+    if (auto* v = dynamic_cast<BooleanNode*>(n)) return v->value ? "true" : "false";
+    if (dynamic_cast<NullNode*>(n))              return "null";
+    if (auto* v = dynamic_cast<Int8Node*>(n))    return std::to_string((int)v->value);
+    if (auto* v = dynamic_cast<Int16Node*>(n))   return std::to_string((int)v->value);
+    if (auto* v = dynamic_cast<Int32Node*>(n))   return std::to_string(v->value);
+    if (auto* v = dynamic_cast<Int64Node*>(n))   return std::to_string((long long)v->value);
+    if (auto* v = dynamic_cast<UInt8Node*>(n))   return std::to_string((unsigned)v->value);
+    if (auto* v = dynamic_cast<UInt16Node*>(n))  return std::to_string((unsigned)v->value);
+    if (auto* v = dynamic_cast<UInt32Node*>(n))  return std::to_string(v->value);
+    if (auto* v = dynamic_cast<UInt64Node*>(n))  return std::to_string((unsigned long long)v->value);
+    if (auto* v = dynamic_cast<CharNode*>(n))    return std::to_string(v->value);
+    if (auto* v = dynamic_cast<Float64Node*>(n)) { char b[64]; std::snprintf(b, sizeof b, "%g", v->value); return b; }
+    if (auto* v = dynamic_cast<Float32Node*>(n)) { char b[64]; std::snprintf(b, sizeof b, "%g", (double)v->value); return b; }
+    if (auto* v = dynamic_cast<StringNode*>(n))  return "\"" + (v->value ? *v->value : std::string()) + "\"";
+
+    if (auto* v = dynamic_cast<BinaryExpressionNode*>(n))
+        return unparseExpr(v->LHS) + " " + binaryOperator(v->token) + " " + unparseExpr(v->RHS);
+    if (auto* v = dynamic_cast<LogicalAndOrNode*>(n))
+        return unparseExpr(v->LHS) + (v->token == ANDAND ? " && " : " || ") + unparseExpr(v->RHS);
+    if (auto* v = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        const char* op = v->token == EXCLAMATION ? "!" : v->token == TILDE ? "~"
+                       : v->token == MINUS ? "-" : v->token == PLUS ? "+" : "";
+        if (!*op) return "";
+        return op + unparseExpr(v->expression);
+    }
+    if (auto* v = dynamic_cast<MemberAccessNode*>(n)) {
+        std::string base = v->expression ? unparseExpr(v->expression)
+                         : (v->classType && v->classType->value ? *v->classType->value : "");
+        std::string mem = v->identifier && v->identifier->value ? *v->identifier->value : "";
+        if (base.empty() || mem.empty()) return "";
+        return base + "." + mem;
+    }
+    if (auto* v = dynamic_cast<ElementAccessNode*>(n)) {
+        std::string base = v->expression ? unparseExpr(v->expression)
+                         : (v->identifier && v->identifier->value ? *v->identifier->value : "");
+        std::string idx;
+        if (v->expressionlist) for (auto& e : *v->expressionlist) { if (!idx.empty()) idx += ", "; idx += unparseExpr(e); }
+        if (base.empty()) return "";
+        return base + "[" + idx + "]";
+    }
+    if (auto* v = dynamic_cast<InvocationNode*>(n)) {
+        std::string callee = v->identifier ? unparseExpr(v->identifier) : unparseExpr(v->expression);
+        std::string args;
+        if (v->args) for (auto& a : *v->args) {
+            if (!a) continue;
+            if (!args.empty()) args += ", ";
+            std::string an = a->name && a->name->value ? *a->name->value : "";
+            std::string av = unparseExpr(a->expression);
+            args += an.empty() ? av : (an + ": " + av);
+        }
+        if (callee.empty()) return "";
+        return callee + "(" + args + ")";
+    }
+    return "";   // unhandled form → caller degrades to a bare "assertion failed"
+}
+
 std::string CEmitter::assignmentOperator(int token)
 {
     switch (token) {
@@ -10196,16 +10267,37 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         && call->args && call->args->size() == 1)
         return "&(" + emitExpression((*call->args)[0]->expression) + ")";
 
-    // `panic(msg: s)` and `assert(cond: c)` — builtins that trap cleanly (abort with a message), the
-    // user-facing form of the runtime bounds trap. Let a user collection bounds-check itself without
-    // dropping to FFI `abort()`. `panic` aborts unconditionally; `assert` aborts iff the condition is
-    // false. Recoverable errors use `Result<T,E>` — `panic` is for "this is a bug that can't continue".
+    // `panic(msg:)`, `assert(cond:, msg:)`, `debugAssert(cond:, msg:)` — builtins that trap cleanly (abort
+    // with a message + `file:line`), the user-facing form of the runtime bounds trap. Let a user collection
+    // bounds-check itself without dropping to FFI `abort()`. `panic` aborts unconditionally; `assert`/
+    // `debugAssert` abort iff the condition is false, auto-appending the condition's source text (unparseExpr)
+    // to the message. `msg:` is MANDATORY (empty string allowed). `debugAssert` is stripped under `--release`
+    // (dev-only checks; `assert` stays always-on). Recoverable errors use `Result<T,E>` — these are for
+    // "this is a bug that can't continue".
     bool bareCall = (!call->identifier->qualifier || call->identifier->qualifier->empty());
-    if (name == "panic" && bareCall && call->args && call->args->size() == 1)
-        return "kama_panic(" + emitExpression((*call->args)[0]->expression) + ")";
-    if (name == "assert" && bareCall && call->args && call->args->size() == 1)
-        return "((" + emitExpression((*call->args)[0]->expression)
-             + ") ? (void)0 : kama_panic(kama_string_lit(\"assertion failed\", 16)))";
+    if (bareCall && (name == "panic" || name == "assert" || name == "debugAssert")) {
+        auto argByName = [&](const char* want) -> SharedExpression {
+            if (call->args) for (auto& a : *call->args)
+                if (a && a->name && a->name->value && *a->name->value == want) return a->expression;
+            return nullptr;
+        };
+        std::string fileLit = "\"" + cEscapeStringBody(_sourcePath) + "\"";
+        std::string lineLit = std::to_string(call->line);
+
+        if (name == "panic") {
+            SharedExpression msg = argByName("msg");
+            if (!msg) { unsupported("`panic` requires `msg:`", call->line); return "(void)0"; }
+            return "kama_panic_at(" + emitExpression(msg) + ", " + fileLit + ", " + lineLit + ")";
+        }
+        SharedExpression cond = argByName("cond");
+        SharedExpression msg  = argByName("msg");
+        if (!cond) { unsupported("`assert`/`debugAssert` requires `cond:`", call->line); return "(void)0"; }
+        if (!msg)  { unsupported("`assert`/`debugAssert` requires `msg:` (use `msg: \"\"` for none)", call->line); return "(void)0"; }
+        if (name == "debugAssert" && _release) return "(void)0";   // stripped in release builds
+        std::string condText = unparseExpr(cond);
+        return "((" + emitExpression(cond) + ") ? (void)0 : kama_assert_fail(\""
+             + cEscapeStringBody(condText) + "\", " + emitExpression(msg) + ", " + fileLit + ", " + lineLit + "))";
+    }
     // `drop(place)` — run the destructor of a place's value (for a library owner over `Ptr<T>` to drop
     // its heap pointee before `free`). A no-op when the value's type isn't destructible. The type is
     // resolved via exprClass (so `drop(this.deref())` reaches the pointee `T` through a `ref T` return).

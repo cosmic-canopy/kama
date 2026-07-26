@@ -1,1 +1,1 @@
-assertion failed
+assertion failed: zero == 1
