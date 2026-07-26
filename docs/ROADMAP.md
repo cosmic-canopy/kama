@@ -114,8 +114,19 @@ to [SPEC.md](SPEC.md) / [docs/design/construction-model.md](design/construction-
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
 - **Command-line args / environment access — ✅ SHIPPED (§1 near-term #2).** In the baked-in prelude floor
-  (survives `--no-std`), not an importable `std::env`: `args()`, `programName()`, `env()`, `envOr()`. See
-  [SPEC.md](SPEC.md) "Command-line arguments + environment" (as-shipped) and the §1 arc note above.
+  (survives `--no-std`), not an importable `std::env`: `args()`, `programInvocation()`/`programName()`/
+  `programPath()`, `env()`, `envOr()`. See [SPEC.md](SPEC.md) "Command-line arguments + environment"
+  (as-shipped) and the §1 arc note above.
+- **Console output / logging — no first-class surface yet (tracked, near-term candidate).** Kama can *build*
+  text (`std::fmt` `toString`/interpolation) but cannot *print* it: there is no `print`/`println`/`eprintln`
+  and no pre-opened **stdout/stderr** handle in the floor or `std::io`. Today output means FFI (`extern fn
+  puts`/`printf`) — `examples/httpd` does this. Only *fatal* traps (`panic`/`assert`/bounds) reach stderr,
+  via the runtime's raw `write(2, …)`. Shape when scheduled: a `std::io` **stdout/stderr `Writer`** (reuse the
+  shipped `Writer` contract + fd wrapper, like `std::fs::File`) plus `print`/`println`/`eprintln` conveniences
+  built over `std::fmt` (one allocation via `Formatter`). Pairs naturally with `std::process` (child stdio)
+  and with the now-shipped argv/env (a CLI reads args → prints output) — sequence it around §1 #3. NOT the
+  floor unless a `--no-std` freestanding `println` is wanted (stdout needs libc `write`/`fdopen`, so the
+  hosted `std::io` home is the right one; embedded keeps only the weak-hook trap path).
 - **Stdlib layering — 3 LOW-prio follow-ups ([design/stdlib-layering.md](design/stdlib-layering.md)).** The
   prelude-vs-`lib`-vs-primitive split is principled (contracts/syntax/intrinsics in the prelude; backends
   opt-in), so nothing is mis-placed. Recorded, none blocking: (a) split/MCU-promote `Atomic` so lock-free cells
