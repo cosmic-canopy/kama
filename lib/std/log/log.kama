@@ -61,19 +61,6 @@ fn void logAt(int32 level, ref string tag, ref string msg) {
     }
 }
 
-// Dispatch a record WITHOUT re-checking the filter. The M7 recognized-facade lowering calls this after its
-// own inlined `kama_log_enabled` guard (built at the call site so the message is only assembled when the
-// record passes). It lives HERE, not inlined at the call site, on purpose: the swappable sink slot is a
-// per-TU `static` in the runtime, and `setLogSink` writes it from THIS module's TU — so the dispatch must
-// read it from the same TU (a call-site-inlined `kama_log_dispatch` would read main's empty slot and always
-// hit the console default). Reads `tag`/`msg` by borrow, like `logAt`. Not exported: only the lowering emits it.
-fn void logDispatch(int32 level, ref string tag, ref string msg) {
-    unsafe {
-        kama_log_dispatch(level: level, tag: tag.cstr(), tagLen: cast<usize>(tag.length()),
-                          msg: msg.cstr(), msgLen: cast<usize>(msg.length()));
-    }
-}
-
 fn void logError(string tag, string msg) { logAt(level: 0i32, tag: ref tag, msg: ref msg); }
 fn void logWarn (string tag, string msg) { logAt(level: 1i32, tag: ref tag, msg: ref msg); }
 fn void logInfo (string tag, string msg) { logAt(level: 2i32, tag: ref tag, msg: ref msg); }

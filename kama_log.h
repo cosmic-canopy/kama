@@ -27,7 +27,12 @@
 // kama_string — matching this typedef. dispatch synthesizes borrowed kama_strings (cap==0) for it, valid for
 // the duration of the call.
 typedef void (*kama_log_sink_fn)(int32_t level, kama_string tag, kama_string msg);
-static kama_log_sink_fn kama_log_slot = 0;
+// EXTERNAL LINKAGE (single definition in the entry TU, emitted by the compiler — see `isEntry` in
+// kama.cemit.cpp). The sink is process-global: `setLogSink` writes it from the std::log TU while a log call
+// dispatches from wherever it appears (main / any module), so a per-TU `static` slot would read an empty copy
+// and always fall back to the console default. One object fixes it for every TU. (Same class as the panic
+// hook; the LEVEL/TAG filter cache below stays per-TU — each TU derives identical state from the env.)
+extern kama_log_sink_fn kama_log_slot;
 static inline void kama_set_log_sink(kama_log_sink_fn s) { kama_log_slot = s; }
 
 // ---- Level names / config parsing --------------------------------------------

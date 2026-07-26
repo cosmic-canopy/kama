@@ -1833,9 +1833,10 @@ void CEmitter::emitLogFacade(InvocationNode* iv, int level, int depth)
     size_t msgPre = _scopes.empty() ? 0 : _scopes.back().locals.size();
     std::string msgVar = logSpanOf(logArgByName(iv, "msg"), gd);
     flushHoisted(gd);
-    // Dispatch through the std::log library helper (NOT the raw `kama_log_dispatch`): the swappable sink slot
-    // is a per-TU static that `setLogSink` writes from the std::log TU, so the dispatch must run there too.
-    indent(gd); *_out << "std__log__logDispatch(" << level << ", &" << tagVar << ", &" << msgVar << ");\n";
+    // Dispatch straight to the extern seam: the sink slot is external-linkage (one definition), so the
+    // borrowed spans reach the right slot from any TU. Read by borrow (`.data`/`.len`) — no ownership transfer.
+    indent(gd); *_out << "kama_log_dispatch(" << level << ", " << tagVar << ".data, " << tagVar << ".len, "
+                      << msgVar << ".data, " << msgVar << ".len);\n";
     dropCondTemps(msgPre, gd);                 // drop the message's Formatter/owned temps inside the guard
     indent(bd); *_out << "}\n";
 
@@ -10748,6 +10749,17 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _viewParams.clear();
 
     if (isEntry) {
+        // Single definition of the process-global set-once runtime slots (external-linkage in the headers —
+        // see kama_runtime.h / kama_log.h). The entry TU is the one, program-wide place to define them: the
+        // panic hook is referenced by the `static inline` fatal paths inlined into every TU, and the log sink
+        // by every dispatch, so a per-TU `static` would let a slot set in one TU be read as empty in another.
+        // Emitted at file scope, before `main`. The panic-hook pair is unconditional (any program can panic);
+        // the log sink only when the program imports std::log.
+        *_out << "void (*kama_panic_hook)(void) = 0;\n"
+             << "int kama_in_panic_hook = 0;\n";
+        if (externsHeader("kama_log.h"))
+            *_out << "kama_log_sink_fn kama_log_slot = 0;\n";
+        *_out << "\n";
         // Synthesized portable entry point. Emitted target-agnostically (the emitter has no target
         // knowledge by design): BOTH forms are written behind a preprocessor guard, and the driver's
         // `-DKAMA_TARGET_EMBEDDED` (`--target embedded`) selects the freestanding one — same pattern as

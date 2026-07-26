@@ -194,6 +194,13 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-log
     if sh tools/check-log.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# setPanicHandler across TUs: the handler slot is process-global (external linkage), so a panic raised in a
+# different TU than the one that registered it must still run the handler. Multi-file build + a runtime abort,
+# so plain native pass only (wasm/SAN abort codes differ, like the trap fixtures).
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-panic-multitu.sh ]; then
+    if sh tools/check-panic-multitu.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # M2.1 package store: `kama install` fetches git/url deps into the content-addressed store, verifies
 # sha256 integrity, and writes a reproducible lock. Network-free (file:// git repo + local tarball). The
 # `.d/` harness only runs `kama build`, so install/store/integrity ride here — plain native pass only.

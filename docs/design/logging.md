@@ -301,7 +301,7 @@ resolve the same via `resolveFunc`), yielding the level ordinal 0..4. A recogniz
 {   kama_string tag = <tag>;                       // bound once (the filter needs it)
     if (kama_log_enabled(L, tag.data, tag.len)) {  // inlined here — reads the process-global config, TU-safe
         <message build hoisted HERE>               // interpolation/concat/call — skipped when filtered
-        std__log__logDispatch(L, &tag, &msg);
+        kama_log_dispatch(L, tag.data, tag.len, msg.data, msg.len);
     }
 }
 ```
@@ -315,15 +315,46 @@ resolve the same via `resolveFunc`), yielding the level ordinal 0..4. A recogniz
   becomes a scope-dtor'd temp dropped — via `dropCondTemps` — *inside* the guard where it was hoisted (the
   message's `Formatter` temp included), a literal/lvalue is a borrow temp (never dropped, so a heap-owning
   variable arg can't double-free). `logEnabled` stays available but is no longer manually required.
-- **The one non-obvious edge — the swappable sink is a per-TU `static`.** `setLogSink` writes the slot from the
-  std::log TU; a call-site-inlined `kama_log_dispatch` would read *main's* empty slot and always hit the console
-  default (the same multi-TU-static hazard the config side already dodges via the process-global env). So the
-  dispatch routes through a new thin std::log-module helper **`logDispatch(level, ref tag, ref msg)`** (compiled
-  in the std::log TU alongside `setLogSink`); only the enabled *check* is inlined at the call site (it reads
-  env-backed config, so it is TU-safe). `@compileFor(FLAG)` remains the full physical-drop escape hatch for a
-  whole subsystem — no new mechanism. `tools/check-log.sh` gains: an observable-side-effect message proving it
-  is built only when the record passes (default vs `--log=debug`), and a `--release` transpile-grep proving
-  `Debug`/`Trace` call sites are stripped while `Info` is kept (and all survive a non-release build).
+- **The swappable sink slot is process-global (external linkage).** The inlined `kama_log_dispatch` reads the
+  sink slot from *its own* TU, while `setLogSink` writes it from the std::log TU — so a per-TU `static` slot
+  would read empty and always hit the console default (the multi-TU-static hazard the config side dodges via the
+  process-global env). The fix is the general one, not a per-call-site workaround: `kama_log_slot` has
+  **external linkage** with a single definition emitted in the entry TU (`isEntry` in `kama.cemit.cpp`), so every
+  TU shares one object. This is the same treatment the **panic-handler slot** needs — see the note below.
+  `@compileFor(FLAG)` remains the full physical-drop escape hatch for a whole subsystem — no new mechanism.
+  `tools/check-log.sh` gains: an observable-side-effect message proving it is built only when the record passes
+  (default vs `--log=debug`), and a `--release` transpile-grep proving `Debug`/`Trace` call sites are stripped
+  while `Info` is kept (and all survive a non-release build).
+
+## Process-global runtime slots — external linkage (the panic handler / sink cross-TU fix)
+
+Found while shipping M7: the runtime is header-only (`static inline` functions + `static` globals in
+`kama_runtime.h`/`kama_log.h`), and a multi-file/debug build compiles **one TU per source** (each including the
+shared `.gen.h`), so every `static` runtime global is **duplicated per TU**. That is deliberate for genuinely
+isolate-local state (the MCU per-isolate statics use `KAMA_ISOLATE_LOCAL`/`_Thread_local`) — but it is a bug for
+a **process-global, set-once slot written in one TU and read in another**:
+
+- **`kama_panic_hook`** (+ the `kama_in_panic_hook` re-entrancy flag) — `setPanicHandler` writes it from the
+  entry TU, but a panic *originates* wherever a `static inline` fatal path (bounds/panic/assert) was inlined:
+  every TU. A per-TU slot let a panic raised in **library/stdlib code** read its own empty copy and silently
+  take the **default abort** instead of the user's handler. (Not caught earlier because the M2 fixture triggers
+  its panic from `main`'s TU; a single-file trap fixture is one TU and *cannot* exhibit it.)
+- **`kama_log_slot`** — the M7 sink case above, same root cause.
+
+Both are now **external-linkage with a single definition emitted in the entry TU** (`void (*kama_panic_hook)(void)
+= 0;` + `int kama_in_panic_hook = 0;`, and — when the program imports std::log — `kama_log_sink_fn kama_log_slot
+= 0;`, at file scope before `main` in the `isEntry` block). The accessors stay `static inline` and reference the
+shared externs; the read paths keep zero call overhead. Verified by `tools/check-panic-multitu.sh` (a two-file
+build whose panic is raised in `Lib`'s TU while `setPanicHandler` runs in `main`'s — the handler must still
+fire) and by check-log's cross-TU custom-sink case.
+
+**Deliberately NOT changed (per-TU is correct or a separate decision):** the `KAMA_LOG` filter *cache*
+(`kama_log_global`/`_ntags`/…) — each TU re-derives identical state from the process-global env, so per-TU
+copies never disagree; `kama_trace_acc` — a documented single-TU test helper; and **`kama_argc`/`kama_argv`**,
+which have a prior explicit "keep non-external" decision (config that needs argv is env-bridged in `main`). ⚠️
+open follow-up: the prelude floor `args()`/`programName()`/`env()` are `static inline` reading `kama_argv`, so a
+call from a **non-entry TU** would read an empty argv — the identical hazard, gated behind that argv decision.
+Revisit if/when a use case calls those from library code (flagged for the concurrency/pre-1.0 cleanup).
 
 ## Residual implementation details (settle in the build session)
 - Exact `LogRecord` fields if `emit` grows beyond `(level, tag, msg)` (timestamp / source loc / isolate id).

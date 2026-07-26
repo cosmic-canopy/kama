@@ -312,8 +312,16 @@ static inline void kama_set_panic_handler(void (*h)(void)) { (void)h; }
 // already handling one skips the hook and hard-aborts — no infinite recursion); and the runtime ALWAYS
 // TERMINATES after it (it is not a resume point — recovery is `Result`, not panic). Covers every hosted
 // fatal path (bounds / panic / assert), matching the embedded "one hook for all fatal conditions" policy.
-static void (*kama_panic_hook)(void) = 0;
-static int kama_in_panic_hook = 0;
+//
+// EXTERNAL LINKAGE (single definition in the entry TU, emitted by the compiler — see `isEntry` in
+// kama.cemit.cpp). This handler is PROCESS-GLOBAL by contract, not per-isolate, so it must be ONE object: a
+// panic path is `static inline` and inlined into EVERY TU, and `setPanicHandler` writes the slot from the
+// entry TU — a per-TU `static` slot would leave a panic that ORIGINATES in another TU (e.g. a bounds-check
+// failure in stdlib/library code) reading its own empty copy and silently taking the default abort instead
+// of the user's handler. The re-entrancy flag is likewise one global (a re-entrant panic from any TU during
+// handling skips the hook). (Genuinely isolate-local state uses KAMA_ISOLATE_LOCAL, not plain `static`.)
+extern void (*kama_panic_hook)(void);
+extern int kama_in_panic_hook;
 static inline void kama_set_panic_handler(void (*h)(void)) { if (!kama_panic_hook) kama_panic_hook = h; }
 static inline void kama_run_panic_hook(void) {
     if (kama_panic_hook && !kama_in_panic_hook) { kama_in_panic_hook = 1; kama_panic_hook(); }
