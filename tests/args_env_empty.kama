@@ -1,0 +1,37 @@
+// Task #2: command-line argv + environment access in the prelude floor — the NO-ARG paths that the
+// standard harness (which runs fixtures with no args and doesn't clear the environment) can reach.
+// Returns 0 iff every check passes; a distinct nonzero code pinpoints the first failing check.
+//   - args() is empty (the harness passes no user args; argv[0] is excluded, so count == 0)
+//   - foreach over args() yields nothing
+//   - env(<unset>) is None
+//   - envOr(<unset>, fallback) returns the fallback
+//   - programInvocation() / programName() are Some (argv[0] exists on native + wasm)
+//   - programPath() is exercised but NOT asserted here: it is platform-dependent (None on wasm — a JS host
+//     has no exe path), and this fixture runs on the wasm leg too; its native Some-resolution is asserted in
+//     tools/check-argv-env.sh.
+// The with-args / set-env paths live in tools/check-argv-env.sh (the harness can't set those).
+fn int32 main() {
+    if (args().count() != 0) { return 1; }
+
+    int32 seen = 0;
+    foreach (string a in args()) { seen = seen + 1; }
+    if (seen != 0) { return 2; }
+
+    int32 miss = match (env(name: "KAMA_DEFINITELY_UNSET_XYZ_123")) { case Some(v): 1; case None: 0; };
+    if (miss != 0) { return 3; }
+
+    if (envOr(name: "KAMA_DEFINITELY_UNSET_XYZ_123", dflt: "fallback") != "fallback") { return 4; }
+
+    int32 hasInv = match (programInvocation()) { case Some(p): 1; case None: 0; };
+    if (hasInv != 1) { return 5; }
+
+    int32 hasName = match (programName()) { case Some(p): 1; case None: 0; };
+    if (hasName != 1) { return 6; }
+
+    // Exercise programPath() on every leg (so its wasm branch links + runs) but don't gate on availability
+    // — it's None on wasm, Some on native. The guard below is never true; it just keeps the call live.
+    int32 pathProbe = match (programPath()) { case Some(p): 1; case None: 0; };
+    if (pathProbe < 0) { return 7; }
+
+    return 0;
+}

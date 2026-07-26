@@ -837,6 +837,107 @@ static int kama_trace_acc = 0;
 static inline void kama_trace(int code) { kama_trace_acc = kama_trace_acc * 31 + code; }
 static inline int  kama_trace_get(void) { return kama_trace_acc; }
 
+// ---- Command-line arguments + environment (prelude floor) -------------------
+// argv/argc are stashed once by the synthesized `main` (kama.cemit) via kama_args_init BEFORE kama_main
+// runs, then read-only — so PLAIN globals (NOT KAMA_ISOLATE_LOCAL/_Thread_local): argv is process-wide,
+// every isolate must see the same vector, and it's written once on the main thread before any spawn, so
+// there is no race. The prelude binds these via `extern fn`, exactly like kama_string_from_raw. The
+// invocation (argv[0]) is NOT part of args(): kama_args_count/kama_args_at index argv[1..argc). Three separate
+// program-identity accessors: kama_program_invocation (argv[0] VERBATIM — exactly how it was launched),
+// kama_program_name (basename of argv[0] — "what was I invoked as", for usage text / applet dispatch,
+// spoofable but conventional), and kama_program_path (the OS-RESOLVED absolute executable path — reliable
+// for finding sibling files / re-exec). getenv/strlen/readlink/… are declared at
+// BLOCK scope (the malloc/memcpy/snprintf pattern), so <stdlib.h>/<string.h>/<unistd.h> never leak to user
+// code and the header stays dependency-light + `--no-std`-clean.
+#if !defined(KAMA_TARGET_EMBEDDED)
+static int    kama_argc = 0;
+static char** kama_argv = 0;
+static inline void kama_args_init(int argc, char** argv) { kama_argc = argc; kama_argv = argv; }
+static inline int  kama_args_count(void) { return kama_argc > 1 ? kama_argc - 1 : 0; }   // drop argv[0]
+// The i-th user arg (0-based over argv[1..argc)) as a FRESH owned kama_string; out-of-range -> "".
+static inline kama_string kama_args_at(int i) {
+    if (i < 0 || i >= kama_args_count()) return kama_string_lit("", 0);
+    extern size_t strlen(const char*);
+    const char* a = kama_argv[i + 1];
+    return kama_string_from_raw((const uint8_t*)a, 0, (int32_t)strlen(a));
+}
+// The raw invocation — argv[0] VERBATIM (exactly how the program was launched: `./app`, `/usr/bin/app`,
+// or a bare `app`), as a fresh owned copy; 1 if present, else 0 + "". The unmodified string, for
+// fidelity/logging or code ported from Go's os.Args[0] / Rust's args().next(). basename -> program_name;
+// resolved path -> program_path.
+static inline int kama_program_invocation(kama_string* out) {
+    if (kama_argc < 1 || !kama_argv[0]) { *out = kama_string_lit("", 0); return 0; }
+    extern size_t strlen(const char*);
+    *out = kama_string_from_raw((const uint8_t*)kama_argv[0], 0, (int32_t)strlen(kama_argv[0]));
+    return 1;
+}
+// The program name — the basename of argv[0] (the last path segment, splitting on BOTH '/' and '\\' so it
+// is correct cross-platform), as a fresh owned copy; 1 if present, else 0 + "". This is "the name the
+// program was invoked as" (usage messages, busybox-style applet dispatch): `/usr/bin/app` -> `app`,
+// `.\app.exe` -> `app.exe`, a bare `app` -> `app`.
+static inline int kama_program_name(kama_string* out) {
+    if (kama_argc < 1 || !kama_argv[0]) { *out = kama_string_lit("", 0); return 0; }
+    extern size_t strlen(const char*);
+    const char* a = kama_argv[0];
+    size_t len = strlen(a), start = 0;
+    for (size_t i = 0; i < len; ++i) { if (a[i] == '/' || a[i] == '\\') start = i + 1; }
+    *out = kama_string_from_raw((const uint8_t*)(a + start), 0, (int32_t)(len - start));
+    return 1;
+}
+// The OS-RESOLVED absolute path to the running executable (NOT argv[0] — that is unreliable: a PATH launch
+// passes a bare name and a caller can spoof it). Reliable on the hosted desktop/server platforms; returns 0
+// (-> None in kama) where there is no such notion or no portable query — wasm (runs in a JS/browser host),
+// bare metal (the embedded stub below), and any platform without a branch here (e.g. a console port adds its
+// own). Models the driver's selfExePath (kama.driver.cpp): _get_pgmptr / readlink /proc/self/exe /
+// _NSGetExecutablePath, each declared at block scope so no platform header leaks.
+static inline int kama_program_path(kama_string* out) {
+#if defined(__EMSCRIPTEN__)
+    (void)out; *out = kama_string_lit("", 0); return 0;   // wasm host: no executable path
+#elif defined(_WIN32)
+    extern int _get_pgmptr(char**);
+    extern size_t strlen(const char*);
+    char* p = 0;
+    if (_get_pgmptr(&p) == 0 && p) { *out = kama_string_from_raw((const uint8_t*)p, 0, (int32_t)strlen(p)); return 1; }
+    *out = kama_string_lit("", 0); return 0;
+#elif defined(__linux__)
+    extern long readlink(const char*, char*, size_t);   // ssize_t; does not NUL-terminate
+    char buf[4096];
+    long n = readlink("/proc/self/exe", buf, sizeof buf - 1);
+    if (n > 0 && n < (long)sizeof buf) { *out = kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)n); return 1; }
+    *out = kama_string_lit("", 0); return 0;
+#elif defined(__APPLE__)
+    extern int _NSGetExecutablePath(char*, unsigned int*);   // <mach-o/dyld.h>; NUL-terminates on success
+    extern size_t strlen(const char*);
+    char buf[4096]; unsigned int sz = sizeof buf;
+    if (_NSGetExecutablePath(buf, &sz) == 0) { *out = kama_string_from_raw((const uint8_t*)buf, 0, (int32_t)strlen(buf)); return 1; }
+    *out = kama_string_lit("", 0); return 0;
+#else
+    (void)out; *out = kama_string_lit("", 0); return 0;   // no portable query on this platform
+#endif
+}
+// Look up env var `name` (a NUL-terminated C string). Writes an OWNED copy to *out and returns 1 if set,
+// else leaves *out = "" and returns 0.
+static inline int kama_env_lookup(const char* name, kama_string* out) {
+    extern char* getenv(const char*);
+    extern size_t strlen(const char*);
+    const char* v = getenv(name);
+    if (!v) { *out = kama_string_lit("", 0); return 0; }
+    *out = kama_string_from_raw((const uint8_t*)v, 0, (int32_t)strlen(v));
+    return 1;
+}
+#else
+// Freestanding: no argv, no environ, no executable path. Stubs so the prelude surface still COMPILES on
+// --target embedded (args() -> empty, programInvocation()/programName()/programPath()/env() -> None) with
+// zero libc linkage — same discipline as kama_panic's embedded arm.
+static inline void        kama_args_init(int argc, char** argv) { (void)argc; (void)argv; }
+static inline int         kama_args_count(void) { return 0; }
+static inline kama_string kama_args_at(int i) { (void)i; return kama_string_lit("", 0); }
+static inline int         kama_program_invocation(kama_string* out) { *out = kama_string_lit("", 0); return 0; }
+static inline int         kama_program_name(kama_string* out) { *out = kama_string_lit("", 0); return 0; }
+static inline int         kama_program_path(kama_string* out) { *out = kama_string_lit("", 0); return 0; }
+static inline int         kama_env_lookup(const char* name, kama_string* out) { (void)name; *out = kama_string_lit("", 0); return 0; }
+#endif
+
 // ---- Serialization graph context ------------------------------------------
 // Pure-C substrate for the compiler's object-graph serialization (a `@generate` type that transitively
 // reaches a Shared/Weak/Owned — see `reachesPointer`). No std::collections dependency: the compiler's own

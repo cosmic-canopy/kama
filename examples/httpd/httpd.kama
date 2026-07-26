@@ -17,22 +17,11 @@ import std::fs::{readFile};
 import std::io::{IoError, writeAll};
 import std::collections::{DynamicArray, FixedArray};
 
-extern "<stdlib.h>";
-extern fn Ptr<int8> getenv(Ptr<int8> name);
-extern "<string.h>";
-extern fn usize strlen(Ptr<int8> s);
 extern "<stdio.h>";
 extern fn int32 puts(Ptr<int8> s);
 
 // ---- small utilities --------------------------------------------------------
-
-// The value of environment variable `name`, or a copy of `dflt` if it is unset.
-fn string envOr(string name, string dflt) {
-    Ptr<int8> p = getenv(name: name.cstr());
-    if (p == null) { return copy dflt; }
-    int32 len = cast<int32>(strlen(s: p));
-    unsafe { return kama_string_from_raw(src: cast<Ptr<uint8>>(p), start: 0, len: len); }
-}
+// `envOr(name:, dflt:)` (config lookup with a fallback) is now in the prelude floor — no local getenv shim.
 
 // Parse a decimal port; fall back to `dflt` on anything non-numeric.
 fn uint16 parsePort(ref string s, uint16 dflt) {

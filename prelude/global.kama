@@ -350,6 +350,92 @@ type value Split implements Iterator<string> {
     }
 }
 
+// ── Command-line arguments + environment (prelude floor) ──────────────────────────────────────────────
+// argv/env access lives in the FLOOR (survives --no-std), so it can't hand back a std::collections type
+// (DynamicArray/View aren't collected this early). `Args` is the single handle: a cursor that `foreach`
+// iterates (Iterator<string>) AND supports random access via count()/get(at:). Each yielded/returned
+// string is a fresh OWNED copy (like Split), so a caller may `give` it onward. The program name (argv[0])
+// is NOT part of args() — it's programInvocation()/programName()/programPath(); indices are 0-based over user args only. The extern fns bind
+// the kama_runtime.h helpers, exactly like kama_string_from_raw above.
+extern fn int32  kama_args_count();
+extern fn string kama_args_at(int32 i);
+extern fn bool   kama_program_invocation(Ptr<string> dst);
+extern fn bool   kama_program_name(Ptr<string> dst);
+extern fn bool   kama_program_path(Ptr<string> dst);
+extern fn bool   kama_env_lookup(Ptr<int8> name, Ptr<string> dst);
+type value Args implements Iterator<string> {
+    int32 pos;
+    public ctor make() { Args a; a.pos = 0; return a; }   // a free fn can't touch the private cursor
+    // foreach protocol: yield each user arg once (a fresh owned string), then None.
+    public fn Optional<string> next() {
+        if (this.pos >= kama_args_count()) { return Optional::None; }
+        string s = kama_args_at(i: this.pos);
+        this.pos = this.pos + 1;
+        return Optional::Some(value: give s);
+    }
+    // Random access (an owned collection isn't available in the floor).
+    public fn int32 count() { return kama_args_count(); }
+    public fn Optional<string> get(int32 at) {
+        if (at < 0 || at >= kama_args_count()) { return Optional::None; }
+        return Optional::Some(value: kama_args_at(i: at));
+    }
+}
+// The program's command-line arguments, excluding the program name.
+// `foreach (string a in args())` or `args().get(at: 0)`.
+fn Args args() { return Args.make(); }
+// The raw invocation — argv[0] VERBATIM, exactly how the program was launched (`./app`, `/usr/bin/app`, or a
+// bare `app` when found via PATH), or None if unavailable (bare-metal firmware). The unmodified string, for
+// fidelity/logging or code ported from Go/Rust; use programName() for a display name, programPath() for the
+// real binary location.
+fn Optional<string> programInvocation() {
+    string val = "";
+    bool found = false;
+    unsafe { found = kama_program_invocation(dst: addr(of: val)); }
+    if (found) { return Optional::Some(value: give val); }
+    return Optional::None;
+}
+// The program name — the basename of argv[0] (the name the program was invoked as: `/usr/bin/app` -> `app`,
+// `.\app.exe` -> `app.exe`). This is what usage/error messages print and what a busybox-style multi-call
+// binary dispatches on. `None` only where there is no argv[0] (bare-metal firmware). Spoofable (it is
+// whatever the caller put in argv[0]) — for the reliable binary location use programPath().
+fn Optional<string> programName() {
+    string val = "";
+    bool found = false;
+    unsafe { found = kama_program_name(dst: addr(of: val)); }
+    if (found) { return Optional::Some(value: give val); }
+    return Optional::None;
+}
+// The OS-resolved absolute path to the running executable — reliable for locating sibling files or
+// re-exec'ing (unlike argv[0], it is queried from the OS, not the caller). `None` where there is no such
+// notion or no portable query: wasm (a JS/browser host), bare-metal firmware, or an unsupported platform.
+fn Optional<string> programPath() {
+    string val = "";
+    bool found = false;
+    unsafe { found = kama_program_path(dst: addr(of: val)); }
+    if (found) { return Optional::Some(value: give val); }
+    return Optional::None;
+}
+// The value of environment variable `name`, or None if unset. `envOr` is sugar for the fallback case.
+fn Optional<string> env(string name) {
+    if (name.length() == 0) { return Optional::None; }   // guard: cstr() of an empty/borrowed string may be NULL
+    string val = "";
+    bool found = false;
+    unsafe { found = kama_env_lookup(name: name.cstr(), dst: addr(of: val)); }
+    if (found) { return Optional::Some(value: give val); }
+    return Optional::None;
+}
+// Calls the runtime seam directly (rather than moving a string out of env()'s Optional, which the
+// ownership model disallows — a payload can be read/`copy`d but not `give`n out of an enum); `give val`
+// moves the fresh LOCAL out, no copy on the hit path.
+fn string envOr(string name, string dflt) {
+    if (name.length() == 0) { return give dflt; }
+    string val = "";
+    bool found = false;
+    unsafe { found = kama_env_lookup(name: name.cstr(), dst: addr(of: val)); }
+    if (found) { return give val; }
+    return give dflt;
+}
+
 // The default allocator (satisfies `Allocator`): a zero-size handle straight onto libc malloc/free. The
 // M8 default `A: Allocator = GlobalAllocator` fills it in for `Owned<T>` / `DynamicArray<T>` / `Map<K,V>`,
 // so the bare types are unchanged and pay nothing at runtime (the field carries no state — an empty

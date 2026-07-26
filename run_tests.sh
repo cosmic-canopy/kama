@@ -148,6 +148,15 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-sof
     if sh tools/check-softfloat.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# Task #2: command-line argv + environment access in the prelude floor. The standard harness runs fixtures
+# with no args/env (only the empty paths, via tests/args_env_empty.kama), so this dedicated guard drives the
+# WITH-args / SET-env paths + the `kama run --` passthrough. Runs on the native AND ASan passes (under
+# KAMA_SAN the script builds the probe with sanitizers, covering the owned-string copies with real args);
+# skipped on WASM (runs a native binary + needs a controllable process environment).
+if [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-argv-env.sh ]; then
+    if sh tools/check-argv-env.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # const-eval 6b-3: `comptime fn` table-baking guard (baked static-const aggregate + comptime fn not emitted).
 # Transpile-only + host-checkable, so run once on the plain native pass like the drift/embedded guards.
 if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-comptime.sh ]; then

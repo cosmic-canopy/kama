@@ -10574,8 +10574,9 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         // knowledge by design): BOTH forms are written behind a preprocessor guard, and the driver's
         // `-DKAMA_TARGET_EMBEDDED` (`--target embedded`) selects the freestanding one — same pattern as
         // KAMA_ISOLATE_LOCAL. Embedded: no argv (there is none on bare metal) and `main` never returns
-        // (there's nowhere to return to; a crt0 calls it and expects it to spin). Hosted: argv marshaling
-        // (argv -> a DynamicArray<string>) is not yet wired, so args are currently ignored.
+        // (there's nowhere to return to; a crt0 calls it and expects it to spin). Hosted: argv/argc are
+        // stashed via kama_args_init BEFORE kama_main runs, so the prelude floor's args()/program*()/env()
+        // can read them (the embedded kama_args_init is a no-op stub — see kama_runtime.h).
         *_out << "#if defined(KAMA_TARGET_EMBEDDED)\n"
              << "int main(void) {\n"
              << "    kama_main();\n"
@@ -10583,7 +10584,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
              << "}\n"
              << "#else\n"
              << "int main(int argc, char** argv) {\n"
-             << "    (void)argc; (void)argv;\n"
+             << "    kama_args_init(argc, argv);\n"
              << "    return (int)kama_main();\n"
              << "}\n"
              << "#endif\n\n";

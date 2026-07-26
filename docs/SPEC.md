@@ -787,6 +787,55 @@ above) or by **by-name aggregate init** — `div_t r = div_t(quot: 3, rem: 2)` s
 real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe`. `s.cstr()` yields a C
 `const char*`.
 
+### Command-line arguments + environment ✅
+
+A program reads its own command-line arguments and environment through a small, always-in-scope **prelude
+floor** surface — no import, and it **survives `--no-std`** (the tier of `Optional`/`Result`/the smart
+pointers). It is *not* an importable `std::env`: arguments enter through the compiler-synthesized `main`
+wrapper (which stashes `argc/argv` into a runtime global before `kama_main` runs), so a `--no-std` user
+cannot reimplement them — a core, non-reimplementable capability belongs in the floor. The user's
+`fn int32 main()` signature is unchanged.
+
+```
+// arguments (argv[0] is excluded — see programPath())
+foreach (string a in args()) { /* each user arg, in order */ }
+int32 n     = args().count();              // number of user args
+string first = match (args().get(at: 0)) { case Some(v): copy v; case None: ""; };
+
+// program identity — three separate accessors, not part of args()
+Optional<string> inv  = programInvocation();  // argv[0] verbatim, e.g. "./myapp" (exact launch string)
+Optional<string> name = programName();        // basename of argv[0], e.g. "myapp" (usage text / dispatch)
+Optional<string> path = programPath();        // OS-resolved absolute exe path (find files / re-exec)
+
+// environment — a keyed lookup, not a list
+Optional<string> home = env(name: "HOME");                 // None when unset
+string term = envOr(name: "TERM", dflt: "dumb");           // value, or the fallback
+```
+
+- **`args() -> Args`** yields the user arguments **excluding** argv[0]. `Args` is a single value handle that
+  both `foreach`-iterates (`implements Iterator<string>`) and supports random access (`count()` +
+  `get(at:) -> Optional<string>`) — one handle covers both, because the floor cannot hand back a
+  `std::collections` type (collections are collected *after* the prelude). Each yielded / returned string is a
+  fresh **owned** copy (`give` it onward, or read it in place).
+- **`programInvocation() -> Optional<string>`** is **argv[0] verbatim** — the exact string the program was
+  launched with (`./myapp`, `/usr/bin/myapp`, or a bare `myapp`), unmodified. For logging fidelity or code
+  ported from Go (`os.Args[0]`) / Rust (`args().next()`). `None` only where there is no argv[0] (firmware).
+- **`programName() -> Optional<string>`** is the **basename of argv[0]** — the name the program was invoked
+  as (`/usr/bin/app` → `app`), what usage/error messages print and what a busybox-style multi-call binary
+  dispatches on. Kept separate from `args()` (it is not a user argument). Spoofable (it is whatever the
+  caller put in argv[0]); `None` only where there is no argv[0] (bare-metal firmware).
+- **`programPath() -> Optional<string>`** is the **OS-resolved absolute path** to the running executable —
+  reliable for locating sibling files or re-exec'ing (queried from the OS via `/proc/self/exe` /
+  `_NSGetExecutablePath` / `_get_pgmptr`, *not* argv[0]). `None` where there is no such notion or no portable
+  query: **wasm** (a JS/browser host), **bare-metal firmware**, or an unsupported platform (a console port
+  adds its own branch). The `Optional` return is what makes the MCU/wasm "not available" honest.
+- **`env(name) -> Optional<string>`** is the primitive (a keyed lookup — the environment is exposed as a
+  by-name query, not an enumerable list); **`envOr(name, dflt) -> string`** is the common fallback wrapper.
+- **Embedded (`--target embedded`).** There is no argv/environ on bare metal, so `kama_args_init` and the
+  accessors are no-op **stubs** behind `#if KAMA_TARGET_EMBEDDED` (`args()` empty, `env()`/`programName()`
+  `None`) — the surface still compiles, with **zero libc linkage** (`getenv` is a block-scope extern, elided).
+- **`kama run -- <args>`** now delivers arguments end-to-end (the passthrough was inert before this landed).
+
 ### `unsafe { }` — raw pointer memory access
 
 The **only** place kama can touch arbitrary memory through a raw pointer. Raw `Ptr<T>` index/store is a

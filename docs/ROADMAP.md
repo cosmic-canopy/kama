@@ -67,13 +67,18 @@ scope + acceptance so a fresh session can start immediately.
    `float` ops lower to compiler-rt/libgcc libcalls automatically. Fixtures green native + wasm + QEMU M0
    (`tests/num_fixed`, `tests/mcu_softfloat` via `tools/check-softfloat.sh`). Fixed a latent emitter bug en
    route (whole-number `float64` literals kept a decimal point — `tests/float64_literal_div`).
-2. **argv / env in the prelude floor — the one remaining runtime-floor language bit.** Design is settled in §2
-   ("Command-line args / environment access"): the mandatory runtime shim stashes `argc/argv` into a runtime
-   global; a small always-in-scope prelude surface (a free `args()` / an `Args` view — spelling TBD) reads it;
-   the user's `fn int32 main()` signature is unchanged; `#if KAMA_TARGET_EMBEDDED`-guarded (freestanding has
-   no argv). Lands in the baked-in floor (survives `--no-std`), NOT an importable `std::env`. *Acceptance:* a
-   program reads its own argv + env on native; the embedded guard still compiles; the inert
-   `kama run -- <args>` (package-management M2.3) now delivers args.
+2. **argv / env in the prelude floor — ✅ SHIPPED.** The one runtime-floor language bit is closed. The
+   synthesized hosted `main` stashes `argc/argv` via `kama_args_init` (a no-op stub on `--target embedded`)
+   before `kama_main`; a small always-in-scope prelude surface reads it — `args() -> Args` (a value handle
+   that `foreach`-iterates *and* offers `count()`/`get(at:)`, since the floor can't hand back a
+   `std::collections` type), `programInvocation()` (argv[0] verbatim) + `programName()` (basename of argv[0])
+   + `programPath()` (OS-resolved exe path; `None` on wasm/MCU) — all `Optional<string>`, excluded from `args()`,
+   `env(name) -> Optional<string>`, and `envOr(name, dflt) -> string`. Lives in the baked-in floor (survives
+   `--no-std`), NOT an importable `std::env`; `main`'s signature is unchanged; `getenv`/`argv` are
+   block-scope externs so the header stays libc-leak-free. The inert `kama run -- <args>`
+   (package-management M2.3) now delivers args. Fixtures: `tests/args_env_empty` (no-arg path) +
+   `tools/check-argv-env.sh` (with-args / set-env + `kama run --`, native + ASan). See [SPEC.md](SPEC.md)
+   "Command-line arguments + environment".
 3. **`std::process` — subprocess handling (library over FFI + the concurrency seams).** Spawn/exec a child,
    wire its stdio, wait for exit. Builds on shipped FFI (`posix_spawn` / `CreateProcess`), the `scope`
    structured-lifetime model (wait-on-exit at scope end → no orphans), and the `std::net::Poller` substrate
@@ -108,17 +113,9 @@ to [SPEC.md](SPEC.md) / [docs/design/construction-model.md](design/construction-
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
-- **Command-line args / environment access — in the PRELUDE FLOOR, not the opt-out stdlib (post-1.0).**
-  A program can't read its argv/env today (`kama_main()` takes no args; the synthesized hosted `main(argc,argv)`
-  wrapper receives and *discards* them). When scheduled, this lands in the **baked-in prelude / runtime floor
-  that survives `--no-std`** (the tier of `Optional`/`Result`/`Deref`/`HeapOwner` + the allocator triad + smart
-  pointers), **NOT** an importable `std::env` module: args enter through the *mandatory* runtime shim /
-  compiler-synthesized `main` wrapper, so a `--no-std` user cannot reimplement them (unlike `std::math`) — a
-  core, non-reimplementable capability belongs in the floor. Shape: the shim stashes `argc/argv` into a runtime
-  global; a small always-in-scope prelude surface (a free `args()` / an `Args` view — spelling TBD) reads it;
-  the user's `fn int32 main()` signature never changes. Embedded: reuse the existing entry-point guard
-  (freestanding `main(void)` has no argv), `#if KAMA_TARGET_EMBEDDED`-guarding the surface. This is the eventual
-  consumer of the (currently inert) `kama run -- <args>` passthrough shipped in package-management M2.3.
+- **Command-line args / environment access — ✅ SHIPPED (§1 near-term #2).** In the baked-in prelude floor
+  (survives `--no-std`), not an importable `std::env`: `args()`, `programName()`, `env()`, `envOr()`. See
+  [SPEC.md](SPEC.md) "Command-line arguments + environment" (as-shipped) and the §1 arc note above.
 - **Stdlib layering — 3 LOW-prio follow-ups ([design/stdlib-layering.md](design/stdlib-layering.md)).** The
   prelude-vs-`lib`-vs-primitive split is principled (contracts/syntax/intrinsics in the prelude; backends
   opt-in), so nothing is mis-placed. Recorded, none blocking: (a) split/MCU-promote `Atomic` so lock-free cells
