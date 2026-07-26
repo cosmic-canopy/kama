@@ -1,0 +1,33 @@
+// M8 (Bug 1 regression): `send` must HAND THE ITEM BACK when the receiver is gone — never silently
+// destroy it. Historically `send` unconditionally zeroed the moved-in item, so a failed delivery
+// corrupted the caller's value (and skipped its destructor on garbage). Here we drop the receiver up
+// front, then send an `Owned<Box>` (a unique heap pointer — a genuine resource): the send fails, the
+// box is returned intact via `SendResult::Undelivered(item)`, we read 42 through it, and it frees
+// exactly once at the match arm's end. ASan-clean under KAMA_SAN=1 (no leak, no double-free, no
+// use-of-zeroed-garbage).
+import std::concurrent::{Channel, Sender, Receiver, SendResult};
+import std::memory::{Owned};
+
+type value Box {
+    int32 v;
+    public ctor make(int32 v) { Box r; r.v = v; return give r; }
+    public fn int32 get() { return this.v; }
+}
+
+fn int main() {
+    Channel<Owned<Box>> ch = Channel::bounded(capacity: 2);
+    Sender<Owned<Box>>   tx = ch.sender();
+    Receiver<Owned<Box>> rx = ch.receiver();
+
+    drop(value: rx);   // receiver gone → any send now fails (nothing is enqueued)
+
+    Owned<Box> b = new Box.make(v: 42);
+    SendResult<Owned<Box>> res = tx.send(item: give b);
+
+    int32 got = 0;
+    match (res) {
+        case Sent:              { got = -1; }             // must NOT happen — the receiver is gone
+        case Undelivered(item): { got = item.get(); }     // value handed back intact → 42; box frees at arm-end
+    };
+    return got;   // 42
+}

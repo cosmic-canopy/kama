@@ -1,6 +1,6 @@
 namespace std::concurrent;
 
-export { Channel, Sender, Receiver };
+export { Channel, Sender, Receiver, SendResult };
 
 // A typed, blocking channel for moving values BETWEEN isolates — the first sanctioned cross-isolate
 // shared object in the concurrency model (M3). `Channel<T>::bounded(capacity:)` creates the queue and
@@ -13,7 +13,7 @@ export { Channel, Sender, Receiver };
 //         Channel<int32> ch = Channel::bounded(capacity: 4);
 //         Sender<int32>   tx = ch.sender();
 //         Receiver<int32> rx = ch.receiver();
-//         isolate producer(tx: give tx);              // reuse the M2 bundle move
+//         spawn producer(tx: give tx);                // reuse the M2 bundle move
 //         Optional<int32> v = rx.recv();              // blocks; None once drained AND the sender is dropped
 //         ...
 //     }
@@ -30,6 +30,13 @@ extern fn int32 kama_channel_recv(Ptr ch, Ptr dst);
 extern fn void  kama_channel_drop_sender(Ptr ch);
 extern fn void  kama_channel_drop_receiver(Ptr ch);
 
+// The outcome of a `send`. `Sent` means the value was delivered (the queue now owns the sole copy).
+// `Undelivered(item)` hands the value BACK to the caller intact — send failed because the receiver is
+// gone, so nothing was enqueued. Modeled on Rust's `mpsc::SendError<T>`: an ownership language must
+// return the value on failure rather than destroy it. (A no-payload `Sent` + a value-carrying
+// `Undelivered` — the same shape as `Optional<T>`'s `None`/`Some`, but named so a match reads clearly.)
+enum SendResult<T> { Sent, Undelivered(T item) }
+
 // The send endpoint. Move-only; SPSC in M3 (multi-producer `clone()` is a follow-up). Dropping it
 // closes the sender side and wakes a blocked receiver, so `recv` returns `None` once drained.
 type resource Sender<T> {
@@ -38,19 +45,23 @@ type resource Sender<T> {
     // Wrap the shared queue handle. Called by `Channel.sender()`; not meant to be used directly.
     public ctor make(Ptr handle) { Sender<T> s; s.handle = handle; return give s; }
 
-    // Move `item` into the channel. Blocks while the ring is full and the receiver is live; returns
-    // false if the receiver is gone. The bytes are relocated into a queue slot (the receiver's `recv`
-    // produces the sole owning copy), then the moved-in `item` is zeroed so its method-end destructor
-    // is a no-op — a zero value is drop-safe (INVARIANT #0). The caller's `give` already suppressed the
-    // caller-side drop, so exactly one owning copy survives (in the queue).
-    public fn bool send(T item) {
-        bool ok = false;
+    // Move `item` into the channel. Blocks while the ring is full and the receiver is live. On success
+    // the bytes are relocated into a queue slot (the receiver's `recv` produces the sole owning copy)
+    // and the moved-in `item` is zeroed so its method-end destructor is a no-op — a zero value is
+    // drop-safe (INVARIANT #0) — leaving exactly one owning copy (in the queue): returns `Sent`.
+    // If the receiver is gone the value is NOT enqueued; we must NOT zero it (that would silently
+    // destroy the caller's resource) — instead we `give` it back in `Undelivered(item)` so the caller
+    // owns it again and can re-route or drop it cleanly. The caller's `give` at the call site already
+    // suppressed its drop, so exactly one owning copy survives either way.
+    public fn SendResult<T> send(T item) {
         unsafe {
             int32 r = kama_channel_send(ch: this.handle, elem: cast<Ptr>(addr(of: item)));
-            memset(p: cast<Ptr>(addr(of: item)), value: 0, n: sizeof(T));
-            ok = (r == 0);
+            if (r == 0) {
+                memset(p: cast<Ptr>(addr(of: item)), value: 0, n: sizeof(T));
+                return SendResult::Sent;
+            }
         }
-        return ok;
+        return SendResult::Undelivered(item: give item);
     }
 
     ~Sender() { if (this.handle != null) { kama_channel_drop_sender(ch: this.handle); } }

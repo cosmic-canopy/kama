@@ -7,8 +7,8 @@ export { Isolate };
 //
 //     import std::concurrent;
 //     fn void worker(Payload p) { ... }              // entry: a top-level fn (no capture → shared-nothing)
-//     isolate worker(p: give payload);               // fused: spawn on a new OS thread, then join
-//     Isolate h = isolate worker(p: give payload);   // handle form: spawn now, join later (or on drop)
+//     spawn worker(p: give payload);                 // fused: spawn on a new OS thread, then join
+//     Isolate h = spawn worker(p: give payload);     // handle form: spawn now, join later (or on drop)
 //     h.join();                                       // explicit join; ~Isolate() also joins (RAII)
 //
 // The bundle is MOVED into the isolate (`give`), so any post-spawn use of the source is a compile error —
