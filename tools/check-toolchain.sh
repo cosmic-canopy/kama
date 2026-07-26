@@ -70,6 +70,12 @@ grep -q "TOOLCHAIN vA" "$tmp/out" || fail "KAMA_VERSION did not override the def
 run sh -c "cd '$tmp/pinned' && KAMA_VERSION=vB '$SEL' build x.kama"   # pin vA, env vB -> vA
 grep -q "TOOLCHAIN vA" "$tmp/out" || fail "KAMA_VERSION wrongly overrode a project pin"
 
+# ---- 4b. a kama.local.json toolchain override beats the kama.json pin (M5.3, dev-local) ---------------
+printf '{ "toolchain": "vB" }\n' > "$tmp/pinned/kama.local.json"
+run sh -c "cd '$tmp/pinned' && '$SEL' build x.kama"                   # kama.json pin vA, local vB -> vB
+grep -q "TOOLCHAIN vB" "$tmp/out" || fail "kama.local.json toolchain override did not beat the kama.json pin"
+rm -f "$tmp/pinned/kama.local.json"
+
 # ---- 5. a pin to a missing version → a clear, actionable error ---------------------------------------
 mkdir -p "$tmp/missing"
 printf '{ "name": "m", "toolchain": "v9" }\n' > "$tmp/missing/kama.json"
@@ -90,4 +96,4 @@ run "$KAMA" toolchain uninstall vA             # vA is not the default → remov
 [ "$RC" = 0 ] || fail "uninstall of a non-default version errored"
 [ ! -d "$HOME/.kama/versions/vA" ] || fail "uninstall did not remove the version dir"
 
-echo "check-toolchain: PASS (list; default switch; pin > KAMA_VERSION > default; missing-version error; pin writes manifest; uninstall guards default)"
+echo "check-toolchain: PASS (list; default switch; kama.local.json > pin > KAMA_VERSION > default; missing-version error; pin writes manifest; uninstall guards default)"

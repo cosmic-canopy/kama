@@ -283,6 +283,12 @@ Kama should answer the ecosystem question so users don't roll their own. Opt-in,
       scope, builds verify the same hashes; (b) **isolated / air-gapped dev** — point scopes (or drop the
       default) at a `file://` mirror so `install` never touches remotes (composes with the existing
       "builds never fetch" guarantee — only `install` fetches, and it can be pointed fully offline).
+    - **Local (dev-only) overrides — `kama.local.json` ✅ SHIPPED 2026-07-26 (M5.3).** The
+      per-machine, gitignored sibling of `kama.json` also carries the install/selector overrides:
+      dependency **`overrides`** (Cargo `[patch]` / Go `replace` — patch-style view-relink that never
+      touches `kama.lock`), a local **`registries`** config layered over the manifest's, and a
+      **`toolchain`** pin that beats the committed one. Design of record + as-shipped detail:
+      [logging.md](logging.md) Part D ("`kama.local.json` install/selector overrides — as shipped").
   - **M3.2 — signing / provenance.** **M3.2a ✅ SHIPPED 2026-07-25** (sign-on-publish / verify-on-install
     via `ssh-keygen -Y` SSHSIG, warn-only + `--verify` enforcement; see the as-shipped entry above). The
     **rest of M3.2** picks the trust model — two credible ones: Go's checksum-transparency log vs npm/PyPI's

@@ -248,17 +248,34 @@ Deep-merge means it layers field-by-field, not whole-file: a `log.tags` entry it
 entry it declares *extends* the valid flag universe.
 
 ```jsonc
-// kama.local.json — bump logging on this machine without touching the committed default
+// kama.local.json — bend the build to this machine without touching the committed manifest
 {
-  "log": { "level": "debug", "tags": { "audio": "trace" } },
-  "flags": { "MY_EXPERIMENT": { "default": true } }
+  "log":        { "level": "debug", "tags": { "audio": "trace" } },  // build-time (compiler)
+  "flags":      { "MY_EXPERIMENT": { "default": true } },            // build-time (compiler)
+  "overrides":  { "geometry": { "path": "../geometry" } },           // install-time (kama pkg install)
+  "registries": { "default": ["file:///srv/mirror"] },              // install-time (kama pkg install)
+  "toolchain":  "1.3.0"                                              // selector (which compiler runs)
 }
 ```
 
-Precedence, high to low: **`--log`/`KAMA_LOG` (runtime) > `kama.local.json` > `kama.json`**. Today
-the merge covers the fields the compiler reads directly — the **`log`** default and **`@compileFor`
-`flags`**. Dependency *path*-overrides (the Cargo-`[patch]` / Go-`replace` local-dev case) and
-toolchain/registry overrides are a later milestone.
+Precedence, high to low: **`--log`/`KAMA_LOG` (runtime) > `kama.local.json` > `kama.json`**.
+
+**Build-time fields** (`log`, `flags`) are read by the compiler and merge field-by-field, as above.
+
+**Install-time fields** are read by `kama pkg install`:
+
+- **`overrides`** — redirect a dependency to a **local directory** for local development (Cargo
+  `[patch]` / Go `replace`). The dep stays declared in `kama.json`; the override just relinks the
+  materialized view (`.kama/deps/<name>`) at your local copy, so your build compiles the local code.
+  It is **never written to `kama.lock`** — the lock stays canonical, so CI (which has no
+  `kama.local.json`) reproduces the published resolution exactly. The overridden package must still be
+  a declared, resolvable dependency and a drop-in for it (its own *new* dependencies aren't re-followed).
+- **`registries`** — a local registry config that layers over `kama.json`'s (same shape: a `default`
+  chain and per-`@scope` chains). Point a scope at a private mirror, or supply a `default` a checkout
+  doesn't commit. Lock-safe for free: the lock pins content integrity, not the registry URI.
+
+The **`toolchain`** field is read by the PATH selector and overrides the committed pin locally (see
+below).
 
 ## Toolchain versions
 
@@ -269,12 +286,15 @@ the current directory and hands off to it. There is no `activate` step.
 
 Resolution order, highest priority first:
 
-1. **Project pin** — a `"toolchain"` field in the project's `kama.json` (found by walking up from
+1. **Local override** — a `"toolchain"` field in `kama.local.json` beside the project's `kama.json`.
+   Gitignored and dev-local, for testing this checkout under a different version without touching the
+   committed pin.
+2. **Project pin** — a `"toolchain"` field in the project's `kama.json` (found by walking up from
    the current directory). This makes the toolchain version a reproducible build input, alongside
    the source, `kama.json`, and `kama.lock`.
-2. **`KAMA_VERSION`** environment variable — a one-off override for the current command, without
+3. **`KAMA_VERSION`** environment variable — a one-off override for the current command, without
    editing any file (handy for a project that has no pin, or to test a build under another version).
-3. **Global default** — recorded in `~/.kama/default`, used when nothing else applies.
+4. **Global default** — recorded in `~/.kama/default`, used when nothing else applies.
 
 ```sh
 kama toolchain list              # installed versions, the default (*), and what this dir resolves to

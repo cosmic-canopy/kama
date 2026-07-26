@@ -91,8 +91,8 @@ scope + acceptance so a fresh session can start immediately.
    config crosses module-scoped statics); a **baked `kama.json` `log` default ✅** (a `{level,tags}` object →
    canonical spec seeded into `KAMA_LOG` in `main` at `overwrite=0`, so `--log` > env > baked > `info` floor —
    M5.1); a **`kama.local.json` deep-merge ✅** (gitignored sibling; `log` per-tag merge + `flags` union — the
-   build-path fields; M5.2), with dep path-overrides + toolchain/registry local overrides the remaining M5.3
-   half; (d) a compiler-recognized
+   build-path fields; M5.2, + dep `overrides` [patch-style view-relink, never in `kama.lock`] + local
+   `registries` + `toolchain` overrides on the install/selector paths; M5.3 ✅); (d) a compiler-recognized
    facade lowering for zero-cost (baked comptime min-level → DCE strip +
    runtime `enabled(level,tag)` guard with message-build inside — an AST pass, **no preprocessor**). Also the
    `kama.local.json` general local-override + the "Floor reference" doc page. **Design of record:

@@ -255,8 +255,33 @@ wins, local tags override per-name while base tags are preserved) and `@compileF
 flag extends the declared universe and a local `default:true` activates it). The runtime precedence therefore
 becomes `--log` > `KAMA_LOG` > `kama.local.json`-merged baked default > `info` floor. Local-only by
 construction (never committed, never in the lockfile), so it can never perturb a reproducible/CI build.
-*(Dependency path-overrides + toolchain/registry local overrides — read by the install/selector paths, not the
-build path — are the remaining M5.3 half.)*
+
+**`kama.local.json` install/selector overrides — as shipped (M5.3).** The second, non-logging half of the
+`kama.local.json` mechanism: the fields read by the install/selector paths rather than the compiler. Three
+overrides, all dev-local and all CI-safe by construction:
+- **`overrides`** — dependency *path*-overrides (Cargo `[patch]` / Go `replace`). **Patch-style / pure
+  view-relink:** `kama pkg install` resolves canonically from `kama.json` and writes the normal `kama.lock`
+  *unchanged*, then — as a strict post-step — relinks the materialized view (`.kama/deps/<name>`) at the
+  local path so this dev's build compiles the local code. The override is **never written to the lock**, so a
+  committed `kama.lock` stays canonical and CI (no `kama.local.json`) reproduces the published resolution
+  exactly. That is the whole guarantee, and it is why the model is view-relink and not resolution-substitution.
+  Consequences (intentional v1): the overridden dep must still be a declared, canonically-resolvable
+  dependency and a drop-in for it — its *new* transitive deps aren't re-followed (replace-style, which
+  resolves an unpublished dep as a path, is a clean later milestone). A `path`-less or non-dependency override
+  is a hard error.
+- **`registries`** — a local `RegConfig` merged over `kama.json`'s in `resolveProject` (`RegConfig::applyLocal`:
+  a local `default`/`default:false` replaces the base default; a local `@scope` replaces that scope's chain).
+  Lock-safe for free because the lock pins integrity, not the URI (M3.1b), so re-pointing to a same-bytes
+  mirror re-resolves byte-identically.
+- **`toolchain`** — highest-precedence pin in the selector's `resolvePin` (`kama.local.json` > `kama.json` pin
+  > `KAMA_VERSION` > default), so a dev can test a checkout under a different local toolchain without editing
+  the committed pin.
+
+Parser: one `overrides` key added to `ManifestReader` (reusing the dependency-object parser) + a
+`loadManifestLocalInstall` loader; `kama publish` also excludes `kama.local.json` from the tarball. Tested via
+`tools/check-packages.sh` (dep-override relinks the view + **`kama.lock` stays byte-identical**; non-dependency
+override errors; a local `registries.default` resolves a dep that `kama.json` alone can't) and
+`tools/check-toolchain.sh` (a local `toolchain` beats the `kama.json` pin).
 
 Tested via `tools/check-log.sh` (registered in `run_tests.sh`, native-only — std::log writes to stderr, which
 the sanitizer harness captures, so it must not be a `tests/*.kama` fixture): level+tag filtering, `--log`

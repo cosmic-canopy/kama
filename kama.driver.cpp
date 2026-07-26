@@ -420,6 +420,16 @@ struct RegConfig {
     bool defaultSet = false;                                       // a `default` key was present
     bool defaultDisabled = false;                                  // `default: false`
     std::map<std::string, std::vector<std::string>> scopes;        // "@scope" -> ordered base chain
+
+    // Merge a `kama.local.json` `registries` over `this` (M5.3): a local `default` (incl. `default:false`)
+    // replaces the base default; a local `@scope` replaces that scope's chain (others preserved). Dev-local
+    // only — the lock pins integrity not URI, so re-pointing to a same-bytes mirror re-resolves identically.
+    void applyLocal(const RegConfig& local) {
+        if (local.defaultSet) {
+            defaultSet = true; defaultDisabled = local.defaultDisabled; defaultBases = local.defaultBases;
+        }
+        for (auto& sc : local.scopes) scopes[sc.first] = sc.second;
+    }
 };
 
 // The `log` config (M5): the project's default log filter, baked into the binary. `level` is the global
@@ -630,6 +640,7 @@ struct ManifestReader {
     std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
     std::string* versionOut = nullptr;                    // set to capture the `version` (else skipped) — `kama publish`
     RegConfig* registriesOut = nullptr;                   // set to capture the `registries` config (M3.1b)
+    std::map<std::string, DepSpec>* overridesOut = nullptr;// set to capture `overrides` (kama.local.json, M5.3)
     LogConfig* logOut = nullptr;                          // set to capture the `log` config (M5)
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
@@ -866,6 +877,7 @@ struct ManifestReader {
             else if (key == "dependencies" && deps) { if (!depsObject(deps)) return false; }
             else if (key == "dev-dependencies" && devDeps) { if (!depsObject(devDeps)) return false; }
             else if (key == "registries" && registriesOut) { if (!registriesObject(registriesOut)) return false; }
+            else if (key == "overrides" && overridesOut) { if (!depsObject(overridesOut)) return false; }  // kama.local.json dep path-overrides (M5.3)
             else if (key == "log" && logOut) { if (!logObject()) return false; }   // baked log default (M5)
             else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
             else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
@@ -908,6 +920,24 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
     r.deps = &deps;
     r.devDeps = devDeps;   // optional: also capture `dev-dependencies` (M2.2)
     r.registriesOut = reg; // optional: also capture `registries` config (M3.1b)
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// Load a `kama.local.json`'s INSTALL-path override fields (M5.3): `overrides` (dep path-overrides) and a
+// local `registries` config. Both are dev-local — they redirect where deps/registries resolve WITHOUT
+// touching the committed `kama.json`/`kama.lock`. Reuses ManifestReader (its `log`/`flags` are read by the
+// compiler driver, not here). Returns false + `err` on malformed JSON.
+static bool loadManifestLocalInstall(const std::string& path, std::map<std::string, DepSpec>& overrides,
+                                     RegConfig& reg, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.overridesOut = &overrides;
+    r.registriesOut = &reg;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -1859,6 +1889,21 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str()); return 2;
     }
 
+    // `kama.local.json` (M5.3): a gitignored, dev-local sibling that layers INSTALL-path overrides over
+    // `kama.json` — a local `registries` config (merged now, so resolution routes through it) and dep
+    // `overrides` (applied AFTER the canonical lock is written, below). Local-only by construction: the
+    // registry merge is lock-safe because the lock pins integrity not URI, and the dep overrides never
+    // touch the lock at all — so CI (which has no `kama.local.json`) reproduces the identical build.
+    std::map<std::string, DepSpec> overrides;
+    std::string localManifest = base + "/kama.local.json";
+    if (std::ifstream(localManifest).good()) {
+        RegConfig localReg; std::string lerr;
+        if (!loadManifestLocalInstall(localManifest, overrides, localReg, lerr)) {
+            fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str()); return 2;
+        }
+        regCfg.applyLocal(localReg);
+    }
+
     std::string viewDir    = base + "/.kama/deps";
     std::string devViewDir = base + "/.kama/dev-deps";
 
@@ -2155,6 +2200,38 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         if (!writeLockFile(base + "/kama.lock", lock)) {
             fprintf(stderr, "kama install: cannot write %s/kama.lock\n", base.c_str()); return 1;
         }
+
+        // Dep path-overrides (M5.3, patch-style): the canonical lock is now written and untouched. Redirect
+        // ONLY the materialized view for each overridden dep to a local path, so this dev's build compiles
+        // against local code. Because nothing here writes the lock, a committed `kama.lock` stays canonical
+        // and CI (no `kama.local.json`) reproduces the published resolution exactly. The overridden dep must
+        // still be a declared, canonically-resolvable dependency (a drop-in replacement); its NEW transitive
+        // deps, if any, are not re-followed (v1 patch semantics — replace-style is a later milestone).
+        for (auto& ov : overrides) {
+            const std::string& name = ov.first;
+            const DepSpec& spec = ov.second;
+            if (spec.path.empty()) {
+                fprintf(stderr, "kama: override '%s' in kama.local.json must specify a \"path\" "
+                        "(only local path-overrides are supported)\n", name.c_str()); return 1;
+            }
+            bool isDev = deps.count(name) == 0 && devDeps.count(name) != 0;
+            if (!deps.count(name) && !isDev) {
+                fprintf(stderr, "kama: override '%s' in kama.local.json is not a dependency of this "
+                        "project — declare it in kama.json first\n", name.c_str()); return 1;
+            }
+            std::string target = absolutePath(base + "/" + spec.path);
+            if (!dirExists(target)) {
+                fprintf(stderr, "kama: override '%s' target not found at %s\n", name.c_str(), target.c_str());
+                return 1;
+            }
+            std::string link = (isDev ? devViewDir : viewDir) + "/" + importNameOf(name);
+            runCmd(rmRfCmd(link));
+            if (!linkDir(target, link)) {
+                fprintf(stderr, "kama: cannot link override '%s'\n", name.c_str()); return 1;
+            }
+            fprintf(stderr, "kama: override '%s' -> %s (local, not locked)\n", name.c_str(), target.c_str());
+        }
+
         fprintf(stderr, "kama: installed %zu package(s) into %s\n", lock.size(), base.c_str());
         return 0;
     }
@@ -2472,7 +2549,7 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     runCmd(rmRfCmd(tmp));
     if (!makeDirs(tmp + "/" + wrapper)) { fprintf(stderr, "kama publish: cannot stage the package\n"); runCmd(rmRfCmd(tmp)); return 1; }
     std::string copyCmd = "tar -c -C \"" + base + "\" --exclude=./.git --exclude=./.kama --exclude=./build "
-                          "--exclude=./kama.lock -f - . | tar -x -C \"" + tmp + "/" + wrapper + "\" -f -";
+                          "--exclude=./kama.lock --exclude=./kama.local.json -f - . | tar -x -C \"" + tmp + "/" + wrapper + "\" -f -";
     if (runCmd(copyCmd) != 0) { fprintf(stderr, "kama publish: cannot copy sources (is tar available?)\n"); runCmd(rmRfCmd(tmp)); return 1; }
     std::string tarball = tmp + "/pkg.tar.gz";
     if (runCmd("tar -czf \"" + tarball + "\" -C \"" + tmp + "\" \"" + wrapper + "\"") != 0) {
@@ -2601,12 +2678,19 @@ static std::string findManifestUpward()
     return "";
 }
 
-// The version the PATH selector should run in the cwd: project pin (nearest kama.json `toolchain`) →
-// `KAMA_VERSION` env → global default (`~/.kama/default`). "" ⇒ no preference (run this binary as-is).
+// The version the PATH selector should run in the cwd: dev-local override (`kama.local.json` `toolchain`,
+// M5.3) → project pin (nearest kama.json `toolchain`) → `KAMA_VERSION` env → global default
+// (`~/.kama/default`). "" ⇒ no preference (run this binary as-is). The local override is gitignored, so a
+// dev can test against a different toolchain without touching the committed pin.
 static std::string resolvePin()
 {
     std::string manifest = findManifestUpward();
     if (!manifest.empty()) {
+        std::string local = dirName(manifest) + "/kama.local.json";
+        if (std::ifstream(local).good()) {
+            std::string tc, err;
+            if (loadManifestToolchain(local, tc, err) && !tc.empty()) return tc;
+        }
         std::string tc, err;
         if (loadManifestToolchain(manifest, tc, err) && !tc.empty()) return tc;
     }
@@ -3037,8 +3121,9 @@ int main(int argc, char** argv)
             // `kama.local.json` (M5.2): a gitignored sibling of the manifest that DEEP-MERGES over it for the
             // fields the compiler reads directly here — `flags` (union: local declares/enables more) and `log`
             // (per-tag merge, local wins). Local-only by construction (never committed / never in the lockfile),
-            // so it can never perturb a reproducible or CI build. Deps/registries/toolchain local overrides —
-            // read by the install/selector/run paths, not here — layer in a later milestone.
+            // so it can never perturb a reproducible or CI build. Its dep `overrides` + `registries` +
+            // `toolchain` local overrides (M5.3) are read on the install/selector paths (`resolveProject`,
+            // `resolvePin`), not here.
             std::string mdir = dirName(manifest);
             std::string localManifest = (mdir == "." ? std::string() : mdir + "/") + "kama.local.json";
             if (std::ifstream(localManifest).good()) {

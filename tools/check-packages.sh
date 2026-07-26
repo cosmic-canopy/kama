@@ -612,4 +612,72 @@ else
     SIGNOTE="signing skipped (no ssh-keygen)"
 fi
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; $SIGNOTE)"
+# ---- M5.3: kama.local.json local overrides -----------------------------------------------------------
+# 26. dep path-override (patch-style): a git dep is redirected to a LOCAL dir for this dev only. The
+#     committed kama.lock stays BYTE-IDENTICAL (the override is never locked → CI-safe), the view relinks
+#     to the local dir, and the build compiles the local code (77) rather than the published one (30).
+ogeo="$tmp/ogeo-src"; mkdir -p "$ogeo"
+printf '{ "name": "ogeo", "version": "1.0.0" }\n' > "$ogeo/kama.json"
+printf 'namespace ogeo;\nexport { area };\nfn int32 area() { return 30; }\n' > "$ogeo/ogeo.kama"
+git -C "$ogeo" init -q
+git -C "$ogeo" -c user.email=t@t -c user.name=t add -A
+git -C "$ogeo" -c user.email=t@t -c user.name=t commit -qm init
+git -C "$ogeo" tag v1.0.0
+ovp="$tmp/ovp"; mkdir -p "$ovp"
+cat > "$ovp/kama.json" <<JSON
+{ "name": "ovc", "version": "0.1.0",
+  "dependencies": { "ogeo": { "git": "file://$ogeo", "rev": "v1.0.0" } } }
+JSON
+printf 'import ogeo::{area};\nfn int32 main() { return area(); }\n' > "$ovp/main.kama"
+if ! "$KAMA" pkg install "$ovp" >"$tmp/ov1.out" 2>&1; then
+    echo "check-packages: FAIL — override base install errored:" >&2; sed 's/^/  /' "$tmp/ov1.out" >&2; exit 1; fi
+cp "$ovp/kama.lock" "$tmp/ov.lock.canon"
+oloc="$tmp/ogeo-local"; mkdir -p "$oloc"
+printf '{ "name": "ogeo", "version": "1.0.0" }\n' > "$oloc/kama.json"
+printf 'namespace ogeo;\nexport { area };\nfn int32 area() { return 77; }\n' > "$oloc/ogeo.kama"
+cat > "$ovp/kama.local.json" <<JSON
+{ "overrides": { "ogeo": { "path": "../ogeo-local" } } }
+JSON
+if ! "$KAMA" pkg install "$ovp" >"$tmp/ov2.out" 2>&1; then
+    echo "check-packages: FAIL — override install errored:" >&2; sed 's/^/  /' "$tmp/ov2.out" >&2; exit 1; fi
+if ! cmp -s "$tmp/ov.lock.canon" "$ovp/kama.lock"; then
+    echo "check-packages: FAIL — a dep override perturbed kama.lock (must stay canonical):" >&2
+    diff "$tmp/ov.lock.canon" "$ovp/kama.lock" >&2 || true; exit 1; fi
+case "$(readlink "$ovp/.kama/deps/ogeo" 2>/dev/null || true)" in
+    *ogeo-local) : ;;
+    *) echo "check-packages: FAIL — override did not relink the view to the local dir" >&2; exit 1 ;;
+esac
+if "$KAMA" build "$ovp/main.kama" -o "$tmp/ovapp" >"$tmp/ovb.out" 2>&1; then
+    if "$tmp/ovapp"; then orc=0; else orc=$?; fi
+    [ "$orc" = 77 ] || { echo "check-packages: FAIL — override app returned $orc, expected 77 (local code)" >&2; exit 1; }
+else echo "check-packages: FAIL — build against the override failed:" >&2; sed 's/^/  /' "$tmp/ovb.out" >&2; exit 1; fi
+# override of a non-dependency → hard error
+cat > "$ovp/kama.local.json" <<JSON
+{ "overrides": { "nope": { "path": "../ogeo-local" } } }
+JSON
+if "$KAMA" pkg install "$ovp" >"$tmp/ovbad.out" 2>&1; then
+    echo "check-packages: FAIL — override of a non-dependency was accepted" >&2; exit 1; fi
+grep -qi "not a dependency" "$tmp/ovbad.out" \
+    || { echo "check-packages: FAIL — non-dependency override message unclear:" >&2; sed 's/^/  /' "$tmp/ovbad.out" >&2; exit 1; }
+
+# 27. registries local override: a registry dep with NO `registry`/`registries` configured in kama.json
+#     fails to resolve (no built-in default in a dev build); a kama.local.json `registries.default`
+#     supplies the base and the dep resolves — proving the local registries override is consulted. (Reuses
+#     the `rg` package published to $reg above.)
+rp="$tmp/rp"; mkdir -p "$rp"
+cat > "$rp/kama.json" <<JSON
+{ "name": "rpc", "version": "0.1.0",
+  "dependencies": { "rg": { "version": "^1.0.0" } } }
+JSON
+printf 'import rg::{area};\nfn int32 main() { return area(); }\n' > "$rp/main.kama"
+if "$KAMA" pkg install "$rp" >"$tmp/rp0.out" 2>&1; then
+    echo "check-packages: FAIL — registry dep resolved with no registry configured" >&2; exit 1; fi
+cat > "$rp/kama.local.json" <<JSON
+{ "registries": { "default": "file://$reg" } }
+JSON
+if ! "$KAMA" pkg install "$rp" >"$tmp/rp1.out" 2>&1; then
+    echo "check-packages: FAIL — kama.local.json registries override did not resolve the dep:" >&2; sed 's/^/  /' "$tmp/rp1.out" >&2; exit 1; fi
+grep -q '"source": "registry"' "$rp/kama.lock" \
+    || { echo "check-packages: FAIL — registries-override install did not lock a registry source:" >&2; sed 's/^/  /' "$rp/kama.lock" >&2; exit 1; }
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; $SIGNOTE)"
