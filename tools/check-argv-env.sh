@@ -66,4 +66,34 @@ if [ "$rc" -ne 0 ]; then
     sed 's/^/  /' "$tmp/run.err" >&2; exit 1
 fi
 
-echo "PASS check-argv-env (hosted argv + env: kama_args_init shape + direct-binary run + 'kama run --' forwarding)"
+# 4. CROSS-TU — argv is process-global (external linkage), so a prelude floor `args()` call from a NON-entry
+#    TU (a library module) must see the same vector as `main`. A per-TU `static` argv would read empty in the
+#    library TU. Two-file build; the program returns 0 iff the library-side count matches main's (== 3 here).
+libdir="$tmp/xtu"
+mkdir -p "$libdir"
+cat > "$libdir/lib.kama" <<'KAMA'
+namespace Lib;
+export { libArgCount };
+fn int32 libArgCount() { return args().count(); }
+KAMA
+cat > "$libdir/main.kama" <<'KAMA'
+import Lib::{libArgCount};
+fn int main() {
+    int32 mc = args().count();     // main's TU
+    int32 lc = libArgCount();      // Lib's TU — must see the SAME argv
+    if (mc != lc) { return 3; }    // cross-TU mismatch (the bug)
+    if (mc != 3)  { return 4; }    // wrong count entirely
+    return 0;
+}
+KAMA
+"$KAMA" build "$libdir/main.kama" "$libdir/lib.kama" -o "$libdir/prog" >/dev/null 2>"$tmp/xtu.err" || {
+    echo "check-argv-env: FAIL — cross-TU build failed" >&2; sed 's/^/  /' "$tmp/xtu.err" >&2; exit 1; }
+set +e
+"$libdir/prog" alpha beta gamma
+rc=$?
+set -e
+if [ "$rc" -ne 0 ]; then
+    echo "check-argv-env: FAIL — a library-TU args() saw a different argv than main (cross-TU, code $rc)" >&2; exit 1
+fi
+
+echo "PASS check-argv-env (hosted argv + env: kama_args_init shape + direct-binary run + 'kama run --' forwarding + cross-TU args())"

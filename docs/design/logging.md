@@ -340,21 +340,26 @@ a **process-global, set-once slot written in one TU and read in another**:
   take the **default abort** instead of the user's handler. (Not caught earlier because the M2 fixture triggers
   its panic from `main`'s TU; a single-file trap fixture is one TU and *cannot* exhibit it.)
 - **`kama_log_slot`** — the M7 sink case above, same root cause.
+- **`kama_argc` / `kama_argv`** — the prelude floor `args()`/`programName()`/`programInvocation()`/
+  `programPath()` are `static inline` reading argv, but `kama_args_init` runs only in `main` (the entry TU). A
+  library-module call to `args()` read an empty argv (`args().count()` == 0 while `main` saw the real count).
+  This one *contradicted its own documented intent* — the header already says "argv is process-wide, every
+  isolate must see the same vector" — so external linkage realizes that intent rather than changing it. (An
+  earlier decision had kept argv per-TU and instead env-bridged the one config that needed it, the std::log
+  `--log` flag; that covered only that path, not the general `args()` surface.)
 
-Both are now **external-linkage with a single definition emitted in the entry TU** (`void (*kama_panic_hook)(void)
-= 0;` + `int kama_in_panic_hook = 0;`, and — when the program imports std::log — `kama_log_sink_fn kama_log_slot
-= 0;`, at file scope before `main` in the `isEntry` block). The accessors stay `static inline` and reference the
-shared externs; the read paths keep zero call overhead. Verified by `tools/check-panic-multitu.sh` (a two-file
-build whose panic is raised in `Lib`'s TU while `setPanicHandler` runs in `main`'s — the handler must still
-fire) and by check-log's cross-TU custom-sink case.
+All three are now **external-linkage with a single definition emitted in the entry TU** (`isEntry` in
+`kama.cemit.cpp`, at file scope before `main`): the panic-hook pair and `kama_argc`/`kama_argv` under
+`#if !defined(KAMA_TARGET_EMBEDDED)` (the headers declare them under the same guard — embedded uses the weak
+`kama_panic_handler` and has no argv), and `kama_log_sink_fn kama_log_slot` when the program imports std::log
+(declared unconditionally, present on embedded too). The accessors stay `static inline` referencing the shared
+externs, so read paths keep zero call overhead. Verified by `tools/check-panic-multitu.sh` (a two-file build
+whose panic is raised in `Lib`'s TU while `setPanicHandler` runs in `main`'s), `tools/check-argv-env.sh` case 4
+(a library-TU `args()` must match `main`'s), and check-log's cross-TU custom-sink case.
 
-**Deliberately NOT changed (per-TU is correct or a separate decision):** the `KAMA_LOG` filter *cache*
-(`kama_log_global`/`_ntags`/…) — each TU re-derives identical state from the process-global env, so per-TU
-copies never disagree; `kama_trace_acc` — a documented single-TU test helper; and **`kama_argc`/`kama_argv`**,
-which have a prior explicit "keep non-external" decision (config that needs argv is env-bridged in `main`). ⚠️
-open follow-up: the prelude floor `args()`/`programName()`/`env()` are `static inline` reading `kama_argv`, so a
-call from a **non-entry TU** would read an empty argv — the identical hazard, gated behind that argv decision.
-Revisit if/when a use case calls those from library code (flagged for the concurrency/pre-1.0 cleanup).
+**Deliberately NOT changed (per-TU is correct):** the `KAMA_LOG` filter *cache* (`kama_log_global`/`_ntags`/…)
+— each TU re-derives identical state from the process-global env, so per-TU copies never disagree — and
+`kama_trace_acc`, a documented single-TU test helper.
 
 ## Residual implementation details (settle in the build session)
 - Exact `LogRecord` fields if `emit` grows beyond `(level, tag, msg)` (timestamp / source loc / isolate id).

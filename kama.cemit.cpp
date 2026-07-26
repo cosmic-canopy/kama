@@ -10750,13 +10750,18 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 
     if (isEntry) {
         // Single definition of the process-global set-once runtime slots (external-linkage in the headers —
-        // see kama_runtime.h / kama_log.h). The entry TU is the one, program-wide place to define them: the
-        // panic hook is referenced by the `static inline` fatal paths inlined into every TU, and the log sink
-        // by every dispatch, so a per-TU `static` would let a slot set in one TU be read as empty in another.
-        // Emitted at file scope, before `main`. The panic-hook pair is unconditional (any program can panic);
-        // the log sink only when the program imports std::log.
-        *_out << "void (*kama_panic_hook)(void) = 0;\n"
-             << "int kama_in_panic_hook = 0;\n";
+        // see kama_runtime.h / kama_log.h). The entry TU is the one, program-wide place to define them: their
+        // readers are `static inline` and inlined into every TU, while the writer runs only here, so a per-TU
+        // `static` would let a slot set in one TU be read as empty in another. Emitted at file scope, before
+        // `main`. The panic hook and argv are hosted-only (the headers declare them under the same guard; on
+        // embedded the panic path is the weak `kama_panic_handler` and there is no argv); the log sink is
+        // declared unconditionally (present on embedded too), emitted only when the program imports std::log.
+        *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n"
+             << "void (*kama_panic_hook)(void) = 0;\n"
+             << "int kama_in_panic_hook = 0;\n"
+             << "int kama_argc = 0;\n"
+             << "char** kama_argv = 0;\n"
+             << "#endif\n";
         if (externsHeader("kama_log.h"))
             *_out << "kama_log_sink_fn kama_log_slot = 0;\n";
         *_out << "\n";

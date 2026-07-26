@@ -960,8 +960,15 @@ static inline int  kama_trace_get(void) { return kama_trace_acc; }
 // BLOCK scope (the malloc/memcpy/snprintf pattern), so <stdlib.h>/<string.h>/<unistd.h> never leak to user
 // code and the header stays dependency-light + `--no-std`-clean.
 #if !defined(KAMA_TARGET_EMBEDDED)
-static int    kama_argc = 0;
-static char** kama_argv = 0;
+// EXTERNAL LINKAGE (single definition in the entry TU — see `isEntry` in kama.cemit.cpp). argv must be ONE
+// object program-wide: the reader accessors (kama_args_count/at, kama_program_*) are `static inline` and
+// inlined into EVERY TU, but `kama_args_init` runs only in `main` (the entry TU). A per-TU `static` would
+// leave the prelude floor `args()`/`programName()`/`programPath()` reading an EMPTY argv when called from any
+// non-entry TU (a library/stdlib module) — the same multi-TU-static hazard as the panic hook / log sink. This
+// realizes the "every isolate sees the same vector" intent documented above (it is written once on the main
+// thread before any spawn, so a single shared object is race-free — not KAMA_ISOLATE_LOCAL/per-isolate).
+extern int    kama_argc;
+extern char** kama_argv;
 static inline void kama_args_init(int argc, char** argv) { kama_argc = argc; kama_argv = argv; }
 static inline int  kama_args_count(void) { return kama_argc > 1 ? kama_argc - 1 : 0; }   // drop argv[0]
 // The i-th user arg (0-based over argv[1..argc)) as a FRESH owned kama_string; out-of-range -> "".
