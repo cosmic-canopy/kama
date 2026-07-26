@@ -436,6 +436,19 @@ fn string envOr(string name, string dflt) {
     return give dflt;
 }
 
+// ── Fatal-handler hook (diagnostics floor) ──────────────────────────────────────────────────────────────
+// Install a custom handler for a fatal `panic`/`assert`/bounds trap. The default runtime behavior writes the
+// message to stderr and `abort()`s — useless/hostile to an end user with no terminal (a shipped game/GUI), so
+// a handler can exhibit gracefully instead (show a dialog, flush a save, route to a telemetry sink). CONTRACT:
+// register ONCE at startup before spawning isolates (the slot is then read-only = race-free); the handler runs
+// for CLEANUP/REPORTING only — the runtime ALWAYS terminates after it (it is NOT a resume point; recovery is
+// `Result`, never panic), and a re-entrant panic while handling one hard-aborts (no infinite recursion). On
+// `--target embedded` there is no runtime setter — provide a strong `kama_panic_handler` symbol at link time
+// instead (this call is a no-op there).
+fnptr void PanicHandler();
+extern fn void kama_set_panic_handler(PanicHandler h);
+fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handler); }
+
 // The default allocator (satisfies `Allocator`): a zero-size handle straight onto libc malloc/free. The
 // M8 default `A: Allocator = GlobalAllocator` fills it in for `Owned<T>` / `DynamicArray<T>` / `Map<K,V>`,
 // so the bare types are unchanged and pay nothing at runtime (the field carries no state — an empty

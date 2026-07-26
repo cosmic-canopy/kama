@@ -300,7 +300,24 @@ static inline void kama_bounds_fail(size_t i, size_t len) {
     kama_panic_handler();
     for (;;) {}   // kama_panic_handler must not return; belt-and-suspenders if a user override does
 }
+// On embedded the fatal handler IS the weak `kama_panic_handler` symbol (firmware provides a strong
+// override at link time), so a runtime setter doesn't apply — this stub lets the prelude `setPanicHandler`
+// surface still compile on --target embedded (a no-op; use the weak-symbol mechanism instead).
+static inline void kama_set_panic_handler(void (*h)(void)) { (void)h; }
 #else
+// Hosted analogue of the embedded weak `kama_panic_handler`: a settable fatal handler for cleanup/exhibition
+// (a shipped game/GUI with no terminal shows a dialog / flushes a save instead of a bare stderr `abort`).
+// Contract (baked in): SET-ONCE (first registration wins — register at startup before spawning isolates,
+// same rule as the argv stash, so the read-only slot is race-free); RE-ENTRANCY-GUARDED (a panic while
+// already handling one skips the hook and hard-aborts — no infinite recursion); and the runtime ALWAYS
+// TERMINATES after it (it is not a resume point — recovery is `Result`, not panic). Covers every hosted
+// fatal path (bounds / panic / assert), matching the embedded "one hook for all fatal conditions" policy.
+static void (*kama_panic_hook)(void) = 0;
+static int kama_in_panic_hook = 0;
+static inline void kama_set_panic_handler(void (*h)(void)) { if (!kama_panic_hook) kama_panic_hook = h; }
+static inline void kama_run_panic_hook(void) {
+    if (kama_panic_hook && !kama_in_panic_hook) { kama_in_panic_hook = 1; kama_panic_hook(); }
+}
 static inline void kama_bounds_fail(size_t i, size_t len) {
     extern void abort(void);
     char buf[96]; size_t p = 0;
@@ -316,6 +333,7 @@ static inline void kama_bounds_fail(size_t i, size_t len) {
 #else
     { extern long write(int, const void*, size_t);       (void)write(2, buf, p); }
 #endif
+    kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
 }
 #endif
@@ -825,6 +843,7 @@ static inline void kama_panic(kama_string msg) {
     if (msg.len) (void)write(2, msg.data, msg.len);
     (void)write(2, "\n", 1);
 #endif
+    kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
 #endif
 }
@@ -850,6 +869,7 @@ static inline void kama_fail_emit(const char* buf, size_t n) {
     (void)write(2, buf, n);
     (void)write(2, "\n", 1);
 #endif
+    kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
 #endif
 }

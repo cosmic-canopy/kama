@@ -1,0 +1,18 @@
+// setPanicHandler installs a custom fatal handler. It runs on the panic (writes "HANDLER RAN" to stderr),
+// then the handler itself panics — the re-entrancy guard must SKIP the handler the second time and hard-abort
+// (no infinite recursion), so the process still terminates with a signal exit. Proves: handler runs +
+// re-entrancy-safe + always-terminates.
+extern "<unistd.h>";
+extern fn int64 write(int32 fd, Ptr buf, usize n);
+
+fn void onPanic() {
+    string m = "HANDLER RAN\n";
+    unsafe { write(fd: 2, buf: m.cstr(), n: cast<usize>(m.length())); }
+    panic(msg: "re-entrant");   // must NOT recurse — the guard skips the hook and aborts
+}
+
+fn int main() {
+    setPanicHandler(handler: onPanic);
+    panic(msg: "boom");
+    return 0;   // unreachable
+}
