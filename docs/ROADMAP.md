@@ -79,14 +79,27 @@ scope + acceptance so a fresh session can start immediately.
    (package-management M2.3) now delivers args. Fixtures: `tests/args_env_empty` (no-arg path) +
    `tools/check-argv-env.sh` (with-args / set-env + `kama run --`, native + ASan). See [SPEC.md](SPEC.md)
    "Command-line arguments + environment".
-3. **`std::process` — subprocess handling (library over FFI + the concurrency seams).** Spawn/exec a child,
+3. **Diagnostics & logging.** The console-output gap: kama can build text (`std::fmt`) but can't print it, and
+   `assert` is underbuilt. Phased: (a) **assert/panic polish** — auto-stringified condition + optional `msg:`
+   + `file:line` + `--release`-stripped `debugAssert` + a hosted `setPanicHandler` (graceful crash-report vs
+   `abort()`, with a re-entrancy/always-terminate/set-once contract); (b) **floor `print`/`println`/`eprint`/
+   `eprintln`** (bare, `--no-std`-surviving, embedded → weak `kama_log_sink`); (c) **`std::log`** — a `Logger`
+   contract + swappable backend, level+tag filtering, `--log`/`KAMA_LOG`/`kama.json` config; (d) a
+   compiler-recognized facade lowering for zero-cost (baked comptime min-level → DCE strip + runtime
+   `enabled(level,tag)` guard with message-build inside — an AST pass, **no preprocessor**). Also the
+   `kama.local.json` general local-override + the "Floor reference" doc page. **Design of record:
+   [design/logging.md](design/logging.md).** *Acceptance:* stdout/stderr print (native+wasm; embedded stub);
+   `assert`/`debugAssert` with message + location; `std::log` with runtime-reconfigurable level+tag on a
+   shipped binary; a `tools/check-*.sh` capturing stdout/stderr. Precedes `std::process` (a subprocess API +
+   a CLI both want console I/O).
+4. **`std::process` — subprocess handling (library over FFI + the concurrency seams).** Spawn/exec a child,
    wire its stdio, wait for exit. Builds on shipped FFI (`posix_spawn` / `CreateProcess`), the `scope`
    structured-lifetime model (wait-on-exit at scope end → no orphans), and the `std::net::Poller` substrate
-   (non-blocking reads of child stdout/stderr). Depends on (2) for clean arg passing. **Design of record:
-   [design/std-process.md](design/std-process.md).** *Acceptance:* run a child, capture its stdout + exit
-   code, on POSIX + Windows, RAII-clean (no zombie/leaked handles), ASan-clean.
+   (non-blocking reads of child stdout/stderr). Depends on (2) for clean arg passing and (3) for child stdio.
+   **Design of record: [design/std-process.md](design/std-process.md).** *Acceptance:* run a child, capture
+   its stdout + exit code, on POSIX + Windows, RAII-clean (no zombie/leaked handles), ASan-clean.
 
-**With (1)–(3) + the docs reconcile, the language is production-ready — tag 1.0.**
+**With (1)–(4) + the docs reconcile, the language is production-ready — tag 1.0.**
 
 **Post-1.0 — the flagship next campaign: the scripting / dual-mode system (§7).** The polymorphic-emitter →
 direct-wasm → bytecode-VM arc. First concrete step: refactor the C emitter behind an abstract backend
@@ -117,16 +130,13 @@ to [SPEC.md](SPEC.md) / [docs/design/construction-model.md](design/construction-
   (survives `--no-std`), not an importable `std::env`: `args()`, `programInvocation()`/`programName()`/
   `programPath()`, `env()`, `envOr()`. See [SPEC.md](SPEC.md) "Command-line arguments + environment"
   (as-shipped) and the §1 arc note above.
-- **Console output / logging — no first-class surface yet (tracked, near-term candidate).** Kama can *build*
-  text (`std::fmt` `toString`/interpolation) but cannot *print* it: there is no `print`/`println`/`eprintln`
-  and no pre-opened **stdout/stderr** handle in the floor or `std::io`. Today output means FFI (`extern fn
-  puts`/`printf`) — `examples/httpd` does this. Only *fatal* traps (`panic`/`assert`/bounds) reach stderr,
-  via the runtime's raw `write(2, …)`. Shape when scheduled: a `std::io` **stdout/stderr `Writer`** (reuse the
-  shipped `Writer` contract + fd wrapper, like `std::fs::File`) plus `print`/`println`/`eprintln` conveniences
-  built over `std::fmt` (one allocation via `Formatter`). Pairs naturally with `std::process` (child stdio)
-  and with the now-shipped argv/env (a CLI reads args → prints output) — sequence it around §1 #3. NOT the
-  floor unless a `--no-std` freestanding `println` is wanted (stdout needs libc `write`/`fdopen`, so the
-  hosted `std::io` home is the right one; embedded keeps only the weak-hook trap path).
+- **Console output / logging — settled, scheduled as §1 near-term #3.** The gap (kama can build text via
+  `std::fmt` but can't print it; `assert` is underbuilt) now has a full design: floor `print`/`println`/
+  `eprint`/`eprintln` + assert/panic polish (`debugAssert`, hosted `setPanicHandler`, auto-stringified
+  condition + `msg:` + `file:line`) + a `std::log` `Logger`-contract logger with level+tag filtering and a
+  zero-cost compiler-recognized facade lowering (baked comptime min-level → DCE strip + runtime guard, **no
+  preprocessor**) + the general `kama.local.json` override + a "Floor reference" doc page. **Design of record:
+  [design/logging.md](design/logging.md).**
 - **Stdlib layering — 3 LOW-prio follow-ups ([design/stdlib-layering.md](design/stdlib-layering.md)).** The
   prelude-vs-`lib`-vs-primitive split is principled (contracts/syntax/intrinsics in the prelude; backends
   opt-in), so nothing is mis-placed. Recorded, none blocking: (a) split/MCU-promote `Atomic` so lock-free cells

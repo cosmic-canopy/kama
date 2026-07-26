@@ -1,7 +1,7 @@
 # `std::process` — subprocess execution (design of record / kickoff)
 
-**Status: KICKOFF — not yet built.** Scheduled as [ROADMAP.md](../ROADMAP.md) §1 near-term order #3 (after the
-argv/env prelude floor, #2). This is **pure library work over the shipped FFI + concurrency seams — no
+**Status: KICKOFF — not yet built.** Scheduled as [ROADMAP.md](../ROADMAP.md) §1 near-term order #4 (after the
+argv/env prelude floor #2 and diagnostics & logging #3 — a subprocess API wants console I/O + child stdio). This is **pure library work over the shipped FFI + concurrency seams — no
 compiler/language change.** Running other binaries is genuinely useful on Linux/servers/tooling; today it is
 only reachable by hand-declaring `extern fn system(...)` etc., so this wraps it in a safe, RAII, cross-platform
 module the way `std::fs`/`std::net` wrap libc.
