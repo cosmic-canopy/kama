@@ -107,6 +107,25 @@ static inline void kama_log_init_args(int argc, char** argv) {
 #endif
 }
 
+// The baked project default (from the manifest `log` section), seeded in main right AFTER kama_log_init_args
+// when the manifest declares one. `setenv(..., overwrite=0)` is deliberate: it only fills KAMA_LOG when it is
+// not already set, so precedence stays `--log` (overwrite=1) > a pre-existing KAMA_LOG env > this baked
+// default > the hardcoded Info floor. It writes the same process-global env every TU reads, so the multi-TU
+// static-copy hazard that a runtime default slot would have is sidestepped. Embedded has no env -> no-op.
+static inline void kama_log_set_default(const char* spec) {
+    if (!spec || !spec[0]) return;
+#if !defined(KAMA_TARGET_EMBEDDED)
+#if defined(_WIN32)
+    { extern char* getenv(const char*); extern int _putenv_s(const char*, const char*);
+      if (!getenv("KAMA_LOG")) (void)_putenv_s("KAMA_LOG", spec); }
+#else
+    { extern int setenv(const char*, const char*, int); (void)setenv("KAMA_LOG", spec, 0); }
+#endif
+#else
+    (void)spec;
+#endif
+}
+
 // Parse the config ONCE (lazy) from the process-global `KAMA_LOG` env (fed by `--log` via kama_log_init_args,
 // or set directly). Cache the stderr isatty for the default sink's color. Embedded has no env/tty -> defaults.
 static void kama_log_ensure_parsed(void) {

@@ -80,10 +80,34 @@ if grep -qF "[INFO]" "$tmp/s.err"; then
     echo "check-log: FAIL — the default console sink still fired after setLogSink" >&2; exit 1
 fi
 
+# --- 6. baked kama.json `log` default: compiled into the binary, env/flag still win (M5) ---
+# Build the same program inside a project dir whose kama.json bakes a default filter (global info, audio=debug).
+mkdir -p "$tmp/proj"
+cp "$tmp/log.kama" "$tmp/proj/log.kama"
+cat > "$tmp/proj/kama.json" <<'JSON'
+{ "name": "logtest", "version": "0.1.0", "log": { "level": "info", "tags": { "audio": "debug" } } }
+JSON
+"$KAMA" build "$tmp/proj/log.kama" -o "$tmp/proj/log" >/dev/null 2>"$tmp/proj.build.err" || {
+    echo "check-log: FAIL — baked-default build failed" >&2; sed 's/^/  /' "$tmp/proj.build.err" >&2; exit 1; }
+# 6a. bare run: the baked per-tag audio=debug shows an audio debug line; net stays at the baked global info.
+"$tmp/proj/log" >/dev/null 2>"$tmp/e6" || { echo "check-log: FAIL — baked-default run exited nonzero" >&2; exit 1; }
+grep -qF "audio-debug" "$tmp/e6" || { echo "check-log: FAIL — baked audio=debug did not enable the audio debug line" >&2; sed 's/^/  /' "$tmp/e6" >&2; exit 1; }
+if grep -qF "net-debug" "$tmp/e6"; then
+    echo "check-log: FAIL — net debug printed though the baked default only raised audio" >&2; sed 's/^/  /' "$tmp/e6" >&2; exit 1
+fi
+# 6b. KAMA_LOG overrides the baked default (overwrite=0 means a set env wins): warn suppresses the audio debug.
+KAMA_LOG=warn "$tmp/proj/log" >/dev/null 2>"$tmp/e6b" || { echo "check-log: FAIL — baked+env run exited nonzero" >&2; exit 1; }
+if grep -qF "[DEBUG]" "$tmp/e6b" || grep -qF "[INFO]" "$tmp/e6b"; then
+    echo "check-log: FAIL — KAMA_LOG=warn did not override the baked default" >&2; sed 's/^/  /' "$tmp/e6b" >&2; exit 1
+fi
+# 6c. --log overrides both: debug enables the net debug line the baked default withheld.
+"$tmp/proj/log" --log=debug >/dev/null 2>"$tmp/e6c" || { echo "check-log: FAIL — baked+flag run exited nonzero" >&2; exit 1; }
+grep -qF "net-debug" "$tmp/e6c" || { echo "check-log: FAIL — --log=debug did not override the baked default" >&2; sed 's/^/  /' "$tmp/e6c" >&2; exit 1; }
+
 # --- 5. embedded lowers freestanding ------------------------------------------
 "$KAMA" transpile --target embedded "$tmp/log.kama" -o "$tmp/emb.c" >/dev/null 2>"$tmp/emb.err" || {
     echo "check-log: FAIL — --target embedded transpile failed" >&2; sed 's/^/  /' "$tmp/emb.err" >&2; exit 1; }
 grep -q 'kama_log_dispatch' "$tmp/emb.c" || { echo "check-log: FAIL — embedded C does not reference kama_log_dispatch" >&2; exit 1; }
 if grep -q 'stdio\.h' "$tmp/emb.c"; then echo "check-log: FAIL — embedded C leaked <stdio.h>" >&2; exit 1; fi
 
-echo "check-log: PASS (level+tag filter, --log/KAMA_LOG config, swappable sink, freestanding lowering)"
+echo "check-log: PASS (level+tag filter, --log/KAMA_LOG config, baked kama.json default, swappable sink, freestanding lowering)"

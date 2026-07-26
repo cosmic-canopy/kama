@@ -10680,8 +10680,12 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         // std::log's `--log` runtime flag: bridge it into the process-global KAMA_LOG env here (main is the one
         // place argv is valid — it is a module-scoped static, not visible to the std::log TU). Only when the
         // program imports std::log (`extern "kama_log.h";`), so non-logging programs stay untouched.
-        if (externsHeader("kama_log.h"))
+        if (externsHeader("kama_log.h")) {
             *_out << "    kama_log_init_args(argc, argv);\n";
+            // The manifest `log` default: seed it into the env AFTER --log (overwrite=0, so flag/env win). M5.
+            if (!_logDefault.empty())
+                *_out << "    kama_log_set_default(\"" << cEscapeStringBody(_logDefault) << "\");\n";
+        }
         *_out << "    return (int)kama_main();\n"
              << "}\n"
              << "#endif\n\n";

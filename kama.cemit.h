@@ -399,6 +399,11 @@ public:
                        bool strict)
     { _activeFlags = active; _declaredFlags = declared; _strictFlags = strict; }
 
+    // The baked `KAMA_LOG` default (from the manifest `log` section). When non-empty and the program imports
+    // std::log, `main` seeds it into the process env (overwrite=0), so a shipped binary carries its project
+    // default log filter while `--log`/`KAMA_LOG` still override it (M5).
+    void setLogDefault(const std::string& spec) { _logDefault = spec; }
+
     // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
     // code under its own `namespace`/`export`, plus an implicit `using` so its names are always in
     // scope. Like the prelude, its generic templates emit nothing unless instantiated.
@@ -551,6 +556,7 @@ private:
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     bool                                      _strictFlags   = false;    // a manifest was loaded -> validate `@compileFor`/`--define` names
+    std::string                               _logDefault;               // baked `KAMA_LOG` project default (M5), seeded in main
 
     // Generic CONTRACTS (`type contract Iterator<T>`) — the exact parallel of generic TYPES above. The
     // TEMPLATE is kept OUT of _interfaces (so the eager vtable-emit loop never sees its unbound `T`);

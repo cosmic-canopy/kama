@@ -88,8 +88,10 @@ scope + acceptance so a fresh session can start immediately.
    level+tag filter and a swappable **sink fnptr** (`setLogSink`, modeled on `setPanicHandler` — a stored
    `Logger` *resource* can't be a module-static, so the design's contract became a runtime-held slot, no
    capability lost), `--log`/`KAMA_LOG` config (the flag bridged into the process-global env in `main`, so the
-   config crosses module-scoped statics); `kama.json` baked defaults deferred to the `kama.local.json`
-   milestone; (d) a compiler-recognized facade lowering for zero-cost (baked comptime min-level → DCE strip +
+   config crosses module-scoped statics); a **baked `kama.json` `log` default ✅** (a `{level,tags}` object →
+   canonical spec seeded into `KAMA_LOG` in `main` at `overwrite=0`, so `--log` > env > baked > `info` floor —
+   M5.1); the general `kama.local.json` deep-merge over it is the remaining M5 half; (d) a compiler-recognized
+   facade lowering for zero-cost (baked comptime min-level → DCE strip +
    runtime `enabled(level,tag)` guard with message-build inside — an AST pass, **no preprocessor**). Also the
    `kama.local.json` general local-override + the "Floor reference" doc page. **Design of record:
    [design/logging.md](design/logging.md).** *Acceptance:* stdout/stderr print (native+wasm; embedded stub);

@@ -875,7 +875,18 @@ KAMA_LOG=info ./app --log=off         # the flag wins (overrides the env) → si
 The config source is the **process-global env**: every translation unit / isolate reads `KAMA_LOG` into its own
 module-scoped static and gets a consistent answer (argv is a module-scoped static, so the `--log` flag is
 bridged into `KAMA_LOG` once in `main` — see `kama_log_init_args`; only programs that `import std::log` emit
-that call). The baked `kama.json` default layer arrives with `kama.local.json` (a later milestone).
+that call).
+
+**Baked project default (`kama.json`).** A shipped binary has no `kama.json` beside it, so a project's default
+filter is compiled in. The manifest gains a `log` section — a JSON object mirroring the same level vocabulary:
+
+```json
+{ "log": { "level": "warn", "tags": { "audio": "debug", "net": "trace" } } }
+```
+
+The compiler translates it to the canonical spec (`warn,audio=debug,net=trace`) and seeds it into `KAMA_LOG`
+in `main` *only if the env is unset* — so the full precedence is **`--log` > `KAMA_LOG` env > baked `kama.json`
+default > the built-in `info` floor**. Invalid level names are a manifest error at build time.
 
 **Swappable sink.** The default sink writes `[LEVEL] tag: msg` to **stderr** (kept off stdout so a CLI's real
 output stays clean), colored on a tty. Install your own — the filter runs upstream, so a sink only ever sees

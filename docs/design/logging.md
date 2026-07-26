@@ -237,8 +237,18 @@ from Part C above, both forced by the value/resource model and both capability-p
   `getenv` (process-global → every module-scoped static parses the same value). Because argv is itself a
   module-scoped static (per the concurrency model, not visible outside `main`'s TU), the **`--log` flag is
   bridged into `KAMA_LOG` once in `main`** (`kama_log_init_args`, emitted only when a program imports
-  std::log). `--log` overwrites the env (it is primary). The `kama.json` baked default is deferred to the
-  `kama.local.json` config-layering milestone.
+  std::log). `--log` overwrites the env (it is primary).
+
+**Baked `kama.json` default — as shipped (M5.1).** The manifest gains a `log` section, a JSON object
+`{ "level": <lvl>, "tags": { <tag>: <lvl> } }` (both optional; level names validated at build time). The
+`ManifestReader` translates it to the canonical `KAMA_LOG` spec string (the runtime C parser stays the single
+source of grammar truth) and threads it to the emitter (`setLogDefault`), which — when the program imports
+std::log — compiles a `kama_log_set_default("<spec>")` call into `main` right after `kama_log_init_args`. That
+helper does `setenv("KAMA_LOG", spec, /*overwrite=*/0)`, so it only fills the env when unset. Result:
+`--log` (overwrite=1) > a pre-existing `KAMA_LOG` env > baked default > the `info` floor — exactly the design
+precedence, and routed through the same process-global env so the multi-TU static-copy hazard is sidestepped
+(no runtime default slot). Embedded is a no-op (no env). *(The `kama.local.json` general local override that
+deep-merges over this — including per-tag log merge — is the M5.2/M5.3 half.)*
 
 Tested via `tools/check-log.sh` (registered in `run_tests.sh`, native-only — std::log writes to stderr, which
 the sanitizer harness captures, so it must not be a `tests/*.kama` fixture): level+tag filtering, `--log`
