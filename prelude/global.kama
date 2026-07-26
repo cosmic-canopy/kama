@@ -449,6 +449,23 @@ fnptr void PanicHandler();
 extern fn void kama_set_panic_handler(PanicHandler h);
 fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handler); }
 
+// ── Console output (diagnostics floor) ──────────────────────────────────────────────────────────────────
+// The floor print family: text to stdout (`print`/`println`, the program's data/results) or stderr
+// (`eprint`/`eprintln`, prompts/progress/diagnostics — `e` for "to stderr", the Rust convention). String-only
+// — formatting rides interpolation (`println("x = ${x}")`). Unbuffered line writes (v1). On `--target
+// embedded` there is no fd, so both streams route to the weak `kama_log_sink` (default no-op; a firmware
+// author overrides it to pipe out a UART/RTT). Survive `--no-std`. `cstr()` of an empty string may be NULL,
+// but the length is 0 then, so the write is a harmless no-op.
+// Each reads its own `s` by borrow (`cstr()`/`length()`) — it never re-passes the string by value, so there
+// is no ownership transfer. A literal / interpolation temp binds to the by-value param directly; a NAMED
+// string is passed with `copy`/`give` like anywhere else in the value model.
+extern fn void kama_print_write(int32 fd, Ptr<int8> bytes, usize len);
+extern fn void kama_print_nl(int32 fd);
+fn void print(string s)    { unsafe { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); } }
+fn void eprint(string s)   { unsafe { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); } }
+fn void println(string s)  { unsafe { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 1); } }
+fn void eprintln(string s) { unsafe { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 2); } }
+
 // The default allocator (satisfies `Allocator`): a zero-size handle straight onto libc malloc/free. The
 // M8 default `A: Allocator = GlobalAllocator` fills it in for `Owned<T>` / `DynamicArray<T>` / `Map<K,V>`,
 // so the bare types are unchanged and pay nothing at runtime (the field carries no state — an empty

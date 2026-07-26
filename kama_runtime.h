@@ -906,6 +906,31 @@ static inline void kama_assert_fail(const char* cond, kama_string msg, const cha
     kama_fail_emit(buf, p);
 }
 
+// --- Floor console output (print / println / eprint / eprintln) --------------
+// Raw unbuffered byte write to a standard fd (1 = stdout, 2 = stderr), no <stdio.h> — the same discipline as
+// the panic path. On --target embedded there is no fd, so BOTH streams route to an OVERRIDABLE weak
+// `kama_log_sink` that defaults to a no-op (zero cost on-chip; a firmware author overrides it once to pipe
+// out a UART/RTT). Mirrors the weak kama_panic_handler. Unbuffered line writes in v1.
+#if defined(KAMA_TARGET_EMBEDDED)
+__attribute__((weak)) void kama_log_sink(const uint8_t* bytes, size_t n) { (void)bytes; (void)n; }
+static inline void kama_print_write(int fd, const void* bytes, size_t n) {
+    (void)fd;
+    kama_log_sink((const uint8_t*)bytes, n);
+}
+#else
+static inline void kama_print_write(int fd, const void* bytes, size_t n) {
+#if defined(_WIN32)
+    extern int _write(int, const void*, unsigned int);
+    (void)_write(fd, bytes, (unsigned int)n);
+#else
+    extern long write(int, const void*, size_t);
+    (void)write(fd, bytes, n);
+#endif
+}
+#endif
+// Write a single newline to `fd` — the `println`/`eprintln` tail (avoids a second kama_string round-trip).
+static inline void kama_print_nl(int fd) { kama_print_write(fd, "\n", 1); }
+
 // Tiny tracing hook for tests/debugging: a folding accumulator that records a
 // sequence of integer events (e.g. constructor/destructor order). Declare in
 // kama with `extern void kama_trace(int code);` / `extern int kama_trace_get();`.

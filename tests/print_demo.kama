@@ -1,0 +1,10 @@
+// The floor print family (stdout side): print + println + interpolation. Runs in every harness mode, so it
+// stays stdout-only — the harness captures stderr into the sanitizer-report file, so a fixture must never
+// write there. The stderr side (eprint/eprintln) + stream separation is covered by tools/check-print.sh.
+fn int32 main() {
+    int32 x = 42;
+    print(s: "Hello, ");
+    println(s: "world");
+    print(s: "x = ${x}\n");        // interpolation rides the string
+    return 0;
+}
