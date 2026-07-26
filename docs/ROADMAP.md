@@ -456,8 +456,22 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
 ## 10. Tooling / distribution (deferred)
 
 - **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
-  deferred.
-- **FreeBSD CI** — a non-blocking `vmactions/freebsd-vm` job (Windows is proven; FreeBSD is next).
+  deferred. (What ships today in `editor/vscode/`: TextMate **syntax highlighting** + language-configuration
+  + **zero-config source-level debugging** — F5 builds and launches under CodeLLDB with breakpoints mapped
+  back to the `.kama` via the emitter's `#line` directives. Missing pieces are the two below.)
+- **Language server (LSP) — the major editor gap; expected to be a big post-launch DX push.** No completion,
+  hover, go-to-definition, find-references, rename, or live (as-you-type) diagnostics today — the extension is
+  highlighting + debugging only, with no language server. An LSP is the piece that turns kama into a
+  first-class IDE experience and is the **prerequisite for the `global::` floor-completion idea**
+  ([design/logging.md](design/logging.md) Part E). Sizeable: needs a reusable semantic front end (the
+  Flex/Bison/AST + name resolution the compiler already has, exposed as a query API rather than a one-shot
+  emit). Not 1.0-blocking, but load-bearing for adoption once launched.
+- **kama-aware debugger value formatting — polish on the working debugger.** Breakpoints/stepping are already
+  kama-source-level, but inspected values render in their emitted-C form (a `string` shows as
+  `kama_string {data,len,cap}`, `Optional<T>` as its tagged union, collections as C structs). Add LLDB type
+  summaries / synthetic providers (CodeLLDB supports Python formatters) so `string`/`Optional`/`Result`/the
+  collections/smart-pointers render as kama values. Small next to the LSP, high polish-value, builds directly
+  on the shipped debug flow.
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.
 - **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries distribute
   without vendoring — the point at which the **orphan rule** (§3, retroactive conformance) becomes load-bearing.
