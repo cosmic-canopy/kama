@@ -836,6 +836,64 @@ string term = envOr(name: "TERM", dflt: "dumb");           // value, or the fall
   `None`) — the surface still compiles, with **zero libc linkage** (`getenv` is a block-scope extern, elided).
 - **`kama run -- <args>`** now delivers arguments end-to-end (the passthrough was inert before this landed).
 
+### Logging (`std::log`) ✅
+
+Leveled, tagged diagnostics — the configurable logger, **a library over a small runtime seam, no new language
+surface**. The floor gives `print`/`eprint` (raw console output) and `assert`/`panic` (fatal checks);
+`std::log` is the tier above: filterable, taggable, redirectable output that **keeps running** (a `warn` is a
+log level, never an abort). Import it — the module is the discovery unit; it is not scattered as floor globals.
+
+```kama
+import std::log::{logInfo, logWarn, logError, logDebug, logTrace, logEnabled, setLogSink, LogLevel};
+
+fn int main() {
+    logInfo(tag: "boot", msg: "starting ${version()}");   // tag may be "" (untagged)
+    logWarn(tag: "net", msg: "returning");
+    if (logEnabled(level: LogLevel::Debug, tag: "audio")) {   // manual guard — skip an expensive build
+        logDebug(tag: "audio", msg: "mix ${dumpState()}");
+    }
+    return 0;
+}
+```
+
+**Two axes, either suppresses a call.** `enum LogLevel { Error, Warn, Info, Debug, Trace }` (ordered — Error
+most severe, Trace most verbose) is the **level**; a free-text string is the **tag**. A call at level `L`
+prints when `L <= threshold(tag)`; the default threshold is **Info** (so Error/Warn/Info print, Debug/Trace are
+suppressed until raised). Both are reconfigurable **at runtime on a shipped binary** — the QA/live-debug win
+most compile-time loggers discard.
+
+**Configuration (runtime).** One grammar, `warn,audio=debug,net=trace` — a leading bareword is the global
+threshold, each `tag=level` overrides one tag (levels `error`/`warn`/`info`/`debug`/`trace`, plus `off`). Two
+sources, `--log` **primary**, `KAMA_LOG` env **secondary**:
+
+```sh
+KAMA_LOG=debug ./app                 # env: global debug
+./app --log warn,audio=debug         # flag: global warn, but the "audio" tag at debug
+KAMA_LOG=info ./app --log=off         # the flag wins (overrides the env) → silence
+```
+
+The config source is the **process-global env**: every translation unit / isolate reads `KAMA_LOG` into its own
+module-scoped static and gets a consistent answer (argv is a module-scoped static, so the `--log` flag is
+bridged into `KAMA_LOG` once in `main` — see `kama_log_init_args`; only programs that `import std::log` emit
+that call). The baked `kama.json` default layer arrives with `kama.local.json` (a later milestone).
+
+**Swappable sink.** The default sink writes `[LEVEL] tag: msg` to **stderr** (kept off stdout so a CLI's real
+output stays clean), colored on a tty. Install your own — the filter runs upstream, so a sink only ever sees
+*enabled* records:
+
+```kama
+fn void mySink(int32 level, string tag, string msg) { /* route to a file / engine console / telemetry */ }
+setLogSink(s: mySink);   // set once at startup, before spawning isolates — like setPanicHandler
+```
+
+Modeled on `setPanicHandler` (a runtime-held slot), **not** a stored `Logger` object: a kama resource can't be
+a module-static and a `Ptr` to an interface isn't dispatchable, so the facade calls the extern
+`kama_log_dispatch`, which invokes the C-held slot (or the built-in console default). The message is built
+eagerly at the call site in v1; `logEnabled` is the manual hot-path guard, and a later **v2** lowers the guard
+automatically (zero-cost when filtered). On `--target embedded` output routes through the same weak
+`kama_log_sink` as `print` (freestanding, no libc); config falls back to the Info default (no argv/env on bare
+metal).
+
 ### `unsafe { }` — raw pointer memory access
 
 The **only** place kama can touch arbitrary memory through a raw pointer. Raw `Ptr<T>` index/store is a

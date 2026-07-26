@@ -25,7 +25,7 @@ For *bugs and broken invariants* — "this can't continue." Recoverable errors s
 | `debugAssert(cond: bool, msg: string)` | Identical to `assert`, but **stripped under `--release`** (`NDEBUG` / `debug_assert!` — for expensive dev-only checks). |
 | `setPanicHandler(handler: PanicHandler)` | Install a custom fatal handler (`fnptr void PanicHandler()`) for cleanup/exhibition — a shipped game/GUI shows a dialog / flushes a save instead of a bare stderr abort. **Contract:** set **once** at startup before spawning isolates; **re-entrancy-guarded** (a panic while handling one hard-aborts); the runtime **always terminates** after it (not a resume point). Covers every hosted fatal path (panic/assert/bounds). On embedded, provide a strong `kama_panic_handler` symbol instead (this is a no-op there). |
 
-*(`warn` is **not** here — a warning must never abort. That is a log level; see [`std::log`](design/logging.md).)*
+*(`warn` is **not** here — a warning must never abort. That is a log level; see [`std::log`](SPEC.md#logging-stdlog-).)*
 
 ## Console I/O — the print family
 

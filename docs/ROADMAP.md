@@ -83,10 +83,14 @@ scope + acceptance so a fresh session can start immediately.
    `assert` is underbuilt. Phased: (a) **assert/panic polish** — auto-stringified condition + optional `msg:`
    + `file:line` + `--release`-stripped `debugAssert` + a hosted `setPanicHandler` (graceful crash-report vs
    `abort()`, with a re-entrancy/always-terminate/set-once contract); (b) **floor `print`/`println`/`eprint`/
-   `eprintln`** (bare, `--no-std`-surviving, embedded → weak `kama_log_sink`); (c) **`std::log`** — a `Logger`
-   contract + swappable backend, level+tag filtering, `--log`/`KAMA_LOG`/`kama.json` config; (d) a
-   compiler-recognized facade lowering for zero-cost (baked comptime min-level → DCE strip + runtime
-   `enabled(level,tag)` guard with message-build inside — an AST pass, **no preprocessor**). Also the
+   `eprintln`** (bare, `--no-std`-surviving, embedded → weak `kama_log_sink`); (c) **`std::log` v1 ✅** —
+   `enum LogLevel` + facade (`logError`/`Warn`/`Info`/`Debug`/`Trace`) + `logEnabled` guard over a runtime
+   level+tag filter and a swappable **sink fnptr** (`setLogSink`, modeled on `setPanicHandler` — a stored
+   `Logger` *resource* can't be a module-static, so the design's contract became a runtime-held slot, no
+   capability lost), `--log`/`KAMA_LOG` config (the flag bridged into the process-global env in `main`, so the
+   config crosses module-scoped statics); `kama.json` baked defaults deferred to the `kama.local.json`
+   milestone; (d) a compiler-recognized facade lowering for zero-cost (baked comptime min-level → DCE strip +
+   runtime `enabled(level,tag)` guard with message-build inside — an AST pass, **no preprocessor**). Also the
    `kama.local.json` general local-override + the "Floor reference" doc page. **Design of record:
    [design/logging.md](design/logging.md).** *Acceptance:* stdout/stderr print (native+wasm; embedded stub);
    `assert`/`debugAssert` with message + location; `std::log` with runtime-reconfigurable level+tag on a

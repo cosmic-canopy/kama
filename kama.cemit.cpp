@@ -10676,8 +10676,13 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
              << "}\n"
              << "#else\n"
              << "int main(int argc, char** argv) {\n"
-             << "    kama_args_init(argc, argv);\n"
-             << "    return (int)kama_main();\n"
+             << "    kama_args_init(argc, argv);\n";
+        // std::log's `--log` runtime flag: bridge it into the process-global KAMA_LOG env here (main is the one
+        // place argv is valid — it is a module-scoped static, not visible to the std::log TU). Only when the
+        // program imports std::log (`extern "kama_log.h";`), so non-logging programs stay untouched.
+        if (externsHeader("kama_log.h"))
+            *_out << "    kama_log_init_args(argc, argv);\n";
+        *_out << "    return (int)kama_main();\n"
              << "}\n"
              << "#endif\n\n";
     }

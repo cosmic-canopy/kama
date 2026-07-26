@@ -188,6 +188,12 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-pri
     if sh tools/check-print.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# std::log v1: leveled/tagged diagnostics write to stderr (captured by the SAN harness), so the filter,
+# --log/KAMA_LOG config, swappable sink, and freestanding lowering are checked here. Plain native pass only.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-log.sh ]; then
+    if sh tools/check-log.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # M2.1 package store: `kama install` fetches git/url deps into the content-addressed store, verifies
 # sha256 integrity, and writes a reproducible lock. Network-free (file:// git repo + local tarball). The
 # `.d/` harness only runs `kama build`, so install/store/integrity ride here — plain native pass only.

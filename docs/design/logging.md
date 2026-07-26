@@ -218,6 +218,32 @@ Two supports for the flat floor:
   `kama.json` baked defaults + runtime `--log` (primary) / `KAMA_LOG` env (secondary).
 - **E1** dedicated linked "Floor reference" page. **E2** `global::` documented-only until an LSP exists.
 
+## `std::log` v1 — as shipped
+
+Built as a pure library (`lib/std/log/log.kama`) over one runtime seam (`kama_log.h`), with two deviations
+from Part C above, both forced by the value/resource model and both capability-preserving:
+
+- **Sink fnptr, not a `Logger` contract instance.** A stored `Logger` would be a resource module-static
+  (rejected — no static-teardown seam) or a `Ptr` to an interface (not dispatchable). So the pluggable backend
+  is a **swappable sink fnptr** held in a runtime slot (`fnptr void LogSink(int32 level, string tag, string
+  msg)` + `setLogSink`), exactly the `setPanicHandler` shape: the facade calls the extern `kama_log_dispatch`,
+  which invokes the slot or a built-in C console default. The runtime **filter** (`kama_log_enabled`) is a
+  separate concern — filter decides, sink outputs (the Rust `log`/`tracing` split). *(The sink's `level` is a
+  plain `int32` ordinal, not `LogLevel`: a fnptr typedef referencing an enum forward-references the
+  later-emitted enum in the shared header — a latent emitter-ordering gap, sidestepped rather than fixed in a
+  v1 library milestone.)*
+- **Config source is the process-global env.** Strings cross the FFI as borrowed `Ptr<int8>`+`usize` spans
+  (the `print` discipline — never by value, so no ownership transfer). The filter reads `KAMA_LOG` via
+  `getenv` (process-global → every module-scoped static parses the same value). Because argv is itself a
+  module-scoped static (per the concurrency model, not visible outside `main`'s TU), the **`--log` flag is
+  bridged into `KAMA_LOG` once in `main`** (`kama_log_init_args`, emitted only when a program imports
+  std::log). `--log` overwrites the env (it is primary). The `kama.json` baked default is deferred to the
+  `kama.local.json` config-layering milestone.
+
+Tested via `tools/check-log.sh` (registered in `run_tests.sh`, native-only — std::log writes to stderr, which
+the sanitizer harness captures, so it must not be a `tests/*.kama` fixture): level+tag filtering, `--log`
+(both forms) + `KAMA_LOG` + precedence, a custom sink, and the freestanding `--target embedded` lowering.
+
 ## Residual implementation details (settle in the build session)
 - Exact `LogRecord` fields if `emit` grows beyond `(level, tag, msg)` (timestamp / source loc / isolate id).
 - `--log` / `KAMA_LOG` grammar edge cases (multiple tags, wildcard `*`, level names vs numbers).

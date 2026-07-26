@@ -1,0 +1,68 @@
+namespace std::log;
+
+export { LogLevel, LogSink, setLogSink, logEnabled,
+         logError, logWarn, logInfo, logDebug, logTrace };
+
+// Leveled, tagged diagnostics — the configurable logger (`import std::log`). Two axes suppress a call: a
+// LEVEL threshold and a per-TAG override, both reconfigurable at runtime on a shipped binary via `--log`
+// (primary) or the `KAMA_LOG` env var (secondary), grammar `warn,audio=debug,net=trace`. Default level Info.
+//
+// This is v1 — a pure library over a small runtime seam (kama_log.h): a runtime FILTER decides, a swappable
+// SINK outputs. The message is built eagerly at the call site; use `logEnabled` as a manual guard to skip the
+// cost on a hot path (v2 will lower that guard automatically). The default sink writes `[LEVEL] tag: msg` to
+// stderr (colored on a tty). Install your own with `setLogSink` (set once at startup, before spawning
+// isolates). Fatal invariants are a different concern — use `assert`/`panic` (the floor), never a log call.
+// Strings cross the FFI seam as borrowed byte spans (Ptr<int8> + usize), never by value — the floor `print`
+// discipline — so a log call never transfers ownership of the caller's message.
+extern "kama_log.h";
+extern fn bool kama_log_enabled(int32 level, Ptr<int8> tag, usize tagLen);
+extern fn void kama_log_dispatch(int32 level, Ptr<int8> tag, usize tagLen, Ptr<int8> msg, usize msgLen);
+extern fn void kama_set_log_sink(LogSink s);
+
+// Ordered by severity: Error is the most severe, Trace the most verbose. The ordinals ARE the filter scale
+// (a call at level L prints when L <= the configured threshold), so their order is load-bearing.
+enum LogLevel { Error, Warn, Info, Debug, Trace }
+
+// A custom sink: `fn void mySink(int32 level, string tag, string msg) { … }` then `setLogSink(s: mySink)`.
+// `level` is the LogLevel ordinal (0 = Error .. 4 = Trace — see `levelBits`); a plain int32, not the enum, so
+// the fnptr type has no forward-reference into the (later-emitted) enum. The filter runs upstream (in the
+// facade), so a sink only ever sees enabled records.
+fnptr void LogSink(int32 level, string tag, string msg);
+
+fn int32 levelBits(LogLevel lv) {
+    return match (lv) {
+        case Error: 0i32;
+        case Warn:  1i32;
+        case Info:  2i32;
+        case Debug: 3i32;
+        case Trace: 4i32;
+    };
+}
+
+fn void setLogSink(LogSink s) { kama_set_log_sink(s: s); }
+
+// Manual hot-path guard: `if (logEnabled(level: LogLevel::Debug, tag: "audio")) { logDebug(...) }` skips
+// building an expensive message when the record is filtered out. Reads `tag` by borrow (like `print`), never
+// forwards it by value.
+fn bool logEnabled(LogLevel level, string tag) {
+    unsafe { return kama_log_enabled(level: levelBits(lv: level), tag: tag.cstr(), tagLen: cast<usize>(tag.length())); }
+}
+
+// The facade. `tag` may be "" (untagged). The message is already built by the caller (eager interpolation);
+// the guard only saves the dispatch + output when filtered. The enabled-check is inlined against the extern
+// (rather than calling `logEnabled`) so the owned `tag`/`msg` params are only ever read by borrow — a
+// kama->kama by-value forward would transfer ownership. v2 lowering will move the message build inside.
+fn void logAt(int32 level, ref string tag, ref string msg) {
+    unsafe {
+        if (kama_log_enabled(level: level, tag: tag.cstr(), tagLen: cast<usize>(tag.length()))) {
+            kama_log_dispatch(level: level, tag: tag.cstr(), tagLen: cast<usize>(tag.length()),
+                              msg: msg.cstr(), msgLen: cast<usize>(msg.length()));
+        }
+    }
+}
+
+fn void logError(string tag, string msg) { logAt(level: 0i32, tag: ref tag, msg: ref msg); }
+fn void logWarn (string tag, string msg) { logAt(level: 1i32, tag: ref tag, msg: ref msg); }
+fn void logInfo (string tag, string msg) { logAt(level: 2i32, tag: ref tag, msg: ref msg); }
+fn void logDebug(string tag, string msg) { logAt(level: 3i32, tag: ref tag, msg: ref msg); }
+fn void logTrace(string tag, string msg) { logAt(level: 4i32, tag: ref tag, msg: ref msg); }
