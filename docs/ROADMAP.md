@@ -109,10 +109,24 @@ scope + acceptance so a fresh session can start immediately.
 
 **With (1)–(4) + the docs reconcile, the language is production-ready — tag 1.0.**
 
-**Post-1.0 — the flagship next campaign: the scripting / dual-mode system (§7).** The polymorphic-emitter →
-direct-wasm → bytecode-VM arc. First concrete step: refactor the C emitter behind an abstract backend
-interface (C as the first impl), the shared lowering in the base — low risk, and it proves the seam before any
-new backend. Design already laid out in §7.
+**Post-1.0 — the decided big-arc sequence (with the user, 2026-07-26):**
+1. **LSP first — the next-highest priority (§10).** Without it kama "won't feel like a professional language"
+   and developers feel lost. It also does double duty: it forces the front end into a **reusable query-API
+   with real source spans** (the `%locations`/span work deferred until now), groundwork every later tool reuses.
+2. **Scripting / multimodal (§7) — the flagship 2.0.** The polymorphic-emitter → direct-wasm → bytecode-VM arc,
+   driven by wanting a fast iteration/runtime tier for game engines + web. First concrete step: refactor the C
+   emitter behind an abstract backend interface (C as the first impl), the shared lowering in the base.
+3. **Self-hosting — the final-version capstone, LOWEST priority.** A maturity/dogfooding milestone, **not** an
+   enabler: it rides on #1 (front-end-as-library) + #2 (runtime-into-kama), which is why §7 notes the
+   runtime port makes multi-backend and self-hosting *the same project*. Do it last, when the language is stable.
+
+**⚠️ Non-negotiable performance invariant (across all of the above).** kama is at **C parity today**, and the
+**native/release tier (`kama → C → clang/emcc`) stays exactly as fast + lean — untouched.** Multimodal is
+**strictly additive**: the same kama syntax *also* renders to direct-WASM and (later) a scripting VM as **separate
+iteration tiers**, never a replacement for the C backend. Direct-WASM is "another hot-reload/scripting option" —
+near-native and toolchain-free, but **not** as fast as native kama today (LLVM's optimizer + SIMD autovectorization
+keep `C→emcc -O3` ahead on heavy numeric loops), so the **release tier remains the max-performance path for both
+native and web**. Don't conflate "can emit WASM directly" with "the fast web path."
 
 ## 2. Deferred language bits (tracked)
 
@@ -357,6 +371,10 @@ engine track (§8) and [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md).
 
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)
 
+**Sequenced AFTER the LSP** (§1 post-1.0 order; user, 2026-07-26). **Strictly additive — it never touches the
+native/release C tier, which stays at C parity.** Direct-WASM is "another hot-reload/scripting option" (near-native,
+toolchain-free) — *not* as fast as native kama today, so the C→emcc release path stays the max-perf web route.
+
 **One language, two modes** — the *same static kama* (identical syntax, semantics, ownership rules; dynamic only
 in *execution*, never in typing) usable both compiled and as a scripting language with a full REPL. The target is
 a REPL that **replaces the Python/Ruby/Lua REPL** for fast iteration and compile-→-run-on-demand, at or near
@@ -477,13 +495,16 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   deferred. (What ships today in `editor/vscode/`: TextMate **syntax highlighting** + language-configuration
   + **zero-config source-level debugging** — F5 builds and launches under CodeLLDB with breakpoints mapped
   back to the `.kama` via the emitter's `#line` directives. Missing pieces are the two below.)
-- **Language server (LSP) — the major editor gap; expected to be a big post-launch DX push.** No completion,
-  hover, go-to-definition, find-references, rename, or live (as-you-type) diagnostics today — the extension is
-  highlighting + debugging only, with no language server. An LSP is the piece that turns kama into a
-  first-class IDE experience and is the **prerequisite for the `global::` floor-completion idea**
-  ([design/logging.md](design/logging.md) Part E). Sizeable: needs a reusable semantic front end (the
-  Flex/Bison/AST + name resolution the compiler already has, exposed as a query API rather than a one-shot
-  emit). Not 1.0-blocking, but load-bearing for adoption once launched.
+- **Language server (LSP) — the major editor gap; the CONFIRMED next-highest post-1.0 priority** (user,
+  2026-07-26 — see the §1 post-1.0 sequence). No completion, hover, go-to-definition, find-references, rename, or
+  live (as-you-type) diagnostics today — the extension is highlighting + debugging only, with no language server.
+  An LSP is the piece that turns kama into a first-class IDE experience and is the **prerequisite for the
+  `global::` floor-completion idea** ([design/logging.md](design/logging.md) Part E). Sizeable: needs a reusable
+  semantic front end (the Flex/Bison/AST + name resolution the compiler already has, exposed as a **query API**
+  rather than a one-shot emit) — and this is the natural moment to add real **source spans** (`%locations`, so
+  far deferred *to* the LSP; a hand-written recursive-descent parser replacing Bison would also buy error-recovery
+  + incremental reparse). That front-end-as-library refactor is also groundwork the scripting/self-hosting tracks
+  reuse. Not 1.0-blocking, but load-bearing for adoption once launched.
 - **kama-aware debugger value formatting — polish on the working debugger.** Breakpoints/stepping are already
   kama-source-level, but inspected values render in their emitted-C form (a `string` shows as
   `kama_string {data,len,cap}`, `Optional<T>` as its tagged union, collections as C structs). Add LLDB type
