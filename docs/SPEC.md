@@ -849,7 +849,9 @@ import std::log::{logInfo, logWarn, logError, logDebug, logTrace, logEnabled, se
 fn int main() {
     logInfo(tag: "boot", msg: "starting ${version()}");   // tag may be "" (untagged)
     logWarn(tag: "net", msg: "returning");
-    if (logEnabled(level: LogLevel::Debug, tag: "audio")) {   // manual guard — skip an expensive build
+    logDebug(tag: "audio", msg: "mix ${dumpState()}");    // dumpState() runs ONLY if the record passes (v2)
+    if (logEnabled(level: LogLevel::Debug, tag: "audio")) {   // logEnabled remains — for guarding a whole block
+        prepareDump();
         logDebug(tag: "audio", msg: "mix ${dumpState()}");
     }
     return 0;
@@ -899,11 +901,25 @@ setLogSink(s: mySink);   // set once at startup, before spawning isolates — li
 
 Modeled on `setPanicHandler` (a runtime-held slot), **not** a stored `Logger` object: a kama resource can't be
 a module-static and a `Ptr` to an interface isn't dispatchable, so the facade calls the extern
-`kama_log_dispatch`, which invokes the C-held slot (or the built-in console default). The message is built
-eagerly at the call site in v1; `logEnabled` is the manual hot-path guard, and a later **v2** lowers the guard
-automatically (zero-cost when filtered). On `--target embedded` output routes through the same weak
-`kama_log_sink` as `print` (freestanding, no libc); config falls back to the Info default (no argv/env on bare
-metal).
+`kama_log_dispatch`, which invokes the C-held slot (or the built-in console default). On `--target embedded`
+output routes through the same weak `kama_log_sink` as `print` (freestanding, no libc); config falls back to
+the Info default (no argv/env on bare metal).
+
+**Zero-cost when filtered (v2 lowering).** The compiler **recognizes** the five facade calls and lowers each to
+a guard with the **message built inside** it — so a filtered-out record never assembles its (possibly
+expensive) message:
+
+```kama
+logDebug(tag: "audio", msg: "mix ${dumpState()}");   // dumpState() runs ONLY if the record passes the filter
+```
+
+Two axes reach zero cost. **Level, compile-time:** under **`--release`** a `Debug`/`Trace` call is stripped
+*physically* (like `debugAssert` — gone at any `-O`; `Error`/`Warn`/`Info` stay). **Level(above the floor) + tag,
+runtime:** an inlined `kama_log_enabled(level, tag)` guard (the same filter, reading the process-global config)
+wraps the message build. So `logEnabled` is no longer a manual necessity — it stays available, but the guard is
+now automatic at every recognized call site. To make a whole subsystem *physically absent* regardless of runtime
+config, gate its declarations with `@compileFor(FLAG)`. This is an **AST lowering, not a preprocessor** — typed,
+hygienic, one grammar (the `"${x}"`/`assert`/`print` shape), exactly like Rust `log`/`tracing`.
 
 ### `unsafe { }` — raw pointer memory access
 

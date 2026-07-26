@@ -133,10 +133,61 @@ if grep -qF "db-info" "$tmp/e7"; then
 fi
 rm -f "$tmp/proj/kama.local.json"
 
+# --- 8. std::log v2 (M7): recognized-facade lowering — message built only when the record passes ----------
+# 8a/8b: the message is a function call with an OBSERVABLE side effect (prints a marker to stdout). The v2
+# lowering builds the message INSIDE the runtime guard, so a filtered-out call never runs it.
+cat > "$tmp/v2.kama" <<'KAMA'
+import std::log::{logInfo, logDebug};
+fn string expensive() { println(s: "BUILT"); return "payload"; }
+fn int32 main() {
+    logInfo(tag: "x", msg: "info-line");
+    logDebug(tag: "net", msg: expensive());
+    return 0;
+}
+KAMA
+"$KAMA" build "$tmp/v2.kama" -o "$tmp/v2" >/dev/null 2>"$tmp/v2.build.err" || {
+    echo "check-log: FAIL — v2 build failed" >&2; sed 's/^/  /' "$tmp/v2.build.err" >&2; exit 1; }
+# 8a. default Info: the debug is filtered → expensive() must NOT run (no BUILT on stdout), no debug line.
+"$tmp/v2" >"$tmp/v8.out" 2>"$tmp/v8.err" || { echo "check-log: FAIL — v2 default run exited nonzero" >&2; exit 1; }
+if grep -qF "BUILT" "$tmp/v8.out"; then
+    echo "check-log: FAIL — v2 built the message though the debug record was filtered out (not zero-cost)" >&2; exit 1
+fi
+grep -qF "[INFO] x: info-line" "$tmp/v8.err" || { echo "check-log: FAIL — v2 dropped a passing info line" >&2; sed 's/^/  /' "$tmp/v8.err" >&2; exit 1; }
+if grep -qF "[DEBUG]" "$tmp/v8.err"; then echo "check-log: FAIL — v2 emitted a filtered debug line" >&2; exit 1; fi
+# 8b. --log=debug: the guard passes → expensive() runs and the record is logged.
+"$tmp/v2" --log=debug >"$tmp/v8b.out" 2>"$tmp/v8b.err" || { echo "check-log: FAIL — v2 --log=debug run exited nonzero" >&2; exit 1; }
+grep -qF "BUILT" "$tmp/v8b.out" || { echo "check-log: FAIL — v2 did not build the message when the debug record passed" >&2; exit 1; }
+grep -qF "[DEBUG] net: payload" "$tmp/v8b.err" || { echo "check-log: FAIL — v2 did not log the passing debug record" >&2; sed 's/^/  /' "$tmp/v8b.err" >&2; exit 1; }
+
+# 8c: --release physically strips Debug/Trace call sites (keep Error/Warn/Info). Distinctive message literals
+# appear ONLY in each level's interpolation, so a transpile-grep proves presence/absence unambiguously.
+cat > "$tmp/strip.kama" <<'KAMA'
+import std::log::{logInfo, logDebug, logTrace};
+fn int32 main() {
+    int32 n = 1;
+    logInfo(tag: "x", msg: "KEEPME ${n}");
+    logDebug(tag: "y", msg: "DROPDEBUG ${n}");
+    logTrace(tag: "z", msg: "DROPTRACE ${n}");
+    return 0;
+}
+KAMA
+"$KAMA" transpile --release "$tmp/strip.kama" -o "$tmp/strip.rel.c" >/dev/null 2>"$tmp/strip.err" || {
+    echo "check-log: FAIL — --release transpile failed" >&2; sed 's/^/  /' "$tmp/strip.err" >&2; exit 1; }
+grep -qF "KEEPME" "$tmp/strip.rel.c" || { echo "check-log: FAIL — --release stripped an info call (only Debug/Trace should go)" >&2; exit 1; }
+if grep -qF "DROPDEBUG" "$tmp/strip.rel.c" || grep -qF "DROPTRACE" "$tmp/strip.rel.c"; then
+    echo "check-log: FAIL — --release did not strip a Debug/Trace call site" >&2; exit 1
+fi
+# Without --release all three survive (runtime-configurable).
+"$KAMA" transpile "$tmp/strip.kama" -o "$tmp/strip.dbg.c" >/dev/null 2>"$tmp/strip.dbg.err" || {
+    echo "check-log: FAIL — debug transpile failed" >&2; sed 's/^/  /' "$tmp/strip.dbg.err" >&2; exit 1; }
+for want in "KEEPME" "DROPDEBUG" "DROPTRACE"; do
+    grep -qF "$want" "$tmp/strip.dbg.c" || { echo "check-log: FAIL — a non-release build dropped $want (should be runtime-gated, not stripped)" >&2; exit 1; }
+done
+
 # --- 5. embedded lowers freestanding ------------------------------------------
 "$KAMA" transpile --target embedded "$tmp/log.kama" -o "$tmp/emb.c" >/dev/null 2>"$tmp/emb.err" || {
     echo "check-log: FAIL — --target embedded transpile failed" >&2; sed 's/^/  /' "$tmp/emb.err" >&2; exit 1; }
 grep -q 'kama_log_dispatch' "$tmp/emb.c" || { echo "check-log: FAIL — embedded C does not reference kama_log_dispatch" >&2; exit 1; }
 if grep -q 'stdio\.h' "$tmp/emb.c"; then echo "check-log: FAIL — embedded C leaked <stdio.h>" >&2; exit 1; fi
 
-echo "check-log: PASS (level+tag filter, --log/KAMA_LOG config, baked kama.json default, kama.local.json deep-merge, swappable sink, freestanding lowering)"
+echo "check-log: PASS (level+tag filter, --log/KAMA_LOG config, baked kama.json default, kama.local.json deep-merge, swappable sink, v2 msg-inside-guard + --release strip, freestanding lowering)"

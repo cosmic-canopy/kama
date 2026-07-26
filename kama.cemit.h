@@ -387,7 +387,7 @@ public:
 
     // `--release`: strips `debugAssert(...)` (dev-only checks) at emit time, mirroring C's `NDEBUG` /
     // Rust's `debug_assert!`. `assert(...)` stays always-on. Set from the driver before emission.
-    void setRelease(bool on) { _release = on; }
+    void setRelease(bool on) { _release = on; _logCompileMin = on ? 3 /*Debug*/ : 99 /*no strip*/; }
 
     // `@compileFor(FLAG)` conditional compilation: the active build-flag set (built-ins from
     // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), and whether
@@ -557,6 +557,12 @@ private:
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     bool                                      _strictFlags   = false;    // a manifest was loaded -> validate `@compileFor`/`--define` names
     std::string                               _logDefault;               // baked `KAMA_LOG` project default (M5), seeded in main
+    // std::log v2 (M7): the compile-time strip floor — the lowest level ORDINAL physically dropped at emit
+    // time (like `debugAssert`). A recognized facade call is stripped iff `_release && level >= _logCompileMin`.
+    // Derived from `_release` in `setRelease` — release => 3 (Debug), so Debug(3)/Trace(4) strip while
+    // Error(0)/Warn(1)/Info(2) are kept; 99 = no strip. A single field so a future `kama.json log.compileMin`
+    // override is a one-line change, not a refactor.
+    int                                       _logCompileMin = 99;
 
     // Generic CONTRACTS (`type contract Iterator<T>`) — the exact parallel of generic TYPES above. The
     // TEMPLATE is kept OUT of _interfaces (so the eager vtable-emit loop never sees its unbound `T`);
@@ -1083,6 +1089,17 @@ private:
     // Statements
     void emitStatement(SharedStatement stmt, int depth);
     void emitAsm(AsmNode* a, int depth);   // `asm("...")` -> `__asm__ __volatile__("..." : : : "memory")` (MCU 6a)
+    // std::log v2 (M7): recognize a `logError/Warn/Info/Debug/Trace(tag:, msg:)` facade call statement and
+    // lower it in place — compile-strip below the floor + a runtime `kama_log_enabled` guard with the message
+    // built INSIDE it (zero cost when filtered). `logFacadeLevel` returns true + the level ordinal (0..4) iff
+    // `iv` resolves to a std::log facade fn (in a log-importing program) with both `tag:`/`msg:` present.
+    bool logFacadeLevel(InvocationNode* iv, int& level);
+    void emitLogFacade(InvocationNode* iv, int level, int depth);
+    // Bind a facade string argument to a stable `kama_string` lvalue and return its temp name (usable as a
+    // span via `.data`/`.len` and by address via `&`); an owned rvalue (interpolation/concat) becomes a
+    // scope-dtor'd temp (dropped via dropCondTemps at the guard/wrapper it was hoisted into), a literal/lvalue
+    // is a borrow temp (no drop). Setup is flushed into `_hoisted` at `depth`.
+    std::string logSpanOf(SharedExpression e, int depth);
     std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
                             bool& isBorrow, bool borrowOK);   // shared front half (borrow = M4.2 `ref`)
     void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)

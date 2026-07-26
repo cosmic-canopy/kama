@@ -1766,6 +1766,84 @@ void CEmitter::emitAsm(AsmNode* a, int depth)
     *_out << "__asm__ __volatile__(\"" << cEscapeStringBody(s) << "\" : : : \"memory\");\n";
 }
 
+// std::log v2 (M7) — the recognized-facade lowering. --------------------------------------------------------
+// A `logError/Warn/Info/Debug/Trace(tag:, msg:)` call returns void, so it can only appear as an
+// ExpressionStatement — recognizing it there covers every call site. `logFacadeLevel` matches the resolved
+// callee (both the bare-imported and `std::log::`-qualified spellings resolve to the same `_funcs` key) and
+// yields the level ordinal.
+static SharedExpression logArgByName(InvocationNode* iv, const char* want)
+{
+    if (iv && iv->args) for (auto& a : *iv->args)
+        if (a && a->name && a->name->value && *a->name->value == want) return a->expression;
+    return nullptr;
+}
+
+bool CEmitter::logFacadeLevel(InvocationNode* iv, int& level)
+{
+    if (!iv || !iv->identifier || iv->expression || !iv->identifier->value) return false;  // a free-fn call
+    if (!externsHeader("kama_log.h")) return false;                                         // program uses std::log?
+    static const std::map<std::string,int> kFacade = {
+        {"std__log__logError", 0}, {"std__log__logWarn", 1}, {"std__log__logInfo", 2},
+        {"std__log__logDebug", 3}, {"std__log__logTrace", 4} };
+    auto it = kFacade.find(resolveFunc(*iv->identifier->value, iv->identifier->qualifier));
+    if (it == kFacade.end()) return false;
+    if (!logArgByName(iv, "tag") || !logArgByName(iv, "msg")) return false;   // else let the normal path diagnose
+    level = it->second;
+    return true;
+}
+
+// Bind a facade string arg to a stable `kama_string` lvalue and return its name — an addressable temp usable
+// both as a span (`.data`/`.len`, for the inline filter check) and by address (`&t`, for the `ref string`
+// dispatch). Setup is flushed into `_hoisted` at the caller's chosen depth. An owned rvalue (interpolation/
+// concat) rides hoistStringTemp — a scope-dtor'd temp dropped via dropCondTemps where it was hoisted; a
+// literal/lvalue is bound to a borrow temp (cap==0, nothing to free), so the value is evaluated exactly once.
+std::string CEmitter::logSpanOf(SharedExpression e, int /*depth*/)
+{
+    if (auto* h = dynamic_cast<HandoffNode*>(e.get())) e = h->value;   // `give`/`copy` marker: log borrows the value
+    std::string t = hoistStringTemp(e);                               // owned rvalue -> registered scope-dtor'd temp
+    if (t.empty()) {                                                  // literal / lvalue -> a borrow temp
+        t = "__logspan" + std::to_string(_tempCounter++);
+        _hoisted.push_back("kama_string " + t + " = " + emitExpression(e) + ";");
+    }
+    return t;
+}
+
+void CEmitter::emitLogFacade(InvocationNode* iv, int level, int depth)
+{
+    // Compile-time strip: below the floor in a --release build the whole statement (message build included)
+    // is physically absent — like `debugAssert`. Works at any -O; args are not evaluated (log calls must be
+    // side-effect-free, the same contract as a stripped `debugAssert`).
+    if (_release && level >= _logCompileMin) return;
+
+    line(iv->line);
+    bool ph = _hoistOK; _hoistOK = true;
+    size_t tagPre = _scopes.empty() ? 0 : _scopes.back().locals.size();
+
+    // Wrapper block: the tag span binds here (the filter needs it); a hoisted owned tag temp drops before it
+    // closes, where it is in scope.
+    indent(depth); *_out << "{\n";
+    int bd = depth + 1;
+    std::string tagVar = logSpanOf(logArgByName(iv, "tag"), bd);
+    flushHoisted(bd);
+
+    // Runtime filter — inlined here in the CALLER's TU (it reads the process-global env config, so it is
+    // multi-TU-safe). The message is built INSIDE, so a filtered-out call skips the interpolation entirely.
+    indent(bd); *_out << "if (kama_log_enabled(" << level << ", " << tagVar << ".data, " << tagVar << ".len)) {\n";
+    int gd = bd + 1;
+    size_t msgPre = _scopes.empty() ? 0 : _scopes.back().locals.size();
+    std::string msgVar = logSpanOf(logArgByName(iv, "msg"), gd);
+    flushHoisted(gd);
+    // Dispatch through the std::log library helper (NOT the raw `kama_log_dispatch`): the swappable sink slot
+    // is a per-TU static that `setLogSink` writes from the std::log TU, so the dispatch must run there too.
+    indent(gd); *_out << "std__log__logDispatch(" << level << ", &" << tagVar << ", &" << msgVar << ");\n";
+    dropCondTemps(msgPre, gd);                 // drop the message's Formatter/owned temps inside the guard
+    indent(bd); *_out << "}\n";
+
+    dropCondTemps(tagPre, bd);                 // drop an owned tag temp inside the wrapper
+    indent(depth); *_out << "}\n";
+    _hoistOK = ph;
+}
+
 void CEmitter::emitStatement(SharedStatement stmt, int depth)
 {
     if (!stmt) return;
@@ -3100,6 +3178,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // a statement-position `match` (value discarded) — emit the switch directly, not as an
     // expression (which would try to lift a result temp). Must precede the generic expr-statement path.
     if (auto* mm = dynamic_cast<MatchNode*>(n)) { emitMatchStatement(mm, depth); return; }
+
+    // std::log v2 (M7): a recognized `logError/Warn/Info/Debug/Trace(tag:, msg:)` facade call lowers to a
+    // compile-strip + runtime-guard with the message built inside (zero cost when off). Intercept before the
+    // generic expression-statement path; an unrecognized call falls straight through unchanged.
+    if (auto* iv = dynamic_cast<InvocationNode*>(n)) {
+        int lvl;
+        if (logFacadeLevel(iv, lvl)) { emitLogFacade(iv, lvl, depth); return; }
+    }
 
     if (dynamic_cast<ExpressionStatementNode*>(n)) {
         line(n->line);

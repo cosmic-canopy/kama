@@ -93,9 +93,13 @@ scope + acceptance so a fresh session can start immediately.
    M5.1); a **`kama.local.json` deep-merge ✅** (gitignored sibling; `log` per-tag merge + `flags` union — the
    build-path fields; M5.2, + dep `overrides` [patch-style view-relink, never in `kama.lock`] + local
    `registries` + `toolchain` overrides on the install/selector paths; M5.3 ✅); (d) a compiler-recognized
-   facade lowering for zero-cost (baked comptime min-level → DCE strip +
-   runtime `enabled(level,tag)` guard with message-build inside — an AST pass, **no preprocessor**). Also the
-   `kama.local.json` general local-override + the "Floor reference" doc page. **Design of record:
+   facade lowering for zero-cost **✅ (M7)** — the five facade call statements are recognized and lowered to a
+   guard with the **message built inside** it: a `--release` **physical strip** of `Debug`/`Trace` (like
+   `debugAssert`, at any `-O`) + an inlined runtime `kama_log_enabled(level, tag)` guard, so a filtered record
+   never assembles its message (`logEnabled` stays available but is no longer manually required). An AST pass,
+   **no preprocessor**; dispatch routes through a std::log-TU `logDispatch` helper so the swappable-sink static
+   slot stays correct across TUs. Also the `kama.local.json` general local-override + the "Floor reference" doc
+   page. **Design of record:
    [design/logging.md](design/logging.md).** *Acceptance:* stdout/stderr print (native+wasm; embedded stub);
    `assert`/`debugAssert` with message + location; `std::log` with runtime-reconfigurable level+tag on a
    shipped binary; a `tools/check-*.sh` capturing stdout/stderr. Precedes `std::process` (a subprocess API +

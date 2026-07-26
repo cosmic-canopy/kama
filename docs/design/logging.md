@@ -287,6 +287,44 @@ Tested via `tools/check-log.sh` (registered in `run_tests.sh`, native-only — s
 the sanitizer harness captures, so it must not be a `tests/*.kama` fixture): level+tag filtering, `--log`
 (both forms) + `KAMA_LOG` + precedence, a custom sink, and the freestanding `--target embedded` lowering.
 
+## `std::log` v2 (the recognized-facade lowering) — as shipped (M7)
+
+Part C realized: the five facade calls are **compiler-recognized and lowered** so the message is built only if
+the record survives two guards. Because a facade call returns `void` it can only appear as an
+`ExpressionStatement` — the lowering intercepts there (`emitLogFacade`, before the generic expression-statement
+path in `kama.cemit.cpp`), which also gives the statement-level control ISO C11 needs (no statement-expressions)
+to place the message build *inside* the guard. `logFacadeLevel` matches the resolved callee against the five
+`std__log__log{Error,Warn,Info,Debug,Trace}` keys (both the bare-imported and `std::log::`-qualified spellings
+resolve the same via `resolveFunc`), yielding the level ordinal 0..4. A recognized statement lowers to:
+
+```c
+{   kama_string tag = <tag>;                       // bound once (the filter needs it)
+    if (kama_log_enabled(L, tag.data, tag.len)) {  // inlined here — reads the process-global config, TU-safe
+        <message build hoisted HERE>               // interpolation/concat/call — skipped when filtered
+        std__log__logDispatch(L, &tag, &msg);
+    }
+}
+```
+
+- **Compile-time strip (level).** Under `--release` a `Debug`(3)/`Trace`(4) call is dropped *physically* at emit
+  time — `emitLogFacade` returns nothing, exactly like `debugAssert` (works at any `-O`, no reliance on C DCE);
+  `Error`/`Warn`/`Info` are kept. The floor is a single field, `_logCompileMin` (release ⇒ 3, else 99 = no
+  strip), derived in `setRelease` — so a future `kama.json log.compileMin` override is a one-line change.
+- **Runtime guard (level above the floor + tag), message inside.** The inlined `kama_log_enabled` reuses the v1
+  filter. The message and tag ride `hoistStringTemp` (`logSpanOf`): an owned rvalue (interpolation/concat/call)
+  becomes a scope-dtor'd temp dropped — via `dropCondTemps` — *inside* the guard where it was hoisted (the
+  message's `Formatter` temp included), a literal/lvalue is a borrow temp (never dropped, so a heap-owning
+  variable arg can't double-free). `logEnabled` stays available but is no longer manually required.
+- **The one non-obvious edge — the swappable sink is a per-TU `static`.** `setLogSink` writes the slot from the
+  std::log TU; a call-site-inlined `kama_log_dispatch` would read *main's* empty slot and always hit the console
+  default (the same multi-TU-static hazard the config side already dodges via the process-global env). So the
+  dispatch routes through a new thin std::log-module helper **`logDispatch(level, ref tag, ref msg)`** (compiled
+  in the std::log TU alongside `setLogSink`); only the enabled *check* is inlined at the call site (it reads
+  env-backed config, so it is TU-safe). `@compileFor(FLAG)` remains the full physical-drop escape hatch for a
+  whole subsystem — no new mechanism. `tools/check-log.sh` gains: an observable-side-effect message proving it
+  is built only when the record passes (default vs `--log=debug`), and a `--release` transpile-grep proving
+  `Debug`/`Trace` call sites are stripped while `Info` is kept (and all survive a non-release build).
+
 ## Residual implementation details (settle in the build session)
 - Exact `LogRecord` fields if `emit` grows beyond `(level, tag, msg)` (timestamp / source loc / isolate id).
 - `--log` / `KAMA_LOG` grammar edge cases (multiple tags, wildcard `*`, level names vs numbers).
