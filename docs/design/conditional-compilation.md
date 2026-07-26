@@ -15,6 +15,9 @@ SPEC.md *Conditional compilation* + KEYWORDS.md *Conditional-compilation attribu
   strict typo-validation; no manifest = permissive. Parsed by a tiny C++ reader in the driver (the
   compiler is C++, not self-hosted, so it cannot use the kama-level `std::serialization::json` library).
   `kama.json` is deliberately the seed of the future package-management manifest. Resolves open-Q2/Q4.
+  *(M5.2: a gitignored `kama.local.json` sibling deep-merges over the manifest — its `flags` UNION into the
+  declared universe, so a machine-local flag it declares is valid and a `default:true` one is active, without
+  editing the committed manifest.)*
 - **`--define` + `--undefine`** (repeatable) for user flags; built-ins from `--target`/`--release`.
 - **Logic**: membership + leading `!` + comma-AND (open-Q3 as leaned). Negation `!FLAG` is encoded in the
   grammar (`attr_arg : EXCLAMATION IDENTIFIER`) as a `SimpleUnaryExpressionNode` — no AST change.

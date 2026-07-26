@@ -247,8 +247,16 @@ std::log — compiles a `kama_log_set_default("<spec>")` call into `main` right 
 helper does `setenv("KAMA_LOG", spec, /*overwrite=*/0)`, so it only fills the env when unset. Result:
 `--log` (overwrite=1) > a pre-existing `KAMA_LOG` env > baked default > the `info` floor — exactly the design
 precedence, and routed through the same process-global env so the multi-TU static-copy hazard is sidestepped
-(no runtime default slot). Embedded is a no-op (no env). *(The `kama.local.json` general local override that
-deep-merges over this — including per-tag log merge — is the M5.2/M5.3 half.)*
+(no runtime default slot). Embedded is a no-op (no env).
+
+**`kama.local.json` deep-merge — as shipped (M5.2).** A gitignored sibling of the manifest layers over it for
+the fields the compiler reads directly: the `log` config (a structured `LogConfig` merge — a local `level`
+wins, local tags override per-name while base tags are preserved) and `@compileFor` `flags` (union — a local
+flag extends the declared universe and a local `default:true` activates it). The runtime precedence therefore
+becomes `--log` > `KAMA_LOG` > `kama.local.json`-merged baked default > `info` floor. Local-only by
+construction (never committed, never in the lockfile), so it can never perturb a reproducible/CI build.
+*(Dependency path-overrides + toolchain/registry local overrides — read by the install/selector paths, not the
+build path — are the remaining M5.3 half.)*
 
 Tested via `tools/check-log.sh` (registered in `run_tests.sh`, native-only — std::log writes to stderr, which
 the sanitizer harness captures, so it must not be a `tests/*.kama` fixture): level+tag filtering, `--log`

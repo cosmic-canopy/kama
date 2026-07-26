@@ -104,10 +104,39 @@ fi
 "$tmp/proj/log" --log=debug >/dev/null 2>"$tmp/e6c" || { echo "check-log: FAIL — baked+flag run exited nonzero" >&2; exit 1; }
 grep -qF "net-debug" "$tmp/e6c" || { echo "check-log: FAIL — --log=debug did not override the baked default" >&2; sed 's/^/  /' "$tmp/e6c" >&2; exit 1; }
 
+# --- 7. kama.local.json deep-merges over kama.json (M5.2): per-tag merge, local wins -----------
+# base: global info + net=trace; local: adds audio=debug and raises the global to warn. The merged filter must
+# (a) keep the base net=trace tag, (b) apply the local audio=debug tag, (c) apply the local global warn — so an
+# untagged (`db`) info line is dropped. A dedicated program makes each of the three observable.
+cat > "$tmp/proj/merge.kama" <<'KAMA'
+import std::log::{logInfo, logDebug};
+fn int32 main() {
+    logDebug(tag: "net", msg: "net-debug");     // base net=trace  -> shown
+    logDebug(tag: "audio", msg: "audio-debug"); // local audio=debug -> shown
+    logInfo(tag: "db", msg: "db-info");         // global warn      -> dropped
+    return 0;
+}
+KAMA
+cat > "$tmp/proj/kama.json" <<'JSON'
+{ "name": "logtest", "version": "0.1.0", "log": { "level": "info", "tags": { "net": "trace" } } }
+JSON
+cat > "$tmp/proj/kama.local.json" <<'JSON'
+{ "log": { "level": "warn", "tags": { "audio": "debug" } } }
+JSON
+"$KAMA" build "$tmp/proj/merge.kama" -o "$tmp/proj/merge" >/dev/null 2>"$tmp/proj2.build.err" || {
+    echo "check-log: FAIL — local-override build failed" >&2; sed 's/^/  /' "$tmp/proj2.build.err" >&2; exit 1; }
+"$tmp/proj/merge" >/dev/null 2>"$tmp/e7" || { echo "check-log: FAIL — local-override run exited nonzero" >&2; exit 1; }
+grep -qF "net-debug" "$tmp/e7" || { echo "check-log: FAIL — base net=trace not preserved through the local merge" >&2; sed 's/^/  /' "$tmp/e7" >&2; exit 1; }
+grep -qF "audio-debug" "$tmp/e7" || { echo "check-log: FAIL — local audio=debug tag did not take effect" >&2; sed 's/^/  /' "$tmp/e7" >&2; exit 1; }
+if grep -qF "db-info" "$tmp/e7"; then
+    echo "check-log: FAIL — local level=warn did not raise the global threshold (an untagged info leaked)" >&2; sed 's/^/  /' "$tmp/e7" >&2; exit 1
+fi
+rm -f "$tmp/proj/kama.local.json"
+
 # --- 5. embedded lowers freestanding ------------------------------------------
 "$KAMA" transpile --target embedded "$tmp/log.kama" -o "$tmp/emb.c" >/dev/null 2>"$tmp/emb.err" || {
     echo "check-log: FAIL — --target embedded transpile failed" >&2; sed 's/^/  /' "$tmp/emb.err" >&2; exit 1; }
 grep -q 'kama_log_dispatch' "$tmp/emb.c" || { echo "check-log: FAIL — embedded C does not reference kama_log_dispatch" >&2; exit 1; }
 if grep -q 'stdio\.h' "$tmp/emb.c"; then echo "check-log: FAIL — embedded C leaked <stdio.h>" >&2; exit 1; fi
 
-echo "check-log: PASS (level+tag filter, --log/KAMA_LOG config, baked kama.json default, swappable sink, freestanding lowering)"
+echo "check-log: PASS (level+tag filter, --log/KAMA_LOG config, baked kama.json default, kama.local.json deep-merge, swappable sink, freestanding lowering)"

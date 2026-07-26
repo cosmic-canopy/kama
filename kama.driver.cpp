@@ -422,6 +422,30 @@ struct RegConfig {
     std::map<std::string, std::vector<std::string>> scopes;        // "@scope" -> ordered base chain
 };
 
+// The `log` config (M5): the project's default log filter, baked into the binary. `level` is the global
+// bareword threshold; `tags` is an ordered list of (tag -> level) overrides. A `kama.local.json` sibling
+// deep-merges over the manifest's (see `applyLocal`): a set local `level` wins, and a local tag replaces the
+// same-named base tag (others preserved) — so a dev can bump verbosity without discarding project defaults.
+struct LogConfig {
+    bool levelSet = false;
+    std::string level;                                         // global threshold bareword ("" if unset)
+    std::vector<std::pair<std::string, std::string>> tags;     // ordered tag -> level overrides
+
+    void applyLocal(const LogConfig& local) {                  // `this` is the base; merge `local` on top
+        if (local.levelSet) { level = local.level; levelSet = true; }
+        for (auto& lt : local.tags) {
+            bool found = false;
+            for (auto& bt : tags) if (bt.first == lt.first) { bt.second = lt.second; found = true; break; }
+            if (!found) tags.push_back(lt);
+        }
+    }
+    std::string canonical() const {                            // -> the `KAMA_LOG` spec: global, then tag=level…
+        std::string spec = level;
+        for (auto& t : tags) { if (!spec.empty()) spec += ","; spec += t.first + "=" + t.second; }
+        return spec;
+    }
+};
+
 // A scoped package `@acme/foo` imports under its BARE last segment (`foo`) — the scope is registry
 // routing only. Two scopes exposing the same bare name collide (a hard error, detected at link time).
 static std::string importNameOf(const std::string& name)
@@ -606,7 +630,7 @@ struct ManifestReader {
     std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
     std::string* versionOut = nullptr;                    // set to capture the `version` (else skipped) — `kama publish`
     RegConfig* registriesOut = nullptr;                   // set to capture the `registries` config (M3.1b)
-    std::string* logOut = nullptr;                        // set to capture the `log` config → canonical spec (M5)
+    LogConfig* logOut = nullptr;                          // set to capture the `log` config (M5)
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -791,24 +815,21 @@ struct ManifestReader {
         return v=="off"||v=="error"||v=="warn"||v=="info"||v=="debug"||v=="trace";
     }
 
-    // Parse the `log` config object → the canonical `KAMA_LOG` spec string that gets baked into the binary
-    // ("warn,audio=debug,net=trace"). The runtime C parser (kama_log.h) stays the single source of truth for
-    // the grammar; this only translates the JSON surface into it. { "level": <lvl>, "tags": { <tag>: <lvl> } },
-    // both keys optional. Unknown keys are tolerated (forward-compat, e.g. a future compile-strip floor).
-    bool logObject(std::string* out) {
+    // Parse the `log` config object into `*logOut`. { "level": <lvl>, "tags": { <tag>: <lvl> } }, both keys
+    // optional. Level names are validated against the same vocabulary the runtime `KAMA_LOG` grammar accepts.
+    // Unknown keys are tolerated (forward-compat, e.g. a future compile-strip floor).
+    bool logObject() {
         ws(); if (i >= s.size() || s[i] != '{') return fail("`log` must be a JSON object");
         ++i; ws();
-        std::string global;
-        std::vector<std::pair<std::string, std::string>> tags;
-        if (i < s.size() && s[i] == '}') { ++i; }
-        else while (true) {
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
             std::string k; if (!str(k)) return false;
             ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `log`");
             ++i; ws();
             if (k == "level") {
                 std::string v; if (!str(v)) return false;
                 if (!validLevelName(v)) return fail("`log.level` must be one of off/error/warn/info/debug/trace");
-                global = v;
+                if (logOut) { logOut->level = v; logOut->levelSet = true; }
             } else if (k == "tags") {
                 ws(); if (i >= s.size() || s[i] != '{') return fail("`log.tags` must be a JSON object");
                 ++i; ws();
@@ -819,7 +840,7 @@ struct ManifestReader {
                     ++i; ws();
                     std::string v; if (!str(v)) return false;
                     if (!validLevelName(v)) return fail("a `log.tags` level must be off/error/warn/info/debug/trace");
-                    tags.push_back({tag, v});
+                    if (logOut) logOut->tags.push_back({tag, v});
                     ws();
                     if (i < s.size() && s[i] == ',') { ++i; continue; }
                     if (i < s.size() && s[i] == '}') { ++i; break; }
@@ -831,9 +852,6 @@ struct ManifestReader {
             if (i < s.size() && s[i] == '}') { ++i; break; }
             return fail("expected ',' or '}' in `log`");
         }
-        std::string spec = global;   // global bareword first, then each tag=level
-        for (auto& t : tags) { if (!spec.empty()) spec += ","; spec += t.first + "=" + t.second; }
-        if (out) *out = spec;
         return true;
     }
 
@@ -848,7 +866,7 @@ struct ManifestReader {
             else if (key == "dependencies" && deps) { if (!depsObject(deps)) return false; }
             else if (key == "dev-dependencies" && devDeps) { if (!depsObject(devDeps)) return false; }
             else if (key == "registries" && registriesOut) { if (!registriesObject(registriesOut)) return false; }
-            else if (key == "log" && logOut) { if (!logObject(logOut)) return false; }   // baked log default (M5)
+            else if (key == "log" && logOut) { if (!logObject()) return false; }   // baked log default (M5)
             else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
             else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
             else if (key == "name" && nameOut) { if (!str(*nameOut)) return false; }
@@ -924,17 +942,16 @@ static bool loadManifestToolchain(const std::string& path, std::string& tcOut, s
     return true;
 }
 
-// Load a `kama.json` manifest's `log` config → the canonical `KAMA_LOG` spec string the compiler bakes into
-// the binary as the project default (`specOut` left empty if absent). Reuses ManifestReader. Returns false +
-// `err` on malformed JSON or an invalid level name. (M5.)
-static bool loadManifestLog(const std::string& path, std::string& specOut, std::string& err)
+// Load a `kama.json` (or `kama.local.json`) manifest's `log` config into `out` (left default if absent).
+// Reuses ManifestReader. Returns false + `err` on malformed JSON or an invalid level name. (M5.)
+static bool loadManifestLog(const std::string& path, LogConfig& out, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
-    r.logOut = &specOut;
+    r.logOut = &out;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -3009,17 +3026,47 @@ int main(int argc, char** argv)
                                     "cannot be declared in `flags`\n", manifest.c_str(), r);
                     return 2;
                 }
-            g_declaredFlags = declared;
-            g_strictFlags   = true;
-            for (auto& d : defaults) g_activeFlags.insert(d);
-
             // Baked log default (M5): the manifest `log` section becomes the project's compiled-in KAMA_LOG
             // spec, seeded into the process env in `main` (overwrite=0, so `--log`/env still win).
-            std::string logErr;
-            if (!loadManifestLog(manifest, g_logDefault, logErr)) {
+            LogConfig logCfg; std::string logErr;
+            if (!loadManifestLog(manifest, logCfg, logErr)) {
                 fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), logErr.c_str());
                 return 2;
             }
+
+            // `kama.local.json` (M5.2): a gitignored sibling of the manifest that DEEP-MERGES over it for the
+            // fields the compiler reads directly here — `flags` (union: local declares/enables more) and `log`
+            // (per-tag merge, local wins). Local-only by construction (never committed / never in the lockfile),
+            // so it can never perturb a reproducible or CI build. Deps/registries/toolchain local overrides —
+            // read by the install/selector/run paths, not here — layer in a later milestone.
+            std::string mdir = dirName(manifest);
+            std::string localManifest = (mdir == "." ? std::string() : mdir + "/") + "kama.local.json";
+            if (std::ifstream(localManifest).good()) {
+                std::set<std::string> ldeclared, ldefaults; std::string lerr;
+                if (!loadManifestFlags(localManifest, ldeclared, ldefaults, lerr)) {
+                    fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
+                    return 2;
+                }
+                for (const char* r : {"NATIVE","WASM","EMBEDDED","DEBUG","RELEASE"})
+                    if (ldeclared.count(r)) {
+                        fprintf(stderr, "kama: %s: `%s` is a built-in flag (set by --target/--release) and "
+                                        "cannot be declared in `flags`\n", localManifest.c_str(), r);
+                        return 2;
+                    }
+                declared.insert(ldeclared.begin(), ldeclared.end());   // union — local extends the universe
+                defaults.insert(ldefaults.begin(), ldefaults.end());
+                LogConfig localLog;
+                if (!loadManifestLog(localManifest, localLog, lerr)) {
+                    fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
+                    return 2;
+                }
+                logCfg.applyLocal(localLog);
+            }
+
+            g_declaredFlags = declared;
+            g_strictFlags   = true;
+            for (auto& d : defaults) g_activeFlags.insert(d);
+            g_logDefault = logCfg.canonical();
 
             // Package deps (M2): if the manifest declares dependencies, the resolved view must already
             // be materialized. The build is a pure, reproducible READ of the view — it never fetches —

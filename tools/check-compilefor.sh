@@ -89,4 +89,26 @@ if grep -q 'WasmClock' "$platc"; then
     exit 1
 fi
 
-echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C; strict manifest rejects undeclared flags)"
+# 6. kama.local.json (M5.2) — a gitignored sibling deep-merges over kama.json: a flag it declares extends the
+#    valid universe (no longer "undeclared"), and one it marks `default:true` is active. Reuse the strict proj:
+#    its kama.json declares only WINDOWS, so LOCALFLAG is undeclared until the local manifest adds it.
+cat > "$proj/kama.local.json" <<'JSON'
+{ "flags": { "LOCALFLAG": { "default": true } } }
+JSON
+cat > "$proj/local.kama" <<'KAMA'
+@compileFor(LOCALFLAG) fn int32 gated() { return 42; }
+fn int32 main() { return gated(); }
+KAMA
+localc="$tmp/local.c"
+if ! "$KAMA" transpile --no-line "$proj/local.kama" -o "$localc" >/dev/null 2>"$tmp/local.err"; then
+    echo "check-compilefor: FAIL — kama.local.json did not declare LOCALFLAG (build rejected it):" >&2
+    sed 's/^/  /' "$tmp/local.err" >&2
+    exit 1
+fi
+if ! grep -q 'gated' "$localc"; then
+    echo "check-compilefor: FAIL — local default:true flag did not keep the @compileFor(LOCALFLAG) body" >&2
+    exit 1
+fi
+rm -f "$proj/kama.local.json"
+
+echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C; strict manifest rejects undeclared flags; kama.local.json extends the flag universe)"

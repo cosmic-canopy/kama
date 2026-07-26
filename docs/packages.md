@@ -236,6 +236,30 @@ depend on never drags *its* dev-dependencies into your build.
   finds declared dependencies but no resolved view tells you to run `kama pkg install` — it
   never silently reaches the network. Once a project is installed, everything works offline.
 
+## Local overrides — `kama.local.json`
+
+A `kama.local.json` sitting next to `kama.json` is a **per-machine override that deep-merges over
+the manifest**. It's for settings that are yours, not the project's — so it is **gitignored by
+convention** (the build never records it in `kama.lock`, and it can't perturb a reproducible or CI
+build; that's the whole point).
+
+Deep-merge means it layers field-by-field, not whole-file: a `log.tags` entry it adds sits
+*alongside* the project's tags rather than replacing them, a scalar it sets wins, and a `flags`
+entry it declares *extends* the valid flag universe.
+
+```jsonc
+// kama.local.json — bump logging on this machine without touching the committed default
+{
+  "log": { "level": "debug", "tags": { "audio": "trace" } },
+  "flags": { "MY_EXPERIMENT": { "default": true } }
+}
+```
+
+Precedence, high to low: **`--log`/`KAMA_LOG` (runtime) > `kama.local.json` > `kama.json`**. Today
+the merge covers the fields the compiler reads directly — the **`log`** default and **`@compileFor`
+`flags`**. Dependency *path*-overrides (the Cargo-`[patch]` / Go-`replace` local-dev case) and
+toolchain/registry overrides are a later milestone.
+
 ## Toolchain versions
 
 kama is its own version manager — there's no `nvm`/`pyenv`/`rustup` to wrap around it. Each

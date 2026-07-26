@@ -7,6 +7,10 @@ bison_report
 # all build artifacts (objects + generated parser/lexer) live here
 build/
 
+# per-machine local manifest override (deep-merges over kama.json; dev-local, never committed — see M5)
+kama.local.json
+**/kama.local.json
+
 # fetched native SDKs (wgpu-native for native --webgpu) — never vendored; tools/fetch-webgpu.sh fills it
 third_party/
 
