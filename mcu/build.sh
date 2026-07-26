@@ -35,6 +35,7 @@ done
 # Board table: CPU (arm-none-eabi -mcpu / clang -mcpu) + clang bare-metal triple.
 case "$BOARD" in
   lm3s6965evb) CPU=cortex-m3; TRIPLE=thumbv7m-none-eabi ;;
+  microbit)    CPU=cortex-m0; TRIPLE=thumbv6m-none-eabi ;;   # nRF51822, no FPU -> soft-float libcalls
   *) echo "mcu/build.sh: unknown board '$BOARD' (add mcu/boards/$BOARD/linker.ld + a case here)" >&2; exit 2 ;;
 esac
 

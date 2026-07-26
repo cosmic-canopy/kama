@@ -141,6 +141,13 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-mcu
     if sh tools/check-mcu.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# Soft-float end-to-end: build a float-math kama program into no-FPU Cortex-M0 firmware and RUN it on QEMU
+# (the emitted float ops become soft-float libcalls). SKIPs (still a pass) without the cross toolchain, like
+# check-mcu.sh above. Native pass only.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-softfloat.sh ]; then
+    if sh tools/check-softfloat.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # const-eval 6b-3: `comptime fn` table-baking guard (baked static-const aggregate + comptime fn not emitted).
 # Transpile-only + host-checkable, so run once on the plain native pass like the drift/embedded guards.
 if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-comptime.sh ]; then

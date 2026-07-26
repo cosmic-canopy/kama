@@ -59,20 +59,14 @@ The concrete sequence to a production-ready 1.0 and its first steps past the tag
 items need new language surface** — they are library + toolchain + one runtime-floor addition. Each lists its
 scope + acceptance so a fresh session can start immediately.
 
-1. **Soft-float + fixed-point (no-FPU MCU / DSP math) — library + toolchain, NO language work.** Closes the
-   one remaining MCU_READINESS 🟡. Two independent pieces:
-   - *Fixed-point (library).* A `std::num` fixed-point `type value` — start concrete with `Q16_16`
-     (16.16 signed), operators `+ - * /` (mul/div widen through `int64` then re-scale), `fromInt`/`toInt`/
-     `fromFloat`/`toFloat`, and saturating variants; consider a later generic `Fixed<intBits, fracBits>` via
-     const generics. Pure library (operator overloading already ships) + exact-value fixtures. The no-FPU
-     answer for audio/DSP/sensor math.
-   - *Soft-float (toolchain, not kama).* kama emits `float` ops as ordinary C `+`/`*`; a cross-compiler
-     targeting a no-FPU core (`-mfloat-abi=soft`, e.g. `-mcpu=cortex-m0plus`) lowers them to libgcc/
-     compiler-rt libcalls automatically. Make it turnkey: add a no-FPU **board preset** (a Cortex-M0+ board:
-     triple `thumbv6m-none-eabi`, `-mcpu=cortex-m0plus`) to `mcu/build.sh` + `run-qemu.sh` (QEMU `microbit`
-     is a Cortex-M0 target) and a float-math fixture that runs on the emulated M0.
-   - *Acceptance:* MCU_READINESS "Soft-float mode / fixed-point" row 🟡 → ✅; fixed-point + soft-float fixtures
-     green (native + QEMU M0).
+1. **Soft-float + fixed-point (no-FPU MCU / DSP math) — ✅ SHIPPED.** Closed the last MCU_READINESS 🟡.
+   *Fixed-point* = the library `type value` `std::num::Q16_16` (16.16 signed; `+ - * /`, `fromInt`/`toInt`/
+   `fromFloat`/`toFloat`, saturating `sat*`; a later generic `Fixed<intBits, fracBits>` stays optional).
+   *Soft-float* = a turnkey no-FPU **board preset** `--board microbit` (QEMU Cortex-M0, triple
+   `thumbv6m-none-eabi`) in `mcu/build.sh`/`run-qemu.sh` + `mcu/boards/microbit/linker.ld`; the emitted C's
+   `float` ops lower to compiler-rt/libgcc libcalls automatically. Fixtures green native + wasm + QEMU M0
+   (`tests/num_fixed`, `tests/mcu_softfloat` via `tools/check-softfloat.sh`). Fixed a latent emitter bug en
+   route (whole-number `float64` literals kept a decimal point — `tests/float64_literal_div`).
 2. **argv / env in the prelude floor — the one remaining runtime-floor language bit.** Design is settled in §2
    ("Command-line args / environment access"): the mandatory runtime shim stashes `argc/argv` into a runtime
    global; a small always-in-scope prelude surface (a free `args()` / an `Args` view — spelling TBD) reads it;
@@ -288,7 +282,7 @@ Remaining forward work:
   | Piece | What's needed |
   |---|---|
   | **Toolchain / build** *(turnkey Cortex-M path ✅ shipped + QEMU-proven — §1)* | `mcu/build.sh <in.kama>` turns the freestanding object into a linked **Cortex-M ELF** (bundled reference startup/vector-table `mcu/startup.c` + board linker script `mcu/boards/<b>/linker.ld` + newlib/rdimon), and `mcu/run-qemu.sh` boots it; `tools/check-mcu.sh` runs `embedded_blink` firmware on emulated silicon and asserts its result. Opt-in cross image (`tools/Dockerfile.mcu`). See [mcu.md](mcu.md). **Remaining:** more board presets (STM32/Pico), vendor-HAL glue (pico-sdk / esp-idf), a real-hardware flash pass, and (optional) folding the two-step link into `kama build --target <board>`. Arduino `setup()`/`loop()` is a later HAL nicety. |
-  | **Soft-float** | Cortex-M0/AVR have no FPU. Today you pass `-msoft-float` to the C compiler and eat the libcall cost; a `Q15.16` fixed-point `type value` is writable *today* (operator overloading) — a **library**. Emitting soft-float intrinsics is the deeper (M) piece. |
+  | **Soft-float** *(✅ shipped — §1)* | Cortex-M0/AVR have no FPU. Turnkey no-FPU board preset `--board microbit` (QEMU Cortex-M0) — the emitted C's `float` ops lower to compiler-rt/libgcc libcalls automatically, QEMU-proven by `tools/check-softfloat.sh`. For fixed-point without the libcall cost, the `std::num::Q16_16` (16.16 signed) `type value` library ships alongside. |
   | **AVR (Harvard) family** *(deferred — Cortex-M/RISC-V first)* | Three AVR-specific pieces: (1) ISR — `@interrupt("VECTOR")` → the `ISR(VECTOR)` macro (`<avr/interrupt.h>`), not the parameterless `__attribute__((interrupt))`; (2) Harvard `PROGMEM` — flash const data needs `PROGMEM` + `pgm_read_*` accessors (a flash pointer can't be plain-deref'd), so `@section` alone doesn't cover it; (3) toolchain — `avr-gcc`-only (clang/zig don't target AVR cleanly). A bounded follow-on when demand warrants. |
 
   **Why kama fits:** no-GC + RAII → deterministic, no hidden pauses; allocation is explicit in the emitted C

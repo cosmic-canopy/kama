@@ -1,0 +1,24 @@
+// Soft-float proof: deterministic floating-point math that returns a fixed exit code. On a no-FPU core
+// (Cortex-M0, `--board microbit`) the emitted C's `float`/`double` ops lower to compiler-rt/libgcc soft-float
+// libcalls; this fixture runs+exits identically on the hosted native/wasm legs and on emulated M0 silicon
+// (see tools/check-softfloat.sh). Value-only — no heap, no preprocessor — so it builds `--target embedded`
+// too. Compares use a tolerance (never `==` on floats) so soft-float rounding can't flake the result.
+fn bool close(float64 a, float64 b) {
+    float64 e = a - b;
+    if (e < 0.0f64) { e = -e; }
+    return e < 0.000001f64;
+}
+
+fn int32 main() {
+    int32 r = 0;
+    float64 d = (1.5f64 * 2.0f64 + 0.25f64) / 0.5f64;      // 6.5
+    if (close(a: d, b: 6.5f64)) { r = r + 11; }
+
+    float32 f = 3.0f32 * 7.0f32 - 1.0f32;                  // 20.0 (f32 path -> __aeabi_fmul/fsub)
+    if (close(a: cast<float64>(f), b: 20.0f64)) { r = r + 11; }
+
+    float64 g = 100.0f64 / 8.0f64;                         // 12.5 (division libcall)
+    if (close(a: g, b: 12.5f64)) { r = r + 11; }
+
+    return r;   // 33
+}

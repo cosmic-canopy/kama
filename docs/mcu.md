@@ -45,7 +45,10 @@ table + linker script + newlib) → boots on the core → runs the real MMIO loo
 
 ## Targeting a different board
 
-The reference board is QEMU's `lm3s6965evb`. To add one (real or emulated):
+Two boards ship: `lm3s6965evb` (the reference, QEMU Cortex-M3) and `microbit` (QEMU nRF51822, **Cortex-M0,
+no FPU** — the soft-float proving board; on a no-FPU core the emitted `float`/`double` ops become
+compiler-rt/libgcc soft-float libcalls, exercised end-to-end by `tools/check-softfloat.sh`). To add another
+(real or emulated):
 
 1. Copy `mcu/boards/lm3s6965evb/linker.ld` to `mcu/boards/<yourboard>/linker.ld` and edit the two `MEMORY`
    origins/lengths to the chip's datasheet (e.g. **STM32F103**: `FLASH 0x08000000/64K`, `RAM 0x20000000/20K`).

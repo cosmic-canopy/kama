@@ -813,7 +813,13 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<Float64Node*>(n)) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%.17g", v->value);
-        return buf;
+        std::string s(buf);
+        // A whole-number %g (`100`) emits a C *integer* literal, so `100.0f64 / 8.0f64` would become the
+        // integer division `100 / 8` (== 12, not 12.5). Force a decimal point to keep it a double literal.
+        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos
+            && s.find('E') == std::string::npos && s.find_first_of("0123456789") != std::string::npos)
+            s += ".0";
+        return s;
     }
     if (auto* v = dynamic_cast<Float32Node*>(n)) {
         char buf[64];

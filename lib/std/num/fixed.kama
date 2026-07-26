@@ -1,0 +1,51 @@
+namespace std::num;
+
+// Signed 16.16 fixed-point — the no-FPU answer for audio / DSP / sensor math on cores without an FPU
+// (Cortex-M0, AVR). A `value` (stack, copied, no alloc) wrapping one `int32 raw` = the real number * 65536.
+// Integer part is [-32768, 32767]; fractional resolution is 1/65536 (~1.5e-5). Pure library over the shipped
+// operator overloading — no compiler support needed; the emitted C is plain integer arithmetic (no libcalls).
+//
+// Overflow follows the language default: the base `+ - * /` operators TRAP on overflow in debug builds (a
+// fixed-point overflow is a real bug in value math). The `sat*` methods are the explicit never-trap
+// alternative (they clamp to the representable range). Model twin: std::time::Duration.
+export { Q16_16 };
+
+@generate(of)
+type value Q16_16 {
+    public int32 raw;   // real value * 65536
+
+    public ctor fromInt(int32 n)       { return Q16_16.of(raw: n * 65536i32); }   // traps if |n| >= 32768 (out of range)
+    public ctor one()                  { return Q16_16.of(raw: 65536i32); }
+    public ctor fromFloat(float64 x)   { return Q16_16.of(raw: cast<int32>(x * 65536.0f64)); }
+    public ctor fromFloat32(float32 x) { return Q16_16.of(raw: cast<int32>(x * 65536.0f32)); }
+
+    public fn int32   toInt()     { return this.raw / 65536i32; }   // truncates toward zero
+    public fn float64 toFloat()   { return cast<float64>(this.raw) / 65536.0f64; }
+    public fn float32 toFloat32() { return cast<float32>(this.raw) / 65536.0f32; }
+
+    public Q16_16 operator+(Q16_16 r) { return Q16_16.of(raw: this.raw + r.raw); }
+    public Q16_16 operator-(Q16_16 r) { return Q16_16.of(raw: this.raw - r.raw); }
+    public Q16_16 operator-()         { return Q16_16.of(raw: -this.raw); }
+    // mul/div widen through int64 to re-scale exactly; the final narrowing cast is the overflow signal.
+    public Q16_16 operator*(Q16_16 r) { return Q16_16.of(raw: cast<int32>((cast<int64>(this.raw) * cast<int64>(r.raw)) >> 16i64)); }
+    public Q16_16 operator/(Q16_16 r) { return Q16_16.of(raw: cast<int32>((cast<int64>(this.raw) << 16i64) / cast<int64>(r.raw))); }
+
+    public bool operator==(Q16_16 r) { return this.raw == r.raw; }
+    public bool operator<(Q16_16 r)  { return this.raw < r.raw; }
+    public bool operator>(Q16_16 r)  { return this.raw > r.raw; }
+    public bool operator<=(Q16_16 r) { return this.raw <= r.raw; }
+    public bool operator>=(Q16_16 r) { return this.raw >= r.raw; }
+
+    // Saturating variants — never trap: compute in int64, clamp to the int32 range, narrow.
+    public fn Q16_16 satAdd(Q16_16 r) { return Q16_16.of(raw: clampToI32(v: cast<int64>(this.raw) + cast<int64>(r.raw))); }
+    public fn Q16_16 satSub(Q16_16 r) { return Q16_16.of(raw: clampToI32(v: cast<int64>(this.raw) - cast<int64>(r.raw))); }
+    public fn Q16_16 satMul(Q16_16 r) { return Q16_16.of(raw: clampToI32(v: (cast<int64>(this.raw) * cast<int64>(r.raw)) >> 16i64)); }
+}
+
+// Clamp an int64 into the int32 range (bounds written as literals, matching std::num::limits). Not exported —
+// an internal helper for the saturating ops.
+fn int32 clampToI32(int64 v) {
+    int64 lo = 0i64 - 2147483648i64;   // int32Min
+    int64 hi = 2147483647i64;          // int32Max
+    return cast<int32>(v < lo ? lo : (v > hi ? hi : v));
+}

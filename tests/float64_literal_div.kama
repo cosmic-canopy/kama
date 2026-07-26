@@ -1,0 +1,11 @@
+// Regression: a whole-number float64 literal (`100.0f64`) must stay a C *double* literal, not collapse to
+// an integer literal — otherwise `100.0f64 / 8.0f64` becomes the integer division `100 / 8` (== 12, not
+// 12.5). Guards kama.cemit.cpp's Float64 decimal-point fixup (parallel to the Float32 one).
+fn int32 main() {
+    int32 r = 0;
+    float64 a = 100.0f64 / 8.0f64;              // 12.5 — the exact bug
+    if (a > 12.4f64 && a < 12.6f64) { r = r + 20; }
+    float64 b = 7.0f64 / 2.0f64;                // 3.5
+    if (b > 3.4f64 && b < 3.6f64) { r = r + 22; }
+    return r;   // 42
+}

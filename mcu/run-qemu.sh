@@ -17,6 +17,7 @@ done
 
 case "$BOARD" in
   lm3s6965evb) MACHINE=lm3s6965evb; CPU=cortex-m3 ;;
+  microbit)    MACHINE=microbit;    CPU=cortex-m0 ;;
   *) echo "mcu/run-qemu.sh: unknown board '$BOARD'" >&2; exit 2 ;;
 esac
 command -v qemu-system-arm >/dev/null || { echo "mcu/run-qemu.sh: qemu-system-arm not found (use the kama-mcu image)" >&2; exit 1; }
