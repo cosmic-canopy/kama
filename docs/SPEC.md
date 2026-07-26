@@ -956,9 +956,15 @@ be written **in the language** rather than baked into the compiler. Three builti
   statically known (bind it to a local first) is a compile error. Lowers to a no-UB ISO-C11 union type-pun.
   It is the safe-surface primitive for binary formats / hashing / endianness (`std::num` `byteswapF32` rides
   it); raw-memory reinterpret of composites stays behind `unsafe`/`Ptr`.
-- **`panic(msg: string)` / `assert(cond: bool)`** — a clean **trap** (writes the message + `abort()`, not
-  UB — the user-facing form of the built-in bounds trap). For a *bug that can't continue*; recoverable
-  errors use `Result<T, E>`. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.)
+- **`assert(cond:, msg:)` / `debugAssert(cond:, msg:)` / `panic(msg:)`** — a clean **trap** (writes the
+  message + `file:line` to stderr, then `abort()` — not UB, the user-facing form of the built-in bounds
+  trap). `msg:` is **mandatory** (empty string allowed); a failed `assert` also **auto-appends the
+  condition's source text** (`assert(cond: x > 0, msg: "")` → `assertion failed: x > 0 (f.kama:12)`).
+  `debugAssert` is identical but **stripped under `--release`** (dev-only checks); `assert` is always-on. For
+  a *bug that can't continue*; recoverable errors use `Result<T, E>`. A custom fatal handler (for a shipped
+  game/GUI with no terminal) installs via **`setPanicHandler(handler:)`** — it runs for cleanup/exhibition,
+  then the runtime still terminates. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.) The
+  full always-in-scope surface is catalogued in **[FLOOR.md](FLOOR.md)**.
 - **`drop(value: place)`** — run a place's destructor now (a no-op for a non-destructible type); lets a
   library owner over `Ptr<T>` drop its heap pointee before `free`.
 - **`addr(of: place)`** — the address of a place (a field/local/element) as a `Ptr<T>`. Taking an address
