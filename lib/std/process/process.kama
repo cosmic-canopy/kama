@@ -1,0 +1,372 @@
+namespace std::process;
+
+// Subprocess execution (Rust `Command` / Go `os/exec` / Python `subprocess` shape). Pure library over the
+// `kama_os.h` FFI seam — no compiler/language change. A `Command` builder (argv VECTOR, never a shell string,
+// so injection-safe by construction) spawns an owned `Process`; `run()` is the one-shot capture. Child pipe
+// ends reuse `std::fs::File`, so they compose with `std::io` (Reader/Writer) and the readiness `Poller`.
+//
+// Lifetime: a `Process` is a move-only RAII resource. Dropping it does a NON-BLOCKING reap (waitpid(WNOHANG)):
+// reap if the child already exited, else DETACH (the OS reparents to init) — the destructor NEVER blocks
+// (avoids the classic blocking-dtor-vs-undrained-pipe deadlock). Explicit `wait()` is the blocking reap that
+// returns the exit code. POSIX only (M1); Windows (CreateProcess) is a later milestone; wasm has no fork/exec.
+
+import std::io::{IoError, lastError};
+import std::fs::{File};
+import std::net::{Poller, Interest};
+import std::collections::{DynamicArray, FixedArray};
+
+export { Command, Process, ExitStatus, Output, Stdio };
+
+extern "kama_os.h";
+// argv/envp marshalling — kama can't build a `char*[]`, so the vector is assembled in C (strdup'd, so it
+// survives the source kama-string RAII across fork). kama holds only the opaque `Ptr` + scalars.
+extern fn Ptr   kama_argv_new(int32 n);
+extern fn void  kama_argv_set(Ptr v, int32 i, Ptr<int8> s);
+extern fn void  kama_argv_free(Ptr v);
+extern fn Ptr   kama_envp_build(Ptr overrides, int32 clear);
+// pipe + spawn + wait + signal (POSIX fork/exec behind the seam)
+extern fn int32 kama_pipe(Ptr<int32> outRd, Ptr<int32> outWr);
+extern fn int32 kama_proc_spawn(Ptr argv, Ptr envp, Ptr<int8> cwd, int32 inFd, int32 outFd, int32 errFd, Ptr<int32> outPid);
+extern fn int32 kama_waitpid(int32 pid, Ptr<int32> outStatus, int32 flags);
+extern fn int32 kama_proc_exited(int32 st);
+extern fn int32 kama_proc_exit_code(int32 st);
+extern fn int32 kama_proc_signaled(int32 st);
+extern fn int32 kama_proc_term_signal(int32 st);
+extern fn int32 kama_kill(int32 pid, int32 sig);
+extern fn int32 kama_WNOHANG();
+extern fn int32 kama_SIGKILL();
+extern fn int32 kama_SIGTERM();
+// files (for /dev/null + parent-side fd hygiene) + errno accessors — the same static-inline seam std::fs uses.
+extern fn int32 kama_open_read(Ptr<int8> path);
+extern fn int32 kama_open_create(Ptr<int8> path);
+extern fn int32 kama_last_error();
+extern fn int32 kama_EINTR();
+
+// How a child's stdin/stdout/stderr is wired. Inherit = share the parent's fd; Piped = a pipe the parent
+// keeps an end of (Process.stdin()/stdout()/stderr() become a readable/writable File); Null = /dev/null.
+enum Stdio { Inherit, Piped, Null }
+
+// A finished child's status. On POSIX a process either EXITS with a code OR is killed by a SIGNAL (exactly
+// one): `code` is -1 when signalled, `signal` is 0 when it exited normally.
+@generate(of)
+type value ExitStatus {
+    public int32 code;
+    public int32 signal;
+    public fn bool success() { return this.signal == 0 && this.code == 0; }
+}
+
+// The captured result of `run()`: the finished status plus the fully-drained stdout/stderr bytes. Move-only
+// (owns the buffers); read via the accessors — `status()` (a value copy), `stdout()`/`stderr()` (borrows,
+// e.g. `out.stdout().length()`).
+type resource Output {
+    ExitStatus st;
+    DynamicArray<uint8> outBytes;
+    DynamicArray<uint8> errBytes;
+    // Internal — produced by Command.run() (a resource ctor is type-private, so this is exposed like
+    // TcpStream.make; not meant to be called directly).
+    public ctor make(ExitStatus status, DynamicArray<uint8> stdout, DynamicArray<uint8> stderr) {
+        Output r; r.st = status; r.outBytes = give stdout; r.errBytes = give stderr; return give r;
+    }
+    public fn ExitStatus status() { return this.st; }
+    public fn ref DynamicArray<uint8> stdout() { return this.outBytes; }
+    public fn ref DynamicArray<uint8> stderr() { return this.errBytes; }
+}
+
+// Fold a raw wait-status into an ExitStatus (WIF* accessors stay in C; kama sees only the int status).
+fn ExitStatus statusOf(int32 st) {
+    if (kama_proc_exited(st: st) != 0)   { return ExitStatus.of(code: kama_proc_exit_code(st: st), signal: 0); }
+    if (kama_proc_signaled(st: st) != 0) { return ExitStatus.of(code: -1, signal: kama_proc_term_signal(st: st)); }
+    return ExitStatus.of(code: -1, signal: 0);
+}
+
+// Build a NULL-terminated argv: [program, args...]. Freed by the caller with kama_argv_free.
+fn Ptr buildArgv(ref string program, ref DynamicArray<string> args) {
+    int32 n = 1 + args.length();
+    Ptr v = kama_argv_new(n: n);
+    kama_argv_set(v: v, i: 0, s: program.cstr());
+    int32 i = 0;
+    while (i < args.length()) {
+        kama_argv_set(v: v, i: i + 1, s: args[i].cstr());
+        i = i + 1;
+    }
+    return v;
+}
+
+// Build the child's envp = inherited environ (unless `clear`) with each KEY=VALUE override applied. The
+// merge (incl. replacing a matching KEY) is done in C; here we just marshal the overrides. Freed by caller.
+fn Ptr buildEnvp(bool clear, ref DynamicArray<string> keys, ref DynamicArray<string> vals) {
+    int32 n = keys.length();
+    Ptr ov = kama_argv_new(n: n);
+    int32 i = 0;
+    while (i < n) {
+        string kv = keys[i] + "=" + vals[i];
+        kama_argv_set(v: ov, i: i, s: kv.cstr());
+        i = i + 1;
+    }
+    Ptr envp = kama_envp_build(overrides: ov, clear: clear ? 1 : 0);
+    kama_argv_free(v: ov);
+    return envp;
+}
+
+// A subprocess builder. Accumulates program + args + env overrides + cwd + per-stream Stdio, then
+// spawn()/run(). Move-only (owns its lists/strings). Not injection-prone: args are a vector, never a shell
+// string (use the explicit `shell` ctor for `sh -c`).
+type resource Command {
+    string program;
+    DynamicArray<string> args;
+    DynamicArray<string> envKeys;
+    DynamicArray<string> envVals;
+    bool   envClear;
+    string cwd;              // empty = inherit the parent's cwd
+    Stdio  inCfg;
+    Stdio  outCfg;
+    Stdio  errCfg;
+
+    // Build a command for `program` (PATH-resolved by execvp unless it contains '/'). Args take ownership of
+    // the passed string (pass a literal, or `copy someVar`).
+    public ctor make(string program) {
+        Command c;
+        c.program = give program;
+        c.args    = DynamicArray.empty();
+        c.envKeys = DynamicArray.empty();
+        c.envVals = DynamicArray.empty();
+        c.envClear = false;
+        c.cwd = "";
+        c.inCfg = Stdio::Inherit; c.outCfg = Stdio::Inherit; c.errCfg = Stdio::Inherit;
+        return give c;
+    }
+
+    // Opt-in shell form: run `sh -c <line>`. The default (argv vector) stays injection-safe; this is the
+    // clearly-named escape hatch when you actually want shell parsing.
+    public ctor shell(string line) {
+        Command c = Command.make(program: "sh");
+        c.args.add(item: "-c");
+        c.args.add(item: give line);
+        return give c;
+    }
+
+    public fn void arg(string a) { this.args.add(item: give a); }
+    public fn void args(ref DynamicArray<string> list) {
+        int32 i = 0;
+        while (i < list.length()) { this.args.add(item: copy list[i]); i = i + 1; }
+    }
+    public fn void cwd(string dir) { this.cwd = give dir; }
+    public fn void env(string key, string val) { this.envKeys.add(item: give key); this.envVals.add(item: give val); }
+    public fn void envClear() { this.envClear = true; }
+    public fn void stdin(Stdio s)  { this.inCfg = s; }
+    public fn void stdout(Stdio s) { this.outCfg = s; }
+    public fn void stderr(Stdio s) { this.errCfg = s; }
+
+    // Spawn the child and return a live Process handle. Creates a pipe (or opens /dev/null) per Piped/Null
+    // stream; the parent keeps its end (in the Process), the child-side ends close on return (RAII).
+    public fn Result<Process, IoError> start() {
+        string devnull = "/dev/null";
+
+        // stdin: parent WRITES inKeep; child READS inGive.
+        File inKeep = File.make(fd: 0);
+        File inGive = File.make(fd: 0);
+        match (this.inCfg) {
+            case Inherit: {}
+            case Piped: {
+                int32 rd = 0; int32 wr = 0;
+                if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
+                inGive = File.make(fd: rd); inKeep = File.make(fd: wr);
+            }
+            case Null: {
+                int32 fd = kama_open_read(path: devnull.cstr());
+                if (fd < 0) { return Result::Err(error: lastError()); }
+                inGive = File.make(fd: fd);
+            }
+        };
+
+        // stdout: parent READS outKeep; child WRITES outGive.
+        File outKeep = File.make(fd: 0);
+        File outGive = File.make(fd: 0);
+        match (this.outCfg) {
+            case Inherit: {}
+            case Piped: {
+                int32 rd = 0; int32 wr = 0;
+                if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
+                outGive = File.make(fd: wr); outKeep = File.make(fd: rd);
+            }
+            case Null: {
+                int32 fd = kama_open_create(path: devnull.cstr());
+                if (fd < 0) { return Result::Err(error: lastError()); }
+                outGive = File.make(fd: fd);
+            }
+        };
+
+        // stderr: parent READS errKeep; child WRITES errGive.
+        File errKeep = File.make(fd: 0);
+        File errGive = File.make(fd: 0);
+        match (this.errCfg) {
+            case Inherit: {}
+            case Piped: {
+                int32 rd = 0; int32 wr = 0;
+                if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
+                errGive = File.make(fd: wr); errKeep = File.make(fd: rd);
+            }
+            case Null: {
+                int32 fd = kama_open_create(path: devnull.cstr());
+                if (fd < 0) { return Result::Err(error: lastError()); }
+                errGive = File.make(fd: fd);
+            }
+        };
+
+        int32 childIn  = match (this.inCfg)  { case Inherit: -1; case _: inGive.rawFd(); };
+        int32 childOut = match (this.outCfg) { case Inherit: -1; case _: outGive.rawFd(); };
+        int32 childErr = match (this.errCfg) { case Inherit: -1; case _: errGive.rawFd(); };
+
+        Ptr argv = buildArgv(program: ref this.program, args: ref this.args);
+        Ptr envp = null;
+        if (this.envClear || this.envKeys.length() > 0) {
+            envp = buildEnvp(clear: this.envClear, keys: ref this.envKeys, vals: ref this.envVals);
+        }
+
+        int32 pid = 0;
+        int32 rc = kama_proc_spawn(argv: argv, envp: envp, cwd: this.cwd.cstr(),
+                                   inFd: childIn, outFd: childOut, errFd: childErr, outPid: addr(of: pid));
+        kama_argv_free(v: argv);
+        if (envp != null) { kama_argv_free(v: envp); }
+        if (rc != 0) { return Result::Err(error: lastError()); }
+
+        // inGive/outGive/errGive drop at return → close the child-side ends (so the parent's read ends see
+        // EOF when the child exits). inKeep/outKeep/errKeep move into the Process.
+        return Result::Ok(value: Process.make(pid: pid, inKeep: give inKeep, outKeep: give outKeep, errKeep: give errKeep));
+    }
+
+    // One-shot: force stdout+stderr Piped, spawn, DRAIN BOTH CONCURRENTLY (a Poller over the two pipe fds —
+    // reading one-then-the-other would deadlock if the child fills the second pipe), then wait. Returns the
+    // captured Output.
+    public fn Result<Output, IoError> run() {
+        this.outCfg = Stdio::Piped;
+        this.errCfg = Stdio::Piped;
+        Result<Process, IoError> sp = this.start();
+        Process p = match (give sp) {
+            case Ok(pr): { := give pr; }
+            case Err(e): { return Result::Err(error: e); }
+        };
+        Result<Poller, IoError> pl = Poller.create();
+        Poller poller = match (give pl) {
+            case Ok(pp): { := give pp; }
+            case Err(e): { return Result::Err(error: e); }
+        };
+        isize outFd = cast<isize>(p.stdout().rawFd());
+        isize errFd = cast<isize>(p.stderr().rawFd());
+        poller.add(fd: outFd, interest: Interest::Read);
+        poller.add(fd: errFd, interest: Interest::Read);
+
+        DynamicArray<uint8> outBuf = DynamicArray.empty();
+        DynamicArray<uint8> errBuf = DynamicArray.empty();
+        FixedArray<uint8> scratch = FixedArray.make(size: 65536);
+        bool outDone = false;
+        bool errDone = false;
+        while (!outDone || !errDone) {
+            Result<int32, IoError> w = poller.wait(timeoutMs: -1);
+            match (w) { case Ok(_): {} case Err(_): {} };   // EINTR → retry (poll re-checks readiness)
+            if (!outDone && poller.readyFor(fd: outFd).readable) {
+                Result<usize, IoError> rr = p.stdout().read(into: scratch.view());
+                int32 got = match (rr) {
+                    case Ok(n): {
+                        int32 cnt = cast<int32>(n); int32 i = 0;
+                        while (i < cnt) { outBuf.add(item: scratch[i]); i = i + 1; }
+                        := cnt;
+                    }
+                    case Err(e): { := 0; }
+                };
+                if (got == 0) { outDone = true; poller.remove(fd: outFd); }
+            }
+            if (!errDone && poller.readyFor(fd: errFd).readable) {
+                Result<usize, IoError> rr = p.stderr().read(into: scratch.view());
+                int32 got = match (rr) {
+                    case Ok(n): {
+                        int32 cnt = cast<int32>(n); int32 i = 0;
+                        while (i < cnt) { errBuf.add(item: scratch[i]); i = i + 1; }
+                        := cnt;
+                    }
+                    case Err(e): { := 0; }
+                };
+                if (got == 0) { errDone = true; poller.remove(fd: errFd); }
+            }
+        }
+        Result<ExitStatus, IoError> stR = p.wait();
+        ExitStatus status = match (stR) {
+            case Ok(s): s;
+            case Err(e): { return Result::Err(error: e); }
+        };
+        return Result::Ok(value: Output.make(status: status, stdout: give outBuf, stderr: give errBuf));
+    }
+}
+
+// A spawned child. Move-only, RAII. Holds the pid + the parent-side pipe ends (a File per Piped stream, else
+// a moved-from File{0} the drop-guard skips).
+type resource Process {
+    int32 pid;                // > 0 live/reapable; 0 = reaped / moved-from sentinel
+    bool  reaped;
+    File  inPipe;             // parent write end  (child stdin)  when inCfg==Piped
+    File  outPipe;            // parent read end   (child stdout) when outCfg==Piped
+    File  errPipe;            // parent read end   (child stderr) when errCfg==Piped
+
+    // Internal — produced by Command.start() (exposed like TcpStream.make; not meant to be called directly).
+    public ctor make(int32 pid, File inKeep, File outKeep, File errKeep) {
+        Process r;
+        r.pid = pid; r.reaped = false;
+        r.inPipe = give inKeep; r.outPipe = give outKeep; r.errPipe = give errKeep;
+        return give r;
+    }
+
+    // The child's process id (Rust `.id()`).
+    public fn int32 id() { return this.pid; }
+
+    // Borrow the parent-side pipe ends (meaningful only when that stream was Piped — else it's a File{0}
+    // sentinel over stdin/stdout, so don't read/write a non-Piped stream). Write to stdin(), read stdout()/
+    // stderr(). Call closeStdin() to send EOF to a child reading its stdin.
+    public fn ref File stdin()  { return this.inPipe; }
+    public fn ref File stdout() { return this.outPipe; }
+    public fn ref File stderr() { return this.errPipe; }
+
+    // Close the child's stdin write end NOW → the child reading its stdin sees EOF. Explicit close (not a
+    // drop) so the child (whose inherited copy of this fd is FD_CLOEXEC'd away at exec) is the last holder.
+    public fn void closeStdin() { this.inPipe.close(); }
+
+    // Blocking reap → the child's ExitStatus. EINTR-retried; sets reaped (a second wait/dtor is a no-op).
+    public fn Result<ExitStatus, IoError> wait() {
+        if (this.reaped) { return Result::Err(error: IoError::Other(code: 0)); }
+        int32 st = 0;
+        while (true) {
+            int32 r = kama_waitpid(pid: this.pid, outStatus: addr(of: st), flags: 0);
+            if (r >= 0) { this.reaped = true; this.pid = 0; return Result::Ok(value: statusOf(st: st)); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+
+    // Non-blocking reap. Ok(Some) if the child exited (status collected), Ok(None) if still running.
+    public fn Result<Optional<ExitStatus>, IoError> tryWait() {
+        if (this.reaped) { return Result::Ok(value: Optional::None); }
+        int32 st = 0;
+        while (true) {
+            int32 r = kama_waitpid(pid: this.pid, outStatus: addr(of: st), flags: kama_WNOHANG());
+            if (r == 0) { return Result::Ok(value: Optional::None); }
+            if (r > 0)  { this.reaped = true; this.pid = 0; return Result::Ok(value: Optional::Some(value: statusOf(st: st))); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+
+    // Send a signal to the child. No-op if already reaped/detached.
+    public fn Result<Unit, IoError> signal(int32 sig) {
+        if (this.pid <= 0) { return Result::Ok(value: Unit::Unit); }
+        if (kama_kill(pid: this.pid, sig: sig) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    public fn Result<Unit, IoError> kill()      { return this.signal(sig: kama_SIGKILL()); }
+    public fn Result<Unit, IoError> terminate() { return this.signal(sig: kama_SIGTERM()); }
+
+    // Non-blocking reap/detach on drop: reap if already exited (no zombie), else leave it (the OS reparents
+    // to init and reaps on its exit). NEVER blocks. Then the pipe Files drop, closing any live fds.
+    ~Process() {
+        if (this.pid > 0 && !this.reaped) {
+            int32 st = 0;
+            int32 r = kama_waitpid(pid: this.pid, outStatus: addr(of: st), flags: kama_WNOHANG());
+        }
+    }
+}

@@ -1,0 +1,37 @@
+// std::process — feed a child's stdin then EOF. Pipe stdin+stdout to `cat`, write "hi\n", closeStdin()
+// (drops the write end -> child sees EOF), read the echoed stdout back. Proves stdin(Piped)+writeAll+
+// closeStdin round-trip (the replace-and-drop EOF idiom).
+import std::process::{Command, Process, Stdio};
+import std::io::{IoError};
+import std::fs::{File};
+import std::collections::{DynamicArray};
+
+fn int main() {
+    Command c = Command.make(program: "cat");
+    c.stdin(s: Stdio::Piped);
+    c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> sr = c.start();
+    Process p = match (give sr) { case Ok(pr): { := give pr; } case Err(e): { return 140; } };
+
+    DynamicArray<uint8> input = DynamicArray.empty();
+    input.add(item: cast<uint8>(104));   // 'h'
+    input.add(item: cast<uint8>(105));   // 'i'
+    input.add(item: cast<uint8>(10));    // '\n'
+    Result<usize, IoError> wr = p.stdin().writeAll(bytes: input);
+    int32 w = match (wr) { case Ok(n): 0; case Err(e): 141; };
+    if (w != 0) { return w; }
+    p.closeStdin();                       // EOF so `cat` finishes
+
+    Result<DynamicArray<uint8>, IoError> rd = p.stdout().readAll();
+    return match (give rd) {
+        case Ok(got): {
+            int32 n = cast<int32>(got.length());
+            int32 code = 42;
+            if (n != 3) { code = 142; }
+            else if (got[0] != cast<uint8>(104)) { code = 143; }
+            else if (got[2] != cast<uint8>(10)) { code = 144; }
+            := code;
+        }
+        case Err(e): 145;
+    };
+}

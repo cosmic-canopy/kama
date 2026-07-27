@@ -1,0 +1,22 @@
+// std::process — cwd() changes the child's working directory. Run the `pwd` binary with cwd("/") and check
+// captured stdout is "/\n" (root avoids the /tmp-symlink ambiguity on macOS; no shell/quoting needed).
+import std::process::{Command, Output};
+import std::io::{IoError};
+import std::collections::{DynamicArray};
+
+fn int main() {
+    Command c = Command.make(program: "pwd");
+    c.cwd(dir: "/");
+    Result<Output, IoError> r = c.run();
+    return match (give r) {
+        case Ok(o): {
+            int32 n = cast<int32>(o.stdout().length());
+            int32 code = 42;
+            if (n != 2) { code = 96; }
+            else if (o.stdout()[0] != cast<uint8>(47)) { code = 97; }   // '/'
+            else if (o.stdout()[1] != cast<uint8>(10)) { code = 98; }   // '\n'
+            := code;
+        }
+        case Err(e): 99;
+    };
+}

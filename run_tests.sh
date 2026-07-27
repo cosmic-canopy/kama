@@ -226,12 +226,18 @@ test_one() {
     expected="$(cat "$expect_file")"
 
     # Net transports split by target (see below); skip the half that doesn't apply to the active target.
-    local uses_net_web=0 uses_net=0 BROWSER=0
+    local uses_net_web=0 uses_net=0 uses_proc=0 BROWSER=0
     { grep -q 'std::net::web' "$src" || grep -q 'kama_net_web.h' "$src"; } && uses_net_web=1
     grep -q 'std::net' "$src" && uses_net=1
+    grep -q 'std::process' "$src" && uses_proc=1
     if [ "$WASM" = 1 ]; then
         if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then
             echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return
+        fi
+        # std::process has no meaning under wasm/emscripten (no fork/exec/waitpid in the sandbox) — same
+        # class as native raw sockets above. Skip any fixture that imports it on the wasm leg.
+        if [ "$uses_proc" = 1 ]; then
+            echo "SKIP $name (std::process: no fork/exec on wasm)" >"$out"; echo SKIP >"$res"; return
         fi
         # Inline asm (MCU 6a) is native/embedded-only — target-specific machine instructions have no wasm
         # form. Skip any fixture that uses `asm(` on the wasm leg (mnemonics like `nop`/`wfi` aren't wasm).

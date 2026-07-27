@@ -1,0 +1,14 @@
+// std::process — start() + blocking wait() reads a non-zero exit code. shell("exit 7") -> code 7, !success.
+import std::process::{Command, Process, ExitStatus};
+import std::io::{IoError};
+
+fn int main() {
+    Command c = Command.shell(line: "exit 7");
+    Result<Process, IoError> sr = c.start();
+    Process p = match (give sr) { case Ok(pr): { := give pr; } case Err(e): { return 80; } };
+    Result<ExitStatus, IoError> wr = p.wait();
+    return match (wr) {
+        case Ok(s): { int32 cc = 42; if (s.success()) { cc = 81; } else if (s.code != 7) { cc = 82; } := cc; }
+        case Err(e): 83;
+    };
+}

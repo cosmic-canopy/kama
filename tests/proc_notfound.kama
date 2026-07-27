@@ -1,0 +1,13 @@
+// std::process — spawning a nonexistent program: the child's execvp fails, so it _exit(127)s (the shell
+// "command not found" convention). run() still returns Ok with the captured (empty) output + code 127.
+import std::process::{Command, Output};
+import std::io::{IoError};
+
+fn int main() {
+    Command c = Command.make(program: "this_binary_does_not_exist_xyzzy");
+    Result<Output, IoError> r = c.run();
+    return match (give r) {
+        case Ok(o): (o.status().code == 127 ? 42 : 130);
+        case Err(e): 131;
+    };
+}

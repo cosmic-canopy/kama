@@ -1,0 +1,22 @@
+// std::process — the ANTI-DEADLOCK guard. A child emits >64 KiB to BOTH stdout and stderr; a naive
+// read-stdout-then-stderr would deadlock when the child blocks filling the second pipe. run() drains both
+// concurrently (Poller), so both are captured in full. 8000 lines * 20 bytes = 160000 each.
+import std::process::{Command, Output};
+import std::io::{IoError};
+import std::collections::{DynamicArray};
+
+fn int main() {
+    Command c = Command.shell(line: "i=0; while [ $i -lt 8000 ]; do echo AAAAAAAAAAAAAAAAAAA; echo BBBBBBBBBBBBBBBBBBB 1>&2; i=$((i+1)); done");
+    Result<Output, IoError> r = c.run();
+    return match (give r) {
+        case Ok(o): {
+            int32 n = cast<int32>(o.stdout().length());
+            int32 e = cast<int32>(o.stderr().length());
+            int32 code = 42;
+            if (n != 160000) { code = 70; }
+            else if (e != 160000) { code = 71; }
+            := code;
+        }
+        case Err(x): 72;
+    };
+}

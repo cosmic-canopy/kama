@@ -721,13 +721,26 @@ fn int main() {
 }
 ```
 
-### Standard I/O (`std::io` / `std::fs` / `std::net`) ✅
+### Standard I/O (`std::io` / `std::fs` / `std::net` / `std::process`) ✅
 
 A native, single-binary I/O foundation — **library over FFI, no new language surface** beyond the prelude's
 `enum Unit` (the empty `Result<Unit, E>` payload — one error convention for void-fallible ops). `std::io`
 gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor) plus free
 `readFile`/`writeFile`/`stat`/`readDir`/`remove`; `std::net` gives RAII `TcpListener`/`TcpStream` (blocking
 TCP) and `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
+
+**Subprocesses (`std::process`).** A `Command` builder — argv **vector** (never a shell string, so
+injection-safe by construction; `Command.shell(line:)` is the explicit `sh -c` opt-in) with `cwd`/`env`/
+`envClear` and per-stream `Stdio { Inherit | Piped | Null }` — spawns an owned, move-only `type resource
+Process` via `start()`, or captures via the one-shot `run() -> Output { status, stdout, stderr }` (which
+drains stdout+stderr **concurrently** through `std::net::Poller`, so a child that fills both pipes can't
+deadlock the parent). `Process` gives `wait()` (blocking reap → `ExitStatus { code, signal, success() }`),
+`tryWait() -> Optional<ExitStatus>` (non-blocking), `kill`/`terminate`/`signal`, and the piped streams as
+`std::fs::File`s (`stdout()`/`stderr()` read, `stdin()`+`closeStdin()` feed-then-EOF). Dropping a `Process`
+**never blocks**: it reaps a already-exited child (no zombie) or detaches it (the OS reparents to init) —
+explicit `wait()` is how you get the status. POSIX only today (fork/execvp/pipe/waitpid behind `kama_os.h`);
+Windows (`CreateProcess`) is a later milestone, and wasm has no process model. See
+[docs/design/std-process.md](design/std-process.md).
 
 **The streaming byte substrate.** `std::io` also defines two contracts that unify every byte source/sink:
 `type contract Writer` (the partial-write primitive `write(View<uint8>) -> Result<usize, IoError>` + `flush`)

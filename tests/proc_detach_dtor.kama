@@ -1,0 +1,20 @@
+// std::process — RAII hygiene under load. 3000x: spawn `true` with a piped stdout, then DROP the Process
+// without wait(). The dtor must reap the (already-exited) child (no zombie pileup) and its File fields must
+// close the pipe ends (no fd leak -> no EMFILE). Stays ASan-clean under KAMA_SAN.
+import std::process::{Command, Process, Stdio};
+import std::io::{IoError};
+
+fn int main() {
+    int32 i = 0;
+    while (i < 3000) {
+        Command c = Command.make(program: "true");
+        c.stdout(s: Stdio::Piped);
+        Result<Process, IoError> sr = c.start();
+        match (give sr) {
+            case Ok(p): {}                 // p drops here: dtor WNOHANG-reaps + closes the pipe read end
+            case Err(e): { return 120; }
+        };
+        i = i + 1;
+    }
+    return 42;
+}

@@ -1,0 +1,23 @@
+// std::process — run `true` (exit 0) and `false` (exit 1) via run() (spawn + concurrent stdout/stderr
+// drain + wait). Proves the fork/exec/pipe path + ExitStatus.success()/code. Returns 42 on success.
+import std::process::{Command, Output, ExitStatus};
+import std::io::{IoError};
+
+fn int main() {
+    Command t = Command.make(program: "true");
+    Result<Output, IoError> tr = t.run();
+    int32 a = match (give tr) {
+        case Ok(o): (o.status().success() ? 0 : 91);
+        case Err(e): 92;
+    };
+    if (a != 0) { return a; }
+
+    Command f = Command.make(program: "false");
+    Result<Output, IoError> fr = f.run();
+    int32 b = match (give fr) {
+        case Ok(o): ((o.status().code == 1) ? 0 : 93);
+        case Err(e): 94;
+    };
+    if (b != 0) { return b; }
+    return 42;
+}

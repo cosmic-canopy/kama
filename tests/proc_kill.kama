@@ -1,0 +1,19 @@
+// std::process — kill() a running child; wait() reports termination by signal (SIGKILL, 9 on POSIX), not a
+// normal exit. Spawn `sleep 10` directly so the pid IS sleep (kill hits it, not a shell wrapper).
+import std::process::{Command, Process, ExitStatus};
+import std::io::{IoError};
+
+fn int main() {
+    Command c = Command.make(program: "sleep");
+    c.arg(a: "10");
+    Result<Process, IoError> sr = c.start();
+    Process p = match (give sr) { case Ok(pr): { := give pr; } case Err(e): { return 100; } };
+    Result<Unit, IoError> kr = p.kill();
+    int32 k = match (kr) { case Ok(u): 0; case Err(e): 101; };
+    if (k != 0) { return k; }
+    Result<ExitStatus, IoError> wr = p.wait();
+    return match (wr) {
+        case Ok(s): { int32 cc = 42; if (s.success()) { cc = 102; } else if (s.signal != 9) { cc = 103; } := cc; }
+        case Err(e): 104;
+    };
+}

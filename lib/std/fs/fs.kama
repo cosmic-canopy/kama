@@ -35,7 +35,17 @@ type value Metadata {
 // (`std::io::Reader`/`Writer`), so serde streams straight to/from disk (`JsonWriter::<File>` / `decodeFrom`).
 type resource File implements Reader, Writer {
     int32 fd;
-    private ctor make(int32 fd) { File r; r.fd = fd; return give r; }
+    // Adopt an already-open fd (e.g. a child pipe end from std::process, mirroring TcpStream.make). Prefer
+    // `open` for files. The File closes this fd on drop (RAII); pass 0 for an empty/moved-from sentinel.
+    public ctor make(int32 fd) { File r; r.fd = fd; return give r; }
+
+    // The raw descriptor (for a readiness Poller etc.), mirroring TcpStream.rawHandle(). Borrow-only — the
+    // File still owns the fd and closes it on drop.
+    public fn int32 rawFd() { return this.fd; }
+
+    // Close the descriptor NOW (idempotent) instead of waiting for drop — e.g. to send EOF down a pipe
+    // (std::process closeStdin). Zeroes the fd so the destructor's `fd > 0` guard won't double-close.
+    public fn void close() { if (this.fd > 0) { int32 rc = kama_close_fd(fd: this.fd); this.fd = 0; } }
 
     // Open a file for reading or writing (Write creates/truncates). The returned `File` closes on drop.
     public ctor Result<File, IoError> open(ref string path, OpenMode mode) {

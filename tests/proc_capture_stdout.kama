@@ -1,0 +1,23 @@
+// std::process — capture a child's stdout bytes via run(). `echo hello` -> "hello\n" (6 bytes), stderr empty.
+import std::process::{Command, Output};
+import std::io::{IoError};
+import std::collections::{DynamicArray};
+
+fn int main() {
+    Command c = Command.make(program: "echo");
+    c.arg(a: "hello");
+    Result<Output, IoError> r = c.run();
+    return match (give r) {
+        case Ok(o): {
+            int32 n = cast<int32>(o.stdout().length());
+            int32 e = cast<int32>(o.stderr().length());
+            int32 code = 42;
+            if (n != 6) { code = 50; }
+            else if (e != 0) { code = 51; }
+            else if (o.stdout()[0] != cast<uint8>(104)) { code = 52; }   // 'h'
+            else if (o.stdout()[5] != cast<uint8>(10)) { code = 53; }    // '\n'
+            := code;
+        }
+        case Err(x): 54;
+    };
+}

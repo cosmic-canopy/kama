@@ -351,6 +351,8 @@ static inline void kama_poller_free(void* ph) {
 #include <netinet/tcp.h>  // TCP_NODELAY
 #include <arpa/inet.h>    // inet_addr
 #include <poll.h>         // poll, struct pollfd, POLLIN/POLLOUT
+#include <sys/wait.h>     // waitpid, WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG, WNOHANG  (std::process)
+#include <signal.h>       // kill, SIGKILL, SIGTERM  (std::process)
 
 // NOT <unistd.h>: on macOS its `write`/`read` carry a `__DARWIN_ALIAS_C` asm label, and because
 // kama_runtime.h already declared+used `write` (its bounds-trap, block scope) BEFORE this header is
@@ -361,6 +363,18 @@ extern long read(int, void*, size_t);
 extern long write(int, const void*, size_t);
 extern int  close(int);
 extern int  unlink(const char*);
+// std::process (fork/exec/pipe): hand-declared for the same reason as read/write above. These have no
+// asm-label alias on macOS, so redeclaring is safe even if a socket header transitively pulls <unistd.h>.
+extern int   pipe(int[2]);
+extern int   dup2(int, int);
+extern int   chdir(const char*);
+extern int   execvp(const char*, char* const[]);
+extern int   fork(void);
+extern void  _exit(int);
+extern int   kill(int, int);
+extern int   fcntl(int, int, ...);
+extern char* strdup(const char*);
+extern char** environ;
 
 // ---- errno / last-error ----------------------------------------------------
 // A stable accessor + constant accessors, so kama never hardcodes per-OS errno numbers. (The Windows
@@ -408,6 +422,99 @@ static inline kama_string kama_dirnext(void* dirp) {
     if (!e) { kama_string r; r.data = NULL; r.len = 0; r.cap = 0; return r; }
     return kama_string_from_raw((const uint8_t*)e->d_name, 0, (int32_t)strlen(e->d_name));
 }
+
+// ---- process (std::process; POSIX fork/exec) -------------------------------
+// A child's argv/envp are built HERE as strdup'd `char*[]` — owned independently of the kama `string` RAII,
+// so they survive across fork even after the parent frees the source strings. kama holds only the opaque
+// vector `Ptr`, `int32` fds/pid, and the `int` wait-status folded to scalar accessors (like `struct stat`).
+static inline void* kama_argv_new(int32_t n) {
+    return calloc((size_t)n + 1, sizeof(char*));           // n slots + NULL terminator, zeroed
+}
+static inline void kama_argv_set(void* v, int32_t i, const char* s) {
+    ((char**)v)[i] = strdup(s ? s : "");                   // own a copy (survives kama-string drop across fork)
+}
+static inline void kama_argv_free(void* v) {
+    if (!v) return;
+    for (char** p = (char**)v; *p; ++p) free(*p);
+    free(v);
+}
+// Build the child's envp: start from the parent `environ` (unless `clear`), then apply each "KEY=VALUE"
+// override — REPLACING an inherited entry with the same KEY (getenv semantics: a plain append wouldn't
+// override, since libc returns the first match), else appending. `overrides` is a NULL-terminated char*[]
+// of "KEY=VALUE". Returns a fresh strdup'd char*[] (free with kama_argv_free). Done in the PARENT (malloc
+// is safe there); the child only assigns the result to `environ` then execs.
+static inline void* kama_envp_build(void* overridesV, int32_t clear) {
+    char** ov = (char**)overridesV;
+    int nov = 0; if (ov) while (ov[nov]) nov++;
+    int nbase = 0; if (!clear && environ) while (environ[nbase]) nbase++;
+    char** out = (char**)calloc((size_t)nbase + (size_t)nov + 1, sizeof(char*));
+    int k = 0;
+    for (int i = 0; i < nbase; i++) {
+        const char* e = environ[i];
+        const char* eq = strchr(e, '=');
+        size_t klen = eq ? (size_t)(eq - e) : strlen(e);
+        int overridden = 0;
+        for (int j = 0; j < nov; j++) {
+            const char* o = ov[j]; const char* oeq = strchr(o, '=');
+            size_t olen = oeq ? (size_t)(oeq - o) : strlen(o);
+            if (olen == klen && strncmp(o, e, klen) == 0) { overridden = 1; break; }
+        }
+        if (!overridden) out[k++] = strdup(e);
+    }
+    for (int j = 0; j < nov; j++) out[k++] = strdup(ov[j]);
+    out[k] = NULL;
+    return out;
+}
+// Create a pipe with BOTH ends marked FD_CLOEXEC. Critical for the fork/exec model: without it the child
+// inherits a copy of EVERY parent pipe fd, and in particular a stdin pipe's WRITE end — so `closeStdin()`
+// in the parent would never deliver EOF (the child keeps its own inherited write end open) and a child
+// like `cat` blocks forever. CLOEXEC makes exec close every inherited end; the dup2'd 0/1/2 survive (dup2
+// clears CLOEXEC on the new fd). macOS has no pipe2(), so set it via fcntl after pipe().
+static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
+    int fds[2];
+    if (pipe(fds) != 0) return -1;
+    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    *outRd = (int32_t)fds[0]; *outWr = (int32_t)fds[1];
+    return 0;
+}
+// fork + (optional chdir) + dup2 the three std fds + execvp. Between fork and exec the child touches ONLY
+// async-signal-safe calls (chdir/dup2/close/execvp/_exit + a bare `environ =` pointer store) — NEVER malloc
+// or setenv — so a custom env is a fully-built envp assigned to `environ` (built in the PARENT, where malloc
+// is safe). In a multithreaded (isolate) parent only the forking thread survives in the child, and it holds
+// no lock it must release, so this is safe. Each std-fd arg is a real fd to dup2 (a pipe end or /dev/null),
+// or -1 to leave the inherited fd untouched. Returns 0 (pid in *outPid) or -1 (fork failed).
+static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
+                                      int32_t inFd, int32_t outFd, int32_t errFd, int32_t* outPid) {
+    int pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {                                        // ---- child (async-signal-safe only) ----
+        if (cwd && cwd[0]) { if (chdir(cwd) != 0) _exit(127); }
+        if (inFd  >= 0) { dup2(inFd,  0); if (inFd  > 2) close(inFd);  }
+        if (outFd >= 0) { dup2(outFd, 1); if (outFd > 2) close(outFd); }
+        if (errFd >= 0) { dup2(errFd, 2); if (errFd > 2) close(errFd); }
+        if (envp) environ = (char**)envp;
+        execvp(((char**)argv)[0], (char* const*)argv);
+        _exit(127);                                        // exec failed (ENOENT/EACCES/...) — 127 convention
+    }
+    *outPid = (int32_t)pid;                                // ---- parent ----
+    return 0;
+}
+// waitpid folded to scalar. Returns >0 (reaped; status in *outStatus), 0 (WNOHANG: still running), -1 (err).
+static inline int32_t kama_waitpid(int32_t pid, int32_t* outStatus, int32_t flags) {
+    int st = 0;
+    int r = (int)waitpid((int)pid, &st, (int)flags);
+    if (r > 0) *outStatus = (int32_t)st;
+    return (int32_t)r;
+}
+static inline int32_t kama_proc_exited(int32_t st)      { return WIFEXITED(st)   ? 1 : 0; }
+static inline int32_t kama_proc_exit_code(int32_t st)   { return (int32_t)WEXITSTATUS(st); }
+static inline int32_t kama_proc_signaled(int32_t st)    { return WIFSIGNALED(st) ? 1 : 0; }
+static inline int32_t kama_proc_term_signal(int32_t st) { return (int32_t)WTERMSIG(st); }
+static inline int32_t kama_kill(int32_t pid, int32_t sig) { return (int32_t)kill((int)pid, (int)sig); }
+static inline int32_t kama_WNOHANG(void) { return (int32_t)WNOHANG; }
+static inline int32_t kama_SIGKILL(void) { return (int32_t)SIGKILL; }
+static inline int32_t kama_SIGTERM(void) { return (int32_t)SIGTERM; }
 
 // ---- TCP sockets -----------------------------------------------------------
 // The `sockaddr_in` fill (family/htons/inet_addr/zero-init) and the `(struct sockaddr*)` cast are all done

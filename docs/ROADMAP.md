@@ -104,12 +104,17 @@ scope + acceptance so a fresh session can start immediately.
    `assert`/`debugAssert` with message + location; `std::log` with runtime-reconfigurable level+tag on a
    shipped binary; a `tools/check-*.sh` capturing stdout/stderr. Precedes `std::process` (a subprocess API +
    a CLI both want console I/O).
-4. **`std::process` — subprocess handling (library over FFI + the concurrency seams).** Spawn/exec a child,
-   wire its stdio, wait for exit. Builds on shipped FFI (`posix_spawn` / `CreateProcess`), the `scope`
-   structured-lifetime model (wait-on-exit at scope end → no orphans), and the `std::net::Poller` substrate
-   (non-blocking reads of child stdout/stderr). Depends on (2) for clean arg passing and (3) for child stdio.
-   **Design of record: [design/std-process.md](design/std-process.md).** *Acceptance:* run a child, capture
-   its stdout + exit code, on POSIX + Windows, RAII-clean (no zombie/leaked handles), ASan-clean.
+4. **`std::process` — subprocess handling — ✅ SHIPPED M1 (POSIX), 2026-07-26.** `Command` builder (argv
+   vector + `shell()` opt-in, `cwd`/`env`/`envClear`, per-stream `Stdio`) → owned `Process` (`wait`/`tryWait`/
+   `kill`/`signal`/`id`, piped streams as `std::fs::File`, `closeStdin`) or one-shot `run()` capturing
+   `Output`. Pure library over `kama_os.h` (fork/execvp/pipe/waitpid) — **no compiler/language change**.
+   Reap-on-drop is non-blocking (reap-or-detach, never blocks); `run()` drains both pipes concurrently via
+   `std::net::Poller` (no deadlock). NOTE: a `Process` gets ordinary RAII drop, **not** the isolate `scope`
+   join barrier (corrected in the design doc — a child shares no address space, so there's nothing to protect;
+   orphans are not structurally prevented, detach outlives the handle). Native 788 / ASan 761 / wasm 737
+   (proc fixtures skipped — no fork/exec in the sandbox), 0-fail. **Design + as-shipped:
+   [design/std-process.md](design/std-process.md).** *Remaining:* **M2 Windows** (`CreateProcess`, own
+   session — the acceptance's Windows half); async/Poller-driven *live* child-stream reads (post-v1).
 
 **With (1)–(4) + the docs reconcile, the language is production-ready — tag 1.0.**
 
