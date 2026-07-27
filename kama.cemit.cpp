@@ -45,6 +45,7 @@ CEmitter::CEmitter(const std::string& sourcePath)
 int CEmitter::analyze(const std::vector<SharedCompilationUnit>& units)
 {
     if (units.empty()) return _unsupported;
+    _units = units;                      // retain for the query facade (URI->unit, outline ownership filter)
     if (units.size() == 1) {
         emit(units[0]);                  // writes to `_analysisSink` (the analysis-mode `_out`)
     } else {
@@ -56,6 +57,8 @@ int CEmitter::analyze(const std::vector<SharedCompilationUnit>& units)
         emitProgram(units, "<analysis>.h", sink, moduleStreams, paths);
         _out = &_analysisSink;           // restore (emitProgram left `_out` at the now-dying local sink)
     }
+    // Tables are stable after the analysis walk — build the read-only query index over them (T4/T5).
+    buildDefSites();
     return _unsupported;
 }
 
@@ -3458,6 +3461,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.retCType = cType(fn->returnType);
         sig.params  = paramSigsOf(fn->parameters);
         sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
+        sig.node = fn;                   // decl site for the LSP def-site table (unused by emission)
         _funcs[sig.cName] = sig;
 
         // a generic template (`fn max<T>(…)`) is registered for monomorphization and is
@@ -3482,6 +3486,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         InterfaceInfo ii;
         ii.name = qualify(*cd->name->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
         ii.symbolAliases = _nsCtx.symbolAliases;   // so contract sigs can name imported/library-generic types
+        ii.node = cd;                              // decl site for the LSP def-site table (unused by emission)
         // Kind-gate: `for value|resource|both` is MANDATORY on a contract — the designer must state which
         // kinds may implement it (`both` / listing both = either).
         if (cd->forKinds) for (auto& k : *cd->forKinds) {

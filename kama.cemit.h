@@ -15,6 +15,7 @@
 #include <cstdint>     // fixed-width ints — not transitive on all libcs (e.g. Windows UCRT)
 #include "kama.forward.h"
 #include "kama.diagnostic.h"   // structured Diagnostic accumulated by unsupported() (query surface)
+#include "kama.query.h"        // LSP query surface: SrcRange / DefSite / PosEntry / SymbolInfo / Location
 
 // A function parameter, in declared order. Named kama arguments are matched
 // against these to recover C's positional order at each call site.
@@ -31,6 +32,7 @@ struct FuncSig {
     std::string            retCType; // resolved C return type (signature check)
     std::vector<ParamSig>  params;
     bool                   isPlaceReturn = false;  // `fn ref T …` — returns a place (T*), deref'd at the call site
+    FunctionDeclarationNode* node = nullptr;  // decl site (LSP def-site table; unused by emission)
 };
 
 // A function-pointer signature type: a bodiless `fn ret Name(params);`.
@@ -361,6 +363,7 @@ struct InterfaceInfo {
     bool                         isGenericInst = false;
     std::string                  templateKey;   // the generic contract this specializes (e.g. "Iterator")
     std::vector<SharedIdentifier> typeArgs;      // the concrete args (e.g. [int32])
+    ClassDeclarationNode*        node = nullptr;  // decl site (`type contract` node; LSP def-site table, unused by emission)
 };
 
 // An enum: lowered to a C `enum` with members mangled `Enum_Member`.
@@ -444,6 +447,20 @@ public:
     const std::vector<Diagnostic>& diagnostics() const { return _diagnostics; }
 
 private:
+    // ---- LSP query index (T4/T5) — built at the tail of analyze(), read by the query facade -------------
+    // Populated from the symbol tables' existing decl-node pointers AFTER analysis, so it never perturbs
+    // resolution/emission (the whole facade runs read-only on stable tables). See kama.query.cpp.
+    std::vector<SharedCompilationUnit> _units;   // the USER units passed to analyze() (URI->unit, outline filter)
+    std::map<std::string, DefSite>     _defSites;  // resolved mangled name -> declaration site
+    std::map<const ASTNode*, const CompilationUnit*> _declUnit;  // top-level decl node -> owning unit
+    std::map<const CompilationUnit*, std::vector<PosEntry>> _positions;  // per-unit sorted decl/sig positions (T4b)
+    void buildDefSites();                        // fill _defSites/_declUnit from the tables (T4a)
+    void addDefSite(const std::string& key, SymKind kind, const CompilationUnit* unit,
+                    ASTNode* declNode, const SharedIdentifier& nameId,
+                    const std::string& display, const std::string& container);  // one _defSites entry
+    const CompilationUnit* unitOfDecl(const ASTNode* topLevelDecl) const;  // _declUnit lookup (nullptr => prelude/std)
+
+
     // Discards any stray write during analysis mode (collectProgram writes no C, but `unsupported()` still
     // appends its `/* TODO */` marker to `*_out`; in analysis mode that marker goes here and is dropped).
     std::ostringstream _analysisSink;
