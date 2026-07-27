@@ -27,9 +27,11 @@ ROADMAP §10 before designing.**
   `tools/check-lsp.sh` (scripted JSON-RPC session over stdio) wired into `run_tests.sh` native leg. native
   793/793; the LSP C++ (JSON parser/transport) is ASan+UBSan-clean under adversarial input; emission
   unchanged (all changes additive). Design of record: [lsp-m1-kickoff.md](lsp-m1-kickoff.md).
-- **NEXT: M2 — hover + go-to-definition + document symbols** (wire the M0 facade —
-  `definitionAt`/`typeAtPosition`/`documentSymbols` — to LSP requests + flip on the `initialize`
-  capabilities). The query index is already built and waiting.
+- **NEXT: M2 — hover + go-to-definition + document symbols.** Cold-start brief:
+  [lsp-m2-kickoff.md](lsp-m2-kickoff.md). Wire the M0 facade (`definitionAt`/`typeAtPosition`/
+  `documentSymbols`) to LSP requests + flip on the `initialize` capabilities. The query index is already
+  built and waiting; the one structural change is keeping the analyzed `CEmitter` alive per document (an
+  opaque index handle) so queries — not just diagnostics — can read it.
 
 ## Why (from the ROADMAP)
 
