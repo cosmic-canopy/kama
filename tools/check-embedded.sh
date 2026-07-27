@@ -23,6 +23,18 @@ trap 'rm -rf "$tmp"' EXIT
 cfile="$tmp/blink.c"
 obj="$tmp/blink.o"
 
+# `--target embedded` is triple-AGNOSTIC by design: it hands the freestanding flags to whatever `--cc`
+# emits, and a firmware author supplies their own cross compiler. That makes the host default fine on
+# Linux (ELF) but wrong on macOS, where clang defaults to mach-o and rejects the ELF section names the
+# @section fixture uses ("mach-o section specifier requires a segment and section separated by a comma").
+# Pin a bare-metal ELF triple there — which is what a real firmware build does anyway. Compile-only
+# (`-c`), so no sysroot or cross libc is needed; `nm` reads the resulting ARM ELF object fine.
+if [ "$(uname -s)" = "Darwin" ]; then
+    set -- --cc "clang --target=armv7m-none-eabi"
+else
+    set --
+fi
+
 # 1. SHAPE — transpile (target-agnostic) and confirm the guarded freestanding entry is emitted.
 "$KAMA" transpile "$FIXTURE" -o "$cfile" >/dev/null
 if ! grep -q '#if defined(KAMA_TARGET_EMBEDDED)' "$cfile"; then
@@ -35,7 +47,7 @@ fi
 # 2. FREESTANDING COMPILE — drive the real `--target embedded` path to an object. This exercises the driver
 #    flag plumbing (-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED -c) and proves the value-only program
 #    compiles freestanding. Warnings (e.g. unused-allocator out-of-scope notes) are fine; a nonzero exit is not.
-if ! "$KAMA" build "$FIXTURE" --target embedded -o "$obj" >/dev/null 2>"$tmp/build.err"; then
+if ! "$KAMA" build "$FIXTURE" --target embedded "$@" -o "$obj" >/dev/null 2>"$tmp/build.err"; then
     echo "check-embedded: FAIL — 'kama build --target embedded' did not compile" >&2
     sed 's/^/  /' "$tmp/build.err" >&2; exit 1
 fi
@@ -72,7 +84,7 @@ fi
 SEC="$ROOT/tests/support/embedded_section.kama"
 secobj="$tmp/section.o"
 if [ ! -f "$SEC" ]; then echo "check-embedded: missing $SEC" >&2; exit 1; fi
-if ! "$KAMA" build "$SEC" --target embedded -o "$secobj" >/dev/null 2>"$tmp/sec.err"; then
+if ! "$KAMA" build "$SEC" --target embedded "$@" -o "$secobj" >/dev/null 2>"$tmp/sec.err"; then
     echo "check-embedded: FAIL — @section program did not compile --target embedded" >&2
     sed 's/^/  /' "$tmp/sec.err" >&2; exit 1
 fi

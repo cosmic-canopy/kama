@@ -2585,8 +2585,18 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     std::string copyCmd = "tar -c -C \"" + base + "\" --exclude=./.git --exclude=./.kama --exclude=./build "
                           "--exclude=./kama.lock --exclude=./kama.local.json -f - . | tar -x -C \"" + tmp + "/" + wrapper + "\" -f -";
     if (runCmd(copyCmd) != 0) { fprintf(stderr, "kama publish: cannot copy sources (is tar available?)\n"); runCmd(rmRfCmd(tmp)); return 1; }
+    // The integrity hash must be REPRODUCIBLE: publishing the same sources twice (e.g. to two mirrors) has
+    // to yield the same sha256, or a consumer re-pointing at a mirror trips the dependency-confusion guard.
+    // Two things break that, and neither is fixable with portable tar flags (GNU's --mtime/--sort don't
+    // exist on bsdtar), so normalize the inputs instead:
+    //   1. the staging wrapper dir is created fresh on every publish, so ITS mtime lands in the archive —
+    //      clamp every staged entry to a fixed timestamp;
+    //   2. libarchive's `tar -cz` (macOS) stamps the CURRENT TIME into the gzip header — compress through
+    //      `gzip -n`, which omits the name/timestamp. (GNU tar was reproducible here only by accident: it
+    //      pipes to gzip via stdin, which stores 0.)
+    runCmd("find \"" + tmp + "/" + wrapper + "\" -exec touch -t 198001010000 {} +");
     std::string tarball = tmp + "/pkg.tar.gz";
-    if (runCmd("tar -czf \"" + tarball + "\" -C \"" + tmp + "\" \"" + wrapper + "\"") != 0) {
+    if (runCmd("tar -cf - -C \"" + tmp + "\" \"" + wrapper + "\" | gzip -n > \"" + tarball + "\"") != 0) {
         fprintf(stderr, "kama publish: cannot create the tarball\n"); runCmd(rmRfCmd(tmp)); return 1;
     }
     std::string integrity = sha256Of(tarball);
