@@ -69,6 +69,12 @@ if [ "${KAMA_WASM:-0}" != "0" ]; then
     echo "(wasm mode: build every positive fixture to wasm + run under node)"
 fi
 
+# Host-is-Windows (the best-effort windows-test CI leg runs this under mingw/msys bash). std::process is
+# POSIX-only until its M2 Windows milestone (no CreateProcess seam yet, and the proc_* fixtures drive
+# POSIX-only utilities like sh/sleep/cat), so skip them here rather than red the Windows leg. Remove this
+# guard when std::process M2 lands (design/std-process.md "M2 — Windows parity").
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) HOST_WIN=1 ;; *) HOST_WIN=0 ;; esac
+
 # Servers for the wasm net::web E2E fixtures, started once for the wasm leg and torn down on exit.
 # net_ws_loopback -> a Node WebSocket echo server (Node built-ins only). net_wt_loopback -> an aioquic
 # HTTP/3 WebTransport echo server; capture the self-signed cert's hash so the browser harness can trust it.
@@ -230,6 +236,9 @@ test_one() {
     { grep -q 'std::net::web' "$src" || grep -q 'kama_net_web.h' "$src"; } && uses_net_web=1
     grep -q 'std::net' "$src" && uses_net=1
     grep -q 'std::process' "$src" && uses_proc=1
+    if [ "$uses_proc" = 1 ] && [ "$HOST_WIN" = 1 ]; then
+        echo "SKIP $name (std::process: POSIX-only until M2 Windows)" >"$out"; echo SKIP >"$res"; return
+    fi
     if [ "$WASM" = 1 ]; then
         if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then
             echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return

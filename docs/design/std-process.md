@@ -135,3 +135,109 @@ already handled).
 **Deferred to later milestones:** Windows (`CreateProcess`/`CreatePipe`/`WaitForSingleObject` + argv-quoting)
 = M2, own session (the handle field may widen to `isize` then, like `TcpStream`). Async/Poller-driven
 *live* child-stream reads = post-v1.
+
+---
+
+## M2 — Windows parity (KICKOFF — not yet built)
+
+**Goal:** the SAME `lib/std/process/process.kama` surface works on Windows, by implementing the process
+functions in `kama_os.h`'s `#if defined(_WIN32)` branch with EXACTLY the POSIX signatures (the header's
+invariant: kama modules are byte-identical across platforms, only the header differs). **Verification is
+Windows CI only** — the `windows-test` job in `.github/workflows/ci.yml` (windows-latest, mingw-w64-ucrt +
+clang, `continue-on-error: true`) runs the full suite over the Windows `kama_os.h` branch; there is no local
+Windows box (user's UTM attempt failed). So M2 is written blind and proven in CI.
+
+### Central design decisions to settle first (with leans)
+
+- **D1 — handle field `int32` → `isize` (RECOMMENDED, and it touches the kama surface, so decide first).**
+  POSIX waits on a `pid` (int); Windows waits on a process `HANDLE` (void*, wider than int) — the PID does
+  NOT work with `WaitForSingleObject`/`TerminateProcess`. Store the wait handle as `isize` (pid on POSIX,
+  `(isize)hProcess` on Windows), like `TcpStream`'s socket handle. Change: `Process` field `int32 pid` →
+  `isize handle`; seam `kama_proc_spawn(…, Ptr<isize> outHandle, Ptr<int32> outPid)`,
+  `kama_waitpid(isize handle, …)` → rename `kama_proc_wait`, `kama_kill(isize handle, …)`. Keep a separate
+  `int32 pid` field so `Process.id()` stays the real OS pid on both (POSIX: pid==handle; Windows:
+  `PROCESS_INFORMATION.dwProcessId`). This is a small, mechanical POSIX-branch refactor done up front so M2
+  isn't a surface change.
+
+- **D2 — reuse CRT fds for child stdio (RECOMMENDED).** Keep `File{int32 fd}` on Windows via the CRT fd
+  layer the Windows fs branch already uses (`_open`/`_read`/`_write`/`_close`). `kama_pipe` on Windows =
+  `_pipe(fds, 65536, _O_BINARY)` (returns int fds). For `CreateProcess`, convert the child-side fd →
+  `HANDLE` with `_get_osfhandle(fd)`, make it inheritable (`SetHandleInformation(h, HANDLE_FLAG_INHERIT)` or
+  `DuplicateHandle`), put it in `STARTUPINFO.hStdInput/Output/Error`, `bInheritHandles=TRUE`. The FD_CLOEXEC
+  trick has a Windows analog: mark ONLY the child's ends inheritable (the parent's kept ends stay
+  non-inheritable) — the reverse-default of POSIX but the same intent. Keeps the kama surface (int32 fd)
+  identical, so `stdin()/stdout()/stderr()`/`File`/`closeStdin` need zero change.
+
+- **D3 — argv → command line quoting.** `CreateProcess` takes ONE command-line string, not argv[]. Implement
+  the canonical MSVCRT/`CommandLineToArgvW` quoting in a C helper `kama_win_cmdline(char** argv) -> char*`
+  (quote args with space/tab/quote/empty; escape embedded `"` and runs of `\` before a `"`). Reference:
+  Daniel Colascione, "Everyone quotes command line arguments the wrong way." This is the classic Windows
+  footgun — get it byte-exact and fixture it.
+
+- **D4 — environment block.** Windows env is a single double-NUL buffer `KEY=VALUE\0KEY=VALUE\0\0`, not
+  `char*[]`. The kama `buildEnvp` already assembles `KEY=VALUE` strings; add a Windows `kama_win_envblock`
+  that merges inherited env (`GetEnvironmentStringsW`/`_environ`) + overrides (replace-by-key, same semantics
+  as `kama_envp_build`) into that buffer. `NULL` = inherit.
+
+- **D5 — `run()` concurrent dual-drain WITHOUT select-on-pipes (THE BIG ONE — biggest risk).** M1's `run()`
+  reuses `std::net::Poller`, but on Windows `select()` works on SOCKETS ONLY — it can't poll pipe fds/handles.
+  So the Poller path can't drain child pipes on Windows. Options: (a) **thread-per-stream** — a reader
+  drains stderr while the main thread drains stdout, then join (simplest correct; matches Rust/Python on
+  Windows); (b) overlapped/async `ReadFile`; (c) `PeekNamedPipe` poll loop (busy). **Lean:** do the
+  concurrent capture in a **C seam helper** so `run()`'s kama stays platform-neutral — e.g.
+  `kama_capture2(int outFd, int errFd, <two growable byte sinks>)` that POSIX implements with `poll` and
+  Windows with two threads (or overlapped I/O). The sink-marshalling is the wrinkle (kama `DynamicArray`
+  can't cross FFI directly) — either (i) the helper fills two `malloc`'d buffers + returns lengths and kama
+  copies them in, or (ii) keep the kama-level drain but branch it with **`@compileFor(WINDOWS)`** (the
+  shipped conditional-compilation primitive): POSIX arm = Poller, Windows arm = an `isolate` reading stderr +
+  a channel handing the bytes back. **Settle D5 before writing code** — it decides whether `run()` grows a C
+  helper or a `@compileFor` split.
+
+- **D6 — reap/signal semantics (straightforward).** No signals on Windows → `ExitStatus.signal` is always 0,
+  `success()` = `code == 0`. `~Process()` non-blocking = `WaitForSingleObject(h, 0)` then `CloseHandle(h)`
+  (detach; Windows auto-reaps when the last handle closes — no zombies). `wait()` =
+  `WaitForSingleObject(h, INFINITE)` + `GetExitCodeProcess`. `tryWait()` = `WaitForSingleObject(h, 0)` →
+  `WAIT_TIMEOUT` = still running. `kill()`/`terminate()` = `TerminateProcess(h, 1)` (Windows has no
+  SIGKILL/SIGTERM distinction; both map to TerminateProcess — document that `signal(sig)` is a POSIX-only
+  fidelity and on Windows any signal terminates).
+
+### Seam mapping (POSIX `kama_*` → Windows)
+
+| kama seam fn | POSIX (shipped) | Windows (M2) |
+|---|---|---|
+| `kama_pipe` | `pipe()` + FD_CLOEXEC | `_pipe(…, _O_BINARY)`; mark child end inheritable only |
+| `kama_proc_spawn` | `fork`+`chdir`+`dup2`+`execvp` | `kama_win_cmdline` + `kama_win_envblock` + `CreateProcessA` (STARTUPINFO w/ redirected `_get_osfhandle` handles, `bInheritHandles`, `lpCurrentDirectory`) |
+| wait (`kama_proc_wait`) | `waitpid` | `WaitForSingleObject` + `GetExitCodeProcess` |
+| `kama_kill` | `kill(pid,sig)` | `TerminateProcess(h,1)` |
+| `kama_proc_exited/exit_code/signaled/term_signal` | `WIF*` macros | exit code from `GetExitCodeProcess`; signaled always 0 |
+| argv/envp | `kama_argv_*` + `kama_envp_build` | `kama_win_cmdline` + `kama_win_envblock` (the argv-vector helpers are platform-agnostic C — hoist them above the `#if` split or duplicate) |
+
+### Fixtures / CI (the OTHER blocker)
+
+The M1 `proc_*` fixtures invoke **POSIX-only** programs (`sh`, `sleep`, `cat`, `echo`, `printenv`, `pwd`,
+`true`, `false`, `/bin/sh`, `/usr/bin/printenv`) — **none exist on Windows**, so they'd fail the `windows-test`
+leg on a fresh checkout even before the seam is written. Two tasks:
+1. **A bundled, cross-platform test helper** (RECOMMENDED) — a tiny program the fixtures drive instead of
+   system utilities, with deterministic subcommands (`echo <text>`, `exit <n>`, `cat` stdin→stdout,
+   `sleep <ms>`, `printenv <k>`, `pwd`). Build it once (a small `.c` or a `.kama` compiled to a native binary
+   in the test harness); every `proc_*` fixture then runs identically on POSIX and Windows. This is the clean
+   fix and removes the current dependency on `/bin/sh` et al.
+2. Until then, `run_tests.sh` should **skip `proc_*` on the Windows leg** (mirror the wasm skip: a
+   `uses_proc` + Windows-target guard) so the best-effort Windows job isn't newly red from M1. (Optional tidy
+   that could land NOW, independent of M2 — flag to the user.)
+
+### Risks (ranked)
+
+1. **D5 pipe-drain without select** — the only genuinely new mechanism; everything else is a direct API
+   swap. Prototype the thread/overlapped drain first.
+2. **D3 argv quoting** — subtle, security-relevant (injection), must be byte-exact; heavily fixture it.
+3. **No local test box** — blind development, CI round-trips are slow; the cross-platform helper (Fixtures §1)
+   makes the CI signal trustworthy.
+4. **Handle vs fd/pid impedance (D1/D2)** — mechanical but touches the surface; do the `isize` refactor up
+   front on the POSIX branch so it's proven green before the Windows branch exists.
+
+### Suggested M2 order
+
+D1 (isize handle refactor, POSIX, stays green) → cross-platform test helper + re-point fixtures (POSIX stays
+green) → Windows `kama_pipe`/`kama_proc_spawn`/wait/kill + `kama_win_cmdline`/`kama_win_envblock` → D5 Windows
+`run()` drain → iterate on the `windows-test` CI leg until the `proc_*` fixtures pass there.
