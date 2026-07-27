@@ -422,6 +422,7 @@ struct Doc {
 
 struct Server {
     std::map<std::string, Doc> docs;    // keyed by URI
+    const char* argv0 = nullptr;        // compiler path — for resolving the stdlib when loading imports
     bool initialized = false;
     bool shutdownReceived = false;
 
@@ -463,7 +464,7 @@ struct Server {
         if (it == docs.end()) return;
         std::string path = uriToPath(uri);
         std::vector<Diagnostic> diags;
-        SharedLspIndex idx = lspAnalyze(path, it->second.text, diags);
+        SharedLspIndex idx = lspAnalyze(path, it->second.text, diags, argv0);
         if (idx) it->second.lastGoodIndex = idx;
         publish(uri, diags);
     }
@@ -638,7 +639,8 @@ struct Server {
 
 } // namespace
 
-int runLspServer() {
+int runLspServer(const char* argv0) {
     Server server;
+    server.argv0 = argv0;
     return server.run();
 }

@@ -1,0 +1,10 @@
+// LSP module-loading fixture (M2.6) — exercised by tools/check-lsp.sh. Opening a file that imports a std
+// module must resolve that module's exports (no false "does not export"). Kept tiny + stable; the imported
+// DynamicArray is referenced in a signature, which is enough to exercise import resolution.
+namespace importsprobe;
+
+import std::collections::{DynamicArray};
+
+fn int32 useit(DynamicArray<int32> a) {
+    return 0;
+}

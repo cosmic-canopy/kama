@@ -38,6 +38,13 @@ GOOD='fn int32 main() {\n    return 0;\n}\n'   # fixed
 QURI="file:///shapes.kama"
 SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) { return a; }\n'
 
+# Module-loading fixture: a REAL on-disk file that imports a std module. Unlike the in-memory buffers above
+# (fake paths -> single-file fallback), this exercises loadProgramUnits pulling std::collections off disk so
+# the imported DynamicArray resolves (no false "does not export"), and cross-module go-to-def into the std
+# source. URI must be the real path so imports resolve relative to it + the stdlib.
+IURI="file://$ROOT/tests/query/imports.kama"
+IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32 useit(DynamicArray<int32> a) { return 0; }\n'
+
 frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$URI"'","languageId":"kama","version":1,"text":"'"$BAD"'"}}}'
@@ -50,6 +57,10 @@ frame '{"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocu
 # A body use-site ("a" in `return a`, kama 3:31 -> LSP 2:31) resolves to null BY DESIGN (M0 indexes decls +
 # signature type refs only; body use-sites are the M3 find-references walk).
 frame '{"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":31}}}'
+# --- module loading: open the import-using file; its imports resolve, so diagnostics are empty and
+#     go-to-def on DynamicArray (kama 3:15 -> LSP 2:15) jumps into the std::collections source ---
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$IURI"'","languageId":"kama","version":1,"text":"'"$IMP"'"}}}'
+frame '{"jsonrpc":"2.0","id":7,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -85,6 +96,10 @@ expect '"id":4,"result":{"uri":"file:///shapes.kama"'         "definition: type 
 expect '"range":{"start":{"line":1,"character":11}'           "definition: lands on the Point decl name (LSP 1:11)"
 expect '"id":5,"result":{"contents":{"kind":"plaintext","value":"value Point"}}'  "hover: 'value Point' on a type ref"
 expect '"id":6,"result":null'                                 "hover: null on a body use-site (M3 scope, intentional)"
+
+echo "check-lsp: module loading (imports resolve across files)"
+expect 'imports.kama","diagnostics":[]'   "import-using file analyzes clean (std::collections loaded; no false 'does not export')"
+expect 'dynamic_array.kama'               "cross-module go-to-def resolves DynamicArray into the std source"
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

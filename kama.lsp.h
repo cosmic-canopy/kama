@@ -28,10 +28,14 @@ using SharedLspIndex = std::shared_ptr<LspIndex>;
 // Analyze one in-memory buffer through the front-end-as-library path (M2 — supersedes lspAnalyzeBuffer).
 // Returns the merged parse + semantic diagnostics via `diags` (kama coords: line 1-based, column 0-based)
 // AND a queryable index handle. `path` is the buffer's source path (from its file:// URI); it names the
-// CompilationUnit and every diagnostic's `file`. Parse errors survive a failed parse (an as-you-type
-// buffer is usually mid-edit); on a parse failure the handle is nullptr (diags still carry the errors) —
-// the server keeps its last good handle so hover/def don't go dark while the buffer won't parse.
-SharedLspIndex lspAnalyze(const std::string& path, const std::string& text, std::vector<Diagnostic>& diags);
+// CompilationUnit and every diagnostic's `file`. Imported modules are loaded from disk (resolved relative
+// to `argv0`'s stdlib, like `kama check`) so cross-module names resolve — the live buffer is substituted
+// for the open file's on-disk copy so unsaved edits still analyze; only the open file's diagnostics are
+// returned. Parse errors survive a failed parse (an as-you-type buffer is usually mid-edit); on a parse
+// failure the handle is nullptr (diags still carry the errors) — the server keeps its last good handle so
+// hover/def don't go dark while the buffer won't parse.
+SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
+                          std::vector<Diagnostic>& diags, const char* argv0);
 
 // Query seams — thin wrappers over the query facade on a handle (the path re-picks the unit within the
 // index). All framework-free (kama.query.h value types); a null handle yields an empty/unknown result.
@@ -39,8 +43,9 @@ std::vector<SymbolInfo> lspDocumentSymbols(const SharedLspIndex& idx, const std:
 Location                lspDefinition(const SharedLspIndex& idx, const std::string& path, int line, int col);
 std::string             lspHover(const SharedLspIndex& idx, const std::string& path, int line, int col);
 
-// Run the language server over stdio; blocks until the client's `exit`. Returns the process exit code
-// (0 after a clean shutdown→exit handshake, 1 if `exit` arrives without a prior `shutdown`).
-int runLspServer();
+// Run the language server over stdio; blocks until the client's `exit`. `argv0` is the compiler's own path
+// (for resolving the stdlib when loading imported modules). Returns the process exit code (0 after a clean
+// shutdown→exit handshake, 1 if `exit` arrives without a prior `shutdown`).
+int runLspServer(const char* argv0);
 
 #endif // __KAMA_LSP_H__

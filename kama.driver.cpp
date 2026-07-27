@@ -2896,16 +2896,38 @@ void maybeReExec(char** argv, const std::string& subcommand)
 // hover/def/outline as instant reads, not a re-analysis per cursor move.
 struct LspIndex { std::shared_ptr<CEmitter> idx; std::string path; };
 
-SharedLspIndex lspAnalyze(const std::string& path, const std::string& text, std::vector<Diagnostic>& diags)
+SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
+                          std::vector<Diagnostic>& diags, const char* argv0)
 {
     ParseResult pr = parseForQuery(text.c_str(), path);
     if (pr.ctx) for (const auto& d : pr.ctx->diagnostics) diags.push_back(d);
     if (!pr.unit) return nullptr;                  // parse failed — diags carry the errors; no queryable index
+
+    // Load the whole program so cross-module names resolve (imported modules parsed from disk, exactly as
+    // `kama check`/`build` do), then substitute the in-memory buffer for the open file's on-disk unit so
+    // unsaved edits still analyze. Without this the single open buffer sees only the built-in prelude, so
+    // every `import`ed type reads as "not exported" — a cascade of false diagnostics. Falls back to
+    // single-file if the file isn't on disk yet (a fresh unsaved buffer) or a module can't be resolved:
+    // best-effort diagnostics then, but hover/def/outline for the open file still work.
+    std::vector<SharedCompilationUnit> units;
+    std::vector<std::string> paths;
+    if (loadProgramUnits({ path }, argv0, units, paths, /*includeDevDeps*/ false) && !units.empty()) {
+        std::string abs = absolutePath(path);
+        bool swapped = false;
+        for (size_t i = 0; i < units.size(); ++i)
+            if (paths[i] == abs) { units[i] = pr.unit; swapped = true; break; }
+        if (!swapped) units.insert(units.begin(), pr.unit);   // defensive: keep the live buffer in the set
+    } else {
+        units = { pr.unit };                       // single-file fallback (unsaved/new file or unresolved import)
+    }
+
     auto emitter = std::make_shared<CEmitter>(path);   // analysis mode: no C emitted
     emitter->setPrelude(preludeUnit());            // Optional/Result implicitly in scope
     for (auto& m : preludeModuleUnits()) emitter->addPreludeModule(m);
-    emitter->analyze({ pr.unit });
-    for (const auto& d : emitter->diagnostics()) diags.push_back(d);
+    emitter->analyze(units);
+    // Only the OPEN file's diagnostics go back to the editor (the server publishes to one URI); imported
+    // modules are analyzed for context, not surfaced. Their diagnostics carry a different `file`.
+    for (const auto& d : emitter->diagnostics()) if (d.file == path) diags.push_back(d);
     auto h = std::make_shared<LspIndex>();
     h->idx = emitter;
     h->path = path;
@@ -2973,7 +2995,7 @@ int main(int argc, char** argv)
         // The `kama lsp` language server (M1): a JSON-RPC 2.0 server over stdio that reuses the
         // front-end-as-library analysis path to publish live diagnostics. Takes no input file (it reads
         // buffers from the editor over the wire), so it returns here before the input/flag handling below.
-        return runLspServer();
+        return runLspServer(argv[0]);   // argv[0] locates the stdlib for loading imported modules
     }
 
     if (subcommand == "update") {
