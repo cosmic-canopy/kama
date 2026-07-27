@@ -1,5 +1,8 @@
 .vscodeignore
 **/.DS_Store
 **/*.map
-node_modules/**
 *.vsix
+
+# NB: do NOT ignore node_modules/** — the extension is not bundled, so it requires
+# 'vscode-languageclient' at runtime (extension.js). vsce ships only production deps.
+# (If we later bundle with esbuild into dist/extension.js, re-add node_modules/** here.)
