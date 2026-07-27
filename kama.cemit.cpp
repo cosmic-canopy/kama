@@ -3038,6 +3038,43 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 if (!mv.empty()) markMoved(mv);
                 return;
             }
+            // A FRESH owned rvalue — a ctor/fn CALL returning this resource by value (`this.inPipe =
+            // File.make(0)`, `this.buf = Buffer.make(…)`) — reassigned to a `resource` lvalue. The NAMED
+            // path above releases the old value; a fresh-rvalue reassignment MUST too, else the old resource
+            // LEAKS (a reassigned fd/handle stays open, a heap buffer leaks). Drop-only-if-live keeps the
+            // ctor field-first-write correct: a fresh `{0}` slot is marked Moved, so its non-live dtor is
+            // skipped — the fd-`close(0)` invariant is untouched. Restricted to (a) a real `resource` kind
+            // (a tagged-union Optional/Result reassignment threads the LHS type via the value-producing path
+            // below — don't preempt it), (b) a call RHS with no give/copy marker (bare `Type(args)`/generic
+            // ctors already returned via the in-place path at ~2806; match/variant/array RHS aren't
+            // InvocationNodes). Hoist the RHS into a temp FIRST (it may read the old lvalue), then drop, then
+            // assign — mirroring the collection fresh-rvalue path.
+            if (handoff == 0 && dynamic_cast<InvocationNode*>(rhs.get())) {
+                std::string lty = exprClass(as->unaryExpression);
+                auto ci = _classes.find(lty);
+                // A GENERIC-instance ctor (`this.m = SortedMap::withAllocator(…)`) must resolve its callee
+                // from the LHS instance — the value-producing path further down threads that type and already
+                // drops the old value; don't preempt it. Only a NON-generic resource is safe to emit standalone.
+                if (ci != _classes.end() && ci->second.kind == TypeKind::Resource
+                    && _genericTypeInstOf.find(lty) == _genericTypeInstOf.end()) {
+                    checkConstWrite(as->unaryExpression, n->line);
+                    std::string lname = lvalueMoveKey(as->unaryExpression);
+                    bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
+                    std::string b = emitExpression(as->unaryExpression);
+                    bool ph = _hoistOK; _hoistOK = true;
+                    std::string rv = emitExpression(rhs);
+                    _hoistOK = ph;
+                    std::string t = "__asgn" + std::to_string(_tempCounter++);
+                    line(n->line);
+                    flushHoisted(depth);
+                    indent(depth); *_out << lty << " " << t << " = " << rv << ";\n";
+                    if (!bMoved && ci->second.destructible)                 // release the old value (only if live)
+                        { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
+                    indent(depth); *_out << b << " = " << t << ";\n";
+                    if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;
+                    return;
+                }
+            }
         }
 
         // Reassigning a collection/`string` lvalue (`s = …`, `this.a = …`). exprClass() is "" for a
