@@ -51,6 +51,7 @@
 #include "kama.context.h"
 #include "kama.cemit.h"
 #include "kama.prelude.h"   // KAMA_PRELUDE_SRC + KAMA_PRELUDE_MODULES (embedded built-in kama)
+#include "kama.lsp.h"       // ParseResult/parseForQuery + runLspServer (the `kama lsp` server)
 
 #ifndef KAMA_VERSION
 #define KAMA_VERSION "0.0.0-dev"
@@ -347,6 +348,31 @@ SharedCompilationUnit parseString(const char* src, const std::string& name)
     yylex_destroy(scanner);
     if (rc != 0 || extra.codeGenContext->errorCount() > 0) return nullptr;
     return extra.compilationUnit;
+}
+
+// Parse a buffer for the LSP: mirrors parseString but keeps the CodeGenContext alive so parse
+// diagnostics survive a failed parse (as-you-type buffers are usually mid-edit). `unit` is non-null only
+// when the parse fully succeeded, so a consumer serves the last good AST on a parse error. Internal to
+// this TU; the LSP reaches it through the external `lspAnalyzeBuffer` seam (defined at end of file).
+struct ParseResult { SharedCompilationUnit unit; SharedCodeGenContext ctx; };
+ParseResult parseForQuery(const char* src, const std::string& name)
+{
+    yyscan_t scanner;
+    struct LexerInstanceData extra = {
+        KAMA_LEXERINSTANCE_DEFAULT_LINE_ONE,
+        KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE,
+        nullptr,
+        std::make_shared<CodeGenContext>(std::make_shared<std::string>(name)),
+        nullptr
+    };
+    yylex_init_extra(&extra, &scanner);
+    yy_scan_string(src, scanner);
+    int rc = yyparse(scanner);
+    yylex_destroy(scanner);
+    ParseResult r;
+    r.ctx  = extra.codeGenContext;
+    r.unit = (rc == 0 && extra.codeGenContext->errorCount() == 0) ? extra.compilationUnit : nullptr;
+    return r;
 }
 
 SharedCompilationUnit preludeUnit() { return parseString(KAMA_PRELUDE_SRC, "<prelude>"); }
@@ -2855,6 +2881,29 @@ void maybeReExec(char** argv, const std::string& subcommand)
 
 } // namespace
 
+// The LSP's single external seam into the front end (declared in kama.lsp.h). Mirrors the `kama check`
+// setup — a FRESH CEmitter per call (analysis is not re-runnable on one instance), the embedded prelude +
+// built-in modules in scope — but drives it off an in-memory buffer and returns structured diagnostics
+// instead of printing. Parse diagnostics are collected even when the parse fails; on a clean parse the
+// unit is cached into `lastGood` and semantic analysis appends its diagnostics. Defined at global scope
+// (external linkage) so kama.lsp.cpp can call it; the anon-namespace helpers above stay internal.
+std::vector<Diagnostic> lspAnalyzeBuffer(const std::string& path, const std::string& text,
+                                         SharedCompilationUnit& lastGood)
+{
+    std::vector<Diagnostic> out;
+    ParseResult pr = parseForQuery(text.c_str(), path);
+    if (pr.ctx) for (const auto& d : pr.ctx->diagnostics) out.push_back(d);
+    if (pr.unit) {
+        lastGood = pr.unit;
+        CEmitter idx(path);                        // analysis mode: no C emitted
+        idx.setPrelude(preludeUnit());             // Optional/Result implicitly in scope
+        for (auto& m : preludeModuleUnits()) idx.addPreludeModule(m);
+        idx.analyze({ pr.unit });
+        for (const auto& d : idx.diagnostics()) out.push_back(d);
+    }
+    return out;
+}
+
 int main(int argc, char** argv)
 {
     if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
@@ -2892,6 +2941,13 @@ int main(int argc, char** argv)
         if (verb == "default")   return cmdToolchainDefault(v);
         if (verb == "pin")       return cmdToolchainPin(v);
         fprintf(stderr, "kama toolchain: unknown command '%s'\n", verb.c_str()); toolchainUsage(); return 2;
+    }
+
+    if (subcommand == "lsp") {
+        // The `kama lsp` language server (M1): a JSON-RPC 2.0 server over stdio that reuses the
+        // front-end-as-library analysis path to publish live diagnostics. Takes no input file (it reads
+        // buffers from the editor over the wire), so it returns here before the input/flag handling below.
+        return runLspServer();
     }
 
     if (subcommand == "update") {

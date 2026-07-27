@@ -141,6 +141,13 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-que
     if sh tools/check-query.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# LSP walking skeleton (M1): drive the `kama lsp` server over stdio with a scripted JSON-RPC session and
+# assert the live-diagnostics loop (lifecycle -> full-document sync -> publishDiagnostics). Native-only
+# like check-query (the server is target-agnostic; sanitizer-clean but no need to re-run under SAN/WASM).
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-lsp.sh ]; then
+    if sh tools/check-lsp.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # MCU end-to-end: build a kama program into Cortex-M firmware and RUN it on emulated silicon (QEMU). SKIPs
 # (still counts as a pass) when the cross toolchain is absent, so this only truly exercises under the opt-in
 # `kama-mcu` image; on the base image it's a no-op. Native pass only (like the guards above).

@@ -1,25 +1,36 @@
 # kama — VSCode extension
 
-Syntax highlighting, bracket/comment support, and breakpoint debugging for the
-[kama](../../README.md) language (`.kama`).
+Syntax highlighting, bracket/comment support, breakpoint debugging, and live
+diagnostics (a language server) for the [kama](../../README.md) language (`.kama`).
 
 ## Install
 
-From this folder:
+From this folder (install the JS deps first — the language client is an npm dep):
 
 ```sh
+npm install
 # symlink into your VSCode extensions (dev install)
 ln -s "$(pwd)" ~/.vscode/extensions/kama-0.1.0
 # then reload VSCode
 ```
 
-Or package + install:
+Or package + install (`vsce package` bundles `node_modules`, so run `npm install` first):
 
 ```sh
+npm install
 npm i -g @vscode/vsce
 vsce package
 code --install-extension kama-0.1.0.vsix
 ```
+
+## Live diagnostics (language server)
+
+On opening a `.kama`, the extension starts the kama language server (`kama lsp`,
+a JSON-RPC server over stdio built into the compiler) and shows errors/warnings
+inline as you type — no build required. It uses the same `kama` binary as the
+debugger (workspace-local `./kama` if present, else `PATH`; build it with `make`).
+Hover, go-to-definition, and completion arrive in later milestones — the same
+server gains them and this client needs no change.
 
 ## Debugging `.kama` (breakpoints, call stack, locals)
 

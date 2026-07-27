@@ -25,6 +25,7 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.cemit.o  \
             kama.comptime.o \
             kama.query.o  \
+            kama.lsp.o    \
             kama.driver.o \
             kama.prelude.gen.o)
 
@@ -50,7 +51,7 @@ $(BUILD)/kama.lexer.cpp $(BUILD)/kama.lexer.hpp: kama.l $(BUILD)/kama.parser.hpp
 # Header dependencies (the implicit rules can't see #includes). Listing all
 # project headers against every object is coarse but cheap, and prevents stale
 # object/ABI-skew bugs when a class layout in a header changes.
-HEADERS = kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h kama.diagnostic.h kama.query.h
+HEADERS = kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h kama.diagnostic.h kama.query.h kama.lsp.h
 $(OBJECTS): $(HEADERS)
 
 # Generated-header dependencies.

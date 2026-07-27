@@ -1,13 +1,19 @@
-// kama VSCode extension — zero-config debugging.
+// kama VSCode extension — zero-config debugging + language server.
 //
 // Pressing F5 in a `.kama` (when no debug session is active) builds a debug binary
 // and launches it under CodeLLDB, with breakpoints mapped back to the `.kama` via
 // the `#line` directives kama emits. No `launch.json` / `tasks.json` needed in the
 // user's project — the whole flow is supplied here.
+//
+// On activation it also starts the kama language server (`kama lsp` over stdio) and
+// wires a LanguageClient, so `.kama` files get live, as-you-type diagnostics (LSP M1).
+// Hover / go-to-definition / completion arrive in later milestones — the same server
+// gains them and this client needs no change.
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
 const cp = require('child_process');
+const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
 
 // Prefer a workspace-local ./kama (a dev checkout of the compiler), else trust PATH.
 function findKama() {
@@ -58,12 +64,28 @@ async function debugCurrentFile() {
   });
 }
 
+let client;   // the running LanguageClient, so deactivate() can stop it
+
+function startLanguageServer() {
+  const kama = findKama();
+  // One server binary, one transport: `kama lsp` speaks JSON-RPC over stdio.
+  const serverOptions = { command: kama, args: ['lsp'], transport: TransportKind.stdio };
+  const clientOptions = {
+    documentSelector: [{ scheme: 'file', language: 'kama' }],
+  };
+  client = new LanguageClient('kama', 'kama Language Server', serverOptions, clientOptions);
+  client.start();
+}
+
 function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand('kama.debugCurrentFile', debugCurrentFile)
   );
+  startLanguageServer();
 }
 
-function deactivate() {}
+function deactivate() {
+  return client ? client.stop() : undefined;
+}
 
 module.exports = { activate, deactivate };

@@ -1,6 +1,6 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M0 COMPLETE (2026-07-27, dev).** The **confirmed next-highest post-1.0 priority** (user, 2026-07-26;
+**Status: M1 COMPLETE (2026-07-27, dev).** The **confirmed next-highest post-1.0 priority** (user, 2026-07-26;
 [ROADMAP.md](../ROADMAP.md) §1 post-1.0 sequence + §10). This doc is the cold-start handoff: what exists to
 reuse, the decisions to settle FIRST, a milestone plan, and a size gauge. **Read [GOALS.md](../GOALS.md) and
 ROADMAP §10 before designing.**
@@ -16,7 +16,20 @@ ROADMAP §10 before designing.**
   ASan+UBSan clean. **The gating XL refactor was milder than framed** — `collectProgram()` was already a
   side-effect-free analysis pass, so M0 became a facade over it (not a class-hierarchy split). Scope: the
   index covers declaration + signature/type-reference positions; body use-sites are M3, locals-hover is M2.
-- **NEXT: M1 — server scaffold + live diagnostics (the walking skeleton).**
+- **M1 — server scaffold + live diagnostics (the walking skeleton). ✅ DONE.** New `kama lsp` subcommand:
+  a JSON-RPC 2.0 server over stdio (hand-rolled JSON reader/writer + framing, no deps) that reuses the M0
+  analysis path to publish live, as-you-type diagnostics. New `kama.lsp.{h,cpp}` (transport + lifecycle +
+  full-document sync + coord mapping); the driver exposes ONE external seam `lspAnalyzeBuffer` (the
+  parse/prelude plumbing lives in the anon-namespaced driver, so the LSP module owns only the editor-facing
+  half). Gap filled: `parseForQuery` keeps the `CodeGenContext` alive so parse diagnostics survive a failed
+  parse (as-you-type buffers are mid-edit). Coord map (one place): kama line 1-based/col 0-based → LSP
+  0-based/0-based. VS Code language client added (`vscode-languageclient`, F5 debug kept). Harness:
+  `tools/check-lsp.sh` (scripted JSON-RPC session over stdio) wired into `run_tests.sh` native leg. native
+  793/793; the LSP C++ (JSON parser/transport) is ASan+UBSan-clean under adversarial input; emission
+  unchanged (all changes additive). Design of record: [lsp-m1-kickoff.md](lsp-m1-kickoff.md).
+- **NEXT: M2 — hover + go-to-definition + document symbols** (wire the M0 facade —
+  `definitionAt`/`typeAtPosition`/`documentSymbols` — to LSP requests + flip on the `initialize`
+  capabilities). The query index is already built and waiting.
 
 ## Why (from the ROADMAP)
 
