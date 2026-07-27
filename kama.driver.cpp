@@ -42,7 +42,11 @@
   #include <unistd.h>
   #include <sys/wait.h>         // WEXITSTATUS
   #ifdef __APPLE__
-    #include <mach-o/dyld.h>    // _NSGetExecutablePath (the selector needs its own true path)
+    // NB: do NOT include <mach-o/dyld.h> for _NSGetExecutablePath — like windows.h above, it is compiled in
+    // the same TU as kama.parser.hpp, and its `enum DYLD_BOOL { FALSE, TRUE }` collides with the token
+    // enum's FALSE/TRUE. Forward-declare the one symbol selfExePath() needs instead (as kama_runtime.h
+    // does); extern "C" (namespace scope) links it to the real libSystem symbol.
+    extern "C" int _NSGetExecutablePath(char*, unsigned int*);
   #endif
 #endif
 
@@ -2841,7 +2845,7 @@ static std::string selfExePath(const char* argv0)
     char buf[PATH_MAX]; ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
     if (n > 0) { buf[n] = '\0'; return buf; }
 #elif defined(__APPLE__)
-    char buf[PATH_MAX]; uint32_t sz = sizeof(buf);
+    char buf[PATH_MAX]; unsigned int sz = sizeof(buf);       // _NSGetExecutablePath declared up top (extern "C")
     if (_NSGetExecutablePath(buf, &sz) == 0) return buf;
 #endif
     return argv0 ? argv0 : "kama";
