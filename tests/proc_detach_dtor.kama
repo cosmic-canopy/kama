@@ -1,6 +1,9 @@
 // std::process — RAII hygiene under load. 3000x: spawn `true` with a piped stdout, then DROP the Process
-// without wait(). The dtor must reap the (already-exited) child (no zombie pileup) and its File fields must
-// close the pipe ends (no fd leak -> no EMFILE). Stays ASan-clean under KAMA_SAN.
+// without wait(). The dtor must leave NO zombie behind — reaping the child if it already exited, else
+// parking the pid for the runtime's reaper to sweep on a later drop (POSIX can't reparent a live child to
+// init while we're still running, so an un-swept pid pins a process-table slot until `fork` fails with
+// EAGAIN — this loop exceeds macOS's kern.maxprocperuid of 2666). Its File fields must also close the pipe
+// ends (no fd leak -> no EMFILE). Stays ASan-clean under KAMA_SAN.
 import std::process::{Command, Process, Stdio};
 import std::io::{IoError};
 

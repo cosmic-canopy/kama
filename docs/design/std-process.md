@@ -19,7 +19,9 @@ module the way `std::fs`/`std::net` wrap libc.
   ordering protects; a child process shares no address space, so there is nothing to make race-free and
   nothing to wait on for safety. Net: dropping a `Process` never blocks and orphans are **not** structurally
   prevented — a still-running detached child outlives its handle (documented, like Rust's `Child`). Use
-  explicit `wait()` when you want the exit status and a definite reap.
+  explicit `wait()` when you want the exit status and a definite reap. Unlike Rust's `Child`, though,
+  dropping does not strand a zombie: the runtime parks the pid and reaps it on a later drop (see the reaper
+  park under "Key decisions as built").
 - **Async child I/O = the shipped `Poller`.** Reading a child's stdout without blocking the caller rides
   `std::net::Poller` (readiness multiplexing over the pipe fds). v1 ships blocking; the Poller path is the
   post-v1 async extension — the seam already exists, so no rework.
@@ -103,6 +105,17 @@ Pure library over the `kama_os.h` seam; **no compiler/language change**. Landed 
 - **Reap = detach + non-blocking** (settled with the user): `~Process()` does `waitpid(WNOHANG)` — reap a
   zombie if the child already exited, else detach. Never blocks (avoids the blocking-dtor-vs-undrained-pipe
   deadlock). Explicit `wait()` is the blocking reap.
+- **"Detach" needs a reaper park on POSIX** (fixed 2026-07-27 — the original design assumed the OS would
+  reparent a dropped-but-live child to init, which is FALSE: reparenting happens when the *parent* exits,
+  not when it drops the handle). An un-reaped child stays a zombie holding a process-table slot, so N drops
+  pin N slots until `fork()` fails with EAGAIN — macOS's `kern.maxprocperuid` (2666) makes that reachable in
+  a few thousand spawns, while Linux's much higher cap hid it. `kama_proc_detach` therefore parks a
+  still-running pid in a process-global list and sweeps that list with `WNOHANG` on every later drop. Still
+  never blocks; only pids whose owner has already given up are parked, so a `Process` the user can still
+  `wait()` on can never have its status stolen. The park lives in the entry TU (one definition, like the
+  panic hook / log sink / argv slots) behind a test-and-set spinlock, since two isolates can drop
+  concurrently. Windows needs none of this — `CloseHandle` is a true detach. Guarded by
+  `tests/proc_detach_dtor.kama` (3000 spawn-and-drop iterations).
 - **Spawn = `fork` + `chdir` + `dup2` + `execvp`** (not `posix_spawn`): fully portable cwd, and the child
   touches only async-signal-safe calls before exec. A custom env is a **fully-built `envp` assigned to
   `environ` in the child** (built in the parent, where malloc is safe) — never `setenv` post-fork (not
@@ -273,7 +286,8 @@ reap; `kama_kill` = `TerminateProcess(h, 1)`; status accessors: `exited`→1, `e
 `term_signal`→0 (keeps kama's `statusOf` unchanged); `kama_capture2` = two `_read` threads.
 
 **Cross-platform seam additions (both branches), to keep `process.kama` identical + correct:**
-- `kama_proc_detach(handle)` — the dtor's non-blocking release. POSIX: `waitpid(WNOHANG)` (reap-or-detach);
+- `kama_proc_detach(handle)` — the dtor's non-blocking release. POSIX: sweep the reaper park, then
+  `waitpid(WNOHANG)` on this pid, parking it if it hasn't exited (see the park decision above);
   Windows: `WaitForSingleObject(h,0)` + `CloseHandle` (detach — no handle leak on drop-while-running).
 - `kama_open_null_read/write()` — the platform null device (`/dev/null` vs `NUL`), replacing the hardcoded
   `/dev/null` string in `start()`'s `Stdio::Null` arms.

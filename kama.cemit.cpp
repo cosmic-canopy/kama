@@ -10853,6 +10853,15 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
              << "#endif\n";
         if (externsHeader("kama_log.h"))
             *_out << "kama_log_sink_fn kama_log_slot = 0;\n";
+        // The detached-child reaper's park (kama_os.h, POSIX branch) — same one-definition rule: its
+        // accessors are `static inline`, so a per-TU `static` park would defeat the cross-TU sweep.
+        if (externsHeader("kama_os.h"))
+            *_out << "#if !defined(_WIN32)\n"
+                  << "int* kama_reap_pids = 0;\n"
+                  << "size_t kama_reap_len = 0;\n"
+                  << "size_t kama_reap_cap = 0;\n"
+                  << "int kama_reap_lock = 0;\n"
+                  << "#endif\n";
         *_out << "\n";
         // Synthesized portable entry point. Emitted target-agnostically (the emitter has no target
         // knowledge by design): BOTH forms are written behind a preprocessor guard, and the driver's

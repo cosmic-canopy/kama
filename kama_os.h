@@ -716,10 +716,57 @@ static inline int32_t kama_proc_exit_code(int32_t st)   { return (int32_t)WEXITS
 static inline int32_t kama_proc_signaled(int32_t st)    { return WIFSIGNALED(st) ? 1 : 0; }
 static inline int32_t kama_proc_term_signal(int32_t st) { return (int32_t)WTERMSIG(st); }
 static inline int32_t kama_kill(ptrdiff_t handle, int32_t sig) { return (int32_t)kill((int)handle, (int)sig); }
-// Non-blocking release on drop: reap a zombie if the child already exited, else detach (the OS reparents to
-// init and reaps on its exit). Never blocks. (Windows closes the process HANDLE here; POSIX has none.)
+// ---- detached-child reaper -------------------------------------------------
+// POSIX has NO "detach" for a child. A Process dropped before its child exits leaves a ZOMBIE in this
+// process's table until the PARENT exits — reparenting to init happens on parent death, not on handle
+// drop. So dropping N not-yet-exited children pins N process-table slots, and once the per-user cap is
+// hit `fork()` starts failing with EAGAIN (macOS kern.maxprocperuid = 2666, so a few thousand detaches
+// is enough to wedge a program; Linux's default cap is high enough to hide it).
+//
+// So a drop that can't reap immediately PARKS the pid here, and every later drop sweeps the park with
+// WNOHANG. That keeps the destructor non-blocking (the whole point of detach-on-drop) while bounding
+// zombies to children that are genuinely still running. Only pids their owner has already given up on
+// are ever parked, so a Process the user can still wait() on can never have its status stolen.
+//
+// One definition, in the entry TU (kama.cemit.cpp emits it): the accessors are `static inline` and get
+// inlined into every TU, so a per-TU `static` would give each TU its own park and defeat the sweep —
+// the same hazard as the panic hook / log sink / argv slots.
+extern int*   kama_reap_pids;
+extern size_t kama_reap_len;
+extern size_t kama_reap_cap;
+extern int    kama_reap_lock;   // test-and-set spinlock: two isolates can drop a Process concurrently
+
+static inline int kama_reap_keep(int r) {                  // still ours to reap later?
+    return r == 0 || (r < 0 && errno == EINTR);            // 0 = running; EINTR = ask again
+}
+// Sweep the park, compacting out everything reaped (or gone). Caller holds the lock.
+static inline void kama_reap_sweep(void) {
+    size_t w = 0;
+    for (size_t i = 0; i < kama_reap_len; ++i) {
+        int st = 0;
+        int r = (int)waitpid(kama_reap_pids[i], &st, WNOHANG);
+        if (kama_reap_keep(r)) kama_reap_pids[w++] = kama_reap_pids[i];
+    }
+    kama_reap_len = w;
+}
+// Non-blocking release on drop: reap the child if it already exited, else park it for a later sweep.
+// Never blocks. (The Windows branch above closes the process HANDLE instead — no zombies there.)
 static inline void kama_proc_detach(ptrdiff_t handle) {
-    int st = 0; (void)waitpid((int)handle, &st, WNOHANG);
+    while (__atomic_test_and_set(&kama_reap_lock, __ATOMIC_ACQUIRE)) { }
+    kama_reap_sweep();
+    int st = 0;
+    int r = (int)waitpid((int)handle, &st, WNOHANG);
+    if (kama_reap_keep(r)) {
+        if (kama_reap_len == kama_reap_cap) {
+            size_t cap = kama_reap_cap ? kama_reap_cap * 2 : 16;
+            int* p = (int*)realloc(kama_reap_pids, cap * sizeof(int));
+            if (p) { kama_reap_pids = p; kama_reap_cap = cap; }
+        }
+        if (kama_reap_len < kama_reap_cap) kama_reap_pids[kama_reap_len++] = (int)handle;
+        // else: allocation failed — drop the pid rather than fail the destructor. That child stays a
+        // zombie until exit (the pre-reaper behaviour), which is the right way to lose this race.
+    }
+    __atomic_clear(&kama_reap_lock, __ATOMIC_RELEASE);
 }
 // The platform null device, opened read/write. POSIX = "/dev/null" (Windows branch = "NUL").
 static inline int32_t kama_open_null_read(void)  { return (int32_t)open("/dev/null", O_RDONLY); }
