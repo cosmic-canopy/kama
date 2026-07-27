@@ -40,6 +40,12 @@ ROADMAP §10 before designing.**
   locals return null **by design** (that's M3 find-references). `tools/check-lsp.sh` extended with the
   three request types + capability + intentional-null assertions (16 checks). native 793/793; ASan+UBSan
   clean; emission unchanged. Design of record: [lsp-m2-kickoff.md](lsp-m2-kickoff.md).
+  - **Follow-up (`9a7c15e`): module-aware analysis.** `lspAnalyze` originally analyzed only the open
+    buffer + built-in prelude, so any `import`ed type read as *"module X does not export Y"* — a cascade
+    of false diagnostics on real multi-module files. It now `loadProgramUnits()` the open file's transitive
+    imports from disk (stdlib via `argv0`, threaded through `runLspServer`), substitutes the live buffer
+    for the open file's on-disk unit, and returns only the open file's diagnostics. Cross-module
+    go-to-definition falls out for free. `tests/query/imports.kama` fixture + 2 harness checks (18 total).
 - **NEXT: M3 — find-references + rename.** Needs the body use-site walk M0/M2 deliberately deferred
   (every use → def index), then rename = workspace edits + safety checks. Cold-start brief:
   [lsp-m3-kickoff.md](lsp-m3-kickoff.md).

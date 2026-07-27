@@ -81,14 +81,19 @@ means find-references and go-to-def agree by construction.
 
 ## Scope decisions to settle FIRST (with leans)
 
-1. **Single-file vs. workspace.** The LSP path (`lspAnalyze`, [kama.driver.cpp:2894](../kama.driver.cpp))
-   analyzes **one buffer + prelude** (`analyze({ pr.unit })`) — it does **not** load imported units. So M3
-   sees only the **current document**. *Lean:* **v1 = single-file references + rename**, and **guard
-   rename**: it is only safe for a symbol whose every use is in-file. For an exported/importable symbol,
-   either (a) restrict rename to file-private symbols, or (b) ship it single-file but **document the
-   limitation loudly** (the harness note pattern from M2). True cross-file rename needs **workspace
-   indexing** (load all program units, `workspace/didChangeWatchedFiles`) — a separate infra milestone
-   (fold into M5 or a dedicated M3.6). Settle this before M3.3, since it bounds rename safety.
+1. **Single-file vs. workspace.** ⚠️ **UPDATED (post-M2, commit `9a7c15e`):** `lspAnalyze` now
+   **loadProgramUnits() the open file's transitive imports** (to kill false cross-module diagnostics), so
+   the analyzed index already spans **all imported units**, not just the open buffer — `_refIndex` built
+   during `analyze()` would therefore capture use-sites **across every loaded module for free**. BUT this
+   is still not full workspace coverage: only modules reachable via the open file's import graph are loaded
+   (a file that imports *this* symbol but isn't itself imported is invisible), and only the open file's
+   buffer is live (imports are read from disk). *Lean:* **references may span the loaded units** (read-only,
+   safe, and a nice win); **rename stays conservatively guarded** — safe only when every use is in the open
+   file, OR restrict to file-private symbols; renaming into a std/imported file on disk is out of scope
+   (and prelude/std are `DefSite.unit`-filtered anyway). Full reverse coverage (find a symbol's users that
+   the open file doesn't import) still needs real **workspace indexing** (`workspace/didChangeWatchedFiles`
+   + a project-wide unit set) — a separate infra milestone (M5 or a dedicated M3.6). Re-confirm what the
+   loaded-unit set actually contains before designing M3.3's rename guard.
 2. **Which symbols are renameable.** User `DefSite`s only — never prelude/std/builtins (`DefSite.unit ==
    nullptr` filters them, same guard the outline uses). `prepareRename` returns `null` for those.
 3. **Include the declaration in references?** LSP passes `context.includeDeclaration`; honor it (add the
