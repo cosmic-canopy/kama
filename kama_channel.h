@@ -53,9 +53,11 @@ static inline void* kama_channel_new(size_t elemSize, size_t cap) {
     return ch;
 }
 
-// Free the queue + its buffer + sync primitives. Precondition (enforced by the drop fns): called with
-// the mutex UNLOCKED and both endpoints dropped, so no other thread can reach it.
-static inline void kama_channel__free(kama_channel_t* ch) {
+// Free the queue + its buffer + sync primitives. Precondition: called by the LAST endpoint to close
+// (both liveness flags down), with the mutex UNLOCKED, so no other thread can reach it. Any items still
+// buffered must already have been drained by the caller (kama-side, where element type T is known) —
+// this frees the raw buffer without touching element contents.
+static inline void kama_channel_free(kama_channel_t* ch) {
     pthread_mutex_destroy(&ch->mu);
     pthread_cond_destroy(&ch->notEmpty);
     pthread_cond_destroy(&ch->notFull);
@@ -84,6 +86,9 @@ static inline int kama_channel_send(void* h, const void* elem) {
         while (ch->count != 0 && ch->receiverLive)           /* block until the receiver takes it */
             pthread_cond_wait(&ch->notFull, &ch->mu);
         int taken = (ch->count == 0);
+        if (!taken) ch->count = 0;                           /* receiver died: DISOWN the stale copy in buf[0] —
+                                                                the caller keeps ownership (SendResult::Undelivered),
+                                                                so teardown-drain must not drop it too (double-free) */
         pthread_mutex_unlock(&ch->mu);
         return taken ? 0 : -1;                               /* receiver died before taking → not delivered */
     }
@@ -122,28 +127,48 @@ static inline int kama_channel_recv(void* h, void* out) {
     return 0;
 }
 
-// Drop the sender endpoint: mark the sender side closed and wake any receiver parked in recv (so it
-// re-checks liveness and returns None once drained). Frees the queue iff the receiver is already gone.
-static inline void kama_channel_drop_sender(void* h) {
+// Non-blocking pop of one buffered element into `out` (elemSize bytes). Returns 1 if an element was
+// written, 0 if the ring is empty. Used ONLY by the last-endpoint teardown drain (below): at that point
+// both endpoints are closing and the queue is quiescent, so the lock is a formality. The element is
+// relocated out (memcpy) exactly like recv — the caller (kama, which knows T) then drops it.
+static inline int kama_channel_try_pop(void* h, void* out) {
+    kama_channel_t* ch = (kama_channel_t*)h;
+    pthread_mutex_lock(&ch->mu);
+    if (ch->count == 0) { pthread_mutex_unlock(&ch->mu); return 0; }
+    memcpy(out, ch->buf + ch->head * ch->elemSize, ch->elemSize);
+    if (ch->cap != 0) ch->head = (ch->head + 1) % ch->cap;
+    ch->count--;
+    pthread_mutex_unlock(&ch->mu);
+    return 1;
+}
+
+// Close the sender endpoint: mark the sender side closed and wake any receiver parked in recv (so it
+// re-checks liveness and returns None once drained). Returns 1 if this was the LAST endpoint (the
+// receiver is already gone) — the caller must then drain any buffered items (kama-side, running each
+// element's ~dtor) and call kama_channel_free. Returns 0 otherwise (the receiver frees later). The
+// liveness flag is set and the other side is read under one lock hold, so the two endpoints can never
+// both observe "last": whichever closes second sees the other's flag already down → exactly one frees.
+static inline int kama_channel_close_sender(void* h) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
     ch->senderLive = 0;
     pthread_cond_broadcast(&ch->notEmpty);
     int last = !ch->receiverLive;
     pthread_mutex_unlock(&ch->mu);
-    if (last) kama_channel__free(ch);
+    return last;
 }
 
-// Drop the receiver endpoint: mark the receiver side closed and wake any sender parked in send (so it
-// re-checks liveness and returns -1). Frees the queue iff the sender is already gone.
-static inline void kama_channel_drop_receiver(void* h) {
+// Close the receiver endpoint: mark the receiver side closed and wake any sender parked in send (so it
+// re-checks liveness and returns -1). Returns 1 if this was the LAST endpoint (same drain+free contract
+// as kama_channel_close_sender), 0 otherwise.
+static inline int kama_channel_close_receiver(void* h) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
     ch->receiverLive = 0;
     pthread_cond_broadcast(&ch->notFull);
     int last = !ch->senderLive;
     pthread_mutex_unlock(&ch->mu);
-    if (last) kama_channel__free(ch);
+    return last;
 }
 
 #endif

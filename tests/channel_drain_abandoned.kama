@@ -1,0 +1,37 @@
+// M8 (Bug 2 regression): a channel ABANDONED with items still buffered must drop them, not leak them.
+// The queue's ring buffer is freed bitwise in C, which knows nothing of `T`'s destructor — so the last
+// endpoint to close now DRAINS the buffer kama-side (where T is known), dropping each item, before the
+// free. Here we buffer three items into a bounded channel and drop BOTH endpoints without ever calling
+// recv. Each item bumps a shared tally in its destructor, so the native exit code proves all three ran
+// (3, not 0); under KAMA_SAN=1 LeakSanitizer additionally proves each heap box freed exactly once.
+import std::concurrent::{Channel, Sender, Receiver};
+import std::memory::{Owned};
+
+extern "<stdlib.h>";
+extern fn Ptr  malloc(usize n);
+extern fn void free(Ptr p);
+
+type resource Tracked {
+    Ptr<int32> tally;   // non-owning: a shared drop counter living in main
+    public ctor make(Ptr<int32> tally) { Tracked t; t.tally = tally; return give t; }
+    ~Tracked() { unsafe { this.tally[0] = this.tally[0] + 1; } }
+}
+
+fn int32 main() {
+    Ptr<int32> tally;
+    unsafe { tally = cast<Ptr<int32>>(malloc(n: sizeof(int32))); tally[0] = 0; }
+    {
+        Channel<Owned<Tracked>> ch = Channel::bounded(capacity: 4);
+        Sender<Owned<Tracked>>   tx = ch.sender();
+        Receiver<Owned<Tracked>> rx = ch.receiver();
+
+        Owned<Tracked> a = new Tracked.make(tally: tally);   tx.send(item: give a);
+        Owned<Tracked> b = new Tracked.make(tally: tally);   tx.send(item: give b);
+        Owned<Tracked> c = new Tracked.make(tally: tally);   tx.send(item: give c);
+        // tx and rx drop here with 3 items still buffered and recv never called: the last endpoint
+        // to close must drain all three (dropping each Owned<Tracked> → Tracked bumps the tally).
+    }
+    int32 n;
+    unsafe { n = tally[0]; free(p: cast<Ptr>(tally)); }
+    return n;   // 3 iff every abandoned item was drained-and-dropped
+}

@@ -27,8 +27,10 @@ extern "kama_channel.h";
 extern fn Ptr   kama_channel_new(usize elemSize, usize cap);
 extern fn int32 kama_channel_send(Ptr ch, Ptr elem);
 extern fn int32 kama_channel_recv(Ptr ch, Ptr dst);
-extern fn void  kama_channel_drop_sender(Ptr ch);
-extern fn void  kama_channel_drop_receiver(Ptr ch);
+extern fn int32 kama_channel_try_pop(Ptr ch, Ptr dst);         // non-blocking pop, for teardown drain
+extern fn int32 kama_channel_close_sender(Ptr ch);             // returns 1 if this endpoint is the last
+extern fn int32 kama_channel_close_receiver(Ptr ch);           // returns 1 if this endpoint is the last
+extern fn void  kama_channel_free(Ptr ch);                     // called by the last endpoint after draining
 
 // The outcome of a `send`. `Sent` means the value was delivered (the queue now owns the sole copy).
 // `Undelivered(item)` hands the value BACK to the caller intact — send failed because the receiver is
@@ -64,7 +66,25 @@ type resource Sender<T> {
         return SendResult::Undelivered(item: give item);
     }
 
-    ~Sender() { if (this.handle != null) { kama_channel_drop_sender(ch: this.handle); } }
+    // Close the sender side. If this is the LAST live endpoint, the queue is now quiescent (the receiver
+    // is already gone and no further send can enqueue), so we DRAIN any items still buffered — relocating
+    // each into a local so its `~dtor` runs exactly once — before freeing the queue. This is the M8
+    // no-leak fix: a channel abandoned with buffered resource items no longer leaks them.
+    ~Sender() {
+        if (this.handle != null) {
+            if (kama_channel_close_sender(ch: this.handle) != 0) {
+                bool more = true;
+                while (more) {
+                    unsafe {
+                        T slot;
+                        int32 got = kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: slot)));
+                        if (got == 0) { more = false; }   // ring empty: `slot` is zero → its drop is a no-op
+                    }                                     // got != 0: `slot` owns a buffered item, dropped here
+                }
+                kama_channel_free(ch: this.handle);
+            }
+        }
+    }
 }
 
 // The receive endpoint. Move-only. Dropping it closes the receiver side and wakes a blocked sender.
@@ -84,7 +104,23 @@ type resource Receiver<T> {
         return Optional::None;                                  // out was untouched (zero) → its drop is a no-op
     }
 
-    ~Receiver() { if (this.handle != null) { kama_channel_drop_receiver(ch: this.handle); } }
+    // Close the receiver side. Symmetric to ~Sender: if this is the last live endpoint, drain the
+    // remaining buffered items (dropping each) before freeing the queue — the M8 no-leak fix.
+    ~Receiver() {
+        if (this.handle != null) {
+            if (kama_channel_close_receiver(ch: this.handle) != 0) {
+                bool more = true;
+                while (more) {
+                    unsafe {
+                        T slot;
+                        int32 got = kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: slot)));
+                        if (got == 0) { more = false; }   // ring empty: `slot` is zero → its drop is a no-op
+                    }                                     // got != 0: `slot` owns a buffered item, dropped here
+                }
+                kama_channel_free(ch: this.handle);
+            }
+        }
+    }
 }
 
 // The channel factory. `bounded(capacity:)` creates the queue (capacity >= 1 is a ring buffer). The
