@@ -45,6 +45,10 @@ SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) {
 IURI="file://$ROOT/tests/query/imports.kama"
 IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32 useit(DynamicArray<int32> a) { return 0; }\n'
 
+# Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
+SURI="file:///sem.kama"
+SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
+
 frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$URI"'","languageId":"kama","version":1,"text":"'"$BAD"'"}}}'
@@ -61,6 +65,11 @@ frame '{"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocu
 #     go-to-def on DynamicArray (kama 3:15 -> LSP 2:15) jumps into the std::collections source ---
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$IURI"'","languageId":"kama","version":1,"text":"'"$IMP"'"}}}'
 frame '{"jsonrpc":"2.0","id":7,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
+# --- SEMANTIC diagnostics: an undeclared type in a BODY. Everything above asserts on a PARSE error,
+#     because semantic diagnostics used to be too incomplete to test — an unknown body type resolved to
+#     nothing and was emitted verbatim, so `kama check` said OK and the editor showed a clean file that
+#     then failed in the C compiler. checkTypeResolves closes that; this asserts the squiggle is live.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$SURI"'","languageId":"kama","version":1,"text":"'"$SEM"'"}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -100,6 +109,10 @@ expect '"id":6,"result":null'                                 "hover: null on a 
 echo "check-lsp: module loading (imports resolve across files)"
 expect 'imports.kama","diagnostics":[]'   "import-using file analyzes clean (std::collections loaded; no false 'does not export')"
 expect 'dynamic_array.kama'               "cross-module go-to-def resolves DynamicArray into the std source"
+
+echo "check-lsp: semantic diagnostics (not just parse errors)"
+expect 'unknown type `Nonexistent`'                        "undeclared body type surfaces as a live diagnostic"
+expect 'sem.kama","diagnostics":[{"range":{"start":{"line":1'  "the squiggle lands on the decl line (kama 2 -> LSP 1)"
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

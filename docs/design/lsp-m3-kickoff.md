@@ -18,6 +18,14 @@ M3's design changed, but the mechanics did):
   way; its usage lines still write to `build/`, which is still gitignored.
 - **A macOS host build now passes 793/793**, same as the container — so M3 can be developed and tested
   natively on this Mac, which is also what the VS Code extension exercises.
+- **Semantic diagnostics got stronger.** M1 recorded that an undeclared type in a body (`Nonexistent x;`)
+  produced NO diagnostic, so `check-lsp.sh` could only assert on parse errors. `checkTypeResolves`
+  (kama.cemit.cpp, called from the local-decl path) now reports it, and the harness asserts the live
+  squiggle. Two things follow for M3: the harness is a usable oracle for semantic diagnostics now, and
+  **an unresolved name in a body is a reported error rather than a silent pass** — so `_refIndex` will
+  simply have no entry for it, which is the right behaviour for find-references. Parameter/return/field
+  positions are still silent (tracked in ROADMAP §2); if M3 wants them, the fix is a single-visit
+  declaration pass, not a check at each of the 8+ emission sites.
 
 ## Goal & acceptance
 

@@ -1,0 +1,10 @@
+// An undeclared type in a BODY must be rejected by kama itself, with a kama-level message — not sail
+// through analysis and surface later as a C-level "undeclared identifier" against generated code.
+// (`kama check` and the LSP share the analysis path, so a silent pass here means the editor shows a
+// clean file that then fails to build.) The sibling case — a type that EXISTS but isn't imported — is
+// reported with the namespace to import; see checkTypeResolves.
+fn int main()
+{
+    Nonexistent thing;
+    return 42;
+}

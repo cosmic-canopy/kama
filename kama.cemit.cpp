@@ -249,6 +249,51 @@ std::string CEmitter::namespaceOfType(const std::string& value) const
     return std::string();
 }
 
+// Is `n` a generic TYPE-PARAM name rather than a real type? Type params flow through the type resolver
+// unresolved by design (a template body mentions `T` long before any instantiation binds it — they are by
+// far the commonest unresolved name), so every "this type doesn't exist" diagnostic must skip them.
+// Checks the active substitution first (inside an instantiation), then every template's declared params —
+// deliberately permissive: missing a typo that happens to collide with some template's param letter is a
+// far better failure than rejecting valid generic code.
+bool CEmitter::isTypeParamName(const std::string& n) const
+{
+    if (_typeSubst.count(n)) return true;
+    for (auto& kv : _genericTypeParams)
+        for (auto& p : kv.second) if (p == n) return true;
+    return false;
+}
+
+// A type name in a DECLARATION that resolved to nothing. `cType` hands an unresolved name straight back
+// (see resolveUserName's "caller handles" tail), and until now no caller did — so a misspelled or
+// unimported type sailed through analysis and only failed later in the C compiler, as a confusing
+// 'undeclared identifier' against generated code. `kama check` (and the LSP, which shares that path) said
+// OK. Two cases, both reported here:
+//   - the name IS a real type in another namespace  -> missing import, name the namespace;
+//   - the name is nowhere at all                    -> unknown type.
+// Only for a BARE, non-builtin name. The caller passes what `cType` produced, and anything cType mapped to
+// a different spelling is by definition known — that covers primitives, `Ptr`/`usize`/`isize`, `This`,
+// generic instances and defaulted-generic bare names WITHOUT re-deriving cType's special cases here (the
+// first cut did re-derive them and promptly flagged `Ptr`). Type params / FFI extern names are excluded
+// explicitly (see isTypeParamName / _externNames).
+void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
+                                 const char* what, int line)
+{
+    if (!type || !type->value || type->genericArg || type->builtInVal != 0) return;
+    const std::string& name = *type->value;
+    if (cTypeResult != name) return;                  // cType mapped it somewhere -> known
+    const std::string& ty = name;
+    if (isClass(ty) || isInterface(ty) || isEnum(ty) || isSigType(ty)) return;
+    if (_genericTypes.count(ty) || _genericContracts.count(ty) || _externNames.count(ty)) return;
+    if (isTypeParamName(ty)) return;
+    std::string ns = namespaceOfType(name);
+    if (!ns.empty())
+        unsupported((std::string("type `") + name + "` is not imported — it lives in `" + ns
+                     + "`; add it to your `import` (`import " + ns + "::{" + name + "}`)").c_str(), line);
+    else
+        unsupported((std::string("unknown type `") + name + "` in " + what
+                     + " — no such type is declared or imported").c_str(), line);
+}
+
 // Resolve a function reference to its mangled cName (same search as types).
 std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qualifier)
 {
@@ -1975,19 +2020,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 unsupported(("generic type `" + *declType->value + "` needs a type argument, e.g. `"
                              + *declType->value + "<int32>`").c_str(), n->line);
             std::string ty = cType(declType);
-            // A bare user type name that resolved to nothing (not a class/enum/interface/sig/generic/
-            // primitive/type-param — `cType` handed the name straight back) but names a real type in
-            // another namespace = a missing import. Clean diagnostic instead of a C-level 'undeclared
-            // identifier' leak (e.g. `BitSetIter it = bs.setBits()` without importing `BitSetIter`).
-            if (declType->value && !declType->genericArg && declType->builtInVal == 0 && ty == *declType->value
-                && !isClass(ty) && !isInterface(ty) && !isEnum(ty) && !isSigType(ty)
-                && !_genericTypes.count(ty) && !_genericContracts.count(ty) && !_externNames.count(ty)) {
-                std::string ns = namespaceOfType(*declType->value);
-                if (!ns.empty())
-                    unsupported(("type `" + *declType->value + "` is not imported — it lives in `" + ns
-                                 + "`; add it to your `import` (`import " + ns + "::{" + *declType->value
-                                 + "}`)").c_str(), n->line);
-            }
+            checkTypeResolves(declType, ty, "a local declaration", n->line);
             bool cls = isClass(ty);
             bool iface = isInterface(ty);
             auto emitDeclarator = [&](auto& d) {

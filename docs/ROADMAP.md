@@ -218,6 +218,18 @@ to [SPEC.md](SPEC.md) / [docs/design/construction-model.md](design/construction-
   whether owning a std stream in a `File` is legitimate (likely a distinct type / `Optional<File>`), or adopt a
   `-1` empty niche (Rust `OwnedFd`) so `fd >= 0` is ownable. Same trap awaits every future raw-handle resource
   (sockets, GPU handles).
+- **Unresolved type names outside local declarations are still silent (bug, small; half-fixed 2026-07-27).**
+  `resolveUserName` hands an unresolved name straight back ("caller handles"), and for a long time no caller
+  did — a misspelled or unimported type passed analysis and only failed later in the C compiler, as an
+  `undeclared identifier` against *generated* code. `kama check` and the LSP (same analysis path) said OK, so
+  the editor showed a clean file that wouldn't build. **`checkTypeResolves` now covers LOCAL declarations**
+  (`unknown type X` / `type X is not imported — it lives in ns`), guarded against generic type params, which
+  flow through that funnel unresolved by design and in huge volume (a probe over the fixture corpus counted
+  ~30 K hits for `T`/`K`/`A`/`V` alone). **Still silent: parameter types, return types, and field types** —
+  same one-line check, but those are walked at 8+ emission sites (prototype, definition, vtable, per generic
+  instance), so wiring it there would emit duplicate diagnostics. The fix is a single-visit declaration pass
+  (or hanging the check off `collectCollections`'s existing per-unit walk), not more call sites. Guarded by
+  `tests/xfail/unknown_type_local` + a `tools/check-lsp.sh` case.
 - **Enum-variant payload-type registration gap (bug, small).** A type used *only* as an enum variant's payload
   — where that variant is never constructed — is not registered/emitted, so the enum's C `struct` references an
   undeclared type (`unknown type name 'Shared_Probe'`). Reproduces with `enum E { A, B(Shared<Probe>) }`
