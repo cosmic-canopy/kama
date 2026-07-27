@@ -10,7 +10,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-KAMA="$ROOT/kama"
+. "$ROOT/tools/kama-bin.sh"
 FIXTURE="$ROOT/tests/comptime_fn_crc.kama"
 
 if [ ! -x "$KAMA" ]; then echo "check-comptime: $KAMA not built" >&2; exit 1; fi

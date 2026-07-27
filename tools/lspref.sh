@@ -9,7 +9,8 @@
 #   diff build/lspref-before.txt build/lspref-after.txt && echo IDENTICAL
 # Run inside the container: tools/cdev exec tools/lspref.sh > build/lspref-after.txt
 set -u
-KAMA="./kama"
+ROOT="."                        # run from the repo root (see the usage lines above)
+. tools/kama-bin.sh             # sets $KAMA — this platform's build, else the root ./kama symlink
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 for src in tests/*.kama; do

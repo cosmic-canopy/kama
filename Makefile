@@ -9,10 +9,13 @@ CXXFLAGS = -std=c++14 -g -Wall -Wno-deprecated-register -DKAMA_VERSION='"$(VERSI
 # build a macOS universal binary: EXTRA_CXXFLAGS="-arch arm64 -arch x86_64".
 CXXFLAGS += $(EXTRA_CXXFLAGS)
 
-# All build artifacts live under build/ (objects + generated parser/lexer), so
-# the repo root stays sources-only and host(mach-o)/container(ELF) objects can't
-# collide. The kama binary stays at the root for stable tooling paths.
-BUILD = build
+# All build artifacts live under build/<os>-<arch>/ (objects + generated parser/lexer + the
+# binary), so the repo root stays sources-only AND a host (mach-o) build coexists with a
+# container (ELF) build instead of clobbering it — no `make clean` when switching between
+# `make` and `tools/cdev make`. The root ./kama is a symlink to the last-built platform's
+# binary, keeping the stable path every consumer (CI, release, docs) already uses.
+PLATFORM ?= $(shell uname -s)-$(shell uname -m)
+BUILD     = build/$(PLATFORM)
 
 # The grammar uses %code/api.pure full, which need bison >= 2.7. macOS ships
 # 2.3, so prefer a Homebrew keg-only bison when present.
@@ -70,14 +73,24 @@ $(BUILD)/%.o: %.cpp | $(BUILD)
 $(BUILD)/%.o: $(BUILD)/%.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -iquote $(BUILD) -iquote . -c $< -o $@
 
-kama: $(OBJECTS)
-	$(CXX) $(CXXFLAGS) $^ -o kama
+$(BUILD)/kama: $(OBJECTS)
+	$(CXX) $(CXXFLAGS) $^ -o $@
 
-test: kama
-	./run_tests.sh
+# Root ./kama — a symlink to this platform's binary, refreshed on every build. Consumers that
+# must not care which platform built last (run_tests.sh, the VS Code extension) resolve
+# build/$(PLATFORM)/kama directly instead. On msys2 `ln -s` degrades to a copy; that works too.
+# PHONY on purpose: make stats through the symlink, so after the *other* platform built last it
+# would see a newer file and skip the relink, leaving ./kama pointing at a foreign binary.
+kama: $(BUILD)/kama
+	ln -sf $(BUILD)/kama kama
 
+# Cleans THIS platform only, on purpose: nuking build/ wholesale would defeat the coexistence
+# the platform-scoped layout buys (a container `make clean` would wipe the host build).
 clean:
 	rm -rf $(BUILD)
 	rm -f kama *~
 
-.PHONY: all clean test
+test: kama
+	./run_tests.sh
+
+.PHONY: all clean test kama

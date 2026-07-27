@@ -12,7 +12,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-KAMA="$ROOT/kama"
+. "$ROOT/tools/kama-bin.sh"
 if [ ! -x "$KAMA" ]; then echo "check-log: $KAMA not built" >&2; exit 1; fi
 
 tmp=$(mktemp -d)

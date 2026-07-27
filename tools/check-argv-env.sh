@@ -13,7 +13,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-KAMA="$ROOT/kama"
+. "$ROOT/tools/kama-bin.sh"
 FIXTURE="$ROOT/tests/support/argv_env_probe.kama"
 
 if [ ! -x "$KAMA" ]; then echo "check-argv-env: $KAMA not built" >&2; exit 1; fi

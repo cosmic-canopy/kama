@@ -9,7 +9,8 @@
 # files plus one .expect; all its .kama are built together (the module system).
 set -u
 
-KAMA="./kama"
+ROOT="."                        # run_tests.sh already assumes cwd == repo root
+. tools/kama-bin.sh             # sets $KAMA — this platform's build, else the root ./kama symlink
 TESTS_DIR="tests"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

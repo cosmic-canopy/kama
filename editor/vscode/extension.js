@@ -15,11 +15,26 @@ const fs = require('fs');
 const cp = require('child_process');
 const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
 
-// Prefer a workspace-local ./kama (a dev checkout of the compiler), else trust PATH.
+// This platform spelled the way the Makefile's `uname -s`-`uname -m` spells it, or null if we
+// can't map it (then we just fall back to the root ./kama below).
+function platformDir() {
+  const os = { darwin: 'Darwin', linux: 'Linux' }[process.platform];
+  const arch = { arm64: 'arm64', x64: 'x86_64' }[process.arch];
+  return os && arch ? os + '-' + arch : null;
+}
+
+// Prefer a workspace-local build of the compiler (a dev checkout), else trust PATH. In a dev tree the
+// Makefile builds per platform into build/<os>-<arch>/kama and leaves the root ./kama a symlink to
+// whichever platform built last — so check the NATIVE path first, or a `tools/cdev make` would hand
+// this extension a Linux binary it can't launch.
 function findKama() {
+  const plat = platformDir();
   for (const f of vscode.workspace.workspaceFolders || []) {
-    const p = path.join(f.uri.fsPath, 'kama');
-    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (_) { /* not here */ }
+    const roots = plat ? [path.join(f.uri.fsPath, 'build', plat), f.uri.fsPath] : [f.uri.fsPath];
+    for (const r of roots) {
+      const p = path.join(r, 'kama');
+      try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (_) { /* not here */ }
+    }
   }
   return 'kama';
 }

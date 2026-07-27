@@ -106,13 +106,15 @@ bool fileExists(const std::string& p)
 
 // Where kama_runtime.h lives, resolved so an INSTALLED binary finds it from any
 // cwd: <exeDir>/../include (bin/kama -> ../include), else <exeDir> (repo root
-// layout), else ".". Always exe-relative — so a per-version toolchain at
+// layout), else <exeDir>/../.. (dev tree: the Makefile builds to build/<os>-<arch>/kama),
+// else ".". Always exe-relative — so a per-version toolchain at
 // ~/.kama/versions/<v>/bin/kama finds *its own* runtime, never an ambient one.
 std::string resolveRuntimeDir(const char* argv0)
 {
     std::string exeDir = dirName(absolutePath(argv0 ? argv0 : "kama"));
     if (fileExists(exeDir + "/../include/kama_runtime.h")) return exeDir + "/../include";
     if (fileExists(exeDir + "/kama_runtime.h"))            return exeDir;
+    if (fileExists(exeDir + "/../../kama_runtime.h"))      return exeDir + "/../..";
     return ".";
 }
 
@@ -138,14 +140,16 @@ std::vector<std::string> listKamaFiles(const std::string& dir)
 }
 
 // The stdlib root, resolved from the binary like resolveRuntimeDir: <exeDir>/../lib/kama
-// (installed, bin/kama -> ../lib/kama), else <exeDir>/lib (repo/dev layout), else "lib".
+// (installed, bin/kama -> ../lib/kama), else <exeDir>/lib (repo root), else <exeDir>/../../lib
+// (dev tree: the Makefile builds to build/<os>-<arch>/kama), else "lib".
 // The stdlib ships INSIDE each install; `std::*` resolves here — exe-relative, so a
 // per-version toolchain uses its own stdlib, never an ambient one.
 std::string resolveStdlibDir(const char* argv0)
 {
     std::string exeDir = dirName(absolutePath(argv0 ? argv0 : "kama"));
-    if (dirExists(exeDir + "/../lib/kama")) return exeDir + "/../lib/kama";
+    if (dirExists(exeDir + "/../lib/kama"))  return exeDir + "/../lib/kama";
     if (dirExists(exeDir + "/lib"))          return exeDir + "/lib";
+    if (dirExists(exeDir + "/../../lib/std")) return exeDir + "/../../lib";
     return "lib";
 }
 
@@ -3316,7 +3320,7 @@ int main(int argc, char** argv)
     if (release) emitLines = false;
 
     // Where kama_runtime.h lives — resolved so an installed binary works from any
-    // cwd (exe-relative: <exe>/../include, else <exe>, else ".").
+    // cwd (exe-relative: <exe>/../include, else <exe>, else <exe>/../.., else ".").
     std::string runtimeDir = resolveRuntimeDir(argv[0]);
 
     if (subcommand == "check") {

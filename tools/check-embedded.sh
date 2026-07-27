@@ -12,7 +12,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-KAMA="$ROOT/kama"
+. "$ROOT/tools/kama-bin.sh"
 FIXTURE="$ROOT/tests/embedded_blink.kama"
 
 if [ ! -x "$KAMA" ]; then echo "check-embedded: $KAMA not built" >&2; exit 1; fi
