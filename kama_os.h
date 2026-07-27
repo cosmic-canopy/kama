@@ -553,11 +553,11 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <sys/wait.h>     // waitpid, WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG, WNOHANG  (std::process)
 #include <signal.h>       // kill, SIGKILL, SIGTERM  (std::process)
 
-// NOT <unistd.h>: on macOS its `write`/`read` carry a `__DARWIN_ALIAS_C` asm label, and because
-// kama_runtime.h already declared+used `write` (its bounds-trap, block scope) BEFORE this header is
-// reached, clang errors "cannot apply asm label to function after its first use." Declare the handful we
-// need directly — they link to the same libc symbols — matching kama_runtime.h's own block-scoped-extern
-// style (and keeping these decls out of user code).
+// NOT <unistd.h>: on macOS its `write`/`read` carry a `__DARWIN_ALIAS_C` asm label, and a header that
+// declares one of them unlabeled first makes clang error "cannot apply asm label to function after its
+// first use." kama_runtime.h's `write` now carries the matching label (see kama_raw_write), so this
+// header only needs to keep `read` off that collision course. Declaring the handful we need directly
+// also keeps libc decls out of user code, matching kama_runtime.h's block-scoped-extern style.
 extern long read(int, void*, size_t);
 extern long write(int, const void*, size_t);
 extern int  close(int);

@@ -280,6 +280,31 @@ static inline void NAME##__dtor(NAME* self) {                                 \
 }
 #define KAMA_BINDABLE_DEFINE(NAME) KAMA_BINDABLE_TYPE(NAME) KAMA_BINDABLE_FUNCS(NAME)
 
+// Raw byte write to a standard fd with NO <stdio.h> — the one place that spells the platform's
+// write syscall. Everything below (bounds trap, panic, assert, print/log floor) goes through here.
+// Not compiled on the freestanding path: every caller's KAMA_TARGET_EMBEDDED branch routes to the
+// weak kama_panic_handler / kama_log_sink instead, because a bare-metal target has no fd.
+//   - POSIX/emscripten spell it `write`; Windows (MSVC/UCRT/MinGW) spell it `_write`.
+//   - macOS needs the __asm("_write") label: <unistd.h> declares write with __DARWIN_ALIAS_C, and a
+//     later include of it (kama_isolate.h pulls <unistd.h> for sysconf) would otherwise be "cannot
+//     apply asm label to function after its first use". Carrying the SAME label here makes that a
+//     consistent redeclaration. (The Windows `_write` spelling does NOT substitute: macOS `write`
+//     mangles to object symbol `_write`, so declaring `_write` in C would mangle to `__write`.)
+#if !defined(KAMA_TARGET_EMBEDDED)
+static inline long kama_raw_write(int fd, const void* bytes, size_t n) {
+#if defined(_WIN32)
+    extern int _write(int, const void*, unsigned int);
+    return _write(fd, bytes, (unsigned int)n);
+#elif defined(__APPLE__)
+    extern long write(int, const void*, size_t) __asm("_write");
+    return write(fd, bytes, n);
+#else
+    extern long write(int, const void*, size_t);
+    return write(fd, bytes, n);
+#endif
+}
+#endif
+
 // Bounds-check trap: a clean panic (not undefined behavior) on out-of-range.
 // Formats its own message and writes to stderr (fd 2) so it needs no <stdio.h>.
 static inline void kama_u64_to_buf(char* buf, size_t* p, size_t v) {
@@ -334,13 +359,7 @@ static inline void kama_bounds_fail(size_t i, size_t len) {
     const char* b = " out of bounds (length ";    while (*b) buf[p++] = *b++;
     kama_u64_to_buf(buf, &p, len);
     const char* c = ")\n";                        while (*c) buf[p++] = *c++;
-    // Raw stderr write (no <stdio.h>): POSIX/emscripten spell it `write`, Windows
-    // (MSVC/UCRT/MinGW) spell it `_write`.
-#if defined(_WIN32)
-    { extern int _write(int, const void*, unsigned int); (void)_write(2, buf, (unsigned int)p); }
-#else
-    { extern long write(int, const void*, size_t);       (void)write(2, buf, p); }
-#endif
+    (void)kama_raw_write(2, buf, p);
     kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
 }
@@ -840,17 +859,9 @@ static inline void kama_panic(kama_string msg) {
     for (;;) {}
 #else
     extern void abort(void);
-#if defined(_WIN32)
-    extern int _write(int, const void*, unsigned int);
-    (void)_write(2, "kama: panic: ", 13);
-    if (msg.len) (void)_write(2, msg.data, (unsigned int)msg.len);
-    (void)_write(2, "\n", 1);
-#else
-    extern long write(int, const void*, size_t);
-    (void)write(2, "kama: panic: ", 13);
-    if (msg.len) (void)write(2, msg.data, msg.len);
-    (void)write(2, "\n", 1);
-#endif
+    (void)kama_raw_write(2, "kama: panic: ", 13);
+    if (msg.len) (void)kama_raw_write(2, msg.data, msg.len);
+    (void)kama_raw_write(2, "\n", 1);
     kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
 #endif
@@ -868,15 +879,8 @@ static inline void kama_fail_emit(const char* buf, size_t n) {
     for (;;) {}
 #else
     extern void abort(void);
-#if defined(_WIN32)
-    extern int _write(int, const void*, unsigned int);
-    (void)_write(2, buf, (unsigned int)n);
-    (void)_write(2, "\n", 1);
-#else
-    extern long write(int, const void*, size_t);
-    (void)write(2, buf, n);
-    (void)write(2, "\n", 1);
-#endif
+    (void)kama_raw_write(2, buf, n);
+    (void)kama_raw_write(2, "\n", 1);
     kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
 #endif
@@ -927,13 +931,7 @@ static inline void kama_print_write(int fd, const void* bytes, size_t n) {
 }
 #else
 static inline void kama_print_write(int fd, const void* bytes, size_t n) {
-#if defined(_WIN32)
-    extern int _write(int, const void*, unsigned int);
-    (void)_write(fd, bytes, (unsigned int)n);
-#else
-    extern long write(int, const void*, size_t);
-    (void)write(fd, bytes, n);
-#endif
+    (void)kama_raw_write(fd, bytes, n);
 }
 #endif
 // Write a single newline to `fd` — the `println`/`eprintln` tail (avoids a second kama_string round-trip).
