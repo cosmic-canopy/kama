@@ -26,11 +26,17 @@ code --install-extension kama-0.1.0.vsix
 ## Live diagnostics (language server)
 
 On opening a `.kama`, the extension starts the kama language server (`kama lsp`,
-a JSON-RPC server over stdio built into the compiler) and shows errors/warnings
-inline as you type — no build required. It uses the same `kama` binary as the
-debugger (workspace-local `./kama` if present, else `PATH`; build it with `make`).
-Hover, go-to-definition, and completion arrive in later milestones — the same
-server gains them and this client needs no change.
+a JSON-RPC server over stdio built into the compiler) and provides, as you type
+(no build required): **live diagnostics**, **hover** (kind + name), **go-to-definition**
+(F12 on a type/function reference), and the **document outline** (Ctrl-Shift-O /
+breadcrumbs). It uses the same `kama` binary as the debugger (workspace-local
+`./kama` if present, else `PATH`). Find-references, rename, and completion arrive
+in later milestones — the same server gains them and this client needs no change.
+
+> **The `kama` binary must be native to your OS.** The extension runs `kama lsp`
+> as a normal host process, so a container-built `./kama` (e.g. a Linux binary from
+> `tools/cdev make` on macOS) will not launch. Build a host-native `kama` (top-level
+> `README.md` / `CLAUDE.md`) and make sure *that* is what the extension finds.
 
 ## Debugging `.kama` (breakpoints, call stack, locals)
 
