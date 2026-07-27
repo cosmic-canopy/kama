@@ -1,9 +1,22 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: KICKOFF — not started.** The **confirmed next-highest post-1.0 priority** (user, 2026-07-26;
+**Status: M0 COMPLETE (2026-07-27, dev).** The **confirmed next-highest post-1.0 priority** (user, 2026-07-26;
 [ROADMAP.md](../ROADMAP.md) §1 post-1.0 sequence + §10). This doc is the cold-start handoff: what exists to
 reuse, the decisions to settle FIRST, a milestone plan, and a size gauge. **Read [GOALS.md](../GOALS.md) and
 ROADMAP §10 before designing.**
+
+## Progress
+
+- **M0 — front-end-as-library + query index + spans. ✅ DONE.** Commits `328a32c` (T1–T3: analyze() seam +
+  structured diagnostics + span fields), `fd817dc` (T4a: def-site table), `4a74dfe` (T4b/T4c/T5: position
+  index + resolution replay + query facade + **real Bison `%locations` spans**). New `kama.query.{h,cpp}`
+  hold the framework-free query types + facade (`documentSymbols`/`definitionAt`/`typeAtPosition`/
+  `diagnosticsFor`), built read-only at the tail of `analyze()`. Debug harness: `kama query <file>
+  --symbols|--def L:C|--type L:C` + `tools/check-query.sh`. Emission byte-identical; native 792/792;
+  ASan+UBSan clean. **The gating XL refactor was milder than framed** — `collectProgram()` was already a
+  side-effect-free analysis pass, so M0 became a facade over it (not a class-hierarchy split). Scope: the
+  index covers declaration + signature/type-reference positions; body use-sites are M3, locals-hover is M2.
+- **NEXT: M1 — server scaffold + live diagnostics (the walking skeleton).**
 
 ## Why (from the ROADMAP)
 
