@@ -1,0 +1,103 @@
+// Cross-platform child helper for the std::process `proc_*` fixtures. The M1 fixtures drove POSIX-only
+// utilities (sh/echo/cat/printenv/pwd/sleep/true/false); those don't exist on Windows, so the Windows CI leg
+// couldn't run them. This one binary — built once by run_tests.sh and located by the fixtures via the
+// KAMA_PROCUTIL env var — provides deterministic subcommands that behave identically on POSIX and Windows,
+// dogfooding the kama floor (args()/env()/print) + std::fs. NOT swept as a fixture (lives under tests/support,
+// no .expect). Subcommands:
+//   echo <text...>   print the args (space-joined) + newline to stdout; exit 0
+//   echo2 <o> <e>    print "<o>\n" to stdout AND "<e>\n" to stderr; exit 0   (dual-stream capture)
+//   exit <n>         exit with code n
+//   cat              copy stdin -> stdout until EOF; exit 0
+//   sleep <ms>       sleep ms milliseconds; exit 0
+//   printenv <k>     if env k is set: print its value + newline, exit 0; else exit 1
+//   spew <n>         emit n lines of 19 'A'+newline to stdout AND 19 'B'+newline to stderr (20 bytes each)
+//   hasfile <name>   exit 0 if a file <name> can be opened (relative to cwd), else 1   (proves cwd())
+import std::fs::{File, OpenMode};
+import std::io::{IoError};
+import std::collections::{DynamicArray};
+
+extern "kama_os.h";
+extern fn void kama_sleep_ms(int32 ms);
+
+// The i-th user arg (0-based; argv[0] excluded by the floor), or "" if absent.
+fn string argAt(int32 i) {
+    Optional<string> o = args().get(at: i);
+    return match (give o) { case Some(v): { := give v; } case None: { := ""; } };
+}
+
+// Parse a non-negative decimal string (the numeric subcommand args are always well-formed digits here).
+fn int32 parseIntArg(string s) {
+    int32 n = s.length();
+    Ptr<int8> p = s.cstr();
+    int32 v = 0;
+    int32 i = 0;
+    while (i < n) {
+        int8 c = 0;
+        unsafe { c = p[i]; }
+        v = v * 10 + (cast<int32>(c) - 48);
+        i = i + 1;
+    }
+    return v;
+}
+
+fn int main() {
+    string cmd = argAt(i: 0);
+
+    if (cmd == "echo") {
+        int32 c = args().count();
+        string line = "";
+        int32 i = 1;
+        while (i < c) {
+            if (i > 1) { line = line + " "; }
+            line = line + argAt(i: i);
+            i = i + 1;
+        }
+        println(s: give line);
+        return 0;
+    }
+    if (cmd == "echo2") {
+        println(s: argAt(i: 1));
+        eprintln(s: argAt(i: 2));
+        return 0;
+    }
+    if (cmd == "exit") {
+        return parseIntArg(s: argAt(i: 1));
+    }
+    if (cmd == "cat") {
+        File input = File.make(fd: 0);
+        File outp  = File.make(fd: 1);
+        Result<DynamicArray<uint8>, IoError> rd = input.readAll();
+        return match (give rd) {
+            case Ok(got): {
+                Result<usize, IoError> wr = outp.writeAll(bytes: got);
+                := match (wr) { case Ok(nb): 0; case Err(e): 1; };
+            }
+            case Err(e): { := 1; }
+        };
+    }
+    if (cmd == "sleep") {
+        kama_sleep_ms(ms: parseIntArg(s: argAt(i: 1)));
+        return 0;
+    }
+    if (cmd == "printenv") {
+        return match (env(name: argAt(i: 1))) {
+            case Some(_): { := 0; }
+            case None: { := 1; }
+        };
+    }
+    if (cmd == "spew") {
+        int32 n = parseIntArg(s: argAt(i: 1));
+        string a = ""; string b = "";
+        int32 k = 0;
+        while (k < 19) { a = a + "A"; b = b + "B"; k = k + 1; }
+        int32 i = 0;
+        while (i < n) { println(s: copy a); eprintln(s: copy b); i = i + 1; }
+        return 0;
+    }
+    if (cmd == "hasfile") {
+        string name = argAt(i: 1);
+        Result<File, IoError> r = File.open(path: name, mode: OpenMode::Read);
+        return match (give r) { case Ok(f): { := 0; } case Err(e): { := 1; } };
+    }
+    return 3;   // unknown subcommand
+}

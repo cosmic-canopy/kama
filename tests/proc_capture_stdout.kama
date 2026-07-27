@@ -1,11 +1,12 @@
-// std::process — capture a child's stdout bytes via run(). `echo hello` -> "hello\n" (6 bytes), stderr empty.
+// std::process — capture a child's stdout bytes via run(). The cross-platform helper's `echo hello` ->
+// "hello\n" (6 bytes), stderr empty.
 import std::process::{Command, Output};
 import std::io::{IoError};
 import std::collections::{DynamicArray};
 
 fn int main() {
-    Command c = Command.make(program: "echo");
-    c.arg(a: "hello");
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "echo"); c.arg(a: "hello");
     Result<Output, IoError> r = c.run();
     return match (give r) {
         case Ok(o): {

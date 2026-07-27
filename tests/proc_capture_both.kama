@@ -1,11 +1,12 @@
-// std::process — shell("echo out; echo err 1>&2") captures stdout "out\n" (4) AND stderr "err\n" (4),
-// proving run()'s concurrent (Poller-driven) drain of both pipes.
+// std::process — the helper's `echo2 out err` writes "out\n" (4) to stdout AND "err\n" (4) to stderr,
+// proving run()'s concurrent drain of both pipes.
 import std::process::{Command, Output};
 import std::io::{IoError};
 import std::collections::{DynamicArray};
 
 fn int main() {
-    Command c = Command.shell(line: "echo out; echo err 1>&2");
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "echo2"); c.arg(a: "out"); c.arg(a: "err");
     Result<Output, IoError> r = c.run();
     return match (give r) {
         case Ok(o): {

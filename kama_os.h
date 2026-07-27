@@ -22,9 +22,9 @@
 // Every function is `static inline` (single-TU, unused ones are pruned) and returns the raw syscall
 // result (`< 0` / a set errno = error); the kama layer maps `kama_last_error()` -> `IoError`.
 //
-// Windows branch: TODO (plan Step 4) — Winsock (`WSAStartup`/`SOCKET`/`closesocket`/`WSAGetLastError`) +
-// CRT (`_open`/`_stat`/`FindFirstFile`). The POSIX branch below also serves iOS/Android/BSD and (via
-// emscripten's POSIX shims) the wasm target's virtual FS.
+// Windows branch: implemented — Winsock (`WSAStartup`/`SOCKET`/`WSAGetLastError`), CRT (`_open`/`_stat`/
+// `FindFirstFile`/`_pipe`), and std::process (`CreateProcess`/`WaitForSingleObject`/`TerminateProcess`). The
+// POSIX branch below also serves iOS/Android/BSD and (via emscripten's POSIX shims) the wasm target's VFS.
 
 #include "kama_runtime.h"
 
@@ -338,6 +338,205 @@ static inline void kama_poller_free(void* ph) {
     if (p) { free(p->fds); free(p); }
 }
 
+// ---- process (std::process; Win32 CreateProcess) ---------------------------
+// Same seam + EXACT signatures as the POSIX branch — process.kama is byte-identical across platforms. The
+// argv-vector helpers (kama_argv_*) are platform-agnostic; kama_envp_build returns the SAME char*[] shape as
+// POSIX (so process.kama frees it with kama_argv_free), and kama_proc_spawn converts argv[]/envp[] into the
+// Windows command-line string + double-NUL env block on the fly.
+static inline void* kama_argv_new(int32_t n) { return calloc((size_t)n + 1, sizeof(char*)); }
+static inline void  kama_argv_set(void* v, int32_t i, const char* s) { ((char**)v)[i] = _strdup(s ? s : ""); }
+static inline void  kama_argv_free(void* v) {
+    if (!v) return;
+    for (char** p = (char**)v; *p; ++p) free(*p);
+    free(v);
+}
+// Merge the inherited env (`_environ`, unless `clear`) with each "KEY=VALUE" override (replace-by-KEY, else
+// append) into a fresh strdup'd char*[] — identical semantics to the POSIX kama_envp_build.
+static inline void* kama_envp_build(void* overridesV, int32_t clear) {
+    char** ov = (char**)overridesV;
+    int nov = 0; if (ov) while (ov[nov]) nov++;
+    char** base = _environ;
+    int nbase = 0; if (!clear && base) while (base[nbase]) nbase++;
+    char** out = (char**)calloc((size_t)nbase + (size_t)nov + 1, sizeof(char*));
+    int k = 0;
+    for (int i = 0; i < nbase; i++) {
+        const char* e = base[i];
+        const char* eq = strchr(e, '=');
+        size_t klen = eq ? (size_t)(eq - e) : strlen(e);
+        int overridden = 0;
+        for (int j = 0; j < nov; j++) {
+            const char* o = ov[j]; const char* oeq = strchr(o, '=');
+            size_t olen = oeq ? (size_t)(oeq - o) : strlen(o);
+            if (olen == klen && _strnicmp(o, e, klen) == 0) { overridden = 1; break; }   // Windows env is case-insensitive
+        }
+        if (!overridden) out[k++] = _strdup(e);
+    }
+    for (int j = 0; j < nov; j++) out[k++] = _strdup(ov[j]);
+    out[k] = NULL;
+    return out;
+}
+// argv[] -> a single Win32 command line with MSVCRT/CommandLineToArgvW quoting (quote args with space/tab/
+// newline/vtab/quote/empty; double a run of backslashes that precedes a `"` or the closing quote, and escape
+// each embedded `"`). Ref: Daniel Colascione, "Everyone quotes command line arguments the wrong way."
+static inline char* kama__win_cmdline(char** argv) {
+    size_t total = 1;
+    for (char** a = argv; *a; a++) total += 2 * strlen(*a) + 3;   // worst case: full backslash doubling + 2 quotes + space
+    char* buf = (char*)malloc(total);
+    if (!buf) return NULL;
+    char* w = buf;
+    for (char** a = argv; *a; a++) {
+        if (a != argv) *w++ = ' ';
+        const char* s = *a;
+        int needQuote = (*s == '\0');
+        for (const char* p = s; *p; p++) if (*p==' '||*p=='\t'||*p=='\n'||*p=='\v'||*p=='"') { needQuote = 1; break; }
+        if (!needQuote) { for (const char* p = s; *p; p++) *w++ = *p; continue; }
+        *w++ = '"';
+        for (size_t i = 0; s[i]; ) {
+            size_t nbs = 0;
+            while (s[i] == '\\') { nbs++; i++; }
+            if (s[i] == '\0')      { for (size_t k=0;k<nbs*2;k++)   *w++='\\'; break; }
+            else if (s[i] == '"')  { for (size_t k=0;k<nbs*2+1;k++) *w++='\\'; *w++='"'; i++; }
+            else                   { for (size_t k=0;k<nbs;k++)     *w++='\\'; *w++=s[i]; i++; }
+        }
+        *w++ = '"';
+    }
+    *w = '\0';
+    return buf;
+}
+// char*[] "KEY=VALUE" -> a Win32 environment block (each string NUL-terminated, the whole block ending in an
+// extra NUL). NULL envp means inherit (kama_proc_spawn passes NULL straight through to CreateProcess).
+static inline char* kama__win_envblock(char** envp) {
+    size_t total = 2;                                  // final "\0\0" (also the empty-block case)
+    for (char** e = envp; *e; e++) total += strlen(*e) + 1;
+    char* buf = (char*)malloc(total);
+    if (!buf) return NULL;
+    char* w = buf;
+    for (char** e = envp; *e; e++) { size_t l = strlen(*e); memcpy(w, *e, l); w += l; *w++ = '\0'; }
+    *w++ = '\0'; *w = '\0';
+    return buf;
+}
+// Pipe over CRT fds (so File{int32 fd} works unchanged). Both ends non-inheritable (_O_NOINHERIT) — the POSIX
+// FD_CLOEXEC analog; kama_proc_spawn makes ONLY the child's chosen ends inheritable for the CreateProcess call.
+static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
+    int fds[2];
+    if (_pipe(fds, 65536, _O_BINARY | _O_NOINHERIT) != 0) return -1;
+    *outRd = (int32_t)fds[0]; *outWr = (int32_t)fds[1];
+    return 0;
+}
+static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
+                                      int32_t inFd, int32_t outFd, int32_t errFd,
+                                      ptrdiff_t* outHandle, int32_t* outPid) {
+    char* cmdline = kama__win_cmdline((char**)argv);
+    if (!cmdline) { errno = ENOMEM; return -1; }
+    char* envblock = envp ? kama__win_envblock((char**)envp) : NULL;
+
+    STARTUPINFOA si; ZeroMemory(&si, sizeof si); si.cb = sizeof si;
+    int useStd = (inFd >= 0 || outFd >= 0 || errFd >= 0);
+    HANDLE hIn = INVALID_HANDLE_VALUE, hOut = INVALID_HANDLE_VALUE, hErr = INVALID_HANDLE_VALUE;
+    if (useStd) {
+        // A redirected stream -> the pipe/NUL fd's HANDLE; an inherited one (fd -1) -> the parent's std handle.
+        hIn  = (inFd  >= 0) ? (HANDLE)_get_osfhandle((int)inFd)  : GetStdHandle(STD_INPUT_HANDLE);
+        hOut = (outFd >= 0) ? (HANDLE)_get_osfhandle((int)outFd) : GetStdHandle(STD_OUTPUT_HANDLE);
+        hErr = (errFd >= 0) ? (HANDLE)_get_osfhandle((int)errFd) : GetStdHandle(STD_ERROR_HANDLE);
+        if (hIn  != INVALID_HANDLE_VALUE) SetHandleInformation(hIn,  HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        if (hOut != INVALID_HANDLE_VALUE) SetHandleInformation(hOut, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        if (hErr != INVALID_HANDLE_VALUE) SetHandleInformation(hErr, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = hIn; si.hStdOutput = hOut; si.hStdError = hErr;
+    }
+    PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof pi);
+    BOOL ok = CreateProcessA(NULL, cmdline, NULL, NULL, useStd ? TRUE : FALSE, 0,
+                             envblock, (cwd && cwd[0]) ? cwd : NULL, &si, &pi);
+    if (useStd) {   // undo inheritability on the parent's copies of the redirected ends (belt-and-suspenders)
+        if (inFd  >= 0 && hIn  != INVALID_HANDLE_VALUE) SetHandleInformation(hIn,  HANDLE_FLAG_INHERIT, 0);
+        if (outFd >= 0 && hOut != INVALID_HANDLE_VALUE) SetHandleInformation(hOut, HANDLE_FLAG_INHERIT, 0);
+        if (errFd >= 0 && hErr != INVALID_HANDLE_VALUE) SetHandleInformation(hErr, HANDLE_FLAG_INHERIT, 0);
+    }
+    free(cmdline); free(envblock);
+    if (!ok) {
+        DWORD e = GetLastError();
+        errno = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES;
+        return -1;
+    }
+    CloseHandle(pi.hThread);
+    *outHandle = (ptrdiff_t)pi.hProcess;
+    *outPid    = (int32_t)pi.dwProcessId;
+    return 0;
+}
+// Wait on the process HANDLE. flags&1 (kama_WNOHANG) -> poll (timeout 0). Returns >0 (reaped; exit code in
+// *outStatus + the HANDLE closed), 0 (WNOHANG: still running, HANDLE kept), -1 (error).
+static inline int32_t kama_proc_wait(ptrdiff_t handle, int32_t* outStatus, int32_t flags) {
+    HANDLE h = (HANDLE)handle;
+    DWORD r = WaitForSingleObject(h, (flags & 1) ? 0 : INFINITE);
+    if (r == WAIT_TIMEOUT) return 0;                       // still running
+    if (r != WAIT_OBJECT_0) { errno = EINVAL; return -1; }
+    DWORD code = 0;
+    if (!GetExitCodeProcess(h, &code)) { errno = EINVAL; return -1; }
+    CloseHandle(h);                                        // reaped: release the handle (Windows auto-cleans)
+    *outStatus = (int32_t)code;
+    return 1;
+}
+// No wait-status bit-packing on Windows: the status int IS the exit code (a child is never "signalled").
+static inline int32_t kama_proc_exited(int32_t st)      { (void)st; return 1; }
+static inline int32_t kama_proc_exit_code(int32_t st)   { return st; }
+static inline int32_t kama_proc_signaled(int32_t st)    { (void)st; return 0; }
+static inline int32_t kama_proc_term_signal(int32_t st) { (void)st; return 0; }
+// No POSIX signals: any signal maps to TerminateProcess (documented in process.kama). Exit code 1.
+static inline int32_t kama_kill(ptrdiff_t handle, int32_t sig) {
+    (void)sig;
+    if (!TerminateProcess((HANDLE)handle, 1)) { errno = EINVAL; return -1; }
+    return 0;
+}
+// Non-blocking release on drop: reap-if-exited (harmless) then CloseHandle (detach — the child keeps running,
+// the OS cleans up when it exits and no handle remains). Never blocks.
+static inline void kama_proc_detach(ptrdiff_t handle) {
+    HANDLE h = (HANDLE)handle;
+    WaitForSingleObject(h, 0);
+    CloseHandle(h);
+}
+static inline int32_t kama_WNOHANG(void) { return 1; }     // a private sentinel; kama_proc_wait tests flags&1
+static inline int32_t kama_SIGKILL(void) { return 9; }     // ignored by kama_kill on Windows (any => Terminate)
+static inline int32_t kama_SIGTERM(void) { return 15; }
+static inline void    kama_sleep_ms(int32_t ms) { Sleep((DWORD)ms); }
+static inline int32_t kama_open_null_read(void)  { return (int32_t)_open("NUL", _O_RDONLY | _O_BINARY); }
+static inline int32_t kama_open_null_write(void) { return (int32_t)_open("NUL", _O_WRONLY | _O_BINARY); }
+
+// Concurrent stdout+stderr drain (kama_capture2). select() is sockets-only on Windows, so drain with two
+// reader threads: a thread drains stderr while this thread drains stdout, then join. Each fills its own
+// malloc/realloc buffer (freed by the caller via kama_free) — same contract as the POSIX poll version.
+typedef struct kama__cap { int fd; uint8_t* buf; size_t len; size_t cap; int err; } kama__cap;
+static inline DWORD WINAPI kama__cap_thread(LPVOID arg) {
+    kama__cap* c = (kama__cap*)arg;
+    for (;;) {
+        if (c->len == c->cap) {
+            size_t nc = c->cap ? c->cap * 2 : 65536;
+            uint8_t* nb = (uint8_t*)realloc(c->buf, nc);
+            if (!nb) { c->err = 1; return 0; }
+            c->buf = nb; c->cap = nc;
+        }
+        int r = _read(c->fd, c->buf + c->len, (unsigned int)(c->cap - c->len));
+        if (r > 0)       c->len += (size_t)r;
+        else if (r == 0) break;                            // EOF
+        else             { c->err = 1; return 0; }
+    }
+    return 0;
+}
+static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
+                                    uint8_t** outBuf, size_t* outLen,
+                                    uint8_t** errBuf, size_t* errLen) {
+    kama__cap co; co.fd = (int)outFd; co.buf = NULL; co.len = 0; co.cap = 0; co.err = 0;
+    kama__cap ce; ce.fd = (int)errFd; ce.buf = NULL; ce.len = 0; ce.cap = 0; ce.err = 0;
+    HANDLE th = CreateThread(NULL, 0, kama__cap_thread, &ce, 0, NULL);
+    if (!th) { errno = EAGAIN; free(co.buf); return -1; }
+    kama__cap_thread(&co);                                 // drain stdout on this thread
+    WaitForSingleObject(th, INFINITE);
+    CloseHandle(th);
+    if (co.err || ce.err) { free(co.buf); free(ce.buf); errno = EIO; return -1; }
+    *outBuf = co.buf; *outLen = co.len;
+    *errBuf = ce.buf; *errLen = ce.len;
+    return 0;
+}
+
 #else
 
 #include <errno.h>
@@ -484,8 +683,12 @@ static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
 // is safe). In a multithreaded (isolate) parent only the forking thread survives in the child, and it holds
 // no lock it must release, so this is safe. Each std-fd arg is a real fd to dup2 (a pipe end or /dev/null),
 // or -1 to leave the inherited fd untouched. Returns 0 (pid in *outPid) or -1 (fork failed).
+// Two out-params carry the child identity: `outHandle` is the wait handle (`isize`/ptrdiff_t — a raw pid on
+// POSIX, so handle==pid here; a `(ptrdiff_t)HANDLE` on Windows) and `outPid` is the real OS pid for `.id()`.
+// Keeping them separate lets Windows wait/kill on the HANDLE while `.id()` still reports the pid.
 static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
-                                      int32_t inFd, int32_t outFd, int32_t errFd, int32_t* outPid) {
+                                      int32_t inFd, int32_t outFd, int32_t errFd,
+                                      ptrdiff_t* outHandle, int32_t* outPid) {
     int pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {                                        // ---- child (async-signal-safe only) ----
@@ -497,13 +700,14 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
         execvp(((char**)argv)[0], (char* const*)argv);
         _exit(127);                                        // exec failed (ENOENT/EACCES/...) — 127 convention
     }
-    *outPid = (int32_t)pid;                                // ---- parent ----
+    *outHandle = (ptrdiff_t)pid; *outPid = (int32_t)pid;   // ---- parent (POSIX: handle == pid) ----
     return 0;
 }
-// waitpid folded to scalar. Returns >0 (reaped; status in *outStatus), 0 (WNOHANG: still running), -1 (err).
-static inline int32_t kama_waitpid(int32_t pid, int32_t* outStatus, int32_t flags) {
+// waitpid folded to scalar; `handle` is the pid on POSIX. Returns >0 (reaped; status in *outStatus),
+// 0 (WNOHANG: still running), -1 (err).
+static inline int32_t kama_proc_wait(ptrdiff_t handle, int32_t* outStatus, int32_t flags) {
     int st = 0;
-    int r = (int)waitpid((int)pid, &st, (int)flags);
+    int r = (int)waitpid((int)handle, &st, (int)flags);
     if (r > 0) *outStatus = (int32_t)st;
     return (int32_t)r;
 }
@@ -511,10 +715,63 @@ static inline int32_t kama_proc_exited(int32_t st)      { return WIFEXITED(st)  
 static inline int32_t kama_proc_exit_code(int32_t st)   { return (int32_t)WEXITSTATUS(st); }
 static inline int32_t kama_proc_signaled(int32_t st)    { return WIFSIGNALED(st) ? 1 : 0; }
 static inline int32_t kama_proc_term_signal(int32_t st) { return (int32_t)WTERMSIG(st); }
-static inline int32_t kama_kill(int32_t pid, int32_t sig) { return (int32_t)kill((int)pid, (int)sig); }
+static inline int32_t kama_kill(ptrdiff_t handle, int32_t sig) { return (int32_t)kill((int)handle, (int)sig); }
+// Non-blocking release on drop: reap a zombie if the child already exited, else detach (the OS reparents to
+// init and reaps on its exit). Never blocks. (Windows closes the process HANDLE here; POSIX has none.)
+static inline void kama_proc_detach(ptrdiff_t handle) {
+    int st = 0; (void)waitpid((int)handle, &st, WNOHANG);
+}
+// The platform null device, opened read/write. POSIX = "/dev/null" (Windows branch = "NUL").
+static inline int32_t kama_open_null_read(void)  { return (int32_t)open("/dev/null", O_RDONLY); }
+static inline int32_t kama_open_null_write(void) { return (int32_t)open("/dev/null", O_WRONLY); }
 static inline int32_t kama_WNOHANG(void) { return (int32_t)WNOHANG; }
 static inline int32_t kama_SIGKILL(void) { return (int32_t)SIGKILL; }
 static inline int32_t kama_SIGTERM(void) { return (int32_t)SIGTERM; }
+
+// Millisecond sleep (used by the cross-platform proc_* test helper; a general convenience too). POSIX uses
+// the `poll(NULL, 0, ms)` idiom — no extra include beyond <poll.h>, already pulled in above.
+static inline void kama_sleep_ms(int32_t ms) { poll((struct pollfd*)0, 0, (int)ms); }
+
+// Concurrent dual-drain of two pipe read-fds to EOF, each into its own malloc/realloc growable buffer. This
+// is what `run()` uses to capture a child's stdout+stderr without deadlocking (reading one to EOF then the
+// other would block once the child fills the second pipe). POSIX drains via `poll` (works on pipe fds); the
+// Windows branch uses two reader threads (`select` there is sockets-only). On success returns 0 and fills
+// *outBuf/*outLen and *errBuf/*errLen — each a heap buffer the caller copies out then frees with kama_free()
+// (a NULL buffer with len 0 when a stream produced no bytes). Returns -1 on a hard poll/read error (both
+// buffers freed). `poll` ignores a negative fd, so a finished stream is masked by setting its pollfd.fd to -1.
+static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
+                                    uint8_t** outBuf, size_t* outLen,
+                                    uint8_t** errBuf, size_t* errLen) {
+    int    fds[2]  = { (int)outFd, (int)errFd };
+    uint8_t* buf[2] = { NULL, NULL };
+    size_t len[2]  = { 0, 0 }, cap[2] = { 0, 0 };
+    int    done[2] = { 0, 0 };
+    struct pollfd pfd[2];
+    while (!done[0] || !done[1]) {
+        for (int i = 0; i < 2; i++) {
+            pfd[i].fd = done[i] ? -1 : fds[i];      // negative fd => poll ignores this slot
+            pfd[i].events = POLLIN; pfd[i].revents = 0;
+        }
+        int pr = poll(pfd, 2, -1);
+        if (pr < 0) { if (errno == EINTR) continue; free(buf[0]); free(buf[1]); return -1; }
+        for (int i = 0; i < 2; i++) {
+            if (done[i] || !(pfd[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
+            if (len[i] == cap[i]) {
+                size_t ncap = cap[i] ? cap[i] * 2 : 65536;
+                uint8_t* nb = (uint8_t*)realloc(buf[i], ncap);
+                if (!nb) { free(buf[0]); free(buf[1]); return -1; }
+                buf[i] = nb; cap[i] = ncap;
+            }
+            ptrdiff_t r = read(fds[i], buf[i] + len[i], cap[i] - len[i]);
+            if (r > 0)       { len[i] += (size_t)r; }
+            else if (r == 0) { done[i] = 1; }               // EOF: child closed this end
+            else { if (errno == EINTR || errno == EAGAIN) continue; free(buf[0]); free(buf[1]); return -1; }
+        }
+    }
+    *outBuf = buf[0]; *outLen = len[0];
+    *errBuf = buf[1]; *errLen = len[1];
+    return 0;
+}
 
 // ---- TCP sockets -----------------------------------------------------------
 // The `sockaddr_in` fill (family/htons/inet_addr/zero-init) and the `(struct sockaddr*)` cast are all done

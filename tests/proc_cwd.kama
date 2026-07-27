@@ -1,22 +1,25 @@
-// std::process — cwd() changes the child's working directory. Run the `pwd` binary with cwd("/") and check
-// captured stdout is "/\n" (root avoids the /tmp-symlink ambiguity on macOS; no shell/quoting needed).
+// std::process — cwd() changes the child's working directory. Portable proof (no OS-specific path strings):
+// the helper's `hasfile <name>` opens <name> RELATIVE to the child's cwd. Run it for the helper's own
+// basename, once WITH cwd set to the helper's directory (KAMA_PROCUTIL_DIR) — it finds the file, exit 0 —
+// and once WITHOUT the override (inheriting the harness cwd = repo root, where that basename is absent) —
+// exit 1. The two differing outcomes prove cwd() took effect. Env vars are set by run_tests.sh.
 import std::process::{Command, Output};
 import std::io::{IoError};
-import std::collections::{DynamicArray};
 
 fn int main() {
-    Command c = Command.make(program: "pwd");
-    c.cwd(dir: "/");
-    Result<Output, IoError> r = c.run();
-    return match (give r) {
-        case Ok(o): {
-            int32 n = cast<int32>(o.stdout().length());
-            int32 code = 42;
-            if (n != 2) { code = 96; }
-            else if (o.stdout()[0] != cast<uint8>(47)) { code = 97; }   // '/'
-            else if (o.stdout()[1] != cast<uint8>(10)) { code = 98; }   // '\n'
-            := code;
-        }
-        case Err(e): 99;
-    };
+    Command c1 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c1.arg(a: "hasfile"); c1.arg(a: envOr(name: "KAMA_PROCUTIL_BASE", dflt: "procutil"));
+    c1.cwd(dir: envOr(name: "KAMA_PROCUTIL_DIR", dflt: "."));
+    Result<Output, IoError> r1 = c1.run();
+    int32 a = match (give r1) { case Ok(o): (o.status().code == 0 ? 0 : 96); case Err(e): 97; };
+    if (a != 0) { return a; }
+
+    Command c2 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c2.arg(a: "hasfile"); c2.arg(a: envOr(name: "KAMA_PROCUTIL_BASE", dflt: "procutil"));
+    // no cwd override -> inherits the harness cwd (repo root), where the basename does not exist
+    Result<Output, IoError> r2 = c2.run();
+    int32 b = match (give r2) { case Ok(o): (o.status().code == 1 ? 0 : 98); case Err(e): 99; };
+    if (b != 0) { return b; }
+
+    return 42;
 }

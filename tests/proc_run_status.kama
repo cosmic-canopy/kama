@@ -1,10 +1,11 @@
-// std::process — run `true` (exit 0) and `false` (exit 1) via run() (spawn + concurrent stdout/stderr
-// drain + wait). Proves the fork/exec/pipe path + ExitStatus.success()/code. Returns 42 on success.
+// std::process — run the helper `exit 0` and `exit 1` via run() (spawn + concurrent stdout/stderr drain +
+// wait). Proves the spawn/exec/pipe path + ExitStatus.success()/code. Returns 42 on success.
 import std::process::{Command, Output, ExitStatus};
 import std::io::{IoError};
 
 fn int main() {
-    Command t = Command.make(program: "true");
+    Command t = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    t.arg(a: "exit"); t.arg(a: "0");
     Result<Output, IoError> tr = t.run();
     int32 a = match (give tr) {
         case Ok(o): (o.status().success() ? 0 : 91);
@@ -12,7 +13,8 @@ fn int main() {
     };
     if (a != 0) { return a; }
 
-    Command f = Command.make(program: "false");
+    Command f = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    f.arg(a: "exit"); f.arg(a: "1");
     Result<Output, IoError> fr = f.run();
     int32 b = match (give fr) {
         case Ok(o): ((o.status().code == 1) ? 0 : 93);

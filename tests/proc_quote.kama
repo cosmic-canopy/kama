@@ -1,0 +1,28 @@
+// std::process — argv passthrough / quoting round-trip. Pass a single arg containing a space, a double
+// quote and a backslash; the helper's `echo` prints that one arg verbatim (+newline). On POSIX this proves
+// the execvp argv vector is passed untouched; on Windows it proves kama__win_cmdline's MSVCRT quoting and
+// the child CRT's CommandLineToArgv parsing round-trip byte-for-byte (the classic Windows footgun). The arg
+// is `a b"c\d` (7 bytes) -> stdout "a b\"c\\d\n" (8 bytes).
+import std::process::{Command, Output};
+import std::io::{IoError};
+import std::collections::{DynamicArray};
+
+fn int main() {
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "echo");
+    c.arg(a: "a b\"c\\d");
+    Result<Output, IoError> r = c.run();
+    return match (give r) {
+        case Ok(o): {
+            int32 n = cast<int32>(o.stdout().length());
+            int32 code = 42;
+            if (n != 8) { code = 80; }
+            else if (o.stdout()[1] != cast<uint8>(32))  { code = 81; }   // ' '
+            else if (o.stdout()[3] != cast<uint8>(34))  { code = 82; }   // '"'
+            else if (o.stdout()[5] != cast<uint8>(92))  { code = 83; }   // '\'
+            else if (o.stdout()[7] != cast<uint8>(10))  { code = 84; }   // '\n'
+            := code;
+        }
+        case Err(x): 85;
+    };
+}

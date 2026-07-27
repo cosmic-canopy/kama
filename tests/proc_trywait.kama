@@ -1,11 +1,11 @@
 // std::process — tryWait() is the non-blocking reap: None while the child runs, then wait() collects the
-// exit. `sleep 1` is alive at the immediate tryWait, exits 0 after wait().
+// exit. The helper's `sleep 1000` (ms) is alive at the immediate tryWait, exits 0 after wait().
 import std::process::{Command, Process, ExitStatus};
 import std::io::{IoError};
 
 fn int main() {
-    Command c = Command.make(program: "sleep");
-    c.arg(a: "1");
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "sleep"); c.arg(a: "1000");
     Result<Process, IoError> sr = c.start();
     Process p = match (give sr) { case Ok(pr): { := give pr; } case Err(e): { return 110; } };
 

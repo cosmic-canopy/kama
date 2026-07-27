@@ -241,3 +241,50 @@ leg on a fresh checkout even before the seam is written. Two tasks:
 D1 (isize handle refactor, POSIX, stays green) → cross-platform test helper + re-point fixtures (POSIX stays
 green) → Windows `kama_pipe`/`kama_proc_spawn`/wait/kill + `kama_win_cmdline`/`kama_win_envblock` → D5 Windows
 `run()` drain → iterate on the `windows-test` CI leg until the `proc_*` fixtures pass there.
+
+---
+
+## As shipped — M2 (Windows parity), 2026-07-26
+
+Followed the suggested order; `process.kama` is byte-identical across platforms (only `kama_os.h` differs).
+Landed green on native (791), ASan+UBSan (764), and wasm (738, `proc_*` skipped). Windows is verified by the
+`windows-test` CI leg (mingw-w64-ucrt + clang).
+
+**D1 (handle refactor, POSIX up front, stayed green):** `Process` now holds `isize handle` (POSIX: pid;
+Windows: `(isize)hProcess`) + a separate `int32 pid` for `id()`. Seam: `kama_waitpid` → `kama_proc_wait(isize
+handle, …)`, `kama_proc_spawn(…, Ptr<isize> outHandle, Ptr<int32> outPid)`, `kama_kill(isize handle, …)`.
+
+**D5 (run() drain) — decided: single C seam helper on BOTH platforms (kickoff option 1).** The in-kama
+`std::net::Poller` drain in `run()` was replaced by one platform-neutral `kama_capture2(outFd, errFd, …)`
+call; the C seam implements it with `poll` on POSIX and two reader threads on Windows. Rationale over a
+`@compileFor` split: adopts the reference (Rust std) design on both platforms, collapses `run()` to a single
+path exercised identically everywhere (no divergent, CI-only-tested Windows arm), and upholds the seam
+invariant. `kama_capture2` returns two heap buffers the kama side copies into `DynamicArray<uint8>` then
+frees with `kama_free` (`bytesFromRaw`). `run()` no longer imports `std::net`/`FixedArray`.
+
+**Windows `kama_os.h` branch** (`#if defined(_WIN32)`, EXACT POSIX signatures): `kama_pipe` = `_pipe(…,
+_O_BINARY | _O_NOINHERIT)` (both ends non-inheritable — the FD_CLOEXEC analog); `kama_proc_spawn` =
+`CreateProcessA` with `STARTF_USESTDHANDLES` (redirected ends → `_get_osfhandle` + `SetHandleInformation`
+inheritable just for the call; all-inherit case uses default inheritance, no `STARTF_USESTDHANDLES`) +
+`kama__win_cmdline` (MSVCRT/`CommandLineToArgvW` quoting, unit-tested byte-exact) + `kama__win_envblock`
+(double-NUL block built from the char*[] `kama_envp_build` returns); `kama_proc_wait` =
+`WaitForSingleObject` (poll vs INFINITE by `flags & WNOHANG`) + `GetExitCodeProcess`, closing the HANDLE on
+reap; `kama_kill` = `TerminateProcess(h, 1)`; status accessors: `exited`→1, `exit_code`→st, `signaled`→0,
+`term_signal`→0 (keeps kama's `statusOf` unchanged); `kama_capture2` = two `_read` threads.
+
+**Cross-platform seam additions (both branches), to keep `process.kama` identical + correct:**
+- `kama_proc_detach(handle)` — the dtor's non-blocking release. POSIX: `waitpid(WNOHANG)` (reap-or-detach);
+  Windows: `WaitForSingleObject(h,0)` + `CloseHandle` (detach — no handle leak on drop-while-running).
+- `kama_open_null_read/write()` — the platform null device (`/dev/null` vs `NUL`), replacing the hardcoded
+  `/dev/null` string in `start()`'s `Stdio::Null` arms.
+- `kama_sleep_ms(ms)` — POSIX `poll(NULL,0,ms)` / Windows `Sleep`; used by the test helper (a general
+  convenience). (`kama_getcwd` from the kickoff was NOT needed — see the test helper below.)
+
+**Test helper + fixtures.** M1's `proc_*` drove POSIX-only utilities (sh/echo/cat/printenv/pwd/sleep/…). They
+now drive one bundled cross-platform child, `tests/support/procutil.kama` (a kama program — dogfoods the
+floor + std::fs — built once by `run_tests.sh`, located via `KAMA_PROCUTIL`), with subcommands `echo`/`echo2`
+/`exit`/`cat`/`sleep`/`printenv`/`spew`/`hasfile`. `proc_cwd` proves `cwd()` via `hasfile` (relative open),
+so no `getcwd` was needed. New `proc_quote` exercises the argv-quoting round-trip. Two documented platform
+divergences are asserted as the portable contract, not the OS specific: `proc_notfound` (POSIX Ok(127) vs
+Windows Err — both accepted) and `proc_kill` (`!success()` — POSIX signal-9 vs Windows TerminateProcess
+code 1). The Windows `proc_*` skip guard in `run_tests.sh` was removed.

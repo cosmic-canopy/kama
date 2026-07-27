@@ -112,9 +112,14 @@ scope + acceptance so a fresh session can start immediately.
    `std::net::Poller` (no deadlock). NOTE: a `Process` gets ordinary RAII drop, **not** the isolate `scope`
    join barrier (corrected in the design doc — a child shares no address space, so there's nothing to protect;
    orphans are not structurally prevented, detach outlives the handle). Native 788 / ASan 761 / wasm 737
-   (proc fixtures skipped — no fork/exec in the sandbox), 0-fail. **Design + as-shipped:
-   [design/std-process.md](design/std-process.md).** *Remaining:* **M2 Windows** (`CreateProcess`, own
-   session — the acceptance's Windows half); async/Poller-driven *live* child-stream reads (post-v1).
+   (proc fixtures skipped — no fork/exec in the sandbox), 0-fail. **M2 Windows parity — ✅ SHIPPED 2026-07-26:**
+   the same `process.kama` surface over the Windows `kama_os.h` branch (`CreateProcess`/`_pipe`/
+   `WaitForSingleObject`/`TerminateProcess` + byte-exact argv quoting). `run()`'s concurrent drain moved into
+   one platform-neutral `kama_capture2` seam (POSIX `poll` / Windows two threads), so `run()` is a single path
+   on both. `proc_*` now drive a bundled cross-platform test helper (`tests/support/procutil.kama`) instead of
+   POSIX utilities; the Windows CI skip guard was removed. Native 791 / ASan 764 / wasm 738, 0-fail; Windows
+   proven by the `windows-test` CI leg. **Design + as-shipped: [design/std-process.md](design/std-process.md).**
+   *Remaining:* async/Poller-driven *live* child-stream reads (post-v1).
 
 **With (1)–(4) + the docs reconcile, the language is production-ready — tag 1.0.**
 

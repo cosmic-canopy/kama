@@ -7,7 +7,8 @@ import std::fs::{File};
 import std::collections::{DynamicArray};
 
 fn int main() {
-    Command c = Command.make(program: "cat");
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "cat");
     c.stdin(s: Stdio::Piped);
     c.stdout(s: Stdio::Piped);
     Result<Process, IoError> sr = c.start();

@@ -7,7 +7,8 @@ import std::io::{IoError};
 fn int main() {
     int32 i = 0;
     while (i < 3000) {
-        Command c = Command.make(program: "true");
+        Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+        c.arg(a: "exit"); c.arg(a: "0");
         c.stdout(s: Stdio::Piped);
         Result<Process, IoError> sr = c.start();
         match (give sr) {

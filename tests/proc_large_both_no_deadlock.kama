@@ -1,12 +1,14 @@
 // std::process — the ANTI-DEADLOCK guard. A child emits >64 KiB to BOTH stdout and stderr; a naive
 // read-stdout-then-stderr would deadlock when the child blocks filling the second pipe. run() drains both
-// concurrently (Poller), so both are captured in full. 8000 lines * 20 bytes = 160000 each.
+// concurrently (kama_capture2), so both are captured in full. The helper's `spew 8000` = 8000 lines * 20
+// bytes = 160000 each (19 'A'+\n to stdout, 19 'B'+\n to stderr).
 import std::process::{Command, Output};
 import std::io::{IoError};
 import std::collections::{DynamicArray};
 
 fn int main() {
-    Command c = Command.shell(line: "i=0; while [ $i -lt 8000 ]; do echo AAAAAAAAAAAAAAAAAAA; echo BBBBBBBBBBBBBBBBBBB 1>&2; i=$((i+1)); done");
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "spew"); c.arg(a: "8000");
     Result<Output, IoError> r = c.run();
     return match (give r) {
         case Ok(o): {

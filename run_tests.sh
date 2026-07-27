@@ -69,12 +69,6 @@ if [ "${KAMA_WASM:-0}" != "0" ]; then
     echo "(wasm mode: build every positive fixture to wasm + run under node)"
 fi
 
-# Host-is-Windows (the best-effort windows-test CI leg runs this under mingw/msys bash). std::process is
-# POSIX-only until its M2 Windows milestone (no CreateProcess seam yet, and the proc_* fixtures drive
-# POSIX-only utilities like sh/sleep/cat), so skip them here rather than red the Windows leg. Remove this
-# guard when std::process M2 lands (design/std-process.md "M2 — Windows parity").
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) HOST_WIN=1 ;; *) HOST_WIN=0 ;; esac
-
 # Servers for the wasm net::web E2E fixtures, started once for the wasm leg and torn down on exit.
 # net_ws_loopback -> a Node WebSocket echo server (Node built-ins only). net_wt_loopback -> an aioquic
 # HTTP/3 WebTransport echo server; capture the self-signed cert's hash so the browser harness can trust it.
@@ -221,6 +215,30 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-too
     if sh tools/check-toolchain.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# std::process cross-platform child helper: ONE native binary the proc_* fixtures drive instead of POSIX-only
+# utilities (sh/echo/cat/printenv/sleep/…), so they run identically on POSIX + Windows. Built once, plain
+# native — it's a child process, so the parent fixture's sanitizers still cover std::process; skipped on the
+# wasm leg (proc_* are skipped there). Fixtures locate it (and, for the cwd test, its dir + basename) via
+# these exported vars. The dir is passed OS-native (CreateProcess's lpCurrentDirectory wants a Windows path).
+if [ "$WASM" = 0 ] && [ -f "$TESTS_DIR/support/procutil.kama" ]; then
+    procutil_bin="$TMP/procutil"
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) procutil_bin="$TMP/procutil.exe" ;; esac
+    if "$KAMA" build "$TESTS_DIR/support/procutil.kama" -o "$procutil_bin" >/dev/null 2>"$TMP/procutil.err"; then
+        procutil_dir="$(dirname "$procutil_bin")"
+        export KAMA_PROCUTIL_BASE="$(basename "$procutil_bin")"
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+                export KAMA_PROCUTIL="$(cygpath -w "$procutil_bin")"
+                export KAMA_PROCUTIL_DIR="$(cygpath -w "$procutil_dir")" ;;
+            *)
+                export KAMA_PROCUTIL="$procutil_bin"
+                export KAMA_PROCUTIL_DIR="$procutil_dir" ;;
+        esac
+    else
+        echo "FAIL procutil (helper build failed)"; cat "$TMP/procutil.err"; fail=$((fail+1))
+    fi
+fi
+
 # One fixture's build+run+compare, run in a background subshell. Buffers its status line(s) into
 # $TMP/$name.out and records PASS/FAIL/SKIP into $TMP/$name.res (tallied in fixture order afterward).
 test_one() {
@@ -236,9 +254,6 @@ test_one() {
     { grep -q 'std::net::web' "$src" || grep -q 'kama_net_web.h' "$src"; } && uses_net_web=1
     grep -q 'std::net' "$src" && uses_net=1
     grep -q 'std::process' "$src" && uses_proc=1
-    if [ "$uses_proc" = 1 ] && [ "$HOST_WIN" = 1 ]; then
-        echo "SKIP $name (std::process: POSIX-only until M2 Windows)" >"$out"; echo SKIP >"$res"; return
-    fi
     if [ "$WASM" = 1 ]; then
         if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then
             echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return

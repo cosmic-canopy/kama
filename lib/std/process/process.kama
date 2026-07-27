@@ -12,8 +12,7 @@ namespace std::process;
 
 import std::io::{IoError, lastError};
 import std::fs::{File};
-import std::net::{Poller, Interest};
-import std::collections::{DynamicArray, FixedArray};
+import std::collections::{DynamicArray};
 
 export { Command, Process, ExitStatus, Output, Stdio };
 
@@ -26,19 +25,26 @@ extern fn void  kama_argv_free(Ptr v);
 extern fn Ptr   kama_envp_build(Ptr overrides, int32 clear);
 // pipe + spawn + wait + signal (POSIX fork/exec behind the seam)
 extern fn int32 kama_pipe(Ptr<int32> outRd, Ptr<int32> outWr);
-extern fn int32 kama_proc_spawn(Ptr argv, Ptr envp, Ptr<int8> cwd, int32 inFd, int32 outFd, int32 errFd, Ptr<int32> outPid);
-extern fn int32 kama_waitpid(int32 pid, Ptr<int32> outStatus, int32 flags);
+extern fn int32 kama_proc_spawn(Ptr argv, Ptr envp, Ptr<int8> cwd, int32 inFd, int32 outFd, int32 errFd, Ptr<isize> outHandle, Ptr<int32> outPid);
+extern fn int32 kama_proc_wait(isize handle, Ptr<int32> outStatus, int32 flags);
 extern fn int32 kama_proc_exited(int32 st);
 extern fn int32 kama_proc_exit_code(int32 st);
 extern fn int32 kama_proc_signaled(int32 st);
 extern fn int32 kama_proc_term_signal(int32 st);
-extern fn int32 kama_kill(int32 pid, int32 sig);
+extern fn int32 kama_kill(isize handle, int32 sig);
+// Non-blocking release on drop: POSIX reaps-if-exited-else-detaches (waitpid WNOHANG); Windows checks then
+// CloseHandle. One platform-neutral verb so the dtor stays identical (POSIX has no handle to close).
+extern fn void  kama_proc_detach(isize handle);
+// Concurrent stdout+stderr drain to EOF (POSIX: poll; Windows: two threads) — see kama_os.h. Fills two heap
+// buffers the caller copies out then frees with kama_free. Keeps run()'s kama one platform-neutral path.
+extern fn int32 kama_capture2(int32 outFd, int32 errFd, Ptr<Ptr> outBuf, Ptr<usize> outLen, Ptr<Ptr> errBuf, Ptr<usize> errLen);
+extern fn void  kama_free(Ptr p);
 extern fn int32 kama_WNOHANG();
 extern fn int32 kama_SIGKILL();
 extern fn int32 kama_SIGTERM();
-// files (for /dev/null + parent-side fd hygiene) + errno accessors — the same static-inline seam std::fs uses.
-extern fn int32 kama_open_read(Ptr<int8> path);
-extern fn int32 kama_open_create(Ptr<int8> path);
+// The platform null device (POSIX "/dev/null", Windows "NUL") for a Null-configured stream, + errno accessors.
+extern fn int32 kama_open_null_read();
+extern fn int32 kama_open_null_write();
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
 
@@ -108,6 +114,17 @@ fn Ptr buildEnvp(bool clear, ref DynamicArray<string> keys, ref DynamicArray<str
     return envp;
 }
 
+// Copy `n` bytes out of a raw heap buffer (produced by kama_capture2) into an owned DynamicArray<uint8>.
+// The caller frees the source buffer with kama_free afterwards.
+fn DynamicArray<uint8> bytesFromRaw(Ptr raw, usize n) {
+    int32 c = cast<int32>(n);
+    DynamicArray<uint8> a = DynamicArray.withCapacity(capacity: c);
+    Ptr<uint8> src = cast<Ptr<uint8>>(raw);
+    int32 i = 0;
+    while (i < c) { unsafe { a.add(item: src[i]); } i = i + 1; }
+    return give a;
+}
+
 // A subprocess builder. Accumulates program + args + env overrides + cwd + per-stream Stdio, then
 // spawn()/run(). Move-only (owns its lists/strings). Not injection-prone: args are a vector, never a shell
 // string (use the explicit `shell` ctor for `sh -c`).
@@ -160,8 +177,6 @@ type resource Command {
     // Spawn the child and return a live Process handle. Creates a pipe (or opens /dev/null) per Piped/Null
     // stream; the parent keeps its end (in the Process), the child-side ends close on return (RAII).
     public fn Result<Process, IoError> start() {
-        string devnull = "/dev/null";
-
         // stdin: parent WRITES inKeep; child READS inGive.
         File inKeep = File.make(fd: 0);
         File inGive = File.make(fd: 0);
@@ -173,7 +188,7 @@ type resource Command {
                 inGive = File.make(fd: rd); inKeep = File.make(fd: wr);
             }
             case Null: {
-                int32 fd = kama_open_read(path: devnull.cstr());
+                int32 fd = kama_open_null_read();
                 if (fd < 0) { return Result::Err(error: lastError()); }
                 inGive = File.make(fd: fd);
             }
@@ -190,7 +205,7 @@ type resource Command {
                 outGive = File.make(fd: wr); outKeep = File.make(fd: rd);
             }
             case Null: {
-                int32 fd = kama_open_create(path: devnull.cstr());
+                int32 fd = kama_open_null_write();
                 if (fd < 0) { return Result::Err(error: lastError()); }
                 outGive = File.make(fd: fd);
             }
@@ -207,7 +222,7 @@ type resource Command {
                 errGive = File.make(fd: wr); errKeep = File.make(fd: rd);
             }
             case Null: {
-                int32 fd = kama_open_create(path: devnull.cstr());
+                int32 fd = kama_open_null_write();
                 if (fd < 0) { return Result::Err(error: lastError()); }
                 errGive = File.make(fd: fd);
             }
@@ -223,21 +238,23 @@ type resource Command {
             envp = buildEnvp(clear: this.envClear, keys: ref this.envKeys, vals: ref this.envVals);
         }
 
+        isize handle = 0;
         int32 pid = 0;
         int32 rc = kama_proc_spawn(argv: argv, envp: envp, cwd: this.cwd.cstr(),
-                                   inFd: childIn, outFd: childOut, errFd: childErr, outPid: addr(of: pid));
+                                   inFd: childIn, outFd: childOut, errFd: childErr,
+                                   outHandle: addr(of: handle), outPid: addr(of: pid));
         kama_argv_free(v: argv);
         if (envp != null) { kama_argv_free(v: envp); }
         if (rc != 0) { return Result::Err(error: lastError()); }
 
         // inGive/outGive/errGive drop at return → close the child-side ends (so the parent's read ends see
         // EOF when the child exits). inKeep/outKeep/errKeep move into the Process.
-        return Result::Ok(value: Process.make(pid: pid, inKeep: give inKeep, outKeep: give outKeep, errKeep: give errKeep));
+        return Result::Ok(value: Process.make(handle: handle, pid: pid, inKeep: give inKeep, outKeep: give outKeep, errKeep: give errKeep));
     }
 
-    // One-shot: force stdout+stderr Piped, spawn, DRAIN BOTH CONCURRENTLY (a Poller over the two pipe fds —
-    // reading one-then-the-other would deadlock if the child fills the second pipe), then wait. Returns the
-    // captured Output.
+    // One-shot: force stdout+stderr Piped, spawn, DRAIN BOTH CONCURRENTLY to EOF, then wait. The concurrent
+    // capture lives in the `kama_capture2` seam (POSIX poll / Windows threads) — reading one stream to EOF
+    // then the other would deadlock once the child fills the second pipe. One platform-neutral path here.
     public fn Result<Output, IoError> run() {
         this.outCfg = Stdio::Piped;
         this.errCfg = Stdio::Piped;
@@ -246,49 +263,17 @@ type resource Command {
             case Ok(pr): { := give pr; }
             case Err(e): { return Result::Err(error: e); }
         };
-        Result<Poller, IoError> pl = Poller.create();
-        Poller poller = match (give pl) {
-            case Ok(pp): { := give pp; }
-            case Err(e): { return Result::Err(error: e); }
-        };
-        isize outFd = cast<isize>(p.stdout().rawFd());
-        isize errFd = cast<isize>(p.stderr().rawFd());
-        poller.add(fd: outFd, interest: Interest::Read);
-        poller.add(fd: errFd, interest: Interest::Read);
+        Ptr outRaw = null; usize outLen = 0;
+        Ptr errRaw = null; usize errLen = 0;
+        int32 rc = kama_capture2(outFd: p.stdout().rawFd(), errFd: p.stderr().rawFd(),
+                                 outBuf: addr(of: outRaw), outLen: addr(of: outLen),
+                                 errBuf: addr(of: errRaw), errLen: addr(of: errLen));
+        if (rc != 0) { return Result::Err(error: lastError()); }
+        DynamicArray<uint8> outBuf = bytesFromRaw(raw: outRaw, n: outLen);
+        DynamicArray<uint8> errBuf = bytesFromRaw(raw: errRaw, n: errLen);
+        if (outRaw != null) { kama_free(p: outRaw); }
+        if (errRaw != null) { kama_free(p: errRaw); }
 
-        DynamicArray<uint8> outBuf = DynamicArray.empty();
-        DynamicArray<uint8> errBuf = DynamicArray.empty();
-        FixedArray<uint8> scratch = FixedArray.make(size: 65536);
-        bool outDone = false;
-        bool errDone = false;
-        while (!outDone || !errDone) {
-            Result<int32, IoError> w = poller.wait(timeoutMs: -1);
-            match (w) { case Ok(_): {} case Err(_): {} };   // EINTR → retry (poll re-checks readiness)
-            if (!outDone && poller.readyFor(fd: outFd).readable) {
-                Result<usize, IoError> rr = p.stdout().read(into: scratch.view());
-                int32 got = match (rr) {
-                    case Ok(n): {
-                        int32 cnt = cast<int32>(n); int32 i = 0;
-                        while (i < cnt) { outBuf.add(item: scratch[i]); i = i + 1; }
-                        := cnt;
-                    }
-                    case Err(e): { := 0; }
-                };
-                if (got == 0) { outDone = true; poller.remove(fd: outFd); }
-            }
-            if (!errDone && poller.readyFor(fd: errFd).readable) {
-                Result<usize, IoError> rr = p.stderr().read(into: scratch.view());
-                int32 got = match (rr) {
-                    case Ok(n): {
-                        int32 cnt = cast<int32>(n); int32 i = 0;
-                        while (i < cnt) { errBuf.add(item: scratch[i]); i = i + 1; }
-                        := cnt;
-                    }
-                    case Err(e): { := 0; }
-                };
-                if (got == 0) { errDone = true; poller.remove(fd: errFd); }
-            }
-        }
         Result<ExitStatus, IoError> stR = p.wait();
         ExitStatus status = match (stR) {
             case Ok(s): s;
@@ -301,16 +286,18 @@ type resource Command {
 // A spawned child. Move-only, RAII. Holds the pid + the parent-side pipe ends (a File per Piped stream, else
 // a moved-from File{0} the drop-guard skips).
 type resource Process {
-    int32 pid;                // > 0 live/reapable; 0 = reaped / moved-from sentinel
+    isize handle;             // OS wait handle (POSIX: pid; Windows: (isize)hProcess). != 0 live/reapable;
+                              //   0 = reaped / moved-from sentinel. wait/kill/dtor act on THIS.
+    int32 pid;                // the real OS pid, reported by id() on both platforms
     bool  reaped;
     File  inPipe;             // parent write end  (child stdin)  when inCfg==Piped
     File  outPipe;            // parent read end   (child stdout) when outCfg==Piped
     File  errPipe;            // parent read end   (child stderr) when errCfg==Piped
 
     // Internal — produced by Command.start() (exposed like TcpStream.make; not meant to be called directly).
-    public ctor make(int32 pid, File inKeep, File outKeep, File errKeep) {
+    public ctor make(isize handle, int32 pid, File inKeep, File outKeep, File errKeep) {
         Process r;
-        r.pid = pid; r.reaped = false;
+        r.handle = handle; r.pid = pid; r.reaped = false;
         r.inPipe = give inKeep; r.outPipe = give outKeep; r.errPipe = give errKeep;
         return give r;
     }
@@ -334,8 +321,8 @@ type resource Process {
         if (this.reaped) { return Result::Err(error: IoError::Other(code: 0)); }
         int32 st = 0;
         while (true) {
-            int32 r = kama_waitpid(pid: this.pid, outStatus: addr(of: st), flags: 0);
-            if (r >= 0) { this.reaped = true; this.pid = 0; return Result::Ok(value: statusOf(st: st)); }
+            int32 r = kama_proc_wait(handle: this.handle, outStatus: addr(of: st), flags: 0);
+            if (r >= 0) { this.reaped = true; this.handle = 0; this.pid = 0; return Result::Ok(value: statusOf(st: st)); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }
@@ -345,17 +332,18 @@ type resource Process {
         if (this.reaped) { return Result::Ok(value: Optional::None); }
         int32 st = 0;
         while (true) {
-            int32 r = kama_waitpid(pid: this.pid, outStatus: addr(of: st), flags: kama_WNOHANG());
+            int32 r = kama_proc_wait(handle: this.handle, outStatus: addr(of: st), flags: kama_WNOHANG());
             if (r == 0) { return Result::Ok(value: Optional::None); }
-            if (r > 0)  { this.reaped = true; this.pid = 0; return Result::Ok(value: Optional::Some(value: statusOf(st: st))); }
+            if (r > 0)  { this.reaped = true; this.handle = 0; this.pid = 0; return Result::Ok(value: Optional::Some(value: statusOf(st: st))); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }
 
-    // Send a signal to the child. No-op if already reaped/detached.
+    // Send a signal to the child. No-op if already reaped/detached (handle == 0). On Windows any signal maps
+    // to TerminateProcess — see kama_kill; `signal(sig)` fidelity is POSIX-only.
     public fn Result<Unit, IoError> signal(int32 sig) {
-        if (this.pid <= 0) { return Result::Ok(value: Unit::Unit); }
-        if (kama_kill(pid: this.pid, sig: sig) != 0) { return Result::Err(error: lastError()); }
+        if (this.handle == 0) { return Result::Ok(value: Unit::Unit); }
+        if (kama_kill(handle: this.handle, sig: sig) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
     public fn Result<Unit, IoError> kill()      { return this.signal(sig: kama_SIGKILL()); }
@@ -364,9 +352,8 @@ type resource Process {
     // Non-blocking reap/detach on drop: reap if already exited (no zombie), else leave it (the OS reparents
     // to init and reaps on its exit). NEVER blocks. Then the pipe Files drop, closing any live fds.
     ~Process() {
-        if (this.pid > 0 && !this.reaped) {
-            int32 st = 0;
-            int32 r = kama_waitpid(pid: this.pid, outStatus: addr(of: st), flags: kama_WNOHANG());
+        if (this.handle != 0 && !this.reaped) {
+            kama_proc_detach(handle: this.handle);
         }
     }
 }
