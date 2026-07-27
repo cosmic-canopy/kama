@@ -10,5 +10,7 @@
 ASTNode::ASTNode(CodeGenContext& context)
     : line(context.line)
     , column(context.col)
+    , endLine(context.endLine)
+    , endColumn(context.endCol)
 {
 }

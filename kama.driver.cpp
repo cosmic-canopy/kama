@@ -3209,6 +3209,40 @@ int main(int argc, char** argv)
     // cwd (exe-relative: <exe>/../include, else <exe>, else ".").
     std::string runtimeDir = resolveRuntimeDir(argv[0]);
 
+    if (subcommand == "check") {
+        // Semantic check only: parse + resolve + type-check + ownership/serde analysis, WITHOUT emitting C
+        // or invoking a C compiler. Runs the exact `collectProgram` analysis a build runs (via the
+        // analysis-mode CEmitter's `analyze()`), so it catches the analysis-phase diagnostics fast. This is
+        // the front-end-as-library entry the LSP query path (and its test harness) build on.
+        std::vector<SharedCompilationUnit> units;
+        std::vector<std::string> unitPaths;
+        if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
+
+        CEmitter idx(input);                 // analysis mode: no output stream
+        idx.setPrelude(preludeUnit());       // Optional/Result available implicitly
+        idx.setNoHeap(g_noHeap);
+        idx.setRelease(g_release);
+        idx.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);
+        idx.setLogDefault(g_logDefault);
+        for (auto& m : preludeModuleUnits()) idx.addPreludeModule(m);
+        idx.analyze(units);
+        const auto& diags = idx.diagnostics();
+        for (const auto& d : diags) {
+            const char* sev = d.severity == DiagSeverity::Error ? "error"
+                            : d.severity == DiagSeverity::Warning ? "warning" : "note";
+            fprintf(stderr, "%s:%d:%d: %s: %s\n",
+                    d.file.c_str(), d.line, d.column, sev, d.message.c_str());
+        }
+        if (!diags.empty()) {
+            fprintf(stderr, "kama: %s FAILED (%zu diagnostic%s)\n",
+                    input.c_str(), diags.size(), diags.size() == 1 ? "" : "s");
+            return 1;
+        }
+        fprintf(stderr, "kama: %s OK (%zu unit%s analyzed)\n",
+                input.c_str(), units.size(), units.size() == 1 ? "" : "s");
+        return 0;
+    }
+
     if (subcommand == "transpile") {
         // Transpile to ONE .c. A file with no imports stays on the single-unit fast path; anything that
         // `import`s modules pulls in every transitive unit (loadProgramUnits, as `build` does) and folds

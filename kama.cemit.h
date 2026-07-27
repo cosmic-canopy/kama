@@ -6,6 +6,7 @@
 // headers so emission can evolve without recompiling the world.
 
 #include <ostream>
+#include <sstream>     // analysis-mode throwaway sink (analyze() — the LSP query path)
 #include <string>
 #include <vector>
 #include <map>
@@ -13,6 +14,7 @@
 #include <algorithm>   // std::find (contract-implementor lookups in the graph-node closure)
 #include <cstdint>     // fixed-width ints — not transitive on all libcs (e.g. Windows UCRT)
 #include "kama.forward.h"
+#include "kama.diagnostic.h"   // structured Diagnostic accumulated by unsupported() (query surface)
 
 // A function parameter, in declared order. Named kama arguments are matched
 // against these to recover C's positional order at each call site.
@@ -425,7 +427,27 @@ public:
     // appends `-lm` only when `<math.h>` is used, `-lws2_32` only for sockets, etc.)
     bool externsHeader(const std::string& h) const { return _externedHeaders.count(h) > 0; }
 
+    // ---- Semantic query surface (LSP / front-end-as-library) --------------------------------------
+    // `collectProgram()` — the parse-time name resolution + type-checking + ownership analysis — is
+    // already a self-contained pass that writes NO C (emission is a separate walk over the same tables).
+    // `analyze()` runs exactly that pass with `_out` pointed at a discarded sink, so a caller can build
+    // the semantic index WITHOUT emitting a byte of C, then read it via the accessors/queries. The
+    // ordinary `emit()`/`emitProgram()` path is untouched. Returns the count of un-analyzable nodes
+    // (0 == fully understood); structured diagnostics land in T2.
+    explicit CEmitter(const std::string& sourcePath = "<analysis>");   // analysis-mode ctor (no real stream)
+    int analyze(const std::vector<SharedCompilationUnit>& units);
+
+    // The semantic diagnostics collected during the last emit()/analyze() run, in encounter order. Every
+    // `unsupported()` call (the emitter's single error channel) also lands here as a structured Diagnostic,
+    // so a non-emitting analyze() can hand them back without scraping stderr. Parse diagnostics live on
+    // CodeGenContext (a syntax error stops the parse before emission); the LSP merges both streams.
+    const std::vector<Diagnostic>& diagnostics() const { return _diagnostics; }
+
 private:
+    // Discards any stray write during analysis mode (collectProgram writes no C, but `unsupported()` still
+    // appends its `/* TODO */` marker to `*_out`; in analysis mode that marker goes here and is dropped).
+    std::ostringstream _analysisSink;
+    std::vector<Diagnostic> _diagnostics;   // structured semantic diagnostics (populated by unsupported())
     std::set<std::string> _externedHeaders;   // every `extern "<h>";` seen (populated by emitIncludes)
     // `isolate` lowering: per-module file-scope helper definitions (thread trampolines) to emit BEFORE a
     // module's bodies (a body takes the address of a trampoline, which C requires defined earlier in the

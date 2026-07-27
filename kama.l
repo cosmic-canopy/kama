@@ -3,18 +3,27 @@
 #include <memory>
 #include "kama.parser.hpp"
 
+/* Each macro records the token's END position (one past its last column) after advancing, alongside the
+ * START it already tracked — so an AST node built at reduction time can carry a [start,end) range, not
+ * just a point (LSP source spans, T3). End line == start line for these single-line tokens. */
 #define SAVE_TOKEN_FROM_BUFFER(l)  yyextra->next_column_number += l; \
+                                   yyextra->codeGenContext->endLine = yyextra->next_line_number; \
+                                   yyextra->codeGenContext->endCol  = yyextra->next_column_number; \
                                    yylval->string = yyextra->workString; \
                                    yyextra->workString = NULL;
 
 #define SAVE_TOKEN(src, leng, l)  yyextra->codeGenContext->line = yyextra->next_line_number; \
                                   yyextra->codeGenContext->col = yyextra->next_column_number; \
                                   yyextra->next_column_number += l; \
+                                  yyextra->codeGenContext->endLine = yyextra->next_line_number; \
+                                  yyextra->codeGenContext->endCol  = yyextra->next_column_number; \
                                   yylval->string = std::make_shared<std::string>(src, leng);
 
 #define RETURN_TOKEN(t, l)   yyextra->codeGenContext->line = yyextra->next_line_number; \
                              yyextra->codeGenContext->col = yyextra->next_column_number; \
                              yyextra->next_column_number += l; \
+                             yyextra->codeGenContext->endLine = yyextra->next_line_number; \
+                             yyextra->codeGenContext->endCol  = yyextra->next_column_number; \
                              return yylval->token = t;
 
 #define YY_EXTRA_TYPE struct LexerInstanceData *

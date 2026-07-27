@@ -14,6 +14,11 @@ class ASTNode {
 public:
     int line;
     int column;
+    // Source span end (one past the last column), captured at construction from the lexer's position (T3).
+    // Like `line`/`column`, this is the lexer position at reduction time — approximate for multi-token
+    // nodes (bison lookahead skew); precise per-node spans are refined where hover/rename need them.
+    int endLine;
+    int endColumn;
     explicit ASTNode(CodeGenContext& context);
     ASTNode(const ASTNode&) = default;                  // Copy constructor
     ASTNode(ASTNode&&) = default;                       // Move constructor

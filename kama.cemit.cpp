@@ -23,6 +23,42 @@ CEmitter::CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLi
 {
 }
 
+// Analysis-mode construction: no real output stream. `_out` points at an internal throwaway sink so the
+// handful of defensive `*_out <<` sites (chiefly `unsupported()`) stay valid while `collectProgram` runs.
+// collectProgram itself emits no C, so the sink stays empty in the well-formed case.
+CEmitter::CEmitter(const std::string& sourcePath)
+    : _out(&_analysisSink)
+    , _sourcePath(sourcePath)
+    , _lines(false)
+    , _unsupported(0)
+{
+}
+
+// Run the FULL front-end pipeline (name resolution, type checking, generic/collection instantiation,
+// ownership + serialization fixpoints, contract/export/import validation, AND the per-body walk) over
+// `units` into a throwaway sink — so no C is written anywhere, yet EVERY diagnostic is captured and the
+// query tables are fully populated. The body walk matters: many diagnostics (use-after-move, raw-pointer-
+// outside-`unsafe`, type/escape errors) are only detected while emitting a function body, not during
+// collectProgram — so a collectProgram-only pass would silently miss them. Reuses the exact emit path a
+// build runs (so `analyze()` diagnostics == `kama build` diagnostics), just aimed at discarded streams.
+// Returns the number of nodes the pipeline could not handle (0 == fully understood).
+int CEmitter::analyze(const std::vector<SharedCompilationUnit>& units)
+{
+    if (units.empty()) return _unsupported;
+    if (units.size() == 1) {
+        emit(units[0]);                  // writes to `_analysisSink` (the analysis-mode `_out`)
+    } else {
+        // Multi-file: the same shared-header + per-module emission a build uses, but every stream is the
+        // one throwaway sink. `_sourcePath` (for #line) is irrelevant when the output is discarded.
+        std::ostringstream sink;
+        std::vector<std::ostream*> moduleStreams(units.size(), &sink);
+        std::vector<std::string>   paths(units.size(), _sourcePath);
+        emitProgram(units, "<analysis>.h", sink, moduleStreams, paths);
+        _out = &_analysisSink;           // restore (emitProgram left `_out` at the now-dying local sink)
+    }
+    return _unsupported;
+}
+
 void CEmitter::indent(int depth)
 {
     for (int i = 0; i < depth; ++i) *_out << "    ";
@@ -45,6 +81,16 @@ void CEmitter::unsupported(const char* what, int srcLine)
     ++_unsupported;
     std::fprintf(stderr, "kama: warning: unsupported %s at %s:%d (not yet lowered)\n",
                  what, _sourcePath.c_str(), srcLine);
+    // Structured form for the query surface. `unsupported` is a hard error at the driver (unsupported > 0
+    // fails the build), so it surfaces as an Error in an editor even though the stderr line says "warning".
+    // We only know the line here (call sites pass `node->line`); precise column/end come with spans (T3).
+    Diagnostic d;
+    d.line = srcLine;
+    d.severity = DiagSeverity::Error;
+    d.code = "unsupported";
+    d.message = what;
+    d.file = _sourcePath;
+    _diagnostics.push_back(d);
     *_out << "/* TODO(kama): unsupported " << what << " */";
 }
 
