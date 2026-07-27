@@ -108,7 +108,9 @@ scope + acceptance so a fresh session can start immediately.
    vector + `shell()` opt-in, `cwd`/`env`/`envClear`, per-stream `Stdio`) → owned `Process` (`wait`/`tryWait`/
    `kill`/`signal`/`id`, piped streams as `std::fs::File`, `closeStdin`) or one-shot `run()` capturing
    `Output`. Pure library over `kama_os.h` (fork/execvp/pipe/waitpid) — **no compiler/language change**.
-   Reap-on-drop is non-blocking (reap-or-detach, never blocks); `run()` drains both pipes concurrently via
+   Reap-on-drop is non-blocking (reap-or-park-for-later-sweep, never blocks — the original "the OS reparents
+   a detached child to init" premise was **false on POSIX** and stranded a zombie per drop; fixed 2026-07-27,
+   see design/std-process.md); `run()` drains both pipes concurrently via
    `std::net::Poller` (no deadlock). NOTE: a `Process` gets ordinary RAII drop, **not** the isolate `scope`
    join barrier (corrected in the design doc — a child shares no address space, so there's nothing to protect;
    orphans are not structurally prevented, detach outlives the handle). Native 788 / ASan 761 / wasm 737

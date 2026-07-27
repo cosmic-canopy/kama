@@ -7,6 +7,18 @@ find-references + rename**, the features that need the piece M0/M2 deliberately 
 use-site index** (every *use* of a symbol → its definition). Read [GOALS.md](../GOALS.md) (favor
 simplicity, few deps, one way to do a thing) before building.
 
+**Build-environment changes since this brief was written** (dev-infra spike, 2026-07-27 — nothing about
+M3's design changed, but the mechanics did):
+- Build output is **platform-scoped**: `build/<os>-<arch>/kama`, with root `./kama` a symlink to whichever
+  platform built last. A host `make` and a `tools/cdev make` no longer clobber each other — **no
+  `make clean` when switching**. Shell scripts get the binary by sourcing `tools/kama-bin.sh`; the VS Code
+  extension's `findKama()` prefers the native path, so a container build can't hand it a Linux binary any
+  more (just reload the window after a rebuild).
+- `tools/lspref.sh` (the byte-identical-emission oracle M3.1 must run) now resolves the binary the same
+  way; its usage lines still write to `build/`, which is still gitignored.
+- **A macOS host build now passes 793/793**, same as the container — so M3 can be developed and tested
+  natively on this Mac, which is also what the VS Code extension exercises.
+
 ## Goal & acceptance
 
 In VS Code (and any LSP editor): **find-references** (Shift+F12) on a type/function decl or a reference to
@@ -117,7 +129,8 @@ means find-references and go-to-def agree by construction.
 ## Gotchas (carried from M0–M2)
 
 - **Anon-namespace seam rule** — every LSP-facing driver function at **global scope after `} //
-  namespace`** ([kama.driver.cpp:2882](../kama.driver.cpp)); the biggest recurring trap.
+  namespace`** ([kama.driver.cpp:2900](../kama.driver.cpp), where `lspAnalyze` and the M2 seams already
+  live); the biggest recurring trap.
 - **Coord convention** — kama line 1-based/col 0-based ↔ LSP 0/0. Convert on the way in, `srcRangeToJson`
   on the way out.
 - **`definitionAt`/`typeAtPosition` are non-const** (mutate `_nsCtx`, save/restored); `referencesAt` will
