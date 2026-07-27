@@ -122,8 +122,19 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
   names-in-scope, import paths, keywords). Delivers the `global::` floor-completion payoff.
 - **M5 — Robustness: error recovery + incremental/perf. `L` (or `XL` if RDP, decision 2).** Makes it feel good
   on broken/large files. Can be folded in earlier if decision 2 picks RDP up front.
-- **M6 — VSCode language client + packaging + tests. `S/M`.** Wire `editor/vscode/` to the server; a
-  `tools/check-lsp.sh`-style harness driving the server over stdio with fixture requests/responses.
+- **M6 — Editor/IDE matrix + packaging + tests. `S/M`.** One `kama lsp` server, thin clients — wire up
+  every editor with a generic LSP client and document each in `docs/editors.md`. `tools/check-lsp.sh`-style
+  harness driving the server over stdio with fixture requests/responses.
+  - **Target matrix (each = a few lines of config pointing at `kama lsp`):** **VS Code** (✅ done — the
+    `editor/vscode/` client), **Neovim** (`nvim-lspconfig`), **Vim** (coc.nvim), **Emacs** (eglot /
+    lsp-mode), **Sublime Text** (LSP package), **Helix**, **Zed**, **Kate**. Feature parity is automatic —
+    all read the same server, so each gains hover/def/outline/refs/rename/completion as the server does.
+  - **⚠️ Xcode is out of scope (no supported path).** Xcode exposes **no** hook to register a third-party
+    LSP server — its editor intelligence (SourceKit-LSP) is wired for Swift/C/C++/ObjC only, and Source
+    Editor Extensions can do only menu-triggered text transforms (no live diagnostics/hover/def/completion).
+    The most one could add is fragile, unsupported syntax highlighting via private language-spec hacks. For
+    a macOS-native, full-featured kama editing experience, the answer is **Zed** (native, first-class LSP)
+    or **VS Code**, not Xcode. Revisit only if Apple ever opens a generic-LSP plug-in surface.
 
 **Overall gauge: the largest post-1.0 campaign to date** — on the order of, or larger than, the concurrency
 campaign; **multiple sessions across M0-M6**, not one sitting. The cost is front-loaded in **M0** (the
