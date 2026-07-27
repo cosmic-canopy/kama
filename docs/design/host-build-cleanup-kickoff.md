@@ -4,9 +4,9 @@
 getting the VS Code plugin running natively on macOS. Both were Linux-container-invisible — they
 only bit a host (mac) build. This doc is the design of record; it records what landed, not a plan.
 
-Result: the host suite went from **760 passed / 33 failed → 790 passed / 3 failed**, the container
-suite stayed at **793 / 0**, and host and container builds now coexist with no `make clean` between
-them.
+Result: the host suite went from **760 passed / 33 failed → 793 passed / 0 failed** — full parity
+with the container, which also stayed at **793 / 0** — and host and container builds now coexist with
+no `make clean` between them.
 
 ## Task 1 — macOS concurrency build failures — SHIPPED
 
@@ -46,16 +46,35 @@ to `__write` and fail to link. macOS must declare `write`.) The helper is guarde
 now records that `write` is safe by label and that `read` is the one still kept off the collision
 course.
 
-### Three host-only failures remain (pre-existing, NOT caused by either task)
+## Task 3 — the last three host failures — SHIPPED (`46bd876`, `52ac8c6`)
 
-Verified present at baseline before any change. None reproduce in the container:
-- **`check-embedded`** — the `@section` fixture uses ELF section names; a mac host clang targets
-  mach-o, which requires `segment,section`. Genuinely needs an ELF-capable cross compiler (the
-  container has one), so this check can't pass on a bare mac host.
-- **`check-packages`** (re-point-to-same-bytes-mirror case) — bsdtar and GNU tar don't produce
-  byte-identical archives, so the two "same bytes" mirrors hash differently on macOS.
-- **`proc_detach_dtor`** — exits 120 (its `Command.start()` errors) on macOS under the 3000x
-  spawn loop; a std::process portability issue, unrelated to the write floor.
+After task 1, three failures were left. All three were verified pre-existing (baselined by stashing
+the task-1 fix), and none reproduced in the container — but only ONE turned out to be a genuine
+platform limitation. The other two were real defects that Linux happened to hide.
+
+- **`check-embedded`** — the only true host limitation. `--target embedded` is triple-AGNOSTIC by
+  design: it hands the freestanding flags to whatever `--cc` emits, which on a mac defaults to
+  mach-o, and mach-o rejects the ELF section names the `@section` fixture uses. Fixed in the guard,
+  not the compiler: pin a bare-metal ELF triple (`clang --target=armv7m-none-eabi`) on Darwin, which
+  is what a real firmware build does anyway. Compile-only, so no sysroot or cross libc is needed,
+  and `nm` reads the resulting ARM ELF object fine (2b's libc-symbol check still applies).
+- **`check-packages`** (re-point-to-same-bytes mirror) — a **registry-correctness bug**, not a test
+  artifact: `kama publish` was not byte-reproducible, so publishing the same sources to two mirrors
+  produced two different integrity hashes and a consumer re-pointing at a mirror tripped the
+  dependency-confusion guard. Two causes, neither fixable with portable tar flags (GNU's
+  `--mtime`/`--sort` don't exist on bsdtar), so the inputs are normalized instead: every staged entry
+  is clamped to a fixed timestamp (the staging wrapper dir is created fresh each publish, so its
+  mtime was landing in the archive), and compression goes through `gzip -n` (libarchive's `tar -cz`
+  stamps the current time into the gzip header; GNU tar was reproducible here only by accident,
+  because it pipes to gzip via stdin, which stores 0).
+- **`proc_detach_dtor`** — a **real `std::process` resource leak**, described in full in
+  `docs/design/std-process.md`. `~Process()` assumed the OS reparents a dropped-but-live child to
+  init; POSIX does that only when the *parent* exits, so every un-reaped child stayed a zombie
+  holding a process-table slot. macOS's `kern.maxprocperuid` (2666) made it reachable — the fixture
+  died at iteration ~2384 with zombies climbing monotonically — while Linux's higher cap hid it.
+  `kama_proc_detach` now parks a still-running pid and sweeps the park with `WNOHANG` on later
+  drops; still non-blocking, and it can never steal a status from a `Process` the user can `wait()`
+  on. Zombies now stay at 0–2 across the whole fixture.
 
 ## Task 2 — platform-scoped build output dirs — SHIPPED
 
@@ -92,6 +111,10 @@ not a rebuild.
 - **`.gitignore`** — already covered: `build/` catches the new subdirs, `/kama` the symlink.
 
 ## Handoff notes
-- The authoritative test run is still **`tools/cdev test`** (container, 793/793). The host
-  `run_tests.sh` now reaches 790 with the three host-only failures listed above.
-- The `dev-infra` memory carries the short version of both.
+- **A host `sh run_tests.sh` on macOS now reaches 793/793, same as `tools/cdev test`.** The container
+  remains the authoritative run (it is the real target and covers the MCU/QEMU legs a bare mac skips),
+  but the mac is no longer a second-class test host.
+- Lesson worth keeping: two of the three "macOS-only" failures were **portability bugs Linux was
+  hiding**, not platform quirks. A second OS is a bug detector — the reproducible-publish and
+  zombie-reaper fixes both matter on Linux too.
+- The `dev-infra` memory carries the short version.
