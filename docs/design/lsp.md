@@ -41,7 +41,8 @@ ROADMAP §10 before designing.**
   three request types + capability + intentional-null assertions (16 checks). native 793/793; ASan+UBSan
   clean; emission unchanged. Design of record: [lsp-m2-kickoff.md](lsp-m2-kickoff.md).
 - **NEXT: M3 — find-references + rename.** Needs the body use-site walk M0/M2 deliberately deferred
-  (every use → def index), then rename = workspace edits + safety checks. See "Milestone plan" below.
+  (every use → def index), then rename = workspace edits + safety checks. Cold-start brief:
+  [lsp-m3-kickoff.md](lsp-m3-kickoff.md).
 
 ## Why (from the ROADMAP)
 
