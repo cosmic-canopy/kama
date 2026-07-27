@@ -46,9 +46,33 @@ ROADMAP §10 before designing.**
     imports from disk (stdlib via `argv0`, threaded through `runLspServer`), substitutes the live buffer
     for the open file's on-disk unit, and returns only the open file's diagnostics. Cross-module
     go-to-definition falls out for free. `tests/query/imports.kama` fixture + 2 harness checks (18 total).
-- **NEXT: M3 — find-references + rename.** Needs the body use-site walk M0/M2 deliberately deferred
-  (every use → def index), then rename = workspace edits + safety checks. Cold-start brief:
-  [lsp-m3-kickoff.md](lsp-m3-kickoff.md).
+- **M3.1–M3.3 — find-references + rename (types + free/generic functions). ✅ DONE.** The body use-site
+  index M0/M2 deferred, built the way the brief's option (A) proposed: **no body walker**. The real
+  resolver records each use as it resolves it — `resolveUserName`/`resolveFunc` gained a defaulted trailing
+  `site` identifier, and exactly **five** call sites pass it (`cType` ×3, which covers every type mention
+  anywhere — locals, fields, `new T`, casts, nested generic args; `emitInvocation` ×2 for calls). Recording
+  is gated on a new `_analysis` flag (set only by the analysis ctor, so `kama build` pays nothing) and on
+  `_refUnit` (set in `emitModuleContent`, so each use is attributed to the file it was spelled in).
+  Everything merges into the **existing** `_positions` index rather than a parallel structure: a
+  resolve-fill sweep at the tail of `buildPositions()` gives every entry its `declKey`, then `_refIndex`
+  (key → uses) falls out of one pass. That simplification made `definitionAt`/`typeAtPosition` **`const`
+  and replay-free** (retiring the "non-const query" trap) and made **hover + go-to-definition work inside
+  bodies** for free. New: facade `referencesAt`/`renameRangeAt`, driver seams `lspReferences`/
+  `lspPrepareRename`, `textDocument/references` + `rename` + `prepareRename`, capabilities
+  `referencesProvider` / `renameProvider:{prepareProvider}`, and `kama query --refs L:C`. Rename validates
+  the new name against **the lexer's own keyword table** (`kamaIsKeyword` in `kama.l` — no duplicated
+  list). Emission byte-identical across all 534 transpile fixtures; native 794/794; ASan+UBSan clean;
+  `-Werror` clean.
+  - **Rename is deliberately guarded to the open file.** References span every loaded unit, but the loaded
+    set is only what the open file transitively imports — a file that imports *this* symbol without being
+    imported back is invisible, so a cross-file rewrite could silently break an unseen caller. Rename
+    refuses with an explanatory error instead of half-rewriting. **M3.5 lifts this** (see below).
+- **NEXT: M3.4 — locals / params / fields / enum members.** The tables retain no per-local/param/field decl
+  node (hence no span); this milestone adds those def-sites + scope-lifetime handling. Most references in
+  real code are locals, and a local can never escape its file, so rename is always safe for them under the
+  existing guard. Then **M3.5 — workspace indexing** (a project-wide unit set +
+  `workspace/didChangeWatchedFiles`), which makes cross-file rename safe and lifts the M3.3 guard.
+  Cold-start brief: [lsp-m3-kickoff.md](lsp-m3-kickoff.md).
 
 ## Why (from the ROADMAP)
 

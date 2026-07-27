@@ -450,21 +450,37 @@ public:
     // All framework-free (kama.query.h types); the driver / `kama lsp` server maps them to protocol JSON.
     // `uri` is a source path matching a unit passed to analyze() (== *unit->name).
     std::vector<SymbolInfo> documentSymbols(const std::string& uri) const;         // outline (user decls only)
-    Location    definitionAt(const std::string& uri, int line, int col);           // go-to-definition (replays resolution)
-    std::string typeAtPosition(const std::string& uri, int line, int col);         // hover: kind + name at a decl/type ref
+    Location    definitionAt(const std::string& uri, int line, int col) const;     // go-to-definition
+    std::string typeAtPosition(const std::string& uri, int line, int col) const;   // hover: kind + name at a decl/type ref
     std::vector<Diagnostic> diagnosticsFor(const std::string& uri) const;          // diagnostics for one file
+    // find-references (M3): every USE of the symbol at the cursor, across every unit passed to analyze().
+    // `includeDecl` adds the declaration's own name range (LSP's context.includeDeclaration).
+    std::vector<Location> referencesAt(const std::string& uri, int line, int col, bool includeDecl) const;
+    // prepareRename (M3): the identifier range at the cursor IF it names a renameable user symbol
+    // (a DefSite in a user unit), else an empty range. Never matches prelude/std/builtins.
+    SrcRange renameRangeAt(const std::string& uri, int line, int col) const;
 
 private:
     const CompilationUnit* unitForUri(const std::string& uri) const;   // *unit->name == uri, else nullptr
+    std::string declKeyAt(const CompilationUnit* unit, int line, int col) const;  // cursor -> resolved DefSite key
     // ---- LSP query index (T4/T5) — built at the tail of analyze(), read by the query facade -------------
     // Populated from the symbol tables' existing decl-node pointers AFTER analysis, so it never perturbs
     // resolution/emission (the whole facade runs read-only on stable tables). See kama.query.cpp.
     std::vector<SharedCompilationUnit> _units;   // the USER units passed to analyze() (URI->unit, outline filter)
     std::map<std::string, DefSite>     _defSites;  // resolved mangled name -> declaration site
     std::map<const ASTNode*, const CompilationUnit*> _declUnit;  // top-level decl node -> owning unit
-    std::map<const CompilationUnit*, std::vector<PosEntry>> _positions;  // per-unit sorted decl/sig positions (T4b)
+    std::map<const CompilationUnit*, std::vector<PosEntry>> _positions;  // per-unit sorted decl/sig/body positions
+    // ---- M3 reference index -----------------------------------------------------------------------------
+    // A body use-site as the REAL resolver produced it (recordRef), pending merge into _positions. Held only
+    // between the analysis walk and buildPositions(), then cleared.
+    struct RecordedRef { const CompilationUnit* unit; const IdentifierNode* id; std::string key; };
+    std::vector<RecordedRef> _bodyRefs;
+    std::map<std::string, std::vector<Location>> _refIndex;   // DefSite key -> every USE site of that symbol
+    const CompilationUnit* _refUnit = nullptr;   // unit whose bodies are being walked (set in emitModuleContent)
+    bool _analysis = false;                      // analysis-mode ctor => record references; a build records none
+    void recordRef(const std::string& key, const IdentifierNode* site);  // pure append; no diagnostics, no cType
     void buildDefSites();                        // fill _defSites/_declUnit from the tables (T4a)
-    void buildPositions();                       // fill _positions (decl names from _defSites + sig type refs) (T4b)
+    void buildPositions();                       // fill _positions + _refIndex (decls, sig refs, body refs)
     const PosEntry* posAt(const CompilationUnit* unit, int line, int col) const;  // smallest span at cursor
     void addDefSite(const std::string& key, SymKind kind, const CompilationUnit* unit,
                     ASTNode* declNode, const SharedIdentifier& nameId,
@@ -641,8 +657,15 @@ private:
     static std::string qualifiedName(SharedIdentifier id);       // dotted "a.b.c" from value+qualifier
     static std::string mangleNs(const std::string& ns);          // "a.b" -> "a__b"
     std::string qualify(const std::string& name) const;          // scope-prefix a declared name
-    std::string resolveUserName(const std::string& value, SharedStringList qualifier);  // class/enum/iface ref
-    std::string resolveFunc(const std::string& name, SharedStringList qualifier);       // function ref
+    // `site`, when non-null, is the source identifier this name was spelled at: in analysis mode the
+    // resolved key is recorded against it for the M3 reference index (recordRef). Defaulted, so the ~68
+    // call sites that have no identifier in hand (or don't want the use recorded) are unaffected.
+    std::string resolveUserName(const std::string& value, SharedStringList qualifier,
+                                const IdentifierNode* site = nullptr);                  // class/enum/iface ref
+    std::string resolveFunc(const std::string& name, SharedStringList qualifier,
+                            const IdentifierNode* site = nullptr);                      // function ref
+    std::string resolveUserNameImpl(const std::string& value, SharedStringList qualifier);  // the search itself
+    std::string resolveFuncImpl(const std::string& name, SharedStringList qualifier);       // the search itself
     bool isNamespace(const std::string& name) const;             // a known public namespace (or alias)
 
     // RAII scope stack: live destructible locals per lexical scope.

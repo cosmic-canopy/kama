@@ -32,6 +32,7 @@ CEmitter::CEmitter(const std::string& sourcePath)
     , _lines(false)
     , _unsupported(0)
 {
+    _analysis = true;   // record body use-sites for the reference index (a `kama build` records none)
 }
 
 // Run the FULL front-end pipeline (name resolution, type checking, generic/collection instantiation,
@@ -181,7 +182,15 @@ bool CEmitter::isNamespace(const std::string& name) const
 // Resolve a class/enum/interface reference (bare or qualified) to its registered
 // mangled name. Bare names search the file's own scope, then its `using`s — never
 // another file's private symbols. Returns the bare name if unresolved.
-std::string CEmitter::resolveUserName(const std::string& value, SharedStringList qualifier)
+std::string CEmitter::resolveUserName(const std::string& value, SharedStringList qualifier,
+                                      const IdentifierNode* site)
+{
+    std::string key = resolveUserNameImpl(value, qualifier);
+    recordRef(key, site);
+    return key;
+}
+
+std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedStringList qualifier)
 {
     auto known = [&](const std::string& n) {
         return _classes.count(n) || _enums.count(n) || _interfaces.count(n) || _sigs.count(n)
@@ -295,7 +304,15 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
 }
 
 // Resolve a function reference to its mangled cName (same search as types).
-std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qualifier)
+std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qualifier,
+                                  const IdentifierNode* site)
+{
+    std::string key = resolveFuncImpl(name, qualifier);
+    recordRef(key, site);
+    return key;
+}
+
+std::string CEmitter::resolveFuncImpl(const std::string& name, SharedStringList qualifier)
 {
     if (name == "main") return "kama_main";
     if (!qualifier || qualifier->empty()) {
@@ -371,7 +388,7 @@ std::string CEmitter::cType(SharedIdentifier type)
     // a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box_int32`).
     // Reached only for a non-reserved name with a type arg; under _typeSubst the arg's `T` resolves.
     if (type->genericArg && type->value) {   // genericArg mirrors genericArgs[0] (non-null iff there are args)
-        std::string tmpl = resolveUserName(*type->value, type->qualifier);
+        std::string tmpl = resolveUserName(*type->value, type->qualifier, type.get());
         // a generic TYPE (`Box<int32>`) or a generic CONTRACT (`Iterator<int32>`) both spell their
         // specialized name; the contract instance lives in _interfaces after discovery.
         if (_genericTypes.count(tmpl) || _genericContracts.count(tmpl))
@@ -381,7 +398,7 @@ std::string CEmitter::cType(SharedIdentifier type)
     // `BitSet<GlobalAllocator>`): spell the defaulted instance name — NOT under _typeSubst, where a bare
     // param name is substituted above. (A bare type-param isn't in _genericTypes, so this never fires for one.)
     if (type->value && !type->genericArg) {
-        std::string tmpl = resolveUserName(*type->value, type->qualifier);
+        std::string tmpl = resolveUserName(*type->value, type->qualifier, type.get());
         if (_genericTypes.count(tmpl) && allTypeParamsDefaulted(tmpl))
             return genericTypeMangle(tmpl, nullptr);
     }
@@ -404,7 +421,7 @@ std::string CEmitter::cType(SharedIdentifier type)
             // User-defined type (class/enum/interface) — resolve through the
             // current file's namespace scope + usings to its mangled C name.
             if (!type->value) return "void";
-            return resolveUserName(*type->value, type->qualifier);
+            return resolveUserName(*type->value, type->qualifier, type.get());
     }
 }
 
@@ -10603,7 +10620,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                          "assign its result to a `comptime` constant and use that").c_str(), call->line);
             return "0";
         }
-        auto fit = _funcs.find(resolveFunc(name, qual));
+        auto fit = _funcs.find(resolveFunc(name, qual, call->identifier.get()));
         if (fit != _funcs.end())
             return placeWrap(emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line),
                              fit->second.isPlaceReturn);
@@ -10612,7 +10629,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     }
 
     // Free-function call — resolve the name through the file's scope + usings.
-    auto it = _funcs.find(resolveFunc(name, call->identifier->qualifier));
+    auto it = _funcs.find(resolveFunc(name, call->identifier->qualifier, call->identifier.get()));
     if (it == _funcs.end()) {
         // const-eval 6b-3: a `comptime fn` is not a runtime symbol — reject a runtime-position call
         // with a diagnostic that points at the `comptime` constant form.
@@ -14714,6 +14731,15 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
 void CEmitter::emitModuleContent(SharedCompilationUnit unit)
 {
     _nsCtx = _unitCtx[unit.get()];   // resolve this file's body references in its scope
+    // M3: attribute every body use-site recorded below to this unit. Save/restore rather than assign so a
+    // nested emission (nothing does this today) can't strand the pointer; outside here recordRef sees
+    // nullptr and drops the record — header/prelude type refs are covered by buildPositions' own walk.
+    const CompilationUnit* savedRefUnit = _refUnit;
+    _refUnit = unit.get();
+    struct RefUnitGuard {
+        const CompilationUnit** slot; const CompilationUnit* prev;
+        ~RefUnitGuard() { *slot = prev; }
+    } refUnitGuard{ &_refUnit, savedRefUnit };
     auto classOf = [&](ASTNode* d) -> ClassInfo* {
         auto* cd = dynamic_cast<ClassDeclarationNode*>(d);
         if (cd && cd->name && cd->name->value) {

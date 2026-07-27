@@ -35,14 +35,15 @@ struct DefSite {
     std::string             container;           // enclosing type for methods/fields ("Point"), else ""
 };
 
-// One indexed source position: a declaration NAME or a signature TYPE reference. M0 indexes ONLY decl /
-// signature identifiers (body use-sites are the M3 find-references walk). `id` carries value + qualifier
-// for resolution replay at a cursor.
+// One indexed source position: a declaration NAME, a signature TYPE reference, or (M3) a BODY use-site.
+// `declKey` is filled for EVERY entry by the resolve-fill sweep at the tail of buildPositions() — decl
+// names carry their own key, signature refs are resolved there, body refs were resolved by the real
+// resolver as analysis ran (see recordRef). An empty declKey means the name resolved to nothing.
 struct PosEntry {
     SrcRange        range;
     IdentifierNode* id = nullptr;
     bool            isDeclName = false;   // true => this identifier IS a def-site name (its own DefSite)
-    std::string     declKey;              // when isDeclName: the DefSite key it declares
+    std::string     declKey;              // the DefSite key this identifier declares or references
 };
 
 // Query results (LSP-shaped, framework-free).

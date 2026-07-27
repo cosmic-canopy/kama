@@ -2,17 +2,20 @@
 //
 // Everything here runs STRICTLY AFTER analyze()'s analysis walk, over the now-stable symbol tables. It is
 // READ-ONLY: it never resolves-and-registers, never emits, never mutates the tables (the one nuance is the
-// resolution replay in definitionAt(), which save/restores _nsCtx — see T4c). Emission is completely
-// untouched, so `kama build` stays byte-identical.
+// resolve-fill sweep in buildPositions(), which save/restores _nsCtx). Emission is completely untouched,
+// so `kama build` stays byte-identical. The query facade itself is const and does no resolution at all —
+// every indexed position carries its resolved DefSite key.
 //
-// Scope for M0: DECLARATION-SITE and SIGNATURE/TYPE-REFERENCE positions only — types, contracts, enums,
-// free/generic functions, methods, ctors. NOT body-expression use-sites (that is the M3 find-references
-// walk over the ~150 stmt/expr node kinds) and NOT locals-hover (M2; per-function scopes are torn down).
-// Fields and enum MEMBERS are also deferred to M2 — the tables don't retain a per-field/per-member decl
-// node (hence no span), and adding that retention is M2 work when hover needs it.
+// Scope: DECLARATION-SITE, SIGNATURE/TYPE-REFERENCE, and (M3) BODY use-site positions — types, contracts,
+// enums, free/generic functions, methods, ctors. Body coverage does NOT come from a walker here: the real
+// resolver records each use as analysis resolves it (CEmitter::recordRef), so references and go-to-
+// definition agree by construction. Still deferred to M3.4: LOCALS, PARAMS, FIELDS and enum MEMBERS — the
+// tables retain no per-local/field decl node (hence no span), which is that milestone's first task.
 
 #include "kama.cemit.h"
 #include "kama.ast.h"
+
+#include <set>
 
 // ---- SrcRange / SymKind helpers -------------------------------------------------------------------------
 
@@ -205,9 +208,20 @@ static void addParamTypes(const SharedParameterList& params, std::vector<PosEntr
     for (auto& p : *params) if (p) addTypeRef(p->type, out);
 }
 
+// A body use-site, recorded by the REAL resolver as the analysis walk resolved it (see resolveUserName /
+// resolveFunc). Pure append: no diagnostics, no cType, no table mutation — so instrumenting the resolvers
+// cannot perturb emission. Dropped outside a module-body walk (_refUnit == nullptr: header/prelude passes,
+// whose type refs buildPositions indexes structurally anyway) and in build mode (_analysis == false).
+void CEmitter::recordRef(const std::string& key, const IdentifierNode* site)
+{
+    if (!_analysis || !_refUnit || !site || key.empty()) return;
+    _bodyRefs.push_back(RecordedRef{ _refUnit, site, key });
+}
+
 void CEmitter::buildPositions()
 {
     _positions.clear();
+    _refIndex.clear();
 
     // (1) Declaration names — one entry per user-unit DefSite (prelude/std have unit==nullptr, skipped).
     for (auto& kv : _defSites) {
@@ -249,6 +263,41 @@ void CEmitter::buildPositions()
         }
     }
 
+    // (3) Body use-sites (M3) — merge what the real resolver recorded during the analysis walk. Dedup by
+    // identifier NODE: an expression re-walked by an analysis helper, or a generic template body re-emitted
+    // per instantiation, hands us the same source node repeatedly, and one source spelling is one reference.
+    {
+        std::map<const CompilationUnit*, std::set<const IdentifierNode*>> seen;
+        for (auto& kv : _positions)
+            for (const auto& e : kv.second) if (e.id) seen[kv.first].insert(e.id);
+        for (const auto& r : _bodyRefs) {
+            if (!r.unit || !r.id) continue;
+            if (!seen[r.unit].insert(r.id).second) continue;   // already indexed (sig ref or earlier record)
+            _positions[r.unit].push_back(
+                PosEntry{ SrcRange{ r.id->line, r.id->column, r.id->endLine, r.id->endColumn },
+                          const_cast<IdentifierNode*>(r.id), false, r.key });
+        }
+        _bodyRefs.clear();
+        _bodyRefs.shrink_to_fit();
+    }
+
+    // (4) Resolve-fill — give every remaining entry its DefSite key. Only the signature type refs from
+    // addTypeRef arrive empty; resolve them in their own unit's namespace context, exactly as the old
+    // per-query replay did (resolveUserName reads only _nsCtx + the tables, both stable after analyze()),
+    // so precomputing here is equivalent and lets the query facade stay const and replay-free.
+    {
+        NsCtx saved = _nsCtx;
+        for (auto& kv : _positions) {
+            auto uit = _unitCtx.find(kv.first);
+            if (uit == _unitCtx.end()) continue;
+            _nsCtx = uit->second;
+            for (auto& e : kv.second)
+                if (e.declKey.empty() && e.id && e.id->value)
+                    e.declKey = resolveUserName(*e.id->value, e.id->qualifier);   // no `site` => not re-recorded
+        }
+        _nsCtx = saved;
+    }
+
     // Sort each unit's entries by start position so posAt can scan deterministically.
     for (auto& kv : _positions) {
         auto& v = kv.second;
@@ -256,6 +305,20 @@ void CEmitter::buildPositions()
             if (a.range.line != b.range.line) return a.range.line < b.range.line;
             return a.range.column < b.range.column;
         });
+    }
+
+    // (5) The reverse index: DefSite key -> every USE of it. Declaration names are excluded (they are the
+    // definition, added back only when a caller asks for includeDecl); prelude/std targets are filtered by
+    // the same `!unit` guard the outline and go-to-definition use.
+    for (auto& kv : _positions) {
+        const CompilationUnit* u = kv.first;
+        if (!u || !u->name) continue;
+        for (const auto& e : kv.second) {
+            if (e.isDeclName || e.declKey.empty()) continue;
+            auto d = _defSites.find(e.declKey);
+            if (d == _defSites.end() || !d->second.unit) continue;
+            _refIndex[e.declKey].push_back(Location{ *u->name, e.range });
+        }
     }
 }
 
@@ -281,11 +344,19 @@ const CompilationUnit* CEmitter::unitForUri(const std::string& uri) const
     return nullptr;
 }
 
-// Go-to-definition. On a decl name -> itself; on a signature type reference -> replay resolution at the
-// cursor and map the resolved mangled name to its def-site. READ-ONLY: the only state touched is _nsCtx,
-// save/restored around resolveUserName (a pure lookup). cType is deliberately NOT called — its unsupported()
-// side effect would pollute _diagnostics — and no collect/emit runs, so no generic instances register.
-Location CEmitter::definitionAt(const std::string& uri, int line, int col)
+// The DefSite key the cursor names, or "" if it names nothing indexed. Every PosEntry carries its key
+// already (buildPositions' resolve-fill), so this is a pure lookup — no resolution replay, no _nsCtx
+// mutation, and correct for FUNCTION references, which the old replay would have run through the TYPE
+// resolver. cType is still deliberately never called from a query path: its unsupported() side effect
+// would pollute _diagnostics.
+std::string CEmitter::declKeyAt(const CompilationUnit* unit, int line, int col) const
+{
+    const PosEntry* e = posAt(unit, line, col);
+    return e ? e->declKey : std::string();
+}
+
+// Go-to-definition. On a decl name -> itself; on a reference -> the def-site its resolved key names.
+Location CEmitter::definitionAt(const std::string& uri, int line, int col) const
 {
     const CompilationUnit* unit = unitForUri(uri);
     if (!unit) return Location{};
@@ -298,44 +369,61 @@ Location CEmitter::definitionAt(const std::string& uri, int line, int col)
         if (it == _defSites.end()) return Location{};
         return Location{ uri, it->second.selectionRange };
     }
-    // Cursor on a type reference: resolve it in the unit's namespace context, then look up the def-site.
-    if (!e->id || !e->id->value) return Location{};
-    NsCtx saved = _nsCtx;
-    auto uit = _unitCtx.find(unit);
-    if (uit != _unitCtx.end()) _nsCtx = uit->second;
-    std::string key = resolveUserName(*e->id->value, e->id->qualifier);
-    _nsCtx = saved;
-
-    auto it = _defSites.find(key);
+    auto it = _defSites.find(e->declKey);
     if (it == _defSites.end() || !it->second.unit) return Location{};   // builtin / prelude / unresolved
     const DefSite& d = it->second;
     return Location{ d.unit->name ? *d.unit->name : uri, d.selectionRange };
 }
 
-// Hover: a short "<kind> <name>" for a declaration or a resolved type reference. Same read-only replay as
-// definitionAt (no cType). Locals-hover (per-function scopes) is M2.
-std::string CEmitter::typeAtPosition(const std::string& uri, int line, int col)
+// Hover: a short "<kind> <name>" for a declaration or a resolved reference.
+std::string CEmitter::typeAtPosition(const std::string& uri, int line, int col) const
 {
     const CompilationUnit* unit = unitForUri(uri);
     if (!unit) return "";
     const PosEntry* e = posAt(unit, line, col);
     if (!e) return "";
 
-    if (e->isDeclName) {
-        auto it = _defSites.find(e->declKey);
-        if (it == _defSites.end()) return "";
-        return std::string(symKindName(it->second.kind)) + " " + it->second.display;
-    }
-    if (!e->id || !e->id->value) return "";
-    NsCtx saved = _nsCtx;
-    auto uit = _unitCtx.find(unit);
-    if (uit != _unitCtx.end()) _nsCtx = uit->second;
-    std::string key = resolveUserName(*e->id->value, e->id->qualifier);
-    _nsCtx = saved;
-
-    auto it = _defSites.find(key);
+    auto it = _defSites.find(e->declKey);
     if (it != _defSites.end()) return std::string(symKindName(it->second.kind)) + " " + it->second.display;
+    if (e->isDeclName || !e->id || !e->id->value) return "";
     return *e->id->value;   // a builtin/unresolved type — echo the source spelling
+}
+
+// Find-references. The cursor may sit on the declaration or on any use — both resolve to the same key, so
+// both return the same set (that is the point of keying the index the way go-to-definition keys it).
+// Spans every unit analyze() was given, i.e. the open file plus its transitive imports.
+std::vector<Location> CEmitter::referencesAt(const std::string& uri, int line, int col,
+                                             bool includeDecl) const
+{
+    std::vector<Location> out;
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return out;
+    std::string key = declKeyAt(unit, line, col);
+    if (key.empty()) return out;
+
+    auto d = _defSites.find(key);
+    if (d == _defSites.end() || !d->second.unit) return out;   // builtin / prelude / unresolved: not renameable
+    if (includeDecl) {
+        const DefSite& s = d->second;
+        out.push_back(Location{ s.unit->name ? *s.unit->name : uri, s.selectionRange });
+    }
+    auto r = _refIndex.find(key);
+    if (r != _refIndex.end()) out.insert(out.end(), r->second.begin(), r->second.end());
+    return out;
+}
+
+// prepareRename: the click-target range, non-empty only when the cursor names a user symbol we can
+// actually rewrite. Returning an empty range makes the editor grey out F2 rather than offer a rename that
+// would silently do nothing (builtins, prelude/std, unresolved names, and — until M3.4 — locals).
+SrcRange CEmitter::renameRangeAt(const std::string& uri, int line, int col) const
+{
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return SrcRange{};
+    const PosEntry* e = posAt(unit, line, col);
+    if (!e || e->declKey.empty()) return SrcRange{};
+    auto d = _defSites.find(e->declKey);
+    if (d == _defSites.end() || !d->second.unit) return SrcRange{};
+    return e->range;
 }
 
 // Document outline: every user-unit def-site in this file, sorted by declaration order.

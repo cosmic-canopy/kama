@@ -6,6 +6,8 @@
 #   2. definitionAt — go-to-definition on a signature type reference replays name resolution at the cursor
 #      and lands on the type's declaration.
 #   3. typeAtPosition — hover returns "<kind> <name>" for a decl name and a resolved type reference.
+#   4. referencesAt (M3) — find-references lists every use of a symbol INCLUDING body use-sites, and a
+#      cursor on a use returns the same set as a cursor on the declaration.
 # Positions are tied to tests/query/shapes.kama; edit both together. Fails (exit 1) with a diagnostic.
 # Run standalone or from run_tests.sh.
 set -eu
@@ -80,6 +82,24 @@ echo "check-query: typeAtPosition (hover)"
 expect --type 17:22 -- "value Point"        # a Point type reference
 expect --type 11:14 -- "resource Widget"    # the Widget decl name
 expect --type 17:9  -- "function midpoint"  # a function decl name
+# M3: hover/def now reach BODY use-sites too (they are indexed positions like any other).
+expect --type 18:5  -- "value Point"        # 'Point m;' inside midpoint's body
+expect --def  25:5  -- "shapes.kama:6:11"   # 'Point p;' inside main's body -> Point decl
+
+echo "check-query: referencesAt (find-references, incl. body use-sites)"
+# Every Point spelling: the decl, the Widget field + ctor param, midpoint's return + 2 params, and the
+# two BODY declarations (18:5, 25:5) that only the M3 reference index can see.
+expect --refs 6:11 -- "shapes.kama:6:11"    # includeDecl -> the declaration itself
+expect --refs 6:11 -- "shapes.kama:12:4"    # 'Point origin' field type
+expect --refs 6:11 -- "shapes.kama:13:21"   # 'Point at' ctor param
+expect --refs 6:11 -- "shapes.kama:17:3"    # midpoint's return type
+expect --refs 6:11 -- "shapes.kama:18:4"    # BODY: 'Point m;' in midpoint
+expect --refs 6:11 -- "shapes.kama:25:4"    # BODY: 'Point p;' in main
+# A cursor on a USE resolves to the same key, so it returns the same set as a cursor on the decl.
+expect --refs 18:5 -- "shapes.kama:6:11"
+expect --refs 18:5 -- "shapes.kama:25:4"
+# Prelude/std symbols are never renameable targets and have no user references to report.
+reject --refs 7:12 -- "shapes.kama"         # 'int32' (a builtin) -> "no references"
 
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

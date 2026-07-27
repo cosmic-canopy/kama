@@ -1,6 +1,28 @@
 # LSP M3 — find-references + rename — kickoff / handoff
 
-**Status: READY TO BUILD (cold-start brief).** M0 (query index + spans), M1 (server + diagnostics), and
+> **Status update (2026-07-27): M3.1–M3.3 are SHIPPED.** The rest of this brief is preserved as the design
+> of record; the as-shipped summary lives in [lsp.md](lsp.md) "Progress". What changed against the plan
+> below, and what a follow-on session needs to know:
+> - **Option (A) was taken** and cost less than framed. The natural capture points turned out to be just
+>   **five** call sites: `cType` ×3 (the single choke point for *every* type spelling — local decls,
+>   fields, `new T`, casts, nested generic args) and `emitInvocation` ×2 (calls). `exprClass` /
+>   `invocationReturnsPlace` / `scanExprForGenerics` were left uninstrumented on purpose: they re-walk the
+>   same expressions, and identifier-node dedup absorbs them anyway.
+> - **`_refIndex` is not a parallel structure.** Body refs merge into the existing `_positions`, and a
+>   resolve-fill sweep at the tail of `buildPositions()` gives *every* entry its `declKey`. Consequences
+>   worth keeping: `definitionAt`/`typeAtPosition` are now **`const` and do no resolution replay** (the
+>   "non-const query" gotcha below is retired), and **hover + go-to-def now work inside bodies**.
+> - **Gating:** a new `_analysis` flag (analysis ctor only) plus `_refUnit` (set in `emitModuleContent`).
+>   `_out == &_analysisSink` is NOT a usable proxy — `emitProgram` reassigns `_out` per module.
+> - **Two stale cites in this brief:** `resolveFunc` is at **kama.cemit.cpp:298**, not 253. And
+>   `bin_search` in `kama.l` returns **`IDENTIFIER`**, not `-1`, when a word isn't a keyword (which is why
+>   `getToken`'s `-1` check is dead code) — `kamaIsKeyword` must compare against `IDENTIFIER`.
+> - **Scope decision 1 was settled the conservative way and is NOT permanent:** rename is guarded to the
+>   open file, and **M3.5 (workspace indexing) is now part of this campaign**, not deferred to M5 — it is
+>   what makes cross-file rename safe. M3.4 (locals/params/fields) comes first, since locals are the
+>   commonest reference and are always single-file.
+
+**Status: M3.1–M3.3 SHIPPED; M3.4/M3.5 remain (original cold-start brief follows).** M0 (query index + spans), M1 (server + diagnostics), and
 M2 (hover / go-to-definition / document symbols) are complete on `dev` (`4a74dfe`, `e74a0bd`, `77709d4`;
 see [lsp.md](lsp.md) "Progress" and the `next-lsp` memory). This is the self-contained handoff for **M3 —
 find-references + rename**, the features that need the piece M0/M2 deliberately deferred: the **body

@@ -2966,6 +2966,19 @@ std::string lspHover(const SharedLspIndex& idx, const std::string& path, int lin
     return idx->idx->typeAtPosition(path, line, col);
 }
 
+std::vector<Location> lspReferences(const SharedLspIndex& idx, const std::string& path,
+                                    int line, int col, bool includeDecl)
+{
+    if (!idx || !idx->idx) return {};
+    return idx->idx->referencesAt(path, line, col, includeDecl);
+}
+
+SrcRange lspPrepareRename(const SharedLspIndex& idx, const std::string& path, int line, int col)
+{
+    if (!idx || !idx->idx) return SrcRange{};
+    return idx->idx->renameRangeAt(path, line, col);
+}
+
 int main(int argc, char** argv)
 {
     if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
@@ -3121,6 +3134,7 @@ int main(int argc, char** argv)
     bool        querySymbols = false;      // `kama query --symbols`: dump the document outline
     std::string queryDef;                  // `kama query --def L:C`: go-to-definition at a cursor
     std::string queryType;                 // `kama query --type L:C`: hover (kind+name) at a cursor
+    std::string queryRefs;                 // `kama query --refs L:C`: find-references at a cursor
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
 
@@ -3146,6 +3160,7 @@ int main(int argc, char** argv)
         else if (a == "--symbols")                  querySymbols = true;             // `kama query` outline
         else if (a == "--def" && i + 1 < argc)      queryDef = argv[++i];            // `kama query` go-to-def L:C
         else if (a == "--type" && i + 1 < argc)     queryType = argv[++i];           // `kama query` hover L:C
+        else if (a == "--refs" && i + 1 < argc)     queryRefs = argv[++i];           // `kama query` refs L:C
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
@@ -3374,6 +3389,7 @@ int main(int argc, char** argv)
         //   kama query <file> --symbols      document outline (one `L:C kind name` line per user decl)
         //   kama query <file> --def  L:C     go-to-definition at 1-based line:col
         //   kama query <file> --type L:C     hover (kind + name) at 1-based line:col
+        //   kama query <file> --refs L:C     find-references (decl + every use) at 1-based line:col
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
         if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
@@ -3416,7 +3432,16 @@ int main(int argc, char** argv)
             printf("%s\n", t.empty() ? "no type" : t.c_str());
             return 0;
         }
-        fprintf(stderr, "kama query: pass --symbols, --def L:C, or --type L:C\n");
+        if (!queryRefs.empty()) {
+            int l, c;
+            if (!parseLC(queryRefs, l, c)) { fprintf(stderr, "kama query: --refs wants L:C\n"); return 2; }
+            auto refs = idx.referencesAt(input, l, c, /*includeDecl*/ true);
+            if (refs.empty()) { printf("no references\n"); return 0; }
+            for (const auto& r : refs)
+                printf("%s:%d:%d\n", r.uri.c_str(), r.range.line, r.range.column);
+            return 0;
+        }
+        fprintf(stderr, "kama query: pass --symbols, --def L:C, --type L:C, or --refs L:C\n");
         return 2;
     }
 

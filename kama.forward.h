@@ -139,4 +139,8 @@ typedef std::shared_ptr<CodeGenContext> SharedCodeGenContext;
 #define KAMA_LEXERINSTANCE_DEFAULT_LINE_ONE 1
 #define KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE 0
 
+// Defined in kama.l, over the lexer's own keyword table — so callers that must reject reserved words
+// (the LSP's rename validation) can never drift from what the compiler actually reserves.
+bool kamaIsKeyword(const char* word);
+
 #endif //__KAMA_FORWARD_H__

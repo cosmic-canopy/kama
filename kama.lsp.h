@@ -42,6 +42,13 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
 std::vector<SymbolInfo> lspDocumentSymbols(const SharedLspIndex& idx, const std::string& path);
 Location                lspDefinition(const SharedLspIndex& idx, const std::string& path, int line, int col);
 std::string             lspHover(const SharedLspIndex& idx, const std::string& path, int line, int col);
+// find-references (M3). Results may name OTHER files: the index spans the open file's transitive imports,
+// so each Location carries its own path — map it through pathToUri rather than assuming the open document.
+std::vector<Location>   lspReferences(const SharedLspIndex& idx, const std::string& path,
+                                      int line, int col, bool includeDecl);
+// prepareRename (M3): the identifier range at the cursor if it names a renameable user symbol, else a
+// zero range (SrcRange::line == 0) — the server turns that into a null result so the editor greys out F2.
+SrcRange                lspPrepareRename(const SharedLspIndex& idx, const std::string& path, int line, int col);
 
 // Run the language server over stdio; blocks until the client's `exit`. `argv0` is the compiler's own path
 // (for resolving the stdlib when loading imported modules). Returns the process exit code (0 after a clean

@@ -35,8 +35,11 @@ GOOD='fn int32 main() {\n    return 0;\n}\n'   # fixed
 # layout is fixed — the query positions below are tied to it (kama line 1-based/col 0-based -> LSP 0/0):
 #   L2 `type value Point { ... }`   -> "Point" name at kama 2:11  (LSP 1:11, the def target)
 #   L3 `fn Point mid(Point a) ...`  -> return-type "Point" at kama 3:3 (LSP 2:3); param-type at kama 3:13 (LSP 2:13)
+#   L4 (M3) a BODY: two `Point` locals at kama 4:17 / 4:26 (LSP 3:17 / 3:26) and a CALL to `mid` at kama
+#      4:36 (LSP 3:36). Only the M3 reference index sees these — M0's signature walk never enters a body.
+#      Appended, so every position above is unchanged.
 QURI="file:///shapes.kama"
-SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) { return a; }\n'
+SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p; Point q = mid(a: p); return q.x; }\n'
 
 # Module-loading fixture: a REAL on-disk file that imports a std module. Unlike the in-memory buffers above
 # (fake paths -> single-file fallback), this exercises loadProgramUnits pulling std::collections off disk so
@@ -61,10 +64,31 @@ frame '{"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocu
 # A body use-site ("a" in `return a`, kama 3:31 -> LSP 2:31) resolves to null BY DESIGN (M0 indexes decls +
 # signature type refs only; body use-sites are the M3 find-references walk).
 frame '{"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":31}}}'
+# --- M3: find-references + rename over the same buffer ---
+# 8:  references on the Point DECL name (LSP 1:11), includeDeclaration -> decl + both signature refs + both body refs.
+# 9:  the same query with includeDeclaration:false -> the decl's own range must be absent.
+# 10: references from a BODY use (LSP 3:17) -> the same set (a use and its decl resolve to one key).
+# 11: references on the `mid` call site (LSP 3:36) -> the fn decl + that call (the resolveFunc hook).
+# 12: prepareRename on the Point decl -> its identifier range.
+# 13: prepareRename on the local `a` (LSP 2:31) -> null (locals are M3.4).
+# 14: rename Point -> Pnt: a WorkspaceEdit with one TextEdit per reference, all in this file.
+# 15: rename to a KEYWORD must be refused (the lexer's own table decides, via kamaIsKeyword).
+frame '{"jsonrpc":"2.0","id":8,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":9,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"context":{"includeDeclaration":false}}}'
+frame '{"jsonrpc":"2.0","id":10,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":17},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":11,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":36},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":12,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11}}}'
+frame '{"jsonrpc":"2.0","id":13,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":31}}}'
+frame '{"jsonrpc":"2.0","id":14,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"newName":"Pnt"}}'
+frame '{"jsonrpc":"2.0","id":15,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"newName":"return"}}'
 # --- module loading: open the import-using file; its imports resolve, so diagnostics are empty and
 #     go-to-def on DynamicArray (kama 3:15 -> LSP 2:15) jumps into the std::collections source ---
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$IURI"'","languageId":"kama","version":1,"text":"'"$IMP"'"}}}'
 frame '{"jsonrpc":"2.0","id":7,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
+# 16: the M3.3 SAFETY GUARD. DynamicArray is declared in std and used across several std files, so a rename
+#     here would rewrite files the user can't see — and the loaded-unit set still isn't every user of the
+#     symbol. Rename must REFUSE rather than half-rewrite. (Lifted by workspace indexing in M3.5.)
+frame '{"jsonrpc":"2.0","id":16,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15},"newName":"Foo"}}'
 # --- SEMANTIC diagnostics: an undeclared type in a BODY. Everything above asserts on a PARSE error,
 #     because semantic diagnostics used to be too incomplete to test — an unknown body type resolved to
 #     nothing and was emitted verbatim, so `kama check` said OK and the editor showed a clean file that
@@ -92,6 +116,8 @@ expect '"textDocumentSync":1'                        "advertises full-document s
 expect '"hoverProvider":true'                        "advertises hoverProvider (M2)"
 expect '"definitionProvider":true'                   "advertises definitionProvider (M2)"
 expect '"documentSymbolProvider":true'               "advertises documentSymbolProvider (M2)"
+expect '"referencesProvider":true'                   "advertises referencesProvider (M3)"
+expect '"renameProvider":{"prepareProvider":true}'   "advertises renameProvider with prepareProvider (M3)"
 expect '"method":"textDocument/publishDiagnostics"'  "server publishes diagnostics"
 expect '"message":"syntax error'                     "syntax error surfaced on the bad buffer"
 expect '"start":{"line":2,"character":0}'            "error range mapped to LSP 0-based (kama 3:0 -> 2:0)"
@@ -104,11 +130,28 @@ expect '"name":"mid","kind":12'                               "documentSymbol: m
 expect '"id":4,"result":{"uri":"file:///shapes.kama"'         "definition: type ref -> file:// Location"
 expect '"range":{"start":{"line":1,"character":11}'           "definition: lands on the Point decl name (LSP 1:11)"
 expect '"id":5,"result":{"contents":{"kind":"plaintext","value":"value Point"}}'  "hover: 'value Point' on a type ref"
-expect '"id":6,"result":null'                                 "hover: null on a body use-site (M3 scope, intentional)"
+expect '"id":6,"result":null'                                 "hover: null on a local use-site (M3.4 scope, intentional)"
+
+echo "check-lsp: M3 find-references"
+expect '"id":8,"result":[{"uri":"file:///shapes.kama"'        "references: returns Locations in this file"
+expect '"start":{"line":3,"character":17}'                    "references: BODY use-site 'Point p' (LSP 3:17) is indexed"
+expect '"start":{"line":3,"character":26}'                    "references: BODY use-site 'Point q' (LSP 3:26) is indexed"
+expect '"id":11,"result":[{"uri":"file:///shapes.kama","range":{"start":{"line":2,"character":9}' \
+                                                              "references: a CALL resolves to the fn decl (resolveFunc hook)"
+expect '"start":{"line":3,"character":36}'                    "references: the call site itself (LSP 3:36) is indexed"
+
+echo "check-lsp: M3 rename"
+expect '"id":12,"result":{"start":{"line":1,"character":11}'  "prepareRename: the Point identifier range"
+expect '"id":13,"result":null'                                "prepareRename: null on a local (not renameable until M3.4)"
+expect '"id":14,"result":{"changes":{"file:///shapes.kama":[' "rename: a WorkspaceEdit keyed by this file's URI"
+expect '"newText":"Pnt"'                                      "rename: each edit carries the new name"
+expect '"id":15,"error"'                                      "rename: a reserved keyword is refused"
 
 echo "check-lsp: module loading (imports resolve across files)"
 expect 'imports.kama","diagnostics":[]'   "import-using file analyzes clean (std::collections loaded; no false 'does not export')"
 expect 'dynamic_array.kama'               "cross-module go-to-def resolves DynamicArray into the std source"
+expect '"id":16,"error"'                  "rename REFUSES a symbol used in other files (no half-rewrite)"
+expect 'Cross-file rename needs workspace indexing'  "...and says why"
 
 echo "check-lsp: semantic diagnostics (not just parse errors)"
 expect 'unknown type `Nonexistent`'                        "undeclared body type surfaces as a live diagnostic"

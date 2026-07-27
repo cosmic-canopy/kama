@@ -384,6 +384,18 @@ Json lspRange(int startLine1, int startCol0, int endLine1, int endCol0) {
     Json range = Json::object(); range.set("start", start); range.set("end", end);
     return range;
 }
+// Would this spelling lex as a kama identifier? Guards rename: an editor will happily send `2x`, `my var`
+// or `return` as a new name, and writing any of those produces a file that no longer parses. The keyword
+// half defers to the lexer's own table (kamaIsKeyword) rather than duplicating it here.
+bool validIdentifier(const std::string& s)
+{
+    if (s.empty()) return false;
+    if (!(isalpha((unsigned char)s[0]) || s[0] == '_')) return false;
+    for (char ch : s)
+        if (!(isalnum((unsigned char)ch) || ch == '_')) return false;
+    return !kamaIsKeyword(s.c_str());
+}
+
 Json rangeToJson(const Diagnostic& d) { return lspRange(d.line, d.column, d.endLine, d.endColumn); }
 Json srcRangeToJson(const SrcRange& r) { return lspRange(r.line, r.column, r.endLine, r.endColumn); }
 
@@ -476,6 +488,10 @@ struct Server {
         caps.set("hoverProvider", true);
         caps.set("definitionProvider", true);
         caps.set("documentSymbolProvider", true);
+        caps.set("referencesProvider", true);
+        Json rename = Json::object();
+        rename.set("prepareProvider", true);   // we can tell the editor up front whether F2 is offered
+        caps.set("renameProvider", std::move(rename));
         Json info = Json::object();
         info.set("name", "kama");
         Json result = Json::object();
@@ -587,6 +603,85 @@ struct Server {
         sendResponse(id, std::move(result));
     }
 
+    // ---- M3 find-references + rename ---------------------------------------------------------------
+
+    // textDocument/references -> Location[]. Always an array (never null) per the spec's usual shape.
+    // Honors context.includeDeclaration. Results can name other files (the index spans the open file's
+    // transitive imports), so each Location's own uri is mapped, not the request's.
+    void handleReferences(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        Json arr = Json::array();
+        auto it = docs.find(uri);
+        if (it != docs.end()) {
+            int l, c; kamaPos(params, l, c);
+            bool includeDecl = true;
+            if (const Json* ctx = params.get("context"))
+                if (const Json* inc = ctx->get("includeDeclaration")) includeDecl = inc->b;
+            for (const auto& r : lspReferences(it->second.lastGoodIndex, uriToPath(uri), l, c, includeDecl)) {
+                Json loc = Json::object();
+                loc.set("uri", pathToUri(r.uri));
+                loc.set("range", srcRangeToJson(r.range));
+                arr.push(std::move(loc));
+            }
+        }
+        sendResponse(id, std::move(arr));
+    }
+
+    // textDocument/prepareRename -> the identifier Range, or null when the symbol isn't renameable
+    // (builtins, prelude/std, unresolved names, and — until M3.4 — locals/params/fields). Null makes the
+    // editor grey F2 out instead of offering a rename that would do nothing.
+    void handlePrepareRename(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        auto it = docs.find(uri);
+        if (it == docs.end()) { sendResponse(id, Json()); return; }
+        int l, c; kamaPos(params, l, c);
+        SrcRange r = lspPrepareRename(it->second.lastGoodIndex, uriToPath(uri), l, c);
+        if (r.line == 0) { sendResponse(id, Json()); return; }
+        sendResponse(id, srcRangeToJson(r));
+    }
+
+    // textDocument/rename -> a WorkspaceEdit {changes:{<uri>:TextEdit[]}}.
+    //
+    // Guarded to the OPEN FILE. References may span every loaded unit, but the loaded set is only what the
+    // open file transitively imports — a file that imports THIS symbol without being imported back is
+    // invisible, so a cross-file rewrite could silently break a caller we never saw. Refusing is the honest
+    // answer until workspace indexing (M3.5) can enumerate every user of a symbol.
+    void handleRename(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        auto it = docs.find(uri);
+        if (it == docs.end()) { sendError(id, -32602, "rename: document not open"); return; }
+        std::string newName = params.getStr("newName");
+        if (!validIdentifier(newName)) {
+            sendError(id, -32602, "`" + newName + "` is not a valid kama identifier");
+            return;
+        }
+        int l, c; kamaPos(params, l, c);
+        std::string path = uriToPath(uri);
+        SrcRange target = lspPrepareRename(it->second.lastGoodIndex, path, l, c);
+        if (target.line == 0) { sendError(id, -32602, "there is nothing renameable here"); return; }
+
+        std::vector<Location> refs =
+            lspReferences(it->second.lastGoodIndex, path, l, c, /*includeDecl*/ true);
+        for (const auto& r : refs)
+            if (r.uri != path) {
+                sendError(id, -32803, "cannot rename: this symbol is also used in " + r.uri
+                                      + ". Cross-file rename needs workspace indexing (LSP M3.5).");
+                return;
+            }
+        Json edits = Json::array();
+        for (const auto& r : refs) {
+            Json e = Json::object();
+            e.set("range", srcRangeToJson(r.range));
+            e.set("newText", newName);
+            edits.push(std::move(e));
+        }
+        Json changes = Json::object();
+        changes.set(uri, std::move(edits));
+        Json result = Json::object();
+        result.set("changes", std::move(changes));
+        sendResponse(id, std::move(result));
+    }
+
     // Returns true to keep looping, false to exit the server.
     bool dispatch(const Json& msg, int& exitCode) {
         std::string method = msg.getStr("method");
@@ -620,6 +715,9 @@ struct Server {
         if (method == "textDocument/documentSymbol") { if (isRequest) handleDocumentSymbol(*idp, params); return true; }
         if (method == "textDocument/definition")     { if (isRequest) handleDefinition(*idp, params);     return true; }
         if (method == "textDocument/hover")          { if (isRequest) handleHover(*idp, params);          return true; }
+        if (method == "textDocument/references")     { if (isRequest) handleReferences(*idp, params);     return true; }
+        if (method == "textDocument/prepareRename")  { if (isRequest) handlePrepareRename(*idp, params);  return true; }
+        if (method == "textDocument/rename")         { if (isRequest) handleRename(*idp, params);         return true; }
 
         // Anything else: a request needs a response (or the client hangs); notifications are ignored.
         if (isRequest) sendError(*idp, -32601, "method not found: " + method);

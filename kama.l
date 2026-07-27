@@ -524,6 +524,16 @@ static int getToken(const char *lexeme)
   return token;
 }
 
+// Does this spelling lex as a reserved word rather than an identifier? The LSP's rename validation asks
+// here rather than carrying its own keyword list, so the two can never drift (the table above is the
+// single source of truth — tools/check-syntax-drift.sh already holds the VS Code grammar to it).
+// NB: bin_search returns IDENTIFIER (not -1) on a miss, which is what `getToken` above actually relies on.
+bool kamaIsKeyword(const char *word)
+{
+  static int num_keywords = sizeof(keywords) / sizeof(name_value);
+  return bin_search(word, 0, num_keywords) != IDENTIFIER;
+}
+
 std::string hexToUTF8(int cp)
 {
     char c[5]={ 0x00,0x00,0x00,0x00,0x00 };
