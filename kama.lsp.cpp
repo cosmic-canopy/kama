@@ -65,6 +65,10 @@ struct Json {
     double      asNum() const { return type == Num ? n : 0; }
     int         asInt() const { return (int)asNum(); }
     std::string getStr(const std::string& k) const { const Json* v = get(k); return v ? v->asStr() : std::string(); }
+    // Nested string: obj[k1][k2] (e.g. params["textDocument"]["uri"]); "" if any hop is absent.
+    std::string getStr2(const std::string& k1, const std::string& k2) const {
+        const Json* v = get(k1); return v ? v->getStr(k2) : std::string();
+    }
 };
 
 // ---- serialize ------------------------------------------------------------------------------
@@ -327,24 +331,61 @@ std::string uriToPath(const std::string& uri) {
     return path;
 }
 
+// Inverse of uriToPath: a filesystem path -> a `file://` URI. Percent-encode any byte outside the URI
+// unreserved/path-safe set so spaces etc. survive the round-trip. On POSIX the path already starts with
+// '/', so `file://` + `/x` yields the conventional `file:///x`.
+std::string pathToUri(const std::string& path) {
+    auto safe = [](unsigned char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+               c == '-' || c == '.' || c == '_' || c == '~' || c == '/' || c == ':';
+    };
+    std::string uri = "file://";
+    for (unsigned char c : path) {
+        if (safe(c)) { uri += (char)c; }
+        else { char buf[4]; snprintf(buf, sizeof buf, "%%%02X", c); uri += buf; }
+    }
+    return uri;
+}
+
+// kama SymKind -> LSP SymbolKind (document outline icons). LSP numbering per the spec.
+int symKindToLsp(SymKind k) {
+    switch (k) {
+        case SymKind::Class:
+        case SymKind::Value:
+        case SymKind::Resource:
+        case SymKind::GenericType: return 5;    // Class
+        case SymKind::Contract:    return 11;   // Interface
+        case SymKind::Enum:        return 10;   // Enum
+        case SymKind::EnumMember:  return 22;   // EnumMember
+        case SymKind::Function:
+        case SymKind::GenericFn:   return 12;   // Function
+        case SymKind::Method:      return 6;    // Method
+        case SymKind::Ctor:        return 9;    // Constructor
+        case SymKind::Field:       return 8;    // Field
+    }
+    return 5;
+}
+
 // ============================================================================================
 // Diagnostics — analyze a buffer via the M0 facade, then map kama Diagnostics to an LSP array.
 // ============================================================================================
 
-// kama coords: line 1-based, column 0-based (Diagnostic). LSP: line 0-based, character 0-based. Convert
-// in ONE place. An unknown end (endLine/endColumn == 0) collapses to a 1-char span at the start so the
-// squiggle is visible.
-Json rangeToJson(const Diagnostic& d) {
-    int sl = d.line > 0 ? d.line - 1 : 0;
-    int sc = d.column >= 0 ? d.column : 0;
+// kama coords: line 1-based, column 0-based. LSP: line 0-based, character 0-based. Convert in ONE place.
+// An unknown end (endLine/endColumn == 0) collapses to a 1-char span at the start so the range is always
+// visible/non-empty. Both Diagnostic ranges and query SrcRanges funnel through here.
+Json lspRange(int startLine1, int startCol0, int endLine1, int endCol0) {
+    int sl = startLine1 > 0 ? startLine1 - 1 : 0;
+    int sc = startCol0 >= 0 ? startCol0 : 0;
     int el, ec;
-    if (d.endLine > 0 && d.endColumn > 0) { el = d.endLine - 1; ec = d.endColumn; }
-    else                                  { el = sl; ec = sc + 1; }
+    if (endLine1 > 0 && endCol0 > 0) { el = endLine1 - 1; ec = endCol0; }
+    else                             { el = sl; ec = sc + 1; }
     Json start = Json::object(); start.set("line", sl); start.set("character", sc);
     Json end   = Json::object(); end.set("line", el);   end.set("character", ec);
     Json range = Json::object(); range.set("start", start); range.set("end", end);
     return range;
 }
+Json rangeToJson(const Diagnostic& d) { return lspRange(d.line, d.column, d.endLine, d.endColumn); }
+Json srcRangeToJson(const SrcRange& r) { return lspRange(r.line, r.column, r.endLine, r.endColumn); }
 
 int severityToLsp(DiagSeverity s) {
     switch (s) {
@@ -374,9 +415,9 @@ Json diagnosticsArray(const std::vector<Diagnostic>& diags) {
 // Server state + dispatch.
 // ============================================================================================
 struct Doc {
-    std::string           text;
-    long                  version = 0;
-    SharedCompilationUnit lastGoodUnit;
+    std::string    text;
+    long           version = 0;
+    SharedLspIndex lastGoodIndex;    // last cleanly-analyzed index; kept across a parse failure (queries stay live)
 };
 
 struct Server {
@@ -414,19 +455,26 @@ struct Server {
         writeMessage(serialize(note));
     }
 
-    // Analyze the stored buffer for `uri` and publish (empty array clears old squiggles).
+    // Analyze the stored buffer for `uri`, cache the queryable index, and publish (empty array clears old
+    // squiggles). On a parse failure lspAnalyze returns nullptr — keep the previous good index so
+    // hover/def/outline keep answering on a mid-edit buffer while diagnostics still update.
     void analyzeAndPublish(const std::string& uri) {
         auto it = docs.find(uri);
         if (it == docs.end()) return;
         std::string path = uriToPath(uri);
-        std::vector<Diagnostic> diags = lspAnalyzeBuffer(path, it->second.text, it->second.lastGoodUnit);
+        std::vector<Diagnostic> diags;
+        SharedLspIndex idx = lspAnalyze(path, it->second.text, diags);
+        if (idx) it->second.lastGoodIndex = idx;
         publish(uri, diags);
     }
 
     void handleInitialize(const Json& id) {
-        // M1 advertises full-document sync only; hover/def/completion flip on in M2.
+        // M1 advertised full-document sync only; M2 turns on the first interactive features.
         Json caps = Json::object();
         caps.set("textDocumentSync", 1);        // TextDocumentSyncKind.Full
+        caps.set("hoverProvider", true);
+        caps.set("definitionProvider", true);
+        caps.set("documentSymbolProvider", true);
         Json info = Json::object();
         info.set("name", "kama");
         Json result = Json::object();
@@ -474,6 +522,70 @@ struct Server {
         publish(uri, {});                        // clear any lingering squiggles
     }
 
+    // ---- M2 query requests (reads off the doc's cached last-good index) --------------------------
+    // Read an LSP {line,character} position (0-based) and convert to kama coords (line 1-based, col
+    // 0-based). Missing fields default to 0.
+    static void kamaPos(const Json& params, int& kamaLine, int& kamaCol) {
+        const Json* pos = params.get("position");
+        int lspLine = 0, lspChar = 0;
+        if (pos) {
+            if (const Json* l = pos->get("line"))      lspLine = l->asInt();
+            if (const Json* c = pos->get("character")) lspChar = c->asInt();
+        }
+        kamaLine = lspLine + 1;
+        kamaCol  = lspChar;
+    }
+
+    // textDocument/documentSymbol -> a flat DocumentSymbol[] (each {name, kind, range, selectionRange};
+    // container nesting is a later refinement). Empty array if the doc has no good index yet.
+    void handleDocumentSymbol(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        Json arr = Json::array();
+        auto it = docs.find(uri);
+        if (it != docs.end()) {
+            for (const auto& s : lspDocumentSymbols(it->second.lastGoodIndex, uriToPath(uri))) {
+                Json sym = Json::object();
+                sym.set("name", s.name);
+                sym.set("kind", symKindToLsp(s.kind));
+                sym.set("range", srcRangeToJson(s.range));
+                sym.set("selectionRange", srcRangeToJson(s.selectionRange));
+                arr.push(std::move(sym));
+            }
+        }
+        sendResponse(id, std::move(arr));
+    }
+
+    // textDocument/definition -> a Location {uri, range} at the decl, or null. Works on decl names +
+    // signature/type references (body use-sites are M3 find-references).
+    void handleDefinition(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        auto it = docs.find(uri);
+        if (it == docs.end()) { sendResponse(id, Json()); return; }
+        int l, c; kamaPos(params, l, c);
+        Location loc = lspDefinition(it->second.lastGoodIndex, uriToPath(uri), l, c);
+        if (loc.range.line == 0) { sendResponse(id, Json()); return; }   // no def -> null
+        Json result = Json::object();
+        result.set("uri", pathToUri(loc.uri));
+        result.set("range", srcRangeToJson(loc.range));
+        sendResponse(id, std::move(result));
+    }
+
+    // textDocument/hover -> {contents:{kind:"plaintext", value:"<kind> <name>"}} or null. No range for v1.
+    void handleHover(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        auto it = docs.find(uri);
+        if (it == docs.end()) { sendResponse(id, Json()); return; }
+        int l, c; kamaPos(params, l, c);
+        std::string text = lspHover(it->second.lastGoodIndex, uriToPath(uri), l, c);
+        if (text.empty()) { sendResponse(id, Json()); return; }          // nothing here -> null
+        Json contents = Json::object();
+        contents.set("kind", "plaintext");
+        contents.set("value", text);
+        Json result = Json::object();
+        result.set("contents", std::move(contents));
+        sendResponse(id, std::move(result));
+    }
+
     // Returns true to keep looping, false to exit the server.
     bool dispatch(const Json& msg, int& exitCode) {
         std::string method = msg.getStr("method");
@@ -504,6 +616,9 @@ struct Server {
         if (method == "textDocument/didOpen")   { handleDidOpen(params);   return true; }
         if (method == "textDocument/didChange") { handleDidChange(params); return true; }
         if (method == "textDocument/didClose")  { handleDidClose(params);  return true; }
+        if (method == "textDocument/documentSymbol") { if (isRequest) handleDocumentSymbol(*idp, params); return true; }
+        if (method == "textDocument/definition")     { if (isRequest) handleDefinition(*idp, params);     return true; }
+        if (method == "textDocument/hover")          { if (isRequest) handleHover(*idp, params);          return true; }
 
         // Anything else: a request needs a response (or the client hangs); notifications are ignored.
         if (isRequest) sendError(*idp, -32601, "method not found: " + method);

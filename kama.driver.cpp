@@ -2881,27 +2881,49 @@ void maybeReExec(char** argv, const std::string& subcommand)
 
 } // namespace
 
-// The LSP's single external seam into the front end (declared in kama.lsp.h). Mirrors the `kama check`
-// setup — a FRESH CEmitter per call (analysis is not re-runnable on one instance), the embedded prelude +
-// built-in modules in scope — but drives it off an in-memory buffer and returns structured diagnostics
-// instead of printing. Parse diagnostics are collected even when the parse fails; on a clean parse the
-// unit is cached into `lastGood` and semantic analysis appends its diagnostics. Defined at global scope
-// (external linkage) so kama.lsp.cpp can call it; the anon-namespace helpers above stay internal.
-std::vector<Diagnostic> lspAnalyzeBuffer(const std::string& path, const std::string& text,
-                                         SharedCompilationUnit& lastGood)
+// The LSP's external seams into the front end (declared in kama.lsp.h). Mirror the `kama check` setup —
+// a FRESH CEmitter per call (analysis is not re-runnable on one instance), the embedded prelude + built-in
+// modules in scope — but drive it off an in-memory buffer and return structured diagnostics instead of
+// printing. Parse diagnostics are collected even when the parse fails. Defined at GLOBAL scope (external
+// linkage) so kama.lsp.cpp can call them; the anon-namespace helpers above stay internal.
+//
+// The opaque handle body: it keeps the analyzed CEmitter alive so the query facade (documentSymbols /
+// definitionAt / typeAtPosition — instance methods reading the index analyze() built) can answer
+// hover/def/outline as instant reads, not a re-analysis per cursor move.
+struct LspIndex { std::shared_ptr<CEmitter> idx; std::string path; };
+
+SharedLspIndex lspAnalyze(const std::string& path, const std::string& text, std::vector<Diagnostic>& diags)
 {
-    std::vector<Diagnostic> out;
     ParseResult pr = parseForQuery(text.c_str(), path);
-    if (pr.ctx) for (const auto& d : pr.ctx->diagnostics) out.push_back(d);
-    if (pr.unit) {
-        lastGood = pr.unit;
-        CEmitter idx(path);                        // analysis mode: no C emitted
-        idx.setPrelude(preludeUnit());             // Optional/Result implicitly in scope
-        for (auto& m : preludeModuleUnits()) idx.addPreludeModule(m);
-        idx.analyze({ pr.unit });
-        for (const auto& d : idx.diagnostics()) out.push_back(d);
-    }
-    return out;
+    if (pr.ctx) for (const auto& d : pr.ctx->diagnostics) diags.push_back(d);
+    if (!pr.unit) return nullptr;                  // parse failed — diags carry the errors; no queryable index
+    auto emitter = std::make_shared<CEmitter>(path);   // analysis mode: no C emitted
+    emitter->setPrelude(preludeUnit());            // Optional/Result implicitly in scope
+    for (auto& m : preludeModuleUnits()) emitter->addPreludeModule(m);
+    emitter->analyze({ pr.unit });
+    for (const auto& d : emitter->diagnostics()) diags.push_back(d);
+    auto h = std::make_shared<LspIndex>();
+    h->idx = emitter;
+    h->path = path;
+    return h;
+}
+
+std::vector<SymbolInfo> lspDocumentSymbols(const SharedLspIndex& idx, const std::string& path)
+{
+    if (!idx || !idx->idx) return {};
+    return idx->idx->documentSymbols(path);
+}
+
+Location lspDefinition(const SharedLspIndex& idx, const std::string& path, int line, int col)
+{
+    if (!idx || !idx->idx) return Location{};
+    return idx->idx->definitionAt(path, line, col);
+}
+
+std::string lspHover(const SharedLspIndex& idx, const std::string& path, int line, int col)
+{
+    if (!idx || !idx->idx) return "";
+    return idx->idx->typeAtPosition(path, line, col);
 }
 
 int main(int argc, char** argv)

@@ -1,6 +1,6 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M1 COMPLETE (2026-07-27, dev).** The **confirmed next-highest post-1.0 priority** (user, 2026-07-26;
+**Status: M2 COMPLETE (2026-07-27, dev).** The **confirmed next-highest post-1.0 priority** (user, 2026-07-26;
 [ROADMAP.md](../ROADMAP.md) §1 post-1.0 sequence + §10). This doc is the cold-start handoff: what exists to
 reuse, the decisions to settle FIRST, a milestone plan, and a size gauge. **Read [GOALS.md](../GOALS.md) and
 ROADMAP §10 before designing.**
@@ -27,11 +27,21 @@ ROADMAP §10 before designing.**
   `tools/check-lsp.sh` (scripted JSON-RPC session over stdio) wired into `run_tests.sh` native leg. native
   793/793; the LSP C++ (JSON parser/transport) is ASan+UBSan-clean under adversarial input; emission
   unchanged (all changes additive). Design of record: [lsp-m1-kickoff.md](lsp-m1-kickoff.md).
-- **NEXT: M2 — hover + go-to-definition + document symbols.** Cold-start brief:
-  [lsp-m2-kickoff.md](lsp-m2-kickoff.md). Wire the M0 facade (`definitionAt`/`typeAtPosition`/
-  `documentSymbols`) to LSP requests + flip on the `initialize` capabilities. The query index is already
-  built and waiting; the one structural change is keeping the analyzed `CEmitter` alive per document (an
-  opaque index handle) so queries — not just diagnostics — can read it.
+- **M2 — hover + go-to-definition + document symbols (the first interactive features). ✅ DONE.** Wired
+  the M0 facade (`documentSymbols`/`definitionAt`/`typeAtPosition`) to `textDocument/documentSymbol` /
+  `definition` / `hover` and flipped on the three `initialize` capabilities. The one structural change:
+  the driver seam `lspAnalyzeBuffer` became `lspAnalyze` (kama.lsp.h/driver.cpp), returning an **opaque
+  `SharedLspIndex` handle** (holds the analyzed `CEmitter` alive) alongside diagnostics; the server's
+  `Doc` caches it as `lastGoodIndex` (kept across a parse failure so hover/def stay live on a mid-edit
+  buffer). Query seams `lspDocumentSymbols`/`lspDefinition`/`lspHover` forward to the facade. New
+  kama.lsp.cpp helpers: `pathToUri` (inverse of `uriToPath`), `srcRangeToJson` (generalized from
+  `rangeToJson` via a shared `lspRange`), `symKindToLsp` (`SymKind`→LSP `SymbolKind`). Coverage matches
+  M0's index — decl names + signature/type references; body use-sites (variable uses, field access) and
+  locals return null **by design** (that's M3 find-references). `tools/check-lsp.sh` extended with the
+  three request types + capability + intentional-null assertions (16 checks). native 793/793; ASan+UBSan
+  clean; emission unchanged. Design of record: [lsp-m2-kickoff.md](lsp-m2-kickoff.md).
+- **NEXT: M3 — find-references + rename.** Needs the body use-site walk M0/M2 deliberately deferred
+  (every use → def index), then rename = workspace edits + safety checks. See "Milestone plan" below.
 
 ## Why (from the ROADMAP)
 
