@@ -3000,6 +3000,9 @@ int main(int argc, char** argv)
     std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
     std::string configPath;                // --config PATH: explicit kama.json (else auto-discovered)
     bool        devBuild   = false;        // --dev: also put .kama/dev-deps on the import path (dev-dependencies)
+    bool        querySymbols = false;      // `kama query --symbols`: dump the document outline
+    std::string queryDef;                  // `kama query --def L:C`: go-to-definition at a cursor
+    std::string queryType;                 // `kama query --type L:C`: hover (kind+name) at a cursor
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
 
@@ -3022,6 +3025,9 @@ int main(int argc, char** argv)
         else if (a == "--undefine" && i + 1 < argc) undefines.push_back(argv[++i]);  // `@compileFor` flag off
         else if (a == "--config" && i + 1 < argc)   configPath = argv[++i];          // explicit kama.json
         else if (a == "--dev")                      devBuild = true;                 // also resolve dev-dependencies
+        else if (a == "--symbols")                  querySymbols = true;             // `kama query` outline
+        else if (a == "--def" && i + 1 < argc)      queryDef = argv[++i];            // `kama query` go-to-def L:C
+        else if (a == "--type" && i + 1 < argc)     queryType = argv[++i];           // `kama query` hover L:C
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
@@ -3241,6 +3247,59 @@ int main(int argc, char** argv)
         fprintf(stderr, "kama: %s OK (%zu unit%s analyzed)\n",
                 input.c_str(), units.size(), units.size() == 1 ? "" : "s");
         return 0;
+    }
+
+    if (subcommand == "query") {
+        // Debug harness for the LSP query index (M0 T4/T5): runs analyze() and dumps the requested query
+        // over the resulting index, in deterministic text. Mirrors `check`'s front-end-as-library setup;
+        // the `kama lsp` server (M1) will call the same CEmitter query methods and map them to protocol JSON.
+        //   kama query <file> --symbols      document outline (one `L:C kind name` line per user decl)
+        //   kama query <file> --def  L:C     go-to-definition at 1-based line:col
+        //   kama query <file> --type L:C     hover (kind + name) at 1-based line:col
+        std::vector<SharedCompilationUnit> units;
+        std::vector<std::string> unitPaths;
+        if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
+
+        CEmitter idx(input);
+        idx.setPrelude(preludeUnit());
+        idx.setNoHeap(g_noHeap);
+        idx.setRelease(g_release);
+        idx.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);
+        idx.setLogDefault(g_logDefault);
+        for (auto& m : preludeModuleUnits()) idx.addPreludeModule(m);
+        idx.analyze(units);
+
+        auto parseLC = [](const std::string& s, int& l, int& c) -> bool {
+            auto colon = s.find(':');
+            if (colon == std::string::npos) return false;
+            l = atoi(s.substr(0, colon).c_str());
+            c = atoi(s.substr(colon + 1).c_str());
+            return true;
+        };
+
+        if (querySymbols) {
+            for (const auto& s : idx.documentSymbols(input))
+                printf("%d:%d %s %s\n", s.selectionRange.line, s.selectionRange.column,
+                       symKindName(s.kind), s.name.c_str());
+            return 0;
+        }
+        if (!queryDef.empty()) {
+            int l, c;
+            if (!parseLC(queryDef, l, c)) { fprintf(stderr, "kama query: --def wants L:C\n"); return 2; }
+            Location loc = idx.definitionAt(input, l, c);
+            if (loc.range.line == 0) { printf("no definition\n"); return 0; }
+            printf("%s:%d:%d\n", loc.uri.c_str(), loc.range.line, loc.range.column);
+            return 0;
+        }
+        if (!queryType.empty()) {
+            int l, c;
+            if (!parseLC(queryType, l, c)) { fprintf(stderr, "kama query: --type wants L:C\n"); return 2; }
+            std::string t = idx.typeAtPosition(input, l, c);
+            printf("%s\n", t.empty() ? "no type" : t.c_str());
+            return 0;
+        }
+        fprintf(stderr, "kama query: pass --symbols, --def L:C, or --type L:C\n");
+        return 2;
     }
 
     if (subcommand == "transpile") {

@@ -10,15 +10,44 @@
 
 
 struct LexerInstanceData*  yyget_extra ( yyscan_t scanner );
-extern int yylex(YYSTYPE * yylval_param, yyscan_t scanner);
+extern int yylex(YYSTYPE * yylval_param, YYLTYPE * yylloc_param, yyscan_t scanner);
 
-int yyerror(yyscan_t scanner, const char *msg);
+int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg);
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str);
 SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
     SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedStringList forKinds,
     SharedClassBaseDeclaration base, SharedClassMemberDeclarationList body);
 
 #define SCANNER_CODEGENCONTEXT *(yyget_extra(scanner)->codeGenContext)
+
+/* LSP source spans (M0). With %locations the lexer stamps each token's true [start,end) into yylloc, so
+ * Bison computes an accurate span (@$) for every rule from its RHS symbols' positions — free of the
+ * one-token lookahead skew that plagued the old "read the lexer counter at reduce time" scheme. This
+ * override does the standard span computation AND stashes @$ into the CodeGenContext, so the existing
+ * ASTNode(context) ctor (its 90-odd construction sites) picks up the accurate rule position with no
+ * per-site edits. A node built mid-action from a raw IDENTIFIER token (a decl name) still gets its
+ * container's start line here; the few such name sites are stamped precisely via STAMP_LOC below. */
+#define YYLLOC_DEFAULT(Cur, Rhs, N)                                          \
+  do {                                                                       \
+    if (N) {                                                                 \
+      (Cur).first_line   = YYRHSLOC(Rhs, 1).first_line;                      \
+      (Cur).first_column = YYRHSLOC(Rhs, 1).first_column;                    \
+      (Cur).last_line    = YYRHSLOC(Rhs, N).last_line;                       \
+      (Cur).last_column  = YYRHSLOC(Rhs, N).last_column;                     \
+    } else {                                                                 \
+      (Cur).first_line = (Cur).last_line = YYRHSLOC(Rhs, 0).last_line;       \
+      (Cur).first_column = (Cur).last_column = YYRHSLOC(Rhs, 0).last_column; \
+    }                                                                        \
+    CodeGenContext* _ctx = yyget_extra(scanner)->codeGenContext.get();       \
+    _ctx->line = (Cur).first_line;  _ctx->col = (Cur).first_column;          \
+    _ctx->endLine = (Cur).last_line; _ctx->endCol = (Cur).last_column;       \
+  } while (0)
+
+/* Stamp an already-built identifier node with a token's precise @N span (for decl names constructed inside
+ * a container action from a raw IDENTIFIER token, where @$ would span the whole container). */
+#define STAMP_LOC(idExpr, Loc)  do { auto _sid = (idExpr); if (_sid) {        \
+    _sid->line = (Loc).first_line;   _sid->column = (Loc).first_column;       \
+    _sid->endLine = (Loc).last_line; _sid->endColumn = (Loc).last_column; } } while (0)
 
 %}
 
@@ -111,6 +140,7 @@ struct kamayystype {
 /* Options */
 %expect 1
 %defines
+%locations
 %define api.pure full
 /* Better syntax errors: "syntax error, unexpected X, expecting Y" (using the token string-aliases below,
    e.g. "when" / "[" / ":="). Zero runtime cost (the parser isn't in the runtime); the message is built
@@ -601,17 +631,21 @@ function_declaration
       $$ = std::make_shared<IncludeNode>(SCANNER_CODEGENCONTEXT, $2);   /* extern "<header.h>"; (FFI #include) */
    }
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
-      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, SharedBlock() );
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, SharedBlock() );
+      STAMP_LOC(fn->name, @4);
+      $$ = fn;
    }
   | COMPTIME FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block   {
       /* `comptime fn T name(…)` — a compile-time-only free function (const-eval 6b-3). Monomorphic in v1
          (no type/const params, no `expose` — it is never emitted as a C symbol). */
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8 );
+      STAMP_LOC(fn->name, @4);
       fn->isComptime = true;
       $$ = fn;
   }
   | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $7, $9 );
+      STAMP_LOC(fn->name, @4);   /* precise name span (an unmodified fn's @$ starts at the previous token) */
       /* Split `<T, K: I + J>` into parallel typeParams (names) + typeBounds (contract lists). */
       if ($5 && !$5->empty()) {
           fn->typeParams = std::make_shared<StringList>();
@@ -628,6 +662,7 @@ function_declaration
   | attribute_list function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
       /* `@interrupt`/`@section(".x")` fn — MCU codegen attributes (mirrors the attributed-TYPE form). */
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $2, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
+      STAMP_LOC(fn->name, @5);
       fn->attributes = $1;
       if ($6 && !$6->empty()) {
           fn->typeParams = std::make_shared<StringList>();
@@ -646,6 +681,7 @@ function_declaration
          The returned place must borrow a `ref`/`out` param (a free fn has no `this`); the escape
          check at the ReturnNode place path enforces it. */
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
+      STAMP_LOC(fn->name, @5);
       fn->isRef = true;
       if ($6 && !$6->empty()) {
           fn->typeParams = std::make_shared<StringList>();
@@ -1320,10 +1356,10 @@ field_declaration
   | attribute_list modifiers_opt type variable_declarators SEMICOLON   { auto f = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $3, $4); f->attributes = $1; $$ = f; }   /* `@field … type name;` */
   ;
 method_declaration
-  : modifiers_opt COMPTIME FN type method_name LPAREN parameter_list_opt RPAREN block   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); m->isComptime = true; $$ = m; }   /* `comptime fn T name(…)` — a type-associated compile-time-only function (6b-3), read `Type::name()` */
-  | modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
-  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
-  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11); m->isConst = ($2 != nullptr); m->isRef = true; if ($10) { m->whenParams = $10->whenParams; m->whenBounds = $10->whenBounds; } $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
+  : modifiers_opt COMPTIME FN type method_name LPAREN parameter_list_opt RPAREN block   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); STAMP_LOC(m->name, @5); m->isComptime = true; $$ = m; }   /* `comptime fn T name(…)` — a type-associated compile-time-only function (6b-3), read `Type::name()` */
+  | modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
+  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
+  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11); STAMP_LOC(m->name, @6); m->isConst = ($2 != nullptr); m->isRef = true; if ($10) { m->whenParams = $10->whenParams; m->whenBounds = $10->whenBounds; } $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
   ;
 /* `fn … when [T: Bound, …]` — a method present only when every gated type-param satisfies its bound (the
    value `iterator()` needs a Copyable element; `Map.copy()` needs both K AND V Copyable). The holder
@@ -1404,9 +1440,9 @@ constructor_declaration
        (infallible, no return type written) or `Result<This,E>` (fallible, leading type like `fn`). Lowered
        through the static-method pipeline; the emitter fills the infallible return type = the enclosing type. */
   | modifiers_opt CTOR method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
-    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, SharedIdentifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $8); m->isCtor = true; if ($7) { m->whenParams = $7->whenParams; m->whenBounds = $7->whenBounds; } $$ = m; }
+    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, SharedIdentifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $8); STAMP_LOC(m->name, @3); m->isCtor = true; if ($7) { m->whenParams = $7->whenParams; m->whenBounds = $7->whenBounds; } $$ = m; }
   | modifiers_opt CTOR type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
-    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $9); m->isCtor = true; if ($8) { m->whenParams = $8->whenParams; m->whenBounds = $8->whenBounds; } $$ = m; }
+    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $9); STAMP_LOC(m->name, @4); m->isCtor = true; if ($8) { m->whenParams = $8->whenParams; m->whenBounds = $8->whenBounds; } $$ = m; }
   ;
 constructor_declarator
   : IDENTIFIER LPAREN parameter_list_opt RPAREN constructor_initializer_opt   { $$ = std::make_shared<ClassConstructorDeclaratorNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, $5); }
@@ -1635,9 +1671,12 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
   return rtn;
 }
 
-int yyerror(yyscan_t scanner, const char *msg) 
+int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg)
 {
     LexerInstanceData* data = yyget_extra(scanner);
-    return data->codeGenContext->handleError(data->codeGenContext->line, data->codeGenContext->col, "Parse", msg);
+    // %locations gives the error's precise start (the offending token), better than the lexer counter.
+    int line = llocp ? llocp->first_line : data->codeGenContext->line;
+    int col  = llocp ? llocp->first_column : data->codeGenContext->col;
+    return data->codeGenContext->handleError(line, col, "Parse", msg);
 }
 

@@ -134,6 +134,13 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-emb
     if sh tools/check-embedded.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# LSP M0: the query-index guard (documentSymbols / definitionAt / typeAtPosition over the analysis-mode
+# front end). Host-checkable, native-only pass (the query path is target-agnostic; no need to re-run under
+# SAN/WASM, though it is sanitizer-clean).
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-query.sh ]; then
+    if sh tools/check-query.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # MCU end-to-end: build a kama program into Cortex-M firmware and RUN it on emulated silicon (QEMU). SKIPs
 # (still counts as a pass) when the cross toolchain is absent, so this only truly exercises under the opt-in
 # `kama-mcu` image; on the base image it's a no-op. Native pass only (like the guards above).

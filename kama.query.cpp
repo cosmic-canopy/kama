@@ -180,3 +180,187 @@ void CEmitter::buildDefSites()
         addDefSite(kv.first, k, unit, sig.node, sig.node->name, bareOf(sig.node->name, kv.first), "");
     }
 }
+
+// ---- position index (T4b) -------------------------------------------------------------------------------
+//
+// Two position sources, unioned per unit: (1) declaration NAMES — taken straight from _defSites (each
+// carries its selectionRange + resolved key + owning unit), so a cursor ON a decl name resolves to its own
+// DefSite; (2) signature TYPE references — a small read-only walk over decl/signature structure (params,
+// return, base, field, ctor-param types + their nested generic args), recording the raw IdentifierNode so
+// definitionAt() can replay resolution at the cursor. The walk NEVER descends into bodies (`block`) — that
+// is the M3 use-site walk — and never touches _nsCtx or the tables.
+
+// Record a type-reference identifier and recurse into its generic arguments (List<Point> -> Point).
+static void addTypeRef(const SharedIdentifier& t, std::vector<PosEntry>& out)
+{
+    if (!t) return;
+    out.push_back(PosEntry{ SrcRange{ t->line, t->column, t->endLine, t->endColumn }, t.get(), false, "" });
+    if (t->genericArgs) for (auto& a : *t->genericArgs) addTypeRef(a, out);
+    else                addTypeRef(t->genericArg, out);   // single-arg collections mirror [0] here
+}
+
+static void addParamTypes(const SharedParameterList& params, std::vector<PosEntry>& out)
+{
+    if (!params) return;
+    for (auto& p : *params) if (p) addTypeRef(p->type, out);
+}
+
+void CEmitter::buildPositions()
+{
+    _positions.clear();
+
+    // (1) Declaration names — one entry per user-unit DefSite (prelude/std have unit==nullptr, skipped).
+    for (auto& kv : _defSites) {
+        const DefSite& d = kv.second;
+        if (!d.unit) continue;
+        _positions[d.unit].push_back(PosEntry{ d.selectionRange, nullptr, true, d.key });
+    }
+
+    // (2) Signature type references — structural walk of each user unit's top-level decls.
+    for (auto& u : _units) {
+        if (!u || !u->codeDeclarationList) continue;
+        auto& out = _positions[u.get()];
+        for (auto& decl : *u->codeDeclarationList) {
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+                addTypeRef(fn->returnType, out);
+                addParamTypes(fn->parameters, out);
+            } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+                if (cd->baseTypes) {
+                    addTypeRef(cd->baseTypes->base, out);
+                    if (cd->baseTypes->interfaces) for (auto& i : *cd->baseTypes->interfaces) addTypeRef(i, out);
+                }
+                if (cd->members) for (auto& m : *cd->members) {
+                    if (auto* fld = dynamic_cast<ClassFieldDeclarationNode*>(m.get())) {
+                        addTypeRef(fld->type, out);
+                    } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                        addTypeRef(md->returnType, out);
+                        addParamTypes(md->params, out);
+                    } else if (auto* ct = dynamic_cast<ClassConstructorDeclarationNode*>(m.get())) {
+                        if (ct->declarator) addParamTypes(ct->declarator->params, out);
+                    } else if (auto* op = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
+                        if (auto* d = op->operatorDeclarator.get()) {
+                            addTypeRef(d->returnType, out);
+                            addTypeRef(d->param1Type, out);
+                            addTypeRef(d->param2Type, out);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort each unit's entries by start position so posAt can scan deterministically.
+    for (auto& kv : _positions) {
+        auto& v = kv.second;
+        std::sort(v.begin(), v.end(), [](const PosEntry& a, const PosEntry& b) {
+            if (a.range.line != b.range.line) return a.range.line < b.range.line;
+            return a.range.column < b.range.column;
+        });
+    }
+}
+
+// The smallest-span indexed position containing (line,col), or nullptr. Smallest-span-wins disambiguates
+// overlapping approximate spans (e.g. a decl name inside its own decl's coarser range).
+const PosEntry* CEmitter::posAt(const CompilationUnit* unit, int line, int col) const
+{
+    auto it = _positions.find(unit);
+    if (it == _positions.end()) return nullptr;
+    const PosEntry* best = nullptr;
+    for (const auto& e : it->second) {
+        if (!e.range.contains(line, col)) continue;
+        if (!best || e.range.span() < best->range.span()) best = &e;
+    }
+    return best;
+}
+
+// ---- query facade (T4c + T5) ----------------------------------------------------------------------------
+
+const CompilationUnit* CEmitter::unitForUri(const std::string& uri) const
+{
+    for (auto& u : _units) if (u && u->name && *u->name == uri) return u.get();
+    return nullptr;
+}
+
+// Go-to-definition. On a decl name -> itself; on a signature type reference -> replay resolution at the
+// cursor and map the resolved mangled name to its def-site. READ-ONLY: the only state touched is _nsCtx,
+// save/restored around resolveUserName (a pure lookup). cType is deliberately NOT called — its unsupported()
+// side effect would pollute _diagnostics — and no collect/emit runs, so no generic instances register.
+Location CEmitter::definitionAt(const std::string& uri, int line, int col)
+{
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return Location{};
+    const PosEntry* e = posAt(unit, line, col);
+    if (!e) return Location{};
+
+    // Cursor on a declaration name: the definition is here.
+    if (e->isDeclName) {
+        auto it = _defSites.find(e->declKey);
+        if (it == _defSites.end()) return Location{};
+        return Location{ uri, it->second.selectionRange };
+    }
+    // Cursor on a type reference: resolve it in the unit's namespace context, then look up the def-site.
+    if (!e->id || !e->id->value) return Location{};
+    NsCtx saved = _nsCtx;
+    auto uit = _unitCtx.find(unit);
+    if (uit != _unitCtx.end()) _nsCtx = uit->second;
+    std::string key = resolveUserName(*e->id->value, e->id->qualifier);
+    _nsCtx = saved;
+
+    auto it = _defSites.find(key);
+    if (it == _defSites.end() || !it->second.unit) return Location{};   // builtin / prelude / unresolved
+    const DefSite& d = it->second;
+    return Location{ d.unit->name ? *d.unit->name : uri, d.selectionRange };
+}
+
+// Hover: a short "<kind> <name>" for a declaration or a resolved type reference. Same read-only replay as
+// definitionAt (no cType). Locals-hover (per-function scopes) is M2.
+std::string CEmitter::typeAtPosition(const std::string& uri, int line, int col)
+{
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return "";
+    const PosEntry* e = posAt(unit, line, col);
+    if (!e) return "";
+
+    if (e->isDeclName) {
+        auto it = _defSites.find(e->declKey);
+        if (it == _defSites.end()) return "";
+        return std::string(symKindName(it->second.kind)) + " " + it->second.display;
+    }
+    if (!e->id || !e->id->value) return "";
+    NsCtx saved = _nsCtx;
+    auto uit = _unitCtx.find(unit);
+    if (uit != _unitCtx.end()) _nsCtx = uit->second;
+    std::string key = resolveUserName(*e->id->value, e->id->qualifier);
+    _nsCtx = saved;
+
+    auto it = _defSites.find(key);
+    if (it != _defSites.end()) return std::string(symKindName(it->second.kind)) + " " + it->second.display;
+    return *e->id->value;   // a builtin/unresolved type — echo the source spelling
+}
+
+// Document outline: every user-unit def-site in this file, sorted by declaration order.
+std::vector<SymbolInfo> CEmitter::documentSymbols(const std::string& uri) const
+{
+    const CompilationUnit* unit = unitForUri(uri);
+    std::vector<SymbolInfo> out;
+    if (!unit) return out;
+    for (auto& kv : _defSites) {
+        const DefSite& d = kv.second;
+        if (d.unit != unit) continue;
+        out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container });
+    }
+    std::sort(out.begin(), out.end(), [](const SymbolInfo& a, const SymbolInfo& b) {
+        if (a.range.line != b.range.line) return a.range.line < b.range.line;
+        return a.range.column < b.range.column;
+    });
+    return out;
+}
+
+// Diagnostics for one file. Single-program M0: filter the accumulated semantic diagnostics by file. (Parse
+// diagnostics live on CodeGenContext and are merged by the driver/server, which owns both streams.)
+std::vector<Diagnostic> CEmitter::diagnosticsFor(const std::string& uri) const
+{
+    std::vector<Diagnostic> out;
+    for (auto& d : _diagnostics) if (d.file == uri) out.push_back(d);
+    return out;
+}

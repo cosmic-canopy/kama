@@ -5,10 +5,19 @@
 
 /* Each macro records the token's END position (one past its last column) after advancing, alongside the
  * START it already tracked — so an AST node built at reduction time can carry a [start,end) range, not
- * just a point (LSP source spans, T3). End line == start line for these single-line tokens. */
+ * just a point (LSP source spans, T3). End line == start line for these single-line tokens.
+ * STAMP_YYLLOC also publishes that [start,end) into Bison's per-token yylloc (%locations, M0), so the
+ * parser reconstructs an accurate span for every rule (@$) instead of reading the lexer counter at reduce
+ * time (which lags by one lookahead token). */
+#define STAMP_YYLLOC  yylloc->first_line   = yyextra->codeGenContext->line;    \
+                      yylloc->first_column = yyextra->codeGenContext->col;     \
+                      yylloc->last_line    = yyextra->codeGenContext->endLine; \
+                      yylloc->last_column  = yyextra->codeGenContext->endCol;
+
 #define SAVE_TOKEN_FROM_BUFFER(l)  yyextra->next_column_number += l; \
                                    yyextra->codeGenContext->endLine = yyextra->next_line_number; \
                                    yyextra->codeGenContext->endCol  = yyextra->next_column_number; \
+                                   STAMP_YYLLOC \
                                    yylval->string = yyextra->workString; \
                                    yyextra->workString = NULL;
 
@@ -17,6 +26,7 @@
                                   yyextra->next_column_number += l; \
                                   yyextra->codeGenContext->endLine = yyextra->next_line_number; \
                                   yyextra->codeGenContext->endCol  = yyextra->next_column_number; \
+                                  STAMP_YYLLOC \
                                   yylval->string = std::make_shared<std::string>(src, leng);
 
 #define RETURN_TOKEN(t, l)   yyextra->codeGenContext->line = yyextra->next_line_number; \
@@ -24,6 +34,7 @@
                              yyextra->next_column_number += l; \
                              yyextra->codeGenContext->endLine = yyextra->next_line_number; \
                              yyextra->codeGenContext->endCol  = yyextra->next_column_number; \
+                             STAMP_YYLLOC \
                              return yylval->token = t;
 
 #define YY_EXTRA_TYPE struct LexerInstanceData *
@@ -37,7 +48,7 @@ void error(const char *, yyscan_t scanner);
 %}
 
 %option extra-type="struct LexerInstanceData *"
-%option 8bit reentrant bison-bridge
+%option 8bit reentrant bison-bridge bison-locations
 %option never-interactive
 %option warn nodefault
 %option stack

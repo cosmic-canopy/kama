@@ -446,7 +446,16 @@ public:
     // CodeGenContext (a syntax error stops the parse before emission); the LSP merges both streams.
     const std::vector<Diagnostic>& diagnostics() const { return _diagnostics; }
 
+    // ---- Query facade (T5) — read off the index built by analyze() ---------------------------------------
+    // All framework-free (kama.query.h types); the driver / `kama lsp` server maps them to protocol JSON.
+    // `uri` is a source path matching a unit passed to analyze() (== *unit->name).
+    std::vector<SymbolInfo> documentSymbols(const std::string& uri) const;         // outline (user decls only)
+    Location    definitionAt(const std::string& uri, int line, int col);           // go-to-definition (replays resolution)
+    std::string typeAtPosition(const std::string& uri, int line, int col);         // hover: kind + name at a decl/type ref
+    std::vector<Diagnostic> diagnosticsFor(const std::string& uri) const;          // diagnostics for one file
+
 private:
+    const CompilationUnit* unitForUri(const std::string& uri) const;   // *unit->name == uri, else nullptr
     // ---- LSP query index (T4/T5) — built at the tail of analyze(), read by the query facade -------------
     // Populated from the symbol tables' existing decl-node pointers AFTER analysis, so it never perturbs
     // resolution/emission (the whole facade runs read-only on stable tables). See kama.query.cpp.
@@ -455,6 +464,8 @@ private:
     std::map<const ASTNode*, const CompilationUnit*> _declUnit;  // top-level decl node -> owning unit
     std::map<const CompilationUnit*, std::vector<PosEntry>> _positions;  // per-unit sorted decl/sig positions (T4b)
     void buildDefSites();                        // fill _defSites/_declUnit from the tables (T4a)
+    void buildPositions();                       // fill _positions (decl names from _defSites + sig type refs) (T4b)
+    const PosEntry* posAt(const CompilationUnit* unit, int line, int col) const;  // smallest span at cursor
     void addDefSite(const std::string& key, SymKind kind, const CompilationUnit* unit,
                     ASTNode* declNode, const SharedIdentifier& nameId,
                     const std::string& display, const std::string& container);  // one _defSites entry

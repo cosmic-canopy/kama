@@ -59,6 +59,7 @@ int CEmitter::analyze(const std::vector<SharedCompilationUnit>& units)
     }
     // Tables are stable after the analysis walk — build the read-only query index over them (T4/T5).
     buildDefSites();
+    buildPositions();
     return _unsupported;
 }
 

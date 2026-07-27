@@ -1,0 +1,29 @@
+// LSP query-index fixture (M0 T4/T5) — exercised by tools/check-query.sh, NOT the main run_tests loop
+// (that scans tests/*.kama, tests/*.d, tests/xfail only). Positions below are asserted by the harness, so
+// keep the layout stable: line/column changes here mean updating check-query.sh.
+namespace shapes;
+
+type value Point {
+    public int32 x;
+    public int32 y;
+}
+
+type resource Widget {
+    Point origin;
+    public ctor make(Point at) { Widget w; w.origin = at; return give w; }
+    public fn int32 originX() { return this.origin.x; }
+}
+
+fn Point midpoint(Point a, Point b) {
+    Point m;
+    m.x = (a.x + b.x) / 2;
+    m.y = (a.y + b.y) / 2;
+    return m;
+}
+
+fn int32 main() {
+    Point p;
+    p.x = 4; p.y = 6;
+    Widget w = Widget.make(at: p);
+    return w.originX();
+}
