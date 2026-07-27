@@ -227,9 +227,13 @@ to [SPEC.md](SPEC.md) / [docs/design/construction-model.md](design/construction-
   flow through that funnel unresolved by design and in huge volume (a probe over the fixture corpus counted
   ~30 K hits for `T`/`K`/`A`/`V` alone). **Still silent: parameter types, return types, and field types** —
   same one-line check, but those are walked at 8+ emission sites (prototype, definition, vtable, per generic
-  instance), so wiring it there would emit duplicate diagnostics. The fix is a single-visit declaration pass
-  (or hanging the check off `collectCollections`'s existing per-unit walk), not more call sites. Guarded by
-  `tests/xfail/unknown_type_local` + a `tools/check-lsp.sh` case.
+  instance), so wiring it there naively would emit duplicate diagnostics — the fix is either a single-visit
+  declaration pass or a dedupe guard (file:line:message) in `checkTypeResolves`, whichever reads cleaner.
+  **De-risked:** real stdlib types (`Stdio`, `DynamicArray`, `File`, `ExitStatus`) *do* reach the unresolved
+  funnel, but only from SPECULATIVE `cType` calls (enum-member probing, `exprClass`) — verified they all
+  resolve correctly at actual param/return/field declaration sites, so the check won't false-positive there
+  and the only guard needed is the existing type-param one. Guarded by `tests/xfail/unknown_type_local` +
+  two `tools/check-lsp.sh` cases.
 - **Enum-variant payload-type registration gap (bug, small).** A type used *only* as an enum variant's payload
   — where that variant is never constructed — is not registered/emitted, so the enum's C `struct` references an
   undeclared type (`unknown type name 'Shared_Probe'`). Reproduces with `enum E { A, B(Shared<Probe>) }`
