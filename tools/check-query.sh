@@ -206,5 +206,52 @@ reject --project --refs 9:11 -- "stray.kama"                # ... and never the 
 # Without --project the sibling package is invisible again (the closure is one file).
 reject --refs 9:11 -- "gearapp.kama"
 
+# ---------------------------------------------------------------------------------------------------
+# M3.5 — an installed DEPENDENCY (not just first-party sub-projects).
+#
+# A dependency is materialized under `<project>/.kama/deps`, which the project walk PRUNES (dot-directory)
+# yet analysis still loads, because the import pulls it in. So a dependency's symbols are queryable —
+# go-to-definition jumps into the dep's source — while the dep's files are NOT part of the project's own
+# file set, and rename must refuse to rewrite them (asserted in check-lsp.sh, which has the rename verb).
+# Built here rather than committed: `.kama/deps` is install output, and a path dep needs no network.
+dep="$tmp/depproj"
+mkdir -p "$dep/geo" "$dep/app"
+cat > "$dep/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "sources": ["."] }
+JSON
+cat > "$dep/geo/geo.kama" <<'KAMA'
+namespace geo;
+export { Point };
+type value Point {
+    public int32 x;
+    public ctor of(int32 x) { Point r; r.x = x; return give r; }
+}
+KAMA
+cat > "$dep/app/kama.json" <<'JSON'
+{ "name": "app", "version": "0.1.0", "main": "app.kama", "sources": ["."],
+  "dependencies": { "geo": { "path": "../geo" } } }
+JSON
+cat > "$dep/app/app.kama" <<'KAMA'
+import geo::{Point};
+fn int32 main() {
+    Point p = Point.of(x: 7);
+    return p.x;
+}
+KAMA
+if (cd "$dep/app" && "$KAMA" pkg install >/dev/null 2>&1); then
+    FIXTURE="$dep/app/app.kama"
+    echo "check-query: M3.5 installed dependency"
+    # The dep's own source is where its declaration lives — go-to-def crosses the package boundary.
+    expect --project --def  3:4 -- "/.kama/deps/geo/geo.kama:3:11"
+    expect --project --type 3:4 -- "value Point"
+    expect --project --refs 3:4 -- "app.kama:3:4"                  # our use
+    expect --project --refs 3:4 -- "/.kama/deps/geo/geo.kama:3:11"  # ... and the dep's declaration
+    # The project's own file set stops at the package boundary: `.kama/` is pruned, so the outline is ours.
+    expect --project --symbols -- "2:9 function main"
+    reject --project --symbols -- "Point"
+else
+    echo "  SKIP: installed-dependency checks (kama pkg install failed)"
+fi
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

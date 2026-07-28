@@ -48,13 +48,13 @@ SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) {
 IURI="file://$ROOT/tests/query/imports.kama"
 IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32 useit(DynamicArray<int32> a) { return 0; }\n'
 
-# Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
 # M3.5 workspace fixture: the DECLARING half of the tests/query/ws package. app.kama (on disk, never
 # opened here) imports it and uses `Widget` three times; widget.kama imports nothing, so its own closure
 # is just itself. Opening it and renaming `Widget` is exactly the case M3.3 had to refuse.
 WWURI="file://$ROOT/tests/query/ws/widget.kama"
 WW='namespace widget;\nexport { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { Widget r; r.size = size; return give r; }\n}\nfn int32 defaultSize() { return 7; }\n'
 
+# Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
 SURI="file:///sem.kama"
 SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 
@@ -70,6 +70,40 @@ SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 #   L8 `    Code c = Code::Ok;`                        -> `Ok` 19..21 (NOT 13..21, which eats `Code::`)
 MURI="file:///bindings.kama"
 M34='namespace m34;\nenum Code { Ok, Bad = 2 }\ntype value Cfg {\n    public int32 scale = 3;\n    public fn int32 twice(int32 bias) { return this.scale * bias; }\n}\nfn int32 run() {\n    int32 seeded = 7;\n    Code c = Code::Ok;\n    return seeded + cast<int32>(c);\n}\n'
+
+# M3.5 dependency fixture: a real installed path dependency, so `.kama/deps` is populated. Built here
+# rather than committed — `.kama/deps` is install output, and a path dep needs no network. The guard under
+# test is that rename REFUSES a symbol whose definition lives in a dependency: `DefSite.unit == nullptr`
+# filters only the built-in prelude, so a dep's units look like ordinary user code and would otherwise be
+# rewritten. Previously this guard was only ever exercised against std.
+dep="$tmp/depproj"
+mkdir -p "$dep/geo" "$dep/app"
+cat > "$dep/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "sources": ["."] }
+JSON
+cat > "$dep/geo/geo.kama" <<'KAMA'
+namespace geo;
+export { Point };
+type value Point {
+    public int32 x;
+    public ctor of(int32 x) { Point r; r.x = x; return give r; }
+}
+KAMA
+cat > "$dep/app/kama.json" <<'JSON'
+{ "name": "app", "version": "0.1.0", "main": "app.kama", "sources": ["."],
+  "dependencies": { "geo": { "path": "../geo" } } }
+JSON
+cat > "$dep/app/app.kama" <<'KAMA'
+import geo::{Point};
+fn int32 main() {
+    Point p = Point.of(x: 7);
+    return p.x;
+}
+KAMA
+depok=0
+(cd "$dep/app" && "$KAMA" pkg install >/dev/null 2>&1) && depok=1
+DURI="file://$dep/app/app.kama"
+DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
 
 frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$ROOT"'/tests/query","capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
@@ -137,6 +171,13 @@ frame '{"jsonrpc":"2.0","id":28,"method":"textDocument/references","params":{"te
 frame '{"jsonrpc":"2.0","id":29,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$WWURI"'"},"position":{"line":2,"character":11},"newName":"Gadget"}}'
 frame '{"jsonrpc":"2.0","id":30,"method":"workspace/symbol","params":{"query":"efaultSi"}}'
 frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"'"$WWURI"'","type":2}]}}'
+# --- M3.5: an installed DEPENDENCY. 32: rename on a type declared in .kama/deps must REFUSE (it is not
+#     ours to rewrite). 33: the dep's symbols must not show up in the project symbol picker either.
+if [ "$depok" = 1 ]; then
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$DURI"'","languageId":"kama","version":1,"text":"'"$DSRC"'"}}}'
+frame '{"jsonrpc":"2.0","id":32,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$DURI"'"},"position":{"line":2,"character":4},"newName":"Pt"}}'
+frame '{"jsonrpc":"2.0","id":33,"method":"workspace/symbol","params":{"query":"Point"}}'
+fi
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -245,6 +286,16 @@ if printf '%s' "$out" | grep -qF 'method not found: workspace/'; then
     fail=1
 else
     echo "  ok: workspace/didChangeWatchedFiles is accepted (index invalidation, not an error)"
+fi
+
+if [ "$depok" = 1 ]; then
+    echo "check-lsp: M3.5 installed dependency"
+    expect '"id":32,"error"'                          "rename REFUSES a type declared in a dependency"
+    expect 'defined outside the project'              "...naming the dependency source it lives in"
+    expect '/.kama/deps/geo/geo.kama'                 "...which is under the project's package store"
+    expect '"id":33,"result":[]'                      "workspace/symbol does not offer a dependency's symbols"
+else
+    echo "  SKIP: installed-dependency checks (kama pkg install failed)"
 fi
 
 if [ "$fail" != 0 ]; then
