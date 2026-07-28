@@ -348,7 +348,7 @@ import_symbols
   ;
 import_symbol
   : IDENTIFIER   { $$ = std::make_shared<UsingDeclarationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
-  | IDENTIFIER AS IDENTIFIER   { $$ = std::make_shared<UsingDeclarationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); }
+  | IDENTIFIER AS IDENTIFIER   { $$ = std::make_shared<UsingDeclarationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); STAMP_LOC($$->identifier, @1); STAMP_LOC($$->alias, @3); }
   ;
 
 code_opt
@@ -579,6 +579,7 @@ type_decl_head
         yyget_extra(scanner)->genericDepth--;
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1);
         id->genericArgs = $4;   /* each element is a type_param node carrying its name + bounds */
+        STAMP_LOC(id, @1);      /* the NAME only — without this a rename REPLACES `Box<T>`, eating `<T>` */
         $$ = id;
     }
   ;
@@ -617,7 +618,7 @@ friend_declaration
   ;
 friend_member_list
   : IDENTIFIER   { $$ = std::make_shared<IdentifierList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
-  | friend_member_list COMMA IDENTIFIER   { $1->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); $$ = $1; }
+  | friend_member_list COMMA IDENTIFIER   { $1->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); STAMP_LOC($1->back(), @3); $$ = $1; }
   ;
 
 function_modifier_opt
@@ -718,9 +719,9 @@ type_param_list
   | type_param_list COMMA type_param   { $1->push_back($3); $$ = $1; }
   ;
 type_param
-  : IDENTIFIER type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->defaultArg = $2; $$ = id; }
-  | IDENTIFIER COLON bound_list type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->bounds = $3; id->defaultArg = $4; $$ = id; }
-  | CONST IDENTIFIER COLON integral_type type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); id->isConstParam = true; id->defaultArg = $5; $$ = id; }   /* `const N: int` — a compile-time value param */
+  : IDENTIFIER type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->defaultArg = $2; STAMP_LOC(id, @1); $$ = id; }
+  | IDENTIFIER COLON bound_list type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->bounds = $3; id->defaultArg = $4; STAMP_LOC(id, @1); $$ = id; }
+  | CONST IDENTIFIER COLON integral_type type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); id->isConstParam = true; id->defaultArg = $5; STAMP_LOC(id, @2); $$ = id; }   /* `const N: int` — a compile-time value param */
   ;
 /* Optional `= DefaultType` (or `= literal` for a const param) on a trailing type parameter. */
 type_param_default_opt
@@ -1067,6 +1068,7 @@ invocation_expression
   | primary_expression DOT IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN {
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, std::make_shared<StringList>(), (*$7)[0]);
         id->genericArgs = $7;
+        STAMP_LOC(id, @3);      /* the method NAME only — not the turbofish */
         auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, id, $1);
         $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, ma, $11);
     }
@@ -1082,6 +1084,7 @@ invocation_expression
        The ctor's own turbofish slot (`.make::<…>` above) stays free for a ctor with its OWN generics. */
   | generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN {
         auto method = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3);
+        STAMP_LOC(method, @3);
         auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, method, std::static_pointer_cast<ExpressionNode>($1));
         $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, ma, $5);
     }
@@ -1092,6 +1095,7 @@ generic_turbofish_name
   : IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } {
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$5)[0]);
         id->genericArgs = $5;
+        STAMP_LOC(id, @1);      /* the NAME only — shared by every turbofish call form */
         $$ = id;
     }
   ;
@@ -1104,9 +1108,9 @@ argument_list
   | argument_list COMMA argument   { $1->push_back($3); }
   ;
 argument
-  : IDENTIFIER COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); }
-  | IDENTIFIER COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); }
-  | IDENTIFIER COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); }
+  : IDENTIFIER COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
+  | IDENTIFIER COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
+  | IDENTIFIER COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   ;
 /* `@name` / `@name(args)` — declaration attributes (serialization metadata + codegen trigger). A BARE arg
    (`@generate(Serialize)`) is an identifier with no value (name set, expression null); a NAMED arg
@@ -1127,8 +1131,8 @@ attr_arg_list
   ;
 attr_arg
   : IDENTIFIER                     { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), SharedExpression()); }
-  | EXCLAMATION IDENTIFIER         { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2))); }   /* negated flag, e.g. @compileFor(!RELEASE) */
-  | IDENTIFIER COLON expression    { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); }
+  | EXCLAMATION IDENTIFIER         { auto flag = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); STAMP_LOC(flag, @2); $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, flag)); }   /* negated flag, e.g. @compileFor(!RELEASE) */
+  | IDENTIFIER COLON expression    { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | STRING_LITERAL                 { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1)); }   /* bare string, e.g. @section(".isr_vector") */
   ;
 variable_reference
@@ -1154,16 +1158,17 @@ object_creation_expression
        `Optional<Owned<T>>`, `None` on OOM instead of trapping. No placement variant (a follow-on). The named
        form is the norm under the M8 construction model (a named-ctor type rejects the bare `new`). */
   | TRY NEW type LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $3, $5); n->isTry = true; $$ = n; }
-  | TRY NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $3, $7); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5); n->isTry = true; $$ = n; }
+  | TRY NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $3, $7); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5); STAMP_LOC(n->ctorName, @5); n->isTry = true; $$ = n; }
   | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $5, $7, $3 ); }
-  | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $2, $6); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4); $$ = n; }
-  | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $5, $9, $3); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7); $$ = n; }
+  | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $2, $6); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4); STAMP_LOC(n->ctorName, @4); $$ = n; }
+  | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $5, $9, $3); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7); STAMP_LOC(n->ctorName, @7); $$ = n; }
     /* On-type turbofish through `new`: `new BTreeNode::<K,V,A>.make(...)` — the uniform construction spelling
        (explicit type args always ride the type as `::<…>`). Reuses `generic_turbofish_name` (the type carries
        its args), mirroring the plain-call on-type turbofish in invocation_expression. */
   | NEW generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN {
         auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $2, $6);
         n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4);
+        STAMP_LOC(n->ctorName, @4);
         $$ = n;
     }
   ;
@@ -1320,6 +1325,7 @@ when_cond_list
         h->whenParams = std::make_shared<IdentifierList>();
         h->whenBounds = std::make_shared<IdentifierList>();
         h->whenParams->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1));
+        STAMP_LOC(h->whenParams->back(), @1);   /* the bound is an already-built type_name; it needs none */
         h->whenBounds->push_back($3); $$ = h; }
     /* `when [A: default]` — a STRUCTURAL bound: the arg bound to A must have a `default` ctor
        (checked via isDefaultFillable). `default` is a keyword, so it can't reduce as a type_name. */
@@ -1328,13 +1334,18 @@ when_cond_list
         h->whenParams = std::make_shared<IdentifierList>();
         h->whenBounds = std::make_shared<IdentifierList>();
         h->whenParams->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1));
-        h->whenBounds->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); $$ = h; }
+        STAMP_LOC(h->whenParams->back(), @1);
+        h->whenBounds->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3));
+        STAMP_LOC(h->whenBounds->back(), @3); $$ = h; }
   | when_cond_list COMMA IDENTIFIER COLON type_name
       { $1->whenParams->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3));
+        STAMP_LOC($1->whenParams->back(), @3);
         $1->whenBounds->push_back($5); $$ = $1; }
   | when_cond_list COMMA IDENTIFIER COLON DEFAULT
       { $1->whenParams->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3));
-        $1->whenBounds->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); $$ = $1; }
+        STAMP_LOC($1->whenParams->back(), @3);
+        $1->whenBounds->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5));
+        STAMP_LOC($1->whenBounds->back(), @5); $$ = $1; }
   ;
 handoff_default
   : GIVE   { $$ = GIVE; }
@@ -1419,10 +1430,10 @@ operator_body
   | SEMICOLON   { $$ = SharedBlock(); }
   ;
 overloadable_operator_declarator
-  : REF type OPERATOR LEFT_BRACKET RIGHT_BRACKET LPAREN type IDENTIFIER RPAREN   { auto d = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $2, LEFT_BRACKET, $7, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $8), SharedIdentifier(), SharedIdentifier()); d->refReturn = true; $$ = d; }   /* `ref T operator[](usize i)` — a place-returning index operator */
+  : REF type OPERATOR LEFT_BRACKET RIGHT_BRACKET LPAREN type IDENTIFIER RPAREN   { auto d = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $2, LEFT_BRACKET, $7, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $8), SharedIdentifier(), SharedIdentifier()); d->refReturn = true; STAMP_LOC(d->param1Name, @8); $$ = d; }   /* `ref T operator[](usize i)` — a place-returning index operator */
   | type OPERATOR overloadable_operator LPAREN RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, SharedIdentifier(), SharedIdentifier(), SharedIdentifier(), SharedIdentifier()); }   /* 0-param unary: `Vec2 operator-()` = `-this` */
-  | type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), SharedIdentifier(), SharedIdentifier()); }
-  | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $9) ); }
+  | type OPERATOR overloadable_operator LPAREN type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), SharedIdentifier(), SharedIdentifier()); STAMP_LOC($$->param1Name, @6); }
+  | type OPERATOR overloadable_operator LPAREN type IDENTIFIER COMMA type IDENTIFIER RPAREN   { $$ = std::make_shared<ClassOperatorDeclaratorNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $9) ); STAMP_LOC($$->param1Name, @6); STAMP_LOC($$->param2Name, @9); }
   ;
 overloadable_operator
   : PLUS
@@ -1458,7 +1469,7 @@ constructor_declaration
     { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $9); STAMP_LOC(m->name, @4); m->isCtor = true; if ($8) { m->whenParams = $8->whenParams; m->whenBounds = $8->whenBounds; } $$ = m; }
   ;
 constructor_declarator
-  : IDENTIFIER LPAREN parameter_list_opt RPAREN constructor_initializer_opt   { $$ = std::make_shared<ClassConstructorDeclaratorNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, $5); }
+  : IDENTIFIER LPAREN parameter_list_opt RPAREN constructor_initializer_opt   { $$ = std::make_shared<ClassConstructorDeclaratorNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, $5); STAMP_LOC($$->constructorName, @1); }
   ;
 constructor_initializer_opt
   : /* Nothing */   { $$ = SharedClassConstructorInitializer(); }
@@ -1472,7 +1483,9 @@ constructor_body
   | SEMICOLON   { $$ = SharedBlock(); }
   ;
 destructor_declaration
-  : modifiers_opt TILDE IDENTIFIER LPAREN RPAREN block   { $$ = std::make_shared<ClassDestructorDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $6); }
+    /* `$$` is the BASE handle here (%type <classmember>), so the name is unreachable through it — hence a
+       named local. Worst span on the checklist: @$ runs from the modifiers through the entire body. */
+  : modifiers_opt TILDE IDENTIFIER LPAREN RPAREN block   { auto d = std::make_shared<ClassDestructorDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $6); STAMP_LOC(d->destructorName, @3); $$ = d; }
   ;
 
 /*------------------------------------------------------------------------------ 

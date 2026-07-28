@@ -43,6 +43,13 @@ GOOD='fn int32 main() {\n    return 0;\n}\n'   # fixed
 NURI="file:///new.kama"
 NEWB='namespace nb;\ntype value P { public int32 x; public fn int32 twice() { return this.x * 2; } }\nfn int32 main() {\n    P p;\n    p.\n    return 0;\n}\n'
 
+# M4.9 fixture: the campaign-exit STAMP_LOC checklist. A generic type's decl name and a named ctor's
+# name are both built mid-action from a raw IDENTIFIER, so without an explicit stamp they inherit their
+# whole production's span. That is a DATA-LOSS bug, not cosmetics: rename REPLACES the range it is handed,
+# so renaming `Box` would have overwritten `Box<T>` and deleted the type-parameter list.
+SPURI="file:///span.kama"
+SPAN='namespace sp;\ntype value Box<T> { public T v; public ctor of(T v) { Box<T> b; b.v = v; return give b; } }\ntype resource R { public ctor make() { R r; return give r; } ~R() { } }\n'
+
 QURI="file:///shapes.kama"
 SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p; Point q = mid(a: p); return q.x; }\n'
 
@@ -223,6 +230,11 @@ frame '{"jsonrpc":"2.0","id":38,"method":"textDocument/completion","params":{"te
 #     inside the symbol list.
 frame '{"jsonrpc":"2.0","id":39,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":12}}}'
 frame '{"jsonrpc":"2.0","id":40,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":26}}}' 
+# --- M4.9: the stamped spans. 41: a GENERIC type's decl name must stop before `<T>`. 42: a named ctor's
+#     name spans just the name, not the declarator.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$SPURI"'","languageId":"kama","version":1,"text":"'"$SPAN"'"}}}'
+frame '{"jsonrpc":"2.0","id":41,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$SPURI"'"},"position":{"line":1,"character":11}}}'
+frame '{"jsonrpc":"2.0","id":42,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$SPURI"'"},"position":{"line":2,"character":32}}}' 
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -376,6 +388,14 @@ expect '{"label":"collections","kind":9}' \
        "import std:: -> the stdlib modules, as CompletionItemKind.Module (9)"
 expect '"id":40,' "import ...::{} -> the module export manifest"
 expect '{"label":"DynamicArray","kind":7,"detail":"std::collections"}' "... naming the module it comes from"
+
+echo "check-lsp: M4.9 stamped declaration spans"
+# Without the type_decl_head stamp this range ended at character 17 — i.e. it covered `Box<T>`, and a
+# rename would have replaced the whole thing, deleting `<T>`.
+expect '"id":41,"result":{"start":{"line":1,"character":11},"end":{"line":1,"character":14}}' \
+       "a generic type decl name spans the NAME, not Name<T>"
+expect '"id":42,"result":{"start":{"line":2,"character":30},"end":{"line":2,"character":34}}' \
+       "a named ctor spans its name, not the declarator"
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

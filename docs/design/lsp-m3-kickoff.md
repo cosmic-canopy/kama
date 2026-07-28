@@ -344,35 +344,54 @@ recording when `_refUnit == _preludeUnit`.
 
 ---
 
-## ⚠️ Campaign-exit checklist — the remaining STAMP_LOC sites
+## ✅ Campaign-exit checklist — the remaining STAMP_LOC sites (CLOSED, LSP M4.9)
 
-**User requirement (2026-07-27): these must be closed before the LSP campaign ends.** Each is a
-production that builds an `IdentifierNode` mid-action and therefore inherits its whole production's span.
-None is reachable by rename *today*, which is why they were not part of M3.4 — but every one of them
-becomes a silent bad-rewrite the moment its symbol kind is indexed, so treat this as a correctness debt,
-not a cosmetic one. The fix is mechanical (`STAMP_LOC(<the name node>, @N)`; where `%type` is a base
-handle, restructure to `auto v = …; STAMP_LOC(v->name, @N); $$ = v;`).
+**User requirement (2026-07-27): these must be closed before the LSP campaign ends.** Each was a
+production that builds an `IdentifierNode` mid-action and therefore inherited its whole production's span.
+None was reachable by rename at the time, which is why they were not part of M3.4 — but every one becomes
+a silent bad-rewrite the moment its symbol kind is indexed, so this was a correctness debt, not a cosmetic
+one. **All closed in M4.9** (`STAMP_LOC(<the name node>, @N)`; where `%type` is a base handle, restructured
+to `auto v = …; STAMP_LOC(v->name, @N); $$ = v;`).
 
 | kama.y | production | name token |
 |---|---|---|
-| 351 | `using_declaration : IDENTIFIER AS IDENTIFIER` | `@1` (name) **and** `@3` (alias) |
+| 351 | `import_symbol : IDENTIFIER AS IDENTIFIER` | `@1` (name) **and** `@3` (alias) |
 | 578 | `type_decl_head : IDENTIFIER LT type_param_list GT` (rule head 576) | `@1` |
 | 620 | `friend_member_list COMMA IDENTIFIER` | `@3` |
 | 721-723 | `type_param`, three arms (rule head 720) | `@1`, `@1`, `@2` |
 | 1067 / 1073 / 1083 / 1164 | turbofish + `new`-turbofish method names | `@3` / `@3` / `@3` / `@4` |
 | 1092 | `generic_turbofish_name : IDENTIFIER COLONCOLON LT … GT` (head 1091) | `@1` |
 | 1107-1109 | named-argument labels (`ArgumentNode::name`) | `@1` |
-| 1129 / 1131 | attribute-argument labels | `@1` |
+| 1130 / 1131 | attribute-argument labels | `@2` / `@1` |
 | 1157 / 1159 / 1160 / 1166 | `ObjectCreationNode::ctorName` (named ctors) | `@5` / `@4` / `@7` / `@4` |
-| 1318+ | `when_cond_list` params and bounds (rule head 1314) | various |
+| 1318+ | `when_cond_list` params and bounds (rule head **1317**) | `@1`/`@3` and `@3`/`@5` per arm |
 | 1422 / 1424 / 1425 | operator-declarator parameter names (head 1414/1421) | `@8` / `@6` / `@6`+`@9` |
 | 1461 | `constructor_declarator : IDENTIFIER LPAREN …` (head 1460) | `@1` |
 | 1475 | `destructor_declaration : modifiers_opt TILDE IDENTIFIER …` (head 1474) | `@3` |
 
-Line numbers verified against `91e27a3`. Two entries are **not** just span polish: named-argument labels
-(1107-1109) name the callee's *parameter*, so indexing them is what would let renaming a parameter update
-its call sites — real M4/M5 functionality, impossible today. `when_cond_list` (1318+) pushes identifiers
-straight into a list with no field to reach, so it needs restructuring, not just a stamp.
+### Four corrections found while closing it
+
+1. **Entry 1's nonterminal is `import_symbol`** (head 349), not `using_declaration`; the *node* is a
+   `UsingDeclarationNode`.
+2. **Line 1129 needed nothing.** `attr_arg : IDENTIFIER` is a SINGLE-symbol production, so `@$ == @1` and
+   the node was already precise. `YYLLOC_DEFAULT` runs immediately before each action, which makes this
+   true of every one-symbol production — worth knowing before adding a stamp anywhere.
+3. **Line 1130 was MISSING from the list and was a real error.** `attr_arg : EXCLAMATION IDENTIFIER`
+   builds the flag identifier from `$2` inside a two-symbol production, so its span included the `!`.
+4. **The `when_cond_list` note was wrong.** `whenParams`/`whenBounds` are public `SharedIdentifierList`s,
+   so `STAMP_LOC(h->whenParams->back(), @1)` right after each `push_back` works — no restructuring needed.
+   The head is 1317 (1314 is `when_clause`).
+
+### It was not theoretical
+
+Measured before and after on `type value Box<T>`: `prepareRename` on `Box` returned characters **11-17**
+without the stamp — covering `Box<T>` — and **11-14** with it. Since rename REPLACES the range it is
+handed, renaming that type would have overwritten `Box<T>` with the new name and **deleted the
+type-parameter list**. Guarded now by two exact-range assertions in `tools/check-lsp.sh` (ids 41/42).
+
+Named-argument labels (1107-1109) name the callee's *parameter*, so their spans are the prerequisite for
+renaming a parameter through its call sites. That indexing is deliberately NOT part of M4 — the spans are
+now correct, so it becomes an ordinary feature rather than a data-loss risk.
 
 ---
 
