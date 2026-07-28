@@ -775,4 +775,48 @@ if "$KAMA" pkg install "$ws/apps/server" >"$tmp/ws4.out" 2>&1; then
     echo "check-packages: FAIL — sibling path dep accepted with no declared workspace" >&2; exit 1; fi
 mv "$tmp/ws-root.bak" "$ws/kama.json"
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused; $SIGNOTE)"
+# 33. per-package import checking: `libs/net` imports `config` while declaring nothing, and only the app
+#     declares it. That builds where it sits and nowhere else, so the build says so — and names the exact
+#     line to add. A warning, not an error: the build still succeeds and still exits 8.
+cat > "$ws/apps/server/kama.json" <<'JSON'
+{ "name": "server", "version": "0.1.0", "main": "main.kama",
+  "dependencies": { "config": { "path": "../../libs/config" },
+                    "net":    { "path": "../../libs/net" } } }
+JSON
+cat > "$ws/libs/net/kama.json" <<'JSON'
+{ "name": "net", "version": "0.1.0", "sources": ["."] }
+JSON
+"$KAMA" pkg install "$ws/apps/server" >/dev/null 2>&1
+"$KAMA" run "$ws/apps/server/main.kama" >"$tmp/ws6.out" 2>&1 && frrc=0 || frrc=$?
+[ "$frrc" = 8 ] || { echo "check-packages: FAIL — free-riding import should warn, not fail (exit $frrc):" >&2; sed 's/^/  /' "$tmp/ws6.out" >&2; exit 1; }
+grep -q "does not declare it" "$tmp/ws6.out" \
+    || { echo "check-packages: FAIL — no warning for a free-riding sub-project:" >&2; sed 's/^/  /' "$tmp/ws6.out" >&2; exit 1; }
+grep -q '"config": { "path": "../config" }' "$tmp/ws6.out" \
+    || { echo "check-packages: FAIL — warning did not name the line to add:" >&2; sed 's/^/  /' "$tmp/ws6.out" >&2; exit 1; }
+
+# 34. and applying exactly the line it suggested silences it — the remedy the diagnostic names is one the
+#     resolver actually accepts (which it did not, before workspace-internal path deps).
+cp "$tmp/net-manifest.bak" "$ws/libs/net/kama.json"
+"$KAMA" pkg install "$ws/apps/server" >/dev/null 2>&1
+"$KAMA" run "$ws/apps/server/main.kama" >"$tmp/ws7.out" 2>&1 && frrc=0 || frrc=$?
+[ "$frrc" = 8 ] || { echo "check-packages: FAIL — declared workspace build exited $frrc, expected 8" >&2; exit 1; }
+if grep -q "does not declare it" "$tmp/ws7.out"; then
+    echo "check-packages: FAIL — warning persists after declaring the dependency:" >&2; sed 's/^/  /' "$tmp/ws7.out" >&2; exit 1; fi
+
+# 35. ACCEPTANCE — every member of the workspace builds on its own, from its own directory, with no
+#     ancestor manifest in play. That is what "extractable" means, and it is mechanically checkable: walk
+#     the `projects` tree and install + check each member where it stands. (`libs/config` has no
+#     dependencies, `libs/net` has one sibling, `apps/server` has two — all three must stand alone.)
+for member in "$ws/libs/config" "$ws/libs/net" "$ws/apps/server"; do
+    if ! "$KAMA" pkg install "$member" >"$tmp/acc.out" 2>&1; then
+        echo "check-packages: FAIL — $member does not install standalone:" >&2; sed 's/^/  /' "$tmp/acc.out" >&2; exit 1; fi
+    for src in "$member"/*.kama; do
+        [ -e "$src" ] || continue
+        if ! "$KAMA" check "$src" >"$tmp/acc.out" 2>&1; then
+            echo "check-packages: FAIL — $src does not build standalone (not extractable):" >&2; sed 's/^/  /' "$tmp/acc.out" >&2; exit 1; fi
+        if grep -q "does not declare it" "$tmp/acc.out"; then
+            echo "check-packages: FAIL — $src free-rides on an ancestor manifest:" >&2; sed 's/^/  /' "$tmp/acc.out" >&2; exit 1; fi
+    done
+done
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-warned-then-silenced; ACCEPTANCE every member builds standalone; $SIGNOTE)"

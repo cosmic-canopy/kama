@@ -381,11 +381,13 @@ std::set<std::string> workspaceMembers(const std::string& projectDir)
 // (<root>/std/memory/). A directory that is a PACKAGE root contributes the files its manifest
 // declares, wherever they live under it, rather than the flat listing. Empty result => unresolved.
 std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs,
-                                            const std::vector<std::string>& roots)
+                                            const std::vector<std::string>& roots,
+                                            std::string* matchedRoot = nullptr)
 {
     std::string rel;
     for (size_t i = 0; i < segs.size(); ++i) rel += (i ? "/" : "") + segs[i];
     for (auto& root : roots) {
+        if (matchedRoot) *matchedRoot = root;
         std::string file = root + "/" + rel + ".kama";
         if (fileExists(file)) return { file };
         std::string dir = root + "/" + rel;
@@ -395,11 +397,22 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
             if (!fs.empty()) return fs;
         }
     }
+    if (matchedRoot) matchedRoot->clear();
     return {};
 }
 
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
+
+// The directory of the manifest DRIVING this build: next to the first input, else the CWD. "" if none.
+// Note this is whoever is compiling, which for a monorepo is not necessarily the package a given source
+// file belongs to — that distinction is the whole of the per-package import check below.
+std::string projectManifestDir(const std::vector<std::string>& inputs)
+{
+    if (!inputs.empty()) { std::string d = dirName(inputs[0]); if (fileExists(d + "/kama.json")) return d; }
+    if (fileExists("kama.json")) return ".";
+    return "";
+}
 
 // The project's resolved-dependency view (`<projectDir>/.kama/deps`), or "" if there is no project
 // manifest or the view has not been materialized. `kama install` populates it (package-name -> store
@@ -407,13 +420,34 @@ SharedCompilationUnit parseString(const char* src, const std::string& name);   /
 // time. Discovered like the manifest: next to the first input, else the CWD.
 std::string projectDepsView(const std::vector<std::string>& inputs, const char* leaf = ".kama/deps")
 {
-    std::string dir;
-    if (!inputs.empty()) { std::string d = dirName(inputs[0]); if (fileExists(d + "/kama.json")) dir = d; }
-    if (dir.empty() && fileExists("kama.json")) dir = ".";
+    std::string dir = projectManifestDir(inputs);
     if (dir.empty()) return "";
     std::string view = dir + "/" + leaf;
     return dirExists(view) ? view : "";
 }
+
+// Defined once DepSpec exists, beside the manifest loaders it wraps.
+const std::set<std::string>& declaredImportNames(const std::string& packageDir);
+
+// The directory of the nearest `kama.json` at or above `fromDir` — the package that OWNS a file. A
+// `.kama` component stops the walk, so a vendored dependency is never owned by its host project. "" if
+// no manifest is above it at all (a scratch file, which nothing can be said about).
+std::string owningPackageDir(const std::string& fromDir)
+{
+    static std::map<std::string, std::string> cache;
+    auto it = cache.find(fromDir);
+    if (it != cache.end()) return it->second;
+    std::string found;
+    for (std::string cur = absolutePath(fromDir);;) {
+        if (baseName(cur) == ".kama") break;
+        if (fileExists(cur + "/kama.json")) { found = cur; break; }
+        std::string parent = dirName(cur);
+        if (parent == cur || parent == ".") break;
+        cur = parent;
+    }
+    return cache.emplace(fromDir, found).first->second;
+}
+
 
 
 bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* argv0,
@@ -427,6 +461,8 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // dev-dependencies are a SEPARATE view, only on the import path under `--dev` — so production code can
     // never import a dev-dep (the phantom-dep guarantee makes this a hard resolve error), at any opt level.
     std::string devDepsView = includeDevDeps ? projectDepsView(cliInputs, ".kama/dev-deps") : "";
+    std::string buildManifestDir = projectManifestDir(cliInputs);
+    std::set<std::string> warnedFreeRide;   // "<manifest>\n<module>" — warn once per package, not per import
     // A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
     auto nsKey = [](SharedCompilationUnit u) -> std::string {
         if (!u || !u->nameSpace || !u->nameSpace->name) return "";
@@ -472,13 +508,44 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 if (!devDepsView.empty()) roots.push_back(devDepsView);   // `--dev` only
             }
             roots.push_back(stdlibDir);
-            auto files = resolveModuleFiles(segs, roots);
+            std::string via;
+            auto files = resolveModuleFiles(segs, roots, &via);
             if (files.empty()) {
                 std::string name;
                 for (size_t k = 0; k < segs.size(); ++k) name += (k ? "::" : "") + segs[k];
                 fprintf(stderr, "kama: error: cannot resolve module '%s' (from %s)\n",
                         name.c_str(), reserved ? stdlibDir.c_str() : here.c_str());
                 return false;
+            }
+            // A sub-project must be EXTRACTABLE — liftable out of its monorepo and still buildable — and
+            // that requires it to declare every dependency it imports. The undeclared-import check above
+            // is satisfied by whoever is COMPILING, so a sibling can free-ride on what only the top-level
+            // app declared: it builds where it sits, fails standalone, and nothing says so.
+            //
+            // So: an import satisfied by the dependency view must be declared by the importing file's OWN
+            // package. Anything reached through the file's own directory, $KAMA_PATH or the stdlib is
+            // intra-package and needs no declaration. Warn rather than error for now — every multi-package
+            // fixture predating this rule free-rides — and promote to an error at a major version.
+            if (!reserved && !via.empty() && (via == depsView || via == devDepsView)) {
+                std::string owner = owningPackageDir(here);
+                if (!owner.empty() && !declaredImportNames(owner).count(segs[0])) {
+                    std::string ownerManifest = owner + "/kama.json";
+                    if (warnedFreeRide.insert(ownerManifest + "\n" + segs[0]).second) {
+                        // Suggest the concrete line. The dependency's own package root is the nearest
+                        // manifest above its sources, which for a workspace sibling is a path away.
+                        std::string depPkg = owningPackageDir(dirName(absolutePath(files[0])));
+                        fprintf(stderr, "kama: warning: %s imports module '%s', but its own package (%s) "
+                                "does not declare it — only %s does, so this package will not build on "
+                                "its own.\n",
+                                paths[i].c_str(), segs[0].c_str(), ownerManifest.c_str(),
+                                (buildManifestDir.empty() ? "the build" : (buildManifestDir + "/kama.json")).c_str());
+                        if (!depPkg.empty())
+                            fprintf(stderr, "kama: note: add to %s: \"dependencies\": { \"%s\": "
+                                    "{ \"path\": \"%s\" } }\n",
+                                    ownerManifest.c_str(), segs[0].c_str(),
+                                    relativePath(owner, depPkg).c_str());
+                    }
+                }
             }
             for (auto& f : files) {
                 std::string abs = absolutePath(f);
@@ -1176,6 +1243,24 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
     r.registriesOut = reg; // optional: also capture `registries` config (M3.1b)
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
+}
+
+// The module names a package's manifest declares, as they are IMPORTED (`@acme/foo` imports as `foo`).
+// Cached: the per-package import check consults it for every import of every build. Declared up beside
+// loadProgramUnits, defined here where DepSpec exists.
+const std::set<std::string>& declaredImportNames(const std::string& packageDir)
+{
+    static std::map<std::string, std::set<std::string>> cache;
+    auto it = cache.find(packageDir);
+    if (it != cache.end()) return it->second;
+    std::set<std::string> names;
+    std::map<std::string, DepSpec> deps, devDeps;
+    std::string err;
+    if (loadManifestDeps(packageDir + "/kama.json", deps, err, &devDeps)) {
+        for (const auto& kv : deps)    names.insert(importNameOf(kv.first));
+        for (const auto& kv : devDeps) names.insert(importNameOf(kv.first));
+    }
+    return cache.emplace(packageDir, std::move(names)).first->second;
 }
 
 // Load a `kama.local.json`'s INSTALL-path override fields (M5.3): `overrides` (dep path-overrides) and a
