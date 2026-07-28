@@ -539,7 +539,10 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   Real **source spans** landed with it (Bison `%locations`, deferred until now), as did the
   front-end-as-library **query API** the scripting/self-hosting tracks reuse: `collectProgram` turned out to
   be a self-contained analysis pass already, so this was a facade over the existing tables rather than a
-  rewrite. **Remaining:** M4 completion +
+  rewrite. **NEXT / ACTIVE (2026-07-28): M4** — cold-start brief
+  [design/lsp-m4-kickoff.md](design/lsp-m4-kickoff.md), line numbers re-verified against `a99436d`; it
+  front-loads two hard prerequisites (the emitter's scope stack is gone by index time; named-argument
+  label spans are whole-production). **Remaining:** M4 completion +
   signature help (the **prerequisite for the `global::` floor-completion idea**,
   [design/logging.md](design/logging.md) Part E), M5 error recovery + incremental reparse (where a
   hand-written recursive-descent parser replacing Bison would be the escalation), M6 clients for all major

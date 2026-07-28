@@ -1,7 +1,26 @@
 # LSP M4 — completion + signature help (cold-start brief)
 
-**Status: NOT STARTED.** Written 2026-07-28, immediately after M3.5 shipped (`469da24`), with line
-numbers verified against that commit. Read [lsp.md](lsp.md) first for campaign context, then this.
+**Status: NOT STARTED — this is the ACTIVE next campaign** (user, 2026-07-28), now that
+workspace-internal dependencies have shipped. Written immediately after M3.5 (`469da24`); **line numbers
+re-verified against `a99436d`**, which is where the `kama.driver.cpp` references below now point. Read
+[lsp.md](lsp.md) first for campaign context, then this.
+
+### What moved under this brief since it was written
+
+The workspace-deps campaign ([workspace-deps-kickoff.md](workspace-deps-kickoff.md), shipped 2026-07-28)
+rewrote large parts of `kama.driver.cpp`. Nothing it did blocks M4, but three things touch the LSP:
+
+- **`kama.driver.cpp` line numbers drifted ~300 lines.** The staging step 2 references below are
+  corrected; `kama.lsp.cpp`, `kama.cemit.*`, `kama.query.cpp` and `kama.y` were not touched by it and
+  their references still stand.
+- **`resolveModuleFiles` gained an optional `matchedRoot` out-param**, and now expands a dependency's
+  declared `sources` — so `lspAnalyze`'s import loading resolves a `src/`-layout package, which it could
+  not before. Strictly more files reachable; nothing to undo.
+- **`loadProgramUnits` can now print a warning to stderr** (a package importing something its own
+  manifest does not declare). It is warn-once per process, so it will not repeat per keystroke — but it
+  *is* a real diagnostic going to the editor's log channel rather than to the Problems pane. Promoting it
+  to a `textDocument/publishDiagnostics` entry against the offending `kama.json` is a natural small win
+  once M4's plumbing exists; it is not a prerequisite.
 
 M3 is complete: the index answers *"what is at this cursor, and where else is it used"* across a whole
 project. M4 asks the harder question — *"what could go here"* — which the index was never built to
@@ -98,8 +117,8 @@ already warm (`wsIndex && !wsDirty`), or accept a stale one for import-path sugg
 1. **Close the STAMP_LOC campaign-exit checklist** ([lsp-m3-kickoff.md](lsp-m3-kickoff.md):347-380).
    Required for signature help; required for campaign exit regardless.
 2. **Scope extents** (prerequisite 1) + `kama query --complete L:C` as the debuggable CLI seam, following
-   the `--refs` pattern exactly (flags at kama.driver.cpp:3268-3272, parsed 3295-3299, dispatched
-   3577-3605 — and **update the fallthrough usage string at :3604**).
+   the `--refs` pattern exactly (flags declared at kama.driver.cpp:3713-3717, parsed 3740-3744,
+   dispatched 4025-4048 — and **update the fallthrough usage string at :4049**).
 3. **Member completion** after `.` and `::` — the highest value per line of code, and testable purely
    through the CLI seam.
 4. **Names in scope** (locals + params + file-visible decls + floor names).
@@ -111,7 +130,7 @@ already warm (`wsIndex && !wsDirty`), or accept a stale one for import-path sugg
 
 Capabilities at kama.lsp.cpp:535-542 — `completionProvider` with `triggerCharacters: [".", ":"]`,
 `signatureHelpProvider` with `["(", ","]`. Dispatch at :876-889, handlers shaped like `handleHover`
-(:614-660); `kamaPos()` (:601) converts LSP 0-based → kama 1-based line. Facade decls at
+(:647-660); `kamaPos()` (:601) converts LSP 0-based → kama 1-based line. Facade decls at
 kama.cemit.h:461-473, impls in kama.query.cpp, one thin driver seam each at global scope in
 kama.driver.cpp (after the anon namespace closes — the M1 linkage rule still applies).
 

@@ -234,6 +234,26 @@ Four things the brief did not anticipate:
   would otherwise trip). `LockEntry.path` is written and parsed but never consumed for resolution — path
   deps always relink from the manifest spec — so this is diagnostic only.
 
+### Post-ship audit (`a99436d`)
+
+Three footguns found by auditing the shipped result, not by a failing test — worth recording because all
+three are *shapes*, not one-offs:
+
+- **A diagnostic must only blame something the user can fix.** The free-ride warning could name a package
+  inside the content-addressed store and ask for a path dep — a file that is not the user's to edit,
+  whose edit breaks the tree hash naming its store entry, asking for a spec the resolver refuses. Reached
+  whenever a fetched dependency free-rides on the root's declaration. Now suppressed for store-resident
+  owners (case 35).
+- **`kama lsp` calls `loadProgramUnits` on every analyze.** Any per-call warn-once set is per-keystroke in
+  the editor. Process-wide statics are the right scope for anything that talks to a human.
+- **Never cache a derived file list in a long-lived process.** `packageSourceFiles` cached the expanded
+  list, so a new `.kama` file in a sibling package was invisible until the server restarted. Cache the
+  *declaration* (the manifest read, which is what the hot path needed); re-expand each time, which costs
+  the same readdir the flat listing it replaced already cost.
+
+Plus a guard: `KAMA_STORE=""` collapses the store root to `/`, which prefix-matches every path and would
+have silently disabled the first check everywhere.
+
 Ordering note: the C++ helpers sit at file scope in `kama.driver.cpp`, but `declaredImportNames` must be
 *defined* after `DepSpec` exists while being *used* by `loadProgramUnits` far above it — hence the
 forward declaration. `collectKamaFiles` moved up beside `listKamaFiles` for the same reason.
