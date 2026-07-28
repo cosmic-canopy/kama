@@ -178,18 +178,30 @@ fi
 # ---------------------------------------------------------------------------------------------------
 # M3.5 — DECLARED project scope (`sources` / `packages` in kama.json).
 #
-# tests/query/mono/ is a workspace: the root declares `"packages": ["packages/*"]`, each member declares
-# `"sources": ["src"]`, and `outside/stray.kama` declares a same-named `Gear` that nothing ever claims.
-# Because the scope is DECLARED rather than inferred, no directory walk of the repo happens, the file cap
-# does not apply, and the stray type cannot collide with the workspace's.
-FIXTURE="$ROOT/tests/query/mono/packages/core/src/gearcore.kama"
+# tests/query/mono/ is a NESTED monorepo. The root declares `"projects": ["libs/*", "group"]`; `group`
+# declares projects of its OWN; each leaf declares `"sources": ["src"]`; and `outside/stray.kama` declares
+# a same-named `Gear` that nothing ever claims. Because the scope is DECLARED rather than inferred, no
+# directory walk of the repo happens, the file cap does not apply, the nested level is still reached, and
+# the stray type cannot collide with the workspace's.
+#
+#   mono/kama.json                  projects: ["libs/*", "group"]
+#     libs/core/kama.json           sources: ["src"]   <- declares Gear
+#     libs/app/kama.json            sources: ["src"]   <- uses Gear
+#     group/kama.json               projects: ["libs/*"]   <- a monorepo INSIDE a monorepo
+#       group/libs/plugin/kama.json sources: ["src"]   <- uses Gear, one level deeper
+#     outside/stray.kama            claimed by nobody  <- must never appear
+#
+# The member directory is `libs/`, NOT `packages/`: kama.lock uses `packages` for resolved dependencies,
+# so a folder of that name next to a `projects` key would teach exactly the confusion the key avoids.
+FIXTURE="$ROOT/tests/query/mono/libs/core/src/gearcore.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo "check-query: M3.5 declared project scope (sources + packages)"
 # The consuming package is reached even though the declaring one never imports it — and reached WITHOUT an
 # editor workspace root, because an ancestor manifest explicitly owns this file.
 expect --project --refs 9:11 -- "gearcore.kama:9:11"        # the declaration
-expect --project --refs 9:11 -- "gearapp.kama:7:4"          # a SIBLING PACKAGE's use
+expect --project --refs 9:11 -- "gearapp.kama:7:4"          # a SIBLING project's use
+expect --project --refs 9:11 -- "gearplugin.kama:6:4"       # a NESTED sub-project's use (projects recurses)
 reject --project --refs 9:11 -- "stray.kama"                # ... and never the undeclared decoy
 # Without --project the sibling package is invisible again (the closure is one file).
 reject --refs 9:11 -- "gearapp.kama"

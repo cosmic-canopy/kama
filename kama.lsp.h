@@ -75,7 +75,7 @@ struct LspProject {
 // Finding a manifest that way is not a guess — it is discovery of a declared fact, the same walk
 // cargo/npm/tsc do. Two things ARE guesses, and each has a manifest key that settles it:
 //
-//   which manifest owns this file  ->  `packages` (a manifest naming its sub-projects, recursively)
+//   which manifest owns this file  ->  `projects` (a manifest naming its sub-projects, recursively)
 //   which files are in it          ->  `sources`  (a package naming its own files)
 //
 // DECLARED first: if an ancestor manifest's expanded tree actually CONTAINS this file, that manifest is

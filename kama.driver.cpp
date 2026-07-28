@@ -671,7 +671,7 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
     std::string* mainOut = nullptr;                       // set to capture the `main` entry field (else skipped)
     std::vector<std::string>* sourcesOut  = nullptr;
-    std::vector<std::string>* packagesOut = nullptr;
+    std::vector<std::string>* projectsOut = nullptr;
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
     std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
     std::string* versionOut = nullptr;                    // set to capture the `version` (else skipped) — `kama publish`
@@ -933,7 +933,7 @@ struct ManifestReader {
             else if (key == "overrides" && overridesOut) { if (!depsObject(overridesOut)) return false; }  // kama.local.json dep path-overrides (M5.3)
             else if (key == "log" && logOut) { if (!logObject()) return false; }   // baked log default (M5)
             else if (key == "sources" && sourcesOut) { if (!stringArray(*sourcesOut)) return false; }  // LSP project scope
-            else if (key == "packages" && packagesOut) { if (!stringArray(*packagesOut)) return false; } // workspace members
+            else if (key == "projects" && projectsOut) { if (!stringArray(*projectsOut)) return false; } // sub-projects
             else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
             else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
             else if (key == "name" && nameOut) { if (!str(*nameOut)) return false; }
@@ -1043,19 +1043,20 @@ static bool loadManifestSources(const std::string& path, std::vector<std::string
     return true;
 }
 
-// Load a `kama.json` manifest's `packages` — the member packages of a WORKSPACE root, relative to the
-// manifest, each a directory holding its own kama.json. A trailing `/*` expands to every immediate
-// subdirectory that has one (`"packages/*"`), so a monorepo need not edit the root manifest per package.
-// Declaring this is what turns "is this a monorepo root?" from something the LSP infers from position
-// into something the repository states. Returns false + `err` on malformed JSON. (LSP M3.5.)
-static bool loadManifestPackages(const std::string& path, std::vector<std::string>& out, std::string& err)
+// Load a `kama.json` manifest's `projects` — the sub-projects this manifest composes, relative to it,
+// each a directory holding its own kama.json. A trailing `/*` expands to every immediate subdirectory that
+// has one (`"packages/*"`), so a monorepo need not edit its root manifest per project. Declaring this is
+// what turns "is this a monorepo root?" from something the LSP infers from position into something the
+// repository states. NOTE the name: `packages` was rejected because kama.lock already uses that key for
+// resolved DEPENDENCIES — packages are what you consume, projects are what you compose. (LSP M3.5.)
+static bool loadManifestProjects(const std::string& path, std::vector<std::string>& out, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
-    r.packagesOut = &out;
+    r.projectsOut = &out;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
     return true;
 }
@@ -3046,12 +3047,12 @@ static size_t lspFileBudget()
 // Collect one package's sources, recursing into any sub-projects its manifest declares.
 //
 //   `sources`  present -> exactly those files/directories are this package's.
-//   `packages` present -> each entry is a sub-project directory holding its own kama.json, walked the same
+//   `projects` present -> each entry is a sub-project directory holding its own kama.json, walked the same
 //                         way. A trailing `/*` ("packages/*") expands to every immediate subdirectory that
-//                         has a manifest, so a monorepo need not edit its root manifest per package.
-//   neither present    -> a leaf: the package's whole directory is its sources.
+//                         has a manifest, so a monorepo need not edit its root manifest per project.
+//   neither present    -> a leaf: the project's whole directory is its sources.
 //
-// A manifest with `packages` but no `sources` is a pure aggregator and contributes no files of its own —
+// A manifest with `projects` but no `sources` is a pure aggregator and contributes no files of its own —
 // walking its directory would re-collect every member and defeat the precision it just declared.
 // `visited` (canonical paths) breaks cycles: a manifest may legally name a directory that names it back,
 // and a symlink makes a loop trivial.
@@ -3060,12 +3061,12 @@ static void collectPackageTree(const std::string& dir, std::vector<std::string>&
 {
     if (!visited.insert(absolutePath(dir)).second) return;
 
-    std::vector<std::string> srcs, members;
+    std::vector<std::string> srcs, subs2;
     std::string err;
     const std::string manifest = dir + "/kama.json";
     if (fileExists(manifest)) {
         loadManifestSources(manifest, srcs, err);
-        loadManifestPackages(manifest, members, err);
+        loadManifestProjects(manifest, subs2, err);
     }
 
     size_t seen = 0;
@@ -3079,11 +3080,11 @@ static void collectPackageTree(const std::string& dir, std::vector<std::string>&
             // A listed path that does not exist is skipped: a manifest may name a directory not created
             // yet, and refusing to index everything else over that would be hostile.
         }
-    } else if (members.empty()) {
+    } else if (subs2.empty()) {
         collectKamaFiles(absolutePath(dir), "", out, seen, (size_t)-1);
     }
 
-    for (const auto& rel : members) {
+    for (const auto& rel : subs2) {
         if (rel.size() > 2 && rel.compare(rel.size() - 2, 2, "/*") == 0) {
             std::string parent = dir + "/" + rel.substr(0, rel.size() - 2);
             std::vector<std::string> subs;
@@ -3130,18 +3131,18 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
         cur = parent;
     }
 
-    // DECLARED beats inferred. If an ancestor manifest explicitly OWNS this file — via `packages` and/or
+    // DECLARED beats inferred. If an ancestor manifest explicitly OWNS this file — via `projects` and/or
     // `sources`, expanded recursively — then widening to it is not a guess and needs no editor boundary to
     // license it. Prefer the outermost such manifest (the top of a nest of monorepos), and require that its
     // expansion actually CONTAINS the open file, so an ancestor that happens to declare unrelated members
     // is not mistaken for this file's owner.
     std::string self = absolutePath(openFilePath);
     for (auto it = manifests.rbegin(); it != manifests.rend() && p.root.empty(); ++it) {
-        std::vector<std::string> srcs, members;
+        std::vector<std::string> srcs, subs;
         std::string e;
         loadManifestSources(*it + "/kama.json", srcs, e);
-        loadManifestPackages(*it + "/kama.json", members, e);
-        if (srcs.empty() && members.empty()) continue;          // declares nothing: not an owner
+        loadManifestProjects(*it + "/kama.json", subs, e);
+        if (srcs.empty() && subs.empty()) continue;             // declares nothing: not an owner
         std::vector<std::string> files;
         std::set<std::string> visited;
         collectPackageTree(*it, files, visited);
@@ -3176,7 +3177,7 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
 
     // Nothing above declared ownership of this file, so the file set is INFERRED: every .kama under the
     // root. That inference is what the cap bounds — see kLspMaxProjectFiles. A manifest can end it by
-    // declaring `sources` (which files are mine) and/or `packages` (which sub-projects I own).
+    // declaring `sources` (which files are mine) and/or `projects` (which sub-projects I compose).
     size_t seen = 0, budget = lspFileBudget();
     p.cap = budget;
     collectKamaFiles(p.root, "", p.files, seen, budget);
