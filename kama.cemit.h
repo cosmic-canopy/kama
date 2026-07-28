@@ -473,6 +473,8 @@ public:
     // site=nullptr — and `cType` is never called, since its unsupported() side effect would inject phantom
     // diagnostics into the file the editor is showing.
     std::vector<CompletionItem> completionsAt(const std::string& uri, const CompletionContext& ctx);
+    // signature help (M4.4). Same lexical context, same non-const reasoning as completionsAt.
+    SignatureHelp signatureAt(const std::string& uri, const CompletionContext& ctx);
 
 private:
     const CompilationUnit* unitForUri(const std::string& uri) const;   // *unit->name == uri, else nullptr
@@ -556,6 +558,7 @@ private:
     // Every binding in `s`, in source order. MUST cover every block-bearing statement — Block, Unsafe,
     // Scope, If/Else, While, DoWhile, For, ForEach, ParallelFor and match arms. (scanStmtForCollections
     // omits Unsafe and Scope and has silently under-scanned ever since; do not copy that bug.)
+    std::vector<QueryBinding> bindingsAt(const QueryCtx& qc, int line) const;
     void collectBindings(SharedStatement s, std::vector<QueryBinding>& out) const;
     void collectBindingsExpr(SharedExpression e, std::vector<QueryBinding>& out) const;  // finds match arms only
     // A type NODE -> its _classes / _genericTypes / _interfaces key, "" for a primitive or unknown. The
@@ -598,6 +601,11 @@ private:
     std::string bareNameOf(const std::string& key) const;
     void addNamesInScope(const QueryCtx& qc, const std::vector<QueryBinding>& binds,
                          std::vector<CompletionItem>& out);
+    // The callable a CANONICALIZED callee path names (M4.4). One resolution serves both signature help
+    // and argument-LABEL completion — kama has no positional arguments, so the two ask the same question.
+    struct CalleeSig { bool found = false; std::string display, ret; std::vector<SignatureParam> params; };
+    CalleeSig resolveCallee(const QueryCtx& qc, const std::vector<QueryBinding>& binds,
+                            const std::string& callee);
 
 
     // Discards any stray write during analysis mode (collectProgram writes no C, but `unsupported()` still

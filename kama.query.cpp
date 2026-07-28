@@ -939,6 +939,20 @@ CEmitter::QueryCtx CEmitter::enclosingCallable(const CompilationUnit* unit, int 
     return qc;
 }
 
+// The callable's parameters plus every binding it declares at or above `line`. A binding declared BELOW
+// the cursor is not in scope at it; sibling scopes are deliberately NOT separated (see QueryBinding).
+std::vector<CEmitter::QueryBinding> CEmitter::bindingsAt(const QueryCtx& qc, int line) const
+{
+    std::vector<QueryBinding> binds;
+    if (qc.params) for (auto& p : *qc.params)
+        if (p && p->identifier && p->identifier->value)
+            binds.push_back(QueryBinding{ *p->identifier->value, p->type, p->identifier->line, true, "" });
+    collectBindings(qc.body, binds);
+    binds.erase(std::remove_if(binds.begin(), binds.end(),
+                               [&](const QueryBinding& b) { return b.line > line; }), binds.end());
+    return binds;
+}
+
 void CEmitter::collectBindings(SharedStatement s, std::vector<QueryBinding>& out) const
 {
     if (!s) return;
@@ -1617,6 +1631,143 @@ void CEmitter::addNamesInScope(const QueryCtx& qc, const std::vector<QueryBindin
     for (size_t i = 0; i < kamaKeywordCount(); ++i) emit(kamaKeywordAt(i), CompletionKind::Keyword, "", "");
 }
 
+// ---- M4.4: signature help + argument labels -------------------------------------------------------------
+//
+// kama has NO positional arguments — kama.y's `argument` productions are all `IDENTIFIER COLON …` — so
+// "which parameter am I on" and "what labels may I type here" are one question with one answer, and the
+// callee resolution below serves both.
+
+CEmitter::CalleeSig CEmitter::resolveCallee(const QueryCtx& qc, const std::vector<QueryBinding>& binds,
+                                            const std::string& callee)
+{
+    CalleeSig sig;
+    if (callee.empty()) return sig;
+    std::vector<PathSeg> segs = splitPath(callee);
+    if (segs.empty() || segs.back().name.empty()) return sig;
+    const std::string name = segs.back().name;
+
+    auto fromParamSigs = [&](const std::vector<ParamSig>& ps, const SharedParameterList& nodes,
+                             const std::string& ownerKey) {
+        for (size_t i = 0; i < ps.size(); ++i) {
+            std::string ty = (nodes && i < nodes->size() && (*nodes)[i])
+                                 ? spellTypeIn(ownerKey, (*nodes)[i]->type) : ps[i].className;
+            sig.params.push_back(SignatureParam{ ps[i].name, ty });
+        }
+        sig.found = true;
+    };
+    auto fromNodes = [&](const SharedParameterList& nodes, const std::string& ownerKey) {
+        if (nodes) for (auto& p : *nodes)
+            if (p && p->identifier && p->identifier->value)
+                sig.params.push_back(SignatureParam{ *p->identifier->value, spellTypeIn(ownerKey, p->type) });
+        sig.found = true;
+    };
+
+    sig.display = callee;
+    if (segs.size() == 1) {
+        auto f = _funcs.find(resolveFunc(name, nullptr));
+        if (f != _funcs.end()) {
+            sig.ret = f->second.node ? spellTypeIn("", f->second.node->returnType) : "";
+            fromParamSigs(f->second.params, f->second.node ? f->second.node->parameters : SharedParameterList(), "");
+            return sig;
+        }
+        // A local bound to a function-POINTER typedef is callable by the same spelling.
+        for (auto it = binds.rbegin(); it != binds.rend(); ++it) {
+            if (it->name != name || !it->type || !it->type->value) continue;
+            auto si = _sigs.find(resolveUserName(*it->type->value, it->type->qualifier));
+            if (si != _sigs.end()) { fromParamSigs(si->second.params, SharedParameterList(), ""); return sig; }
+            break;
+        }
+        return sig;
+    }
+
+    // A qualified head (`a::B.make`) needs the qualifier-aware resolver; a value receiver needs the path
+    // walker. Try the one that can see qualifiers first, since classOfPath's head drops them.
+    std::string recvPath = callee.substr(0, callee.size() - name.size());
+    while (!recvPath.empty() && (recvPath.back() == '.' || recvPath.back() == ':')) recvPath.pop_back();
+    bool isType = false;
+    std::string recv;
+    if (recvPath.find("::") != std::string::npos) { recv = resolvePathAsType(recvPath); isType = !recv.empty(); }
+    if (recv.empty()) recv = classOfPath(qc, binds, recvPath, isType);
+    if (recv.empty()) return sig;
+
+    // Walk the receiver, auto-dereferencing a smart pointer / user `Deref<T>` until the member is found.
+    // Bounded by a visited set: `derefTargetForQuery` can hand back the same key for a self-referential
+    // wrapper, and re-entering resolveCallee with an unchanged path recurses forever.
+    std::set<std::string> seen;
+    for (std::string cls = recv; !cls.empty() && seen.insert(cls).second; cls = derefTargetForQuery(cls)) {
+        // A variant CASE is callable with its payload as labelled arguments (`Optional::Some(value: …)`).
+        if (isType) for (const std::map<std::string, ClassInfo>* tbl : { &_classes, &_genericTypes }) {
+            auto c = tbl->find(cls);
+            if (c == tbl->end() || !c->second.isVariant) continue;
+            for (auto& v : c->second.variants) if (v.name == name) {
+                for (auto& f : v.payload) sig.params.push_back(SignatureParam{ f.name, spellTypeIn(cls, f.type) });
+                sig.found = true;
+                return sig;
+            }
+            break;
+        }
+        auto ci = _classes.find(cls);
+        if (ci != _classes.end()) {
+            ClassInfo* owner = nullptr;
+            if (MethodInfo* mi = findMethod(&ci->second, name, &owner)) {
+                sig.ret = spellTypeIn(owner->name, mi->returnType);
+                fromParamSigs(mi->params, mi->node ? mi->node->params : SharedParameterList(), owner->name);
+                return sig;
+            }
+            auto ct = ci->second.ctors.find(name);
+            if (ct != ci->second.ctors.end()) {
+                sig.ret = cls;
+                fromParamSigs(ct->second.params,
+                              ct->second.node ? ct->second.node->declarator->params : SharedParameterList(), cls);
+                return sig;
+            }
+            continue;
+        }
+        // A CONTRACT receiver keeps its parameters as AST nodes, not ParamSigs.
+        auto ii = _interfaces.find(cls);
+        if (ii != _interfaces.end()) for (auto& m : ii->second.methods) if (m.name == name) {
+            sig.ret = spellTypeIn(cls, m.returnType);
+            fromNodes(m.params, cls);
+            return sig;
+        }
+    }
+    return sig;
+}
+
+SignatureHelp CEmitter::signatureAt(const std::string& uri, const CompletionContext& ctx)
+{
+    SignatureHelp help;
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit || ctx.callee.empty()) return help;
+    QueryScope guard(this);
+    auto uc = _unitCtx.find(unit);
+    if (uc != _unitCtx.end()) _nsCtx = uc->second;
+    _typeSubst.clear();
+
+    QueryCtx qc = enclosingCallable(unit, ctx.line, ctx.column);
+    std::vector<QueryBinding> binds = bindingsAt(qc, ctx.line);
+    CalleeSig sig = resolveCallee(qc, binds, ctx.callee);
+    if (!sig.found) return help;
+
+    help.params = sig.params;
+    // The ACTIVE parameter is the one the cursor's label names, not the comma count: kama arguments are
+    // named, so they may be written in any order and `f(b: 1, |` is on `a`, not on "the second parameter".
+    help.activeParam = -1;
+    for (size_t i = 0; i < sig.params.size(); ++i) {
+        bool used = false;
+        for (auto& f : ctx.filled) if (f == sig.params[i].label) { used = true; break; }
+        if (!used) { help.activeParam = (int)i; break; }
+    }
+    if (ctx.activeParam >= 0 && (size_t)ctx.activeParam < sig.params.size() && ctx.filled.empty())
+        help.activeParam = ctx.activeParam;
+    help.label = sig.display + "(";
+    for (size_t i = 0; i < sig.params.size(); ++i)
+        help.label += (i ? ", " : "") + sig.params[i].label + ": " + sig.params[i].detail;
+    help.label += ")";
+    if (!sig.ret.empty()) help.label += " -> " + sig.ret;
+    return help;
+}
+
 std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, const CompletionContext& ctx)
 {
     std::vector<CompletionItem> out;
@@ -1638,20 +1789,21 @@ std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, cons
         });
         return out;
     }
-    if (ctx.trigger != CompletionTrigger::Dot && ctx.trigger != CompletionTrigger::Bare) return out;
+    if (ctx.trigger != CompletionTrigger::Dot && ctx.trigger != CompletionTrigger::Bare
+        && ctx.trigger != CompletionTrigger::ArgLabel) return out;
 
     QueryCtx qc = enclosingCallable(unit, ctx.line, ctx.column);
-    std::vector<QueryBinding> binds;
-    if (qc.params) for (auto& p : *qc.params)
-        if (p && p->identifier && p->identifier->value)
-            binds.push_back(QueryBinding{ *p->identifier->value, p->type, p->identifier->line, true, "" });
-    collectBindings(qc.body, binds);
-    // A binding declared BELOW the cursor is not in scope at it. (Sibling scopes are deliberately not
-    // separated — see QueryBinding.)
-    binds.erase(std::remove_if(binds.begin(), binds.end(),
-                               [&](const QueryBinding& b) { return b.line > ctx.line; }), binds.end());
+    std::vector<QueryBinding> binds = bindingsAt(qc, ctx.line);
 
-    if (ctx.trigger == CompletionTrigger::Bare) {
+    if (ctx.trigger == CompletionTrigger::ArgLabel) {
+        // Every kama argument is named, so an empty slot admits exactly the callee's unsupplied labels.
+        CalleeSig sig = resolveCallee(qc, binds, ctx.callee);
+        for (auto& p : sig.params) {
+            bool used = false;
+            for (auto& f : ctx.filled) if (f == p.label) { used = true; break; }
+            if (!used) out.push_back(CompletionItem{ p.label + ":", CompletionKind::Label, p.detail, sig.display });
+        }
+    } else if (ctx.trigger == CompletionTrigger::Bare) {
         addNamesInScope(qc, binds, out);
     } else {
         bool isType = false;

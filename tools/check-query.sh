@@ -376,5 +376,26 @@ reject --complete 164:4 -- "collections__"
 expect --complete 23:38 -- "field	secret	int32"               # own private field
 expect --complete 23:38 -- "method	size	fn int32 size()"
 
+# ---------------------------------------------------------------------------------------------------
+# M4.4 — signature help + argument labels. kama has NO positional arguments (kama.y's `argument`
+# productions are all `IDENTIFIER COLON …`), so "which parameter am I on" and "what labels may I type"
+# are one question with one answer.
+echo "check-query: M4.4 signature help"
+expect --sighelp 124:27 -- "sig=blend(lo: int32, hi: int32) -> int32 active=0"
+expect --sighelp 124:34 -- "active=1"                                  # ... the next slot
+expect --sighelp 118:14 -- "sig=cells.add(item: Cell)"                 # a generic INSTANCE's method: T -> Cell
+expect --sighelp 104:42 -- "sig=Optional::Some(value: T)"              # a variant case, payload as labels
+expect --sighelp 151:33 -- "sig=Stat::zero() -> int32 active=-1"       # a static with no parameters
+expect --sighelp 154:24 -- "sig=Stat.of(n: int32) -> Stat"             # a named ctor, dot-on-type
+expect --sighelp 137:52 -- "sig=measure(item: T) -> int32"             # a generic free fn
+expect --sighelp 123:36 -- "sig=derived.total() -> int32"              # reached THROUGH Owned<Derived>'s Deref
+expect --sighelp 164:4  -- "no signature"                              # not inside a call at all
+
+echo "check-query: M4.4 argument-label completion"
+expect --complete 124:27 -- "label	lo:	int32"                        # an empty slot admits every label
+expect --complete 124:27 -- "label	hi:	int32"
+expect --complete 124:34 -- "label	hi:	int32"
+reject --complete 124:34 -- "label	lo:"                              # ... but never one already supplied
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

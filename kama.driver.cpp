@@ -3730,6 +3730,7 @@ int main(int argc, char** argv)
     std::string queryType;                 // `kama query --type L:C`: hover (kind+name) at a cursor
     std::string queryRefs;                 // `kama query --refs L:C`: find-references at a cursor
     std::string queryComplete;             // `kama query --complete L:C`: completion candidates at a cursor
+    std::string querySigHelp;              // `kama query --sighelp L:C`: signature help at a cursor
     bool        queryProject = false;      // `kama query --project`: index the whole project, not one closure
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
@@ -3758,6 +3759,7 @@ int main(int argc, char** argv)
         else if (a == "--type" && i + 1 < argc)     queryType = argv[++i];           // `kama query` hover L:C
         else if (a == "--refs" && i + 1 < argc)     queryRefs = argv[++i];           // `kama query` refs L:C
         else if (a == "--complete" && i + 1 < argc) queryComplete = argv[++i];       // `kama query` completion L:C
+        else if (a == "--sighelp" && i + 1 < argc)  querySigHelp = argv[++i];        // `kama query` signature help L:C
         else if (a == "--project")                  queryProject = true;             // `kama query` workspace scope
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
@@ -3991,6 +3993,7 @@ int main(int argc, char** argv)
         //   kama query <file> --complete L:C completion candidates at line:col — a `trigger=… recv=…` header
         //                                    (the LEXICAL context, from the file's raw text) then one
         //                                    `kind<TAB>label<TAB>detail` line per candidate
+        //   kama query <file> --sighelp L:C  signature help at line:col — `sig=<label> active=<N>`
         //   kama query <file> --project      widen the unit set from <file>'s import closure to the whole
         //                                    project (M3.5 workspace indexing), so --refs sees files that
         //                                    use <file> without being imported by it
@@ -4085,7 +4088,19 @@ int main(int argc, char** argv)
                 printf("%s\t%s\t%s\n", completionKindName(it.kind), it.label.c_str(), it.detail.c_str());
             return 0;
         }
-        fprintf(stderr, "kama query: pass --symbols, --def L:C, --type L:C, --refs L:C, or --complete L:C\n");
+        if (!querySigHelp.empty()) {
+            int l, c;
+            if (!parseLC(querySigHelp, l, c)) { fprintf(stderr, "kama query: --sighelp wants L:C\n"); return 2; }
+            std::ifstream in(input, std::ios::binary);
+            if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
+            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            SignatureHelp h = idx.signatureAt(queryUri, completionContextAt(text, l, c));
+            if (h.label.empty()) { printf("no signature\n"); return 0; }
+            printf("sig=%s active=%d\n", h.label.c_str(), h.activeParam);
+            return 0;
+        }
+        fprintf(stderr, "kama query: pass --symbols, --def L:C, --type L:C, --refs L:C, --complete L:C, "
+                        "or --sighelp L:C\n");
         return 2;
     }
 
