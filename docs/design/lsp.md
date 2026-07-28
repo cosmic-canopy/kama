@@ -176,6 +176,20 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
     `editor/vscode/` client), **Neovim** (`nvim-lspconfig`), **Vim** (coc.nvim), **Emacs** (eglot /
     lsp-mode), **Sublime Text** (LSP package), **Helix**, **Zed**, **Kate**. Feature parity is automatic —
     all read the same server, so each gains hover/def/outline/refs/rename/completion as the server does.
+  - **A full syntax-highlighting audit belongs here (user, 2026-07-27).** One pass over *every* highlight
+    pattern so each editor renders kama faithfully — not just the keyword list `tools/check-syntax-drift.sh`
+    already guards. Motivating evidence: an ad-hoc look at the numeric rules alone found the VS Code grammar
+    disagreeing with the compiler **four** ways — it highlighted `42u32` (invalid; the suffix is `u?i…`),
+    missed `42ui32` entirely, accepted `1_000` and `42f32` (both invalid), and had no rule at all for based
+    literals `0b1010_2`. So the editor was colouring broken code as valid and valid code as an identifier.
+    Fixed in `139fb10`, with the drift guard extended to numeric suffixes. **Assume the same class of error
+    in the rules not yet audited** — strings + escapes + `${}` interpolation holes, char literals
+    (`'\u{E9}'`, multibyte), attributes (`@generate`, `@compileFor`), `asm(...)` blocks, contextual kind
+    words, turbofish, and comment nesting. Two things worth doing while there: (a) push each rule through a
+    compiler-as-oracle table like the numeric one (write the literal, ask `kama check`, compare to the
+    grammar regex) rather than eyeballing; (b) consider **semantic tokens** (`textDocument/semanticTokens`)
+    once the index is rich enough — the LSP can then colour a local differently from a field or a type,
+    which no regex grammar can do, and every client gets it at once.
   - **⚠️ Xcode is out of scope (no supported path).** Xcode exposes **no** hook to register a third-party
     LSP server — its editor intelligence (SourceKit-LSP) is wired for Swift/C/C++/ObjC only, and Source
     Editor Extensions can do only menu-triggered text transforms (no live diagnostics/hover/def/completion).
