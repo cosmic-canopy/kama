@@ -123,6 +123,15 @@ std::vector<Location>   lspReferences(const SharedLspIndex& idx, const std::stri
 // zero range (SrcRange::line == 0) — the server turns that into a null result so the editor greys out F2.
 SrcRange                lspPrepareRename(const SharedLspIndex& idx, const std::string& path, int line, int col);
 
+// completion + signature help (M4). `ctx` is the LEXICAL context the server recovered from the LIVE buffer
+// (completionContextAt), deliberately NOT a bare cursor position: at completion time the buffer does not
+// parse, so the receiver the user just typed exists in no AST. Both use the PER-DOCUMENT index only —
+// completion fires on every keystroke and must never trigger a workspace rebuild. The list is capped.
+std::vector<CompletionItem> lspCompletion(const SharedLspIndex& idx, const std::string& path,
+                                          const CompletionContext& ctx);
+SignatureHelp               lspSignatureHelp(const SharedLspIndex& idx, const std::string& path,
+                                             const CompletionContext& ctx);
+
 // Run the language server over stdio; blocks until the client's `exit`. `argv0` is the compiler's own path
 // (for resolving the stdlib when loading imported modules). Returns the process exit code (0 after a clean
 // shutdown→exit handshake, 1 if `exit` arrives without a prior `shutdown`).

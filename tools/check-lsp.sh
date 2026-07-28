@@ -196,6 +196,18 @@ fi
 # 34: a type declared in a source the project reaches OUTSIDE its own directory is still ours to rename.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$OURI"'","languageId":"kama","version":1,"text":"'"$OSRC"'"}}}'
 frame '{"jsonrpc":"2.0","id":34,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$OURI"'"},"position":{"line":1,"character":19},"newName":"Seep"}}' 
+# --- M4: completion + signature help, over the M2 decl-rich buffer (`$SHP`, still open).
+#     Line 4 is `fn int32 use() { Point p; Point q = mid(a: p); return q.x; }` (LSP line 3):
+#       char 56 = the `x` of `q.x`  -> a Dot trigger on a `Point` local
+#       char 40 = the `a` of `mid(` -> an argument slot with no label yet
+#       char 17 = the `P` of the first `Point` -> a bare position
+#     17: member completion.  18: argument-LABEL completion.  19: signature help, active parameter 0.
+#     35: bare completion.    36: signature help outside any call -> null.
+frame '{"jsonrpc":"2.0","id":17,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":56}}}'
+frame '{"jsonrpc":"2.0","id":18,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":40}}}'
+frame '{"jsonrpc":"2.0","id":19,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":40}}}'
+frame '{"jsonrpc":"2.0","id":35,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":17}}}'
+frame '{"jsonrpc":"2.0","id":36,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":17}}}' 
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -220,6 +232,9 @@ expect '"definitionProvider":true'                   "advertises definitionProvi
 expect '"documentSymbolProvider":true'               "advertises documentSymbolProvider (M2)"
 expect '"referencesProvider":true'                   "advertises referencesProvider (M3)"
 expect '"renameProvider":{"prepareProvider":true}'   "advertises renameProvider with prepareProvider (M3)"
+expect '"completionProvider"'                        "advertises completionProvider (M4)"
+expect '"triggerCharacters":[".",":"]'               "... triggered by . and :"
+expect '"signatureHelpProvider":{"triggerCharacters":["(",","]}' "advertises signatureHelpProvider (M4)"
 expect '"method":"textDocument/publishDiagnostics"'  "server publishes diagnostics"
 expect '"message":"syntax error'                     "syntax error surfaced on the bad buffer"
 expect '"start":{"line":2,"character":0}'            "error range mapped to LSP 0-based (kama 3:0 -> 2:0)"
@@ -319,6 +334,19 @@ fi
 echo "check-lsp: M3.5 ownership is the file SET, not a path prefix"
 expect '"id":34,"result":{"changes":{'          "rename succeeds on a declared source outside the project dir"
 expect '/own/shared/shared.kama":[{"range"'     "...and rewrites that outside file, because the project declared it"
+
+echo "check-lsp: M4 completion + signature help"
+# The list is complete as sent: `isIncomplete:false` tells the client to filter it itself as the user
+# keeps typing, so one `.` costs one request rather than one per character.
+expect '"id":17,"result":{"isIncomplete":false,"items":[{"label":"x","kind":5,"detail":"int32"}]}' \
+       "completion after `.` -> the receiver's field, as CompletionItemKind.Field (5)"
+expect '"id":18,"result":{"isIncomplete":false,"items":[{"label":"a:","kind":10,"detail":"Point"}]}' \
+       "completion in an empty argument slot -> the callee's unsupplied LABEL"
+expect '"id":19,"result":{"signatures":[{"label":"mid(a: Point) -> Point"' \
+       "signatureHelp -> the callee's rendered signature"
+expect '"activeParameter":0' "... with the active parameter"
+expect '"label":"Point"'     "bare completion -> a type in scope"
+expect '"id":36,"result":null' "signatureHelp outside any call -> null"
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

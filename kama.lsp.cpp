@@ -371,6 +371,29 @@ int symKindToLsp(SymKind k) {
     return 5;
 }
 
+// CompletionItemKind — a DIFFERENT numbering from SymbolKind above, which is exactly the kind of thing
+// that goes unnoticed: a Class is 5 as a SymbolKind and 7 as a CompletionItemKind.
+int completionKindToLsp(CompletionKind k) {
+    switch (k) {
+        case CompletionKind::Field:      return 5;    // Field
+        case CompletionKind::Method:     return 2;    // Method
+        case CompletionKind::Ctor:       return 4;    // Constructor
+        case CompletionKind::Variant:    return 20;   // EnumMember
+        case CompletionKind::EnumMember: return 20;   // EnumMember
+        case CompletionKind::Type:       return 7;    // Class
+        case CompletionKind::Contract:   return 8;    // Interface
+        case CompletionKind::Function:   return 3;    // Function
+        case CompletionKind::Local:      return 6;    // Variable
+        case CompletionKind::Param:      return 6;    // Variable
+        case CompletionKind::Label:      return 10;   // Property — an argument label reads as one
+        case CompletionKind::Keyword:    return 14;   // Keyword
+        case CompletionKind::Module:     return 9;    // Module
+        case CompletionKind::Namespace:  return 9;    // Module
+        case CompletionKind::Constant:   return 21;   // Constant
+    }
+    return 6;
+}
+
 // ============================================================================================
 // Diagnostics — analyze a buffer via the M0 facade, then map kama Diagnostics to an LSP array.
 // ============================================================================================
@@ -540,6 +563,17 @@ struct Server {
         Json rename = Json::object();
         rename.set("prepareProvider", true);   // we can tell the editor up front whether F2 is offered
         caps.set("renameProvider", std::move(rename));
+        // M4. `.` and `:` fire member completion; the second `:` of a `::` re-fires it, which is harmless
+        // (the lexical scan sees the same context). No resolveProvider: every item is complete as sent.
+        Json completion = Json::object();
+        Json ctrig = Json::array(); ctrig.push(Json(".")); ctrig.push(Json(":"));
+        completion.set("triggerCharacters", std::move(ctrig));
+        completion.set("resolveProvider", false);
+        caps.set("completionProvider", std::move(completion));
+        Json sighelp = Json::object();
+        Json strig = Json::array(); strig.push(Json("(")); strig.push(Json(","));
+        sighelp.set("triggerCharacters", std::move(strig));
+        caps.set("signatureHelpProvider", std::move(sighelp));
         Json folders = Json::object();
         folders.set("supported", true);
         Json ws = Json::object();
@@ -656,6 +690,65 @@ struct Server {
         contents.set("value", text);
         Json result = Json::object();
         result.set("contents", std::move(contents));
+        sendResponse(id, std::move(result));
+    }
+
+    // ---- M4 completion + signature help --------------------------------------------------------------
+    //
+    // Both read `Doc::text` — the LIVE buffer — for their context, and `Doc::lastGoodIndex` for the
+    // semantics. That split is the whole M4 design: a buffer being completed into does not parse, so the
+    // index necessarily predates the receiver the user just typed, while its LINE GEOMETRY is still right
+    // (typing `p.` adds no lines). Neither handler may touch the workspace index: completion fires on
+    // every keystroke, and rebuilding a project per character is not a thing an editor survives.
+
+    // textDocument/completion -> CompletionList. `isIncomplete: false` is load-bearing — it tells the
+    // client to filter the list itself as the user keeps typing, so one `.` costs one request rather than
+    // one per character.
+    void handleCompletion(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        Json items = Json::array();
+        auto it = docs.find(uri);
+        if (it != docs.end()) {
+            int l, c; kamaPos(params, l, c);
+            CompletionContext ctx = completionContextAt(it->second.text, l, c);
+            for (const auto& item : lspCompletion(it->second.lastGoodIndex, uriToPath(uri), ctx)) {
+                Json j = Json::object();
+                j.set("label", item.label);
+                j.set("kind", completionKindToLsp(item.kind));
+                if (!item.detail.empty()) j.set("detail", item.detail);
+                items.push(std::move(j));
+            }
+        }
+        Json result = Json::object();
+        result.set("isIncomplete", false);
+        result.set("items", std::move(items));
+        sendResponse(id, std::move(result));
+    }
+
+    // textDocument/signatureHelp -> SignatureHelp, or null when nothing callable encloses the cursor.
+    void handleSignatureHelp(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        auto it = docs.find(uri);
+        if (it == docs.end()) { sendResponse(id, Json()); return; }
+        int l, c; kamaPos(params, l, c);
+        CompletionContext ctx = completionContextAt(it->second.text, l, c);
+        SignatureHelp h = lspSignatureHelp(it->second.lastGoodIndex, uriToPath(uri), ctx);
+        if (h.label.empty()) { sendResponse(id, Json()); return; }
+        Json ps = Json::array();
+        for (const auto& p : h.params) {
+            Json jp = Json::object();
+            jp.set("label", p.label + ": " + p.detail);   // a string label: the client substring-matches it
+            ps.push(std::move(jp));
+        }
+        Json sig = Json::object();
+        sig.set("label", h.label);
+        sig.set("parameters", std::move(ps));
+        Json sigs = Json::array();
+        sigs.push(std::move(sig));
+        Json result = Json::object();
+        result.set("signatures", std::move(sigs));
+        result.set("activeSignature", 0);
+        if (h.activeParam >= 0) result.set("activeParameter", h.activeParam);
         sendResponse(id, std::move(result));
     }
 
@@ -888,6 +981,8 @@ struct Server {
         if (method == "textDocument/prepareRename")  { if (isRequest) handlePrepareRename(*idp, params);  return true; }
         if (method == "textDocument/rename")         { if (isRequest) handleRename(*idp, params);         return true; }
         if (method == "workspace/symbol")            { if (isRequest) handleWorkspaceSymbol(*idp, params); return true; }
+        if (method == "textDocument/completion")     { if (isRequest) handleCompletion(*idp, params);     return true; }
+        if (method == "textDocument/signatureHelp")  { if (isRequest) handleSignatureHelp(*idp, params);  return true; }
         // A watched .kama file changed on disk — created, deleted, or edited outside the editor. The client
         // only sends this if it registered watchers (ours does; see editor/vscode/extension.js). Nothing to
         // re-publish: just drop the workspace index so the next gesture re-reads the tree.

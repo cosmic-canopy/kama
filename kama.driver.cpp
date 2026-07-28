@@ -3326,7 +3326,7 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
     if (loadProgramUnits({ path }, argv0, units, paths, /*includeDevDeps*/ false, /*strictImports*/ false) && !units.empty()) {
         std::string abs = absolutePath(path);
         bool swapped = false;
-        for (size_t i = 0; i < units.size(); ++i)
+        for (size_t i = 0; i < paths.size(); ++i)     // paths bounds the scan; the two are parallel
             if (paths[i] == abs) { units[i] = pr.unit; swapped = true; break; }
         if (!swapped) units.insert(units.begin(), pr.unit);   // defensive: keep the live buffer in the set
     } else {
@@ -3509,11 +3509,15 @@ SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
     if (!loadProgramUnits(files, argv0, units, paths, /*includeDevDeps*/ false, /*strictImports*/ false) || units.empty())
         return nullptr;
 
+    // `units` and `paths` are PARALLEL, so the scan must be bounded by `paths` and the two must grow
+    // together. Bounding by units.size() and pushing only a unit read past the end of `paths` on the next
+    // overlay — a real out-of-bounds read whenever two buffers are open and one sits outside the project
+    // set. It went unseen because a plain build just reads adjacent memory; ASan aborts the server.
     for (const auto& lv : live) {
         bool swapped = false;
-        for (size_t i = 0; i < units.size(); ++i)
+        for (size_t i = 0; i < paths.size(); ++i)
             if (paths[i] == lv.first) { units[i] = lv.second; swapped = true; break; }
-        if (!swapped) units.push_back(lv.second);        // an open file outside the project set
+        if (!swapped) { units.push_back(lv.second); paths.push_back(lv.first); }   // open, outside the project
     }
 
     auto emitter = std::make_shared<CEmitter>(files.front());
@@ -3571,6 +3575,26 @@ SrcRange lspPrepareRename(const SharedLspIndex& idx, const std::string& path, in
 {
     if (!idx || !idx->idx) return SrcRange{};
     return idx->idx->renameRangeAt(path, line, col);
+}
+
+std::vector<CompletionItem> lspCompletion(const SharedLspIndex& idx, const std::string& path,
+                                          const CompletionContext& ctx)
+{
+    // Capped here rather than in the facade, for the same reason lspWorkspaceSymbols is: how much to send
+    // an editor is the seam's policy, not the index's. A bare position in a stdlib-heavy file legitimately
+    // has a couple of hundred names in scope.
+    static const size_t kMaxItems = 200;
+    if (!idx || !idx->idx) return {};
+    auto items = idx->idx->completionsAt(path, ctx);
+    if (items.size() > kMaxItems) items.resize(kMaxItems);
+    return items;
+}
+
+SignatureHelp lspSignatureHelp(const SharedLspIndex& idx, const std::string& path,
+                               const CompletionContext& ctx)
+{
+    if (!idx || !idx->idx) return SignatureHelp{};
+    return idx->idx->signatureAt(path, ctx);
 }
 
 int main(int argc, char** argv)
