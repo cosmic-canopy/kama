@@ -203,12 +203,36 @@ Four commits on `dev`, one per step, each green before the next.
 | 1 — canonicalize path specs | `39ffa3c` | `requestorDir` on `Req`; `DepSpec::pathAbs`; `relativePath` |
 | 2 — `sources`-aware resolution | `a4aea5b` | `packageSourceFiles` + manifest cache; `joinPathLexical` |
 | 3 — workspace-internal path deps | `3c9375e` | `workspaceMembers` / `collectProjectDirs` / `expandProjectsEntry` |
-| 4 — per-package import checking | `0e14cfa` | `owningPackageDir` / `declaredImportNames`; acceptance case 35 |
+| 4 — per-package import checking | `0e14cfa` | `owningPackageDir` / `declaredImportNames`; acceptance case 36 |
 
 **The design decision, settled with the user (2026-07-28): option (b)**, intra-workspace imports must be
-declared as path deps, warn-first. The warning names the exact line to add, and check-packages case 34
-asserts that applying exactly that line silences it — the diagnostic's remedy is one the resolver
-accepts, which it was not before step 3.
+declared as path deps. Shipped warn-first, then **promoted to a hard error the same day** (see below).
+The diagnostic names the exact line to add, and check-packages case 34 asserts that applying exactly that
+line makes it build — the remedy is one the resolver accepts, which it was not before step 3.
+
+### Promotion to a hard error
+
+The brief planned to warn "and promote at a major version". That was deferred caution written before the
+facts were checked; all four came back in favour of promoting immediately, so it landed the same day.
+
+- **Nothing in the repo breaks.** Only two manifests declare dependencies at all, both single-package and
+  both already correct. The multi-package fixtures never go through a deps view.
+- **The remedy is ALWAYS appliable wherever the check fires** — the one thing that could have made a hard
+  error a trap. The worry was an undeclared monorepo (no root `projects`), where a sibling path dep is
+  refused, so the suggested line would not work. It cannot arise: the module has to be in the dependency
+  view for the check to trigger, which means *someone* declared it — so the sibling's own declaration
+  either dedups against that one or is a legal workspace-internal path dep. Verified end-to-end.
+- **It can only reach code the user owns**, since store-resident packages are already exempt.
+- **1.0 is not tagged** and is deliberately held until the LSP and the website are done, so the breaking
+  change is free now and would not be again until 2.0.
+
+**Strict for every command that produces something; lenient for `kama lsp` and the `kama query` CLI that
+mirrors it.** `loadProgramUnits` gained a `strictImports` parameter for exactly this. Refusing to analyze
+would strip an editor of cross-module hover, definitions and diagnostics over a *manifest* problem, when
+the code itself is fine and resolves — the same reasoning as the store exemption: don't punish the wrong
+thing. The right home for it in an editor is a diagnostic against the offending `kama.json`, noted as an
+LSP M4 follow-up. Strict mode reports **every** violation before failing rather than stopping at the
+first. Cases 33 (error), 33b (query stays lenient) and 34 (the named fix works) pin all three.
 
 Four things the brief did not anticipate:
 
@@ -243,7 +267,7 @@ three are *shapes*, not one-offs:
   inside the content-addressed store and ask for a path dep — a file that is not the user's to edit,
   whose edit breaks the tree hash naming its store entry, asking for a spec the resolver refuses. Reached
   whenever a fetched dependency free-rides on the root's declaration. Now suppressed for store-resident
-  owners (case 35).
+  owners (case 35 of tools/check-packages.sh).
 - **`kama lsp` calls `loadProgramUnits` on every analyze.** Any per-call warn-once set is per-keystroke in
   the editor. Process-wide statics are the right scope for anything that talks to a human.
 - **Never cache a derived file list in a long-lived process.** `packageSourceFiles` cached the expanded

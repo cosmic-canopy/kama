@@ -126,17 +126,21 @@ workspace carries them both — so a path dependency there is permitted, and one
 workspace is still refused.
 
 Each package's imports are checked against **its own** manifest. If `libs/net` imports `config` while only
-`apps/server` declares it, the build warns and names the line to add:
+`apps/server` declares it, the build **fails** and names the line to add:
 
 ```
-kama: warning: libs/net/net.kama imports module 'config', but its own package
+kama: error: libs/net/net.kama imports module 'config', but its own package
   (libs/net/kama.json) does not declare it — only apps/server/kama.json does, so
   this package will not build on its own.
 kama: note: add to libs/net/kama.json: "dependencies": { "config": { "path": "../config" } }
 ```
 
-It is a warning today so that a monorepo written before this rule still builds; it becomes an error at a
-major version. An import that *nothing* declares is a hard error, as it always was.
+An import that *nothing* declares is also an error, as it always was. A single-package project never meets
+this rule at all: an import resolved through your own directory needs no declaration.
+
+Your **editor** is not held to it. `kama lsp` (and the `kama query` CLI that mirrors it) reports the same
+thing but keeps analyzing — refusing would strip cross-module hover and go-to-definition over a manifest
+problem, when the code itself is fine and resolves.
 
 The property is mechanically checkable, and worth wiring into CI: install and build each member from its
 own directory, with no ancestor manifest in play.

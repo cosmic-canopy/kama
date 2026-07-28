@@ -456,10 +456,16 @@ std::string owningPackageDir(const std::string& fromDir)
 
 
 
+// `strictImports` decides what an import satisfied by the dependency view but undeclared by the importing
+// file's OWN package does: fail the build (every command that produces something) or merely report it.
+// The LSP and the `query` CLI that mirrors it pass false — refusing to analyze would strip an editor of
+// cross-module hover, definitions and diagnostics over a *manifest* problem, when the code is fine and
+// resolves. The right home for it there is a diagnostic against the offending `kama.json` (LSP M4).
 bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* argv0,
                       std::vector<SharedCompilationUnit>& units,
                       std::vector<std::string>& paths,
-                      bool includeDevDeps = false)
+                      bool includeDevDeps = false,
+                      bool strictImports = true)
 {
     std::string stdlibDir = resolveStdlibDir(argv0);
     std::vector<std::string> extraRoots = splitSearchPath(getenv("KAMA_PATH"));
@@ -472,10 +478,11 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // (KAMA_STORE set to empty) suppresses nothing rather than everything.
     std::string storeRoot = absolutePath(storeDir()) + "/";
     if (storeRoot.size() <= 1) storeRoot = "\n";        // matches no path
-    // "<manifest>\n<module>", warned once per package+module. PROCESS-wide, not per call: `kama lsp`
-    // re-analyzes on every keystroke, and a per-call set would repeat the same warning into the editor's
+    // "<manifest>\n<module>", reported once per package+module. PROCESS-wide, not per call: `kama lsp`
+    // re-analyzes on every keystroke, and a per-call set would repeat the same message into the editor's
     // output channel forever. A build calls this once, so nothing changes there.
     static std::set<std::string> warnedFreeRide;
+    bool undeclaredImport = false;   // strict mode: report them ALL, then fail, rather than stop at one
     // A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
     auto nsKey = [](SharedCompilationUnit u) -> std::string {
         if (!u || !u->nameSpace || !u->nameSpace->name) return "";
@@ -537,8 +544,14 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             //
             // So: an import satisfied by the dependency view must be declared by the importing file's OWN
             // package. Anything reached through the file's own directory, $KAMA_PATH or the stdlib is
-            // intra-package and needs no declaration. Warn rather than error for now — every multi-package
-            // fixture predating this rule free-rides — and promote to an error at a major version.
+            // intra-package and needs no declaration, so a single-package project never meets this rule.
+            //
+            // A hard error under `strictImports`, which is every command that produces something. It
+            // shipped as a warning and was promoted once the remedy was shown to be ALWAYS appliable
+            // wherever it fires: the module has to be in the dependency view for this to trigger at all,
+            // which means someone declared it, so the sibling's own declaration either dedups against
+            // that one or is a legal workspace-internal path dep. A guarantee nobody is forced to honor
+            // is not a guarantee — and build-output warnings are scrolled past.
             //
             // Only for a package the user can actually FIX. A fetched package's sources live in the
             // content-addressed store, where its manifest is not the user's to edit — and editing it
@@ -549,13 +562,15 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 if (!owner.empty() && owner.compare(0, storeRoot.size(), storeRoot) == 0) owner.clear();
                 if (!owner.empty() && !declaredImportNames(owner).count(segs[0])) {
                     std::string ownerManifest = owner + "/kama.json";
+                    undeclaredImport = true;
                     if (warnedFreeRide.insert(ownerManifest + "\n" + segs[0]).second) {
                         // Suggest the concrete line. The dependency's own package root is the nearest
                         // manifest above its sources, which for a workspace sibling is a path away.
                         std::string depPkg = owningPackageDir(dirName(absolutePath(files[0])));
-                        fprintf(stderr, "kama: warning: %s imports module '%s', but its own package (%s) "
+                        fprintf(stderr, "kama: %s: %s imports module '%s', but its own package (%s) "
                                 "does not declare it — only %s does, so this package will not build on "
                                 "its own.\n",
+                                strictImports ? "error" : "warning",
                                 paths[i].c_str(), segs[0].c_str(), ownerManifest.c_str(),
                                 (buildManifestDir.empty() ? "the build" : (buildManifestDir + "/kama.json")).c_str());
                         if (!depPkg.empty())
@@ -576,7 +591,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             }
         }
     }
-    return true;
+    return !(strictImports && undeclaredImport);   // reported every one above, then fail once
 }
 
 // Parse one kama file into a CompilationUnit. Returns nullptr on failure.
@@ -3308,7 +3323,7 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
     // best-effort diagnostics then, but hover/def/outline for the open file still work.
     std::vector<SharedCompilationUnit> units;
     std::vector<std::string> paths;
-    if (loadProgramUnits({ path }, argv0, units, paths, /*includeDevDeps*/ false) && !units.empty()) {
+    if (loadProgramUnits({ path }, argv0, units, paths, /*includeDevDeps*/ false, /*strictImports*/ false) && !units.empty()) {
         std::string abs = absolutePath(path);
         bool swapped = false;
         for (size_t i = 0; i < units.size(); ++i)
@@ -3491,7 +3506,7 @@ SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
     // std/dependency modules it needs for names to resolve.
     std::vector<SharedCompilationUnit> units;
     std::vector<std::string> paths;
-    if (!loadProgramUnits(files, argv0, units, paths, /*includeDevDeps*/ false) || units.empty())
+    if (!loadProgramUnits(files, argv0, units, paths, /*includeDevDeps*/ false, /*strictImports*/ false) || units.empty())
         return nullptr;
 
     for (const auto& lv : live) {
@@ -3993,7 +4008,7 @@ int main(int argc, char** argv)
             }
             queryInputs = proj.files;
         }
-        if (!loadProgramUnits(queryInputs, argv[0], units, unitPaths, devBuild)) return 1;
+        if (!loadProgramUnits(queryInputs, argv[0], units, unitPaths, devBuild, /*strictImports*/ false)) return 1;
         // Every query re-picks the unit by an EXACT name match (CEmitter::unitForUri), and the project
         // enumeration yields absolute paths — so a relative `input` would match nothing. Ask by the same
         // spelling the units were parsed with. (The LSP server is immune: file:// URIs are already absolute.)

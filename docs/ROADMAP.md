@@ -556,10 +556,13 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   layout is importable at all; path deps are permitted **between members of one declared `projects`
   tree** (cargo's rule — reproducible because the workspace carries them) and still refused everywhere
   else; and a file's imports are checked against **its own** package's manifest rather than whoever is
-  compiling, so free-riding on a top-level app's declaration is reported with the exact line to add.
-  That last check **warns** today, so a monorepo written before the rule still builds; **promote it to a
-  hard error at the next major version**. Acceptance is mechanical and lives in `tools/check-packages.sh`
-  (case 35): every member installs and builds from its own directory with no ancestor manifest in play.
+  compiling, so free-riding on a top-level app's declaration **fails the build**, naming the exact line to
+  add. That last check shipped as a warning and was promoted to a hard error the same day, once the remedy
+  was shown to be always appliable wherever it fires — a guarantee nobody is forced to honor is not a
+  guarantee. It is deliberately **lenient in the LSP/`query` path**, where refusing to analyze would strip
+  an editor of cross-module answers over a manifest problem. Acceptance is mechanical and lives in
+  `tools/check-packages.sh` (case 36): every member installs and builds from its own directory with no
+  ancestor manifest in play.
   **Follow-on, not done:** version reconciliation on publish — `kama publish` substituting a registry
   version for a workspace path dep.
 - **kama-aware debugger value formatting — polish on the working debugger.** Breakpoints/stepping are already
