@@ -310,6 +310,72 @@ std::vector<std::string> packageSourceFiles(const std::string& dir)
     return cache.emplace(manifest, std::move(out)).first->second;
 }
 
+static bool loadManifestProjects(const std::string& path, std::vector<std::string>& out, std::string& err);
+
+// Expand one `projects` entry against `dir`: a plain sub-project directory, or a trailing "/*" meaning
+// every immediate subdirectory that has a manifest. Sorted — readdir order is not deterministic.
+std::vector<std::string> expandProjectsEntry(const std::string& dir, const std::string& rel)
+{
+    std::vector<std::string> out;
+    if (rel.size() > 2 && rel.compare(rel.size() - 2, 2, "/*") == 0) {
+        std::string parent = dir + "/" + rel.substr(0, rel.size() - 2);
+        if (DIR* d = opendir(parent.c_str())) {
+            while (struct dirent* e = readdir(d)) {
+                std::string n = e->d_name;
+                if (n.empty() || n[0] == '.') continue;
+                if (dirExists(parent + "/" + n) && fileExists(parent + "/" + n + "/kama.json"))
+                    out.push_back(parent + "/" + n);
+            }
+            closedir(d);
+        }
+        std::sort(out.begin(), out.end());
+    } else if (dirExists(dir + "/" + rel)) {
+        out.push_back(dir + "/" + rel);
+    }
+    return out;
+}
+
+// Every package directory in the `projects` tree rooted at `dir`, canonical, INCLUDING `dir` itself.
+// The output set doubles as the cycle break (a manifest may legally name a directory that names it
+// back, and a symlink makes a loop trivial) — the same guard collectPackageTree keeps for files.
+void collectProjectDirs(const std::string& dir, std::set<std::string>& out)
+{
+    if (!out.insert(absolutePath(dir)).second) return;
+    const std::string manifest = dir + "/kama.json";
+    if (!fileExists(manifest)) return;
+    std::vector<std::string> subs;
+    std::string err;
+    loadManifestProjects(manifest, subs, err);
+    for (const auto& rel : subs)
+        for (const auto& sub : expandProjectsEntry(dir, rel)) collectProjectDirs(sub, out);
+}
+
+// The workspace that OWNS `projectDir`: the package directories of the outermost ancestor manifest whose
+// `projects` tree, expanded recursively, actually contains `projectDir`. Falls back to `{projectDir}`
+// when no ancestor claims it — no workspace, so a path dep stays top-level only.
+//
+// Mirrors lspFindProject's rule (declared beats inferred, outermost wins, and it must CONTAIN me) so the
+// build and the editor agree on what one workspace is. A `.kama` component stops the walk, so a vendored
+// dependency can never reach out into its host project and call itself a member.
+std::set<std::string> workspaceMembers(const std::string& projectDir)
+{
+    const std::string self = absolutePath(projectDir);
+    std::vector<std::string> ancestors;
+    for (std::string cur = self;;) {
+        if (baseName(cur) == ".kama") break;
+        if (fileExists(cur + "/kama.json")) ancestors.push_back(cur);
+        std::string parent = dirName(cur);
+        if (parent == cur || parent == ".") break;      // filesystem root
+        cur = parent;
+    }
+    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
+        std::set<std::string> members;
+        collectProjectDirs(*it, members);
+        if (members.size() > 1 && members.count(self)) return members;
+    }
+    return { self };
+}
+
 // Resolve module segments (["std","memory"]) to source file(s) under the first matching
 // root: a file-module (<root>/std/memory.kama) or every *.kama in a directory-module
 // (<root>/std/memory/). A directory that is a PACKAGE root contributes the files its manifest
@@ -2131,6 +2197,10 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
     std::string viewDir    = base + "/.kama/deps";
     std::string devViewDir = base + "/.kama/dev-deps";
 
+    // The workspace this project belongs to, if any. Computed ONCE here rather than inside the attempt
+    // loop below: it depends only on the manifests on disk, so it is immutable across restarts.
+    const std::set<std::string> wsMembers = workspaceMembers(base);
+
     // Range deps (git+version) select the highest matching tag. Because the BFS resolves each node on
     // first sight, a *later*, tighter requestor of the same name can invalidate an already-fetched tag.
     // We handle that by RESTARTING resolution with the now-known constraint pre-seeded — bounded, since
@@ -2294,9 +2364,15 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     }
                     continue;   // dedup (diamond / prod-wins-over-dev)
                 }
-                if (!r.spec.path.empty() && r.requestor != "<root manifest>") {
+                // A path dep from a FETCHED package is not reproducible — the local directory it names is
+                // not carried with it. Between two members of one declared `projects` workspace it is
+                // exactly as reproducible as the workspace itself, which is what makes a sub-project able
+                // to declare the siblings it imports, and so able to be lifted out and still build.
+                if (!r.spec.path.empty() && r.requestor != "<root manifest>" &&
+                    !(wsMembers.count(absolutePath(r.requestorDir)) && wsMembers.count(r.spec.pathAbs))) {
                     fprintf(stderr, "kama install: path dependency '%s' (required by %s) is only allowed at the "
-                            "top level — a fetched package cannot reference a local path reproducibly\n",
+                            "top level, or between members of one declared `projects` workspace — a fetched "
+                            "package cannot reference a local path reproducibly\n",
                             r.name.c_str(), r.requestor.c_str());
                     return 1;
                 }
@@ -3206,25 +3282,8 @@ static void collectPackageTree(const std::string& dir, std::vector<std::string>&
         collectKamaFiles(absolutePath(dir), "", out, seen, (size_t)-1);
     }
 
-    for (const auto& rel : subs2) {
-        if (rel.size() > 2 && rel.compare(rel.size() - 2, 2, "/*") == 0) {
-            std::string parent = dir + "/" + rel.substr(0, rel.size() - 2);
-            std::vector<std::string> subs;
-            if (DIR* d = opendir(parent.c_str())) {
-                while (struct dirent* e = readdir(d)) {
-                    std::string n = e->d_name;
-                    if (n.empty() || n[0] == '.') continue;
-                    if (dirExists(parent + "/" + n) && fileExists(parent + "/" + n + "/kama.json"))
-                        subs.push_back(parent + "/" + n);
-                }
-                closedir(d);
-            }
-            std::sort(subs.begin(), subs.end());          // readdir order is not deterministic
-            for (const auto& sub : subs) collectPackageTree(sub, out, visited);
-        } else if (dirExists(dir + "/" + rel)) {
-            collectPackageTree(dir + "/" + rel, out, visited);
-        }
-    }
+    for (const auto& rel : subs2)
+        for (const auto& sub : expandProjectsEntry(dir, rel)) collectPackageTree(sub, out, visited);
 }
 
 std::string lspRealPath(const std::string& path) { return absolutePath(path); }

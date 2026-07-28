@@ -680,4 +680,99 @@ if ! "$KAMA" pkg install "$rp" >"$tmp/rp1.out" 2>&1; then
 grep -q '"source": "registry"' "$rp/kama.lock" \
     || { echo "check-packages: FAIL — registries-override install did not lock a registry source:" >&2; sed 's/^/  /' "$rp/kama.lock" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; $SIGNOTE)"
+# ---- workspace-internal dependencies -----------------------------------------------------------------
+# The five-file monorepo from docs/design/workspace-deps-kickoff.md: a root that composes `projects`, two
+# libraries, and an app. `libs/net` declares the sibling it imports, which is what makes it extractable.
+ws="$tmp/acme"
+mkdir -p "$ws/libs/config" "$ws/libs/net" "$ws/apps/server"
+cat > "$ws/kama.json" <<'JSON'
+{ "name": "acme", "version": "0.1.0", "projects": ["libs/*", "apps/server"] }
+JSON
+cat > "$ws/libs/config/kama.json" <<'JSON'
+{ "name": "config", "version": "0.1.0", "sources": ["."] }
+JSON
+cat > "$ws/libs/config/config.kama" <<'KAMA'
+namespace config;
+export { Config };
+
+type value Config {
+    public int32 port;
+    public ctor of(int32 port) { Config r; r.port = port; return give r; }
+}
+KAMA
+cat > "$ws/libs/net/kama.json" <<'JSON'
+{ "name": "net", "version": "0.1.0", "sources": ["."],
+  "dependencies": { "config": { "path": "../config" } } }
+JSON
+cat > "$ws/libs/net/net.kama" <<'KAMA'
+namespace net;
+import config::{Config};
+export { listenPort };
+
+fn int32 listenPort() { Config c = Config.of(port: 8); return c.port; }
+KAMA
+# The app declares only what IT imports. `config` therefore reaches the resolver for the first time as a
+# TRANSITIVE request from `net` — a non-root requestor, which is the case the top-level-only rule refused.
+cat > "$ws/apps/server/kama.json" <<'JSON'
+{ "name": "server", "version": "0.1.0", "main": "main.kama",
+  "dependencies": { "net": { "path": "../../libs/net" } } }
+JSON
+printf 'import net::{listenPort};\nfn int32 main() { return listenPort(); }\n' > "$ws/apps/server/main.kama"
+
+# 28. a workspace member may declare the sibling it imports, and that path dep resolves transitively.
+if ! "$KAMA" pkg install "$ws/apps/server" >"$tmp/ws0.out" 2>&1; then
+    echo "check-packages: FAIL — workspace-internal path dep rejected:" >&2; sed 's/^/  /' "$tmp/ws0.out" >&2; exit 1; fi
+"$KAMA" run "$ws/apps/server/main.kama" >/dev/null 2>&1 && wsrc=0 || wsrc=$?
+[ "$wsrc" = 8 ] || { echo "check-packages: FAIL — workspace app exited $wsrc, expected 8" >&2; exit 1; }
+
+# 29. THE MILESTONE — the sub-project is EXTRACTABLE: it builds on its own, from its own directory, with
+#     no ancestor manifest in play. Before workspace-internal path deps it could not declare `config` at
+#     all, so it built where it sat and nowhere else.
+if ! "$KAMA" pkg install "$ws/libs/net" >"$tmp/ws1.out" 2>&1; then
+    echo "check-packages: FAIL — sub-project could not install standalone:" >&2; sed 's/^/  /' "$tmp/ws1.out" >&2; exit 1; fi
+if ! "$KAMA" check "$ws/libs/net/net.kama" >"$tmp/ws2.out" 2>&1; then
+    echo "check-packages: FAIL — sub-project does not build standalone (not extractable):" >&2; sed 's/^/  /' "$tmp/ws2.out" >&2; exit 1; fi
+
+# 30. the app may ALSO declare `config`, and it spells the same directory differently (`../../libs/config`
+#     vs net's `../config`). Paths are relative to the manifest that declared them, so the two must
+#     canonicalize to one package and dedup — comparing the spellings reports "require different sources".
+cat > "$ws/apps/server/kama.json" <<'JSON'
+{ "name": "server", "version": "0.1.0", "main": "main.kama",
+  "dependencies": { "config": { "path": "../../libs/config" },
+                    "net":    { "path": "../../libs/net" } } }
+JSON
+if ! "$KAMA" pkg install "$ws/apps/server" >"$tmp/ws5.out" 2>&1; then
+    echo "check-packages: FAIL — two spellings of one sibling directory conflicted:" >&2; sed 's/^/  /' "$tmp/ws5.out" >&2; exit 1; fi
+
+# 31. a member may NOT reach outside the workspace — that path is not carried by anything, so it is not
+#     reproducible. The declaration is the gate, not adjacency.
+mkdir -p "$tmp/stray/lib"
+cat > "$tmp/stray/lib/kama.json" <<'JSON'
+{ "name": "stray", "version": "0.1.0", "sources": ["."] }
+JSON
+printf 'namespace stray;\nexport { v };\nfn int32 v() { return 1; }\n' > "$tmp/stray/lib/stray.kama"
+cp "$ws/libs/net/kama.json" "$tmp/net-manifest.bak"
+cat > "$ws/libs/net/kama.json" <<'JSON'
+{ "name": "net", "version": "0.1.0", "sources": ["."],
+  "dependencies": { "config": { "path": "../config" },
+                    "stray":  { "path": "../../../stray/lib" } } }
+JSON
+if "$KAMA" pkg install "$ws/apps/server" >"$tmp/ws3.out" 2>&1; then
+    echo "check-packages: FAIL — a path dep escaping the workspace was accepted" >&2; exit 1; fi
+grep -q "only allowed at the top level" "$tmp/ws3.out" \
+    || { echo "check-packages: FAIL — workspace-escape message unclear:" >&2; sed 's/^/  /' "$tmp/ws3.out" >&2; exit 1; }
+cp "$tmp/net-manifest.bak" "$ws/libs/net/kama.json"
+
+# 32. and without a root manifest DECLARING the tree, the very same sibling dep is refused — proving the
+#     gate is the `projects` declaration and not mere directory adjacency. (The app is back to declaring
+#     only `net`, so `config` is again a first-encounter transitive request.)
+cat > "$ws/apps/server/kama.json" <<'JSON'
+{ "name": "server", "version": "0.1.0", "main": "main.kama",
+  "dependencies": { "net": { "path": "../../libs/net" } } }
+JSON
+mv "$ws/kama.json" "$tmp/ws-root.bak"
+if "$KAMA" pkg install "$ws/apps/server" >"$tmp/ws4.out" 2>&1; then
+    echo "check-packages: FAIL — sibling path dep accepted with no declared workspace" >&2; exit 1; fi
+mv "$tmp/ws-root.bak" "$ws/kama.json"
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused; $SIGNOTE)"
