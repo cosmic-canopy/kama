@@ -163,14 +163,119 @@ means find-references and go-to-def agree by construction.
   live); the biggest recurring trap.
 - **Coord convention** — kama line 1-based/col 0-based ↔ LSP 0/0. Convert on the way in, `srcRangeToJson`
   on the way out.
-- **`definitionAt`/`typeAtPosition` are non-const** (mutate `_nsCtx`, save/restored); `referencesAt` will
-  be too. Single-threaded dispatch keeps it safe — don't share a handle across threads.
+- ~~**`definitionAt`/`typeAtPosition` are non-const**~~ — **no longer true.** M3.1's resolve-fill sweep
+  precomputes every position's `declKey`, so the whole query facade is `const` and touches no `_nsCtx`.
 - **Don't call `cType`** in query paths — its `unsupported()` side effect pollutes `_diagnostics` (the M0
   rule). The `recordRef` hook must be a pure append.
+
+---
+
+# M3.4 — locals, params, fields, enum members (cold-start brief)
+
+**Status: NOT STARTED. Scoped by reconnaissance, 2026-07-27.** This is the milestone that makes
+find-references/rename useful on the symbols users touch most. M3.1–M3.3 cover types, contracts, enums
+(the type), methods, ctors and free/generic functions; everything below is still invisible to the index.
+
+The four kinds are **not equally hard** — do them in this order.
+
+## (a) Enum members — EASY, no new retention
+
+`EnumMemberDeclarationNode` ([kama.ast.h:1030](../kama.ast.h)) already carries its own
+`SharedIdentifier identifier`, and `EnumDeclarationNode` ([kama.ast.h:1008](../kama.ast.h)) carries the
+member list as `body`. `buildDefSites` already reaches the decl node via `_enumDeclNodes`
+([kama.query.cpp:167-175](../kama.query.cpp)) — so def-sites are one loop over `en->body` away, keyed
+`<enumKey>_<Member>` to match what the emitter spells. `SymKind::EnumMember` already exists and is unused.
+
+**Uses** are recorded at the identifier arm below — enum member references (`Enum.Member`) are handled at
+[kama.cemit.cpp:1052-1058](../kama.cemit.cpp), which already calls `resolveUserName` on the enum name and
+then looks up `_enums`; the member name is `nm` on the same node.
+
+## (b) Locals + params — MEDIUM; the scope plumbing exists, the def-sites don't
+
+What already exists and should be reused:
+- **`findScopeDeclaring(name)`** ([kama.cemit.cpp:1467](../kama.cemit.cpp)) — innermost-out scope search;
+  its comment states `declaredNames` records EVERY local, so it is **exact for locals**, and `-1` means
+  "a parameter (params outlive any scope) or unknown".
+- **Scope registration** at [kama.cemit.cpp:2053-2060](../kama.cemit.cpp)
+  (`_scopes.back().declaredNames.push_back(nm)`) — the natural def-site creation point.
+- **THE USE CHOKE POINT: [kama.cemit.cpp:1049](../kama.cemit.cpp)** — `if (auto* v =
+  dynamic_cast<IdentifierNode*>(n))`, commented *"Variable/parameter reference."* This is the arm every
+  bare identifier reference flows through, and it holds the source `IdentifierNode` (position included).
+  It is the locals analogue of what `cType`/`emitInvocation` were for M3.1 — one site, not a long tail.
+
+What must be built:
+1. **`Scope::declaredNames` is `std::vector<std::string>` — strings only, no position and no key.** It has
+   to carry the declaring `IdentifierNode*` (or a synthesized declKey) so a use can be tied to *which*
+   declaration. This is the one intrusive change; `Scope` is at [kama.cemit.h:650](../kama.cemit.h).
+2. **Synthetic keys must handle SHADOWING.** Two locals named `i` in sibling scopes are different symbols
+   and must not merge. Key on the declaration site, e.g. `local:<fnKey>:<name>@<line>:<col>` — unique by
+   construction, and the scope entry carries it so uses resolve to the right one.
+3. **Params need a grammar fix** (below).
+
+## (c) Fields — MEDIUM; needs new retention
+
+`FieldInfo` ([kama.cemit.h:51](../kama.cemit.h)) holds `name` as a **plain `std::string`** and a `type`
+identifier — there is **no name IdentifierNode and no decl node**, so a field name has **no source span
+today**. Add a `SharedIdentifier nameId` (or the `ClassFieldDeclarationNode*`) to `FieldInfo` and populate
+it in `collectClasses`; then def-sites follow. Field **uses** are `MemberAccessNode`, which does carry the
+member name as its own `SharedIdentifier identifier` ([kama.ast.h:534](../kama.ast.h)) — good — but see
+the grammar fix.
+
+## ⚠️ The grammar prerequisite: STAMP_LOC (do this FIRST, it is load-bearing)
+
+`YYLLOC_DEFAULT` ([kama.y:22-45](../kama.y)) stamps each rule's `@$` into the CodeGenContext, and the
+`ASTNode(context)` ctor picks it up. So **an IdentifierNode built mid-action from a raw `IDENTIFIER` token
+gets its CONTAINER's span, not the name's own span** — the header comment says exactly this, and
+`STAMP_LOC` ([kama.y:48](../kama.y)) is the fix. Today STAMP_LOC is applied **only at function / method /
+ctor name sites** (kama.y:635, 642, 648, 665, 684, 1359-1362, 1443, 1445).
+
+Audited for M3.4:
+- **Local declarators — probably already correct, VERIFY FIRST.** `variable_declarator : IDENTIFIER`
+  (kama.y ~:772) is a **single-token rule**, so `@$` *is* the token's span and the name node should get a
+  precise range with no change. Confirm empirically before assuming it.
+- **Parameters — BROKEN, needs STAMP_LOC.** `parameter : const_opt hardware_opt parameter_modifier_opt
+  type IDENTIFIER` — `@$` spans the whole parameter, so the name node currently reports the parameter's
+  start. Needs `STAMP_LOC(<the name id>, @5)`.
+- **Member access — BROKEN, needs STAMP_LOC.** Every `MemberAccessNode` production builds its name node
+  mid-action: kama.y:430, **1034, 1035, 1036**. Each needs `STAMP_LOC(..., @3)`.
+- **Class fields / enum members** — audit the same way before building on their spans.
+
+⚠️ Recall the grammar trap from the MCU campaign: **every `_opt` rule MUST set `$$`** (an empty rule with
+no `$$ =` yields garbage). Touching these rules re-runs bison; `tools/check-syntax-drift.sh` guards the
+keyword/highlighter side.
+
+## Rename note
+
+A local, param or field can never be referenced from another file, so **the M3.3 open-file guard never
+fires for them** — M3.4 delivers full-fidelity rename for the commonest case without waiting on M3.5.
+
+---
+
+# M3.5 — workspace indexing (cold-start brief)
+
+**Status: NOT STARTED.** This is what makes cross-file rename safe and **lifts the M3.3 guard** — it is
+part of this campaign, not deferred to M5.
+
+The problem it solves: `lspAnalyze` ([kama.driver.cpp:2913](../kama.driver.cpp)) loads the open file plus
+its **transitive imports**. References across that set are already correct, but the set is *reachability
+from the open file* — a file that imports THIS symbol without being imported back is invisible. So rename
+can see some users and not others, which is why M3.3 refuses rather than half-rewriting.
+
+Shape:
+1. A **project-wide unit set** rather than an import-graph closure — enumerate the project's `.kama`
+   sources (the `kama.json` manifest already declares the package; reuse `loadProgramUnits`' resolver
+   rather than a new file walker).
+2. `workspace/didChangeWatchedFiles` to keep it fresh, plus the `workspaceFolders` capability.
+3. Then `referencesAt` spans the project and `handleRename`
+   ([kama.lsp.cpp](../kama.lsp.cpp), the `r.uri != path` loop) drops its refusal and emits a multi-file
+   `WorkspaceEdit` — still refusing to write into std/prelude (`DefSite.unit == nullptr` already filters
+   those, and loaded std MODULES should be excluded explicitly since their units are non-null).
+4. Watch the perf budget: whole-project analysis per keystroke is the thing M5 (incremental) exists for;
+   M3.5 should index once and update per file change, not per edit.
 
 ## After M3
 
 **M4** — completion + signature-help (the quality-hard one; delivers the `global::` floor-completion
-payoff). **M5** — error-recovery + incremental/perf (+ workspace indexing if not done in M3). **M6** —
-broadened editor clients + `docs/editors.md` (Neovim `nvim-lspconfig`, Vim, Emacs eglot) — one server, so
-each editor is a few lines of client glue; the user wants all major IDEs ASAP.
+payoff). **M5** — error-recovery + incremental/perf. **M6** — broadened editor clients + `docs/editors.md`
+(Neovim `nvim-lspconfig`, Vim, Emacs eglot) — one server, so each editor is a few lines of client glue;
+the user wants all major IDEs ASAP.
