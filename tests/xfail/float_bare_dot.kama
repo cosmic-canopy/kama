@@ -1,0 +1,8 @@
+// A float literal's dot needs digits on BOTH sides: `1.` and `.5` are rejected. Same rule as Swift, Zig
+// and (for `.5`) Rust — those spellings are the error-prone ones, `.5` reading as a stray member access
+// and `1.` as an unfinished expression. The dotless EXPONENT form `1e10` is allowed, because the
+// exponent marker already makes it unmistakably a float (see tests/float_exponent.kama).
+fn int32 main() {
+    float64 f = 1.;   // ERROR: write `1.0`
+    return cast<int32>(f);
+}

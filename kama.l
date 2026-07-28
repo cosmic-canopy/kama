@@ -80,9 +80,16 @@ oct_literal                 {oct_literal_no_suffix}{int_suffix}
 based_literal               {based_literal_no_suffix}{int_suffix}
 
 exponent                    [eE][+\-]?{dec_digit}+
-float_exp                   {dec_digit}\.{dec_digit}+{exponent}
-float_normal                {dec_digit}+\.{dec_digit}+
-float_literal_no_suffix     ({float_exp}|{float_normal})
+  /* Two forms, matching Swift and Zig exactly: `digits.digits` with an optional exponent, or `digits`
+     with a REQUIRED exponent (`1e10` — the exponent marker already makes it unmistakably a float).
+     A dot still needs digits on BOTH sides, so `1.` and `.5` stay rejected: those are the error-prone
+     spellings (`.5` reads as a stray member access, `1.` as an unfinished expression), and rejecting
+     them is ordinary — Swift, Zig and Rust do. Rejecting `1e10`, which kama used to do, is not: no
+     mainstream language does, and it blocked pasting constants from C headers and datasheets.
+     ⚠️ These used to be two macros, and the exponent one accepted only a SINGLE leading digit — so
+     `12.5` lexed but `12.5e10` did not, while non-normalized `0.0001e10` was fine. One macro can't
+     drift that way. See docs/SPEC.md "Numeric literals". */
+float_literal_no_suffix     ({dec_digit}+\.{dec_digit}+{exponent}?|{dec_digit}+{exponent})
 float_literal32             {float_literal_no_suffix}f(32)
 float_literal64             {float_literal_no_suffix}f(64)
 

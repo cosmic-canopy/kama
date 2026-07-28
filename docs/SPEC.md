@@ -28,6 +28,22 @@ borrow — a slice/span), or `type contract` (an interface).
 No raw arrays and **no raw pointers — by design** (raw memory access is confined to `unsafe { }` at the FFI
 boundary). Collections are generic library types.
 
+### Numeric literals
+
+| form | example | notes |
+|---|---|---|
+| decimal / hex / octal integer | `42`, `0xFF`, `0o17` | no digit separators — `1_000` is not a literal |
+| based integer | `0b1010_2` | `0b<digits>_<base>`, base 2–32; the `_<base>` is required |
+| integer suffix | `42i32`, `42ui32` | `u?i(8\|16\|32\|64)` — unsigned is **`ui`**; there is no bare `42u32` |
+| float | `12.5`, `12.5e10`, `1e10`, `1.5e-3` | `digits.digits` with an optional exponent, **or** `digits` with a required one |
+| float suffix | `1.5f32`, `1e10f64` | `f32` / `f64` |
+
+**A float literal's dot needs digits on both sides** — `1.` and `.5` are rejected
+(`tests/xfail/float_bare_dot.kama`); those are the error-prone spellings, `.5` reading as a stray member
+access and `1.` as an unfinished expression. A **dotless exponent is fine** (`1e10`), because the exponent
+marker already makes it unmistakably a float. This is exactly Swift's and Zig's rule. There is **no
+normalization requirement**: `12.5e10` and `0.5e10` are both literals, not just `1.25e11`.
+
 ### The `string` type
 
 There is **one** string type: lowercase `string`, a builtin like `int32`/`bool`/`float64`. It lowers to a

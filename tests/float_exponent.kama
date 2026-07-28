@@ -1,0 +1,34 @@
+// Scientific notation. Two regressions in one fixture, both from the lexer's float macros:
+//   1. The exponent form accepted only a SINGLE digit before the dot, so `1.5e10` lexed but `12.5e10`
+//      did not — while non-normalized `0.0001e10` was fine, so it was not a normalization rule either.
+//   2. A dotless exponent (`1e10`) was rejected outright, which no mainstream language does; it blocked
+//      pasting constants straight from C headers and datasheets.
+// kama now matches Swift and Zig: `digits.digits` with an optional exponent, or `digits` with a required
+// one. A dot still needs digits on both sides (see tests/xfail/float_bare_dot.kama).
+// Asserts the VALUES, not just that it parses — a mis-lexed exponent still compiles to *something*.
+fn int32 main() {
+    int32 r = 0;
+
+    float64 a = 12.5e2f64;                      // 1250.0 — multi-digit mantissa, regression 1
+    if (a > 1249.9f64 && a < 1250.1f64) { r = r + 8; }
+
+    float64 b = 123.456e+1f64;                  // 1234.56 — explicit `+` exponent
+    if (b > 1234.5f64 && b < 1234.6f64) { r = r + 8; }
+
+    float64 c = 12.5e-2f64;                     // 0.125 — negative exponent
+    if (c > 0.124f64 && c < 0.126f64) { r = r + 8; }
+
+    float64 d = 1e3f64;                         // 1000.0 — dotless exponent, regression 2
+    if (d > 999.9f64 && d < 1000.1f64) { r = r + 8; }
+
+    float64 e = 1E-3f64;                        // 0.001 — capital E, negative, dotless
+    if (e > 0.0009f64 && e < 0.0011f64) { r = r + 5; }
+
+    float32 f = 1.5e2f32;                       // 150.0 — the single-digit form still works
+    if (f > 149.9f32 && f < 150.1f32) { r = r + 3; }
+
+    float64 g = 12.5e10f64 / 1e9f64;            // 125.0 — both forms, mixed, surviving arithmetic
+    if (g > 124.9f64 && g < 125.1f64) { r = r + 2; }
+
+    return r;   // 42
+}

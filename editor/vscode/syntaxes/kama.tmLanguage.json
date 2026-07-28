@@ -133,11 +133,50 @@
       }
     },
     "numbers": {
+      "comment": "Mirrors kama.l exactly; guarded by tools/check-syntax-drift.sh. Three things the earlier rules got wrong: the integer suffix is `u?i(8|16|32|64)`, so it is `42ui32` and there is NO bare `42u32`; kama has NO digit separators, so `1_000` is not a literal; and a float suffix needs a fractional part, so `42f32` is not one either. Each literal splits its digits from its TYPE SUFFIX via captures, so `i32` in `42i32` colors like the `int32` keyword rather than like the digits. Anything else starting with a digit is flagged illegal instead of being coloured as a valid number.",
       "patterns": [
-        { "name": "constant.numeric.hex.kama", "match": "\\b0[xX][0-9A-Fa-f_]+(i8|i16|i32|i64|u8|u16|u32|u64)?\\b" },
-        { "name": "constant.numeric.octal.kama", "match": "\\b0[oO][0-7_]+(i8|i16|i32|i64|u8|u16|u32|u64)?\\b" },
-        { "name": "constant.numeric.float.kama", "match": "\\b[0-9][0-9_]*\\.[0-9_]+([eE][-+]?[0-9]+)?(f32|f64)?\\b" },
-        { "name": "constant.numeric.integer.kama", "match": "\\b[0-9][0-9_]*(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64)?\\b" }
+        {
+          "comment": "Based literal `0b<digits>_<base 2..32>` (e.g. 0b1010_2) — must precede the integer rule.",
+          "match": "\\b(0[bB][0-9A-Za-z]+_(?:[12][0-9]|3[0-2]|[2-9]))((?:u?i(?:8|16|32|64))?)\\b",
+          "captures": {
+            "1": { "name": "constant.numeric.other.kama" },
+            "2": { "name": "storage.type.numeric.kama" }
+          }
+        },
+        {
+          "match": "\\b(0[xX][0-9A-Fa-f]+)((?:u?i(?:8|16|32|64))?)\\b",
+          "captures": {
+            "1": { "name": "constant.numeric.hex.kama" },
+            "2": { "name": "storage.type.numeric.kama" }
+          }
+        },
+        {
+          "match": "\\b(0[oO][0-7]+)((?:u?i(?:8|16|32|64))?)\\b",
+          "captures": {
+            "1": { "name": "constant.numeric.octal.kama" },
+            "2": { "name": "storage.type.numeric.kama" }
+          }
+        },
+        {
+          "comment": "`digits.digits` with an optional exponent, or `digits` with a required one (1e10). A dot needs digits on both sides, so `1.` and `.5` fall through to the illegal rule.",
+          "match": "\\b((?:[0-9]+\\.[0-9]+(?:[eE][-+]?[0-9]+)?|[0-9]+[eE][-+]?[0-9]+))((?:f32|f64)?)\\b",
+          "captures": {
+            "1": { "name": "constant.numeric.float.kama" },
+            "2": { "name": "storage.type.numeric.kama" }
+          }
+        },
+        {
+          "match": "\\b([0-9]+)((?:u?i(?:8|16|32|64))?)\\b",
+          "captures": {
+            "1": { "name": "constant.numeric.integer.kama" },
+            "2": { "name": "storage.type.numeric.kama" }
+          }
+        },
+        {
+          "comment": "Reached only when every rule above failed: a bad suffix (42u32, 42f32), a digit separator (1_000), or a based literal with no `_<base>` (0b1010).",
+          "name": "invalid.illegal.numeric.kama",
+          "match": "\\b[0-9][0-9A-Za-z_]*\\b"
+        }
       ]
     },
     "functions": {
