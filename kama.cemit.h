@@ -535,7 +535,8 @@ private:
     // The user callable whose BODY contains (line,col), plus its enclosing type. Span containment over the
     // unit's top-level decls and class members — a flat loop, no scope stack (the emitter's `_scopes` is
     // long dead by index time, and rebuilding it is not needed: see collectBindings).
-    struct QueryCtx { std::string typeKey;                 // enclosing type's _classes/_genericTypes key ("" at file scope)
+    struct QueryCtx { const CompilationUnit* unit = nullptr;   // the file the cursor is in
+                      std::string typeKey;                 // enclosing type's _classes/_genericTypes key ("" at file scope)
                       std::string funcName;                // enclosing callable's kama name (friend-grant checks)
                       SharedParameterList params;
                       SharedBlock body;
@@ -590,6 +591,13 @@ private:
     void addNamespaceSymbols(const std::string& path, std::vector<CompletionItem>& out);
     // A `::`-qualified path -> the table key it names, "" if it names a namespace or nothing (M4.2).
     std::string resolvePathAsType(const std::string& path);
+    // Everything spellable as a BARE name at the cursor (M4.3): bindings, the enclosing type's members,
+    // and the file-visible top-level decls. The last of those is the flooding risk — `_classes`/`_funcs`
+    // span the whole import closure — so `bareNameOf` is the exact INVERSE of resolveUserNameImpl's
+    // lookup order, and a key it cannot spell is a key that must not appear.
+    std::string bareNameOf(const std::string& key) const;
+    void addNamesInScope(const QueryCtx& qc, const std::vector<QueryBinding>& binds,
+                         std::vector<CompletionItem>& out);
 
 
     // Discards any stray write during analysis mode (collectProgram writes no C, but `unsupported()` still

@@ -154,3 +154,12 @@ fn int32 scopes() {
     Stat made = Stat.of(n: 1);
     return viaStatic + viaConst + viaNs + made.size();
 }
+
+// M4.3 — a USER's own `extern` FFI binding must still complete (only LIBRARY C bindings are filtered).
+extern fn int32 myOwnFfi(int32 x);
+
+fn int32 bareNames(int32 seed) {
+    Cell near;
+    int32 far = near.value + seed;
+    return far;
+}

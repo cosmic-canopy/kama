@@ -350,5 +350,31 @@ expect --complete 153:33 -- "contract	Sized"
 expect --complete 153:33 -- "function	blend"
 reject --complete 153:33 -- "DynamicArray"                  # ... never another namespace's symbols
 
+# ---------------------------------------------------------------------------------------------------
+# M4.3 — bare names. The flooding guard is the whole milestone: `_classes` and `_funcs` span the entire
+# import closure, so `bareNameOf` is the exact INVERSE of resolveUserNameImpl's lookup order and anything
+# it cannot spell must not appear.
+echo "check-query: M4.3 names in scope"
+expect --complete 164:4 -- "local	near	Cell"                 # locals, with their declared types
+expect --complete 164:4 -- "param	seed	int32"                # ... and parameters
+expect --complete 164:4 -- "type	Cell"                       # a type declared in this file
+expect --complete 164:4 -- "type	DynamicArray"               # ... one reached through an import
+expect --complete 164:4 -- "function	print	fn void print(s: string)"   # the always-in-scope FLOOR
+expect --complete 164:4 -- "function	args	fn Args args()"
+expect --complete 164:4 -- "function	main	fn int32 main()"    # `main` is the one name the resolver rewrites
+expect --complete 164:4 -- "keyword	foreach"                  # the lexer's own keyword table
+# The C-ABI plumbing behind the floor is spellable but is NOT language surface. A user's own extern is.
+expect --complete 164:4 -- "function	myOwnFfi"
+reject --complete 164:4 -- "	free	"
+reject --complete 164:4 -- "kama_args_at"
+reject --complete 164:4 -- "kama_ctrl_release_strong"
+reject --complete 164:4 -- "kama_main"                        # ... and never a mangled spelling
+# A deeper namespace than any `using` reaches is unspellable here, mangled instances doubly so.
+reject --complete 164:4 -- "DynamicArray_"
+reject --complete 164:4 -- "collections__"
+# Inside a method a field is spellable bare — which is exactly why a local may not shadow one.
+expect --complete 23:38 -- "field	secret	int32"               # own private field
+expect --complete 23:38 -- "method	size	fn int32 size()"
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

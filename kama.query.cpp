@@ -891,6 +891,7 @@ std::string CEmitter::classKeyOfName(const SharedIdentifier& name)
 CEmitter::QueryCtx CEmitter::enclosingCallable(const CompilationUnit* unit, int line, int col)
 {
     QueryCtx qc;
+    qc.unit = unit;
     if (!unit || !unit->codeDeclarationList) return qc;
     auto holds = [&](const ASTNode* n) { return n && rangeOfNode(n).contains(line, col); };
     auto take = [&](SharedParameterList ps, SharedBlock body, const SharedIdentifier& nm) {
@@ -1524,6 +1525,98 @@ void CEmitter::addNamespaceSymbols(const std::string& path, std::vector<Completi
     }
 }
 
+// ---- M4.3: bare names ---------------------------------------------------------------------------------
+
+// The bare spelling `key` would answer to at this cursor, or "" if it is unreachable from here. This is the
+// exact inverse of resolveUserNameImpl's lookup order — the file's own scope, then each `using`d namespace,
+// then the bare/global floor — and it is what keeps the list honest: `_classes` and `_funcs` span the entire
+// import closure, thousands of entries, and a name that cannot be spelled here must not be offered.
+// A remainder still containing `__` means the key sits in a DEEPER namespace than any `using` reaches
+// (`std__collections__X` under a `using std`), and is likewise unspellable.
+std::string CEmitter::bareNameOf(const std::string& key) const
+{
+    auto under = [&](const std::string& ns) -> std::string {
+        if (ns.empty()) return "";
+        std::string pre = ns + "__";
+        if (key.compare(0, pre.size(), pre) != 0) return "";
+        std::string rest = key.substr(pre.size());
+        return (rest.empty() || rest.find("__") != std::string::npos) ? "" : rest;
+    };
+    std::string n = under(_nsCtx.scope);
+    if (!n.empty()) return n;
+    for (auto& u : _nsCtx.usings) { n = under(u); if (!n.empty()) return n; }
+    return key.find("__") == std::string::npos ? key : "";   // the bare floor, in scope everywhere
+}
+
+void CEmitter::addNamesInScope(const QueryCtx& qc, const std::vector<QueryBinding>& binds,
+                               std::vector<CompletionItem>& out)
+{
+    std::set<std::string> seen;
+    auto emit = [&](const std::string& label, CompletionKind k, const std::string& detail,
+                    const std::string& container) {
+        if (!label.empty() && seen.insert(label).second)
+            out.push_back(CompletionItem{ label, k, detail, container });
+    };
+
+    // Innermost first, so a local shadows nothing but still sorts ahead of a same-named global.
+    for (auto it = binds.rbegin(); it != binds.rend(); ++it)
+        emit(it->name, it->isParam ? CompletionKind::Param : CompletionKind::Local,
+             spellTypeIn(it->ownerKey, it->type), "");
+
+    // Inside a method, a field or method of the enclosing type is spellable bare (that is precisely why
+    // a local may not shadow one).
+    if (!qc.typeKey.empty()) {
+        std::vector<CompletionItem> mine;
+        addMembers(qc.typeKey, /*wantStatic*/ false, qc, mine);
+        for (auto& m : mine) emit(m.label, m.kind, m.detail, m.container);
+        emit("this", CompletionKind::Keyword, qc.typeKey, "");
+    }
+
+    for (auto& kv : _classes) {
+        if (kv.second.isGenericInst || kv.second.isIntrinsicColl || kv.second.isVariant
+            || kv.second.isExternStruct) continue;                     // not names anyone can spell
+        emit(bareNameOf(kv.first), CompletionKind::Type, "", "");
+    }
+    for (auto& kv : _genericTypes)     emit(bareNameOf(kv.first), CompletionKind::Type, "", "");
+    for (auto& kv : _enums)            emit(bareNameOf(kv.first), CompletionKind::Type, "enum", "");
+    for (auto& kv : _interfaces)       { if (!kv.second.isGenericInst) emit(bareNameOf(kv.first), CompletionKind::Contract, "", ""); }
+    for (auto& kv : _genericContracts) emit(bareNameOf(kv.first), CompletionKind::Contract, "", "");
+    for (auto& kv : _funcs) {
+        std::string label = bareNameOf(kv.first);
+        if (label.empty()) continue;
+        // An `extern fn` is a C-ABI BINDING, not language surface — `kama_args_at`,
+        // `kama_ctrl_release_strong`, `malloc`/`free`. They are spellable, which is exactly why the
+        // namespace walk finds them, and offering them would bury `print` and `args` under plumbing.
+        // Offer one only when it is declared in the file being edited, so a user's own FFI still
+        // completes. "Not in the prelude" is NOT the test: `free` is declared in the prelude AND in
+        // std::collections::allocator, and the std unit is a real analyzed unit.
+        if (isExtern(kv.second.node)) {
+            auto d = _defSites.find(kv.first);
+            if (d == _defSites.end() || d->second.unit != qc.unit) continue;
+        }
+        // `main` is the one name the resolver rewrites unconditionally (resolveFuncImpl), so the table
+        // key is `kama_main` and the walk would otherwise offer that unspellable spelling.
+        if (kv.first == "kama_main") label = "main";
+        std::string detail = "fn " + (kv.second.node ? spellTypeIn("", kv.second.node->returnType) : std::string())
+                           + " " + label + "(";
+        for (size_t i = 0; i < kv.second.params.size(); ++i) {
+            detail += (i ? ", " : "") + kv.second.params[i].name + ": ";
+            detail += (kv.second.node && kv.second.node->parameters && i < kv.second.node->parameters->size()
+                       && (*kv.second.node->parameters)[i])
+                          ? spellTypeIn("", (*kv.second.node->parameters)[i]->type)
+                          : kv.second.params[i].className;
+        }
+        emit(label, CompletionKind::Function, detail + ")", "");
+    }
+    // Per-symbol imports (`import a::b::{X as Y}`) bind a LOCAL spelling that no key-prefix walk can find.
+    for (auto& a : _nsCtx.symbolAliases)
+        if (_classes.count(a.second) || _funcs.count(a.second) || _enums.count(a.second)
+            || _interfaces.count(a.second) || _genericTypes.count(a.second))
+            emit(a.first, _funcs.count(a.second) ? CompletionKind::Function : CompletionKind::Type, "", "");
+
+    for (size_t i = 0; i < kamaKeywordCount(); ++i) emit(kamaKeywordAt(i), CompletionKind::Keyword, "", "");
+}
+
 std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, const CompletionContext& ctx)
 {
     std::vector<CompletionItem> out;
@@ -1545,7 +1638,7 @@ std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, cons
         });
         return out;
     }
-    if (ctx.trigger != CompletionTrigger::Dot) return out;   // bare names are M4.3
+    if (ctx.trigger != CompletionTrigger::Dot && ctx.trigger != CompletionTrigger::Bare) return out;
 
     QueryCtx qc = enclosingCallable(unit, ctx.line, ctx.column);
     std::vector<QueryBinding> binds;
@@ -1558,10 +1651,30 @@ std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, cons
     binds.erase(std::remove_if(binds.begin(), binds.end(),
                                [&](const QueryBinding& b) { return b.line > ctx.line; }), binds.end());
 
-    bool isType = false;
-    std::string cls = classOfPath(qc, binds, ctx.receiver, isType);
-    if (!cls.empty()) addMembers(cls, isType, qc, out);
-    std::sort(out.begin(), out.end(), [](const CompletionItem& a, const CompletionItem& b) {
+    if (ctx.trigger == CompletionTrigger::Bare) {
+        addNamesInScope(qc, binds, out);
+    } else {
+        bool isType = false;
+        std::string cls = classOfPath(qc, binds, ctx.receiver, isType);
+        if (!cls.empty()) addMembers(cls, isType, qc, out);
+    }
+    // Rank by RELEVANCE at this trigger, not by enum order: at a bare position the nearest names win
+    // (a local beats a keyword); after a `.` the member kinds are already in the right order.
+    bool bare = (ctx.trigger == CompletionTrigger::Bare);
+    auto rank = [&](CompletionKind k) {
+        if (!bare) return (int)k;
+        switch (k) {
+            case CompletionKind::Local: case CompletionKind::Param:    return 0;
+            case CompletionKind::Field: case CompletionKind::Method:   return 1;
+            case CompletionKind::Function:                             return 2;
+            case CompletionKind::Type: case CompletionKind::Contract:  return 3;
+            case CompletionKind::Keyword:                              return 5;
+            default:                                                   return 4;
+        }
+    };
+    std::sort(out.begin(), out.end(), [&](const CompletionItem& a, const CompletionItem& b) {
+        int ra = rank(a.kind), rb = rank(b.kind);
+        if (ra != rb) return ra < rb;
         if (a.kind != b.kind) return (int)a.kind < (int)b.kind;
         return a.label < b.label;
     });

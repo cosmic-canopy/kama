@@ -537,8 +537,19 @@ static int getToken(const char *lexeme)
 // NB: bin_search returns IDENTIFIER (not -1) on a miss, which is what `getToken` above actually relies on.
 bool kamaIsKeyword(const char *word)
 {
-  static int num_keywords = sizeof(keywords) / sizeof(name_value);
-  return bin_search(word, 0, num_keywords) != IDENTIFIER;
+  return bin_search(word, 0, (int)kamaKeywordCount()) != IDENTIFIER;
+}
+
+/* The keyword table, exposed for keyword COMPLETION (LSP M4.3). Same single-source-of-truth reasoning as
+   kamaIsKeyword: the completion list and the lexer must never disagree about what a keyword is. */
+size_t kamaKeywordCount(void)
+{
+  return sizeof(keywords) / sizeof(name_value);
+}
+
+const char *kamaKeywordAt(size_t i)
+{
+  return i < kamaKeywordCount() ? keywords[i].name : "";
 }
 
 std::string hexToUTF8(int cp)

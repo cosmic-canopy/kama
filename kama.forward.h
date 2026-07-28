@@ -142,5 +142,8 @@ typedef std::shared_ptr<CodeGenContext> SharedCodeGenContext;
 // Defined in kama.l, over the lexer's own keyword table — so callers that must reject reserved words
 // (the LSP's rename validation) can never drift from what the compiler actually reserves.
 bool kamaIsKeyword(const char* word);
+// The lexer's keyword table, for keyword completion (LSP M4.3) — one source of truth, as above.
+size_t      kamaKeywordCount();
+const char* kamaKeywordAt(size_t i);
 
 #endif //__KAMA_FORWARD_H__
