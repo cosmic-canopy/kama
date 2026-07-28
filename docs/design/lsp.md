@@ -1,7 +1,7 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M3 COMPLETE — all of M0–M3.5 shipped (2026-07-27, dev). NEXT = M4**, the active campaign as of
-2026-07-28 now that workspace-internal dependencies have landed
+**Status: M4 COMPLETE — all of M0–M4.9 shipped (M4 on 2026-07-28, dev). NEXT = M5** (error recovery +
+incremental reparse), then M6 (editor clients). Interleaved before M4: workspace-internal dependencies
 ([workspace-deps-kickoff.md](workspace-deps-kickoff.md)). The **confirmed next-highest post-1.0 priority** (user, 2026-07-26;
 [ROADMAP.md](../ROADMAP.md) §1 post-1.0 sequence + §10). This doc is the cold-start handoff: what exists to
 reuse, the decisions to settle FIRST, a milestone plan, and a size gauge. **Read [GOALS.md](../GOALS.md) and
@@ -107,21 +107,29 @@ ROADMAP §10 before designing.**
   `client/registerCapability`), `kama query --project`, `lspRealPath`. Emission byte-identical across all
   535 fixtures; native 797/797, container 797/797, ASan/UBSan 768/768 plus a sanitized-compiler run of both
   LSP harnesses. Cost: **0.45 s** for a 43-file project rebuild vs 0.23 s for a single-file closure.
-- **NEXT: M4 — completion + signature help. ACTIVE.** Cold-start brief:
-  [lsp-m4-kickoff.md](lsp-m4-kickoff.md), line numbers re-verified against `a99436d`. It front-loads the
-  two **hard prerequisites** recon turned up: the emitter's scope stack is torn down before the index is
-  built (so "which locals are visible here" is unanswerable today), and named-argument label spans are
-  still whole-production (so signature help's active-parameter index is impossible today).
-  [lsp-m3-kickoff.md](lsp-m3-kickoff.md) carries the **campaign-exit checklist** of those remaining
-  mid-action identifier productions; it must be closed before the campaign ends, and the named-argument
-  entry is a blocker for M4 specifically.
+- **M4 — completion + signature help. ✅ SHIPPED 2026-07-28** (M4.0–M4.9). Design of record, with an
+  "As shipped" section: [lsp-m4-kickoff.md](lsp-m4-kickoff.md). Three of the brief's load-bearing claims
+  did not survive contact with the code, and each reshaped the milestone:
+  - **`exprClass` / `isTypeReceiver` / `canAccess` are unusable from a query path.** The brief listed all
+    three as free reuse. `exprClass` calls `cType` on six paths — forbidden, since `unsupported()` would
+    land a phantom diagnostic on the file the editor is showing — and reads `_localTypes`, which is
+    cleared at every function entry and after `analyze()` holds the LAST emitted function's locals.
+    Substitutes: `mangleElem` (type node → mangled key, generic instances included), `findMethod`, and a
+    fresh pure `visibleFrom`.
+  - **The "scope extents" prerequisite was unnecessary.** kama FORBIDS shadowing, so within a callable a
+    name is unique except across sibling scopes — and completion emits LABELS, which dedupe. Rename needed
+    per-declaration identity; completion does not. Consequence: **zero emitter edits** in M4.0–M4.7.
+  - **The "named-argument spans block signature help" prerequisite was false.** With no error productions
+    in the grammar, a half-typed call has no AST anywhere, so the active parameter must come from a
+    lexical scan regardless. The checklist stayed a campaign-exit requirement and shipped as M4.9.
 
-  Interleaved since M3.5: the workspace-deps campaign, which rewrote much of `kama.driver.cpp` (the M4
-  brief's references are corrected for it) and gave `lspAnalyze` two things for free — imports now resolve
-  a dependency laid out with `src/`, and a package that imports something its own manifest does not
-  declare is reported. That report currently goes to stderr; routing it to
-  `textDocument/publishDiagnostics` against the offending `kama.json` is a small win once M4's plumbing
-  exists.
+  The brief also **omitted the highest-value context in the language**: every kama argument is named, so an
+  argument slot with no label yet is a first-class completion context, ranked above import paths.
+
+  Also fixed here: a **pre-existing out-of-bounds read** in `lspAnalyzeWorkspace` (parallel `units`/`paths`
+  vectors, a `paths` index bounded by `units.size()`), present since the workspace-deps campaign and
+  invisible in a plain build. The sanitized-compiler run of the LSP harnesses is what caught it — it is a
+  manual step, not part of `run_tests.sh`, so **run it at the end of every LSP milestone**.
 
 ## Why (from the ROADMAP)
 

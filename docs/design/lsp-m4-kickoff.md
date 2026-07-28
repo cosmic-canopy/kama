@@ -1,7 +1,7 @@
 # LSP M4 — completion + signature help (cold-start brief)
 
-**Status: NOT STARTED — this is the ACTIVE next campaign** (user, 2026-07-28), now that
-workspace-internal dependencies have shipped. Written immediately after M3.5 (`469da24`); **line numbers
+**Status: ✅ SHIPPED 2026-07-28** (M4.0–M4.9). The brief below is preserved as written; see
+**"As shipped"** at the end for where it was wrong, which was in three load-bearing places. Written immediately after M3.5 (`469da24`); **line numbers
 re-verified against `a99436d`**, which is where the `kama.driver.cpp` references below now point. Read
 [lsp.md](lsp.md) first for campaign context, then this.
 
@@ -147,3 +147,89 @@ kama.driver.cpp (after the anon namespace closes — the M1 linkage rule still a
 - **Anything keyed off "the first open document" must not depend on URI sort order** — `docs` is a
   `std::map` keyed by URI, and that ordering differs between macOS and the container. It cost M3.5 a
   container-only failure.
+
+
+---
+
+# As shipped (2026-07-28) — where the brief was wrong
+
+Ten commits, M4.0–M4.9. `kama query --complete L:C` / `--sighelp L:C` are the CLI seams; check-query.sh
+grew 100 → 170 assertions and check-lsp.sh 58 → 75. 799/799 native, emission byte-identical across all
+535 lspref fixtures, both LSP harnesses green under `make EXTRA_CXXFLAGS="-fsanitize=address,undefined"`.
+
+## The three claims that did not survive contact with the code
+
+**1. The three helpers in "what the index already gives you for free" are all UNUSABLE from a query path.**
+`exprClass` calls `cType` on six paths — the one thing the campaign's own rule forbids, since
+`unsupported()` pollutes `_diagnostics` and `diagnosticsFor` filters by file, so a completion request would
+inject phantom squiggles into the open file — and it reads `_localTypes`, which is cleared at every
+function entry and after `analyze()` holds *the last emitted function's* locals. `isTypeReceiver` calls
+both. `canAccess` calls `unsupported()` on denial and decides from `_currentClass`/`_currentFunc`, both
+dead by index time. Substitutes, each verified clean through its transitive closure: **`mangleElem`** (the
+exact "type node → mangled key" function, generic instances included), `genericTypeMangle`, `findMethod`,
+and a fresh pure `visibleFrom` predicate.
+
+**2. Prerequisite (1), "the scope stack is dead by index time", did not need solving.** kama **forbids
+shadowing** (`kama.cemit.cpp`, `emitDeclarator`: a local may not shadow a parameter, an enclosing-scope
+local, or a field), so within one callable a name is unique *except across sibling scopes* — and
+completion emits **labels**, so two sibling bindings collapse to one entry with identical insert text.
+Rename needed per-declaration identity; completion does not. No `popScope()` edit, no scope tree, no
+`RecordedDef` extension: **M4.0–M4.7 touch no emitter code at all**, so byte-identical emission held by
+construction rather than by testing.
+
+**3. Prerequisite (2), "named-argument spans block signature help", was false.** `kama.y` has **no error
+productions**. A half-typed call `f(a: 1, ` therefore has no AST *anywhere* — not in the last-good index,
+not in a fresh parse — so the active parameter must come from a textual scan of the live buffer regardless
+of any span work. The checklist remained a campaign-exit requirement and shipped last, as M4.9.
+
+## What the brief omitted
+
+**Argument-label completion.** `kama.y:1106-1109` shows the only `argument` productions are
+`IDENTIFIER COLON …` — every kama argument is named — so an argument slot with no label yet is the
+language's most-used completion context. It falls straight out of the callee resolution signature help
+needs, and it outranks import paths and keywords.
+
+## The design that resulted
+
+**Two layers.** A **lexical** layer (`completionContextAt`, in `kama.query.cpp` so the CLI and the server
+share one scan) recovers `{trigger, receiver, callee, prefix, filled, activeParam}` from raw buffer text;
+a **semantic** layer answers from the post-`analyze()` tables. What crosses the seam is that lexical
+context, never a bare cursor position — the receiver the user just typed exists in no AST, so asking the
+index to find it at a position is asking it to find something provably absent.
+
+**The stale index is usually CORRECT, not merely tolerable.** Press Enter (still parses, index refreshes),
+then type `p.` (breaks the parse, adds no lines): the last good index stays geometry-accurate for the
+whole file. Every single-line statement lands there. M4.6 covers the two cases that do not — a buffer that
+has never parsed, and one whose line count moved — by blanking the cursor's line and re-analyzing.
+Blanking, not a placeholder: it needs no grammar knowledge and preserves geometry exactly.
+
+## Findings worth carrying to M5/M6
+
+- **A pre-existing out-of-bounds read in `lspAnalyzeWorkspace`**, fixed in M4.5. `units` and `paths` are
+  parallel; the overlay loop bounded a `paths` index by `units.size()` and then pushed a unit without a
+  path. Fires with two buffers open when one is outside the project set. Present since the workspace-deps
+  campaign; a plain build reads adjacent memory and carries on. **The sanitized-compiler run of the LSP
+  harnesses is what caught it, and it is a manual step — run it at the end of every LSP milestone.**
+- **A type may carry a FIELD and a METHOD under one name.** `std::process::Command` has both spellings of
+  `args`, so field-vs-method precedence must follow whether the source CALLED the segment. Only real
+  stdlib code exposed this; the fixture could not have.
+- **Bare-name completion is a filtering problem, not an enumeration one.** `bareNameOf` is the exact
+  inverse of `resolveUserNameImpl`'s lookup order, and three leaks got past the first cut: the C-ABI
+  plumbing behind the floor (`kama_args_at`, `malloc`, `free`) is genuinely spellable and buried `print`
+  under 27 lines of shims; `main`'s table key is `kama_main`; and ranking by enum order put keywords above
+  locals. Note `free` is declared in the prelude **and** in `std::collections::allocator`, so "not in the
+  prelude" is not the test — an `extern fn` is offered only when declared in the file being edited.
+- **Backticks inside a double-quoted `expect` description are shell command substitution.** The harness
+  was silently running `.` and `p.` while building its own text, and one instance was a hard syntax error.
+- **M4.9 was measured, not assumed.** Without the `type_decl_head` stamp, `prepareRename` on `Box` in
+  `type value Box<T>` returned characters 11-17 — covering `Box<T>` — so a rename would have deleted the
+  type-parameter list. A span is invisible in every other test: nothing fails, the rewrite is just wrong.
+
+## Deferred, deliberately
+
+- **Indexing argument labels** so renaming a parameter rewrites its call sites. The spans are now correct
+  (M4.9), which turns this from a data-loss risk into an ordinary feature. M5.
+- **Promoting the undeclared-import warning** to a `publishDiagnostics` entry against the offending
+  `kama.json`. Still stderr-only; the plumbing it was waiting on now exists.
+- **A parse cache** (`path → (mtime, unit)`). Completion on a never-parsed buffer costs one extra analysis;
+  `didChange` already costs one per keystroke. M5 (incremental) territory.

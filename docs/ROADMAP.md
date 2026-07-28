@@ -539,14 +539,18 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   Real **source spans** landed with it (Bison `%locations`, deferred until now), as did the
   front-end-as-library **query API** the scripting/self-hosting tracks reuse: `collectProgram` turned out to
   be a self-contained analysis pass already, so this was a facade over the existing tables rather than a
-  rewrite. **NEXT / ACTIVE (2026-07-28): M4** — cold-start brief
-  [design/lsp-m4-kickoff.md](design/lsp-m4-kickoff.md), line numbers re-verified against `a99436d`; it
-  front-loads two hard prerequisites (the emitter's scope stack is gone by index time; named-argument
-  label spans are whole-production). **Remaining:** M4 completion +
-  signature help (the **prerequisite for the `global::` floor-completion idea**,
-  [design/logging.md](design/logging.md) Part E), M5 error recovery + incremental reparse (where a
-  hand-written recursive-descent parser replacing Bison would be the escalation), M6 clients for all major
-  editors. Status of record: [design/lsp.md](design/lsp.md).
+  rewrite. **M4 completion + signature help — SHIPPED (2026-07-28)**, M4.0–M4.9:
+  members after `.` and `::`, names in scope, keywords, import paths, signature help, argument-label
+  completion (kama has no positional arguments, so that is the language's most-used context), and the
+  **`global::` root qualifier** it was the prerequisite for ([design/logging.md](design/logging.md) Part E
+  — now shipped, with the completion payoff it waited for). Both of the kickoff brief's "hard
+  prerequisites" turned out not to be prerequisites, and the three helpers it proposed reusing were all
+  unusable from a query path; see the "As shipped" section of
+  [design/lsp-m4-kickoff.md](design/lsp-m4-kickoff.md). The campaign-exit STAMP_LOC checklist is CLOSED
+  (M4.9) — measured, not assumed: renaming a generic type would have deleted its type-parameter list.
+  **Remaining:** M5 error recovery + incremental reparse (where a hand-written recursive-descent parser
+  replacing Bison would be the escalation), M6 clients for all major editors. Status of record:
+  [design/lsp.md](design/lsp.md).
 - **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
   liftable out of the monorepo to stand alone. Design of record:
   [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:
