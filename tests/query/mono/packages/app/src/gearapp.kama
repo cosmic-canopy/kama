@@ -1,0 +1,9 @@
+// The CONSUMING package. gearcore does not import this, so this file is invisible to gearcore's own import
+// closure — only the declared workspace brings it into view. (The import resolves because every project
+// file is in the one analysis; a real build would declare core as a path dependency.)
+import gearcore::{Gear};
+
+fn int32 useGear() {
+    Gear g = Gear.of(teeth: 12);
+    return g.teeth;
+}

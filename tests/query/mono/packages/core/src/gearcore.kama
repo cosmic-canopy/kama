@@ -1,0 +1,13 @@
+// LSP M3.5 monorepo fixture — the DECLARING package.
+// The root kama.json says `"packages": ["packages/*"]` and each package says `"sources": ["src"]`, so the
+// project is DECLARED, not inferred: no walk of the repo, no file cap, and `outside/` is excluded because
+// nothing ever claimed it.
+namespace gearcore;
+
+export { Gear };
+
+type value Gear {
+    public int32 teeth;
+
+    public ctor of(int32 teeth) { Gear r; r.teeth = teeth; return give r; }
+}

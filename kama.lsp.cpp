@@ -804,7 +804,7 @@ struct Server {
             for (const auto& r : refs)
                 if (r.uri != path) {
                     std::string why = proj.tooLarge
-                        ? (proj.root + " holds more than " + std::to_string(kLspMaxProjectFiles) +
+                        ? (proj.root + " holds more than " + std::to_string(proj.cap) +
                            " .kama files, which is a source tree rather than a package. Add a kama.json "
                            "next to the sources you want indexed")
                         : std::string("this file is not part of a kama package. Add a kama.json next to "

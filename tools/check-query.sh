@@ -175,5 +175,24 @@ else
     fail=1
 fi
 
+# ---------------------------------------------------------------------------------------------------
+# M3.5 — DECLARED project scope (`sources` / `packages` in kama.json).
+#
+# tests/query/mono/ is a workspace: the root declares `"packages": ["packages/*"]`, each member declares
+# `"sources": ["src"]`, and `outside/stray.kama` declares a same-named `Gear` that nothing ever claims.
+# Because the scope is DECLARED rather than inferred, no directory walk of the repo happens, the file cap
+# does not apply, and the stray type cannot collide with the workspace's.
+FIXTURE="$ROOT/tests/query/mono/packages/core/src/gearcore.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo "check-query: M3.5 declared project scope (sources + packages)"
+# The consuming package is reached even though the declaring one never imports it — and reached WITHOUT an
+# editor workspace root, because an ancestor manifest explicitly owns this file.
+expect --project --refs 9:11 -- "gearcore.kama:9:11"        # the declaration
+expect --project --refs 9:11 -- "gearapp.kama:7:4"          # a SIBLING PACKAGE's use
+reject --project --refs 9:11 -- "stray.kama"                # ... and never the undeclared decoy
+# Without --project the sibling package is invisible again (the closure is one file).
+reject --refs 9:11 -- "gearapp.kama"
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

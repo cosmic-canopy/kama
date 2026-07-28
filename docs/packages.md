@@ -45,6 +45,62 @@ kama run src/app.kama    # explicit file — same thing
 location, runs it, forwards the exit code, and cleans up. It's **native-only** (wasm needs a
 browser/node, embedded emits a freestanding object) — for those, use `kama build --target …`.
 
+## Telling the tooling what your project contains — `sources` and `packages`
+
+Both keys are **optional**, and both exist to replace an inference with a declaration. Editor tooling
+(the language server) has to know which files make up your project before it can safely do a
+project-wide operation like renaming a symbol across files. Without a declaration it has to infer —
+"every `.kama` under here" — and an inference can be wrong, so it is **capped at 500 files**; past that,
+cross-file rename refuses rather than answer from a set it doesn't trust. Declaring removes the guess,
+and with it the cap.
+
+**`sources`** — which files are this package's, relative to the manifest. Each entry is a directory
+(searched recursively) or a single `.kama` file:
+
+```json
+{
+  "name": "myapp",
+  "version": "0.1.0",
+  "main": "src/app.kama",
+  "sources": ["src"]
+}
+```
+
+Now `examples/`, `tests/` and scratch files beside them are not part of the package, so a rename can
+never reach into them and a same-named type over there can never be confused with yours.
+
+**`packages`** — the sub-projects this manifest owns, each a directory with its own `kama.json`. This is
+how you declare a monorepo. A trailing `/*` expands to every immediate subdirectory that has a manifest:
+
+```json
+// the workspace root
+{
+  "name": "acme",
+  "version": "0.1.0",
+  "packages": ["packages/*", "tools/codegen"]
+}
+```
+
+```
+acme/
+  kama.json                      <- packages: ["packages/*", "tools/codegen"]
+  packages/
+    core/kama.json               <- sources: ["src"]
+    ui/kama.json                 <- sources: ["src"]
+  tools/codegen/kama.json
+  scratch/notes.kama             <- claimed by nobody: never indexed
+```
+
+`packages` is **recursive** — a member may declare members of its own, so monorepos nest to any depth —
+and cycles are broken automatically, so a manifest naming a directory that names it back is harmless. A
+manifest with `packages` but no `sources` is a pure aggregator: it contributes no files itself, only its
+members'. Editing a file in `packages/core` then makes the whole workspace the rename scope, so renaming
+a type there correctly updates `packages/ui`.
+
+Without either key nothing breaks — the tooling infers the file set as before. These keys buy precision
+and remove the cap. If you have a large tree that genuinely is one program and you'd rather not declare
+it, `KAMA_LSP_MAX_FILES` raises the inference cap (`0` = no limit).
+
 ## Adding a dependency
 
 Dependencies come from a local path, a git repo, or a tarball URL. Add one with `kama pkg

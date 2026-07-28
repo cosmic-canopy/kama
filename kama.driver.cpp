@@ -670,6 +670,8 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* deps = nullptr;      // set to capture `dependencies` (else it's skipped)
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
     std::string* mainOut = nullptr;                       // set to capture the `main` entry field (else skipped)
+    std::vector<std::string>* sourcesOut  = nullptr;
+    std::vector<std::string>* packagesOut = nullptr;
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
     std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
     std::string* versionOut = nullptr;                    // set to capture the `version` (else skipped) — `kama publish`
@@ -694,6 +696,23 @@ struct ManifestReader {
         }
         if (i >= s.size()) return fail("unterminated string");
         ++i; return true;
+    }
+
+    // A JSON array of strings (`sources`). Rejects a non-array or a non-string element rather than
+    // tolerating it: this one declares what the tooling may rewrite, so a typo must not silently widen
+    // or narrow the set.
+    bool stringArray(std::vector<std::string>& out) {
+        ws(); if (i >= s.size() || s[i] != '[') return fail("expected a JSON array");
+        ++i; ws();
+        if (i < s.size() && s[i] == ']') { ++i; return true; }
+        while (true) {
+            std::string v; if (!str(v)) return false;
+            out.push_back(v);
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
+            if (i < s.size() && s[i] == ']') { ++i; return true; }
+            return fail("expected ',' or ']' in a string array");
+        }
     }
 
     bool skipValue() {   // string | number | true/false/null | balanced object/array
@@ -913,6 +932,8 @@ struct ManifestReader {
             else if (key == "registries" && registriesOut) { if (!registriesObject(registriesOut)) return false; }
             else if (key == "overrides" && overridesOut) { if (!depsObject(overridesOut)) return false; }  // kama.local.json dep path-overrides (M5.3)
             else if (key == "log" && logOut) { if (!logObject()) return false; }   // baked log default (M5)
+            else if (key == "sources" && sourcesOut) { if (!stringArray(*sourcesOut)) return false; }  // LSP project scope
+            else if (key == "packages" && packagesOut) { if (!stringArray(*packagesOut)) return false; } // workspace members
             else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
             else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
             else if (key == "name" && nameOut) { if (!str(*nameOut)) return false; }
@@ -1003,6 +1024,39 @@ static bool loadManifestToolchain(const std::string& path, std::string& tcOut, s
     ManifestReader r(src, declared, defaults);
     r.toolchainOut = &tcOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// Load a `kama.json` manifest's `sources` — the directories/files that make up this package, relative to
+// the manifest. Empty (or absent) means "not declared", and the LSP falls back to walking the whole
+// manifest directory under a file cap. Declaring them is what removes the guess, and with it the cap.
+// Returns false + `err` on malformed JSON. (LSP M3.5.)
+static bool loadManifestSources(const std::string& path, std::vector<std::string>& out, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.sourcesOut = &out;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
+    return true;
+}
+
+// Load a `kama.json` manifest's `packages` — the member packages of a WORKSPACE root, relative to the
+// manifest, each a directory holding its own kama.json. A trailing `/*` expands to every immediate
+// subdirectory that has one (`"packages/*"`), so a monorepo need not edit the root manifest per package.
+// Declaring this is what turns "is this a monorepo root?" from something the LSP infers from position
+// into something the repository states. Returns false + `err` on malformed JSON. (LSP M3.5.)
+static bool loadManifestPackages(const std::string& path, std::vector<std::string>& out, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.packagesOut = &out;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
     return true;
 }
 
@@ -2955,9 +3009,9 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
 // Deliberately NOT collectFilesRel (line ~1523): the prune list, extension filter and early abort are most
 // of the body, and its one caller (treeHashOf) wants a complete unfiltered tree.
 static void collectKamaFiles(const std::string& root, const std::string& rel,
-                             std::vector<std::string>& out, size_t& seen)
+                             std::vector<std::string>& out, size_t& seen, size_t budget)
 {
-    if (seen > kLspMaxProjectFiles) return;
+    if (seen > budget) return;
     std::string dir = rel.empty() ? root : root + "/" + rel;
     DIR* d = opendir(dir.c_str());
     if (!d) return;
@@ -2967,14 +3021,87 @@ static void collectKamaFiles(const std::string& root, const std::string& rel,
         std::string childRel = rel.empty() ? n : rel + "/" + n;
         if (dirExists(dir + "/" + n)) {
             if (n == "build") continue;                  // generated C + objects, never sources
-            collectKamaFiles(root, childRel, out, seen);
-            if (seen > kLspMaxProjectFiles) break;
+            collectKamaFiles(root, childRel, out, seen, budget);
+            if (seen > budget) break;
         } else if (n.size() > 5 && n.compare(n.size() - 5, 5, ".kama") == 0) {
-            if (++seen > kLspMaxProjectFiles) break;
+            if (++seen > budget) break;
             out.push_back(dir + "/" + n);
         }
     }
     closedir(d);
+}
+
+// The cap in force for a GUESSED file set. `KAMA_LSP_MAX_FILES` overrides the default; 0 means no limit,
+// for someone who knows their tree really is one program and would rather not add a manifest.
+static size_t lspFileBudget()
+{
+    if (const char* env = getenv("KAMA_LSP_MAX_FILES")) {
+        char* end = nullptr;
+        long v = strtol(env, &end, 10);
+        if (end && *end == '\0' && v >= 0) return v == 0 ? (size_t)-1 : (size_t)v;
+    }
+    return kLspMaxProjectFiles;
+}
+
+// Collect one package's sources, recursing into any sub-projects its manifest declares.
+//
+//   `sources`  present -> exactly those files/directories are this package's.
+//   `packages` present -> each entry is a sub-project directory holding its own kama.json, walked the same
+//                         way. A trailing `/*` ("packages/*") expands to every immediate subdirectory that
+//                         has a manifest, so a monorepo need not edit its root manifest per package.
+//   neither present    -> a leaf: the package's whole directory is its sources.
+//
+// A manifest with `packages` but no `sources` is a pure aggregator and contributes no files of its own —
+// walking its directory would re-collect every member and defeat the precision it just declared.
+// `visited` (canonical paths) breaks cycles: a manifest may legally name a directory that names it back,
+// and a symlink makes a loop trivial.
+static void collectPackageTree(const std::string& dir, std::vector<std::string>& out,
+                               std::set<std::string>& visited)
+{
+    if (!visited.insert(absolutePath(dir)).second) return;
+
+    std::vector<std::string> srcs, members;
+    std::string err;
+    const std::string manifest = dir + "/kama.json";
+    if (fileExists(manifest)) {
+        loadManifestSources(manifest, srcs, err);
+        loadManifestPackages(manifest, members, err);
+    }
+
+    size_t seen = 0;
+    if (!srcs.empty()) {
+        for (const auto& rel : srcs) {
+            // absolutePath, not a bare join: `"sources": ["."]` would otherwise yield `<dir>/./x.kama`,
+            // and CEmitter::unitForUri matches unit names EXACTLY — so every query would miss.
+            std::string abs = absolutePath(dir + "/" + rel);
+            if (dirExists(abs))       collectKamaFiles(abs, "", out, seen, (size_t)-1);
+            else if (fileExists(abs)) out.push_back(abs);
+            // A listed path that does not exist is skipped: a manifest may name a directory not created
+            // yet, and refusing to index everything else over that would be hostile.
+        }
+    } else if (members.empty()) {
+        collectKamaFiles(absolutePath(dir), "", out, seen, (size_t)-1);
+    }
+
+    for (const auto& rel : members) {
+        if (rel.size() > 2 && rel.compare(rel.size() - 2, 2, "/*") == 0) {
+            std::string parent = dir + "/" + rel.substr(0, rel.size() - 2);
+            std::vector<std::string> subs;
+            if (DIR* d = opendir(parent.c_str())) {
+                while (struct dirent* e = readdir(d)) {
+                    std::string n = e->d_name;
+                    if (n.empty() || n[0] == '.') continue;
+                    if (dirExists(parent + "/" + n) && fileExists(parent + "/" + n + "/kama.json"))
+                        subs.push_back(parent + "/" + n);
+                }
+                closedir(d);
+            }
+            std::sort(subs.begin(), subs.end());          // readdir order is not deterministic
+            for (const auto& sub : subs) collectPackageTree(sub, out, visited);
+        } else if (dirExists(dir + "/" + rel)) {
+            collectPackageTree(dir + "/" + rel, out, visited);
+        }
+    }
 }
 
 std::string lspRealPath(const std::string& path) { return absolutePath(path); }
@@ -3003,9 +3130,42 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
         cur = parent;
     }
 
+    // DECLARED beats inferred. If an ancestor manifest explicitly OWNS this file — via `packages` and/or
+    // `sources`, expanded recursively — then widening to it is not a guess and needs no editor boundary to
+    // license it. Prefer the outermost such manifest (the top of a nest of monorepos), and require that its
+    // expansion actually CONTAINS the open file, so an ancestor that happens to declare unrelated members
+    // is not mistaken for this file's owner.
+    std::string self = absolutePath(openFilePath);
+    for (auto it = manifests.rbegin(); it != manifests.rend() && p.root.empty(); ++it) {
+        std::vector<std::string> srcs, members;
+        std::string e;
+        loadManifestSources(*it + "/kama.json", srcs, e);
+        loadManifestPackages(*it + "/kama.json", members, e);
+        if (srcs.empty() && members.empty()) continue;          // declares nothing: not an owner
+        std::vector<std::string> files;
+        std::set<std::string> visited;
+        collectPackageTree(*it, files, visited);
+        for (const auto& f : files)
+            if (absolutePath(f) == self) {
+                p.root            = *it;
+                p.hasManifest     = true;
+                p.declaredSources = true;
+                p.files           = files;
+                break;
+            }
+    }
+    if (p.declaredSources) {
+        std::sort(p.files.begin(), p.files.end());
+        p.files.erase(std::unique(p.files.begin(), p.files.end()), p.files.end());
+        p.seenCount = p.files.size();
+        return p;
+    }
+
     if (!manifests.empty()) {
-        // Under a declared workspace the OUTERMOST manifest wins (monorepo root). Without one, only the
-        // nearest is defensible — there is no boundary, so widening could swallow a stray $HOME manifest.
+        // Nothing declared ownership, so this IS an inference. Under a declared workspace the outermost
+        // manifest wins (a monorepo root that never said so — over-indexing is the safe direction, since
+        // under-indexing is what silently rewrites a caller we never saw). Without an editor boundary only
+        // the nearest is defensible: widening could otherwise swallow a stray $HOME manifest.
         p.root        = underWorkspace ? manifests.back() : manifests.front();
         p.hasManifest = true;
     } else if (underWorkspace) {
@@ -3014,10 +3174,14 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
         return p;                                        // no project: rename keeps refusing, honestly
     }
 
-    size_t seen = 0;
-    collectKamaFiles(p.root, "", p.files, seen);
+    // Nothing above declared ownership of this file, so the file set is INFERRED: every .kama under the
+    // root. That inference is what the cap bounds — see kLspMaxProjectFiles. A manifest can end it by
+    // declaring `sources` (which files are mine) and/or `packages` (which sub-projects I own).
+    size_t seen = 0, budget = lspFileBudget();
+    p.cap = budget;
+    collectKamaFiles(p.root, "", p.files, seen, budget);
     p.seenCount = seen;
-    if (seen > kLspMaxProjectFiles) { p.tooLarge = true; p.files.clear(); }
+    if (seen > budget) { p.tooLarge = true; p.files.clear(); }
     std::sort(p.files.begin(), p.files.end());           // deterministic unit order
     return p;
 }
@@ -3543,7 +3707,7 @@ int main(int argc, char** argv)
             }
             if (proj.tooLarge) {
                 fprintf(stderr, "kama query --project: %s holds more than %zu .kama files\n",
-                        proj.root.c_str(), kLspMaxProjectFiles);
+                        proj.root.c_str(), proj.cap);
                 return 1;
             }
             queryInputs = proj.files;

@@ -45,10 +45,14 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
 // cross-file rename rather than half-rewrite. A workspace index replaces that with a PROJECT-WIDE unit set,
 // so find-references sees every user of a symbol and rename can safely rewrite them all.
 //
-// The enumeration cap. A "project" that blows this is not a package — it is a source tree of unrelated
-// programs (cstar itself holds 870 .kama files, 813 of them independent tests/ fixtures with their own
-// `main` and colliding type names). Analyzing those as ONE program would be slow AND wrong, so we refuse
-// and say so rather than quietly answer from a corrupted index.
+// The enumeration cap — and note what it is actually for. It is NOT a resource limit: 500 trivial files
+// analyze in ~0.3s, faster than 43 real stdlib files, because cost tracks content and import depth rather
+// than file count. It bounds a GUESS. Absent a `sources` declaration, "the project" is inferred as every
+// .kama under a root, and when that inference is wrong — cstar itself holds 870, 813 of them independent
+// tests/ fixtures with their own `main` and colliding type names — they get analyzed as ONE program, the
+// symbol tables collide, and rename would confidently rewrite the wrong file. So raising this number is
+// not the fix for a large project; declaring `sources` in kama.json is (which removes the cap entirely).
+// `KAMA_LSP_MAX_FILES` overrides it for a tree the user knows is one program; 0 means unlimited.
 const size_t kLspMaxProjectFiles = 500;
 
 // The project a file belongs to, plus every `.kama` source in it. `root` is empty when the file belongs to
@@ -57,22 +61,32 @@ struct LspProject {
     std::string              root;               // project root directory ("" = no project)
     std::vector<std::string> files;              // every *.kama under root, absolute, sorted
     bool                     hasManifest = false;   // root was found via kama.json (vs. the editor's folder)
+    bool                     declaredSources = false;  // kama.json listed `sources` — no guessing, no cap
     bool                     tooLarge    = false;   // enumeration blew the cap; `files` is empty
     size_t                   seenCount   = 0;       // how many were seen before the cap (for the message)
+    size_t                   cap         = 0;       // the cap actually in force (KAMA_LSP_MAX_FILES honored)
 };
 
 // Resolve the project owning `openFilePath`. `workspaceRoot` is the editor's folder (from initialize's
 // rootUri / workspaceFolders), or "" if the client sent none.
 //
-// Root rule: walk UP from the file recording every directory holding a kama.json, then take the OUTERMOST
-// one — npm/cargo *workspace* semantics, so a monorepo's root manifest wins over a package's and rename in
-// one package sees the other packages' uses. The walk never rises above `workspaceRoot` (it may examine
-// that directory itself), and stops at any `.kama` path component so a vendored dependency keeps its own
-// manifest. With no manifest at all the root falls back to `workspaceRoot`.
+// Walk UP from the file recording every directory holding a kama.json (never above `workspaceRoot`, which
+// it may examine; stopping at any `.kama` component so a vendored dependency keeps its own manifest).
+// Finding a manifest that way is not a guess — it is discovery of a declared fact, the same walk
+// cargo/npm/tsc do. Two things ARE guesses, and each has a manifest key that settles it:
 //
-// If the file is NOT under `workspaceRoot` (no rootUri, or a file opened from outside the folder) there is
-// no declared boundary, so widening is unjustified: take the NEAREST manifest instead of the outermost, and
-// if there is none, return no project rather than risk indexing a stray kama.json in $HOME.
+//   which manifest owns this file  ->  `packages` (a manifest naming its sub-projects, recursively)
+//   which files are in it          ->  `sources`  (a package naming its own files)
+//
+// DECLARED first: if an ancestor manifest's expanded tree actually CONTAINS this file, that manifest is
+// the project — outermost such wins (the top of a nest of monorepos), and no editor boundary is needed to
+// license it, because nothing is being inferred. The file set is exactly what was declared, uncapped.
+//
+// INFERRED otherwise: under `workspaceRoot` the outermost manifest wins (over-indexing is the safe
+// direction — under-indexing is what silently rewrites a caller we never saw); outside it, only the
+// nearest is defensible, since widening could otherwise swallow a stray kama.json in $HOME. With no
+// manifest at all the root falls back to `workspaceRoot`. In every inferred case the file set is every
+// .kama under the root, bounded by the cap above.
 LspProject lspFindProject(const std::string& openFilePath, const std::string& workspaceRoot);
 
 // realpath(): symlinks and `..` collapsed. The LSP layer needs it because module resolution hands back
