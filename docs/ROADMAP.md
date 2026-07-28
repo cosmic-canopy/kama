@@ -544,7 +544,8 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   [design/logging.md](design/logging.md) Part E), M5 error recovery + incremental reparse (where a
   hand-written recursive-descent parser replacing Bison would be the escalation), M6 clients for all major
   editors. Status of record: [design/lsp.md](design/lsp.md).
-- **Workspace-internal dependencies — a monorepo gap opened by `projects`.** A sub-project should be
+- **Workspace-internal dependencies — a monorepo gap opened by `projects`.** Cold-start brief:
+  [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md). A sub-project should be
   *extractable* (liftable out to stand alone), which requires it to declare everything it imports. The
   undeclared-import check runs against the manifest driving the **build**, not each package's own, so a
   sibling can import what only the top-level app declared: it builds in place and fails standalone, with

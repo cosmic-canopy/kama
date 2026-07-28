@@ -113,7 +113,8 @@ What pushes you into it: a library **cannot** declare a path dependency on a sib
 dependencies are top-level-only (`a fetched package cannot reference a local path reproducibly`). So the
 correct declaration is currently rejected. Until workspace-internal dependencies exist (the usual answer,
 as in cargo: allow path deps *within* a declared workspace, substituting a registry version on publish),
-verify extractability by hand — build each sub-project on its own before relying on it.
+verify extractability by hand — build each sub-project on its own before relying on it. The plan is
+[design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md).
 
 Without either key nothing breaks — the tooling infers the file set as before. These keys buy precision
 and remove the cap. If you have a large tree that genuinely is one program and you'd rather not declare
