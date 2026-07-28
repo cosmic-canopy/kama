@@ -17,6 +17,8 @@
 #include "kama.ast.h"
 
 #include <cctype>
+#include <functional>   // std::function — the recursive type-spelling lambda (libc++ pulls it
+                       // in transitively on macOS; the container toolchain does not)
 #include <set>
 
 // ---- SrcRange / SymKind helpers -------------------------------------------------------------------------
