@@ -18,6 +18,7 @@
 #include <vector>
 #include <map>
 #include <utility>
+#include <algorithm>
 
 #include "kama.lsp.h"        // lspAnalyzeBuffer seam + Diagnostic + runLspServer
 
@@ -442,6 +443,22 @@ struct Server {
     bool initialized = false;
     bool shutdownReceived = false;
 
+    // ---- workspace index (M3.5) ----------------------------------------------------------------
+    // A SECOND index, spanning the whole project rather than one file's import closure. Only the two
+    // queries that need reverse reachability use it (references, rename); diagnostics, hover, go-to-def
+    // and the outline stay on the per-document index, which is what keeps typing cheap — go-to-def can
+    // only ever land in something the open file imports, so it needs nothing wider.
+    //
+    // Built LAZILY, on the first gesture that needs it, and dropped whenever any buffer or watched file
+    // changes. Real language servers (rust-analyzer, clangd, gopls) keep a warm index instead, but they
+    // pay for it with incremental reparse; without that (M5) a warm index would still need a full rebuild
+    // after every keystroke, so eager work would be pure waste. Rebuild cost is one whole-project parse
+    // per gesture — see docs/design/lsp-m3-kickoff.md for the measured number and the upgrade path.
+    std::string    workspaceRoot;       // the editor's folder, from initialize (may be empty)
+    SharedLspIndex wsIndex;             // cached project-wide index
+    std::string    wsRootOfIndex;       // which project root wsIndex was built for
+    bool           wsDirty = true;      // a buffer or watched file changed since wsIndex was built
+
     void sendResponse(const Json& id, Json result) {
         Json resp = Json::object();
         resp.set("jsonrpc", "2.0");
@@ -485,7 +502,33 @@ struct Server {
         publish(uri, diags);
     }
 
-    void handleInitialize(const Json& id) {
+    // The project owning `path`, plus a workspace index over it, rebuilt only when something changed.
+    // Every open buffer is handed in as an overlay so unsaved edits are what get searched and rewritten.
+    // Returns the project even when the index is null (too large / unresolvable) — the caller needs
+    // `root`/`tooLarge` to explain the refusal.
+    LspProject workspaceIndexFor(const std::string& path) {
+        LspProject proj = lspFindProject(path, workspaceRoot);
+        if (proj.root.empty() || proj.files.empty()) { wsIndex = nullptr; wsRootOfIndex.clear(); return proj; }
+        if (wsIndex && !wsDirty && wsRootOfIndex == proj.root) return proj;
+        std::vector<std::pair<std::string, std::string>> overlays;
+        for (auto& kv : docs) overlays.push_back({ uriToPath(kv.first), kv.second.text });
+        wsIndex        = lspAnalyzeWorkspace(proj.files, overlays, argv0);
+        wsRootOfIndex  = proj.root;
+        wsDirty        = false;
+        return proj;
+    }
+
+    void handleInitialize(const Json& id, const Json& params) {
+        // The editor's workspace folder bounds project discovery (lspFindProject never rises above it).
+        // `rootUri` is deprecated in the spec but still what most clients send; workspaceFolders wins.
+        std::string rootUri = params.getStr("rootUri");
+        if (const Json* folders = params.get("workspaceFolders"))
+            if (folders->type == Json::Arr && !folders->arr.empty()) {
+                std::string first = folders->arr.front().getStr("uri");
+                if (!first.empty()) rootUri = first;
+            }
+        if (!rootUri.empty()) workspaceRoot = uriToPath(rootUri);
+
         // M1 advertised full-document sync only; M2 turns on the first interactive features.
         Json caps = Json::object();
         caps.set("textDocumentSync", 1);        // TextDocumentSyncKind.Full
@@ -493,9 +536,15 @@ struct Server {
         caps.set("definitionProvider", true);
         caps.set("documentSymbolProvider", true);
         caps.set("referencesProvider", true);
+        caps.set("workspaceSymbolProvider", true);
         Json rename = Json::object();
         rename.set("prepareProvider", true);   // we can tell the editor up front whether F2 is offered
         caps.set("renameProvider", std::move(rename));
+        Json folders = Json::object();
+        folders.set("supported", true);
+        Json ws = Json::object();
+        ws.set("workspaceFolders", std::move(folders));
+        caps.set("workspace", std::move(ws));
         Json info = Json::object();
         info.set("name", "kama");
         Json result = Json::object();
@@ -514,6 +563,7 @@ struct Server {
         const Json* ver = td->get("version");
         doc.version = ver ? (long)ver->asNum() : 0;
         docs[uri] = std::move(doc);
+        wsDirty = true;              // a new buffer joins the overlay set
         analyzeAndPublish(uri);
     }
 
@@ -532,6 +582,7 @@ struct Server {
         }
         const Json* ver = td->get("version");
         if (ver) it->second.version = (long)ver->asNum();
+        wsDirty = true;              // the workspace index holds a now-stale copy of this buffer
         analyzeAndPublish(uri);
     }
 
@@ -540,6 +591,7 @@ struct Server {
         if (!td) return;
         std::string uri = td->getStr("uri");
         docs.erase(uri);
+        wsDirty = true;              // its overlay is gone; the on-disk copy takes over
         publish(uri, {});                        // clear any lingering squiggles
     }
 
@@ -609,9 +661,29 @@ struct Server {
 
     // ---- M3 find-references + rename ---------------------------------------------------------------
 
+    // Is `file` inside the project rooted at `root`, and not in its package store? Rename must not rewrite
+    // the standard library or a dependency's sources: they're read-only from the project's point of view,
+    // and the index holds their units too (DefSite.unit == nullptr filters only the built-in prelude, so
+    // std MODULES would otherwise look like ordinary renameable user code).
+    // ⚠️ Both sides go through lspRealPath first. Module resolution names the stdlib relative to the
+    // COMPILER binary (`<exeDir>/../../lib/std/…`), which in a dev tree still has the project root as a
+    // literal prefix — so a raw string compare would declare a std symbol project-owned and rewrite it.
+    static bool underRoot(const std::string& fileIn, const std::string& rootIn) {
+        if (rootIn.empty()) return false;
+        std::string file = lspRealPath(fileIn), root = lspRealPath(rootIn);
+        if (file.size() <= root.size()) return false;
+        if (file.compare(0, root.size(), root) != 0 || file[root.size()] != '/') return false;
+        return file.compare(root.size(), 7, "/.kama/") != 0;   // <root>/.kama/deps — vendored, not ours
+    }
+
     // textDocument/references -> Location[]. Always an array (never null) per the spec's usual shape.
-    // Honors context.includeDeclaration. Results can name other files (the index spans the open file's
-    // transitive imports), so each Location's own uri is mapped, not the request's.
+    // Honors context.includeDeclaration. Results can name other files, so each Location's own uri is
+    // mapped, not the request's.
+    //
+    // Uses the WORKSPACE index when the file belongs to a project (M3.5): the per-document index only sees
+    // what the open file imports, so it would silently omit every file that uses this symbol without being
+    // imported back — the same blind spot that forced rename to refuse. Falls back to the document index
+    // for a file in no project, where that is the best honest answer available.
     void handleReferences(const Json& id, const Json& params) {
         std::string uri = params.getStr2("textDocument", "uri");
         Json arr = Json::array();
@@ -621,11 +693,50 @@ struct Server {
             bool includeDecl = true;
             if (const Json* ctx = params.get("context"))
                 if (const Json* inc = ctx->get("includeDeclaration")) includeDecl = inc->b;
-            for (const auto& r : lspReferences(it->second.lastGoodIndex, uriToPath(uri), l, c, includeDecl)) {
+            std::string path = uriToPath(uri);
+            workspaceIndexFor(path);
+            const SharedLspIndex& idx = wsIndex ? wsIndex : it->second.lastGoodIndex;
+            for (const auto& r : lspReferences(idx, path, l, c, includeDecl)) {
                 Json loc = Json::object();
                 loc.set("uri", pathToUri(r.uri));
                 loc.set("range", srcRangeToJson(r.range));
                 arr.push(std::move(loc));
+            }
+        }
+        sendResponse(id, std::move(arr));
+    }
+
+    // workspace/symbol -> SymbolInformation[]: project-wide symbol search (the editor's Ctrl+T picker).
+    void handleWorkspaceSymbol(const Json& id, const Json& params) {
+        std::string query = params.getStr("query");
+        Json arr = Json::array();
+        // Unlike every other request this one carries NO document, so the project has to be inferred. Two
+        // rules, in order: the project we already hold an index for (what the user has been working in),
+        // then the first open document that belongs to a project at all.
+        //
+        // ⚠️ NOT simply `docs.begin()` — `docs` is keyed by URI, so that picks by string sort order:
+        // `file:///Users/…` sorts before `file:///bindings.kama` but `file:///workspace/…` sorts after, so
+        // the anchor would change with the checkout path. That passed on macOS and failed in the container.
+        std::string anchor;
+        for (auto& kv : docs) {
+            std::string p = uriToPath(kv.first);
+            LspProject probe = lspFindProject(p, workspaceRoot);
+            if (probe.root.empty() || probe.files.empty()) continue;
+            if (anchor.empty()) anchor = p;
+            if (!wsRootOfIndex.empty() && probe.root == wsRootOfIndex) { anchor = p; break; }
+        }
+        if (!anchor.empty()) {
+            LspProject proj = workspaceIndexFor(anchor);
+            for (const auto& s : lspWorkspaceSymbols(wsIndex, query, proj.root)) {
+                Json loc = Json::object();
+                loc.set("uri", pathToUri(s.uri));
+                loc.set("range", srcRangeToJson(s.selectionRange));
+                Json sym = Json::object();
+                sym.set("name", s.name);
+                sym.set("kind", symKindToLsp(s.kind));
+                sym.set("location", std::move(loc));
+                if (!s.container.empty()) sym.set("containerName", s.container);
+                arr.push(std::move(sym));
             }
         }
         sendResponse(id, std::move(arr));
@@ -644,12 +755,14 @@ struct Server {
         sendResponse(id, srcRangeToJson(r));
     }
 
-    // textDocument/rename -> a WorkspaceEdit {changes:{<uri>:TextEdit[]}}.
+    // textDocument/rename -> a WorkspaceEdit {changes:{<uri>:TextEdit[]}}, spanning every project file
+    // that uses the symbol (M3.5).
     //
-    // Guarded to the OPEN FILE. References may span every loaded unit, but the loaded set is only what the
-    // open file transitively imports — a file that imports THIS symbol without being imported back is
-    // invisible, so a cross-file rewrite could silently break a caller we never saw. Refusing is the honest
-    // answer until workspace indexing (M3.5) can enumerate every user of a symbol.
+    // M3.3 refused any cross-file rename, because the loaded unit set was only what the open file
+    // transitively imports: a file using THIS symbol without being imported back was invisible, so a
+    // rewrite could silently break a caller we never saw. The workspace index removes that blind spot, so
+    // the refusal is replaced by three narrower ones — no project, a project too big to trust, and a
+    // definition we don't own. Everything else is rewritten across all its files at once.
     void handleRename(const Json& id, const Json& params) {
         std::string uri = params.getStr2("textDocument", "uri");
         auto it = docs.find(uri);
@@ -661,26 +774,73 @@ struct Server {
         }
         int l, c; kamaPos(params, l, c);
         std::string path = uriToPath(uri);
-        SrcRange target = lspPrepareRename(it->second.lastGoodIndex, path, l, c);
+
+        LspProject proj = workspaceIndexFor(path);
+        // No project (no kama.json, or a tree too big to trust as one) => no way to know who else uses this
+        // symbol. That does NOT make rename impossible: a symbol whose uses are all inside the open file —
+        // every local, param and private field, the commonest rename by far — needs no workspace knowledge.
+        // So fall back to the document index under M3.3's original rule: rewrite when nothing escapes this
+        // file, refuse when something does, and say which piece of project setup would lift the refusal.
+        bool haveProject = wsIndex != nullptr;
+        const SharedLspIndex& idx = haveProject ? wsIndex : it->second.lastGoodIndex;
+
+        SrcRange target = lspPrepareRename(idx, path, l, c);
         if (target.line == 0) { sendError(id, -32602, "there is nothing renameable here"); return; }
 
-        std::vector<Location> refs =
-            lspReferences(it->second.lastGoodIndex, path, l, c, /*includeDecl*/ true);
-        for (const auto& r : refs)
-            if (r.uri != path) {
-                sendError(id, -32803, "cannot rename: this symbol is also used in " + r.uri
-                                      + ". Cross-file rename needs workspace indexing (LSP M3.5).");
+        if (haveProject) {
+            // Refuse on the DEFINITION's location, not on the uses: a symbol we don't own (std, a
+            // dependency) may legitimately be used from project files, and rewriting only those callers
+            // while leaving the declaration alone would break the build.
+            Location def = lspDefinition(idx, path, l, c);
+            if (!def.uri.empty() && !underRoot(def.uri, proj.root)) {
+                sendError(id, -32803, "cannot rename: this symbol is defined outside the project, in " +
+                                      def.uri + ". Only sources under " + proj.root + " can be rewritten.");
                 return;
             }
-        Json edits = Json::array();
+        }
+
+        std::vector<Location> refs = lspReferences(idx, path, l, c, /*includeDecl*/ true);
+        if (!haveProject) {
+            for (const auto& r : refs)
+                if (r.uri != path) {
+                    std::string why = proj.tooLarge
+                        ? (proj.root + " holds more than " + std::to_string(kLspMaxProjectFiles) +
+                           " .kama files, which is a source tree rather than a package. Add a kama.json "
+                           "next to the sources you want indexed")
+                        : std::string("this file is not part of a kama package. Add a kama.json next to "
+                                      "your sources");
+                    sendError(id, -32803, "cannot rename: this symbol is also used in " + r.uri +
+                                          ", and " + why + " so a rename can see every file that uses it.");
+                    return;
+                }
+        }
+        // Group by file. Within a file the edits must be sorted and non-overlapping (LSP requirement), so
+        // sort by position and drop exact duplicates.
+        std::map<std::string, std::vector<SrcRange>> byFile;
         for (const auto& r : refs) {
-            Json e = Json::object();
-            e.set("range", srcRangeToJson(r.range));
-            e.set("newText", newName);
-            edits.push(std::move(e));
+            // Never write outside the project (the open file itself always counts — it may be project-less).
+            if (haveProject && !underRoot(r.uri, proj.root) && r.uri != path) continue;
+            byFile[r.uri].push_back(r.range);
         }
         Json changes = Json::object();
-        changes.set(uri, std::move(edits));
+        for (auto& kv : byFile) {
+            std::vector<SrcRange>& rs = kv.second;
+            std::sort(rs.begin(), rs.end(), [](const SrcRange& a, const SrcRange& b) {
+                if (a.line != b.line) return a.line < b.line;
+                return a.column < b.column;
+            });
+            rs.erase(std::unique(rs.begin(), rs.end(), [](const SrcRange& a, const SrcRange& b) {
+                return a.line == b.line && a.column == b.column;
+            }), rs.end());
+            Json edits = Json::array();
+            for (const auto& r : rs) {
+                Json e = Json::object();
+                e.set("range", srcRangeToJson(r));
+                e.set("newText", newName);
+                edits.push(std::move(e));
+            }
+            changes.set(pathToUri(kv.first), std::move(edits));
+        }
         Json result = Json::object();
         result.set("changes", std::move(changes));
         sendResponse(id, std::move(result));
@@ -699,7 +859,7 @@ struct Server {
             return false;
         }
         if (method == "initialize") {
-            if (isRequest) handleInitialize(*idp);
+            if (isRequest) handleInitialize(*idp, params);
             return true;
         }
         if (!initialized) {
@@ -722,6 +882,11 @@ struct Server {
         if (method == "textDocument/references")     { if (isRequest) handleReferences(*idp, params);     return true; }
         if (method == "textDocument/prepareRename")  { if (isRequest) handlePrepareRename(*idp, params);  return true; }
         if (method == "textDocument/rename")         { if (isRequest) handleRename(*idp, params);         return true; }
+        if (method == "workspace/symbol")            { if (isRequest) handleWorkspaceSymbol(*idp, params); return true; }
+        // A watched .kama file changed on disk — created, deleted, or edited outside the editor. The client
+        // only sends this if it registered watchers (ours does; see editor/vscode/extension.js). Nothing to
+        // re-publish: just drop the workspace index so the next gesture re-reads the tree.
+        if (method == "workspace/didChangeWatchedFiles") { wsDirty = true; return true; }
 
         // Anything else: a request needs a response (or the client hangs); notifications are ignored.
         if (isRequest) sendError(*idp, -32601, "method not found: " + method);

@@ -49,6 +49,12 @@ IURI="file://$ROOT/tests/query/imports.kama"
 IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32 useit(DynamicArray<int32> a) { return 0; }\n'
 
 # Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
+# M3.5 workspace fixture: the DECLARING half of the tests/query/ws package. app.kama (on disk, never
+# opened here) imports it and uses `Widget` three times; widget.kama imports nothing, so its own closure
+# is just itself. Opening it and renaming `Widget` is exactly the case M3.3 had to refuse.
+WWURI="file://$ROOT/tests/query/ws/widget.kama"
+WW='namespace widget;\nexport { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { Widget r; r.size = size; return give r; }\n}\nfn int32 defaultSize() { return 7; }\n'
+
 SURI="file:///sem.kama"
 SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 
@@ -65,7 +71,7 @@ SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 MURI="file:///bindings.kama"
 M34='namespace m34;\nenum Code { Ok, Bad = 2 }\ntype value Cfg {\n    public int32 scale = 3;\n    public fn int32 twice(int32 bias) { return this.scale * bias; }\n}\nfn int32 run() {\n    int32 seeded = 7;\n    Code c = Code::Ok;\n    return seeded + cast<int32>(c);\n}\n'
 
-frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
+frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$ROOT"'/tests/query","capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$URI"'","languageId":"kama","version":1,"text":"'"$BAD"'"}}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$URI"'","version":2},"contentChanges":[{"text":"'"$GOOD"'"}]}}'
@@ -120,6 +126,17 @@ frame '{"jsonrpc":"2.0","id":24,"method":"textDocument/prepareRename","params":{
 frame '{"jsonrpc":"2.0","id":25,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":3,"character":18},"context":{"includeDeclaration":false}}}'
 frame '{"jsonrpc":"2.0","id":26,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":7,"character":12},"newName":"total"}}'
 frame '{"jsonrpc":"2.0","id":27,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":9,"character":13}}}'
+# --- M3.5: workspace indexing. Open widget.kama (a REAL on-disk file inside tests/query/ws, which holds
+#     a kama.json) and rename `Widget`. rootUri is tests/query and the nearest manifest below it is ws/,
+#     so the project is exactly those two files — and the rewrite must reach app.kama, which widget.kama
+#     does NOT import. 28: references span both files. 29: the multi-file WorkspaceEdit. 30: a project-wide
+#     symbol search. 31: didChangeWatchedFiles is accepted (a notification, so silence == success; the
+#     assertion is that it does not come back as "method not found").
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$WWURI"'","languageId":"kama","version":1,"text":"'"$WW"'"}}}'
+frame '{"jsonrpc":"2.0","id":28,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$WWURI"'"},"position":{"line":2,"character":11},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":29,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$WWURI"'"},"position":{"line":2,"character":11},"newName":"Gadget"}}'
+frame '{"jsonrpc":"2.0","id":30,"method":"workspace/symbol","params":{"query":"efaultSi"}}'
+frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"'"$WWURI"'","type":2}]}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -177,8 +194,8 @@ expect '"id":15,"error"'                                      "rename: a reserve
 echo "check-lsp: module loading (imports resolve across files)"
 expect 'imports.kama","diagnostics":[]'   "import-using file analyzes clean (std::collections loaded; no false 'does not export')"
 expect 'dynamic_array.kama'               "cross-module go-to-def resolves DynamicArray into the std source"
-expect '"id":16,"error"'                  "rename REFUSES a symbol used in other files (no half-rewrite)"
-expect 'Cross-file rename needs workspace indexing'  "...and says why"
+expect '"id":16,"error"'                             "rename still REFUSES a symbol we do not own"
+expect 'this symbol is defined outside the project'   "...and now says WHY: DynamicArray is declared in std"
 
 echo "check-lsp: M3.4 bindings (locals / params / fields / enum members)"
 # Each of these asserts the FULL range. An `end` past the name is the data-loss bug the M3.4 grammar
@@ -203,6 +220,32 @@ expect '"id":27,"result":{"contents":{"kind":"plaintext","value":"local seeded"}
 echo "check-lsp: semantic diagnostics (not just parse errors)"
 expect 'unknown type `Nonexistent`'                        "undeclared body type surfaces as a live diagnostic"
 expect 'sem.kama","diagnostics":[{"range":{"start":{"line":1'  "the squiggle lands on the decl line (kama 2 -> LSP 1)"
+
+echo "check-lsp: M3.5 workspace indexing (cross-file rename)"
+expect '"workspaceSymbolProvider":true'                 "advertises workspaceSymbolProvider (M3.5)"
+expect '"workspace":{"workspaceFolders":{"supported":true}}' \
+                                                        "advertises workspaceFolders support (M3.5)"
+# THE MILESTONE: app.kama is not in widget.kama's import closure, so every one of these would be missing
+# without the project-wide unit set.
+expect '"id":28,"result":[{"uri":"file://'"$ROOT"'/tests/query/ws/widget.kama"' \
+                                                        "references: starts with the declaring file"
+expect '/tests/query/ws/app.kama","range":{"start":{"line":4,"character":3}' \
+                                                        "references REACH app.kama, which widget.kama does not import"
+expect '"id":29,"result":{"changes":{"file://'"$ROOT"'/tests/query/ws/app.kama":[' \
+                                                        "rename: the WorkspaceEdit rewrites the OTHER file too"
+expect '/tests/query/ws/widget.kama":[{"range":{"start":{"line":2,"character":11}' \
+                                                        "rename: ... and the declaring file, keyed separately"
+expect '"newText":"Gadget"'                             "rename: the cross-file edits carry the new name"
+expect '"id":30,"result":[{"name":"defaultSize","kind":12' \
+                                                        "workspace/symbol: substring search finds a project symbol"
+expect '"id":30,'                                       "workspace/symbol: answered (not method-not-found)"
+# didChangeWatchedFiles is a notification: the proof it is handled is that no error came back for it.
+if printf '%s' "$out" | grep -qF 'method not found: workspace/'; then
+    echo "  FAIL: a workspace/* method was rejected as unknown" >&2
+    fail=1
+else
+    echo "  ok: workspace/didChangeWatchedFiles is accepted (index invalidation, not an error)"
+fi
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

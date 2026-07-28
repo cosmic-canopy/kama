@@ -2948,6 +2948,140 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
     return h;
 }
 
+// ---- workspace indexing (M3.5) ---------------------------------------------------------------------
+
+// Every *.kama under `root`, recursively, as absolute paths. Prunes build output, the package store, and
+// dot-directories; aborts once the cap is blown (the caller reports rather than truncating silently).
+// Deliberately NOT collectFilesRel (line ~1523): the prune list, extension filter and early abort are most
+// of the body, and its one caller (treeHashOf) wants a complete unfiltered tree.
+static void collectKamaFiles(const std::string& root, const std::string& rel,
+                             std::vector<std::string>& out, size_t& seen)
+{
+    if (seen > kLspMaxProjectFiles) return;
+    std::string dir = rel.empty() ? root : root + "/" + rel;
+    DIR* d = opendir(dir.c_str());
+    if (!d) return;
+    while (struct dirent* e = readdir(d)) {
+        std::string n = e->d_name;
+        if (n.empty() || n[0] == '.') continue;          // ".", "..", .git, .kama (the package store) …
+        std::string childRel = rel.empty() ? n : rel + "/" + n;
+        if (dirExists(dir + "/" + n)) {
+            if (n == "build") continue;                  // generated C + objects, never sources
+            collectKamaFiles(root, childRel, out, seen);
+            if (seen > kLspMaxProjectFiles) break;
+        } else if (n.size() > 5 && n.compare(n.size() - 5, 5, ".kama") == 0) {
+            if (++seen > kLspMaxProjectFiles) break;
+            out.push_back(dir + "/" + n);
+        }
+    }
+    closedir(d);
+}
+
+std::string lspRealPath(const std::string& path) { return absolutePath(path); }
+
+LspProject lspFindProject(const std::string& openFilePath, const std::string& workspaceRoot)
+{
+    LspProject p;
+    if (openFilePath.empty()) return p;
+    std::string wsRoot = workspaceRoot.empty() ? std::string() : absolutePath(workspaceRoot);
+    std::string dir    = dirName(absolutePath(openFilePath));
+
+    // Is the file inside the editor's folder? That is what licenses widening past the first manifest.
+    bool underWorkspace = !wsRoot.empty() &&
+                          (dir == wsRoot || dir.compare(0, wsRoot.size() + 1, wsRoot + "/") == 0);
+
+    // Walk up collecting manifest directories, nearest first. Bounded by the editor's folder when we have
+    // one; a `.kama` component stops the walk so a vendored dep never escapes into its host project.
+    std::vector<std::string> manifests;
+    std::string cur = dir;
+    for (;;) {
+        if (baseName(cur) == ".kama") break;
+        if (fileExists(cur + "/kama.json")) manifests.push_back(cur);
+        if (underWorkspace && cur == wsRoot) break;      // examined it, go no higher
+        std::string parent = dirName(cur);
+        if (parent == cur || parent == ".") break;       // filesystem root
+        cur = parent;
+    }
+
+    if (!manifests.empty()) {
+        // Under a declared workspace the OUTERMOST manifest wins (monorepo root). Without one, only the
+        // nearest is defensible — there is no boundary, so widening could swallow a stray $HOME manifest.
+        p.root        = underWorkspace ? manifests.back() : manifests.front();
+        p.hasManifest = true;
+    } else if (underWorkspace) {
+        p.root = wsRoot;
+    } else {
+        return p;                                        // no project: rename keeps refusing, honestly
+    }
+
+    size_t seen = 0;
+    collectKamaFiles(p.root, "", p.files, seen);
+    p.seenCount = seen;
+    if (seen > kLspMaxProjectFiles) { p.tooLarge = true; p.files.clear(); }
+    std::sort(p.files.begin(), p.files.end());           // deterministic unit order
+    return p;
+}
+
+SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
+                                   const std::vector<std::pair<std::string, std::string>>& overlays,
+                                   const char* argv0)
+{
+    if (files.empty()) return nullptr;
+
+    // Parse the live buffers first. A buffer that won't parse simply keeps its on-disk copy — a mid-edit
+    // file shouldn't blind the whole workspace.
+    std::vector<std::pair<std::string, SharedCompilationUnit>> live;
+    for (const auto& ov : overlays) {
+        ParseResult pr = parseForQuery(ov.second.c_str(), ov.first);
+        if (pr.unit) live.push_back({ absolutePath(ov.first), pr.unit });
+    }
+
+    // Passing every project file as a CLI input makes loadProgramUnits' BFS yield the UNION of all their
+    // import closures, deduped by absolute path — which is exactly the project-wide set, plus whatever
+    // std/dependency modules it needs for names to resolve.
+    std::vector<SharedCompilationUnit> units;
+    std::vector<std::string> paths;
+    if (!loadProgramUnits(files, argv0, units, paths, /*includeDevDeps*/ false) || units.empty())
+        return nullptr;
+
+    for (const auto& lv : live) {
+        bool swapped = false;
+        for (size_t i = 0; i < units.size(); ++i)
+            if (paths[i] == lv.first) { units[i] = lv.second; swapped = true; break; }
+        if (!swapped) units.push_back(lv.second);        // an open file outside the project set
+    }
+
+    auto emitter = std::make_shared<CEmitter>(files.front());
+    emitter->setPrelude(preludeUnit());
+    for (auto& m : preludeModuleUnits()) emitter->addPreludeModule(m);
+    emitter->analyze(units);
+    auto h = std::make_shared<LspIndex>();
+    h->idx  = emitter;
+    h->path = files.front();
+    return h;
+}
+
+std::vector<SymbolInfo> lspWorkspaceSymbols(const SharedLspIndex& idx, const std::string& query,
+                                            const std::string& root)
+{
+    static const size_t kMaxResults = 200;   // a picker wants the first screenful, not the whole project
+    if (!idx || !idx->idx || root.empty()) return {};
+    std::string absRoot = absolutePath(root);
+    std::vector<SymbolInfo> out;
+    for (auto& s : idx->idx->workspaceSymbols(query)) {
+        if (out.size() >= kMaxResults) break;
+        // Real-path both sides: the stdlib resolves relative to the compiler binary, so in a dev tree its
+        // raw path can still carry the project root as a literal prefix (see lspRealPath).
+        std::string f = absolutePath(s.uri);
+        if (f.size() <= absRoot.size() || f.compare(0, absRoot.size(), absRoot) != 0 ||
+            f[absRoot.size()] != '/')
+            continue;                                     // std, a dependency, or outside the project
+        if (f.compare(absRoot.size(), 7, "/.kama/") == 0) continue;   // the package store
+        out.push_back(s);
+    }
+    return out;
+}
+
 std::vector<SymbolInfo> lspDocumentSymbols(const SharedLspIndex& idx, const std::string& path)
 {
     if (!idx || !idx->idx) return {};
@@ -3135,6 +3269,7 @@ int main(int argc, char** argv)
     std::string queryDef;                  // `kama query --def L:C`: go-to-definition at a cursor
     std::string queryType;                 // `kama query --type L:C`: hover (kind+name) at a cursor
     std::string queryRefs;                 // `kama query --refs L:C`: find-references at a cursor
+    bool        queryProject = false;      // `kama query --project`: index the whole project, not one closure
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
 
@@ -3161,6 +3296,7 @@ int main(int argc, char** argv)
         else if (a == "--def" && i + 1 < argc)      queryDef = argv[++i];            // `kama query` go-to-def L:C
         else if (a == "--type" && i + 1 < argc)     queryType = argv[++i];           // `kama query` hover L:C
         else if (a == "--refs" && i + 1 < argc)     queryRefs = argv[++i];           // `kama query` refs L:C
+        else if (a == "--project")                  queryProject = true;             // `kama query` workspace scope
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
@@ -3390,9 +3526,33 @@ int main(int argc, char** argv)
         //   kama query <file> --def  L:C     go-to-definition at 1-based line:col
         //   kama query <file> --type L:C     hover (kind + name) at 1-based line:col
         //   kama query <file> --refs L:C     find-references (decl + every use) at 1-based line:col
+        //   kama query <file> --project      widen the unit set from <file>'s import closure to the whole
+        //                                    project (M3.5 workspace indexing), so --refs sees files that
+        //                                    use <file> without being imported by it
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
-        if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
+        std::vector<std::string> queryInputs = inputs;
+        if (queryProject) {
+            // No editor here to declare a workspace, so lspFindProject falls back to the nearest kama.json
+            // (see its contract) — which is what a CLI user in a package expects.
+            LspProject proj = lspFindProject(input, "");
+            if (proj.root.empty()) {
+                fprintf(stderr, "kama query --project: %s is not inside a kama package (no kama.json found)\n",
+                        input.c_str());
+                return 1;
+            }
+            if (proj.tooLarge) {
+                fprintf(stderr, "kama query --project: %s holds more than %zu .kama files\n",
+                        proj.root.c_str(), kLspMaxProjectFiles);
+                return 1;
+            }
+            queryInputs = proj.files;
+        }
+        if (!loadProgramUnits(queryInputs, argv[0], units, unitPaths, devBuild)) return 1;
+        // Every query re-picks the unit by an EXACT name match (CEmitter::unitForUri), and the project
+        // enumeration yields absolute paths — so a relative `input` would match nothing. Ask by the same
+        // spelling the units were parsed with. (The LSP server is immune: file:// URIs are already absolute.)
+        const std::string queryUri = queryProject ? absolutePath(input) : input;
 
         CEmitter idx(input);
         idx.setPrelude(preludeUnit());
@@ -3412,7 +3572,7 @@ int main(int argc, char** argv)
         };
 
         if (querySymbols) {
-            for (const auto& s : idx.documentSymbols(input))
+            for (const auto& s : idx.documentSymbols(queryUri))
                 printf("%d:%d %s %s\n", s.selectionRange.line, s.selectionRange.column,
                        symKindName(s.kind), s.name.c_str());
             return 0;
@@ -3420,7 +3580,7 @@ int main(int argc, char** argv)
         if (!queryDef.empty()) {
             int l, c;
             if (!parseLC(queryDef, l, c)) { fprintf(stderr, "kama query: --def wants L:C\n"); return 2; }
-            Location loc = idx.definitionAt(input, l, c);
+            Location loc = idx.definitionAt(queryUri, l, c);
             if (loc.range.line == 0) { printf("no definition\n"); return 0; }
             printf("%s:%d:%d\n", loc.uri.c_str(), loc.range.line, loc.range.column);
             return 0;
@@ -3428,14 +3588,14 @@ int main(int argc, char** argv)
         if (!queryType.empty()) {
             int l, c;
             if (!parseLC(queryType, l, c)) { fprintf(stderr, "kama query: --type wants L:C\n"); return 2; }
-            std::string t = idx.typeAtPosition(input, l, c);
+            std::string t = idx.typeAtPosition(queryUri, l, c);
             printf("%s\n", t.empty() ? "no type" : t.c_str());
             return 0;
         }
         if (!queryRefs.empty()) {
             int l, c;
             if (!parseLC(queryRefs, l, c)) { fprintf(stderr, "kama query: --refs wants L:C\n"); return 2; }
-            auto refs = idx.referencesAt(input, l, c, /*includeDecl*/ true);
+            auto refs = idx.referencesAt(queryUri, l, c, /*includeDecl*/ true);
             if (refs.empty()) { printf("no references\n"); return 0; }
             for (const auto& r : refs)
                 printf("%s:%d:%d\n", r.uri.c_str(), r.range.line, r.range.column);

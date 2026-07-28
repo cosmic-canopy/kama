@@ -87,6 +87,13 @@ function startLanguageServer() {
   const serverOptions = { command: kama, args: ['lsp'], transport: TransportKind.stdio };
   const clientOptions = {
     documentSelector: [{ scheme: 'file', language: 'kama' }],
+    // Watch every .kama in the workspace so the server hears about files created, deleted, or edited
+    // outside the editor, and can drop its workspace index (LSP M3.5 — that index is what makes
+    // find-references and cross-file rename see files the open one doesn't import). Registering the
+    // watcher HERE, client-side, is deliberate: the alternative is server-driven registration via
+    // `client/registerCapability`, a server->client request the server has no machinery for. Every
+    // editor's LSP client offers the same client-side hook, so M6's other clients wire it the same way.
+    synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/*.kama') },
   };
   client = new LanguageClient('kama', 'kama Language Server', serverOptions, clientOptions);
   client.start();

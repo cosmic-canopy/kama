@@ -86,10 +86,28 @@ ROADMAP §10 before designing.**
   filtered out of `documentSymbols`; fields and enum members appear. Emission byte-identical; native
   794/794, container 794/794, ASan/UBSan 765/765; harnesses +39 assertions, including exact
   `prepareRename` ranges per kind as the data-loss guard.
-- **NEXT: M3.5 — workspace indexing** (a project-wide unit set + `workspace/didChangeWatchedFiles`), which
-  makes cross-file rename safe and lifts the M3.3 guard. Cold-start brief:
-  [lsp-m3-kickoff.md](lsp-m3-kickoff.md) — which also carries the **campaign-exit checklist** of the
-  remaining mid-action identifier productions whose spans are still whole-production.
+- **M3.5 — workspace indexing. ✅ DONE.** The M3.3 guard is lifted: find-references and rename now span the
+  whole project, not one file's import closure. **Project root = the OUTERMOST `kama.json` walking up from
+  the open file** (npm/cargo *workspace* semantics, bounded by the editor's folder), so a monorepo's root
+  manifest wins over a package's and renaming in one package sees the other packages' uses — nearest-wins
+  would index only the one package and then silently rewrite it anyway, recreating the M3.3 bug one level
+  up. With no manifest the root falls back to the editor's `rootUri`, capped at 500 `.kama` files: cstar
+  itself holds 870, 813 of them independent `tests/` fixtures with their own `main` and colliding type
+  names, which as one program would be slow *and* wrong. A **second, lazily-built index** (`lspAnalyzeWorkspace`,
+  every open buffer passed in as an overlay) serves only references/rename/`workspace/symbol`; diagnostics,
+  hover, go-to-def and the outline stay on the per-document index, so typing costs nothing extra.
+  Rename refuses in three narrow cases — no project, project too large, and a definition outside the
+  project (std or a dependency; `DefSite.unit == nullptr` filters only the built-in prelude, so std
+  *modules* would otherwise look renameable) — and otherwise emits a multi-file `WorkspaceEdit` grouped by
+  URI. **A file in no project still renames** under M3.3's original open-file rule, which is what keeps
+  M3.4's local/param/field rename working in a standalone buffer. New: `workspace/symbol`,
+  `workspace/didChangeWatchedFiles` (the VS Code client registers the watcher, avoiding server→client
+  `client/registerCapability`), `kama query --project`, `lspRealPath`. Emission byte-identical across all
+  535 fixtures; native 797/797, container 797/797, ASan/UBSan 768/768 plus a sanitized-compiler run of both
+  LSP harnesses. Cost: **0.45 s** for a 43-file project rebuild vs 0.23 s for a single-file closure.
+- **NEXT: M4 — completion + signature help.** [lsp-m3-kickoff.md](lsp-m3-kickoff.md) still carries the
+  **campaign-exit checklist** of the remaining mid-action identifier productions whose spans are still
+  whole-production; it must be closed before the campaign ends.
 
 ## Why (from the ROADMAP)
 

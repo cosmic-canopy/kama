@@ -528,13 +528,18 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   + **zero-config source-level debugging** — F5 builds and launches under CodeLLDB with breakpoints mapped
   back to the `.kama` via the emitter's `#line` directives. Missing pieces are the two below.)
 - **Language server (LSP) — IN PROGRESS, the CONFIRMED next-highest post-1.0 priority** (user, 2026-07-26 —
-  see the §1 post-1.0 sequence). **Shipped through M3.4:** `kama lsp` (a JSON-RPC/stdio subcommand) serving
-  live as-you-type diagnostics, hover, go-to-definition, document outline, find-references and rename —
-  the last two now covering locals, parameters, fields and enum members as well as types and functions.
+  see the §1 post-1.0 sequence). **Shipped through M3.5 (all of M3):** `kama lsp` (a JSON-RPC/stdio
+  subcommand) serving live as-you-type diagnostics, hover, go-to-definition, document outline,
+  find-references, rename and project-wide symbol search — references and rename covering locals,
+  parameters, fields and enum members as well as types and functions, and now spanning the **whole
+  project** rather than one file's import closure, so cross-file rename is safe (M3.5). A project is the
+  **outermost `kama.json`** above the open file (workspace semantics, so monorepos rewrite across
+  packages), falling back to the editor's folder under a file cap; rename refuses only for a symbol
+  defined outside the project, an unindexable tree, or a file in no package.
   Real **source spans** landed with it (Bison `%locations`, deferred until now), as did the
   front-end-as-library **query API** the scripting/self-hosting tracks reuse: `collectProgram` turned out to
   be a self-contained analysis pass already, so this was a facade over the existing tables rather than a
-  rewrite. **Remaining:** M3.5 workspace indexing (lifts the cross-file rename guard), M4 completion +
+  rewrite. **Remaining:** M4 completion +
   signature help (the **prerequisite for the `global::` floor-completion idea**,
   [design/logging.md](design/logging.md) Part E), M5 error recovery + incremental reparse (where a
   hand-written recursive-descent parser replacing Bison would be the escalation), M6 clients for all major

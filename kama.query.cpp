@@ -402,6 +402,15 @@ void CEmitter::buildPositions()
             if (e.isDeclName || e.declKey.empty()) continue;
             auto d = _defSites.find(e.declKey);
             if (d == _defSites.end() || !d->second.unit) continue;
+            // A "use" sitting exactly on its own declaration's name IS the declaration, however it got
+            // recorded — includeDecl adds it back, so letting it through would double-count. It reaches
+            // here for a type that declares a `ctor`: the ctor's implicit result type resolves through the
+            // class's OWN decl identifier, so recordRef stamps the decl name's range as a reference. Left
+            // in, find-references shows the declaration twice and rename emits two identical TextEdits over
+            // one range — which the LSP spec forbids within a file.
+            const DefSite& s = d->second;
+            if (s.unit == u && e.range.line == s.selectionRange.line &&
+                e.range.column == s.selectionRange.column) continue;
             _refIndex[e.declKey].push_back(Location{ *u->name, e.range });
         }
     }
@@ -523,9 +532,39 @@ std::vector<SymbolInfo> CEmitter::documentSymbols(const std::string& uri) const
         if (kv.second.kind == SymKind::Local || kv.second.kind == SymKind::Param) continue;
         const DefSite& d = kv.second;
         if (d.unit != unit) continue;
-        out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container });
+        out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container, uri });
     }
     std::sort(out.begin(), out.end(), [](const SymbolInfo& a, const SymbolInfo& b) {
+        if (a.range.line != b.range.line) return a.range.line < b.range.line;
+        return a.range.column < b.range.column;
+    });
+    return out;
+}
+
+// Project-wide symbol search (M3.5) — documentSymbols without the single-unit filter, so every symbol
+// carries its own `uri`. Name matching only: restricting the result to the PROJECT (this index also holds
+// std and dependency units, which a project symbol picker must not offer) is the driver seam's job, since
+// deciding whether a path is inside a directory needs real-path resolution the facade has no business
+// owning. Sorted by file then position; the caller caps.
+std::vector<SymbolInfo> CEmitter::workspaceSymbols(const std::string& query) const
+{
+    std::vector<SymbolInfo> out;
+    std::string needle;
+    for (char c : query) needle += (char)tolower((unsigned char)c);
+
+    for (auto& kv : _defSites) {
+        const DefSite& d = kv.second;
+        if (d.kind == SymKind::Local || d.kind == SymKind::Param) continue;   // as in the outline: noise
+        if (!d.unit || !d.unit->name) continue;                               // prelude / builtin
+        if (!needle.empty()) {
+            std::string hay;
+            for (char c : d.display) hay += (char)tolower((unsigned char)c);
+            if (hay.find(needle) == std::string::npos) continue;
+        }
+        out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container, *d.unit->name });
+    }
+    std::sort(out.begin(), out.end(), [](const SymbolInfo& a, const SymbolInfo& b) {
+        if (a.uri != b.uri) return a.uri < b.uri;
         if (a.range.line != b.range.line) return a.range.line < b.range.line;
         return a.range.column < b.range.column;
     });

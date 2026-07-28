@@ -49,6 +49,9 @@ struct PosEntry {
 
 // Query results (LSP-shaped, framework-free).
 struct Location   { std::string uri; SrcRange range; };
-struct SymbolInfo { std::string name; SymKind kind; SrcRange range, selectionRange; std::string container; };
+// `uri` is the declaring unit's path. It is redundant for documentSymbols (every symbol is in the file you
+// asked about) but load-bearing for workspaceSymbols, whose results span the project.
+struct SymbolInfo { std::string name; SymKind kind; SrcRange range, selectionRange; std::string container;
+                    std::string uri; };
 
 #endif // __KAMA_QUERY_H__

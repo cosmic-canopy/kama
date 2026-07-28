@@ -1,0 +1,18 @@
+// LSP M3.5 workspace-indexing fixture — the DECLARING half.
+//
+// The whole point of this pair: `app.kama` imports THIS file, but this file imports nothing. So the M0-M3
+// unit set for an editor session on widget.kama (the file plus its transitive imports) is just widget.kama
+// — `app.kama` is invisible to it, which is exactly why M3.3 had to refuse cross-file rename rather than
+// half-rewrite. With workspace indexing the project's OTHER files are in the set, so find-references on
+// `Widget` reaches app.kama and rename rewrites both.
+namespace widget;
+
+export { Widget, defaultSize };
+
+type value Widget {
+    public int32 size;
+
+    public ctor of(int32 size) { Widget r; r.size = size; return give r; }
+}
+
+fn int32 defaultSize() { return 7; }

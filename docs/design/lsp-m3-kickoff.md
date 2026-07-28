@@ -378,7 +378,8 @@ straight into a list with no field to reach, so it needs restructuring, not just
 
 # M3.5 — workspace indexing (cold-start brief)
 
-**Status: NOT STARTED.** This is what makes cross-file rename safe and **lifts the M3.3 guard** — it is
+**Status: ✅ SHIPPED.** See "As shipped" at the end of this section for where the plan changed under
+contact. This is what makes cross-file rename safe and **lifts the M3.3 guard** — it is
 part of this campaign, not deferred to M5.
 
 The problem it solves: `lspAnalyze` ([kama.driver.cpp:2913](../kama.driver.cpp)) loads the open file plus
@@ -397,6 +398,63 @@ Shape:
    those, and loaded std MODULES should be excluded explicitly since their units are non-null).
 4. Watch the perf budget: whole-project analysis per keystroke is the thing M5 (incremental) exists for;
    M3.5 should index once and update per file change, not per edit.
+
+## As shipped (2026-07-28) — where the plan changed under contact
+
+The four-point shape above held. What the brief did not anticipate:
+
+1. **Root discovery is OUTERMOST-manifest, not nearest, and it needed a fallback.** The brief said "a
+   project-wide unit set … the `kama.json` manifest already declares the package" without saying which
+   manifest. Nearest-wins breaks **monorepos** — with `packages/a` and `packages/b` under a root manifest,
+   opening a file in `a` would index only `a`, find none of `b`'s uses, and then *rewrite anyway*, because
+   the def-site is inside `a` and passes every guard. That is the M3.3 bug recreated one level up. So the
+   walk collects every manifest directory up to (and including) the editor's `workspaceRoot` and takes the
+   **outermost** — npm/cargo workspace semantics. When the open file is *not* under `workspaceRoot` there
+   is no declared boundary, so it takes the **nearest** instead: an unbounded upward walk could otherwise
+   pick up a stray `kama.json` in `$HOME` and index the world.
+2. **A file cap is load-bearing, not a nicety.** With no manifest the root falls back to `workspaceRoot`,
+   and cstar itself has **870 `.kama` files, 813 of them independent `tests/` fixtures** each with its own
+   `main` and colliding type names. Analyzing those as one program is slow *and* wrong (whichever `Point`
+   registers last wins the table, so a rename could rewrite an unrelated fixture). `kLspMaxProjectFiles`
+   = 500; over it, `LspProject::tooLarge` and rename refuses naming the count.
+3. **Requiring a project for *any* rename was a regression, caught by the harness.** The first cut refused
+   when there was no project — which broke M3.4's local/param/field rename in a standalone buffer, the
+   commonest rename there is. A symbol whose uses are all inside the open file needs no workspace
+   knowledge at all, so a project-less file now falls back to the document index under **M3.3's original
+   open-file rule**. The failing assertion was the existing `"id":26` local rename; without it this would
+   have shipped.
+4. **⚠️ String-prefix path tests are unsafe here — `lspRealPath` exists for one reason.** Module
+   resolution names the stdlib relative to the *compiler binary*: `<exeDir>/../../lib/std/…`, which in a
+   dev tree is literally `/…/cstar/build/Darwin-arm64/../../lib/std/…` — a string that **has the project
+   root as a prefix**. `underRoot()` would therefore have called a std symbol project-owned and rewritten
+   it. The too-large guard masked this in the obvious test (the repo has 870 files); it only showed up
+   when probing a small project outside the repo. Both sides now go through `realpath` first. The same
+   reasoning moved the `workspace/symbol` root filter *out* of `kama.query.cpp` into the driver seam —
+   path policy belongs where `absolutePath` lives, and the facade must not gain a dependency on the LSP
+   header.
+5. **`workspace/symbol` has no document to anchor on, and "first open doc" is not deterministic.** `docs`
+   is keyed by URI, so `docs.begin()` picks by *string sort order*: `file:///Users/…` sorts before
+   `file:///bindings.kama`, but `file:///workspace/…` sorts after. It passed on macOS and **failed only in
+   the container**. The anchor is now the project the server already holds an index for, else the first
+   open document that belongs to a project at all.
+6. **A pre-existing self-reference duplicate had to be fixed first.** A type declaring a `ctor` reported
+   its own declaration name **twice** from find-references — the ctor's implicit result type resolves
+   through the class's own decl identifier, so `recordRef` stamped the decl name as a reference to itself.
+   Visible in the existing `tests/query/shapes.kama` with no `--project` involved; the harness never caught
+   it because it greps for substrings. Harmless while rename was single-file, but two identical `TextEdit`s
+   over one range is exactly what the LSP spec forbids. `buildPositions`' reverse-index pass now drops a
+   use whose range equals its own DefSite's `selectionRange`, and `check-query.sh` counts occurrences.
+
+**Perf, measured:** a 43-file project (`lib/std` with a manifest dropped in) rebuilds in **0.45 s**, against
+**0.23 s** for the same file's single-file closure — roughly 2×, paid once per gesture, never while typing.
+The documented upgrade path is a `path → (mtime, parsed unit)` cache so a rebuild re-parses only what
+changed, which is the shape rust-analyzer/clangd/gopls use. Its prerequisite is unverified: M0 established
+analysis is not re-runnable on one `CEmitter` *instance*, but whether the **ASTs themselves** are written
+during analysis (and so unsafe to re-analyze under a second emitter) has never been checked. That is M5's
+job, and self-hosting may change the calculus.
+
+**Not done:** `workspace/didChangeWorkspaceFolders` (the folder set is read once at `initialize`);
+multi-root workspaces beyond "the first folder wins"; `documentChanges`/rename-file edits.
 
 ## After M3
 

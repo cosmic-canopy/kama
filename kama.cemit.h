@@ -460,6 +460,11 @@ public:
     // prepareRename (M3): the identifier range at the cursor IF it names a renameable user symbol
     // (a DefSite in a user unit), else an empty range. Never matches prelude/std/builtins.
     SrcRange renameRangeAt(const std::string& uri, int line, int col) const;
+    // workspace/symbol (M3.5): every user symbol in the index whose name contains `query`
+    // (case-insensitive; "" matches all), each carrying its declaring file in SymbolInfo::uri. Spans every
+    // unit, including std — restricting to one project is the driver seam's job (it needs real-path
+    // resolution), as is capping the result.
+    std::vector<SymbolInfo> workspaceSymbols(const std::string& query) const;
 
 private:
     const CompilationUnit* unitForUri(const std::string& uri) const;   // *unit->name == uri, else nullptr

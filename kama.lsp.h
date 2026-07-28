@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <utility>
 #include "kama.forward.h"
 #include "kama.diagnostic.h"
 #include "kama.query.h"     // SymbolInfo / Location value types (query-seam return types)
@@ -36,6 +37,63 @@ using SharedLspIndex = std::shared_ptr<LspIndex>;
 // hover/def don't go dark while the buffer won't parse.
 SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
                           std::vector<Diagnostic>& diags, const char* argv0);
+
+// ---- workspace indexing (M3.5) ---------------------------------------------------------------------
+//
+// lspAnalyze's unit set is REACHABILITY FROM THE OPEN FILE: the file plus its transitive imports. A file
+// that imports THIS symbol without being imported back is invisible to it, which is why M3.3 had to refuse
+// cross-file rename rather than half-rewrite. A workspace index replaces that with a PROJECT-WIDE unit set,
+// so find-references sees every user of a symbol and rename can safely rewrite them all.
+//
+// The enumeration cap. A "project" that blows this is not a package — it is a source tree of unrelated
+// programs (cstar itself holds 870 .kama files, 813 of them independent tests/ fixtures with their own
+// `main` and colliding type names). Analyzing those as ONE program would be slow AND wrong, so we refuse
+// and say so rather than quietly answer from a corrupted index.
+const size_t kLspMaxProjectFiles = 500;
+
+// The project a file belongs to, plus every `.kama` source in it. `root` is empty when the file belongs to
+// no project we're willing to index — the honest answer, and the server keeps refusing rename.
+struct LspProject {
+    std::string              root;               // project root directory ("" = no project)
+    std::vector<std::string> files;              // every *.kama under root, absolute, sorted
+    bool                     hasManifest = false;   // root was found via kama.json (vs. the editor's folder)
+    bool                     tooLarge    = false;   // enumeration blew the cap; `files` is empty
+    size_t                   seenCount   = 0;       // how many were seen before the cap (for the message)
+};
+
+// Resolve the project owning `openFilePath`. `workspaceRoot` is the editor's folder (from initialize's
+// rootUri / workspaceFolders), or "" if the client sent none.
+//
+// Root rule: walk UP from the file recording every directory holding a kama.json, then take the OUTERMOST
+// one — npm/cargo *workspace* semantics, so a monorepo's root manifest wins over a package's and rename in
+// one package sees the other packages' uses. The walk never rises above `workspaceRoot` (it may examine
+// that directory itself), and stops at any `.kama` path component so a vendored dependency keeps its own
+// manifest. With no manifest at all the root falls back to `workspaceRoot`.
+//
+// If the file is NOT under `workspaceRoot` (no rootUri, or a file opened from outside the folder) there is
+// no declared boundary, so widening is unjustified: take the NEAREST manifest instead of the outermost, and
+// if there is none, return no project rather than risk indexing a stray kama.json in $HOME.
+LspProject lspFindProject(const std::string& openFilePath, const std::string& workspaceRoot);
+
+// realpath(): symlinks and `..` collapsed. The LSP layer needs it because module resolution hands back
+// paths RELATIVE to the compiler binary — the stdlib arrives as `<exeDir>/../../lib/std/…`, which in a
+// dev tree still carries the project root as a literal string prefix. A rename deciding "is this
+// definition inside the project?" by string prefix would then treat a std symbol as the project's own and
+// happily rewrite it. Normalize both sides before comparing. Falls back to the input if it doesn't exist.
+std::string lspRealPath(const std::string& path);
+
+// Analyze a whole project: `files` (every project source) plus their transitive imports, with `overlays`
+// — (path, live buffer text) for each open document — substituted for their on-disk copies so unsaved
+// edits are reflected. Diagnostics are deliberately NOT returned: the per-document index still owns
+// diagnostics/hover/go-to-def, and this index exists only for the queries that need reverse reachability.
+SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
+                                   const std::vector<std::pair<std::string, std::string>>& overlays,
+                                   const char* argv0);
+
+// workspace/symbol: project-wide symbol search. `query` is a case-insensitive substring ("" matches all);
+// only symbols declared under `root` are returned, so std and dependencies stay out of the picker. Capped.
+std::vector<SymbolInfo> lspWorkspaceSymbols(const SharedLspIndex& idx, const std::string& query,
+                                            const std::string& root);
 
 // Query seams — thin wrappers over the query facade on a handle (the path re-picks the unit within the
 // index). All framework-free (kama.query.h value types); a null handle yields an empty/unknown result.

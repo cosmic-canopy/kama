@@ -140,5 +140,40 @@ reject --refs 39:14 -- "scopes.kama:44:20"  # ... and must NOT return the siblin
 expect --refs 43:14 -- "scopes.kama:44:20"
 reject --refs 43:14 -- "scopes.kama:40:20"
 
+# ---------------------------------------------------------------------------------------------------
+# M3.5 — WORKSPACE INDEXING (`--project`).
+#
+# tests/query/ws/ is a two-file package: app.kama imports widget.kama, and widget.kama imports nothing.
+# So widget.kama's own import closure is JUST ITSELF — app.kama's three uses of `Widget` are invisible to
+# it. That asymmetry is the whole reason M3.3 had to refuse cross-file rename, and it is what --project
+# fixes by widening the unit set from one closure to every .kama under the nearest kama.json.
+FIXTURE="$ROOT/tests/query/ws/widget.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo "check-query: M3.5 workspace indexing"
+# Without --project: only widget.kama's own uses are visible. (`--refs` prints absolute paths under
+# --project and the given path without it, so match on the basename+position, which both forms carry.)
+expect --refs 12:11 -- "widget.kama:12:11"          # the declaration itself
+expect --refs 12:11 -- "widget.kama:15:33"          # 'Widget r;' inside the ctor
+reject --refs 12:11 -- "app.kama"                   # ... and app.kama is INVISIBLE (the M3.3 blind spot)
+# With --project: the same query reaches every file in the package.
+expect --project --refs 12:11 -- "app.kama:5:3"     # 'fn Widget make(...)' return type
+expect --project --refs 12:11 -- "app.kama:6:4"     # 'Widget w = Widget.of(...)'
+expect --project --refs 12:11 -- "app.kama:11:4"    # 'Widget w = make(...)' in main
+expect --project --refs 12:11 -- "widget.kama:12:11"  # ... without losing the declaring file's own uses
+# A free function crosses the boundary the same way.
+expect --project --refs 18:9 -- "app.kama:11:23"    # 'defaultSize()' called from app.kama
+# The declaration must be reported ONCE. A type that declares a `ctor` used to be listed twice: the
+# ctor's implicit result type resolves through the class's own decl identifier, so the decl name was
+# recorded as a reference to itself. Rename replaces every range it is handed, so a duplicate meant two
+# identical TextEdits over one range — which the LSP spec forbids within a file.
+count=$("$KAMA" query "$FIXTURE" --project --refs 12:11 2>&1 | grep -c "widget.kama:12:11" || true)
+if [ "$count" = 1 ]; then
+    echo "  ok: the declaration is reported exactly once (no self-reference duplicate)"
+else
+    echo "  FAIL: expected the decl at widget.kama:12:11 once, got $count" >&2
+    fail=1
+fi
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"
