@@ -89,6 +89,39 @@ std::string baseName(const std::string& path)
     return (slash == std::string::npos) ? path : path.substr(slash + 1);
 }
 
+// Split a path into its non-empty components, on either separator so one code path serves Windows.
+// The leading "/" of a POSIX absolute path drops out; that is harmless because relativePath only ever
+// compares two paths that were canonicalized the same way.
+std::vector<std::string> splitPathComponents(const std::string& p)
+{
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : p) {
+        if (c == '/' || c == '\\') { if (!cur.empty()) out.push_back(cur); cur.clear(); }
+        else cur += c;
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+// `target` spelled relative to `fromDir` — both already absolute. Pure string work over canonical
+// forms: drop the shared prefix, then one `..` per component of `fromDir` that is left over. Returns
+// `target` unchanged when the two share no root at all (different Windows drives). Emits forward
+// slashes, which is what a manifest and a lockfile spell on every platform.
+std::string relativePath(const std::string& fromDir, const std::string& target)
+{
+    std::vector<std::string> f = splitPathComponents(fromDir), t = splitPathComponents(target);
+    size_t i = 0;
+    while (i < f.size() && i < t.size() && f[i] == t[i]) ++i;
+    if (i == 0) return target;
+    std::string out;
+    for (size_t k = i; k < f.size(); ++k) out += "../";
+    for (size_t k = i; k < t.size(); ++k) { out += t[k]; if (k + 1 < t.size()) out += "/"; }
+    if (out.empty()) return ".";
+    if (out.size() > 1 && out.back() == '/') out.pop_back();
+    return out;
+}
+
 std::string stripExtension(const std::string& path)
 {
     size_t slash = path.find_last_of("/\\");
@@ -442,6 +475,11 @@ struct DepSpec {
     std::string registry;   // optional explicit registry base URI (else the configured/default registry)
     std::string signature;  // registry dep (internal): the SSHSIG blob from the index (verified at fetch)
     std::string sigKey;     // registry dep (internal): the signer public key from the index
+    // Resolver-internal, never read from or written to a manifest: `path` canonicalized against the dir
+    // of the manifest that DECLARED it. A path spec is meaningless without its declaring manifest —
+    // `../config` from a sibling and `../../libs/config` from the app name the same directory — so
+    // every comparison and every materialization goes through this, never through the spelling.
+    std::string pathAbs;
 };
 
 // The `registries` config (M3.1b): where registry deps resolve from. `default` is the base chain for
@@ -517,7 +555,11 @@ static std::string storeLabel(const std::string& name)
 // hard error. Range (git+version, no rev) deps take the SemVer path below instead.
 static bool sameSpec(const DepSpec& a, const DepSpec& b)
 {
-    return a.path == b.path && a.git == b.git && a.url == b.url
+    // Paths compare CANONICALIZED, never as spellings — see DepSpec::pathAbs. (The raw `path` is only a
+    // fallback for a spec the resolver never canonicalized; inside the resolver `pathAbs` is always set.)
+    const std::string& ap = a.pathAbs.empty() ? a.path : a.pathAbs;
+    const std::string& bp = b.pathAbs.empty() ? b.path : b.pathAbs;
+    return ap == bp && a.git == b.git && a.url == b.url
         && a.rev == b.rev && a.integrity == b.integrity;
 }
 
@@ -1739,12 +1781,14 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
 // links with ZERO fetch (offline), a cold store re-fetches by the recorded `commit`/`integrity` and asserts
 // the tree hash still matches. A new/changed spec resolves fresh via fetchToStore. path deps always relink
 // the local dir. The caller sets out.dev / out.dependencies.
-static bool resolveOne(const std::string& name, const DepSpec& spec, const std::string& base,
+// `requestorDir` is the directory of the manifest that DECLARED this dep — a path spec resolves against
+// it, not against the root project (they differ the moment a workspace member declares a sibling).
+static bool resolveOne(const std::string& name, const DepSpec& spec, const std::string& requestorDir,
                        const std::map<std::string, LockEntry>& oldLock,
                        LockEntry& out, std::string& storePath, std::string& err)
 {
     if (!spec.path.empty()) {
-        std::string target = absolutePath(base + "/" + spec.path);
+        std::string target = spec.pathAbs.empty() ? absolutePath(requestorDir + "/" + spec.path) : spec.pathAbs;
         if (!dirExists(target)) { err = "path dependency '" + name + "' not found at " + target; return false; }
         out = LockEntry(); out.source = "path"; out.path = spec.path; storePath = target;
         return true;
@@ -2017,7 +2061,9 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         runCmd(rmRfCmd(devViewDir));
         if (!makeDirs(viewDir)) { fprintf(stderr, "kama install: cannot create %s\n", viewDir.c_str()); return 1; }
 
-        struct Req { std::string name; DepSpec spec; std::string requestor; bool dev; };
+        // `requestor` is a display name for diagnostics; `requestorDir` is the directory of the manifest
+        // that declared this dep — what a path spec is actually relative to.
+        struct Req { std::string name; DepSpec spec; std::string requestor; std::string requestorDir; bool dev; };
         std::map<std::string, DepSpec> chosen;        // name -> the one resolved (tag-pinned) spec
         std::map<std::string, std::string> chosenBy;  // name -> first requestor (conflict diagnostics)
         std::map<std::string, std::string> chosenVer; // range deps: name -> resolved concrete "x.y.z"
@@ -2107,6 +2153,10 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         auto drain = [&](std::deque<Req>& q) -> int {
             while (!q.empty()) {
                 Req r = q.front(); q.pop_front();
+                // Canonicalize the path spec against its OWN declaring manifest before anything compares
+                // or materializes it — the single point where a spelling becomes a directory.
+                if (!r.spec.path.empty() && r.spec.pathAbs.empty())
+                    r.spec.pathAbs = absolutePath(r.requestorDir + "/" + r.spec.path);
                 bool incomingRange = isRangeDep(r.spec) || isRegistryDep(r.spec);   // a versioned dep (git range or registry)
 
                 auto ci = chosen.find(r.name);
@@ -2234,9 +2284,14 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 chosen[r.name] = r.spec; chosenBy[r.name] = r.requestor;
 
                 LockEntry e; std::string storePath, ferr;
-                if (!resolveOne(r.name, r.spec, base, oldLock, e, storePath, ferr)) {
+                if (!resolveOne(r.name, r.spec, r.requestorDir, oldLock, e, storePath, ferr)) {
                     fprintf(stderr, "kama install: %s\n", ferr.c_str()); return 1;
                 }
+                // The lock lives at the ROOT, so a path it records must be root-relative to mean anything.
+                // A root-declared dep already is — keep its spelling verbatim, so an existing lock stays
+                // byte-identical on re-install. Only a workspace member's sibling dep gets re-based.
+                if (!r.spec.path.empty() && r.requestor != "<root manifest>")
+                    e.path = relativePath(absolutePath(base), storePath);
                 if (incomingRange) e.version = chosenVer[r.name];   // record what the range resolved to
                 if (regBaseOf.count(r.name)) {                       // a registry dep: overwrite the url source
                     e.source = "registry"; e.registry = regBaseOf[r.name];
@@ -2269,7 +2324,9 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                         fprintf(stderr, "kama install: %s: %s\n", childManifest.c_str(), cerr.c_str()); return 2;
                     }
                     for (auto& ck : childDeps) { directNames.push_back(ck.first);
-                        q.push_back({ck.first, ck.second, r.name, r.dev}); }
+                        // storePath is where THIS package's manifest lives — the dir its own path specs
+                        // are relative to. For a path dep that is the local package dir itself.
+                        q.push_back({ck.first, ck.second, r.name, storePath, r.dev}); }
                     std::sort(directNames.begin(), directNames.end());   // deterministic dependencies[] order
                 }
                 e.dependencies = directNames;
@@ -2279,8 +2336,8 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         };
 
         std::deque<Req> prodQ, devQ;
-        for (auto& kv : deps)    prodQ.push_back({kv.first, kv.second, "<root manifest>", false});
-        for (auto& kv : devDeps) devQ.push_back({kv.first, kv.second, "<root manifest>", true});
+        for (auto& kv : deps)    prodQ.push_back({kv.first, kv.second, "<root manifest>", base, false});
+        for (auto& kv : devDeps) devQ.push_back({kv.first, kv.second, "<root manifest>", base, true});
         int rc = drain(prodQ);                       // phase 1 (prod) drains fully before phase 2 → prod wins
         if (rc == 0) rc = drain(devQ);               // phase 2 (dev)
         if (rc == RESTART) continue;                 // a tighter range surfaced — re-resolve with it seeded
