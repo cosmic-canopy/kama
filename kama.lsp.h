@@ -132,6 +132,18 @@ std::vector<CompletionItem> lspCompletion(const SharedLspIndex& idx, const std::
 SignatureHelp               lspSignatureHelp(const SharedLspIndex& idx, const std::string& path,
                                              const CompletionContext& ctx);
 
+// Import-path completion (M4.7). Both answer from the FILESYSTEM and the module resolver, not from the
+// index: a module the user is about to import is by definition not loaded yet, so the query index cannot
+// know it exists. They mirror loadProgramUnits' root order exactly (the file's own directory, KAMA_PATH,
+// the resolved dependency view, then the stdlib — with `std`/`core` reserved to the stdlib), so what
+// completes is what would actually resolve.
+//   lspImportModules: the next path segment after `prefix` ("" = the top level).
+//   lspImportSymbols: the names a module's `export { … }` manifest publishes.
+std::vector<std::string> lspImportModules(const std::string& fromPath, const std::string& prefix,
+                                          const char* argv0);
+std::vector<std::string> lspImportSymbols(const std::string& fromPath, const std::string& modulePath,
+                                          const char* argv0);
+
 // Run the language server over stdio; blocks until the client's `exit`. `argv0` is the compiler's own path
 // (for resolving the stdlib when loading imported modules). Returns the process exit code (0 after a clean
 // shutdown→exit handshake, 1 if `exit` arrives without a prior `shutdown`).

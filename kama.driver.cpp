@@ -3597,6 +3597,83 @@ SignatureHelp lspSignatureHelp(const SharedLspIndex& idx, const std::string& pat
     return idx->idx->signatureAt(path, ctx);
 }
 
+// The import roots visible from `fromPath`, in loadProgramUnits' order. `reserved` mirrors its rule that
+// `std`/`core` resolve ONLY under the stdlib, so a local directory named `std` cannot shadow it.
+static std::vector<std::string> lspImportRoots(const std::string& fromPath, bool reserved, const char* argv0)
+{
+    std::vector<std::string> roots;
+    if (!reserved) {
+        roots.push_back(dirName(absolutePath(fromPath)));
+        for (auto& r : splitSearchPath(getenv("KAMA_PATH"))) roots.push_back(r);
+        std::string dv = projectDepsView({ fromPath });
+        if (!dv.empty()) roots.push_back(dv);
+    }
+    roots.push_back(resolveStdlibDir(argv0));
+    return roots;
+}
+
+static std::vector<std::string> lspSplitModulePath(const std::string& path, std::string& rel)
+{
+    std::vector<std::string> segs;
+    for (size_t i = 0; i < path.size();) {
+        size_t sep = path.find("::", i);
+        std::string seg = path.substr(i, sep == std::string::npos ? std::string::npos : sep - i);
+        if (!seg.empty()) segs.push_back(seg);
+        if (sep == std::string::npos) break;
+        i = sep + 2;
+    }
+    rel.clear();
+    for (size_t i = 0; i < segs.size(); ++i) rel += (i ? "/" : "") + segs[i];
+    return segs;
+}
+
+std::vector<std::string> lspImportModules(const std::string& fromPath, const std::string& prefix,
+                                          const char* argv0)
+{
+    std::string rel;
+    std::vector<std::string> segs = lspSplitModulePath(prefix, rel);
+    std::vector<std::string> roots = lspImportRoots(fromPath, !segs.empty() && (segs[0] == "std" || segs[0] == "core"), argv0);
+    const std::string self = stripExtension(baseName(absolutePath(fromPath)));
+    std::set<std::string> out;                       // sorted + deduped across roots
+    for (auto& root : roots) {
+        std::string dir = rel.empty() ? root : root + "/" + rel;
+        if (!dirExists(dir)) continue;
+        DIR* d = opendir(dir.c_str());
+        if (!d) continue;
+        while (struct dirent* e = readdir(d)) {
+            std::string n = e->d_name;
+            if (n.empty() || n[0] == '.' || n == "build") continue;
+            if (n.size() > 5 && n.compare(n.size() - 5, 5, ".kama") == 0) {
+                std::string m = n.substr(0, n.size() - 5);
+                if (!(rel.empty() && m == self)) out.insert(m);   // a file cannot import itself
+            } else if (dirExists(dir + "/" + n)) {
+                out.insert(n);                                    // a directory-module or a deeper level
+            }
+        }
+        closedir(d);
+    }
+    return { out.begin(), out.end() };
+}
+
+std::vector<std::string> lspImportSymbols(const std::string& fromPath, const std::string& modulePath,
+                                          const char* argv0)
+{
+    std::string rel;
+    std::vector<std::string> segs = lspSplitModulePath(modulePath, rel);
+    if (segs.empty()) return {};
+    auto files = resolveModuleFiles(segs, lspImportRoots(fromPath, segs[0] == "std" || segs[0] == "core", argv0));
+    // Parse the module rather than reading the index: the module being imported is, by definition, one the
+    // open file does not import yet, so it is not in the index at all. Only reachable from inside an
+    // `import …::{ }` list, so the parse is per-gesture, not per-keystroke.
+    std::set<std::string> out;
+    for (auto& f : files) {
+        SharedCompilationUnit u = parseFile(f);
+        if (!u || !u->exportList) continue;           // no `export { … }` => no public surface to offer
+        for (auto& n : *u->exportList) if (n) out.insert(*n);
+    }
+    return { out.begin(), out.end() };
+}
+
 int main(int argc, char** argv)
 {
     if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
@@ -4108,8 +4185,18 @@ int main(int argc, char** argv)
             printf("trigger=%s recv=%s callee=%s prefix=%s active=%d filled=%s\n",
                    completionTriggerName(cc.trigger), cc.receiver.c_str(), cc.callee.c_str(),
                    cc.prefix.c_str(), cc.activeParam, filled.c_str());
-            for (const auto& it : idx.completionsAt(queryUri, cc))
-                printf("%s\t%s\t%s\n", completionKindName(it.kind), it.label.c_str(), it.detail.c_str());
+            // The import triggers answer from the module resolver, not the index — a module the file does
+            // not import yet is by definition absent from it.
+            if (cc.trigger == CompletionTrigger::ImportPath) {
+                for (const auto& m : lspImportModules(input, cc.receiver, argv[0]))
+                    printf("module\t%s\t\n", m.c_str());
+            } else if (cc.trigger == CompletionTrigger::ImportSymbol) {
+                for (const auto& sym : lspImportSymbols(input, cc.receiver, argv[0]))
+                    printf("type\t%s\t%s\n", sym.c_str(), cc.receiver.c_str());
+            } else {
+                for (const auto& it : idx.completionsAt(queryUri, cc))
+                    printf("%s\t%s\t%s\n", completionKindName(it.kind), it.label.c_str(), it.detail.c_str());
+            }
             return 0;
         }
         if (!querySigHelp.empty()) {

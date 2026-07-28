@@ -218,6 +218,11 @@ frame '{"jsonrpc":"2.0","id":36,"method":"textDocument/signatureHelp","params":{
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$NURI"'","languageId":"kama","version":1,"text":"'"$NEWB"'"}}}'
 frame '{"jsonrpc":"2.0","id":37,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":4,"character":6}}}'
 frame '{"jsonrpc":"2.0","id":38,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":4,"character":4}}}' 
+# --- M4.7: import paths, over the real on-disk imports.kama buffer. Line 2 is
+#     `import std::collections::{DynamicArray};` (LSP line 1): char 12 is after `std::`, char 26 is
+#     inside the symbol list.
+frame '{"jsonrpc":"2.0","id":39,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":12}}}'
+frame '{"jsonrpc":"2.0","id":40,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":26}}}' 
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -349,7 +354,7 @@ echo "check-lsp: M4 completion + signature help"
 # The list is complete as sent: `isIncomplete:false` tells the client to filter it itself as the user
 # keeps typing, so one `.` costs one request rather than one per character.
 expect '"id":17,"result":{"isIncomplete":false,"items":[{"label":"x","kind":5,"detail":"int32"}]}' \
-       "completion after `.` -> the receiver's field, as CompletionItemKind.Field (5)"
+       "completion after a dot -> the receiver's field, as CompletionItemKind.Field (5)"
 expect '"id":18,"result":{"isIncomplete":false,"items":[{"label":"a:","kind":10,"detail":"Point"}]}' \
        "completion in an empty argument slot -> the callee's unsupplied LABEL"
 expect '"id":19,"result":{"signatures":[{"label":"mid(a: Point) -> Point"' \
@@ -362,9 +367,15 @@ echo "check-lsp: M4.6 completion on a buffer that has never parsed"
 # Without the repair these are both empty — which is the state a NEW file is in, where completion is
 # wanted most. The repair blanks only the cursor's line, so line/column geometry is preserved exactly.
 expect '"id":37,"result":{"isIncomplete":false,"items":[{"label":"x","kind":5,"detail":"int32"},{"label":"twice"' \
-       "`p.` resolves even though the buffer does not parse"
+       "a dotted receiver resolves even though the buffer does not parse"
 expect '"id":38,"result":{"isIncomplete":false,"items":[{"label":"p","kind":6,"detail":"P"}' \
        "... and the bare position still sees the local"
+
+echo "check-lsp: M4.7 import paths"
+expect '{"label":"collections","kind":9}' \
+       "import std:: -> the stdlib modules, as CompletionItemKind.Module (9)"
+expect '"id":40,' "import ...::{} -> the module export manifest"
+expect '{"label":"DynamicArray","kind":7,"detail":"std::collections"}' "... naming the module it comes from"
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

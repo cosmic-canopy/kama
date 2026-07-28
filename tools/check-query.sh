@@ -377,6 +377,19 @@ expect --complete 23:38 -- "field	secret	int32"               # own private fiel
 expect --complete 23:38 -- "method	size	fn int32 size()"
 
 # ---------------------------------------------------------------------------------------------------
+# M4.7 — import paths. These answer from the module RESOLVER, not the index: a module the file does not
+# import yet is by definition absent from the index. Root order mirrors loadProgramUnits exactly, so what
+# completes is what would actually resolve.
+echo "check-query: M4.7 import paths"
+expect --complete 15:7  -- "module	std"           # `import |` -> the stdlib root
+expect --complete 15:7  -- "module	shapes"        # ... and sibling file-modules in this directory
+reject --complete 15:7  -- "module	complete"      # ... but never the file itself
+expect --complete 15:12 -- "module	collections"   # `import std::|` -> the stdlib's modules
+expect --complete 15:12 -- "module	process"
+expect --complete 15:26 -- "type	DynamicArray	std::collections"   # `import …::{|}` -> the export manifest
+expect --complete 15:26 -- "type	Deque	std::collections"
+
+# ---------------------------------------------------------------------------------------------------
 # M4.4 — signature help + argument labels. kama has NO positional arguments (kama.y's `argument`
 # productions are all `IDENTIFIER COLON …`), so "which parameter am I on" and "what labels may I type"
 # are one question with one answer.

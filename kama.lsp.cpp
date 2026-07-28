@@ -758,12 +758,27 @@ struct Server {
             int l, c; kamaPos(params, l, c);
             std::string path = uriToPath(uri);
             CompletionContext ctx = completionContextAt(it->second.text, l, c);
-            for (const auto& item : lspCompletion(indexForRequest(it->second, path, l), path, ctx)) {
+            auto push = [&](const std::string& label, CompletionKind kind, const std::string& detail) {
                 Json j = Json::object();
-                j.set("label", item.label);
-                j.set("kind", completionKindToLsp(item.kind));
-                if (!item.detail.empty()) j.set("detail", item.detail);
+                j.set("label", label);
+                j.set("kind", completionKindToLsp(kind));
+                if (!detail.empty()) j.set("detail", detail);
                 items.push(std::move(j));
+            };
+            // An import names something the file does NOT import yet, so the index cannot know it exists;
+            // these two answer from the module resolver instead (M4.7).
+            if (ctx.trigger == CompletionTrigger::ImportPath) {
+                for (const auto& m : lspImportModules(path, ctx.receiver, argv0))
+                    push(m, CompletionKind::Module, "");
+            } else if (ctx.trigger == CompletionTrigger::ImportSymbol) {
+                for (const auto& sym : lspImportSymbols(path, ctx.receiver, argv0)) {
+                    bool already = false;
+                    for (const auto& f : ctx.filled) if (f == sym) { already = true; break; }
+                    if (!already) push(sym, CompletionKind::Type, ctx.receiver);
+                }
+            } else {
+                for (const auto& item : lspCompletion(indexForRequest(it->second, path, l), path, ctx))
+                    push(item.label, item.kind, item.detail);
             }
         }
         Json result = Json::object();
