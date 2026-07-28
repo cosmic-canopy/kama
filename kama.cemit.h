@@ -465,6 +465,14 @@ public:
     // unit, including std — restricting to one project is the driver seam's job (it needs real-path
     // resolution), as is capping the result.
     std::vector<SymbolInfo> workspaceSymbols(const std::string& query) const;
+    // completion (M4). `ctx` is the LEXICAL context recovered from the LIVE buffer (completionContextAt) —
+    // NOT a cursor position: at completion time the buffer does not parse, so the receiver the user just
+    // typed exists in no AST. NOT const, unlike the rest of the facade: resolving a type spelling means
+    // swapping `_nsCtx` (and, inside a generic instance, `_typeSubst`) to the querying context and back,
+    // exactly as buildPositions' resolve-fill sweep does. Nothing is recorded — every resolve passes
+    // site=nullptr — and `cType` is never called, since its unsupported() side effect would inject phantom
+    // diagnostics into the file the editor is showing.
+    std::vector<CompletionItem> completionsAt(const std::string& uri, const CompletionContext& ctx);
 
 private:
     const CompilationUnit* unitForUri(const std::string& uri) const;   // *unit->name == uri, else nullptr
@@ -514,6 +522,68 @@ private:
                     ASTNode* declNode, const SharedIdentifier& nameId,
                     const std::string& display, const std::string& container);  // one _defSites entry
     const CompilationUnit* unitOfDecl(const ASTNode* topLevelDecl) const;  // _declUnit lookup (nullptr => prelude/std)
+
+    // ---- M4 completion helpers (kama.query.cpp) --------------------------------------------------------
+    // Save/restore the two pieces of resolver state a query mutates. RAII rather than paired assignments
+    // because the completion paths return early all over the place, and one leaked _nsCtx would corrupt
+    // every subsequent query on this index.
+    struct QueryScope {
+        CEmitter* e; NsCtx ns; std::map<std::string, SharedIdentifier> subst;
+        explicit QueryScope(CEmitter* e) : e(e), ns(e->_nsCtx), subst(e->_typeSubst) {}
+        ~QueryScope() { e->_nsCtx = ns; e->_typeSubst = subst; }
+    };
+    // The user callable whose BODY contains (line,col), plus its enclosing type. Span containment over the
+    // unit's top-level decls and class members — a flat loop, no scope stack (the emitter's `_scopes` is
+    // long dead by index time, and rebuilding it is not needed: see collectBindings).
+    struct QueryCtx { std::string typeKey;                 // enclosing type's _classes/_genericTypes key ("" at file scope)
+                      std::string funcName;                // enclosing callable's kama name (friend-grant checks)
+                      SharedParameterList params;
+                      SharedBlock body;
+                      // `<T: Drawable>` in scope here. A receiver typed by a bare type-param has no concrete
+                      // class to look at, so its BOUND contract is the only thing that can answer `x.`.
+                      std::map<std::string, SharedIdentifierList> typeParamBounds; };
+    QueryCtx enclosingCallable(const CompilationUnit* unit, int line, int col);
+    std::string classKeyOfName(const SharedIdentifier& name);   // a decl's name node -> its table key ("" if none)
+    // One binding a body declares. No scope extent and no index key: kama FORBIDS shadowing
+    // (kama.cemit.cpp, emitDeclarator), so within a callable a name is unique except across sibling scopes,
+    // and two sibling bindings collapse to one completion LABEL with identical insert text. Rename needed
+    // per-declaration identity; completion does not.
+    struct QueryBinding { std::string name; SharedIdentifier type; int line = 0; bool isParam = false;
+                          // The class whose generic substitution `type` must be read under. Non-empty only
+                          // for a match-arm payload binding, whose type node is the VARIANT TEMPLATE's `T`.
+                          std::string ownerKey; };
+    // Every binding in `s`, in source order. MUST cover every block-bearing statement — Block, Unsafe,
+    // Scope, If/Else, While, DoWhile, For, ForEach, ParallelFor and match arms. (scanStmtForCollections
+    // omits Unsafe and Scope and has silently under-scanned ever since; do not copy that bug.)
+    void collectBindings(SharedStatement s, std::vector<QueryBinding>& out) const;
+    void collectBindingsExpr(SharedExpression e, std::vector<QueryBinding>& out) const;  // finds match arms only
+    // A type NODE -> its _classes / _genericTypes / _interfaces key, "" for a primitive or unknown. The
+    // cType-FREE stand-in for exprClass, which is unusable here twice over: it calls cType on six paths,
+    // and it reads _localTypes, which is cleared at every function entry and after analyze() holds the LAST
+    // emitted function's locals. `ownerKey` supplies the generic-instance substitution for a member's type
+    // (a field of `DynamicArray_Cell` is declared `T` on the template).
+    std::string classOfTypeNodeIn(const std::string& ownerKey, SharedIdentifier t);
+    std::string spellTypeIn(const std::string& ownerKey, const SharedIdentifier& t);   // source spelling, for `detail`
+    void installOwnerScope(const std::string& ownerKey);   // _nsCtx + _typeSubst for reading ownerKey's members
+    // A canonicalized receiver path (`h.cell`, `makeHolder()`, `cells[]`, `this`, `Point`) -> the class key
+    // it names. `isType` distinguishes `Point.` (offer ctors + statics) from `p.` (offer instance members);
+    // a live binding of the same spelling WINS, mirroring isTypeReceiver's precedence.
+    std::string classOfPath(const QueryCtx& qc, const std::vector<QueryBinding>& binds,
+                            const std::string& path, bool& isType);
+    // A bare type-param receiver resolves through its contract BOUND — the only thing that can answer.
+    std::string boundOfTypeParam(const QueryCtx& qc, const SharedIdentifier& t, const std::string& fallback);
+    // One path segment: `cls`'s member `name` plus the `()` / `[]` suffixes that segment carried.
+    std::string stepMemberType(const std::string& cls, const std::string& name, const std::string& suffix);
+    std::string memberTypeOf(const std::string& cls, const std::string& name, bool preferMethod);
+    std::string elementTypeOf(const std::string& cls);   // `coll[i]`
+    // The pointee of a smart pointer or a user `Deref<T>` — derefTarget's cType-free counterpart.
+    std::string derefTargetForQuery(const std::string& cls);
+    // Visibility as a PURE predicate. canAccess is unusable from a query: it calls unsupported() on denial
+    // and decides from _currentClass/_currentFunc, both dead after analysis.
+    bool visibleFrom(const ClassInfo* owner, Visibility vis, const std::string& member,
+                     const QueryCtx& qc) const;
+    void addMembers(const std::string& clsKey, bool wantStatic, const QueryCtx& qc,
+                    std::vector<CompletionItem>& out);
 
 
     // Discards any stray write during analysis mode (collectProgram writes no C, but `unsupported()` still

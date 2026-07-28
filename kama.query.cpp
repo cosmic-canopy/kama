@@ -863,3 +863,598 @@ std::vector<Diagnostic> CEmitter::diagnosticsFor(const std::string& uri) const
     for (auto& d : _diagnostics) if (d.file == uri) out.push_back(d);
     return out;
 }
+
+// ---- M4.1: the semantic layer — member completion after `.` ---------------------------------------------
+//
+// Three pieces: find the callable the cursor is in, collect the bindings it declares (with their declared
+// TYPE nodes — the one thing no recorded state retains), and walk a canonicalized receiver path to a class
+// key whose members can be listed.
+//
+// Everything here avoids `cType`, whose `unsupported()` side effect would land a phantom diagnostic on the
+// very file the editor is showing. That rules out the three helpers the kickoff brief proposed reusing:
+// `exprClass` (calls cType on six paths, and reads `_localTypes`, which is cleared at every function entry
+// and after analyze() holds the LAST emitted function's locals), `isTypeReceiver` (calls both), and
+// `canAccess` (calls unsupported() on denial and decides from `_currentClass`/`_currentFunc`, both dead).
+// The substitutes are `mangleElem` — the exact "type node -> mangled key" function, generic instances
+// included — plus `findMethod` / `findFieldOwner` for the inheritance walks, each verified clean.
+
+std::string CEmitter::classKeyOfName(const SharedIdentifier& name)
+{
+    if (!name || !name->value) return "";
+    std::string key = resolveUserName(*name->value, name->qualifier);   // site=nullptr => records nothing
+    if (_classes.count(key) || _genericTypes.count(key) || _interfaces.count(key)
+        || _genericContracts.count(key) || _enums.count(key)) return key;
+    return "";
+}
+
+CEmitter::QueryCtx CEmitter::enclosingCallable(const CompilationUnit* unit, int line, int col)
+{
+    QueryCtx qc;
+    if (!unit || !unit->codeDeclarationList) return qc;
+    auto holds = [&](const ASTNode* n) { return n && rangeOfNode(n).contains(line, col); };
+    auto take = [&](SharedParameterList ps, SharedBlock body, const SharedIdentifier& nm) {
+        qc.params = ps; qc.body = body;
+        if (nm && nm->value) qc.funcName = *nm->value;
+    };
+    auto takeBounds = [&](const SharedStringList& ps, const SharedBoundsList& bs) {
+        if (!ps || !bs) return;
+        for (size_t i = 0; i < ps->size() && i < bs->size(); ++i)
+            if ((*ps)[i] && (*bs)[i]) qc.typeParamBounds[*(*ps)[i]] = (*bs)[i];
+    };
+    for (auto& d : *unit->codeDeclarationList) {
+        if (!d || !holds(d.get())) continue;
+        if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(d.get())) {
+            take(fn->parameters, fn->block, fn->name);
+            takeBounds(fn->typeParams, fn->typeBounds);
+            return qc;
+        }
+        ClassMemberDeclarationList* members = nullptr;
+        if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d.get())) {
+            qc.typeKey = classKeyOfName(cd->name);
+            takeBounds(cd->typeParams, cd->typeBounds);
+            members = cd->members.get();
+        } else if (auto* ri = dynamic_cast<RetroactiveImplNode*>(d.get())) {
+            // `implements C for T { … }` — the enclosing type is the retro TARGET, which has no
+            // ClassDeclarationNode here at all.
+            qc.typeKey = classKeyOfName(ri->target);
+            members = ri->members.get();
+        }
+        if (!members) return qc;
+        for (auto& m : *members) {
+            if (!m || !holds(m.get())) continue;
+            if (auto* me = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                take(me->params, me->body, me->name);
+            else if (auto* ct = dynamic_cast<ClassConstructorDeclarationNode*>(m.get())) {
+                if (ct->declarator) take(ct->declarator->params, ct->body, ct->declarator->constructorName);
+            } else if (auto* dt = dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
+                take(SharedParameterList(), dt->body, dt->destructorName);
+            else if (auto* op = dynamic_cast<ClassOperatorDeclarationNode*>(m.get()))
+                take(SharedParameterList(), op->body, SharedIdentifier());
+            break;
+        }
+        return qc;   // inside the type but not inside a member body: typeKey alone is still worth having
+    }
+    return qc;
+}
+
+void CEmitter::collectBindings(SharedStatement s, std::vector<QueryBinding>& out) const
+{
+    if (!s) return;
+    ASTNode* n = s.get();
+    auto add = [&](const SharedIdentifier& name, const SharedIdentifier& type) {
+        if (name && name->value) out.push_back(QueryBinding{ *name->value, type, name->line, false });
+    };
+    if (auto* b = dynamic_cast<BlockNode*>(n)) {
+        if (b->statements) for (auto& st : *b->statements) collectBindings(st, out);
+    } else if (auto* u = dynamic_cast<UnsafeNode*>(n)) {
+        collectBindings(u->body, out);
+    } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
+        collectBindings(sc->body, out);
+    } else if (auto* i = dynamic_cast<IfNode*>(n)) {
+        collectBindingsExpr(i->booleanExpression, out);
+        collectBindings(i->ifStatement, out);
+        collectBindings(i->elseStatement, out);
+    } else if (auto* w = dynamic_cast<WhileNode*>(n)) {
+        collectBindingsExpr(w->booleanExpression, out);
+        collectBindings(w->whileStatement, out);
+    } else if (auto* dw = dynamic_cast<DoWhileNode*>(n)) {
+        collectBindingsExpr(dw->booleanExpression, out);
+        collectBindings(dw->doWhileStatement, out);
+    } else if (auto* f = dynamic_cast<ForNode*>(n)) {
+        if (f->initializerStatements) for (auto& st : *f->initializerStatements) collectBindings(st, out);
+        collectBindingsExpr(f->booleanExpression, out);
+        if (f->iteratorStatements) for (auto& st : *f->iteratorStatements) collectBindings(st, out);
+        collectBindings(f->body, out);
+    } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+        add(fe->name, fe->type);
+        collectBindingsExpr(fe->expression, out);
+        collectBindings(fe->body, out);
+    } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
+        add(pf->name, pf->type);
+        collectBindingsExpr(pf->expression, out);
+        collectBindings(pf->body, out);
+    } else if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
+        if (lv->variables) for (auto& d : *lv->variables) if (d) {
+            add(d->name, lv->type);
+            collectBindingsExpr(d->initializer, out);
+        }
+    } else if (auto* cl = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
+        if (cl->variables) for (auto& d : *cl->variables) if (d) {
+            add(d->name, cl->type);
+            collectBindingsExpr(d->initializer, out);
+        }
+    } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
+        collectBindingsExpr(r->expression, out);
+    } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
+        // Assignment / invocation / object-creation / match / isolate in statement position: all of these
+        // are BOTH an ExpressionNode and a StatementNode, so re-enter through the expression side.
+        collectBindingsExpr(std::dynamic_pointer_cast<ExpressionNode>(s), out);
+    }
+}
+
+// The expression half exists for ONE reason: a `match` in expression position (`int32 x = match (o) { … };`)
+// whose arms bind payloads and may open blocks. Mirrors scanExprForCollections' composite set so a match
+// nested inside an assignment, a call argument or a ternary is still reached.
+void CEmitter::collectBindingsExpr(SharedExpression e, std::vector<QueryBinding>& out) const
+{
+    if (!e) return;
+    ASTNode* n = e.get();
+    if (auto* mm = dynamic_cast<MatchNode*>(n)) {
+        collectBindingsExpr(mm->subject, out);
+        // A payload binding's TYPE comes from the subject's variant case. The subject is a plain local in
+        // the overwhelming majority of matches, and that is the only shape resolved here — anything more
+        // would be re-implementing exprClass, which this file exists to avoid. An unresolved binding still
+        // completes as a NAME; only `binding.` cannot resolve.
+        std::string subjKey;
+        if (auto* sid = dynamic_cast<IdentifierNode*>(mm->subject.get()))
+            if (sid->value && (!sid->qualifier || sid->qualifier->empty()))
+                for (auto it = out.rbegin(); it != out.rend(); ++it)
+                    if (it->name == *sid->value) {
+                        subjKey = const_cast<CEmitter*>(this)->classOfTypeNodeIn(it->ownerKey, it->type);
+                        break;
+                    }
+        const ClassInfo* subj = nullptr;
+        { auto c = _classes.find(subjKey); if (c != _classes.end()) subj = &c->second; }
+        if (mm->arms) for (auto& a : *mm->arms) if (a) {
+            if (a->bindingIds) {
+                const std::vector<FieldInfo>* payload = nullptr;
+                if (subj && a->variantName)
+                    for (auto& vc : subj->variants) if (vc.name == *a->variantName) { payload = &vc.payload; break; }
+                for (size_t i = 0; i < a->bindingIds->size(); ++i) {
+                    const SharedIdentifier& id = (*a->bindingIds)[i];
+                    if (!id || !id->value) continue;
+                    SharedIdentifier ty = (payload && i < payload->size()) ? (*payload)[i].type : SharedIdentifier();
+                    out.push_back(QueryBinding{ *id->value, ty, id->line, false, subjKey });
+                }
+            }
+            collectBindingsExpr(a->body, out);
+            collectBindings(a->block, out);
+        }
+        return;
+    }
+    if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        collectBindingsExpr(as->unaryExpression, out); collectBindingsExpr(as->expression, out);
+    } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
+        collectBindingsExpr(b->LHS, out); collectBindingsExpr(b->RHS, out);
+    } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) {
+        collectBindingsExpr(l->LHS, out); collectBindingsExpr(l->RHS, out);
+    } else if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) {
+        collectBindingsExpr(t->condition, out); collectBindingsExpr(t->LHS, out); collectBindingsExpr(t->RHS, out);
+    } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        collectBindingsExpr(inv->expression, out);
+        if (inv->args) for (auto& a : *inv->args) if (a) collectBindingsExpr(a->expression, out);
+    } else if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) {
+        if (oc->args) for (auto& a : *oc->args) if (a) collectBindingsExpr(a->expression, out);
+    } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        collectBindingsExpr(ea->expression, out);
+        if (ea->expressionlist) for (auto& x : *ea->expressionlist) collectBindingsExpr(x, out);
+    } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        collectBindingsExpr(ma->expression, out);
+    } else if (auto* c = dynamic_cast<CastNode*>(n)) {
+        collectBindingsExpr(c->unaryExpression, out);
+    } else if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) {
+        collectBindingsExpr(ad->operand, out);
+    } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        collectBindingsExpr(su->expression, out);
+    } else if (auto* pe = dynamic_cast<PreIncrDecrNode*>(n)) {
+        collectBindingsExpr(pe->expression, out);
+    } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) {
+        collectBindingsExpr(po->expression, out);
+    } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
+        if (al->elements) for (auto& x : *al->elements) collectBindingsExpr(x, out);
+        collectBindingsExpr(al->fillValue, out);
+    }
+}
+
+// ---- type resolution, cType-free -------------------------------------------------------------------------
+
+// Point `_nsCtx` (and, for a generic instance, `_typeSubst`) at the context in which `ownerKey`'s member
+// declarations were written, so their type spellings resolve the way emission resolves them. Callers must
+// hold a QueryScope; this only installs.
+void CEmitter::installOwnerScope(const std::string& ownerKey)
+{
+    if (ownerKey.empty()) return;
+    auto ic = _genericTypeInstCtx.find(ownerKey);
+    if (ic != _genericTypeInstCtx.end()) _nsCtx = ic->second;
+    else {
+        auto c = _classes.find(ownerKey);
+        if (c != _classes.end()) { _nsCtx.scope = c->second.scope; _nsCtx.usings = c->second.usings;
+                                   _nsCtx.symbolAliases = c->second.symbolAliases; }
+        else {
+            auto i = _interfaces.find(ownerKey);
+            if (i != _interfaces.end()) { _nsCtx.scope = i->second.scope; _nsCtx.usings = i->second.usings;
+                                          _nsCtx.symbolAliases = i->second.symbolAliases; }
+        }
+    }
+    // A generic INSTANCE stores its members with the TEMPLATE's type spellings (`T`), resolved at emit
+    // under `_typeSubst`. mangleElem already consults that map, so binding it here is all it takes.
+    auto gi = _genericTypeInsts.find(ownerKey);
+    if (gi == _genericTypeInsts.end()) return;
+    auto ps = _genericTypeParams.find(gi->second.templateKey);
+    if (ps == _genericTypeParams.end()) return;
+    _typeSubst.clear();
+    for (size_t i = 0; i < ps->second.size() && i < gi->second.typeArgs.size(); ++i)
+        if (gi->second.typeArgs[i]) _typeSubst[ps->second[i]] = gi->second.typeArgs[i];
+}
+
+std::string CEmitter::classOfTypeNodeIn(const std::string& ownerKey, SharedIdentifier t)
+{
+    if (!t) return "";
+    QueryScope guard(this);
+    installOwnerScope(ownerKey);
+    std::string key = mangleElem(t);            // resolveUserName inside passes site=nullptr: records nothing
+    if (_classes.count(key) || _interfaces.count(key) || _genericTypes.count(key)
+        || _genericContracts.count(key) || _enums.count(key)) return key;
+    return "";
+}
+
+std::string CEmitter::spellTypeIn(const std::string& ownerKey, const SharedIdentifier& t)
+{
+    if (!t) return "";
+    QueryScope guard(this);
+    installOwnerScope(ownerKey);
+    // Recursive so a nested generic reads as it was written. A bare type-param bound by the instance
+    // substitution spells its concrete argument, which is what the reader of `detail` wants to see.
+    std::function<std::string(const SharedIdentifier&)> spell = [&](const SharedIdentifier& id) -> std::string {
+        if (!id) return "";
+        switch (id->builtInVal) {
+            case IDENTIFIER_STRING_VAL:  return "string";
+            case IDENTIFIER_INT8_VAL:    return "int8";
+            case IDENTIFIER_INT16_VAL:   return "int16";
+            case IDENTIFIER_INT32_VAL:   return "int32";
+            case IDENTIFIER_INT64_VAL:   return "int64";
+            case IDENTIFIER_UINT8_VAL:   return "uint8";
+            case IDENTIFIER_UINT16_VAL:  return "uint16";
+            case IDENTIFIER_UINT32_VAL:  return "uint32";
+            case IDENTIFIER_UINT64_VAL:  return "uint64";
+            case IDENTIFIER_BOOL_VAL:    return "bool";
+            case IDENTIFIER_FLOAT32_VAL: return "float32";
+            case IDENTIFIER_FLOAT64_VAL: return "float64";
+            default: break;
+        }
+        if (!id->value) return "";
+        if (!id->genericArg && !id->genericArgs) {
+            auto s = _typeSubst.find(*id->value);
+            if (s != _typeSubst.end()) return spell(s->second);
+        }
+        // An INTRINSIC member's type node is synthesized from an already-mangled name (a smart pointer's
+        // `deref` returns `ns__Node`); a user-written node holds the source spelling and has no `__`, so
+        // stripping the namespace prefix is a no-op there. Same convention as buildDefSites' bareOf.
+        std::string out = *id->value;
+        { size_t sep = out.rfind("__"); if (sep != std::string::npos) out = out.substr(sep + 2); }
+        if (id->genericArgs && !id->genericArgs->empty()) {
+            out += "<";
+            for (size_t i = 0; i < id->genericArgs->size(); ++i) out += (i ? ", " : "") + spell((*id->genericArgs)[i]);
+            out += ">";
+        } else if (id->genericArg) {
+            out += "<" + spell(id->genericArg) + ">";
+        }
+        return out;
+    };
+    return spell(t);
+}
+
+// ---- receiver path -> class key --------------------------------------------------------------------------
+
+namespace {
+// Split a canonicalized path into (separator, segment) pairs. The first pair's separator is "".
+struct PathSeg { std::string sep, name, suffix; };   // suffix is "()" / "[]" / ""
+std::vector<PathSeg> splitPath(const std::string& path)
+{
+    std::vector<PathSeg> segs;
+    size_t i = 0;
+    std::string sep;
+    while (i < path.size()) {
+        size_t b = i;
+        while (i < path.size() && (isalnum((unsigned char)path[i]) || path[i] == '_')) ++i;
+        PathSeg s; s.sep = sep; s.name = path.substr(b, i - b);
+        while (i + 1 < path.size() && (path[i] == '(' || path[i] == '[')) { s.suffix += path.substr(i, 2); i += 2; }
+        segs.push_back(s);
+        if (i + 1 < path.size() && path[i] == ':' && path[i + 1] == ':') { sep = "::"; i += 2; }
+        else if (i < path.size() && path[i] == '.')                     { sep = ".";  i += 1; }
+        else break;
+    }
+    return segs;
+}
+}  // namespace
+
+std::string CEmitter::classOfPath(const QueryCtx& qc, const std::vector<QueryBinding>& binds,
+                                  const std::string& path, bool& isType)
+{
+    isType = false;
+    std::vector<PathSeg> segs = splitPath(path);
+    if (segs.empty() || segs[0].name.empty()) return "";
+
+    // ---- head ----
+    // The head NAME is resolved independently of its suffixes: `cells[0]` still starts from the local
+    // `cells`. Only a leading `()` on a name that is not a binding means "call the free function".
+    std::string cur;
+    const PathSeg& h = segs[0];
+    size_t sfx = 0;                                  // first suffix pair not yet applied
+    if (h.name == "this") {
+        cur = qc.typeKey;
+    } else {
+        // A live binding WINS over a same-spelled type — the precedence isTypeReceiver uses. Last match
+        // wins so a later declaration in a sibling scope beats an earlier one.
+        for (auto it = binds.rbegin(); it != binds.rend(); ++it)
+            if (it->name == h.name) { cur = classOfTypeNodeIn(it->ownerKey, it->type);
+                                     cur = boundOfTypeParam(qc, it->type, cur); break; }
+        if (cur.empty() && h.suffix.compare(0, 2, "()") == 0) {
+            // A free-function call. Take the RETURN TYPE NODE off the signature rather than its retCType
+            // string: the node re-mangles cleanly, the C string would have to be reverse-engineered.
+            auto f = _funcs.find(resolveFunc(h.name, nullptr));
+            if (f != _funcs.end() && f->second.node) {
+                cur = classOfTypeNodeIn("", f->second.node->returnType);
+                sfx = 2;                             // the `()` was the call itself
+            }
+        }
+        if (cur.empty()) {
+            std::string k = resolveUserName(h.name, nullptr);
+            if (_classes.count(k) || _interfaces.count(k) || _enums.count(k)
+                || _genericTypes.count(k) || _genericContracts.count(k)) {
+                cur = k;
+                isType = h.suffix.empty();           // `Point.` offers ctors; `Point().` would not be a type
+            }
+        }
+    }
+    if (cur.empty()) return "";
+    if (!cur.empty() && sfx < h.suffix.size()) cur = stepMemberType(cur, "", h.suffix.substr(sfx));
+
+    // ---- tail ----
+    for (size_t i = 1; i < segs.size() && !cur.empty(); ++i) {
+        isType = false;                       // only the HEAD can be a type; `Type.member` does not chain
+        cur = stepMemberType(cur, segs[i].name, segs[i].suffix);
+    }
+    return cur;
+}
+
+// A receiver typed by a bare type-param (`fn f<T: Drawable>(T x) { x.| }`) has no concrete class — `T` is in
+// no table. Its BOUND contract is the only thing that can answer, and `linkContracts()` has already merged
+// every parent `refines` into the contract's method list. Returns `fallback` unchanged when `t` is not an
+// in-scope type-param, so the ordinary path is untouched.
+std::string CEmitter::boundOfTypeParam(const QueryCtx& qc, const SharedIdentifier& t, const std::string& fallback)
+{
+    if (!fallback.empty() || !t || !t->value || t->genericArg || t->genericArgs) return fallback;
+    auto b = qc.typeParamBounds.find(*t->value);
+    if (b == qc.typeParamBounds.end() || !b->second) return fallback;
+    for (auto& bound : *b->second) {
+        if (!bound || !bound->value) continue;
+        std::string k = resolveUserName(*bound->value, bound->qualifier);
+        if (_interfaces.count(k) || _genericContracts.count(k)) return k;
+    }
+    return fallback;
+}
+
+// One step along a receiver path: the member `name` of `cls`, followed by whatever `()` / `[]` suffixes that
+// segment carried. Whether the segment is CALLED decides field-vs-method precedence, and it genuinely
+// matters: a type may carry both spellings (std::process::Command has a `args` field AND an `args` method),
+// and `this.args.add(…)` names the field. Auto-derefs a smart pointer or a user `Deref<T>` when the member
+// is not found directly, mirroring emitDispatch's fallback.
+std::string CEmitter::stepMemberType(const std::string& cls, const std::string& name, const std::string& suffix)
+{
+    std::string cur = cls;
+    size_t p = 0;
+    if (!name.empty()) {
+        bool called = suffix.compare(0, 2, "()") == 0;
+        cur = memberTypeOf(cur, name, called);
+        if (called) p = 2;                                    // that `()` WAS the call
+    }
+    // Remaining suffixes. A `()` here applied to no name (`f()()`) leaves the value as it is; only `[]`
+    // steps to an element type.
+    for (; !cur.empty() && p + 1 < suffix.size(); p += 2)
+        if (suffix.compare(p, 2, "[]") == 0) cur = elementTypeOf(cur);
+    return cur;
+}
+
+// The type of `cls`'s member `name`. `preferMethod` reflects whether the source called it.
+std::string CEmitter::memberTypeOf(const std::string& cls, const std::string& name, bool preferMethod)
+{
+    auto ci = _classes.find(cls);
+    if (ci == _classes.end()) return "";
+    ClassInfo* c = &ci->second;
+    auto asMethod = [&]() -> std::string {
+        ClassInfo* owner = nullptr;
+        MethodInfo* mi = findMethod(c, name, &owner);
+        return (mi && owner) ? classOfTypeNodeIn(owner->name, mi->returnType) : "";
+    };
+    auto asField = [&]() -> std::string {
+        // Walk `fields` rather than findFieldOwner: same base chain, but one list instead of two, and the
+        // list is the one addMembers offers from — so what completes is what resolves.
+        for (ClassInfo* fo = c; fo; fo = fo->base)
+            for (auto& f : fo->fields) if (f.name == name) return classOfTypeNodeIn(fo->name, f.type);
+        return "";
+    };
+    std::string hit = preferMethod ? asMethod() : asField();
+    if (hit.empty()) hit = preferMethod ? asField() : asMethod();
+    if (!hit.empty()) return hit;
+    std::string pointee = derefTargetForQuery(cls);
+    return pointee.empty() ? "" : memberTypeOf(pointee, name, preferMethod);
+}
+
+// The element type behind `coll[i]`.
+std::string CEmitter::elementTypeOf(const std::string& cls)
+{
+    auto ci = _classes.find(cls);
+    if (ci == _classes.end()) return "";
+    ClassInfo* c = &ci->second;
+    if (c->isIntrinsicColl && !c->collElemClass.empty()) return c->collElemClass;
+    ClassInfo* owner = nullptr;
+    MethodInfo* op = findMethod(c, "op_index", &owner);      // `a[i]` is registered under this name
+    if (op && owner) return classOfTypeNodeIn(owner->name, op->returnType);
+    std::string pointee = derefTargetForQuery(cls);
+    return pointee.empty() ? "" : elementTypeOf(pointee);
+}
+
+// The pointee of a smart pointer or a user `Deref<T>`, "" if `cls` is neither. The cType-free counterpart of
+// derefTarget, which resolves through cTypeInInstance.
+std::string CEmitter::derefTargetForQuery(const std::string& cls)
+{
+    auto it = _classes.find(cls);
+    if (it == _classes.end()) return "";
+    ClassInfo& c = it->second;
+    if (c.isIntrinsicColl && (c.collKind == CollKind::Owned || c.collKind == CollKind::Shared
+                              || c.collKind == CollKind::Weak || c.collKind == CollKind::Bindable))
+        return c.collElemClass;
+    if (_derefContract.empty()) return "";
+    for (auto& ifn : c.interfaces) {
+        auto ii = _interfaces.find(ifn);
+        if (ii == _interfaces.end() || !ii->second.isGenericInst || ii->second.templateKey != _derefContract)
+            continue;
+        ClassInfo* owner = nullptr;
+        MethodInfo* mi = findMethod(&c, "deref", &owner);
+        if (mi && owner) return classOfTypeNodeIn(owner->name, mi->returnType);
+    }
+    return "";
+}
+
+// ---- member listing --------------------------------------------------------------------------------------
+
+bool CEmitter::visibleFrom(const ClassInfo* owner, Visibility vis, const std::string& member,
+                           const QueryCtx& qc) const
+{
+    if (vis == Visibility::Public || !owner) return true;
+    const ClassInfo* from = nullptr;
+    { auto f = _classes.find(qc.typeKey); if (f != _classes.end()) from = &f->second; }
+    if (vis == Visibility::Protected) {
+        for (const ClassInfo* c = from; c; c = c->base) if (c == owner) return true;
+        return false;
+    }
+    if (from == owner) return true;
+    for (auto& g : owner->friendGrants) {                       // an owner-granted `friend`
+        if (!g.members.empty() && !g.members.count(member)) continue;
+        if (g.accessorIsClass) { if (from && from->name == g.accessor) return true; }
+        else                   { if (!qc.funcName.empty() && qc.funcName == g.accessor) return true; }
+    }
+    return false;
+}
+
+void CEmitter::addMembers(const std::string& clsKey, bool wantStatic, const QueryCtx& qc,
+                          std::vector<CompletionItem>& out)
+{
+    auto found = _classes.find(clsKey);
+    if (found == _classes.end()) {
+        // A CONTRACT receiver (a type-param bound, or a contract-typed value): `linkContracts()` has
+        // already merged every parent `refines` into `methods`, so this IS the full slot set.
+        auto ic = _interfaces.find(clsKey);
+        if (ic == _interfaces.end()) return;
+        for (auto& m : ic->second.methods) {
+            if (m.isCtor != wantStatic) continue;
+            std::string detail = "fn " + spellTypeIn(clsKey, m.returnType) + " " + m.name + "(";
+            if (m.params) for (size_t i = 0; i < m.params->size(); ++i) {
+                const auto& p = (*m.params)[i];
+                if (!p || !p->identifier || !p->identifier->value) continue;
+                detail += (i ? ", " : "") + *p->identifier->value + ": " + spellTypeIn(clsKey, p->type);
+            }
+            out.push_back(CompletionItem{ m.name, CompletionKind::Method, detail + ")", ic->second.name });
+        }
+        return;
+    }
+
+    std::set<std::string> seen;
+    auto emit = [&](CompletionItem it) {
+        if (seen.insert(it.label).second) out.push_back(std::move(it));
+    };
+    auto renderParams = [&](const std::string& ownerKey, const std::vector<ParamSig>& ps,
+                            const SharedParameterList& nodes) {
+        std::string s = "(";
+        for (size_t i = 0; i < ps.size(); ++i) {
+            s += (i ? ", " : "") + ps[i].name + ": ";
+            s += (nodes && i < nodes->size() && (*nodes)[i]) ? spellTypeIn(ownerKey, (*nodes)[i]->type)
+                                                            : ps[i].className;
+        }
+        return s + ")";
+    };
+
+    for (ClassInfo* c = &found->second; c; c = c->base) {
+        if (!wantStatic) for (auto& f : c->fields) {
+            if (f.name.rfind("__", 0) == 0) continue;
+            if (!visibleFrom(c, f.visibility, f.name, qc)) continue;
+            emit(CompletionItem{ f.name, CompletionKind::Field, spellTypeIn(c->name, f.type), c->name });
+        }
+        for (auto& kv : c->methods) {
+            const MethodInfo& m = kv.second;
+            // Operators are not spellable as members; the synthesized serde/format bodies have no source
+            // form a user would call. `of`/`zero` (isSynthBag) and the intrinsic collection ops ARE
+            // user-callable and are exactly what a `.` on a collection should offer.
+            if (m.isOperator || m.isSynthSer || m.isSynthDe || m.isSynthFormat) continue;
+            if (kv.first.rfind("__", 0) == 0) continue;
+            bool isStaticish = m.isStatic || m.isCtor;
+            if (isStaticish != wantStatic) continue;
+            if (!visibleFrom(c, m.visibility, kv.first, qc)) continue;
+            emit(CompletionItem{ kv.first, m.isCtor ? CompletionKind::Ctor : CompletionKind::Method,
+                                 "fn " + spellTypeIn(c->name, m.returnType) + " " + kv.first
+                                     + renderParams(c->name, m.params, m.node ? m.node->params : SharedParameterList()),
+                                 c->name });
+        }
+        if (wantStatic) for (auto& kv : c->ctors) {
+            if (!visibleFrom(c, kv.second.visibility, kv.first, qc)) continue;
+            emit(CompletionItem{ kv.first, CompletionKind::Ctor,
+                                 "ctor " + kv.first + renderParams(c->name, kv.second.params,
+                                     kv.second.node && kv.second.node->declarator
+                                         ? kv.second.node->declarator->params : SharedParameterList()),
+                                 c->name });
+        }
+    }
+
+    // A smart pointer or a user `Deref<T>` also offers the pointee's members, AFTER its own — strictly more
+    // helpful than emitDispatch's either/or, and the wrapper-first order matches how dispatch resolves.
+    std::string pointee = derefTargetForQuery(clsKey);
+    if (!pointee.empty() && pointee != clsKey) {
+        std::vector<CompletionItem> inner;
+        addMembers(pointee, wantStatic, qc, inner);
+        for (auto& it : inner) emit(std::move(it));
+    }
+}
+
+std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, const CompletionContext& ctx)
+{
+    std::vector<CompletionItem> out;
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return out;
+    QueryScope guard(this);                    // every path below resolves names; restore on ANY exit
+    auto uc = _unitCtx.find(unit);
+    if (uc != _unitCtx.end()) _nsCtx = uc->second;
+    _typeSubst.clear();
+
+    if (ctx.trigger != CompletionTrigger::Dot) return out;   // `::` is M4.2, bare names M4.3
+
+    QueryCtx qc = enclosingCallable(unit, ctx.line, ctx.column);
+    std::vector<QueryBinding> binds;
+    if (qc.params) for (auto& p : *qc.params)
+        if (p && p->identifier && p->identifier->value)
+            binds.push_back(QueryBinding{ *p->identifier->value, p->type, p->identifier->line, true, "" });
+    collectBindings(qc.body, binds);
+    // A binding declared BELOW the cursor is not in scope at it. (Sibling scopes are deliberately not
+    // separated — see QueryBinding.)
+    binds.erase(std::remove_if(binds.begin(), binds.end(),
+                               [&](const QueryBinding& b) { return b.line > ctx.line; }), binds.end());
+
+    bool isType = false;
+    std::string cls = classOfPath(qc, binds, ctx.receiver, isType);
+    if (!cls.empty()) addMembers(cls, isType, qc, out);
+    std::sort(out.begin(), out.end(), [](const CompletionItem& a, const CompletionItem& b) {
+        if (a.kind != b.kind) return (int)a.kind < (int)b.kind;
+        return a.label < b.label;
+    });
+    return out;
+}

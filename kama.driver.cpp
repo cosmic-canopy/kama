@@ -4081,6 +4081,8 @@ int main(int argc, char** argv)
             printf("trigger=%s recv=%s callee=%s prefix=%s active=%d filled=%s\n",
                    completionTriggerName(cc.trigger), cc.receiver.c_str(), cc.callee.c_str(),
                    cc.prefix.c_str(), cc.activeParam, filled.c_str());
+            for (const auto& it : idx.completionsAt(queryUri, cc))
+                printf("%s\t%s\t%s\n", completionKindName(it.kind), it.label.c_str(), it.detail.c_str());
             return 0;
         }
         fprintf(stderr, "kama query: pass --symbols, --def L:C, --type L:C, --refs L:C, or --complete L:C\n");

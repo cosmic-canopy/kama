@@ -266,22 +266,71 @@ FIXTURE="$ROOT/tests/query/complete.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo "check-query: M4.0 completion context (lexical scan)"
-expect --complete 107:21 -- "trigger=dot recv=c "                    # c.|value
-expect --complete 109:27 -- "trigger=dot recv=h.cell "               # h.cell.|value — a chained receiver
-expect --complete 110:33 -- "trigger=dot recv=makeHolder() "         # a CALL receiver, canonicalized to `()`
-expect --complete 113:30 -- "trigger=dot recv=cells[] "              # an INDEX receiver, canonicalized to `[]`
-expect --complete 115:27 -- "trigger=dot recv=owned "                # a smart-pointer receiver
-expect --complete 130:24 -- "trigger=scope recv=Level "              # Level::|High
-expect --complete 130:24 -- "active=-1"                              # `(a == b)` is a GROUPING paren, not a call
-expect --complete 118:27 -- "trigger=arg-label recv= callee=blend prefix= active=0 filled="   # blend(|lo: …)
-expect --complete 118:34 -- "trigger=arg-label recv= callee=blend prefix= active=1 filled=lo" # …, |hi: 4)
+expect --complete 112:21 -- "trigger=dot recv=c "                    # c.|value
+expect --complete 114:27 -- "trigger=dot recv=h.cell "               # h.cell.|value — a chained receiver
+expect --complete 115:33 -- "trigger=dot recv=makeHolder() "         # a CALL receiver, canonicalized to `()`
+expect --complete 119:30 -- "trigger=dot recv=cells[] "              # an INDEX receiver, canonicalized to `[]`
+expect --complete 121:27 -- "trigger=dot recv=owned "                # a smart-pointer receiver
+expect --complete 136:24 -- "trigger=scope recv=Level "              # Level::|High
+expect --complete 136:24 -- "active=-1"                              # `(a == b)` is a GROUPING paren, not a call
+expect --complete 124:27 -- "trigger=arg-label recv= callee=blend prefix= active=0 filled="   # blend(|lo: …)
+expect --complete 124:34 -- "trigger=arg-label recv= callee=blend prefix= active=1 filled=lo" # …, |hi: 4)
 expect --complete 15:12  -- "trigger=import-path recv=std "          # import std::|collections
 expect --complete 15:26  -- "trigger=import-symbol recv=std::collections "   # import …::{|DynamicArray}
 # Literals and comments hold no code — and an interpolation HOLE does, so it must still complete.
-expect --complete 119:21 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a string body
-expect --complete 121:17 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a // comment
-expect --complete 122:15 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a /* block */
-expect --complete 120:30 -- "trigger=dot recv=c "                    # inside "interp ${c.|value} hole"
+expect --complete 125:21 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a string body
+expect --complete 127:17 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a // comment
+expect --complete 128:15 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a /* block */
+expect --complete 126:30 -- "trigger=dot recv=c "                    # inside "interp ${c.|value} hole"
+
+# ---------------------------------------------------------------------------------------------------
+# M4.1 — member completion after `.`. Output is one `kind<TAB>label<TAB>detail` line per candidate.
+echo "check-query: M4.1 member completion (receivers)"
+expect --complete 112:21 -- "field	value	int32"                     # c.| — a public field, with its type
+expect --complete 112:21 -- "method	doubled	fn int32 doubled()"       # ... and its methods
+reject --complete 112:21 -- "secret"                                  # ... but NEVER a private one from outside
+expect --complete 114:27 -- "field	value	int32"                     # h.cell.| — chained through a field's type
+expect --complete 115:33 -- "field	cell	Cell"                       # makeHolder().| — a call's return type
+expect --complete 116:40 -- "field	value	int32"                     # makeHolder().get().| — a CALLED tail segment
+expect --complete 119:30 -- "method	doubled	fn int32 doubled()"       # cells[0].| — a generic instance's ELEMENT
+expect --complete 121:27 -- "method	read	fn int32 read()"            # owned.| — through Owned<Node>'s Deref
+expect --complete 120:33 -- "ctor	make	fn Node make(tag: int32)"     # Node.| — a TYPE receiver offers ctors
+reject --complete 121:27 -- "ctor"                                    # ... and an INSTANCE receiver never does
+expect --complete 53:16  -- "method	size	fn int32 size()"            # item.| where `T: Sized` — via the BOUND
+
+echo "check-query: M4.1 generic-instance substitution + visibility"
+# A generic instance's members are stored with the TEMPLATE's spellings; they must read as the INSTANCE's.
+expect --complete 118:10 -- "method	add	fn void add(item: Cell)"      # DynamicArray<Cell>.add takes a Cell, not a T
+expect --complete 118:10 -- "method	pop	fn Optional<Cell> pop()"      # ... including a nested generic return
+# Inside a method, `this.` sees what THAT type may see — private included, inherited protected included,
+# a base class's privates never.
+expect --complete 23:44  -- "field	secret	int32"                     # own private field, from inside
+expect --complete 36:42  -- "method	baseOnly	fn int32 baseOnly()"   # inherited PROTECTED method, from a subclass
+reject --complete 36:42  -- "hidden"                                  # ... but not the base's privates
+reject --complete 36:42  -- "shared"
+
+echo "check-query: M4.1 collectBindings covers every block-bearing statement"
+# Each probe reads a local declared inside one statement kind. A miss is silent everywhere else — it just
+# means fewer suggestions — which is exactly why it needs a test per kind.
+expect --complete 69:33  -- "field	value	int32"    # a bare nested block
+expect --complete 73:31  -- "field	value	int32"    # if
+expect --complete 76:31  -- "field	value	int32"    # else
+expect --complete 80:32  -- "field	value	int32"    # while
+expect --complete 84:29  -- "field	value	int32"    # do/while
+expect --complete 88:30  -- "field	value	int32"    # for
+expect --complete 94:29  -- "field	value	int32"    # the foreach BINDING
+expect --complete 94:47  -- "field	value	int32"    # a local inside the foreach body
+expect --complete 98:33  -- "field	value	int32"    # unsafe
+expect --complete 102:32 -- "field	value	int32"    # scope
+expect --complete 105:62 -- "field	value	int32"    # a match arm's payload binding (type from the variant case)
+
+# A type may declare a FIELD and a METHOD under one name (std::process::Command has both spellings of
+# `args`). Which one a path segment names depends on whether the source CALLED it — resolving `this.args.`
+# through the void-returning method would silently offer nothing.
+echo "check-query: M4.1 field-vs-method precedence on a real stdlib type"
+FIXTURE="$ROOT/lib/std/process/process.kama"
+expect --complete 166:45 -- "method	add	fn void add(item: string)"   # this.args.| is the DynamicArray FIELD
+expect --complete 62:43  -- "field	code	int32"                       # ... and a plain `this.` still works
 
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

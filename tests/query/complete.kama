@@ -57,48 +57,53 @@ fn int32 blend(int32 lo, int32 hi) { return lo + hi; }
 
 fn Holder makeHolder() { Holder h; return h; }
 
+// The collectBindings under-cover guard. Every block-bearing statement kind declares a local of a type WITH
+// members, and immediately reads one — so a probe at the column just after each `.` proves the walker
+// descended into that statement kind. A miss here is silent in every other test: it just means fewer
+// suggestions. (scanStmtForCollections has under-scanned `unsafe` and `scope` since it was written.)
 fn int32 statements(int32 n) {
-    int32 inBlock = 1;
+    Cell inBlock;
+    int32 total = inBlock.value;
     {
-        int32 inNested = 2;
-        inBlock = inBlock + inNested;
+        Cell inNested;
+        total = total + inNested.value;
     }
     if (n > 0) {
-        int32 inThen = 3;
-        inBlock = inBlock + inThen;
+        Cell inThen;
+        total = total + inThen.value;
     } else {
-        int32 inElse = 4;
-        inBlock = inBlock + inElse;
+        Cell inElse;
+        total = total + inElse.value;
     }
-    while (inBlock < 5) {
-        int32 inWhile = 5;
-        inBlock = inBlock + inWhile;
+    while (total < 0) {
+        Cell inWhile;
+        total = total + inWhile.value;
     }
     do {
-        int32 inDo = 6;
-        inBlock = inBlock + inDo;
-    } while (inBlock < 0);
+        Cell inDo;
+        total = total + inDo.value;
+    } while (total < 0);
     for (int32 i = 0; i < 2; i = i + 1) {
-        int32 inFor = 7;
-        inBlock = inBlock + inFor;
+        Cell inFor;
+        total = total + inFor.value;
     }
-    DynamicArray<int32> nums;
-    nums.add(item: 8);
-    foreach (int32 each in nums) {
-        int32 inForeach = 9;
-        inBlock = inBlock + each + inForeach;
+    DynamicArray<Cell> nums;
+    nums.add(item: inBlock);
+    foreach (Cell each in nums) {
+        Cell inForeach;
+        total = total + each.value + inForeach.value;
     }
     unsafe {
-        int32 inUnsafe = 10;
-        inBlock = inBlock + inUnsafe;
+        Cell inUnsafe;
+        total = total + inUnsafe.value;
     }
     scope {
-        int32 inScope = 11;
-        inBlock = inBlock + inScope;
+        Cell inScope;
+        total = total + inScope.value;
     }
-    Optional<int32> maybe = Optional::Some(value: 12);
-    int32 fromMatch = match (maybe) { case Some(bound): bound; case None: 0; };
-    return inBlock + fromMatch;
+    Optional<Cell> maybe = Optional::Some(value: inBlock);
+    int32 fromMatch = match (maybe) { case Some(bound): bound.value; case None: 0; };
+    return total + fromMatch;
 }
 
 fn int32 receivers() {
@@ -108,6 +113,7 @@ fn int32 receivers() {
     Holder h;
     int32 chained = h.cell.value;
     int32 viaCall = makeHolder().cell.value;
+    int32 viaChain = makeHolder().get().value;
     DynamicArray<Cell> cells;
     cells.add(item: c);
     int32 viaIndex = cells[0].value;
@@ -121,7 +127,7 @@ fn int32 receivers() {
     // comment c.value is not code either
     /* block c.value is not code either */
     char ch = 'c';
-    return direct + chained + viaCall + viaIndex + viaOwned + inherited + labelled;
+    return direct + chained + viaCall + viaChain + viaIndex + viaOwned + inherited + labelled;
 }
 
 fn int32 main() {
