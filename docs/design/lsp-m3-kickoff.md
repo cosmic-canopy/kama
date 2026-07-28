@@ -321,9 +321,21 @@ and the generic `basic_identifier : IDENTIFIER LT type_arg_list GT` arm (kama.y:
 have eaten `<A, B, …>`. Note `qualified_identifier : qualifier basic_identifier` does **not** need one:
 it reuses `$2` rather than constructing a node.
 
-**Still not covered, by decision:** the tail segments of a dotted chain `obj.a.b`
-([kama.cemit.cpp:1080](../kama.cemit.cpp) / [1089](../kama.cemit.cpp)) are string-concatenated without
-ever resolving a `FieldInfo`, so `b` is unindexed. That needs a per-segment type walk that does not exist.
+**Correction (same day): the "dotted tail" gap does not exist.** The first write-up of this milestone
+claimed `obj.a.b` left `b` unindexed, reading the qualified-identifier branch at kama.cemit.cpp:1079 as the
+handler for dotted access. It is not. Real `.` access parses as **chained `MemberAccessNode`**, and
+`emitMemberAccess` resolves each level through `exprClass` — so **every segment of `o.inner.deep` and
+`this.nest.inner.deep` is indexed**, verified directly. That branch fired only for a *value-headed* `::`
+(`o::inner::deep`), which [SPEC.md](../SPEC.md) ("a `::` head is always a type/namespace, a `.` head always
+a value") forbids outright. A probe over **544 source files plus the whole stdlib found zero uses**, so
+rather than build a type walk to index a spelling the spec disallows, the branch now **rejects** it —
+`tests/xfail/scope_op_on_value.kama`. Every legitimate `::` form keeps a type/namespace head
+(`Vec2::dot`, `Type::NAME`, `Color::Blue`, `ns::counter`) and is resolved earlier in the same function, so
+statics are untouched.
+
+*Method:* the way this got settled was a throwaway `fprintf` probe inside the branch plus a sweep over the
+whole corpus. Worth repeating whenever a "we don't cover X" claim rests on reading one code path — it cost
+two builds and overturned the conclusion.
 
 **Perf watch:** every local in the open file's whole import closure is now indexed, on top of the
 per-keystroke reparse. A real multi-import stdlib file measures ~0.25 s end to end — the same order as

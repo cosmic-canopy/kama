@@ -1870,7 +1870,11 @@ shared header (`<out>.gen.h`) + one `.c` per unit — imports just add the resol
 **Scope resolution uses `::`** (namespaces, qualified types, enum variants: `Color::Blue`); `.` is
 **instance/value access only** (`obj.field`, `obj.method()`). The two are *syntactically* distinct, so
 there's no namespace-vs-object precedence rule — a `::` head is always a type/namespace, a `.` head always a
-value. `main` is the global entry point (unmangled).
+value. This is **enforced**, not merely conventional: a `::` whose head is a local, a parameter or a field
+is rejected with a message naming the `.` spelling, so field access has exactly one spelling
+(`tests/xfail/scope_op_on_value.kama`). The one deliberate crossover is **dot-on-type for constructors** —
+`Vec2.make(...)` constructs, `Vec2::dot(...)` calls a `static fn` — kept greppably distinct on purpose
+(`tests/dot_vs_static_greppable.kama`). `main` is the global entry point (unmangled).
 
 ## Serialization — `@`-attributes + `@generate` ✅ (intrinsic implementation complete — by-value + full object graph + polymorphic `Shared<Contract>`; see [ROADMAP.md](ROADMAP.md) §4)
 

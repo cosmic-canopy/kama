@@ -1076,23 +1076,18 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                     return tc->second.cName;
                 }
             }
-            // Object field access `obj.field[.field…]` (qualifier=[obj,…], value=field).
+            // `::` resolves NAMESPACES and TYPES; `.` is instance/value access (SPEC "Scope resolution
+            // uses `::`"). So a `::` head that is a local, a parameter or a field is a spelling error for
+            // `.`, not a second way to reach a member — accepting it would give the language two ways to
+            // write field access, one of them undocumented. Every static form keeps a TYPE or NAMESPACE
+            // head (`Vec2::dot`, `Type::NAME`, `Color::Blue`, `ns::counter`) and is resolved above, so
+            // this rejects only the value-headed spelling.
             const std::string& head = *(*v->qualifier)[0];
-            if (_localTypes.count(head) && !_localTypes[head].empty()) {
-                std::string e = _refParams.count(head) ? ("(*" + head + ")") : head;
-                e = "(" + e + ")";
-                for (size_t i = 1; i < v->qualifier->size(); ++i) e += "." + *(*v->qualifier)[i];
-                return e + "." + nm;
-            }
-            if (_currentClass) {
-                ClassInfo* owner = findFieldOwner(_currentClass, head);
-                if (owner) {
-                    if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);
-                    checkFieldAccess(owner, head, v->line);
-                    std::string e = "self->" + basePathTo(_currentClass, owner) + head;
-                    for (size_t i = 1; i < v->qualifier->size(); ++i) e += "." + *(*v->qualifier)[i];
-                    return e + "." + nm;
-                }
+            if (_localTypes.count(head) || (_currentClass && findFieldOwner(_currentClass, head))) {
+                std::string dotted = head;   // the whole path respelled, not just the two ends
+                for (size_t i = 1; i < v->qualifier->size(); ++i) dotted += "." + *(*v->qualifier)[i];
+                unsupported(("`" + head + "` is a value — reach its members with `.` (`" + dotted + "."
+                             + nm + "`); `::` resolves namespaces and types").c_str(), v->line);
             }
         }
         // A ref/out parameter is a pointer in C; reads dereference it.

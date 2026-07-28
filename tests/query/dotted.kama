@@ -1,0 +1,23 @@
+namespace dotted;
+
+type value Inner {
+    public int32 deep;
+}
+
+type value Outer {
+    public Inner inner;
+    public int32 top;
+}
+
+fn int32 probe(Outer o) {
+    int32 a = o.top;
+    int32 b = o.inner.deep;
+    return a + b;
+}
+
+type value Holder {
+    public Outer nest;
+    public fn int32 reach() {
+        return this.nest.inner.deep + this.nest.top;
+    }
+}

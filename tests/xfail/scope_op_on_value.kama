@@ -1,0 +1,13 @@
+// `::` resolves NAMESPACES and TYPES; `.` is instance/value access (SPEC: "a `::` head is always a
+// type/namespace, a `.` head always a value"). The emitter used to quietly accept a value-headed `::`
+// and lower it to the same C as `.`, which gave the language a second, undocumented way to spell field
+// access — exactly what GOALS.md's "favor one way to do a thing" rules out. It is now an error.
+// The legitimate `::` forms all keep a TYPE/NAMESPACE head and are unaffected: `Vec2::dot(...)` (static
+// fn), `Type::NAME` (comptime const), `Color::Blue` (enum variant), `ns::counter` (module static).
+type value Inner { public int32 deep; }
+type value Outer { public Inner inner; }
+
+fn int32 main() {
+    Outer o;
+    return o::inner::deep;   // ERROR: `o` is a value — write `o.inner.deep`
+}
