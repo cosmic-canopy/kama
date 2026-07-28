@@ -105,9 +105,13 @@ ROADMAP §10 before designing.**
   `client/registerCapability`), `kama query --project`, `lspRealPath`. Emission byte-identical across all
   535 fixtures; native 797/797, container 797/797, ASan/UBSan 768/768 plus a sanitized-compiler run of both
   LSP harnesses. Cost: **0.45 s** for a 43-file project rebuild vs 0.23 s for a single-file closure.
-- **NEXT: M4 — completion + signature help.** [lsp-m3-kickoff.md](lsp-m3-kickoff.md) still carries the
-  **campaign-exit checklist** of the remaining mid-action identifier productions whose spans are still
-  whole-production; it must be closed before the campaign ends.
+- **NEXT: M4 — completion + signature help.** Cold-start brief:
+  [lsp-m4-kickoff.md](lsp-m4-kickoff.md), which front-loads the two **hard prerequisites** recon turned
+  up: the emitter's scope stack is torn down before the index is built (so "which locals are visible
+  here" is unanswerable today), and named-argument label spans are still whole-production (so signature
+  help's active-parameter index is impossible today). [lsp-m3-kickoff.md](lsp-m3-kickoff.md) carries the
+  **campaign-exit checklist** of those remaining mid-action identifier productions; it must be closed
+  before the campaign ends, and the named-argument entry is a blocker for M4 specifically.
 
 ## Why (from the ROADMAP)
 
