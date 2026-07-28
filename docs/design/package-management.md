@@ -683,6 +683,13 @@ over unchanged.
   decisions live in the M3.1 registry-sources notes above — implement them here.
 - **M3.2a — first signing bits: sign-on-publish + verify-on-install (local keys).** The rest of M3.2
   (trust model: transparency-log vs sigstore/OIDC provenance) is a later slice.
+- **Workspace-internal dependencies ✅ shipped 2026-07-28** — its own campaign, design of record
+  [workspace-deps-kickoff.md](workspace-deps-kickoff.md). Two things it changed here: **path deps are no
+  longer strictly top-level** (permitted between members of one declared `projects` tree, refused
+  everywhere else), and the **phantom-dep guarantee is now per-package** — M2.0's version, quoted above,
+  is satisfied by whoever is *compiling*, which let a monorepo sibling free-ride on the top-level app's
+  declaration. A file's imports are now checked against its own package's manifest (a warning during the
+  transition, a hard error at the next major version).
 
 ### The registry protocol (settle the schema first)
 

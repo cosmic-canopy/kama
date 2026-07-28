@@ -1,7 +1,8 @@
 # Workspace-internal dependencies — making a sub-project extractable (cold-start brief)
 
-**Status: NOT STARTED. This is the ACTIVE next campaign** (user, 2026-07-28), ahead of resuming the LSP
-campaign at M4. Line numbers verified against **`6c97e31`**.
+**Status: ✅ SHIPPED 2026-07-28** — all four steps plus the acceptance loop, on `dev`. The brief below is
+kept as written (line numbers against `6c97e31`); **[As shipped](#as-shipped)** at the end records what
+changed against the plan. The LSP campaign resumes at M4.
 
 **The goal, in one sentence:** a sub-project inside a monorepo must be **extractable** — liftable out of
 the tree to stand alone — which requires it to declare every dependency it imports, and requires that
@@ -192,6 +193,50 @@ what "extractable" means and it is mechanically checkable — a loop over the `p
   what you consume, projects are what you compose* — do not reintroduce the collision.
 - The whole toolchain is containerized: `tools/cdev make`, `tools/cdev test`,
   `tools/cdev exec env KAMA_SAN=1 ./run_tests.sh`.
+
+## As shipped
+
+Four commits on `dev`, one per step, each green before the next.
+
+| step | commit | what landed |
+|---|---|---|
+| 1 — canonicalize path specs | `39ffa3c` | `requestorDir` on `Req`; `DepSpec::pathAbs`; `relativePath` |
+| 2 — `sources`-aware resolution | `a4aea5b` | `packageSourceFiles` + manifest cache; `joinPathLexical` |
+| 3 — workspace-internal path deps | `3c9375e` | `workspaceMembers` / `collectProjectDirs` / `expandProjectsEntry` |
+| 4 — per-package import checking | `0e14cfa` | `owningPackageDir` / `declaredImportNames`; acceptance case 35 |
+
+**The design decision, settled with the user (2026-07-28): option (b)**, intra-workspace imports must be
+declared as path deps, warn-first. The warning names the exact line to add, and check-packages case 34
+asserts that applying exactly that line silences it — the diagnostic's remedy is one the resolver
+accepts, which it was not before step 3.
+
+Four things the brief did not anticipate:
+
+- **`absolutePath` is `realpath()`, and it must NOT be used when expanding a dependency's `sources`.** A
+  path dependency reaches its package *through* the `.kama/deps/<name>` symlink; resolving it respells
+  the dependency's files as first-party paths and defeats every "is this file mine?" test downstream.
+  `check-query` and `check-lsp` both caught it. New `joinPathLexical` collapses `.`/`..` as text instead.
+  This is the third time in this area that a path was canonicalized more than the caller wanted — after
+  `lspRealPath` and `ownsFile`. The rule is narrower than "never compare paths as strings": *canonicalize
+  for identity, never for a path you are going to hand back.*
+- **The path-dep gate is only reachable on a FIRST encounter.** The dedup branch at the top of `drain`
+  returns before it. The kickoff's own five-file demonstration therefore does not exercise the gate — the
+  app declares `config` too, so `net`'s request dedups. The harness fixture was rewritten so the app
+  declares only `net`, making `config` a first-encounter transitive request (case 28), paired against
+  case 32 which removes only the root manifest and asserts the same dep is refused.
+- **Nothing needed migrating.** The brief expected a hard error to break every multi-package fixture on
+  day one, which is much of why warn-first was chosen. It would not have: `tests/query/mono` and
+  `tests/query/ws` are *query* fixtures whose imports resolve because every project file is already in
+  the one analysis. They never go through a deps view, so the rule does not reach them. Warn-first is
+  still right for users' existing monorepos — the reasoning was sound, the specific prediction was not.
+- **`kama.lock` records a path root-relative only for a non-root requestor.** A root-declared dep keeps
+  its spelling verbatim, so an existing lock stays byte-identical on re-install (the existing assertion
+  would otherwise trip). `LockEntry.path` is written and parsed but never consumed for resolution — path
+  deps always relink from the manifest spec — so this is diagnostic only.
+
+Ordering note: the C++ helpers sit at file scope in `kama.driver.cpp`, but `declaredImportNames` must be
+*defined* after `DepSpec` exists while being *used* by `loadProgramUnits` far above it — hence the
+forward declaration. `collectKamaFiles` moved up beside `listKamaFiles` for the same reason.
 
 ## Not in scope
 

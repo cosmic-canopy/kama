@@ -544,17 +544,21 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   [design/logging.md](design/logging.md) Part E), M5 error recovery + incremental reparse (where a
   hand-written recursive-descent parser replacing Bison would be the escalation), M6 clients for all major
   editors. Status of record: [design/lsp.md](design/lsp.md).
-- **Workspace-internal dependencies — a monorepo gap opened by `projects`.** Cold-start brief:
-  [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md). A sub-project should be
-  *extractable* (liftable out to stand alone), which requires it to declare everything it imports. The
-  undeclared-import check runs against the manifest driving the **build**, not each package's own, so a
-  sibling can import what only the top-level app declared: it builds in place and fails standalone, with
-  no warning. The correct declaration is currently rejected outright — path dependencies are top-level
-  only, since a *fetched* package referencing a local path is not reproducible. The standard fix is
-  cargo's: permit path deps **within a declared `projects` tree** (reproducible because the workspace
-  carries them), substituting a version on publish. Related: `resolveModuleFiles` only finds `.kama`
-  directly inside a dependency's directory, so a dependency using the documented `src/` layout cannot be
-  imported at all — a package's own `sources` is the natural thing for the resolver to consult.
+- **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
+  liftable out of the monorepo to stand alone. Design of record:
+  [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:
+  [packages.md](packages.md). Four interlocking defects closed, in dependency order — path specs resolve
+  against the manifest that **declared** them and compare canonicalized (two spellings of one directory
+  are one package); module resolution consults a dependency's own `sources`, so the documented `src/`
+  layout is importable at all; path deps are permitted **between members of one declared `projects`
+  tree** (cargo's rule — reproducible because the workspace carries them) and still refused everywhere
+  else; and a file's imports are checked against **its own** package's manifest rather than whoever is
+  compiling, so free-riding on a top-level app's declaration is reported with the exact line to add.
+  That last check **warns** today, so a monorepo written before the rule still builds; **promote it to a
+  hard error at the next major version**. Acceptance is mechanical and lives in `tools/check-packages.sh`
+  (case 35): every member installs and builds from its own directory with no ancestor manifest in play.
+  **Follow-on, not done:** version reconciliation on publish — `kama publish` substituting a registry
+  version for a workspace path dep.
 - **kama-aware debugger value formatting — polish on the working debugger.** Breakpoints/stepping are already
   kama-source-level, but inspected values render in their emitted-C form (a `string` shows as
   `kama_string {data,len,cap}`, `Optional<T>` as its tagged union, collections as C structs). Add LLDB type

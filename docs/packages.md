@@ -69,6 +69,10 @@ and with it the cap.
 Now `examples/`, `tests/` and scratch files beside them are not part of the package, so a rename can
 never reach into them and a same-named type over there can never be confused with yours.
 
+`sources` is also how **importers** find your files. Without it, a package is importable only if its
+`.kama` files sit directly in its root directory — so a library laid out with `src/` needs this key to be
+importable at all.
+
 **`projects`** — the sub-projects this manifest composes, each a directory with its own `kama.json`. This
 is how you declare a monorepo. A trailing `/*` expands to every immediate subdirectory that has a
 manifest. (It is *not* called `packages`: `kama.lock` already uses that key for resolved dependencies, and
@@ -100,21 +104,48 @@ harmless. A manifest with `projects` but no `sources` is a pure aggregator: it c
 itself, only its sub-projects'. Editing a file in `libs/core` then makes the whole workspace the
 rename scope, so renaming a type there correctly updates `libs/ui`.
 
-### ⚠️ Sub-projects are not yet enforced as self-contained
+### Sub-projects are self-contained — declare what you import
 
-A sub-project *should* be extractable — liftable out of the monorepo to stand alone — and that requires it
-to declare every dependency it imports. Today that is the intent but **not enforced**: the
-undeclared-import check runs against the manifest that drives the *build*, not against each package's own
-manifest. So if `apps/server` declares `config`, then `libs/net` can `import config::{…}` without
-declaring it and the app still builds — while `kama check libs/net/net.kama` on its own fails with
-`cannot resolve module 'config'`. The package free-rides, and nothing says so.
+A sub-project should be **extractable**: liftable out of the monorepo to stand alone. That requires it to
+declare every dependency it *imports*, not merely to be built alongside one that does. So a member
+declares its siblings the same way it declares anything else — as a path dependency:
 
-What pushes you into it: a library **cannot** declare a path dependency on a sibling, because path
-dependencies are top-level-only (`a fetched package cannot reference a local path reproducibly`). So the
-correct declaration is currently rejected. Until workspace-internal dependencies exist (the usual answer,
-as in cargo: allow path deps *within* a declared workspace, substituting a registry version on publish),
-verify extractability by hand — build each sub-project on its own before relying on it. The plan is
-[design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md).
+```json
+// libs/net/kama.json — net imports config, so net declares config
+{
+  "name": "net",
+  "version": "0.1.0",
+  "sources": ["."],
+  "dependencies": { "config": { "path": "../config" } }
+}
+```
+
+Path dependencies are otherwise top-level-only, because a *fetched* package cannot reference a local path
+reproducibly. Between two members of one declared `projects` tree that objection does not apply — the
+workspace carries them both — so a path dependency there is permitted, and one pointing outside the
+workspace is still refused.
+
+Each package's imports are checked against **its own** manifest. If `libs/net` imports `config` while only
+`apps/server` declares it, the build warns and names the line to add:
+
+```
+kama: warning: libs/net/net.kama imports module 'config', but its own package
+  (libs/net/kama.json) does not declare it — only apps/server/kama.json does, so
+  this package will not build on its own.
+kama: note: add to libs/net/kama.json: "dependencies": { "config": { "path": "../config" } }
+```
+
+It is a warning today so that a monorepo written before this rule still builds; it becomes an error at a
+major version. An import that *nothing* declares is a hard error, as it always was.
+
+The property is mechanically checkable, and worth wiring into CI: install and build each member from its
+own directory, with no ancestor manifest in play.
+
+```sh
+for m in libs/config libs/net apps/server; do
+    (cd "$m" && kama pkg install && kama check *.kama) || exit 1
+done
+```
 
 Without either key nothing breaks — the tooling infers the file set as before. These keys buy precision
 and remove the cap. If you have a large tree that genuinely is one program and you'd rather not declare
