@@ -284,30 +284,35 @@ static bool loadManifestSources(const std::string& path, std::vector<std::string
 // declaration of where a package's files are, so module resolution consults it — which is also what
 // makes the key earn its keep beyond the LSP.
 //
-// Cached by manifest path: this runs for every import of every build, and loadManifestSources re-reads
-// the file on every call. Process-lifetime, which is the whole story for a build; for a long-lived
-// `kama lsp`, changing a *dependency's* own manifest implies a re-install to take effect anyway.
-std::vector<std::string> packageSourceFiles(const std::string& dir)
+// The `sources` a manifest declares, cached by path — this runs for every import of every build and
+// loadManifestSources re-reads the file on every call. Only the DECLARATION is cached, never the expanded
+// file list: `kama lsp` is long-lived, and a newly added `.kama` file has to become visible without
+// restarting the server. Expanding costs a readdir, which is exactly what the flat listing it replaced
+// cost anyway.
+const std::vector<std::string>& manifestSourcesCached(const std::string& manifest)
 {
     static std::map<std::string, std::vector<std::string>> cache;
-    const std::string manifest = dir + "/kama.json";
     auto it = cache.find(manifest);
     if (it != cache.end()) return it->second;
-
-    std::vector<std::string> out, srcs;
+    std::vector<std::string> srcs;
     std::string err;
-    if (fileExists(manifest) && loadManifestSources(manifest, srcs, err)) {
-        for (const auto& rel : srcs) {
-            // Lexical, not absolutePath: `"sources": ["."]` must not yield `<dir>/./x.kama` (unit names
-            // are matched EXACTLY downstream), but neither may the `.kama/deps` symlink be resolved away.
-            std::string sub = joinPathLexical(dir, rel);
-            if (dirExists(sub))       { size_t seen = 0; collectKamaFiles(sub, "", out, seen, (size_t)-1); }
-            else if (fileExists(sub)) out.push_back(sub);
-            // A listed path that does not exist is skipped, as in collectPackageTree.
-        }
-        std::sort(out.begin(), out.end());   // readdir order is not deterministic; emit order must be
+    if (!fileExists(manifest) || !loadManifestSources(manifest, srcs, err)) srcs.clear();
+    return cache.emplace(manifest, std::move(srcs)).first->second;
+}
+
+std::vector<std::string> packageSourceFiles(const std::string& dir)
+{
+    std::vector<std::string> out;
+    for (const auto& rel : manifestSourcesCached(dir + "/kama.json")) {
+        // Lexical, not absolutePath: `"sources": ["."]` must not yield `<dir>/./x.kama` (unit names are
+        // matched EXACTLY downstream), but neither may the `.kama/deps` symlink be resolved away.
+        std::string sub = joinPathLexical(dir, rel);
+        if (dirExists(sub))       { size_t seen = 0; collectKamaFiles(sub, "", out, seen, (size_t)-1); }
+        else if (fileExists(sub)) out.push_back(sub);
+        // A listed path that does not exist is skipped, as in collectPackageTree.
     }
-    return cache.emplace(manifest, std::move(out)).first->second;
+    std::sort(out.begin(), out.end());   // readdir order is not deterministic; emit order must be
+    return out;
 }
 
 static bool loadManifestProjects(const std::string& path, std::vector<std::string>& out, std::string& err);
@@ -428,6 +433,7 @@ std::string projectDepsView(const std::vector<std::string>& inputs, const char* 
 
 // Defined once DepSpec exists, beside the manifest loaders it wraps.
 const std::set<std::string>& declaredImportNames(const std::string& packageDir);
+std::string storeDir();   // the content-addressed package store (~/.kama/store)
 
 // The directory of the nearest `kama.json` at or above `fromDir` — the package that OWNS a file. A
 // `.kama` component stops the walk, so a vendored dependency is never owned by its host project. "" if
@@ -462,7 +468,14 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // never import a dev-dep (the phantom-dep guarantee makes this a hard resolve error), at any opt level.
     std::string devDepsView = includeDevDeps ? projectDepsView(cliInputs, ".kama/dev-deps") : "";
     std::string buildManifestDir = projectManifestDir(cliInputs);
-    std::set<std::string> warnedFreeRide;   // "<manifest>\n<module>" — warn once per package, not per import
+    // "/" would prefix-match every path and silently disable the check, so an unresolvable store root
+    // (KAMA_STORE set to empty) suppresses nothing rather than everything.
+    std::string storeRoot = absolutePath(storeDir()) + "/";
+    if (storeRoot.size() <= 1) storeRoot = "\n";        // matches no path
+    // "<manifest>\n<module>", warned once per package+module. PROCESS-wide, not per call: `kama lsp`
+    // re-analyzes on every keystroke, and a per-call set would repeat the same warning into the editor's
+    // output channel forever. A build calls this once, so nothing changes there.
+    static std::set<std::string> warnedFreeRide;
     // A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
     auto nsKey = [](SharedCompilationUnit u) -> std::string {
         if (!u || !u->nameSpace || !u->nameSpace->name) return "";
@@ -526,8 +539,14 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             // package. Anything reached through the file's own directory, $KAMA_PATH or the stdlib is
             // intra-package and needs no declaration. Warn rather than error for now — every multi-package
             // fixture predating this rule free-rides — and promote to an error at a major version.
+            //
+            // Only for a package the user can actually FIX. A fetched package's sources live in the
+            // content-addressed store, where its manifest is not the user's to edit — and editing it
+            // would break the tree hash that names its store entry. Its author's missing declaration is
+            // its author's bug; here it would be a diagnostic instructing a destructive action.
             if (!reserved && !via.empty() && (via == depsView || via == devDepsView)) {
                 std::string owner = owningPackageDir(here);
+                if (!owner.empty() && owner.compare(0, storeRoot.size(), storeRoot) == 0) owner.clear();
                 if (!owner.empty() && !declaredImportNames(owner).count(segs[0])) {
                     std::string ownerManifest = owner + "/kama.json";
                     if (warnedFreeRide.insert(ownerManifest + "\n" + segs[0]).second) {

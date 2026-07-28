@@ -803,7 +803,36 @@ cp "$tmp/net-manifest.bak" "$ws/libs/net/kama.json"
 if grep -q "does not declare it" "$tmp/ws7.out"; then
     echo "check-packages: FAIL — warning persists after declaring the dependency:" >&2; sed 's/^/  /' "$tmp/ws7.out" >&2; exit 1; fi
 
-# 35. ACCEPTANCE — every member of the workspace builds on its own, from its own directory, with no
+# 35. a FETCHED package that free-rides must NOT be warned about. Its sources live in the
+#     content-addressed store, where the manifest is not the user's to edit and editing it would break
+#     the tree hash naming its store entry — and a path dep out of a fetched package is refused anyway.
+#     So the diagnostic would instruct a destructive action nobody can act on. (`geo` is the git package
+#     built at the top of this file; here a second copy imports `mathx` without declaring it.)
+fr="$tmp/frdep"; mkdir -p "$fr/geosrc" "$fr/mathx" "$fr/app"
+cat > "$fr/mathx/kama.json" <<'JSON'
+{ "name": "mathx", "version": "1.0.0" }
+JSON
+printf 'namespace mathx;\nexport { two };\nfn int32 two() { return 2; }\n' > "$fr/mathx/mathx.kama"
+cat > "$fr/geosrc/kama.json" <<'JSON'
+{ "name": "geodep", "version": "1.0.0" }
+JSON
+printf 'namespace geodep;\nimport mathx::{two};\nexport { area };\nfn int32 area() { return two(); }\n' > "$fr/geosrc/geodep.kama"
+( cd "$fr/geosrc" && git init -q . && git add -A \
+  && git -c user.email=t@t -c user.name=t commit -qm x && git tag v1.0.0 ) >/dev/null 2>&1
+cat > "$fr/app/kama.json" <<JSON
+{ "name": "frapp", "version": "0.1.0", "main": "main.kama",
+  "dependencies": { "geodep": { "git": "file://$fr/geosrc", "rev": "v1.0.0" },
+                    "mathx":  { "path": "../mathx" } } }
+JSON
+printf 'import geodep::{area};\nfn int32 main() { return area(); }\n' > "$fr/app/main.kama"
+if ! "$KAMA" pkg install "$fr/app" >"$tmp/fr0.out" 2>&1; then
+    echo "check-packages: FAIL — fetched free-rider fixture did not install:" >&2; sed 's/^/  /' "$tmp/fr0.out" >&2; exit 1; fi
+"$KAMA" run "$fr/app/main.kama" >"$tmp/fr1.out" 2>&1 && frdrc=0 || frdrc=$?
+[ "$frdrc" = 2 ] || { echo "check-packages: FAIL — fetched free-rider build exited $frdrc, expected 2:" >&2; sed 's/^/  /' "$tmp/fr1.out" >&2; exit 1; }
+if grep -q "does not declare it" "$tmp/fr1.out"; then
+    echo "check-packages: FAIL — told the user to edit a package inside the store:" >&2; sed 's/^/  /' "$tmp/fr1.out" >&2; exit 1; fi
+
+# 36. ACCEPTANCE — every member of the workspace builds on its own, from its own directory, with no
 #     ancestor manifest in play. That is what "extractable" means, and it is mechanically checkable: walk
 #     the `projects` tree and install + check each member where it stands. (`libs/config` has no
 #     dependencies, `libs/net` has one sibling, `apps/server` has two — all three must stand alone.)
@@ -819,4 +848,4 @@ for member in "$ws/libs/config" "$ws/libs/net" "$ws/apps/server"; do
     done
 done
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-warned-then-silenced; ACCEPTANCE every member builds standalone; $SIGNOTE)"
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-warned-then-silenced; store-package-not-blamed; ACCEPTANCE every member builds standalone; $SIGNOTE)"
