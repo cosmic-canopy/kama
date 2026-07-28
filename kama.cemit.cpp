@@ -1055,13 +1055,17 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             auto enumQual = std::make_shared<StringList>();
             for (size_t i = 0; i + 1 < v->qualifier->size(); ++i) enumQual->push_back((*v->qualifier)[i]);
             std::string en = resolveUserName(*v->qualifier->back(), enumQual);
-            if (_enums.count(en)) return en + "_" + nm;
+            // `v`'s span is just the MEMBER name (qualified_identifier reuses the basic_identifier node),
+            // so recording the use here points find-references/rename at `Member`, not at `Enum::Member`.
+            if (_enums.count(en)) { recordRef(enumMemberKey(en, nm), v); return en + "_" + nm; }
             // `Union::Variant` with no payload -> `(Union){ .tag = Union_Variant }`
             // (`Optional<int32>::None` resolves the instance via the target-type context).
             if (ClassInfo* vt = resolveVariantType(en))
                 for (auto& vc : vt->variants)
-                    if (vc.name == nm)
+                    if (vc.name == nm) {
+                        recordRef(enumMemberKey(vt->name, nm), v);
                         return emitVariantConstruction(*vt, nm, SharedArgumentList(), v->line);
+                    }
             // 6b-2: `Type::NAME` -> a type-associated `comptime` constant. Access-checked (public/private,
             // same as a field), then read through its real `static const` symbol.
             {
@@ -1092,14 +1096,16 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             }
         }
         // A ref/out parameter is a pointer in C; reads dereference it.
-        if (_refParams.count(nm)) return "(*" + nm + ")";
+        if (_refParams.count(nm)) { recordRef(bindingKeyOf(nm), v); return "(*" + nm + ")"; }
         // An unqualified name that is a field of the enclosing class (or an
         // ancestor) and not a local/param resolves to self->[__base.]…field.
         if (_currentClass && !_localTypes.count(nm)) {
             ClassInfo* owner = findFieldOwner(_currentClass, nm);
             if (owner) {
                 if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);
-                checkFieldAccess(owner, nm, v->line); return "self->" + basePathTo(_currentClass, owner) + nm;
+                checkFieldAccess(owner, nm, v->line);
+                recordRef(fieldKey(owner->name, nm), v);   // implicit `this.` field read
+                return "self->" + basePathTo(_currentClass, owner) + nm;
             }
         }
         // A bare **function name** used as a value (not a call) → its C function
@@ -1111,6 +1117,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (_moduleStatics.count(qualify(nm))) return qualify(nm);
         }
         checkNotMoved(nm, v->line);   // reject reading a moved-from `resource` value
+        recordRef(bindingKeyOf(nm), v);   // a local, a param, or an unindexed name (empty key => dropped)
         return nm;
     }
 
@@ -1128,7 +1135,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string name = (ba->identifier && ba->identifier->value) ? *ba->identifier->value : "";
         if (_currentClass && _currentClass->base) {
             ClassInfo* owner = findFieldOwner(_currentClass->base, name);
-            if (owner) { checkFieldAccess(owner, name, ba->line); return "self->__base." + basePathTo(_currentClass->base, owner) + name; }
+            if (owner) { checkFieldAccess(owner, name, ba->line);
+                         recordRef(fieldKey(owner->name, name), ba->identifier.get());
+                         return "self->__base." + basePathTo(_currentClass->base, owner) + name; }
         }
         unsupported("base access", ba->line);
         return name;
@@ -2058,6 +2067,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             unsupported(("local `" + nm + "` shadows a field — rename it").c_str(), n->line);
                     }
                     if (!_scopes.empty()) _scopes.back().declaredNames.push_back(nm);
+                    registerBinding(d->name.get(), SymKind::Local);   // LSP index (analysis mode only)
                 }
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
                 _localCTypes[nm] = ty;                        // full C type (incl. primitives) for assignment-RHS lowering
@@ -2833,6 +2843,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // Loop-body scope (a loop boundary so break/continue unwind correctly).
         Scope sc; sc.isLoopBoundary = true;
         _scopes.push_back(sc);
+        registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
         bool hadType = _localTypes.count(nm);
         std::string prevType = hadType ? _localTypes[nm] : std::string();
         _localTypes[nm] = elemClass;   // element binding's class (for x.method() resolution)
@@ -3651,6 +3662,7 @@ ClassInfo CEmitter::buildVariantClassInfo(EnumDeclarationNode* ed, const std::st
                     if (p && p->identifier && p->identifier->value) {
                         FieldInfo fi;
                         fi.name = *p->identifier->value;
+                        fi.nameId = p->identifier;
                         fi.type = p->type;
                         vc.payload.push_back(fi);
                     }
@@ -3961,6 +3973,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         for (auto& d : *fd->declarators) {
                             FieldInfo fi;
                             fi.name        = (d->name && d->name->value) ? *d->name->value : "";
+                            fi.nameId      = d->name;
                             fi.type        = fd->type;
                             fi.initializer = d->initializer;
                             fi.visibility  = fvis;
@@ -4169,6 +4182,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             }
                             FieldInfo fi;
                             fi.name        = fn;
+                            fi.nameId      = d->name;
                             fi.type        = kd->type;
                             fi.initializer = d->initializer;
                             fi.visibility  = kvis;
@@ -6507,6 +6521,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
 
     Scope sc; sc.isLoopBoundary = true;
     _scopes.push_back(sc);
+    registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
     bool hadType = _localTypes.count(nm);
     std::string prevType = hadType ? _localTypes[nm] : std::string();
     _localTypes[nm] = elemClass;
@@ -9686,6 +9701,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         std::string vn = a->variantName ? *a->variantName : "";
         bool found = false;
         for (auto& v : ci.variants) if (v.name == vn) { found = true; break; }
+        if (found) recordRef(enumMemberKey(subjCls, vn), a->variantId.get());   // LSP: the arm uses the case
         if (!found)          unsupported(("`match` arm names unknown variant '" + vn + "' of '" + subjCls + "'").c_str(), a->line);
         if (covered.count(vn)) unsupported(("duplicate `match` arm for variant '" + vn + "'").c_str(), a->line);
         covered.insert(vn);
@@ -9774,6 +9790,9 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                              + std::to_string(vc ? vc->payload.size() : 0)).c_str(), a->line);
             for (size_t i = 0; vc && i < a->bindings->size() && i < vc->payload.size(); ++i) {
                 std::string bn = *(*a->bindings)[i];
+                // LSP index: the binding's own node (parallel list, same order) carries the span.
+                if (a->bindingIds && i < a->bindingIds->size())
+                    registerBinding((*a->bindingIds)[i].get(), SymKind::Local);
                 const FieldInfo& pf = vc->payload[i];
                 std::string bcty = cType(pf.type);
                 std::string slot = std::string(sp) + "->u." + *a->variantName + "." + pf.name;
@@ -9968,6 +9987,10 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         std::string vn = a->variantName ? *a->variantName : "";
         bool found = false;
         for (auto& mem : ei.members) if (mem.name == vn) { found = true; break; }
+        // LSP index: a `case Ok:` arm IS a use of the enum member — without this, renaming a member
+        // would rewrite every `Enum::Member` and leave the arms behind, i.e. produce code that no
+        // longer compiles. `variantId` is the same name as a node with a span (see MatchArmNode).
+        if (found) recordRef(enumMemberKey(enumTy, vn), a->variantId.get());
         if (!found)            unsupported(("`match` arm names unknown case '" + vn + "' of enum '" + enumTy + "'").c_str(), a->line);
         if (a->bindings && !a->bindings->empty())
                                unsupported(("enum case '" + vn + "' carries no payload to bind").c_str(), a->line);
@@ -10828,6 +10851,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // Track by-ref params (deref on read) and param classes (for member calls).
     _refParams.clear();
     _paramNames.clear();
+    _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
     _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
     _moveState.clear();   // per-function move analysis
     _pendingParamDtors.clear();
@@ -10838,6 +10862,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
             _paramNames.insert(pn);   // a later local declaration shadowing a param is a compile error
+            registerBinding(p->identifier.get(), SymKind::Param);
             if (paramByRef(p.get())) _refParams.insert(pn);
             if (p->isConst) _constLocals.insert(pn);   // const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
@@ -11361,6 +11386,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
     _refParams.clear();
     _paramNames.clear();
+    _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
     _viewParams.clear();
     _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
     _moveState.clear();   // per-method move analysis
@@ -11376,6 +11402,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             if (!p->identifier || !p->identifier->value) continue;
             const std::string& pn = *p->identifier->value;
             _paramNames.insert(pn);   // a later local declaration shadowing a param is a compile error
+            registerBinding(p->identifier.get(), SymKind::Param);
             if (paramByRef(p.get())) _refParams.insert(pn);
             if (p->isConst) _constLocals.insert(pn);   // const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
@@ -12812,13 +12839,15 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         std::string T = _classes[cls].collElemClass;
         std::string basePath;
         ClassInfo* owner = findFieldOwner(&_classes[T], field);
-        if (owner) { basePath = basePathTo(&_classes[T], owner); checkFieldAccess(owner, field, ma->line); }
+        if (owner) { basePath = basePathTo(&_classes[T], owner); checkFieldAccess(owner, field, ma->line);
+                     recordRef(fieldKey(owner->name, field), ma->identifier.get()); }
         return "(" + emitExpression(ma->expression) + ").ptr->" + basePath + field;
     }
     std::string basePath;
     if (!cls.empty() && _classes.count(cls)) {
         ClassInfo* owner = findFieldOwner(&_classes[cls], field);
-        if (owner) { basePath = basePathTo(&_classes[cls], owner); checkFieldAccess(owner, field, ma->line); }
+        if (owner) { basePath = basePathTo(&_classes[cls], owner); checkFieldAccess(owner, field, ma->line);
+                     recordRef(fieldKey(owner->name, field), ma->identifier.get()); }
         else {
             // the field is NOT on the wrapper itself — auto-deref via a `Deref<T>` contract to the
             // pointee: `w.field` -> `Cls__deref(&(w))->[base]field` (a T*). (Only when not on `cls`.)
@@ -12829,6 +12858,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
                 MethodInfo* dref = findMethod(&_classes[cls], "deref", &dc);
                 std::string bp = basePathTo(&_classes[dtgt], fo);
                 checkFieldAccess(fo, field, ma->line);
+                recordRef(fieldKey(fo->name, field), ma->identifier.get());
                 if (dref) return dref->cName + "(&(" + emitExpression(ma->expression) + "))->" + bp + field;
             }
         }

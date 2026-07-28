@@ -1,12 +1,13 @@
-// LSP M3.4 fixture (locals / params / fields / enum members) — exercised by tools/check-query.sh once
-// M3.4 lands. NOT scanned by the main run_tests loop (that reads tests/*.kama, tests/*.d, tests/xfail).
+// LSP M3.4 fixture (locals / params / fields / enum members) — exercised by tools/check-query.sh.
+// NOT scanned by the main run_tests loop (that reads tests/*.kama, tests/*.d, tests/xfail).
 //
-// Deliberately covers every span shape the AST gets right or wrong today (measured 2026-07-27, see
-// docs/design/lsp-m3-kickoff.md "The grammar prerequisite"): a name is precise ONLY when its production
-// is the bare IDENTIFIER token. So each kind appears BOTH with and without an initializer/value, and
-// `shadow` is declared twice in sibling scopes so keys must be per-declaration, not per-name.
+// Deliberately covers every span shape the AST used to get wrong (measured 2026-07-27, see
+// docs/design/lsp-m3-kickoff.md "The grammar prerequisite"): a name was precise ONLY when its production
+// was the bare IDENTIFIER token. M3.4's STAMP_LOC pass fixed the rest, so each kind appears BOTH with and
+// without an initializer/value to keep that fixed, and `shadow` is declared twice in sibling scopes so
+// keys must be per-declaration, not per-name.
 //
-// Positions are asserted by the harness — keep the layout stable.
+// Positions are asserted by the harness — keep the layout stable, and APPEND rather than insert.
 namespace scopes;
 
 enum Code {
@@ -43,4 +44,25 @@ fn int32 shadowing(int32 n) {
         acc = acc + shadow;
     }
     return acc;
+}
+
+// Enum-member USES. `Code::Ok` is an expression use; the `match` arms are the ones that used to be
+// invisible to the index (the AST held the arm name as a bare string), which would have made renaming a
+// member rewrite the `Code::…` uses and silently leave `case Ok:` behind.
+fn int32 classify(Code c) {
+    Code seen = Code::Ok;
+    int32 rank = match (c) {
+        case Ok:  0;
+        case Bad: 1;
+    };
+    return rank + cast<int32>(seen);
+}
+
+// A `foreach` loop variable is a local too, though it never enters the shadowing table.
+fn int32 total(InlineArray<int32, 3> xs) {
+    int32 sum = 0;
+    foreach (int32 item in xs) {
+        sum = sum + item;
+    }
+    return sum;
 }

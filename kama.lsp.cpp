@@ -362,6 +362,10 @@ int symKindToLsp(SymKind k) {
         case SymKind::Method:      return 6;    // Method
         case SymKind::Ctor:        return 9;    // Constructor
         case SymKind::Field:       return 8;    // Field
+        // M3.4 bindings. They never reach documentSymbols (the facade filters them out of the outline),
+        // but hover and the symbol-kind decoration in other requests still ask for a kind.
+        case SymKind::Local:       return 13;   // Variable
+        case SymKind::Param:       return 13;   // Variable
     }
     return 5;
 }

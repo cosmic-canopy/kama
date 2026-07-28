@@ -50,6 +50,7 @@ enum class Visibility { Private, Protected, Public };
 
 struct FieldInfo {
     std::string      name;
+    SharedIdentifier nameId;         // LSP (M3.4): the name's own identifier node — `name` alone has no span
     SharedIdentifier type;
     SharedExpression initializer;    // optional; applied in the constructor
     Visibility       visibility = Visibility::Private;
@@ -475,10 +476,32 @@ private:
     // between the analysis walk and buildPositions(), then cleared.
     struct RecordedRef { const CompilationUnit* unit; const IdentifierNode* id; std::string key; };
     std::vector<RecordedRef> _bodyRefs;
+    // M3.4: a DECLARATION discovered during the walk. Locals, params and match bindings have no symbol-table
+    // entry to key on, so — unlike types/functions — their def-sites can only be captured where the walk
+    // knows the enclosing scope. Same lifetime as _bodyRefs: merged by buildDefSites(), then cleared.
+    struct RecordedDef { const CompilationUnit* unit; const IdentifierNode* id; std::string key;
+                         SymKind kind; std::string container; };
+    std::vector<RecordedDef> _localDefs;
     std::map<std::string, std::vector<Location>> _refIndex;   // DefSite key -> every USE site of that symbol
     const CompilationUnit* _refUnit = nullptr;   // unit whose bodies are being walked (set in emitModuleContent)
     bool _analysis = false;                      // analysis-mode ctor => record references; a build records none
     void recordRef(const std::string& key, const IdentifierNode* site);  // pure append; no diagnostics, no cType
+    void recordDef(const std::string& key, const IdentifierNode* site, SymKind kind,
+                   const std::string& container);                        // pure append (M3.4 bindings)
+    // M3.4 keys. These name symbols the resolvers never produce a mangled name for, so they are PREFIXED —
+    // an index-only namespace that cannot collide with a resolveUserName/resolveFunc result. A binding is
+    // keyed by its DECLARATION SITE, which is what makes two same-named locals in sibling scopes (or in two
+    // different functions) distinct symbols without threading a function key through every call.
+    std::string bindingKey(const IdentifierNode* declSite) const;        // "local:<file>:<line>:<col>:<name>"
+    static std::string fieldKey(const std::string& ownerKey, const std::string& name);       // "field:Owner::name"
+    static std::string enumMemberKey(const std::string& enumKey, const std::string& name);   // "enum:Enum::name"
+    // The binding key `name` currently resolves to: innermost enclosing scope first, then the parameters of
+    // the function being emitted. Empty when `name` is neither (recordRef/recordDef ignore an empty key).
+    std::string bindingKeyOf(const std::string& name) const;
+    // Give a binding declaration an index key, record the def-site, and make the name resolvable for the
+    // rest of its scope (SymKind::Param goes to _paramDeclKeys, everything else to the innermost scope).
+    // A no-op outside analysis mode, so `kama build` pays nothing.
+    void registerBinding(const IdentifierNode* declSite, SymKind kind);
     void buildDefSites();                        // fill _defSites/_declUnit from the tables (T4a)
     void buildPositions();                       // fill _positions + _refIndex (decls, sig refs, body refs)
     const PosEntry* posAt(const CompilationUnit* unit, int line, int col) const;  // smallest span at cursor
@@ -523,6 +546,10 @@ private:
     std::set<std::string> _refParams;        // by-ref params of the function being emitted
     std::set<std::string> _paramNames;       // parameter names of the function being emitted — a local
                                              // declaration shadowing one is a compile error (see emitDeclarator)
+    std::map<std::string, std::string> _paramDeclKeys;   // LSP (M3.4), analysis mode: param name -> index key
+                                             // for the function being emitted. Params outlive every scope, so
+                                             // they sit here rather than in Scope::indexDecls; cleared with
+                                             // _paramNames at each function/method entry.
     std::set<std::string> _viewParams;       // by-VALUE `type view` params of the fn being emitted — a valid
                                              // root for a view return (borrows caller memory that outlives the
                                              // call). (A `ref`-view param is already in _refParams.)
@@ -678,7 +705,14 @@ private:
                    // are the root locals its children `ref`-borrow (M4.2) — a second child borrowing the
                    // same root is rejected (the same-root disjointness rule: no two tasks share a cell).
                    bool isTaskScope = false; std::vector<std::string> taskChildren;
-                   std::set<std::string> borrowedRoots; };
+                   std::set<std::string> borrowedRoots;
+                   // LSP (M3.4), analysis mode only: the bindings this scope declares, with the index key
+                   // each was given. Deliberately PARALLEL to `declaredNames` rather than folded into it —
+                   // that vector drives the shadowing rules, and it also (by design) excludes `foreach` and
+                   // `match` bindings, which the index does want. Popping the scope is what makes two
+                   // same-named locals in sibling scopes resolve to their own declaration.
+                   struct IndexDecl { std::string name, key; };
+                   std::vector<IndexDecl> indexDecls; };
     // Erase move-state for the closing scope's locals, then pop it. A name going out of scope is
     // lexically dead, so a sibling scope reusing it must start NotMoved (not inherit a stale Moved).
     void popScope();

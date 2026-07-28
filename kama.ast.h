@@ -1057,6 +1057,11 @@ class MatchArmNode : public StatementNode {
 public:
     SharedString     variantName;   // the variant matched; "_" = wildcard
     SharedStringList bindings;      // payload binding names in field order; null/empty if none
+    // LSP (M3.4): the same two names again, as nodes carrying a source span, so find-references and
+    // rename can reach a `case Ok:` arm and its payload bindings. Kept ALONGSIDE the strings above —
+    // every existing reader spells `*variantName` / `*bindings[i]` and is untouched.
+    SharedIdentifier     variantId;
+    SharedIdentifierList bindingIds;   // parallel to `bindings`, same order
     SharedExpression body;          // single-expression arm: the arm's value / side-effect expression
     SharedBlock      block;         // block arm `{ … }` (multi-statement); one of body/block is set
     explicit MatchArmNode(CodeGenContext& context)

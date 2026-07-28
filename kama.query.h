@@ -19,7 +19,8 @@ struct SrcRange {
 };
 
 enum class SymKind { Class, Value, Resource, Contract, Enum, EnumMember,
-                     Function, Method, Ctor, Field, GenericType, GenericFn };
+                     Function, Method, Ctor, Field, GenericType, GenericFn,
+                     Local, Param };   // M3.4: function-scoped bindings — indexed, but kept OUT of outlines
 const char* symKindName(SymKind k);      // stable lowercase tag ("class", "method", …) for text/JSON output
 
 // A declaration's location + identity. Keyed in `_defSites` by its RESOLVED mangled name (exactly what

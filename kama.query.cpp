@@ -7,10 +7,11 @@
 // every indexed position carries its resolved DefSite key.
 //
 // Scope: DECLARATION-SITE, SIGNATURE/TYPE-REFERENCE, and (M3) BODY use-site positions — types, contracts,
-// enums, free/generic functions, methods, ctors. Body coverage does NOT come from a walker here: the real
-// resolver records each use as analysis resolves it (CEmitter::recordRef), so references and go-to-
-// definition agree by construction. Still deferred to M3.4: LOCALS, PARAMS, FIELDS and enum MEMBERS — the
-// tables retain no per-local/field decl node (hence no span), which is that milestone's first task.
+// enums, free/generic functions, methods, ctors, and (M3.4) LOCALS, PARAMS, FIELDS and enum MEMBERS. Body
+// coverage does NOT come from a walker here: the real resolver records each use as analysis resolves it
+// (CEmitter::recordRef), so references and go-to-definition agree by construction. Function-scoped
+// bindings have no table entry to key on, so their DECLARATIONS are recorded the same way, during the
+// walk that knows the enclosing scope (CEmitter::recordDef) — see the "M3.4 keys" note below.
 
 #include "kama.cemit.h"
 #include "kama.ast.h"
@@ -54,6 +55,8 @@ const char* symKindName(SymKind k)
         case SymKind::Field:       return "field";
         case SymKind::GenericType: return "generic-type";
         case SymKind::GenericFn:   return "generic-fn";
+        case SymKind::Local:       return "local";
+        case SymKind::Param:       return "param";
     }
     return "symbol";
 }
@@ -134,6 +137,13 @@ void CEmitter::buildDefSites()
             addDefSite(mi.cName, mi.isCtor ? SymKind::Ctor : SymKind::Method, unit, mnode, mname,
                        bare + "." + mkv.first, bare);
         }
+        // Fields (M3.4). Only the declaring type gets an entry: a generic INSTANCE shares the template's
+        // field nodes, and instances are skipped above, so a field can never be keyed twice.
+        for (auto& fi : ci.fields) {
+            if (!fi.nameId) continue;   // synthesized (variant payload of an instantiated template, etc.)
+            addDefSite(fieldKey(kv.first, fi.name), SymKind::Field, unit,
+                       fi.nameId.get(), fi.nameId, fi.name, bare);
+        }
         for (auto& ckv : ci.ctors) {
             CtorInfo& ctor = ckv.second;
             if (!ctor.node) continue;
@@ -164,14 +174,21 @@ void CEmitter::buildDefSites()
         }
     }
 
-    // Enums (plain + tagged). _enumDeclNodes carries the decl node keyed by the same qualified name.
-    for (auto& kv : _enums) {
-        auto dn = _enumDeclNodes.find(kv.first);
-        EnumDeclarationNode* en = dn == _enumDeclNodes.end() ? nullptr : dn->second;
+    // Enums + their MEMBERS. Driven by _enumDeclNodes, not _enums: a TAGGED enum is lowered to a variant
+    // ClassInfo and never reaches _enums, and the _classes loop above skips variant backings — so this is
+    // the only place either kind of enum gets a def-site. Every member carries its own identifier node.
+    for (auto& kv : _enumDeclNodes) {
+        EnumDeclarationNode* en = kv.second;
         if (!en) continue;
         const CompilationUnit* unit = unitOfDecl(en);
-        addDefSite(kv.first, SymKind::Enum, unit, en, en->identifier,
-                   bareOf(en->identifier, kv.first), "");
+        std::string bare = bareOf(en->identifier, kv.first);
+        addDefSite(kv.first, SymKind::Enum, unit, en, en->identifier, bare, "");
+        if (!en->body) continue;
+        for (auto& m : *en->body) {
+            if (!m || !m->identifier || !m->identifier->value) continue;
+            addDefSite(enumMemberKey(kv.first, *m->identifier->value), SymKind::EnumMember, unit,
+                       m.get(), m->identifier, *m->identifier->value, bare);
+        }
     }
 
     // Free functions (+ generic free-fn templates). node was captured in collectSignatures.
@@ -182,6 +199,23 @@ void CEmitter::buildDefSites()
         SymKind k = _generics.count(kv.first) ? SymKind::GenericFn : SymKind::Function;
         addDefSite(kv.first, k, unit, sig.node, sig.node->name, bareOf(sig.node->name, kv.first), "");
     }
+
+    // Bindings the walk recorded (M3.4): locals, params, foreach/match bindings. Their key already encodes
+    // the declaration site, and the identifier node IS the declaration — range and selectionRange coincide.
+    for (const auto& d : _localDefs) {
+        if (!d.unit || !d.id || !d.id->value) continue;
+        DefSite s;
+        s.key   = d.key;
+        s.kind  = d.kind;
+        s.range = s.selectionRange = SrcRange{ d.id->line, d.id->column, d.id->endLine, d.id->endColumn };
+        s.unit      = d.unit;
+        s.node      = const_cast<IdentifierNode*>(d.id);
+        s.display   = *d.id->value;
+        s.container = d.container;
+        _defSites[d.key] = s;   // a generic body re-walked per instantiation re-records an identical entry
+    }
+    _localDefs.clear();
+    _localDefs.shrink_to_fit();
 }
 
 // ---- position index (T4b) -------------------------------------------------------------------------------
@@ -216,6 +250,57 @@ void CEmitter::recordRef(const std::string& key, const IdentifierNode* site)
 {
     if (!_analysis || !_refUnit || !site || key.empty()) return;
     _bodyRefs.push_back(RecordedRef{ _refUnit, site, key });
+}
+
+// A binding DECLARATION (local / param / foreach or match binding), recorded by the walk that knows the
+// enclosing scope. Same gating and same pure-append discipline as recordRef.
+void CEmitter::recordDef(const std::string& key, const IdentifierNode* site, SymKind kind,
+                         const std::string& container)
+{
+    if (!_analysis || !_refUnit || !site || key.empty()) return;
+    _localDefs.push_back(RecordedDef{ _refUnit, site, key, kind, container });
+}
+
+// ---- M3.4 index-only keys -------------------------------------------------------------------------------
+
+std::string CEmitter::bindingKey(const IdentifierNode* declSite) const
+{
+    if (!declSite || !declSite->value) return "";
+    const std::string file = (_refUnit && _refUnit->name) ? *_refUnit->name : "";
+    return "local:" + file + ":" + std::to_string(declSite->line) + ":"
+         + std::to_string(declSite->column) + ":" + *declSite->value;
+}
+
+std::string CEmitter::fieldKey(const std::string& ownerKey, const std::string& name)
+{
+    if (ownerKey.empty() || name.empty()) return "";
+    return "field:" + ownerKey + "::" + name;
+}
+
+std::string CEmitter::enumMemberKey(const std::string& enumKey, const std::string& name)
+{
+    if (enumKey.empty() || name.empty()) return "";
+    return "enum:" + enumKey + "::" + name;
+}
+
+void CEmitter::registerBinding(const IdentifierNode* declSite, SymKind kind)
+{
+    if (!_analysis || !_refUnit || !declSite || !declSite->value) return;
+    std::string key = bindingKey(declSite);
+    if (key.empty()) return;
+    recordDef(key, declSite, kind, "");
+    if (kind == SymKind::Param)      _paramDeclKeys[*declSite->value] = key;
+    else if (!_scopes.empty())       _scopes.back().indexDecls.push_back(Scope::IndexDecl{ *declSite->value, key });
+}
+
+std::string CEmitter::bindingKeyOf(const std::string& name) const
+{
+    if (!_analysis || name.empty()) return "";
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        for (auto& d : _scopes[i].indexDecls)
+            if (d.name == name) return d.key;
+    auto p = _paramDeclKeys.find(name);
+    return p == _paramDeclKeys.end() ? std::string() : p->second;
 }
 
 void CEmitter::buildPositions()
@@ -426,13 +511,16 @@ SrcRange CEmitter::renameRangeAt(const std::string& uri, int line, int col) cons
     return e->range;
 }
 
-// Document outline: every user-unit def-site in this file, sorted by declaration order.
+// Document outline: every user-unit def-site in this file, sorted by declaration order. Function-scoped
+// bindings are indexed (for go-to-def / references / rename) but deliberately NOT outlined — an outline
+// listing every local is noise, and no editor expects one.
 std::vector<SymbolInfo> CEmitter::documentSymbols(const std::string& uri) const
 {
     const CompilationUnit* unit = unitForUri(uri);
     std::vector<SymbolInfo> out;
     if (!unit) return out;
     for (auto& kv : _defSites) {
+        if (kv.second.kind == SymKind::Local || kv.second.kind == SymKind::Param) continue;
         const DefSite& d = kv.second;
         if (d.unit != unit) continue;
         out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container });

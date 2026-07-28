@@ -52,6 +52,19 @@ IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32
 SURI="file:///sem.kama"
 SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 
+# M3.4 fixture: one of each binding kind, each WITH the trailing syntax whose span used to be swallowed.
+# The prepareRename ranges below are the DATA-LOSS GUARD — rename replaces the range it is given, so a
+# range that ran past the name would rewrite `seeded = 7` (or `Code::Ok`, or `Bad = 2`) as the new name.
+# LSP 0-based lines/chars:
+#   L1 `enum Code { Ok, Bad = 2 }`                     -> `Bad` 16..19  (NOT 16..23)
+#   L3 `    public int32 scale = 3;`                   -> `scale` 17..22 (NOT 17..26)
+#   L4 `    public fn int32 twice(int32 bias) { … }`   -> `bias` 32..36 (NOT 26..36, which starts at the type)
+#      ... its body `this.scale` -> `scale` at 52..57 (NOT 47.., which starts at the receiver)
+#   L7 `    int32 seeded = 7;`                         -> `seeded` 10..16 (NOT 10..20)
+#   L8 `    Code c = Code::Ok;`                        -> `Ok` 19..21 (NOT 13..21, which eats `Code::`)
+MURI="file:///bindings.kama"
+M34='namespace m34;\nenum Code { Ok, Bad = 2 }\ntype value Cfg {\n    public int32 scale = 3;\n    public fn int32 twice(int32 bias) { return this.scale * bias; }\n}\nfn int32 run() {\n    int32 seeded = 7;\n    Code c = Code::Ok;\n    return seeded + cast<int32>(c);\n}\n'
+
 frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$URI"'","languageId":"kama","version":1,"text":"'"$BAD"'"}}}'
@@ -94,6 +107,19 @@ frame '{"jsonrpc":"2.0","id":16,"method":"textDocument/rename","params":{"textDo
 #     nothing and was emitted verbatim, so `kama check` said OK and the editor showed a clean file that
 #     then failed in the C compiler. checkTypeResolves closes that; this asserts the squiggle is live.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$SURI"'","languageId":"kama","version":1,"text":"'"$SEM"'"}}}'
+# --- M3.4: locals / params / fields / enum members ---
+# 20-24: prepareRename on each kind, asserting the EXACT range (the data-loss guard described above).
+# 25:    references on the field `scale` -> its `this.scale` use, proving the member-access span is the
+#        name and not the receiver. 26: a full rename of a local. 27: hover reports the binding kind.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$MURI"'","languageId":"kama","version":1,"text":"'"$M34"'"}}}'
+frame '{"jsonrpc":"2.0","id":20,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":7,"character":12}}}'
+frame '{"jsonrpc":"2.0","id":21,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":4,"character":33}}}'
+frame '{"jsonrpc":"2.0","id":22,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":3,"character":18}}}'
+frame '{"jsonrpc":"2.0","id":23,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":1,"character":17}}}'
+frame '{"jsonrpc":"2.0","id":24,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":8,"character":20}}}'
+frame '{"jsonrpc":"2.0","id":25,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":3,"character":18},"context":{"includeDeclaration":false}}}'
+frame '{"jsonrpc":"2.0","id":26,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":7,"character":12},"newName":"total"}}'
+frame '{"jsonrpc":"2.0","id":27,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":9,"character":13}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -130,7 +156,7 @@ expect '"name":"mid","kind":12'                               "documentSymbol: m
 expect '"id":4,"result":{"uri":"file:///shapes.kama"'         "definition: type ref -> file:// Location"
 expect '"range":{"start":{"line":1,"character":11}'           "definition: lands on the Point decl name (LSP 1:11)"
 expect '"id":5,"result":{"contents":{"kind":"plaintext","value":"value Point"}}'  "hover: 'value Point' on a type ref"
-expect '"id":6,"result":null'                                 "hover: null on a local use-site (M3.4 scope, intentional)"
+expect '"id":6,"result":{"contents":{"kind":"plaintext","value":"param a"}}'      "hover: 'param a' on a parameter use-site (M3.4)"
 
 echo "check-lsp: M3 find-references"
 expect '"id":8,"result":[{"uri":"file:///shapes.kama"'        "references: returns Locations in this file"
@@ -142,7 +168,8 @@ expect '"start":{"line":3,"character":36}'                    "references: the c
 
 echo "check-lsp: M3 rename"
 expect '"id":12,"result":{"start":{"line":1,"character":11}'  "prepareRename: the Point identifier range"
-expect '"id":13,"result":null'                                "prepareRename: null on a local (not renameable until M3.4)"
+expect '"id":13,"result":{"start":{"line":2,"character":31},"end":{"line":2,"character":32}}' \
+                                                              "prepareRename: a parameter use is renameable and spans just the name (M3.4)"
 expect '"id":14,"result":{"changes":{"file:///shapes.kama":[' "rename: a WorkspaceEdit keyed by this file's URI"
 expect '"newText":"Pnt"'                                      "rename: each edit carries the new name"
 expect '"id":15,"error"'                                      "rename: a reserved keyword is refused"
@@ -152,6 +179,26 @@ expect 'imports.kama","diagnostics":[]'   "import-using file analyzes clean (std
 expect 'dynamic_array.kama'               "cross-module go-to-def resolves DynamicArray into the std source"
 expect '"id":16,"error"'                  "rename REFUSES a symbol used in other files (no half-rewrite)"
 expect 'Cross-file rename needs workspace indexing'  "...and says why"
+
+echo "check-lsp: M3.4 bindings (locals / params / fields / enum members)"
+# Each of these asserts the FULL range. An `end` past the name is the data-loss bug the M3.4 grammar
+# pass fixed — rename replaces this range verbatim, so a wrong end silently eats the initializer/value.
+expect '"id":20,"result":{"start":{"line":7,"character":10},"end":{"line":7,"character":16}}' \
+                                          "prepareRename: local 'seeded' spans the NAME, not 'seeded = 7'"
+expect '"id":21,"result":{"start":{"line":4,"character":32},"end":{"line":4,"character":36}}' \
+                                          "prepareRename: param 'bias' starts at the name, not at its type"
+expect '"id":22,"result":{"start":{"line":3,"character":17},"end":{"line":3,"character":22}}' \
+                                          "prepareRename: field 'scale' spans the NAME, not 'scale = 3'"
+expect '"id":23,"result":{"start":{"line":1,"character":16},"end":{"line":1,"character":19}}' \
+                                          "prepareRename: enum member 'Bad' spans the NAME, not 'Bad = 2'"
+expect '"id":24,"result":{"start":{"line":8,"character":19},"end":{"line":8,"character":21}}' \
+                                          "prepareRename: a 'Code::Ok' use spans 'Ok', not the qualifier too"
+expect '"id":25,"result":[{"uri":"file:///bindings.kama","range":{"start":{"line":4,"character":52}' \
+                                          "references: 'this.scale' is a field use at the NAME, not the receiver"
+expect '"id":26,"result":{"changes":{"file:///bindings.kama":['  "rename: a local produces a WorkspaceEdit"
+expect '"newText":"total"'                                       "rename: the local's edits carry the new name"
+expect '"id":27,"result":{"contents":{"kind":"plaintext","value":"local seeded"}}' \
+                                          "hover: 'local seeded' on a local use-site"
 
 echo "check-lsp: semantic diagnostics (not just parse errors)"
 expect 'unknown type `Nonexistent`'                        "undeclared body type surfaces as a live diagnostic"

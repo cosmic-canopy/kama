@@ -263,7 +263,7 @@ struct kamayystype {
 %type <expressionstatement> expression_statement statement_expression assignment invocation_expression match_expression
 %type <matcharm> match_arm match_pattern
 %type <matcharmlist> match_arms
-%type <strings> match_bindings
+%type <identifierlist> match_bindings
 %type <expressionstatement> object_creation_expression new_expression post_increment_expression post_decrement_expression
 %type <expressionstatement> pre_increment_expression pre_decrement_expression
    /* %type <unaryexpression> unary_expression */
@@ -427,7 +427,7 @@ interp_body
   ;
 interp_hole
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | interp_hole DOT IDENTIFIER   { $$ = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); }
+  | interp_hole DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | interp_hole LEFT_BRACKET interp_index RIGHT_BRACKET   { $$ = std::make_shared<ElementAccessNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
   ;
 interp_index
@@ -461,6 +461,7 @@ basic_identifier
            single-arg consumer (Ptr/collections/guards) is untouched; multi-arg sites read genericArgs. */
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$4)[0]);
         id->genericArgs = $4;
+        STAMP_LOC(id, @1);   /* the NAME only — rename must not swallow `<A, B, …>` */
         $$ = id;
     }
   ;
@@ -481,7 +482,9 @@ type_or_value_arg
 
 qualified_identifier_no_generic
   : IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); }
+    /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
+       reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
+  | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); }
   ;
 
 type_name
@@ -698,7 +701,9 @@ function_declaration
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
       /* `fnptr ret Name(params);` — an explicit function-pointer TYPE.
          A null body marks it as a signature type (collectSignatures -> _sigs). */
-      $$ = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() );
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  SharedModifier(), $2, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, SharedBlock() );
+      STAMP_LOC(fn->name, @3);
+      $$ = fn;
   }
   ;
 /* Generic type parameters on a fn declaration: `fn max<T, U>(...)` / `fn sort<T: Comparable>(...)`
@@ -741,7 +746,7 @@ parameter_list
   | parameter_list COMMA parameter   { $1->push_back($3); }
   ;
 parameter
-  : const_opt hardware_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); $$ = p; }
+  : const_opt hardware_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
   ;
 parameter_modifier_opt
   : /* Nothing */ { $$ = SharedModifier(); }
@@ -770,7 +775,7 @@ variable_declarators
   ;
 variable_declarator
   : IDENTIFIER   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
-  | IDENTIFIER EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); }
+  | IDENTIFIER EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   ;
 variable_initializer
   : expression
@@ -788,7 +793,7 @@ constant_declarators
   | constant_declarators COMMA constant_declarator   { $1->push_back($3); }
   ;
 constant_declarator
-  : IDENTIFIER EQ constant_expression   { $$ = std::make_shared<ConstVariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); }
+  : IDENTIFIER EQ constant_expression   { $$ = std::make_shared<ConstVariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   | IDENTIFIER                          { $$ = std::make_shared<ConstVariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression()); }
   ;
 block
@@ -847,7 +852,7 @@ scope_statement
      own closing brace (self-joining barrier). `ref` is mandatory (disjoint mutable is the whole point);
      the body is a `block` because those braces ARE the barrier (like `scope { }`). */
 parallel_for_statement
-  : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression RPAREN block   { $$ = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); }
+  : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); STAMP_LOC(n->name, @5); $$ = n; }
   ;
 empty_statement
   : SEMICOLON   {  }
@@ -931,17 +936,25 @@ match_arm
   ;
 match_pattern
   : IDENTIFIER
-    { auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = $1; $$ = a; }
+    { auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = $1;
+      a->variantId = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); STAMP_LOC(a->variantId, @1); $$ = a; }
   | IDENTIFIER LPAREN match_bindings RPAREN
-    { auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = $1; a->bindings = $3; $$ = a; }
+    { auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = $1;
+      a->variantId = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); STAMP_LOC(a->variantId, @1);
+      /* The bindings arrive as nodes (for the LSP index); mirror their names into the string list every
+         existing reader uses, so nothing downstream changes. */
+      a->bindingIds = $3;
+      a->bindings = std::make_shared<StringList>();
+      for (auto& b : *$3) a->bindings->push_back(b->value);
+      $$ = a; }
   ;
 match_bindings
-  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
-  | match_bindings COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; }
+  : IDENTIFIER   { $$ = std::make_shared<IdentifierList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
+  | match_bindings COMMA IDENTIFIER   { auto b = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); STAMP_LOC(b, @3); $1->push_back(b); $$ = $1; }
   ;
 foreach_statement
-  : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement   { $$ = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); }
-  | FOREACH LPAREN REF type IDENTIFIER IN expression RPAREN embedded_statement   { auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); n->isRef = true; $$ = n; }   /* `foreach (ref T e in …)` — mutate elements in place */
+  : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement   { auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); STAMP_LOC(n->name, @4); $$ = n; }
+  | FOREACH LPAREN REF type IDENTIFIER IN expression RPAREN embedded_statement   { auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); n->isRef = true; STAMP_LOC(n->name, @5); $$ = n; }   /* `foreach (ref T e in …)` — mutate elements in place */
   ;
 jump_statement
   : break_statement
@@ -1031,9 +1044,9 @@ parenthesized_expression
   : LPAREN expression RPAREN   { $$ = $2; }
   ;
 member_access
-  : primary_expression DOT IDENTIFIER   { $$ = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); }
-  | qualified_identifier_no_generic DOT IDENTIFIER   { $$ = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); }
-  | class_type DOT IDENTIFIER   { $$ = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); }
+  : primary_expression DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | qualified_identifier_no_generic DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | class_type DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
@@ -1129,7 +1142,7 @@ this_access
   : THIS   { $$ = std::make_shared<ThisAccessNode>(SCANNER_CODEGENCONTEXT); }
   ;
 base_access
-  : BASE DOT IDENTIFIER   { $$ = std::make_shared<BaseAccessNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3) ); }
+  : BASE DOT IDENTIFIER   { auto ba = std::make_shared<BaseAccessNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3) ); STAMP_LOC(ba->identifier, @3); $$ = ba; }
   | BASE LEFT_BRACKET expression_list RIGHT_BRACKET   { $$ = std::make_shared<BaseAccessNode>(SCANNER_CODEGENCONTEXT, $3); }
   ;
 new_expression
@@ -1528,8 +1541,8 @@ enum_member_declarations
   ;
 enum_member_declaration
   : IDENTIFIER   { $$ = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
-  | IDENTIFIER EQ constant_expression   { $$ = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3 ); }
-  | IDENTIFIER LPAREN parameter_list RPAREN   { auto m = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); m->payload = $3; $$ = m; }   /* tagged-union variant with a named payload */
+  | IDENTIFIER EQ constant_expression   { $$ = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3 ); STAMP_LOC($$->identifier, @1); }
+  | IDENTIFIER LPAREN parameter_list RPAREN   { auto m = std::make_shared<EnumMemberDeclarationNode>(SCANNER_CODEGENCONTEXT,  std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); m->payload = $3; STAMP_LOC(m->identifier, @1); $$ = m; }   /* tagged-union variant with a named payload */
   ;
 
 /*------------------------------------------------------------------------------ 

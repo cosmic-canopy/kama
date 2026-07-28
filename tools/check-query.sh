@@ -22,7 +22,8 @@ if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; f
 fail=0
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
-# expect <flags...> -- <substring>: run `kama query FIXTURE <flags>` and assert the output contains <substring>.
+# expect <flags...> -- <substring>: run `kama query $FIXTURE <flags>` and assert the output contains
+# <substring>. $FIXTURE is reassigned partway down for the M3.4 block — the helpers read it at call time.
 expect() {
     want=""
     args=""
@@ -100,6 +101,44 @@ expect --refs 18:5 -- "shapes.kama:6:11"
 expect --refs 18:5 -- "shapes.kama:25:4"
 # Prelude/std symbols are never renameable targets and have no user references to report.
 reject --refs 7:12 -- "shapes.kama"         # 'int32' (a builtin) -> "no references"
+
+# ---- M3.4: locals, params, fields, enum members -----------------------------------------------------
+# Second fixture. Positions are tied to tests/query/scopes.kama — edit both together, and APPEND to that
+# file rather than inserting, so these line numbers stay valid.
+FIXTURE="$ROOT/tests/query/scopes.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo "check-query: M3.4 outline (fields + enum members in; locals + params OUT)"
+expect --symbols -- "14:4 enum-member Ok"
+expect --symbols -- "15:4 enum-member Bad"
+expect --symbols -- "19:17 field limit"
+expect --symbols -- "20:17 field scale"
+# An outline listing every local/param would be noise — documentSymbols filters those two kinds.
+reject --symbols -- "local"
+reject --symbols -- "param"
+
+echo "check-query: M3.4 hover + go-to-definition on bindings"
+expect --type 30:12 -- "local seeded"       # a local USE
+expect --type 22:33 -- "param bias"         # a parameter declaration
+expect --type 19:17 -- "field limit"
+expect --type 14:4  -- "enum-member Ok"
+expect --def  30:12 -- "scopes.kama:29:10"  # local use -> its declaration
+expect --def  23:20 -- "scopes.kama:19:17"  # 'this.limit' -> the field declaration
+expect --def  53:22 -- "scopes.kama:14:4"   # 'Code::Ok'  -> the enum member declaration
+expect --def  55:13 -- "scopes.kama:14:4"   # 'case Ok:'  -> the same enum member
+
+echo "check-query: M3.4 find-references"
+expect --refs 29:10 -- "scopes.kama:30:12"  # local 'seeded' decl -> its one use
+expect --refs 22:33 -- "scopes.kama:23:41"  # param 'bias' -> its use in the body
+expect --refs 19:17 -- "scopes.kama:23:20"  # field 'limit' -> 'this.limit'
+expect --refs 14:4  -- "scopes.kama:53:22"  # enum member 'Ok' -> the 'Code::Ok' read
+expect --refs 14:4  -- "scopes.kama:55:13"  # ... and the 'case Ok:' match arm
+expect --refs 64:19 -- "scopes.kama:65:20"  # a foreach loop variable is a local too
+# SHADOWING: two `shadow` locals in sibling scopes are DISTINCT symbols, keyed by declaration site.
+expect --refs 39:14 -- "scopes.kama:40:20"
+reject --refs 39:14 -- "scopes.kama:44:20"  # ... and must NOT return the sibling's use
+expect --refs 43:14 -- "scopes.kama:44:20"
+reject --refs 43:14 -- "scopes.kama:40:20"
 
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"
