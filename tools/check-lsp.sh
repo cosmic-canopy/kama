@@ -38,6 +38,11 @@ GOOD='fn int32 main() {\n    return 0;\n}\n'   # fixed
 #   L4 (M3) a BODY: two `Point` locals at kama 4:17 / 4:26 (LSP 3:17 / 3:26) and a CALL to `mid` at kama
 #      4:36 (LSP 3:36). Only the M3 reference index sees these — M0's signature walk never enters a body.
 #      Appended, so every position above is unchanged.
+# M4.6 fixture: a buffer that has NEVER parsed — `p.` on line 5 is a syntax error, so there is no
+# last-good index at all. This is the state a NEW file is in the first time completion is wanted.
+NURI="file:///new.kama"
+NEWB='namespace nb;\ntype value P { public int32 x; public fn int32 twice() { return this.x * 2; } }\nfn int32 main() {\n    P p;\n    p.\n    return 0;\n}\n'
+
 QURI="file:///shapes.kama"
 SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p; Point q = mid(a: p); return q.x; }\n'
 
@@ -208,6 +213,11 @@ frame '{"jsonrpc":"2.0","id":18,"method":"textDocument/completion","params":{"te
 frame '{"jsonrpc":"2.0","id":19,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":40}}}'
 frame '{"jsonrpc":"2.0","id":35,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":17}}}'
 frame '{"jsonrpc":"2.0","id":36,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":17}}}' 
+# --- M4.6: a buffer that never parsed. Completion repairs by blanking the CURSOR'S LINE and
+#     re-analyzing — the lexical context still comes from the untouched text, so `p.` is not lost.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$NURI"'","languageId":"kama","version":1,"text":"'"$NEWB"'"}}}'
+frame '{"jsonrpc":"2.0","id":37,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":4,"character":6}}}'
+frame '{"jsonrpc":"2.0","id":38,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":4,"character":4}}}' 
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -347,6 +357,14 @@ expect '"id":19,"result":{"signatures":[{"label":"mid(a: Point) -> Point"' \
 expect '"activeParameter":0' "... with the active parameter"
 expect '"label":"Point"'     "bare completion -> a type in scope"
 expect '"id":36,"result":null' "signatureHelp outside any call -> null"
+
+echo "check-lsp: M4.6 completion on a buffer that has never parsed"
+# Without the repair these are both empty — which is the state a NEW file is in, where completion is
+# wanted most. The repair blanks only the cursor's line, so line/column geometry is preserved exactly.
+expect '"id":37,"result":{"isIncomplete":false,"items":[{"label":"x","kind":5,"detail":"int32"},{"label":"twice"' \
+       "`p.` resolves even though the buffer does not parse"
+expect '"id":38,"result":{"isIncomplete":false,"items":[{"label":"p","kind":6,"detail":"P"}' \
+       "... and the bare position still sees the local"
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

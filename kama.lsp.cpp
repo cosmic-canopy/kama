@@ -458,6 +458,7 @@ struct Doc {
     std::string    text;
     long           version = 0;
     SharedLspIndex lastGoodIndex;    // last cleanly-analyzed index; kept across a parse failure (queries stay live)
+    size_t         linesAtLastGood = 0;   // M4.6: line count when it was built — the geometry it still describes
 };
 
 struct Server {
@@ -521,7 +522,10 @@ struct Server {
         std::string path = uriToPath(uri);
         std::vector<Diagnostic> diags;
         SharedLspIndex idx = lspAnalyze(path, it->second.text, diags, argv0);
-        if (idx) it->second.lastGoodIndex = idx;
+        if (idx) {
+            it->second.lastGoodIndex = idx;
+            it->second.linesAtLastGood = countLines(it->second.text);
+        }
         publish(uri, diags);
     }
 
@@ -701,6 +705,48 @@ struct Server {
     // (typing `p.` adds no lines). Neither handler may touch the workspace index: completion fires on
     // every keystroke, and rebuilding a project per character is not a thing an editor survives.
 
+    static size_t countLines(const std::string& t) {
+        size_t n = 1;
+        for (char c : t) if (c == '\n') ++n;
+        return n;
+    }
+
+    // The index to answer a request at `kamaLine` with.
+    //
+    // Normally that is `lastGoodIndex`, and it is CORRECT rather than merely tolerable: the realistic
+    // sequence — press Enter (still parses, index refreshes), then type `p.` (breaks the parse, adds no
+    // lines) — leaves the last good index geometry-accurate for the whole file. Every single-line
+    // statement, which is essentially every completion, lands in that case.
+    //
+    // Two cases do not: a buffer that has NEVER parsed (a new file — where completion is most wanted and
+    // there is nothing at all to answer from), and one whose LINE COUNT has moved since the last good
+    // parse, where every position below the edit is off. Both are repaired by blanking the cursor's line
+    // and re-analyzing. Blanking rather than substituting a placeholder is deliberate twice over: it needs
+    // no grammar knowledge (`p.__hole;` is not a legal statement — `statement_expression` is invocation /
+    // assignment / increment only), and it preserves line and column geometry EXACTLY, which is the whole
+    // invariant. The lexical context still comes from the UNTOUCHED buffer, so the receiver the user typed
+    // is not lost.
+    //
+    // Cost is one analysis, and only on that gate; `didChange` already runs one per keystroke, so this is
+    // at worst a second one on a file that is not currently parseable.
+    SharedLspIndex indexForRequest(Doc& doc, const std::string& path, int kamaLine) {
+        if (doc.lastGoodIndex && countLines(doc.text) == doc.linesAtLastGood) return doc.lastGoodIndex;
+        size_t off = 0;
+        for (int i = 1; i < kamaLine; ++i) {
+            off = doc.text.find('\n', off);
+            if (off == std::string::npos) return doc.lastGoodIndex;
+            ++off;
+        }
+        if (off > doc.text.size()) return doc.lastGoodIndex;
+        std::string repaired = doc.text;
+        size_t eol = repaired.find('\n', off);
+        if (eol == std::string::npos) eol = repaired.size();
+        for (size_t i = off; i < eol; ++i) repaired[i] = ' ';
+        std::vector<Diagnostic> ignored;   // the repaired buffer is not what the user has; never publish it
+        SharedLspIndex idx = lspAnalyze(path, repaired, ignored, argv0);
+        return idx ? idx : doc.lastGoodIndex;
+    }
+
     // textDocument/completion -> CompletionList. `isIncomplete: false` is load-bearing — it tells the
     // client to filter the list itself as the user keeps typing, so one `.` costs one request rather than
     // one per character.
@@ -710,8 +756,9 @@ struct Server {
         auto it = docs.find(uri);
         if (it != docs.end()) {
             int l, c; kamaPos(params, l, c);
+            std::string path = uriToPath(uri);
             CompletionContext ctx = completionContextAt(it->second.text, l, c);
-            for (const auto& item : lspCompletion(it->second.lastGoodIndex, uriToPath(uri), ctx)) {
+            for (const auto& item : lspCompletion(indexForRequest(it->second, path, l), path, ctx)) {
                 Json j = Json::object();
                 j.set("label", item.label);
                 j.set("kind", completionKindToLsp(item.kind));
@@ -731,8 +778,9 @@ struct Server {
         auto it = docs.find(uri);
         if (it == docs.end()) { sendResponse(id, Json()); return; }
         int l, c; kamaPos(params, l, c);
+        std::string path = uriToPath(uri);
         CompletionContext ctx = completionContextAt(it->second.text, l, c);
-        SignatureHelp h = lspSignatureHelp(it->second.lastGoodIndex, uriToPath(uri), ctx);
+        SignatureHelp h = lspSignatureHelp(indexForRequest(it->second, path, l), path, ctx);
         if (h.label.empty()) { sendResponse(id, Json()); return; }
         Json ps = Json::array();
         for (const auto& p : h.params) {
