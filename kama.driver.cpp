@@ -3227,21 +3227,16 @@ SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
 }
 
 std::vector<SymbolInfo> lspWorkspaceSymbols(const SharedLspIndex& idx, const std::string& query,
-                                            const std::string& root)
+                                            const std::vector<std::string>& files)
 {
     static const size_t kMaxResults = 200;   // a picker wants the first screenful, not the whole project
-    if (!idx || !idx->idx || root.empty()) return {};
-    std::string absRoot = absolutePath(root);
+    if (!idx || !idx->idx || files.empty()) return {};
+    std::set<std::string> own;
+    for (const auto& f : files) own.insert(absolutePath(f));
     std::vector<SymbolInfo> out;
     for (auto& s : idx->idx->workspaceSymbols(query)) {
         if (out.size() >= kMaxResults) break;
-        // Real-path both sides: the stdlib resolves relative to the compiler binary, so in a dev tree its
-        // raw path can still carry the project root as a literal prefix (see lspRealPath).
-        std::string f = absolutePath(s.uri);
-        if (f.size() <= absRoot.size() || f.compare(0, absRoot.size(), absRoot) != 0 ||
-            f[absRoot.size()] != '/')
-            continue;                                     // std, a dependency, or outside the project
-        if (f.compare(absRoot.size(), 7, "/.kama/") == 0) continue;   // the package store
+        if (!own.count(absolutePath(s.uri))) continue;   // std, a dependency, or otherwise not ours
         out.push_back(s);
     }
     return out;

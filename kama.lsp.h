@@ -105,9 +105,10 @@ SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
                                    const char* argv0);
 
 // workspace/symbol: project-wide symbol search. `query` is a case-insensitive substring ("" matches all);
-// only symbols declared under `root` are returned, so std and dependencies stay out of the picker. Capped.
+// only symbols declared in one of `files` are returned, so std, dependencies and anything else the index
+// happens to hold stay out of the picker. Capped.
 std::vector<SymbolInfo> lspWorkspaceSymbols(const SharedLspIndex& idx, const std::string& query,
-                                            const std::string& root);
+                                            const std::vector<std::string>& files);
 
 // Query seams — thin wrappers over the query facade on a handle (the path re-picks the unit within the
 // index). All framework-free (kama.query.h value types); a null handle yields an empty/unknown result.

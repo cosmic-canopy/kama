@@ -102,6 +102,21 @@ fn int32 main() {
 KAMA
 depok=0
 (cd "$dep/app" && "$KAMA" pkg install >/dev/null 2>&1) && depok=1
+
+# M3.5 ownership fixture: a project whose `sources` reach OUTSIDE its own directory. Ownership is decided
+# by the project's FILE SET, not by a path prefix — so this file IS renameable (the project declared it),
+# while the dependency above is NOT (inside the root, but not ours). A prefix test gets both backwards.
+mkdir -p "$tmp/own/proj" "$tmp/own/shared"
+cat > "$tmp/own/proj/kama.json" <<'JSON'
+{ "name": "own", "version": "0.1.0", "sources": [".", "../shared"] }
+JSON
+cat > "$tmp/own/shared/shared.kama" <<'KAMA'
+namespace shared;
+type value Leak { public int32 v; }
+KAMA
+OURI="file://$tmp/own/proj/app.kama"
+OSRC='namespace shared;\nfn int32 main() { Leak l; l.v = 1; return l.v; }\n'
+printf 'namespace shared;\nfn int32 main() { Leak l; l.v = 1; return l.v; }\n' > "$tmp/own/proj/app.kama"
 DURI="file://$dep/app/app.kama"
 DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
 
@@ -178,6 +193,9 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":32,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$DURI"'"},"position":{"line":2,"character":4},"newName":"Pt"}}'
 frame '{"jsonrpc":"2.0","id":33,"method":"workspace/symbol","params":{"query":"Point"}}'
 fi
+# 34: a type declared in a source the project reaches OUTSIDE its own directory is still ours to rename.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$OURI"'","languageId":"kama","version":1,"text":"'"$OSRC"'"}}}'
+frame '{"jsonrpc":"2.0","id":34,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$OURI"'"},"position":{"line":1,"character":19},"newName":"Seep"}}' 
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -297,6 +315,10 @@ if [ "$depok" = 1 ]; then
 else
     echo "  SKIP: installed-dependency checks (kama pkg install failed)"
 fi
+
+echo "check-lsp: M3.5 ownership is the file SET, not a path prefix"
+expect '"id":34,"result":{"changes":{'          "rename succeeds on a declared source outside the project dir"
+expect '/own/shared/shared.kama":[{"range"'     "...and rewrites that outside file, because the project declared it"
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

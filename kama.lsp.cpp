@@ -665,15 +665,20 @@ struct Server {
     // the standard library or a dependency's sources: they're read-only from the project's point of view,
     // and the index holds their units too (DefSite.unit == nullptr filters only the built-in prelude, so
     // std MODULES would otherwise look like ordinary renameable user code).
-    // ⚠️ Both sides go through lspRealPath first. Module resolution names the stdlib relative to the
-    // COMPILER binary (`<exeDir>/../../lib/std/…`), which in a dev tree still has the project root as a
-    // literal prefix — so a raw string compare would declare a std symbol project-owned and rewrite it.
-    static bool underRoot(const std::string& fileIn, const std::string& rootIn) {
-        if (rootIn.empty()) return false;
-        std::string file = lspRealPath(fileIn), root = lspRealPath(rootIn);
-        if (file.size() <= root.size()) return false;
-        if (file.compare(0, root.size(), root) != 0 || file[root.size()] != '/') return false;
-        return file.compare(root.size(), 7, "/.kama/") != 0;   // <root>/.kama/deps — vendored, not ours
+    // Does the project OWN this file — i.e. may a rename rewrite it?
+    //
+    // The authority is the project's own FILE SET, not a path prefix. That matters in both directions: a
+    // dependency lives *inside* the project root (`<root>/.kama/deps/...`) and must never be rewritten,
+    // while a `"sources": ["../shared"]` entry lives *outside* it and must be, because the project said so.
+    // A prefix test gets both backwards. It is also what retires the realpath trap that nearly let a rename
+    // rewrite the stdlib: module resolution names std relative to the compiler binary
+    // (`<exeDir>/../../lib/std/…`), which in a dev tree literally carries the project root as a prefix —
+    // but it is not in the file set, so membership excludes it without any string reasoning at all.
+    // Paths are still normalized, since the same file reaches us spelled several ways.
+    static bool ownsFile(const std::string& file, const std::vector<std::string>& files) {
+        std::string f = lspRealPath(file);
+        for (const auto& p : files) if (lspRealPath(p) == f) return true;
+        return false;
     }
 
     // textDocument/references -> Location[]. Always an array (never null) per the spec's usual shape.
@@ -727,7 +732,7 @@ struct Server {
         }
         if (!anchor.empty()) {
             LspProject proj = workspaceIndexFor(anchor);
-            for (const auto& s : lspWorkspaceSymbols(wsIndex, query, proj.root)) {
+            for (const auto& s : lspWorkspaceSymbols(wsIndex, query, proj.files)) {
                 Json loc = Json::object();
                 loc.set("uri", pathToUri(s.uri));
                 loc.set("range", srcRangeToJson(s.selectionRange));
@@ -792,9 +797,9 @@ struct Server {
             // dependency) may legitimately be used from project files, and rewriting only those callers
             // while leaving the declaration alone would break the build.
             Location def = lspDefinition(idx, path, l, c);
-            if (!def.uri.empty() && !underRoot(def.uri, proj.root)) {
+            if (!def.uri.empty() && !ownsFile(def.uri, proj.files)) {
                 sendError(id, -32803, "cannot rename: this symbol is defined outside the project, in " +
-                                      def.uri + ". Only sources under " + proj.root + " can be rewritten.");
+                                      def.uri + ". Only this project's own sources can be rewritten.");
                 return;
             }
         }
@@ -819,7 +824,7 @@ struct Server {
         std::map<std::string, std::vector<SrcRange>> byFile;
         for (const auto& r : refs) {
             // Never write outside the project (the open file itself always counts — it may be project-less).
-            if (haveProject && !underRoot(r.uri, proj.root) && r.uri != path) continue;
+            if (haveProject && !ownsFile(r.uri, proj.files) && r.uri != path) continue;
             byFile[r.uri].push_back(r.range);
         }
         Json changes = Json::object();
