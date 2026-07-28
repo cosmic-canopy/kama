@@ -332,5 +332,23 @@ FIXTURE="$ROOT/lib/std/process/process.kama"
 expect --complete 166:45 -- "method	add	fn void add(item: string)"   # this.args.| is the DynamicArray FIELD
 expect --complete 62:43  -- "field	code	int32"                       # ... and a plain `this.` still works
 
+# ---------------------------------------------------------------------------------------------------
+# M4.2 — after `::`. A `::` head is always a TYPE or a NAMESPACE (SPEC forbids `::` on a value, and the
+# emitter rejects it), so there are exactly two answers.
+FIXTURE="$ROOT/tests/query/complete.kama"
+echo "check-query: M4.2 completion after \`::\`"
+expect --complete 136:24 -- "enum-member	High"          # Level::| — a plain enum's members
+expect --complete 136:24 -- "enum-member	Low"
+expect --complete 104:37 -- "variant	Some	(value: T)"   # Optional::| — a generic variant's cases + payload
+expect --complete 104:37 -- "variant	None"
+expect --complete 151:28 -- "method	zero	fn int32 zero()"   # Stat::| — a static method
+expect --complete 151:28 -- "ctor	of	fn Stat of(n: int32)" # ... a named ctor (the `::` bridge reaches them)
+expect --complete 151:28 -- "constant	LIMIT	int32"          # ... and a type-associated `comptime` constant
+# A NAMESPACE head lists what that namespace declares, one level deep.
+expect --complete 153:33 -- "type	Cell"
+expect --complete 153:33 -- "contract	Sized"
+expect --complete 153:33 -- "function	blend"
+reject --complete 153:33 -- "DynamicArray"                  # ... never another namespace's symbols
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

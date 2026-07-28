@@ -136,3 +136,21 @@ fn int32 main() {
     int32 lvl = (Level::High == Level::Low) ? 1 : 0;
     return statements(n: 1) + receivers() + measure(item: c) + lvl;
 }
+
+// M4.2 — a `::` head is always a TYPE or a NAMESPACE (SPEC forbids `::` on a value). Appended AFTER main
+// so every line number above stays valid; `scopes()` is never called, which analysis does not mind.
+type value Stat implements Sized {
+    public int32 n;
+    public comptime int32 LIMIT = 7;
+    public static fn int32 zero() { return 0; }
+    public ctor of(int32 n) { Stat s; s.n = n; return give s; }
+    public fn int32 size() { return this.n; }
+}
+
+fn int32 scopes() {
+    int32 viaStatic = Stat::zero();
+    int32 viaConst = Stat::LIMIT;
+    int32 viaNs = completeprobe::blend(lo: 1, hi: 2);
+    Stat made = Stat.of(n: 1);
+    return viaStatic + viaConst + viaNs + made.size();
+}

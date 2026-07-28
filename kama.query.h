@@ -96,7 +96,7 @@ struct CompletionContext {
 CompletionContext completionContextAt(const std::string& text, int line, int col);
 
 enum class CompletionKind { Field, Method, Ctor, Variant, EnumMember, Type, Contract,
-                            Function, Local, Param, Label, Keyword, Module, Namespace };
+                            Function, Local, Param, Label, Keyword, Module, Namespace, Constant };
 const char* completionKindName(CompletionKind k);   // stable lowercase tag, mirrors symKindName
 
 struct CompletionItem {

@@ -99,6 +99,7 @@ const char* completionKindName(CompletionKind k)
         case CompletionKind::Keyword:    return "keyword";
         case CompletionKind::Module:     return "module";
         case CompletionKind::Namespace:  return "namespace";
+        case CompletionKind::Constant:   return "constant";
     }
     return "symbol";
 }
@@ -1426,6 +1427,103 @@ void CEmitter::addMembers(const std::string& clsKey, bool wantStatic, const Quer
     }
 }
 
+// ---- M4.2: after `::` -------------------------------------------------------------------------------
+//
+// A `::` head is always a TYPE or a NAMESPACE — never a value (SPEC forbids it, and the emitter rejects it
+// outright). So there are exactly two answers: the type's scope-level members (enum cases, statics, ctors,
+// type-associated constants), or everything the namespace declares.
+
+std::string CEmitter::resolvePathAsType(const std::string& path)
+{
+    std::vector<PathSeg> segs = splitPath(path);
+    if (segs.empty() || segs.back().name.empty()) return "";
+    auto qual = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < segs.size(); ++i) qual->push_back(std::make_shared<std::string>(segs[i].name));
+    std::string key = resolveUserName(segs.back().name, qual->empty() ? SharedStringList() : qual);
+    if (_classes.count(key) || _enums.count(key) || _interfaces.count(key)
+        || _genericTypes.count(key) || _genericContracts.count(key)) return key;
+    return "";
+}
+
+void CEmitter::addScopeMembers(const std::string& key, const QueryCtx& qc, std::vector<CompletionItem>& out)
+{
+    // A plain enum keeps its members in _enums; a TAGGED enum becomes a variant ClassInfo and never reaches
+    // that table, so both spellings have to be consulted. A generic variant template (`Optional`) keeps its
+    // cases on the template shape, which _classes does not hold either.
+    auto e = _enums.find(key);
+    if (e != _enums.end())
+        for (auto& m : e->second.members)
+            out.push_back(CompletionItem{ m.name, CompletionKind::EnumMember, "", e->second.name });
+    for (const std::map<std::string, ClassInfo>* tbl : { &_classes, &_genericTypes }) {
+        auto c = tbl->find(key);
+        if (c == tbl->end() || !c->second.isVariant) continue;
+        for (auto& v : c->second.variants) {
+            std::string detail;
+            for (size_t i = 0; i < v.payload.size(); ++i)
+                detail += (i ? ", " : "(") + v.payload[i].name + ": " + spellTypeIn(key, v.payload[i].type);
+            out.push_back(CompletionItem{ v.name, CompletionKind::Variant,
+                                          detail.empty() ? "" : detail + ")", c->second.name });
+        }
+        break;
+    }
+    // Type-associated `comptime` constants, read as `Type::NAME`.
+    for (auto& kv : _typeConsts) {
+        if (kv.second.owner != key) continue;
+        size_t sep = kv.first.rfind("::");
+        if (sep == std::string::npos) continue;
+        std::string nm = kv.first.substr(sep + 2);
+        const ClassInfo* owner = nullptr;
+        { auto c = _classes.find(key); if (c != _classes.end()) owner = &c->second; }
+        if (!visibleFrom(owner, kv.second.visibility, nm, qc)) continue;
+        out.push_back(CompletionItem{ nm, CompletionKind::Constant, spellTypeIn(key, kv.second.type), key });
+    }
+    // Static methods and named constructors. A primitive or intrinsic-collection head carries its statics
+    // through a retro-impl conformance, which lives in a different table.
+    if (_classes.count(key)) addMembers(key, /*wantStatic*/ true, qc, out);
+    else if (ClassInfo* rt = retroTargetInfo(key)) addMembers(rt->name, /*wantStatic*/ true, qc, out);
+}
+
+void CEmitter::addNamespaceSymbols(const std::string& path, std::vector<CompletionItem>& out)
+{
+    std::vector<PathSeg> segs = splitPath(path);
+    if (segs.empty()) return;
+    std::string dotted;
+    for (auto& s : segs) dotted += (dotted.empty() ? "" : ".") + s.name;
+    std::string ns = mangleNs(dotted);
+    if (segs.size() == 1) {                       // a 1-segment head may be a module alias
+        auto a = _nsCtx.aliases.find(segs[0].name);
+        if (a != _nsCtx.aliases.end()) ns = a->second;
+    }
+    if (!_namespaces.count(ns)) return;
+    const std::string prefix = ns + "__";
+    // One level deep: `std::` offers `collections`, not `collections::DynamicArray`.
+    auto leaf = [&](const std::string& key, std::string& name) {
+        if (key.compare(0, prefix.size(), prefix) != 0) return false;
+        name = key.substr(prefix.size());
+        return name.find("__") == std::string::npos && !name.empty();
+    };
+    std::set<std::string> seen;
+    auto add = [&](const std::string& key, CompletionKind kind, const std::string& detail) {
+        std::string name;
+        if (!leaf(key, name) || !seen.insert(name).second) return;
+        out.push_back(CompletionItem{ name, kind, detail, dotted });
+    };
+    for (auto& kv : _classes) {
+        if (kv.second.isGenericInst || kv.second.isIntrinsicColl || kv.second.isExternStruct) continue;
+        add(kv.first, kv.second.isVariant ? CompletionKind::Type : CompletionKind::Type, "");
+    }
+    for (auto& kv : _genericTypes)      add(kv.first, CompletionKind::Type, "");
+    for (auto& kv : _enums)             add(kv.first, CompletionKind::Type, "enum");
+    for (auto& kv : _interfaces)        { if (!kv.second.isGenericInst) add(kv.first, CompletionKind::Contract, ""); }
+    for (auto& kv : _genericContracts)  add(kv.first, CompletionKind::Contract, "");
+    for (auto& kv : _funcs)             add(kv.first, CompletionKind::Function, "");
+    for (auto& n : _namespaces) {                    // nested namespaces (`std::` -> `collections`)
+        std::string name;
+        if (!leaf(n, name) || !seen.insert(name).second) continue;
+        out.push_back(CompletionItem{ name, CompletionKind::Namespace, "", dotted });
+    }
+}
+
 std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, const CompletionContext& ctx)
 {
     std::vector<CompletionItem> out;
@@ -1436,7 +1534,18 @@ std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, cons
     if (uc != _unitCtx.end()) _nsCtx = uc->second;
     _typeSubst.clear();
 
-    if (ctx.trigger != CompletionTrigger::Dot) return out;   // `::` is M4.2, bare names M4.3
+    if (ctx.trigger == CompletionTrigger::Scope) {
+        QueryCtx sqc = enclosingCallable(unit, ctx.line, ctx.column);
+        std::string key = resolvePathAsType(ctx.receiver);
+        if (!key.empty()) addScopeMembers(key, sqc, out);
+        else              addNamespaceSymbols(ctx.receiver, out);
+        std::sort(out.begin(), out.end(), [](const CompletionItem& a, const CompletionItem& b) {
+            if (a.kind != b.kind) return (int)a.kind < (int)b.kind;
+            return a.label < b.label;
+        });
+        return out;
+    }
+    if (ctx.trigger != CompletionTrigger::Dot) return out;   // bare names are M4.3
 
     QueryCtx qc = enclosingCallable(unit, ctx.line, ctx.column);
     std::vector<QueryBinding> binds;

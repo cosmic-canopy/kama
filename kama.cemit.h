@@ -584,6 +584,12 @@ private:
                      const QueryCtx& qc) const;
     void addMembers(const std::string& clsKey, bool wantStatic, const QueryCtx& qc,
                     std::vector<CompletionItem>& out);
+    // `Enum::` / `Variant::` cases and type-associated `comptime` constants (M4.2).
+    void addScopeMembers(const std::string& key, const QueryCtx& qc, std::vector<CompletionItem>& out);
+    // Everything declared in the namespace `path` names, one level deep (M4.2).
+    void addNamespaceSymbols(const std::string& path, std::vector<CompletionItem>& out);
+    // A `::`-qualified path -> the table key it names, "" if it names a namespace or nothing (M4.2).
+    std::string resolvePathAsType(const std::string& path);
 
 
     // Discards any stray write during analysis mode (collectProgram writes no C, but `unsupported()` still
