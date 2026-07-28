@@ -176,11 +176,15 @@ Two supports for the flat floor:
 1. **Dedicated, linked "Floor reference" doc page** (its own page, linked from SPEC.md) listing everything
    always-in-scope, grouped by concern (core types · construction · diagnostics · console I/O · args/env) —
    the floor's documentary namespace, kept current as it grows. *(Do this.)*
-2. **`global::` root qualifier — documented concept only for now.** Reserve the semantics (`global::assert` ≡
-   bare `assert`, same symbol; the resolver already has the empty-namespace + alias machinery) so they can't
-   drift, but **build the resolver alias only when an LSP exists** to give it a completion payoff (the VS Code
-   extension is highlighting + source-level debugging only today — ROADMAP §10 "Language server (LSP)").
-   Precedent: C# `global::`, Rust's nameable `std::prelude`. Bare stays THE everyday style.
+2. **`global::` root qualifier — ✅ SHIPPED with the language server (LSP M4.8).** `global::assert` is the
+   same symbol as bare `assert`; the qualifier resolves from the root, skipping the file's own scope, its
+   `using`s and its aliases, so it reaches the floor even where a local declaration shadows the spelling.
+   `global::a::b::X` names a namespace absolutely (the fuller C# semantic, adopted because the precedent was
+   already cited here). `global` is reserved as a namespace root. Built once an LSP existed exactly as
+   planned, so the qualifier ships with its completion payoff: typing `global::` lists the whole floor, which
+   is otherwise undiscoverable — there is no module to import that would enumerate it. Bare stays THE
+   everyday style. Resolver seam: `resolveUserNameImpl` / `resolveFuncImpl`; emission byte-identical across
+   all 535 fixtures.
 
 ## Phasing
 
@@ -216,7 +220,7 @@ Two supports for the flat floor:
   `trace`+`debug` under `--release`, keep `info`/`warn`/`error` (standard).
 - **D1** `kama.local.json` whole-file deep-merge, general (incl. dep path-overrides), local-only. **D2**
   `kama.json` baked defaults + runtime `--log` (primary) / `KAMA_LOG` env (secondary).
-- **E1** dedicated linked "Floor reference" page. **E2** `global::` documented-only until an LSP exists.
+- **E1** dedicated linked "Floor reference" page. **E2** `global::` — shipped with LSP M4.8, as planned.
 
 ## `std::log` v1 — as shipped
 

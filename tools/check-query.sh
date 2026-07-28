@@ -390,6 +390,18 @@ expect --complete 15:26 -- "type	DynamicArray	std::collections"   # `import …:
 expect --complete 15:26 -- "type	Deque	std::collections"
 
 # ---------------------------------------------------------------------------------------------------
+# M4.8 — `global::` names the ROOT scope. Its completion payoff is why the alias waited for an LSP: the
+# always-in-scope floor is otherwise undiscoverable, since there is no module to import that would list it.
+echo "check-query: M4.8 global:: completion"
+expect --complete 170:12 -- "function	println	fn void println(s: string)"   # the floor
+expect --complete 170:12 -- "function	args	fn Args args()"
+expect --complete 170:12 -- "type	Optional"
+reject --complete 170:12 -- "	Cell	"          # ... never a namespaced symbol, even this file's own
+reject --complete 170:12 -- "	blend	"
+reject --complete 170:12 -- "keyword"           # ... and `global::while` is not a thing
+reject --complete 170:12 -- "kama_args_at"      # ... nor the C-ABI plumbing behind the floor
+
+# ---------------------------------------------------------------------------------------------------
 # M4.4 — signature help + argument labels. kama has NO positional arguments (kama.y's `argument`
 # productions are all `IDENTIFIER COLON …`), so "which parameter am I on" and "what labels may I type"
 # are one question with one answer.

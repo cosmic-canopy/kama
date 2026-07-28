@@ -163,3 +163,10 @@ fn int32 bareNames(int32 seed) {
     int32 far = near.value + seed;
     return far;
 }
+
+// M4.8 — `global::` names the ROOT scope explicitly: the same symbol as the bare spelling, reachable
+// even where a local declaration shadows it. Its completion payoff is why the alias waited for an LSP.
+fn int32 rootScope() {
+    global::println(s: "root scope");                  // a FLOOR symbol, named explicitly
+    return global::completeprobe::blend(lo: 1, hi: 2);  // ... and an absolute namespace path
+}

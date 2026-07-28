@@ -591,7 +591,7 @@ private:
     // `Enum::` / `Variant::` cases and type-associated `comptime` constants (M4.2).
     void addScopeMembers(const std::string& key, const QueryCtx& qc, std::vector<CompletionItem>& out);
     // Everything declared in the namespace `path` names, one level deep (M4.2).
-    void addNamespaceSymbols(const std::string& path, std::vector<CompletionItem>& out);
+    void addNamespaceSymbols(const std::string& path, const QueryCtx& qc, std::vector<CompletionItem>& out);
     // A `::`-qualified path -> the table key it names, "" if it names a namespace or nothing (M4.2).
     std::string resolvePathAsType(const std::string& path);
     // Everything spellable as a BARE name at the cursor (M4.3): bindings, the enclosing type's members,

@@ -4,8 +4,15 @@ The **floor** is everything usable with **no `import`** and available even under
 contracts/types the language itself leans on, the construction helpers, plus the diagnostics, console-I/O and
 args/env capabilities that a program cannot reimplement (they bind runtime globals set before `main`). It has
 no browsable namespace, so this page *is* its documentary namespace — grouped by concern, kept current as the
-floor grows. Bare is the everyday style (importing to call `assert`/`println` would be terrible); a future
-`global::` root qualifier (documented-only until an LSP exists) will name it explicitly.
+floor grows. Bare is the everyday style (importing to call `assert`/`println` would be terrible).
+
+**`global::` names the floor explicitly** (shipped with the language server, LSP M4.8). `global::assert` is
+the *same symbol* as bare `assert` — the qualifier resolves from the root, ignoring the file's own namespace,
+its `using`s and its aliases, so it still reaches the floor where a local declaration shadows the spelling.
+The longer form `global::a::b::X` names a namespace absolutely, through none of those. Precedent: C#'s
+`global::`. `global` is therefore reserved as a namespace root. Typing `global::` in an editor lists this
+whole surface — which is why the qualifier waited for a language server: without completion it would have
+been a spelling with no discovery payoff.
 
 Everything here lives in [`prelude/global.kama`](../prelude/global.kama) over
 [`kama_runtime.h`](../kama_runtime.h). The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is

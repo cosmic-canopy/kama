@@ -204,14 +204,28 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
         auto sa = _nsCtx.symbolAliases.find(value);
         if (sa != _nsCtx.symbolAliases.end() && known(sa->second)) return sa->second;
     }
-    if (qualifier && !qualifier->empty()) {
-        // Qualified `A.B...value` — a namespace path (alias-expand a 1-segment head).
+    // `global::…` — resolve from the ROOT, ignoring the file's own scope, its `using`s and its aliases.
+    // `global::assert` is the same symbol as bare `assert`, nameable even where a local declaration
+    // shadows the spelling; `global::a::b::X` names a namespace absolutely. `global` is therefore reserved
+    // as a namespace root. (docs/design/logging.md Part E — deferred until an LSP existed to give it a
+    // completion payoff; precedent is C#'s `global::`.)
+    SharedStringList q = qualifier;
+    bool rooted = q && !q->empty() && *(*q)[0] == "global";
+    if (rooted) {
+        auto rest = std::make_shared<StringList>();
+        for (size_t i = 1; i < q->size(); ++i) rest->push_back((*q)[i]);
+        q = rest;
+        if (q->empty()) return value;                    // `global::X` == the bare/floor spelling
+    }
+    if (q && !q->empty()) {
+        // Qualified `A.B...value` — a namespace path (alias-expand a 1-segment head, but never under
+        // `global::`, whose whole meaning is "not through this file's aliases").
         std::string nsMangled;
-        if (qualifier->size() == 1 && _nsCtx.aliases.count(*(*qualifier)[0]))
-            nsMangled = _nsCtx.aliases[*(*qualifier)[0]];
+        if (!rooted && q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
+            nsMangled = _nsCtx.aliases[*(*q)[0]];
         else {
             std::string path;
-            for (auto& seg : *qualifier) path += (path.empty() ? "" : ".") + *seg;
+            for (auto& seg : *q) path += (path.empty() ? "" : ".") + *seg;
             nsMangled = mangleNs(path);
         }
         std::string cand = nsMangled + "__" + value;
@@ -319,13 +333,21 @@ std::string CEmitter::resolveFuncImpl(const std::string& name, SharedStringList 
         auto sa = _nsCtx.symbolAliases.find(name);   // per-symbol `import a::b::{fn as g}`
         if (sa != _nsCtx.symbolAliases.end() && _funcs.count(sa->second)) return sa->second;
     }
-    if (qualifier && !qualifier->empty()) {
+    SharedStringList q = qualifier;                      // `global::…` — see resolveUserNameImpl
+    bool rooted = q && !q->empty() && *(*q)[0] == "global";
+    if (rooted) {
+        auto rest = std::make_shared<StringList>();
+        for (size_t i = 1; i < q->size(); ++i) rest->push_back((*q)[i]);
+        q = rest;
+        if (q->empty()) return name;                     // `global::f` == the bare/floor spelling
+    }
+    if (q && !q->empty()) {
         std::string nsMangled;
-        if (qualifier->size() == 1 && _nsCtx.aliases.count(*(*qualifier)[0]))
-            nsMangled = _nsCtx.aliases[*(*qualifier)[0]];
+        if (!rooted && q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
+            nsMangled = _nsCtx.aliases[*(*q)[0]];
         else {
             std::string path;
-            for (auto& seg : *qualifier) path += (path.empty() ? "" : ".") + *seg;
+            for (auto& seg : *q) path += (path.empty() ? "" : ".") + *seg;
             nsMangled = mangleNs(path);
         }
         std::string cand = nsMangled + "__" + name;

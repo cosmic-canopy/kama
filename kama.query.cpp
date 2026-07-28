@@ -1498,10 +1498,27 @@ void CEmitter::addScopeMembers(const std::string& key, const QueryCtx& qc, std::
     else if (ClassInfo* rt = retroTargetInfo(key)) addMembers(rt->name, /*wantStatic*/ true, qc, out);
 }
 
-void CEmitter::addNamespaceSymbols(const std::string& path, std::vector<CompletionItem>& out)
+void CEmitter::addNamespaceSymbols(const std::string& path, const QueryCtx& qc,
+                                   std::vector<CompletionItem>& out)
 {
     std::vector<PathSeg> segs = splitPath(path);
     if (segs.empty()) return;
+    // `global::` — the floor, explicitly. This is the completion payoff the alias was deferred for
+    // (docs/design/logging.md Part E): the always-in-scope surface is otherwise undiscoverable, because
+    // there is no module to `import` and therefore nothing to type that would list it.
+    if (segs.size() == 1 && segs[0].name == "global") {
+        QueryScope guard(this);
+        _nsCtx = NsCtx{};                       // no own scope, no usings: bareNameOf yields ONLY floor keys
+        // Only the UNIT carries over: it is what tells a library C-ABI binding from the user's own FFI.
+        // Bindings and the enclosing type's members are deliberately dropped — `global::` names neither.
+        QueryCtx floorCtx;
+        floorCtx.unit = qc.unit;
+        addNamesInScope(floorCtx, {}, out);
+        out.erase(std::remove_if(out.begin(), out.end(), [](const CompletionItem& c) {
+            return c.kind == CompletionKind::Keyword;   // `global::while` is not a thing
+        }), out.end());
+        return;
+    }
     std::string dotted;
     for (auto& s : segs) dotted += (dotted.empty() ? "" : ".") + s.name;
     std::string ns = mangleNs(dotted);
@@ -1782,7 +1799,7 @@ std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, cons
         QueryCtx sqc = enclosingCallable(unit, ctx.line, ctx.column);
         std::string key = resolvePathAsType(ctx.receiver);
         if (!key.empty()) addScopeMembers(key, sqc, out);
-        else              addNamespaceSymbols(ctx.receiver, out);
+        else              addNamespaceSymbols(ctx.receiver, sqc, out);
         std::sort(out.begin(), out.end(), [](const CompletionItem& a, const CompletionItem& b) {
             if (a.kind != b.kind) return (int)a.kind < (int)b.kind;
             return a.label < b.label;
