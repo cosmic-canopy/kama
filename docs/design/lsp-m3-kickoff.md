@@ -172,9 +172,14 @@ means find-references and go-to-def agree by construction.
 
 # M3.4 — locals, params, fields, enum members (cold-start brief)
 
-**Status: NOT STARTED. Scoped by reconnaissance, 2026-07-27.** This is the milestone that makes
-find-references/rename useful on the symbols users touch most. M3.1–M3.3 cover types, contracts, enums
-(the type), methods, ctors and free/generic functions; everything below is still invisible to the index.
+> **Status: ✅ SHIPPED 2026-07-27 (`91e27a3`, dev).** Emission byte-identical across all 534 lspref
+> fixtures; native 794/794, container 794/794, ASan/UBSan 765/765. The brief below is kept as the
+> reconnaissance of record — **read the "As shipped" section at the end of it first**, which records
+> where the plan changed under contact.
+
+This is the milestone that makes find-references/rename useful on the symbols users touch most.
+M3.1–M3.3 cover types, contracts, enums (the type), methods, ctors and free/generic functions;
+everything below was still invisible to the index.
 
 The four kinds are **not equally hard** — do them in this order.
 
@@ -284,6 +289,78 @@ KEYWORD (it broke the first draft of this fixture); the shadowing accumulator is
 
 A local, param or field can never be referenced from another file, so **the M3.3 open-file guard never
 fires for them** — M3.4 delivers full-fidelity rename for the commonest case without waiting on M3.5.
+
+## As shipped (2026-07-27, `91e27a3`) — where the plan changed under contact
+
+The recon above held up: the choke points were where it said, the ordering (enum members → locals/params
+→ fields) was right, and the grammar prerequisite was real. Four things came out differently.
+
+1. **`Scope::declaredNames` did NOT need its type changed** — the brief's one intrusive change was
+   avoidable. `Scope` gained an **analysis-only `std::vector<IndexDecl> indexDecls` parallel to it**
+   instead. Two reasons this is strictly better: `declaredNames` drives the shadowing *rules*
+   (`findScopeDeclaring` + the enclosing-scope walk), so leaving it alone means zero behavioural risk;
+   and it deliberately excludes `foreach` and `match` bindings, which the index *does* want. Scope pop
+   is still what makes sibling-scope `shadow` locals distinct.
+2. **Binding declarations are recorded during the walk, not reconstructed after it.** Locals/params have
+   no table entry to key on, so `recordDef` / `_localDefs` mirror M3.1's `recordRef` / `_bodyRefs`, and
+   `buildDefSites` materialises them at the tail. One helper, `registerBinding(declSite, kind)`, is the
+   single entry point used by all five declaration sites.
+3. **Keys are prefixed** (`local:<file>:<line>:<col>:<name>`, `field:<Owner>::<name>`,
+   `enum:<Enum>::<name>`) — an index-only namespace that cannot collide with a `resolveUserName` /
+   `resolveFunc` result. ⚠️ Do **not** key an enum member by its emitted C spelling `Enum_Member`.
+4. **`documentSymbols` needs an explicit Local/Param filter**, or the outline floods with every local in
+   the file. Fields and enum members stay in. A side effect worth knowing: driving enum def-sites off
+   `_enumDeclNodes` instead of `_enums` means a **tagged** enum's TYPE finally gets a def-site — the
+   `_classes` loop skips variant backings, so it had none before.
+
+**Two more spans turned out to be the same data-loss bug and were fixed here rather than deferred**
+(both were load-bearing for symbols M3.1 *already* renamed):
+`qualified_identifier_no_generic : qualifier IDENTIFIER` (kama.y:485) — the production an `Enum::Member`
+read or a `mod::fn` call reduces through, whose whole-production span would have eaten the qualifier —
+and the generic `basic_identifier : IDENTIFIER LT type_arg_list GT` arm (kama.y:464), whose span would
+have eaten `<A, B, …>`. Note `qualified_identifier : qualifier basic_identifier` does **not** need one:
+it reuses `$2` rather than constructing a node.
+
+**Still not covered, by decision:** the tail segments of a dotted chain `obj.a.b`
+([kama.cemit.cpp:1080](../kama.cemit.cpp) / [1089](../kama.cemit.cpp)) are string-concatenated without
+ever resolving a `FieldInfo`, so `b` is unindexed. That needs a per-segment type walk that does not exist.
+
+**Perf watch:** every local in the open file's whole import closure is now indexed, on top of the
+per-keystroke reparse. A real multi-import stdlib file measures ~0.25 s end to end — the same order as
+before, since parsing dominates. This is M5 (incremental) territory; if it ever needs a quick lever, skip
+recording when `_refUnit == _preludeUnit`.
+
+---
+
+## ⚠️ Campaign-exit checklist — the remaining STAMP_LOC sites
+
+**User requirement (2026-07-27): these must be closed before the LSP campaign ends.** Each is a
+production that builds an `IdentifierNode` mid-action and therefore inherits its whole production's span.
+None is reachable by rename *today*, which is why they were not part of M3.4 — but every one of them
+becomes a silent bad-rewrite the moment its symbol kind is indexed, so treat this as a correctness debt,
+not a cosmetic one. The fix is mechanical (`STAMP_LOC(<the name node>, @N)`; where `%type` is a base
+handle, restructure to `auto v = …; STAMP_LOC(v->name, @N); $$ = v;`).
+
+| kama.y | production | name token |
+|---|---|---|
+| 351 | `using_declaration : IDENTIFIER AS IDENTIFIER` | `@1` (name) **and** `@3` (alias) |
+| 578 | `type_decl_head : IDENTIFIER LT type_param_list GT` (rule head 576) | `@1` |
+| 620 | `friend_member_list COMMA IDENTIFIER` | `@3` |
+| 721-723 | `type_param`, three arms (rule head 720) | `@1`, `@1`, `@2` |
+| 1067 / 1073 / 1083 / 1164 | turbofish + `new`-turbofish method names | `@3` / `@3` / `@3` / `@4` |
+| 1092 | `generic_turbofish_name : IDENTIFIER COLONCOLON LT … GT` (head 1091) | `@1` |
+| 1107-1109 | named-argument labels (`ArgumentNode::name`) | `@1` |
+| 1129 / 1131 | attribute-argument labels | `@1` |
+| 1157 / 1159 / 1160 / 1166 | `ObjectCreationNode::ctorName` (named ctors) | `@5` / `@4` / `@7` / `@4` |
+| 1318+ | `when_cond_list` params and bounds (rule head 1314) | various |
+| 1422 / 1424 / 1425 | operator-declarator parameter names (head 1414/1421) | `@8` / `@6` / `@6`+`@9` |
+| 1461 | `constructor_declarator : IDENTIFIER LPAREN …` (head 1460) | `@1` |
+| 1475 | `destructor_declaration : modifiers_opt TILDE IDENTIFIER …` (head 1474) | `@3` |
+
+Line numbers verified against `91e27a3`. Two entries are **not** just span polish: named-argument labels
+(1107-1109) name the callee's *parameter*, so indexing them is what would let renaming a parameter update
+its call sites — real M4/M5 functionality, impossible today. `when_cond_list` (1318+) pushes identifiers
+straight into a list with no field to reach, so it needs restructuring, not just a stamp.
 
 ---
 

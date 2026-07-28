@@ -67,12 +67,29 @@ ROADMAP §10 before designing.**
     set is only what the open file transitively imports — a file that imports *this* symbol without being
     imported back is invisible, so a cross-file rewrite could silently break an unseen caller. Rename
     refuses with an explanatory error instead of half-rewriting. **M3.5 lifts this** (see below).
-- **NEXT: M3.4 — locals / params / fields / enum members.** The tables retain no per-local/param/field decl
-  node (hence no span); this milestone adds those def-sites + scope-lifetime handling. Most references in
-  real code are locals, and a local can never escape its file, so rename is always safe for them under the
-  existing guard. Then **M3.5 — workspace indexing** (a project-wide unit set +
-  `workspace/didChangeWatchedFiles`), which makes cross-file rename safe and lifts the M3.3 guard.
-  Cold-start brief: [lsp-m3-kickoff.md](lsp-m3-kickoff.md).
+- **M3.4 — locals / params / fields / enum members. ✅ DONE (`91e27a3`).** The kinds users touch most.
+  Two halves. **(1) A grammar span pass, which was a data-loss fix, not polish:** `YYLLOC_DEFAULT` gives an
+  identifier built mid-action its whole *production's* span, and rename REPLACES the range it is handed —
+  so renaming `int32 seeded = 7` would have rewritten `seeded = 7`, and `Code::Ok` would have lost its
+  qualifier. `STAMP_LOC` now narrows declarators, const declarators, enum members, parameters, the four
+  member-access arms, `foreach`/`parallel_for` loop variables, `base.field`, the `Ns::Name` use production
+  and the generic `Name<A, B>` arm — the last three of which shipped rename already depended on.
+  **(2) Index plumbing reusing the M3.1 machinery**, not a second index: bindings have no table entry to
+  key on, so `recordDef`/`_localDefs` mirror `recordRef`/`_bodyRefs` and materialize in `buildDefSites`.
+  Keys are prefixed into an index-only namespace (`local:<file>:<line>:<col>:<name>`, `field:…`, `enum:…`);
+  keying a binding by its **declaration site** is what makes two same-named locals in sibling scopes
+  distinct symbols. `Scope` gained an analysis-only `indexDecls` vector *parallel* to `declaredNames`
+  rather than changing that vector's type — `declaredNames` drives the shadowing rules and deliberately
+  omits `foreach`/`match` bindings, which the index wants. `MatchArmNode` gained
+  `variantId`/`bindingIds` alongside its existing strings, so a `case Ok:` arm is a real reference (without
+  it, renaming an enum member produced code that no longer compiles). Locals and params are indexed but
+  filtered out of `documentSymbols`; fields and enum members appear. Emission byte-identical; native
+  794/794, container 794/794, ASan/UBSan 765/765; harnesses +39 assertions, including exact
+  `prepareRename` ranges per kind as the data-loss guard.
+- **NEXT: M3.5 — workspace indexing** (a project-wide unit set + `workspace/didChangeWatchedFiles`), which
+  makes cross-file rename safe and lifts the M3.3 guard. Cold-start brief:
+  [lsp-m3-kickoff.md](lsp-m3-kickoff.md) — which also carries the **campaign-exit checklist** of the
+  remaining mid-action identifier productions whose spans are still whole-production.
 
 ## Why (from the ROADMAP)
 

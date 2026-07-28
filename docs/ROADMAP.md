@@ -527,16 +527,18 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   deferred. (What ships today in `editor/vscode/`: TextMate **syntax highlighting** + language-configuration
   + **zero-config source-level debugging** — F5 builds and launches under CodeLLDB with breakpoints mapped
   back to the `.kama` via the emitter's `#line` directives. Missing pieces are the two below.)
-- **Language server (LSP) — the major editor gap; the CONFIRMED next-highest post-1.0 priority** (user,
-  2026-07-26 — see the §1 post-1.0 sequence). No completion, hover, go-to-definition, find-references, rename, or
-  live (as-you-type) diagnostics today — the extension is highlighting + debugging only, with no language server.
-  An LSP is the piece that turns kama into a first-class IDE experience and is the **prerequisite for the
-  `global::` floor-completion idea** ([design/logging.md](design/logging.md) Part E). Sizeable: needs a reusable
-  semantic front end (the Flex/Bison/AST + name resolution the compiler already has, exposed as a **query API**
-  rather than a one-shot emit) — and this is the natural moment to add real **source spans** (`%locations`, so
-  far deferred *to* the LSP; a hand-written recursive-descent parser replacing Bison would also buy error-recovery
-  + incremental reparse). That front-end-as-library refactor is also groundwork the scripting/self-hosting tracks
-  reuse. Not 1.0-blocking, but load-bearing for adoption once launched.
+- **Language server (LSP) — IN PROGRESS, the CONFIRMED next-highest post-1.0 priority** (user, 2026-07-26 —
+  see the §1 post-1.0 sequence). **Shipped through M3.4:** `kama lsp` (a JSON-RPC/stdio subcommand) serving
+  live as-you-type diagnostics, hover, go-to-definition, document outline, find-references and rename —
+  the last two now covering locals, parameters, fields and enum members as well as types and functions.
+  Real **source spans** landed with it (Bison `%locations`, deferred until now), as did the
+  front-end-as-library **query API** the scripting/self-hosting tracks reuse: `collectProgram` turned out to
+  be a self-contained analysis pass already, so this was a facade over the existing tables rather than a
+  rewrite. **Remaining:** M3.5 workspace indexing (lifts the cross-file rename guard), M4 completion +
+  signature help (the **prerequisite for the `global::` floor-completion idea**,
+  [design/logging.md](design/logging.md) Part E), M5 error recovery + incremental reparse (where a
+  hand-written recursive-descent parser replacing Bison would be the escalation), M6 clients for all major
+  editors. Status of record: [design/lsp.md](design/lsp.md).
 - **kama-aware debugger value formatting — polish on the working debugger.** Breakpoints/stepping are already
   kama-source-level, but inspected values render in their emitted-C form (a `string` shows as
   `kama_string {data,len,cap}`, `Optional<T>` as its tagged union, collections as C structs). Add LLDB type
