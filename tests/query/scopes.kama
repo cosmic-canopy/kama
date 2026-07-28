@@ -1,0 +1,46 @@
+// LSP M3.4 fixture (locals / params / fields / enum members) — exercised by tools/check-query.sh once
+// M3.4 lands. NOT scanned by the main run_tests loop (that reads tests/*.kama, tests/*.d, tests/xfail).
+//
+// Deliberately covers every span shape the AST gets right or wrong today (measured 2026-07-27, see
+// docs/design/lsp-m3-kickoff.md "The grammar prerequisite"): a name is precise ONLY when its production
+// is the bare IDENTIFIER token. So each kind appears BOTH with and without an initializer/value, and
+// `shadow` is declared twice in sibling scopes so keys must be per-declaration, not per-name.
+//
+// Positions are asserted by the harness — keep the layout stable.
+namespace scopes;
+
+enum Code {
+    Ok,          // no value  -> name span already precise
+    Bad = 2      // `= value` -> end span currently swallows the value
+}
+
+type value Cfg {
+    public int32 limit;        // no initializer -> precise
+    public int32 scale = 3;    // initializer    -> end span currently swallows `= 3`
+
+    public fn int32 scaled(int32 bias) {   // `bias` is a PARAM: both ends currently wrong
+        return this.limit * this.scale + bias;   // `limit`/`scale` are field USES via MemberAccessNode
+    }
+}
+
+fn int32 tally(int32 first, int32 second) {
+    int32 plain;                      // no initializer -> precise
+    int32 seeded = first + second;    // initializer -> end span currently swallows the initializer
+    plain = seeded + first;
+    return plain;
+}
+
+// Two `shadow` locals in SIBLING scopes: distinct symbols. Find-references on either must return only
+// its own uses, and renaming one must not touch the other.
+fn int32 shadowing(int32 n) {
+    int32 acc = 0;
+    {
+        int32 shadow = n + 1;
+        acc = acc + shadow;
+    }
+    {
+        int32 shadow = n + 2;
+        acc = acc + shadow;
+    }
+    return acc;
+}

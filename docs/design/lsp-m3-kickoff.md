@@ -206,7 +206,10 @@ What already exists and should be reused:
 What must be built:
 1. **`Scope::declaredNames` is `std::vector<std::string>` — strings only, no position and no key.** It has
    to carry the declaring `IdentifierNode*` (or a synthesized declKey) so a use can be tied to *which*
-   declaration. This is the one intrusive change; `Scope` is at [kama.cemit.h:650](../kama.cemit.h).
+   declaration. This is the one intrusive change; `struct Scope` is at
+   [kama.cemit.h:673](../kama.cemit.h), the stack `_scopes` at [kama.cemit.h:685](../kama.cemit.h).
+   ⚠️ `declaredNames` is read by `findScopeDeclaring` and by the enclosing-scope walk at
+   [kama.cemit.cpp:2053](../kama.cemit.cpp) — update both readers with the type.
 2. **Synthetic keys must handle SHADOWING.** Two locals named `i` in sibling scopes are different symbols
    and must not merge. Key on the declaration site, e.g. `local:<fnKey>:<name>@<line>:<col>` — unique by
    construction, and the scope entry carries it so uses resolve to the right one.
@@ -225,24 +228,57 @@ the grammar fix.
 
 `YYLLOC_DEFAULT` ([kama.y:22-45](../kama.y)) stamps each rule's `@$` into the CodeGenContext, and the
 `ASTNode(context)` ctor picks it up. So **an IdentifierNode built mid-action from a raw `IDENTIFIER` token
-gets its CONTAINER's span, not the name's own span** — the header comment says exactly this, and
+inherits its WHOLE PRODUCTION's span, not the name's own** — the header comment says exactly this, and
 `STAMP_LOC` ([kama.y:48](../kama.y)) is the fix. Today STAMP_LOC is applied **only at function / method /
 ctor name sites** (kama.y:635, 642, 648, 665, 684, 1359-1362, 1443, 1445).
 
-Audited for M3.4:
-- **Local declarators — probably already correct, VERIFY FIRST.** `variable_declarator : IDENTIFIER`
-  (kama.y ~:772) is a **single-token rule**, so `@$` *is* the token's span and the name node should get a
-  precise range with no change. Confirm empirically before assuming it.
-- **Parameters — BROKEN, needs STAMP_LOC.** `parameter : const_opt hardware_opt parameter_modifier_opt
-  type IDENTIFIER` — `@$` spans the whole parameter, so the name node currently reports the parameter's
-  start. Needs `STAMP_LOC(<the name id>, @5)`.
-- **Member access — BROKEN, needs STAMP_LOC.** Every `MemberAccessNode` production builds its name node
-  mid-action: kama.y:430, **1034, 1035, 1036**. Each needs `STAMP_LOC(..., @3)`.
-- **Class fields / enum members** — audit the same way before building on their spans.
+**MEASURED, not reasoned** (2026-07-27, via a throwaway probe over a fixture covering all four kinds).
+The rule that falls out: *a name's span is correct only when its production is the bare `IDENTIFIER`
+token.* It gets a **wrong end** when the name LEADS a multi-symbol rule, and a **wrong start** when it
+TRAILS one:
+
+| kind | production | measured | needs STAMP_LOC |
+|---|---|---|---|
+| enum member, no value | `IDENTIFIER` | `Red` → 3:13..3:16 ✅ exact | no |
+| enum member `= v` | `IDENTIFIER EQ const_expr` | `Ok` → 3:12..**3:18** (swallows `= 1`) | **yes, @1** |
+| field, no initializer | `variable_declarator: IDENTIFIER` | `limit` → 6:17..6:22 ✅ exact | no |
+| field/local `= init` | `IDENTIFIER EQ initializer` | `seeded` → 13:10..**13:20** (swallows `= 7`) | **yes, @1** |
+| local, no initializer | `IDENTIFIER` | `plain` → 12:10..12:15 ✅ exact | no |
+| **parameter** | `… type IDENTIFIER` | `bias` → **8:24**..8:34 (starts at the TYPE) | **yes, @5** |
+| **member access** | `primary DOT IDENTIFIER` | `limit` → **14:28**..14:35 (starts at the receiver) | **yes, @3** |
+
+🔴 **This is a data-loss bug if M3.4 ships without the fix, not a cosmetic one.** Rename REPLACES the
+range, so renaming a local declared `int32 seeded = 7;` would rewrite `seeded = 7` → `newName`, silently
+eating the initializer. Land the STAMP_LOC changes and assert the ranges BEFORE wiring rename to any of
+these symbol kinds.
+
+Exact sites to fix (verified 2026-07-27):
+
+| kama.y | rule | fix |
+|---|---|---|
+| **773** | `variable_declarator : IDENTIFIER EQ variable_initializer` | `STAMP_LOC(<name>, @1)` |
+| **791** | `constant_declarator : IDENTIFIER EQ constant_expression` | `STAMP_LOC(<name>, @1)` |
+| **1531** | `enum_member_declaration : IDENTIFIER EQ constant_expression` | `STAMP_LOC(m->identifier, @1)` |
+| **1532** | `enum_member_declaration : IDENTIFIER LPAREN parameter_list RPAREN` (tagged variant) | `STAMP_LOC(m->identifier, @1)` |
+| **744** | `parameter : const_opt hardware_opt parameter_modifier_opt type IDENTIFIER` | `STAMP_LOC(p->identifier, @5)` |
+| **430, 1034, 1035, 1036** | the `MemberAccessNode` productions | `STAMP_LOC(<name>, @3)` |
+
+Lines 772 (`variable_declarator : IDENTIFIER`), 792 (`constant_declarator : IDENTIFIER`) and 1530
+(`enum_member_declaration : IDENTIFIER`) are the single-token arms — already correct, leave them alone.
+Note 773/791 build the node inline as a ctor argument, so the STAMP_LOC needs a named local (or reach it
+back off the constructed declarator, e.g. `STAMP_LOC($$->name, @1)`).
 
 ⚠️ Recall the grammar trap from the MCU campaign: **every `_opt` rule MUST set `$$`** (an empty rule with
 no `$$ =` yields garbage). Touching these rules re-runs bison; `tools/check-syntax-drift.sh` guards the
 keyword/highlighter side.
+
+## Fixture is already in place
+
+**`tests/query/scopes.kama`** was written for this milestone and compiles clean today. It covers every
+row of the table above — each kind BOTH with and without an initializer/value — plus **two `shadow`
+locals in sibling scopes**, so the per-declaration keying requirement is exercised (find-references on
+one must not return the other's uses, and renaming one must not touch the other). ⚠️ `out` is a RESERVED
+KEYWORD (it broke the first draft of this fixture); the shadowing accumulator is named `acc`.
 
 ## Rename note
 
