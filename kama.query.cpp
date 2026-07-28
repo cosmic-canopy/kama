@@ -16,6 +16,7 @@
 #include "kama.cemit.h"
 #include "kama.ast.h"
 
+#include <cctype>
 #include <set>
 
 // ---- SrcRange / SymKind helpers -------------------------------------------------------------------------
@@ -59,6 +60,289 @@ const char* symKindName(SymKind k)
         case SymKind::Param:       return "param";
     }
     return "symbol";
+}
+
+// ---- M4: the lexical layer ------------------------------------------------------------------------------
+//
+// A completion request arrives while the buffer is mid-edit and therefore usually does NOT parse — kama.y has
+// no error productions, so there is no partial AST to interrogate, in this index or any other. Everything the
+// cursor's CONTEXT depends on (what is left of the dot, which argument slot we are in, what has been typed so
+// far) is recovered here, from raw text, and handed to the semantic layer as data. See kama.query.h.
+
+const char* completionTriggerName(CompletionTrigger t)
+{
+    switch (t) {
+        case CompletionTrigger::Bare:         return "bare";
+        case CompletionTrigger::Dot:          return "dot";
+        case CompletionTrigger::Scope:        return "scope";
+        case CompletionTrigger::ArgLabel:     return "arg-label";
+        case CompletionTrigger::ImportPath:   return "import-path";
+        case CompletionTrigger::ImportSymbol: return "import-symbol";
+    }
+    return "bare";
+}
+
+const char* completionKindName(CompletionKind k)
+{
+    switch (k) {
+        case CompletionKind::Field:      return "field";
+        case CompletionKind::Method:     return "method";
+        case CompletionKind::Ctor:       return "ctor";
+        case CompletionKind::Variant:    return "variant";
+        case CompletionKind::EnumMember: return "enum-member";
+        case CompletionKind::Type:       return "type";
+        case CompletionKind::Contract:   return "contract";
+        case CompletionKind::Function:   return "function";
+        case CompletionKind::Local:      return "local";
+        case CompletionKind::Param:      return "param";
+        case CompletionKind::Label:      return "label";
+        case CompletionKind::Keyword:    return "keyword";
+        case CompletionKind::Module:     return "module";
+        case CompletionKind::Namespace:  return "namespace";
+    }
+    return "symbol";
+}
+
+namespace {
+
+const size_t kNpos = std::string::npos;
+
+inline bool identStart(char c) { return isalpha((unsigned char)c) || c == '_'; }
+inline bool identChar(char c)  { return isalnum((unsigned char)c) || c == '_'; }
+inline bool spaceChar(char c)  { return isspace((unsigned char)c) != 0; }
+
+// Blank every byte that is not CODE: string and char literal bodies (delimiters included) and comments become
+// spaces, newlines are preserved, so every offset in `out` still names the same source position. `${…}`
+// interpolation holes stay CODE — they hold ordinary expressions, and completing inside one is as useful as
+// anywhere else. Walks only as far as the cursor; returns false if the cursor itself landed in a literal or a
+// comment, where there is nothing to complete.
+//
+// Block comments do NOT nest (the lexer's IN_COMMENT state has no re-entry rule for `/*`), so a flat state
+// machine is faithful, not an approximation.
+bool sanitizePrefix(const std::string& text, size_t upto, std::string& out)
+{
+    enum class S { Code, Line, Block, RegStr, VerbStr, ChrLit };
+    S st = S::Code;
+    std::vector<int> holes;          // brace depth inside each open `${…}`; non-empty => we are in a hole
+    out.assign(upto, ' ');
+    for (size_t i = 0; i < upto; ) {
+        char c = text[i];
+        char d = (i + 1 < text.size()) ? text[i + 1] : '\0';
+        if (c == '\n') { out[i] = '\n'; if (st == S::Line) st = S::Code; ++i; continue; }
+        switch (st) {
+            case S::Code:
+                if (c == '/' && d == '/') { st = S::Line;  i += 2; continue; }
+                if (c == '/' && d == '*') { st = S::Block; i += 2; continue; }
+                if (c == '@' && d == '"') { st = S::VerbStr; i += 2; continue; }
+                if (c == '"')             { st = S::RegStr;  ++i;   continue; }
+                if (c == '\'')            { st = S::ChrLit;  ++i;   continue; }
+                if (!holes.empty()) {
+                    if (c == '{') ++holes.back();
+                    else if (c == '}') {
+                        if (holes.back() == 0) { holes.pop_back(); st = S::RegStr; ++i; continue; }
+                        --holes.back();
+                    }
+                }
+                out[i] = c; ++i; continue;
+            case S::Line:  ++i; continue;
+            case S::Block: if (c == '*' && d == '/') { st = S::Code; i += 2; continue; } ++i; continue;
+            case S::RegStr:
+                if (c == '\\')            { i += 2; continue; }
+                if (c == '$' && d == '{') { holes.push_back(0); st = S::Code; i += 2; continue; }
+                if (c == '"')             { st = S::Code; ++i; continue; }
+                ++i; continue;
+            case S::VerbStr:
+                if (c == '"' && d == '"') { i += 2; continue; }   // `""` is an escaped quote, not the end
+                if (c == '"')             { st = S::Code; ++i; continue; }
+                ++i; continue;
+            case S::ChrLit:
+                if (c == '\\')  { i += 2; continue; }
+                if (c == '\'')  { st = S::Code; ++i; continue; }
+                ++i; continue;
+        }
+    }
+    return st == S::Code;
+}
+
+size_t skipWsBack(const std::string& s, size_t i) { while (i > 0 && spaceChar(s[i - 1])) --i; return i; }
+
+// Index OF the opener matching the closer at s[i-1]. kNpos if unbalanced.
+size_t matchOpenBack(const std::string& s, size_t i)
+{
+    char close = s[i - 1];
+    char open  = (close == ')') ? '(' : (close == ']') ? '[' : '{';
+    int depth = 0;
+    for (size_t j = i; j > 0; --j) {
+        char c = s[j - 1];
+        if (c == close) ++depth;
+        else if (c == open && --depth == 0) return j - 1;
+    }
+    return kNpos;
+}
+
+// Scan a CANONICALIZED path backwards from `end`: whitespace squeezed out, every call/index group reduced to a
+// bare `()` / `[]` suffix, `.` and `::` separators preserved (they mean different things to the resolver). So
+// `  foo(a: 1) . bar ` arrives as `foo().bar`. Returns false when what precedes is not a path at all — a
+// numeric literal (`1.5`), a turbofish (we deliberately do not balance `<>`), or nothing.
+bool scanPathBack(const std::string& s, size_t end, std::string& path)
+{
+    std::vector<std::string> parts;   // segments and separators, collected right-to-left
+    size_t pos = end;
+    for (;;) {
+        pos = skipWsBack(s, pos);
+        std::string suffix;
+        while (pos > 0 && (s[pos - 1] == ')' || s[pos - 1] == ']')) {
+            char close = s[pos - 1];
+            size_t open = matchOpenBack(s, pos);
+            if (open == kNpos) return false;
+            suffix = (close == ')' ? "()" : "[]") + suffix;
+            pos = skipWsBack(s, open);
+        }
+        size_t e = pos;
+        while (pos > 0 && identChar(s[pos - 1])) --pos;
+        if (pos == e || !identStart(s[pos])) return false;
+        parts.push_back(s.substr(pos, e - pos) + suffix);
+        size_t p = skipWsBack(s, pos);
+        if (p >= 2 && s[p - 1] == ':' && s[p - 2] == ':') { parts.push_back("::"); pos = p - 2; continue; }
+        if (p >= 1 && s[p - 1] == '.')                    { parts.push_back(".");  pos = p - 1; continue; }
+        break;
+    }
+    path.clear();
+    for (auto it = parts.rbegin(); it != parts.rend(); ++it) path += *it;
+    return true;
+}
+
+// The innermost UNCLOSED opener before `from`, with its kind. kNpos if the cursor is at top level.
+size_t innermostOpen(const std::string& s, size_t from, char& kind)
+{
+    int depth = 0;
+    for (size_t i = from; i > 0; --i) {
+        char c = s[i - 1];
+        if (c == ')' || c == ']' || c == '}') { ++depth; continue; }
+        if (c == '(' || c == '[' || c == '{') {
+            if (depth == 0) { kind = c; return i - 1; }
+            --depth;
+        }
+    }
+    return kNpos;
+}
+
+// Walk an argument list forwards from its opener, counting TOP-LEVEL commas (the active slot) and collecting
+// the `label:` spellings already supplied, so they can be filtered out of the suggestions.
+void scanArgList(const std::string& s, size_t open, size_t cursor,
+                 int& active, std::vector<std::string>& filled, bool& slotHasColon)
+{
+    int depth = 0;
+    active = 0;
+    slotHasColon = false;
+    size_t slotStart = open + 1;
+    for (size_t i = open + 1; i < cursor; ++i) {
+        char c = s[i];
+        if (c == '(' || c == '[' || c == '{') { ++depth; continue; }
+        if (c == ')' || c == ']' || c == '}') { --depth; continue; }
+        if (depth != 0) continue;
+        if (c == ',') { ++active; slotStart = i + 1; slotHasColon = false; continue; }
+        if (c != ':') continue;
+        if (s[i + 1] == ':') { ++i; continue; }                  // `::` is a qualifier, not a label
+        if (slotHasColon) continue;                              // a later `:` is a ternary arm, not the label
+        slotHasColon = true;
+        size_t e = i;      while (e > slotStart && spaceChar(s[e - 1])) --e;
+        size_t b = e;      while (b > slotStart && identChar(s[b - 1])) --b;
+        if (b < e && identStart(s[b])) filled.push_back(s.substr(b, e - b));
+    }
+}
+
+size_t lineStartOf(const std::string& s, size_t pos)
+{
+    if (pos == 0) return 0;
+    size_t nl = s.rfind('\n', pos - 1);
+    return nl == kNpos ? 0 : nl + 1;
+}
+
+bool lineOpensImport(const std::string& s, size_t lineStart)
+{
+    size_t i = lineStart;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+    if (s.compare(i, 6, "import") != 0) return false;
+    return i + 6 >= s.size() || !identChar(s[i + 6]);
+}
+
+}  // namespace
+
+CompletionContext completionContextAt(const std::string& text, int line, int col)
+{
+    CompletionContext ctx;
+    ctx.line = line;
+    ctx.column = col;
+
+    // (1) cursor byte offset. Line is 1-based, column 0-based (the convention kamaPos and lspRange establish);
+    // both are clamped, since an editor can ask about a position the buffer no longer has.
+    size_t off = 0;
+    for (int cur = 1; cur < line; ++cur) {
+        size_t nl = text.find('\n', off);
+        if (nl == kNpos) { off = text.size(); break; }
+        off = nl + 1;
+    }
+    size_t eol = text.find('\n', off);
+    if (eol == kNpos) eol = text.size();
+    size_t cursor = off + (size_t)(col > 0 ? col : 0);
+    if (cursor > eol) cursor = eol;
+
+    // (2) blank out literals and comments — nothing to complete inside one.
+    std::string code;
+    if (!sanitizePrefix(text, cursor, code)) return ctx;
+
+    // (3) the identifier characters already typed. A run starting with a digit is a numeric literal, not a
+    // partially-typed name, so there is nothing to complete.
+    size_t pstart = cursor;
+    while (pstart > 0 && identChar(code[pstart - 1])) --pstart;
+    if (pstart < cursor && !identStart(code[pstart])) return ctx;
+    ctx.prefix = code.substr(pstart, cursor - pstart);
+
+    // (4) enclosing bracket. A call gives the callee and the active slot for signature help, regardless of
+    // which trigger we end up reporting; a brace may be an import's symbol list.
+    char openKind = '\0';
+    size_t open = innermostOpen(code, pstart, openKind);
+    bool slotHasColon = false;
+    // A `(` with no path in front of it is a GROUPING paren, not a call — do not report an argument slot for
+    // it, or `(a == b)` would look like a one-argument call to signature help.
+    if (open != kNpos && openKind == '(' && scanPathBack(code, open, ctx.callee))
+        scanArgList(code, open, cursor, ctx.activeParam, ctx.filled, slotHasColon);
+
+    // (5) imports first: `import std::coll` would otherwise read as a Scope trigger on a type named `std`.
+    if (open != kNpos && openKind == '{' && lineOpensImport(code, lineStartOf(code, open))) {
+        ctx.trigger = CompletionTrigger::ImportSymbol;
+        size_t q = skipWsBack(code, open);
+        if (q >= 2 && code[q - 1] == ':' && code[q - 2] == ':') scanPathBack(code, q - 2, ctx.receiver);
+        ctx.filled.clear();
+        for (size_t i = open + 1, b = i; i <= cursor; ++i) {         // the symbols already listed
+            if (i < cursor && identChar(code[i])) continue;
+            if (b < i && identStart(code[b]) && !(i == cursor && b == pstart)) ctx.filled.push_back(code.substr(b, i - b));
+            b = i + 1;
+        }
+        return ctx;
+    }
+    if (lineOpensImport(code, lineStartOf(code, cursor))) {
+        ctx.trigger = CompletionTrigger::ImportPath;
+        size_t q = skipWsBack(code, pstart);
+        if (q >= 2 && code[q - 1] == ':' && code[q - 2] == ':') scanPathBack(code, q - 2, ctx.receiver);
+        return ctx;
+    }
+
+    // (6) member access. Whitespace between the operator and the cursor is legal kama and is tolerated here.
+    size_t k = skipWsBack(code, pstart);
+    if (k >= 2 && code[k - 1] == ':' && code[k - 2] == ':') {
+        if (scanPathBack(code, k - 2, ctx.receiver)) { ctx.trigger = CompletionTrigger::Scope; return ctx; }
+    } else if (k >= 1 && code[k - 1] == '.') {
+        if (scanPathBack(code, k - 1, ctx.receiver)) { ctx.trigger = CompletionTrigger::Dot; return ctx; }
+    }
+
+    // (7) an argument slot with no label yet. Every argument in kama is named, so this is the only thing that
+    // can go here — ranking it above the bare-name fallback is what makes `f(` useful.
+    if (open != kNpos && openKind == '(' && !slotHasColon && !ctx.callee.empty())
+        ctx.trigger = CompletionTrigger::ArgLabel;
+
+    return ctx;
 }
 
 // ---- span extraction ------------------------------------------------------------------------------------

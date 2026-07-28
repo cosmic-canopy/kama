@@ -1,0 +1,132 @@
+// LSP completion fixture (M4) — exercised by tools/check-query.sh, NOT the main run_tests loop.
+//
+// Cursor positions are asserted by line:column, so KEEP THE LAYOUT STABLE and APPEND rather than insert.
+// The trick that makes this work: every probe points at a cursor position INSIDE otherwise-valid source
+// (the column of the character just after a `.`, or just inside a `(`), so the file still parses, analyzes
+// clean, and the index is real — while the lexical scan sees exactly what it would see in a half-typed
+// buffer. That is why this fixture must stay free of diagnostics: run `kama check` on it after any edit.
+//
+// Coverage, in order: the block-bearing statement kinds (the collectBindings under-cover guard — a local
+// declared in each of Block / If / Else / While / DoWhile / For / ForEach / Unsafe / Scope / match arm),
+// inheritance + visibility, a smart-pointer receiver, a generic-instance receiver, a generic type-param
+// receiver, chained and call/index receivers, and the literal/comment suppression cases.
+namespace completeprobe;
+
+import std::collections::{DynamicArray};
+
+type contract Sized for both { fn int32 size(); }
+
+type value Cell implements Sized {
+    public int32 value;
+    private int32 secret;
+    public fn int32 size() { return this.value; }
+    public fn int32 doubled() { return this.value * 2; }
+}
+
+type virtual resource Base {
+    int32 shared;
+    int32 hidden;
+    public ctor make() { Base b; return give b; }
+    protected virtual fn int32 baseOnly() { return this.shared; }
+}
+
+type final resource Derived extends Base {
+    int32 own;
+    public ctor make() { Derived d; return give d; }
+    public fn int32 total() { return this.own + this.baseOnly(); }
+}
+
+type value Holder {
+    public Cell cell;
+    public fn Cell get() { return this.cell; }
+}
+
+type resource Node {
+    int32 tag;
+    public ctor make(int32 tag) { Node n; n.tag = tag; return give n; }
+    public fn int32 read() { return this.tag; }
+}
+
+enum Level { Low, High }
+
+fn int32 measure<T: Sized>(T item) {
+    return item.size();
+}
+
+fn int32 blend(int32 lo, int32 hi) { return lo + hi; }
+
+fn Holder makeHolder() { Holder h; return h; }
+
+fn int32 statements(int32 n) {
+    int32 inBlock = 1;
+    {
+        int32 inNested = 2;
+        inBlock = inBlock + inNested;
+    }
+    if (n > 0) {
+        int32 inThen = 3;
+        inBlock = inBlock + inThen;
+    } else {
+        int32 inElse = 4;
+        inBlock = inBlock + inElse;
+    }
+    while (inBlock < 5) {
+        int32 inWhile = 5;
+        inBlock = inBlock + inWhile;
+    }
+    do {
+        int32 inDo = 6;
+        inBlock = inBlock + inDo;
+    } while (inBlock < 0);
+    for (int32 i = 0; i < 2; i = i + 1) {
+        int32 inFor = 7;
+        inBlock = inBlock + inFor;
+    }
+    DynamicArray<int32> nums;
+    nums.add(item: 8);
+    foreach (int32 each in nums) {
+        int32 inForeach = 9;
+        inBlock = inBlock + each + inForeach;
+    }
+    unsafe {
+        int32 inUnsafe = 10;
+        inBlock = inBlock + inUnsafe;
+    }
+    scope {
+        int32 inScope = 11;
+        inBlock = inBlock + inScope;
+    }
+    Optional<int32> maybe = Optional::Some(value: 12);
+    int32 fromMatch = match (maybe) { case Some(bound): bound; case None: 0; };
+    return inBlock + fromMatch;
+}
+
+fn int32 receivers() {
+    Cell c;
+    c.value = 1;
+    int32 direct = c.value + c.doubled();
+    Holder h;
+    int32 chained = h.cell.value;
+    int32 viaCall = makeHolder().cell.value;
+    DynamicArray<Cell> cells;
+    cells.add(item: c);
+    int32 viaIndex = cells[0].value;
+    Owned<Node> owned = new Node.make(tag: 2);
+    int32 viaOwned = owned.read();
+    Owned<Derived> derived = new Derived.make();
+    int32 inherited = derived.total();
+    int32 labelled = blend(lo: 3, hi: 4);
+    string text = "c.value is not code";
+    string held = "interp ${c.value} hole";
+    // comment c.value is not code either
+    /* block c.value is not code either */
+    char ch = 'c';
+    return direct + chained + viaCall + viaIndex + viaOwned + inherited + labelled;
+}
+
+fn int32 main() {
+    Cell c;
+    c.value = 5;
+    int32 lvl = (Level::High == Level::Low) ? 1 : 0;
+    return statements(n: 1) + receivers() + measure(item: c) + lvl;
+}

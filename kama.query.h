@@ -2,6 +2,7 @@
 #define __KAMA_QUERY_H__
 
 #include <string>
+#include <vector>
 #include "kama.forward.h"
 
 // LSP / front-end-as-library query surface (M0 T4/T5). Framework-free, LSP-shaped value types that the
@@ -53,5 +54,61 @@ struct Location   { std::string uri; SrcRange range; };
 // asked about) but load-bearing for workspaceSymbols, whose results span the project.
 struct SymbolInfo { std::string name; SymKind kind; SrcRange range, selectionRange; std::string container;
                     std::string uri; };
+
+// ---- completion + signature help (M4) --------------------------------------------------------------------
+//
+// What the cursor sits after, decided by a purely LEXICAL scan of the buffer — never by looking the position
+// up in the index. That is not a shortcut, it is the only thing that can work: kama.y has NO error
+// productions, so a buffer being completed into (`p.`, `f(a: 1, `) does not parse at all, and the AST in the
+// server's last-good index therefore PREDATES the receiver the user just typed. Asking the index "what node
+// is at this cursor" would be asking it to find something provably absent.
+
+enum class CompletionTrigger {
+    Bare,           // a bare identifier position — names in scope, types, keywords
+    Dot,            // after `recv.`   — instance members (or a type's ctors)
+    Scope,          // after `recv::`  — enum members, statics, namespace symbols
+    ArgLabel,       // inside a call's argument list, in a slot with no `label:` yet — kama args are ALL named
+    ImportPath,     // inside `import a::b|` — a module path segment
+    ImportSymbol,   // inside `import a::b::{X, |}` — a symbol exported by that module
+};
+const char* completionTriggerName(CompletionTrigger t);   // stable lowercase tag, mirrors symKindName
+
+// The lexical facts recovered at the cursor. `receiver` and `callee` are CANONICALIZED paths: whitespace
+// squeezed out, and any call/index group reduced to a bare `()` / `[]` suffix, so `foo(a: 1).bar` arrives as
+// `foo().bar`. Separators (`.` vs `::`) are preserved — they mean different things to the resolver.
+struct CompletionContext {
+    CompletionTrigger        trigger = CompletionTrigger::Bare;
+    std::string              receiver;    // path left of a Dot/Scope trigger, or the module path of an Import
+    std::string              callee;      // path left of the innermost UNCLOSED `(` — "" if not inside a call
+    std::string              prefix;      // identifier characters already typed at the cursor
+    std::vector<std::string> filled;      // argument labels / import symbols already supplied (filter them out)
+    int                      activeParam = -1;      // 0-based argument slot within `callee`, -1 if not in a call
+    int                      line = 0, column = 0;  // kama coords: line 1-based, column 0-based
+};
+
+// Recover the lexical context at (line, col) in raw buffer text. Skips string literals, char literals and
+// comments — but DESCENDS into `${…}` interpolation holes, which are ordinary code. Deliberately does not
+// balance `<` `>` (ambiguous with less-than). Total: an unrecognizable position yields Bare with an empty
+// prefix, and a cursor inside a literal or comment yields Bare with everything empty.
+//
+// Lives here rather than in the LSP server so `kama query --complete` and `textDocument/completion` share one
+// scan and can never drift — the same single-source-of-truth reasoning that put kamaIsKeyword in the lexer.
+CompletionContext completionContextAt(const std::string& text, int line, int col);
+
+enum class CompletionKind { Field, Method, Ctor, Variant, EnumMember, Type, Contract,
+                            Function, Local, Param, Label, Keyword, Module, Namespace };
+const char* completionKindName(CompletionKind k);   // stable lowercase tag, mirrors symKindName
+
+struct CompletionItem {
+    std::string    label;                              // shown AND inserted (no snippets in M4)
+    CompletionKind kind = CompletionKind::Local;
+    std::string    detail;                             // "int32", "fn Point midpoint(a: Point, b: Point)"
+    std::string    container;                          // declaring type / namespace ("" for a local)
+};
+
+struct SignatureParam { std::string label, detail; };  // label "a", detail "Point"
+struct SignatureHelp  { std::string label;             // "midpoint(a: Point, b: Point) -> Point"
+                        std::vector<SignatureParam> params;
+                        int activeParam = -1; };       // an empty label means nothing callable is here
 
 #endif // __KAMA_QUERY_H__

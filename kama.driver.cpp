@@ -3729,6 +3729,7 @@ int main(int argc, char** argv)
     std::string queryDef;                  // `kama query --def L:C`: go-to-definition at a cursor
     std::string queryType;                 // `kama query --type L:C`: hover (kind+name) at a cursor
     std::string queryRefs;                 // `kama query --refs L:C`: find-references at a cursor
+    std::string queryComplete;             // `kama query --complete L:C`: completion candidates at a cursor
     bool        queryProject = false;      // `kama query --project`: index the whole project, not one closure
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
@@ -3756,6 +3757,7 @@ int main(int argc, char** argv)
         else if (a == "--def" && i + 1 < argc)      queryDef = argv[++i];            // `kama query` go-to-def L:C
         else if (a == "--type" && i + 1 < argc)     queryType = argv[++i];           // `kama query` hover L:C
         else if (a == "--refs" && i + 1 < argc)     queryRefs = argv[++i];           // `kama query` refs L:C
+        else if (a == "--complete" && i + 1 < argc) queryComplete = argv[++i];       // `kama query` completion L:C
         else if (a == "--project")                  queryProject = true;             // `kama query` workspace scope
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
@@ -3986,6 +3988,9 @@ int main(int argc, char** argv)
         //   kama query <file> --def  L:C     go-to-definition at 1-based line:col
         //   kama query <file> --type L:C     hover (kind + name) at 1-based line:col
         //   kama query <file> --refs L:C     find-references (decl + every use) at 1-based line:col
+        //   kama query <file> --complete L:C completion candidates at line:col — a `trigger=… recv=…` header
+        //                                    (the LEXICAL context, from the file's raw text) then one
+        //                                    `kind<TAB>label<TAB>detail` line per candidate
         //   kama query <file> --project      widen the unit set from <file>'s import closure to the whole
         //                                    project (M3.5 workspace indexing), so --refs sees files that
         //                                    use <file> without being imported by it
@@ -4061,7 +4066,24 @@ int main(int argc, char** argv)
                 printf("%s:%d:%d\n", r.uri.c_str(), r.range.line, r.range.column);
             return 0;
         }
-        fprintf(stderr, "kama query: pass --symbols, --def L:C, --type L:C, or --refs L:C\n");
+        if (!queryComplete.empty()) {
+            int l, c;
+            if (!parseLC(queryComplete, l, c)) { fprintf(stderr, "kama query: --complete wants L:C\n"); return 2; }
+            // The lexical context comes from the file's RAW TEXT, never from the index — see
+            // completionContextAt. Reading it here (rather than reusing the parsed unit) is also what lets
+            // this harness exercise cursor positions mid-token, which is where an editor actually asks.
+            std::ifstream in(input, std::ios::binary);
+            if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
+            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            CompletionContext cc = completionContextAt(text, l, c);
+            std::string filled;
+            for (size_t i = 0; i < cc.filled.size(); ++i) filled += (i ? "," : "") + cc.filled[i];
+            printf("trigger=%s recv=%s callee=%s prefix=%s active=%d filled=%s\n",
+                   completionTriggerName(cc.trigger), cc.receiver.c_str(), cc.callee.c_str(),
+                   cc.prefix.c_str(), cc.activeParam, filled.c_str());
+            return 0;
+        }
+        fprintf(stderr, "kama query: pass --symbols, --def L:C, --type L:C, --refs L:C, or --complete L:C\n");
         return 2;
     }
 

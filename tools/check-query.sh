@@ -253,5 +253,35 @@ else
     echo "  SKIP: installed-dependency checks (kama pkg install failed)"
 fi
 
+# ---------------------------------------------------------------------------------------------------
+# M4.0 — the completion LEXICAL layer.
+#
+# `--complete L:C` prints the context recovered from the file's RAW TEXT before any semantics run:
+#   trigger=<bare|dot|scope|arg-label|import-path|import-symbol> recv=… callee=… prefix=… active=N filled=…
+# Every probe points INSIDE valid source (the column of the character just after a `.`, or just inside a
+# `(`), so the fixture parses and analyzes clean while the scanner sees exactly what a half-typed buffer
+# would give it. That equivalence is the whole design: at completion time the buffer does NOT parse, so
+# this context can never come from the index.
+FIXTURE="$ROOT/tests/query/complete.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo "check-query: M4.0 completion context (lexical scan)"
+expect --complete 107:21 -- "trigger=dot recv=c "                    # c.|value
+expect --complete 109:27 -- "trigger=dot recv=h.cell "               # h.cell.|value — a chained receiver
+expect --complete 110:33 -- "trigger=dot recv=makeHolder() "         # a CALL receiver, canonicalized to `()`
+expect --complete 113:30 -- "trigger=dot recv=cells[] "              # an INDEX receiver, canonicalized to `[]`
+expect --complete 115:27 -- "trigger=dot recv=owned "                # a smart-pointer receiver
+expect --complete 130:24 -- "trigger=scope recv=Level "              # Level::|High
+expect --complete 130:24 -- "active=-1"                              # `(a == b)` is a GROUPING paren, not a call
+expect --complete 118:27 -- "trigger=arg-label recv= callee=blend prefix= active=0 filled="   # blend(|lo: …)
+expect --complete 118:34 -- "trigger=arg-label recv= callee=blend prefix= active=1 filled=lo" # …, |hi: 4)
+expect --complete 15:12  -- "trigger=import-path recv=std "          # import std::|collections
+expect --complete 15:26  -- "trigger=import-symbol recv=std::collections "   # import …::{|DynamicArray}
+# Literals and comments hold no code — and an interpolation HOLE does, so it must still complete.
+expect --complete 119:21 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a string body
+expect --complete 121:17 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a // comment
+expect --complete 122:15 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a /* block */
+expect --complete 120:30 -- "trigger=dot recv=c "                    # inside "interp ${c.|value} hole"
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"
