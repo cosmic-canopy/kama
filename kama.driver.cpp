@@ -104,6 +104,27 @@ std::vector<std::string> splitPathComponents(const std::string& p)
     return out;
 }
 
+// Join a relative `rel` onto `dir` LEXICALLY — collapsing "." and ".." as text, never touching the
+// filesystem. Deliberately NOT absolutePath(): that is realpath(), which resolves symlinks, and a path
+// dependency reaches its package *through* the `.kama/deps/<name>` symlink. Canonicalizing there would
+// respell a dependency's files as first-party paths and defeat every "is this file mine?" test
+// downstream (the LSP's ownership check, rename's refusal to touch a dependency).
+std::string joinPathLexical(const std::string& dir, const std::string& rel)
+{
+    std::string joined = rel.empty() ? dir : dir + "/" + rel;
+    bool absolute = !joined.empty() && (joined[0] == '/' || joined[0] == '\\');
+    std::vector<std::string> parts;
+    for (const auto& c : splitPathComponents(joined)) {
+        if (c == ".") continue;
+        if (c == ".." && !parts.empty() && parts.back() != "..") { parts.pop_back(); continue; }
+        parts.push_back(c);
+    }
+    std::string out;
+    for (size_t i = 0; i < parts.size(); ++i) { if (i) out += "/"; out += parts[i]; }
+    if (absolute) out = "/" + out;
+    return out.empty() ? "." : out;
+}
+
 // `target` spelled relative to `fromDir` — both already absolute. Pure string work over canonical
 // forms: drop the shared prefix, then one `..` per component of `fromDir` that is left over. Returns
 // `target` unchanged when the two share no root at all (different Windows drives). Emits forward
@@ -172,6 +193,34 @@ std::vector<std::string> listKamaFiles(const std::string& dir)
     return out;
 }
 
+// Every *.kama under `root`, recursively, as absolute paths. Prunes build output, the package store, and
+// dot-directories; aborts once the cap is blown (the caller reports rather than truncating silently).
+// Deliberately NOT collectFilesRel: the prune list, extension filter and early abort are most of the
+// body, and its one caller (treeHashOf) wants a complete unfiltered tree. Order is readdir's — a caller
+// that needs determinism sorts (module resolution does; the LSP's set queries don't care).
+static void collectKamaFiles(const std::string& root, const std::string& rel,
+                             std::vector<std::string>& out, size_t& seen, size_t budget)
+{
+    if (seen > budget) return;
+    std::string dir = rel.empty() ? root : root + "/" + rel;
+    DIR* d = opendir(dir.c_str());
+    if (!d) return;
+    while (struct dirent* e = readdir(d)) {
+        std::string n = e->d_name;
+        if (n.empty() || n[0] == '.') continue;          // ".", "..", .git, .kama (the package store) …
+        std::string childRel = rel.empty() ? n : rel + "/" + n;
+        if (dirExists(dir + "/" + n)) {
+            if (n == "build") continue;                  // generated C + objects, never sources
+            collectKamaFiles(root, childRel, out, seen, budget);
+            if (seen > budget) break;
+        } else if (n.size() > 5 && n.compare(n.size() - 5, 5, ".kama") == 0) {
+            if (++seen > budget) break;
+            out.push_back(dir + "/" + n);
+        }
+    }
+    closedir(d);
+}
+
 // The stdlib root, resolved from the binary like resolveRuntimeDir: <exeDir>/../lib/kama
 // (installed, bin/kama -> ../lib/kama), else <exeDir>/lib (repo root), else <exeDir>/../../lib
 // (dev tree: the Makefile builds to build/<os>-<arch>/kama), else "lib".
@@ -224,9 +273,47 @@ std::vector<std::string> splitSearchPath(const char* env)
     return out;
 }
 
+static bool loadManifestSources(const std::string& path, std::vector<std::string>& out, std::string& err);
+
+// The source files of the package rooted at `dir`, per its manifest's `sources` — or {} when `dir` is not
+// a package root or declares none, in which case the caller falls back to the flat listing.
+//
+// This is what lets a dependency use the `src/` layout docs/packages.md teaches for applications: an
+// installed `.kama/deps/geo/` holds only `kama.json`, its sources one level down, so a non-recursive
+// listing of it finds nothing and the package cannot be imported AT ALL. `sources` is precisely the
+// declaration of where a package's files are, so module resolution consults it — which is also what
+// makes the key earn its keep beyond the LSP.
+//
+// Cached by manifest path: this runs for every import of every build, and loadManifestSources re-reads
+// the file on every call. Process-lifetime, which is the whole story for a build; for a long-lived
+// `kama lsp`, changing a *dependency's* own manifest implies a re-install to take effect anyway.
+std::vector<std::string> packageSourceFiles(const std::string& dir)
+{
+    static std::map<std::string, std::vector<std::string>> cache;
+    const std::string manifest = dir + "/kama.json";
+    auto it = cache.find(manifest);
+    if (it != cache.end()) return it->second;
+
+    std::vector<std::string> out, srcs;
+    std::string err;
+    if (fileExists(manifest) && loadManifestSources(manifest, srcs, err)) {
+        for (const auto& rel : srcs) {
+            // Lexical, not absolutePath: `"sources": ["."]` must not yield `<dir>/./x.kama` (unit names
+            // are matched EXACTLY downstream), but neither may the `.kama/deps` symlink be resolved away.
+            std::string sub = joinPathLexical(dir, rel);
+            if (dirExists(sub))       { size_t seen = 0; collectKamaFiles(sub, "", out, seen, (size_t)-1); }
+            else if (fileExists(sub)) out.push_back(sub);
+            // A listed path that does not exist is skipped, as in collectPackageTree.
+        }
+        std::sort(out.begin(), out.end());   // readdir order is not deterministic; emit order must be
+    }
+    return cache.emplace(manifest, std::move(out)).first->second;
+}
+
 // Resolve module segments (["std","memory"]) to source file(s) under the first matching
 // root: a file-module (<root>/std/memory.kama) or every *.kama in a directory-module
-// (<root>/std/memory/). Empty result => unresolved.
+// (<root>/std/memory/). A directory that is a PACKAGE root contributes the files its manifest
+// declares, wherever they live under it, rather than the flat listing. Empty result => unresolved.
 std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs,
                                             const std::vector<std::string>& roots)
 {
@@ -236,7 +323,11 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
         std::string file = root + "/" + rel + ".kama";
         if (fileExists(file)) return { file };
         std::string dir = root + "/" + rel;
-        if (dirExists(dir)) { auto fs = listKamaFiles(dir); if (!fs.empty()) return fs; }
+        if (dirExists(dir)) {
+            auto fs = packageSourceFiles(dir);        // declared: wherever the package says its files are
+            if (fs.empty()) fs = listKamaFiles(dir);  // undeclared: the plain directory-module listing
+            if (!fs.empty()) return fs;
+        }
     }
     return {};
 }
@@ -3061,33 +3152,7 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
 }
 
 // ---- workspace indexing (M3.5) ---------------------------------------------------------------------
-
-// Every *.kama under `root`, recursively, as absolute paths. Prunes build output, the package store, and
-// dot-directories; aborts once the cap is blown (the caller reports rather than truncating silently).
-// Deliberately NOT collectFilesRel (line ~1523): the prune list, extension filter and early abort are most
-// of the body, and its one caller (treeHashOf) wants a complete unfiltered tree.
-static void collectKamaFiles(const std::string& root, const std::string& rel,
-                             std::vector<std::string>& out, size_t& seen, size_t budget)
-{
-    if (seen > budget) return;
-    std::string dir = rel.empty() ? root : root + "/" + rel;
-    DIR* d = opendir(dir.c_str());
-    if (!d) return;
-    while (struct dirent* e = readdir(d)) {
-        std::string n = e->d_name;
-        if (n.empty() || n[0] == '.') continue;          // ".", "..", .git, .kama (the package store) …
-        std::string childRel = rel.empty() ? n : rel + "/" + n;
-        if (dirExists(dir + "/" + n)) {
-            if (n == "build") continue;                  // generated C + objects, never sources
-            collectKamaFiles(root, childRel, out, seen, budget);
-            if (seen > budget) break;
-        } else if (n.size() > 5 && n.compare(n.size() - 5, 5, ".kama") == 0) {
-            if (++seen > budget) break;
-            out.push_back(dir + "/" + n);
-        }
-    }
-    closedir(d);
-}
+// (collectKamaFiles lives up beside listKamaFiles — module resolution needs it too.)
 
 // The cap in force for a GUESSED file set. `KAMA_LSP_MAX_FILES` overrides the default; 0 means no limit,
 // for someone who knows their tree really is one program and would rather not add a manifest.
