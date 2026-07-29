@@ -154,6 +154,19 @@ if printf '%s' "$gccline" | grep -qF -- "-target "; then
     exit 1
 fi
 
+# 8b. SANE DEFAULT — with a `zig` on PATH and nothing configured, a cross build should just work: zig is
+#     the one widely-available compiler that bundles every target's libc, so it is the only thing kama can
+#     pick unprompted and expect to succeed. Skipped where zig is absent (it is not a build dependency).
+if command -v zig >/dev/null 2>&1; then
+    if ! "$KAMA" build "$FIXTURE" --target x86_64-linux-musl -o "$tmp/auto" >/dev/null 2>"$tmp/auto.err"; then
+        echo "check-target: FAIL — a cross build did not pick up the zig on PATH:" >&2
+        sed 's/^/  /' "$tmp/auto.err" >&2
+        exit 1
+    fi
+else
+    echo "check-target: (skipping the zig-on-PATH default — no zig installed)"
+fi
+
 # 9. TARGET SPECS — a target declared in kama.json carries its own toolchain, so a team shares one
 #    checked-in cross setup instead of each developer remembering flags.
 spec="$tmp/spec"

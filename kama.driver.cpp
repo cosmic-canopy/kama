@@ -4962,9 +4962,29 @@ int main(int argc, char** argv)
         //     has its triple baked into its name, and passing `-target` would confuse or break it.
         // Detected from the command string, so it works for the bundled zig, `--cc "zig cc"`, a plain
         // `--cc clang`, or a `cc` declared on the target in kama.json.
-        const bool ccTakesTargetFlag =
+        bool ccTakesTargetFlag =
                compiler.find("clang") != std::string::npos
             || (compiler.find("zig") != std::string::npos && compiler.find(" cc") != std::string::npos);
+        // Sane default for a cross build nobody configured: if a `zig` is on PATH, use it. Zig is the one
+        // widely-available compiler that bundles every target's libc, so it is the only thing we can pick
+        // unprompted and expect to WORK — picking host clang would produce a confusing sysroot error
+        // instead. Checked only when crossing, so a normal build never pays for the probe.
+        if (!ccIsExplicit && !ccTakesTargetFlag) {
+            static const bool zigOnPath = [] {
+#ifdef _WIN32
+                return runCmd("zig version >NUL 2>&1") == 0;
+#else
+                return runCmd("zig version >/dev/null 2>&1") == 0;
+#endif
+            }();
+            if (zigOnPath && !wasm
+                && (g_target.arch != hostTarget().arch
+                    || (g_target.hosted() && g_target.os != hostTarget().os))) {
+                compiler = "zig cc";
+                ccTakesTargetFlag = true;
+            }
+        }
+
         // Only the bundled/host default is presumed unable to cross: an explicitly chosen compiler is the
         // user telling us they have a toolchain, so we hand it the target and let IT complain if not.
 
@@ -4990,8 +5010,8 @@ int main(int argc, char** argv)
         if (crossing) {
             if (ccTakesTargetFlag && ccIsExplicit) {
                 crossFlags = " -target " + g_target.triple();   // clang / zig cc: one binary, target as a flag
-            } else if (ccTakesTargetFlag && !ccIsExplicit && compiler.find("zig") != std::string::npos) {
-                crossFlags = " -target " + g_target.triple();   // the bundled zig ships the target's libc
+            } else if (ccTakesTargetFlag && compiler.find("zig") != std::string::npos) {
+                crossFlags = " -target " + g_target.triple();   // bundled or PATH zig ships the target's libc
             } else if (!ccIsExplicit) {
                 fprintf(stderr,
                         "kama: cannot build for %s (%s) — the default C compiler has no libc for it.\n"

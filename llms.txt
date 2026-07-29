@@ -32,8 +32,10 @@ examples read the test fixtures.
 ## Toolchain & runtime
 - [README](README.md): build/run via the containerized toolchain (`tools/cdev`); native +
   wasm targets; `kama build [--release] [--target <name-or-triple>]`.
-- [Build configuration](docs/design/build-configuration.md): target triples (`<arch>-<os>-<abi>`),
-  cross-compilation, single-select groups (TARGET / BUILD_TYPE / OUTPUT) and `@compileFor` flags.
+- [Targets & toolchains](docs/targets.md): which platforms `--target` reaches, how to get a cross
+  toolchain (your own / clang+sysroot / zig), output kinds, and per-platform notes.
+- [Build configuration](docs/design/build-configuration.md): the design — target triples
+  (`<arch>-<os>-<abi>`), single-select groups (TARGET / BUILD_TYPE / OUTPUT), `@compileFor` flags.
 - [Runtime header](kama_runtime.h): the small C runtime included by generated code.
 - [Repo guide for AI assistants](CLAUDE.md): working conventions and build commands.
 

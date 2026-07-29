@@ -114,8 +114,7 @@ Options: `--release`/`--debug` (default debug: `-g -O0`), `--target <name-or-tri
 cross-compiling works with `--cc "zig cc"`), `--select GROUP=VALUE` (build-configuration groups, e.g.
 `OUTPUT=STATIC` for a static library), `--define NAME` (a `@compileFor` flag), `--webgpu`
 (link Emscripten's WebGPU port), `--cc <compiler>`, `--no-line` (omit `#line`), `--keep-c`.
-Targets, build types and your own selection axes are configurable in `kama.json` — see
-**[build configuration](docs/design/build-configuration.md)**.
+Targets, cross-compilation and toolchain setup: **[targets & toolchains](docs/targets.md)**.
 
 For multi-file / dependency projects — a `kama.json` manifest, `kama pkg add`/`install`,
 the lockfile, and `kama run` — see the **[packages quickstart](docs/packages.md)**.

@@ -2012,6 +2012,8 @@ kama build app.kama --target aarch64-linux-gnu --cc "zig cc"   # cross-compile t
 kama build lib.kama --select OUTPUT=STATIC   # a static library (libapp.a)
 ```
 
+Toolchain setup per platform lives in **[targets.md](targets.md)**.
+
 **`--target`** takes a built-in name (`HOST`, `MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`), a target
 your `kama.json` declares, or a bare `<arch>-<os>-<abi>` triple. Every compile and link flag follows the
 selected target rather than the machine you are building on, so cross-compiling is a matter of having a

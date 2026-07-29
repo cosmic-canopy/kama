@@ -43,7 +43,8 @@ kama run src/app.kama    # explicit file — same thing
 
 `kama run` is a thin wrapper over `kama build`: it compiles a native executable to a temp
 location, runs it, forwards the exit code, and cleans up. It's **native-only** (wasm needs a
-browser/node, embedded emits a freestanding object) — for those, use `kama build --target …`.
+browser/node, a bare-metal target emits a freestanding object) — for those, use `kama build --target …`;
+see [targets.md](targets.md).
 
 ## Telling the tooling what your project contains — `sources` and `packages`
 
@@ -376,7 +377,8 @@ Precedence, high to low: **`--log`/`KAMA_LOG` (runtime) > `kama.local.json` > `k
 **Build-time fields** (`log`, `flags`, `select`) are read by the compiler and merge field-by-field, as
 above. **`select`** declares this project's build-configuration groups — extra targets (each with an
 optional cross toolchain), extra build types, and any single-select axis of your own. It is described
-in full in [design/build-configuration.md](design/build-configuration.md); the short version is that a
+in full in [design/build-configuration.md](design/build-configuration.md), with the practical
+toolchain setup in [targets.md](targets.md); the short version is that a
 group takes exactly one value, that value's name becomes a `@compileFor` flag, and `--select
 GROUP=VALUE` picks it. A local manifest may add targets and change defaults, so a developer can point
 a cross target at their own sysroot without editing the committed file.
