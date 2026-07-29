@@ -1032,6 +1032,14 @@ static void seedBuiltinSelectGroups()
     bt.values = { "DEBUG", "RELEASE" };
     bt.dflt   = "DEBUG";
     g_selectGroups["BUILD_TYPE"] = bt;
+
+    // What artifact to produce. Before this campaign the kind was smeared across a `--shared` boolean and
+    // a bare-metal target implying object-only; every other toolchain makes it its own axis (MSBuild
+    // OutputType, CMake add_library(STATIC|SHARED|MODULE), Cargo crate-type). No default here: it depends
+    // on the resolved target (bare metal defaults to OBJECT), so main picks it once the target is known.
+    SelectGroup out;
+    out.values = { "EXE", "SHARED", "STATIC", "OBJECT" };
+    g_selectGroups["OUTPUT"] = out;
 }
 
 // Walk a value's `inherits` chain, innermost first, into `out`. Cycles are broken by the visited set —
@@ -4698,17 +4706,31 @@ int main(int argc, char** argv)
         for (auto& u : undefines) { if (!validate(u, "--undefine")) return 2; g_activeFlags.erase(u); }
     }
 
-    // `--shared` is a native shared-library packaging step (desktop dev-loop hot-reload). On wasm
-    // the host re-instantiates the module instead of `dlopen`ing it, so `expose` alone (KAMA_EXPORT
-    // -> EMSCRIPTEN_KEEPALIVE) covers the web boundary — `--shared` is meaningless there.
-    if (shared && wasm) {
-        fprintf(stderr, "kama: --shared is native-only; a wasm build exports `expose`d functions "
+    // Resolve the OUTPUT axis. `--shared` is sugar for `--select OUTPUT=SHARED`; the default depends on
+    // the target, since a bare-metal build has no entry point to link and stops at an object.
+    std::string outputKind = g_activeFlags.count("SHARED")  ? "SHARED"
+                           : g_activeFlags.count("STATIC")  ? "STATIC"
+                           : g_activeFlags.count("OBJECT")  ? "OBJECT"
+                           : g_activeFlags.count("EXE")     ? "EXE"
+                           : embedded ? "OBJECT" : "EXE";
+    if (shared) outputKind = "SHARED";
+    const bool outObject = (outputKind == "OBJECT");
+    const bool outStatic = (outputKind == "STATIC");
+    const bool outShared = (outputKind == "SHARED");
+    // Anything that is not a finished executable stops at `-c`; only EXE and SHARED reach the linker.
+    const bool stopsAtObject = outObject || outStatic;
+
+    // On wasm the host re-instantiates the module rather than `dlopen`ing it, so `expose` alone
+    // (KAMA_EXPORT -> EMSCRIPTEN_KEEPALIVE) covers the web boundary — a shared library is meaningless.
+    if (outShared && wasm) {
+        fprintf(stderr, "kama: OUTPUT=SHARED is native-only; a wasm build exports `expose`d functions "
                         "directly (no --shared needed)\n");
         return 2;
     }
-    if (shared && embedded) {
-        fprintf(stderr, "kama: --shared is native-only; --target embedded emits a freestanding object "
-                        "you link into your firmware image\n");
+    if ((outShared || outputKind == "EXE") && embedded) {
+        fprintf(stderr, "kama: OUTPUT=%s needs an OS; a bare-metal target (%s) emits an object or a static "
+                        "library you link into your firmware image\n",
+                outputKind.c_str(), g_target.triple().c_str());
         return 2;
     }
 
@@ -4974,10 +4996,11 @@ int main(int argc, char** argv)
         // Default output: native -> bare exe name (or lib<name>.<so|dylib|dll> for --shared);
         // wasm -> an HTML harness (emcc also emits the .js + .wasm alongside it).
         const char* sharedExt = g_target.sharedLibExt();
-        std::string defaultOut = wasm     ? (stripExtension(input) + ".html")
-                               : embedded ? (stripExtension(input) + ".o")
-                               : shared   ? (stripExtension(input) + sharedExt)
-                                          : stripExtension(input);
+        std::string defaultOut = wasm      ? (stripExtension(input) + ".html")
+                               : outStatic ? (dirName(input) + "/lib" + baseName(stripExtension(input)) + ".a")
+                               : outObject ? (stripExtension(input) + ".o")
+                               : outShared ? (stripExtension(input) + sharedExt)
+                                           : stripExtension(input);
         std::string outPath    = output.empty() ? defaultOut : output;
 
         // Transpile to one or more .c (multi-file emits a shared header too).
@@ -5065,14 +5088,14 @@ int main(int argc, char** argv)
         // by default; only `expose`d functions (KAMA_EXPORT -> visibility("default"),used) reach the
         // dynamic symbol table, so a host `dlopen`+`dlsym`s exactly the declared entry points. `used`
         // also keeps them past -dead_strip/--gc-sections. (native-only — rejected with --target wasm.)
-        if (shared) cmd << "-fPIC -shared -fvisibility=hidden ";
+        if (outShared) cmd << "-fPIC -shared -fvisibility=hidden ";
         if (release) {
             // Optimized, no debug info, asserts off. Native uses -O3 (max speed — matches Rust's release
             // default); wasm uses -Oz (size — download cost dominates). -ffunction/data-sections +
             // --gc-sections let the linker drop unused (std)library code — the
             // "pay for what you use" pruning lever. Native also strips symbols.
             cmd << (wasm ? "-Oz " : "-O3 ") << "-DNDEBUG -ffunction-sections -fdata-sections ";
-            if (!wasm && !embedded) {   // -Wl,* is link-time; a bare-metal build stops at -c (see below)
+            if (!wasm && !stopsAtObject) {   // -Wl,* is link-time; OBJECT/STATIC stop at -c (see below)
                 // ld64 spells section GC differently from GNU ld/lld, and treats `-s` as obsolete (it
                 // warns on every release link), so the strip flag is for the GNU-style linkers only.
                 if (g_target.isMacOS()) cmd << "-Wl,-dead_strip ";
@@ -5106,7 +5129,8 @@ int main(int argc, char** argv)
         // the crt0/startup + linker script are the user's per-chip link step. `-DKAMA_TARGET_EMBEDDED`
         // selects the freestanding `main`/panic forms in the emitted C + runtime. The CPU triple
         // (`-target thumbv*-none-eabi -mcpu=...`) is deliberately NOT baked in v1 — pass it via `--cc`.
-        if (embedded) cmd << "-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED -c ";
+        if (embedded)      cmd << "-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED ";   // no OS: os=none
+        if (stopsAtObject) cmd << "-c ";                                                // no link step
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
         if (!headerDir.empty()) cmd << "-I" << headerDir << " ";   // the shared generated header
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
@@ -5133,7 +5157,10 @@ int main(int argc, char** argv)
         // it too: under -sPROXY_TO_PTHREAD `main` runs on a worker, and EXIT_RUNTIME is what carries its
         // return value out as the process exit code (else node sees 0 regardless).
         if (wasm && (needsApp || needsPthread)) cmd << "-sEXIT_RUNTIME=1 ";
-        for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
+        // STATIC compiles each TU on its own (below) and archives the results, so its sources are not
+        // appended here. Every link-tail flag is already suppressed for a compile-only build, which is
+        // what makes moving the sources to the end equivalent.
+        if (!outStatic) for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
         // Native WebGPU seam: compile the surface TU (Objective-C on macOS — it attaches a CAMetalLayer
         // to the NSWindow) and link GLFW + the window-system libs. Only when the program externs
         // kama_gpu.h AND targets native (the web seam is header-only static-inline, compiled nowhere).
@@ -5164,10 +5191,10 @@ int main(int argc, char** argv)
         }
         // Link-time libraries (skipped for --target embedded: it stops at `-c`, so its board link — where
         // the user supplies startup + linker script — owns library selection).
-        if (!embedded) for (auto& lib : links) cmd << "-l" << lib << " ";   // FFI link flags
+        if (!stopsAtObject) for (auto& lib : links) cmd << "-l" << lib << " ";   // FFI link flags
         // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm
         // FFI). Native only — wasm/emscripten bundles libm. (--gc-sections still prunes unused code.)
-        if (needsLibm && !wasm && !embedded) cmd << "-lm ";
+        if (needsLibm && !wasm && !stopsAtObject) cmd << "-lm ";
         // Pay-for-what-you-use: wire up threads only when the program uses the isolate seam (std::concurrent's
         // kama_isolate.h / kama_channel.h). Native: link libpthread (harmless on macOS — pthreads live in libc;
         // required on Linux). Wasm: emscripten pthreads = Web Workers over a shared SharedArrayBuffer, so the
@@ -5176,7 +5203,7 @@ int main(int argc, char** argv)
         // thread). PTHREAD_POOL_SIZE pre-warms worker slots (KAMA_PTHREAD_POOL, default 0); STRICT=0 lets the
         // pool grow on demand so a `scope` with more children than the pool never stalls — pre-warm is a pure
         // latency knob, not a correctness cap.
-        if (needsPthread && !embedded) {
+        if (needsPthread && !stopsAtObject) {
             if (wasm) {
                 const char* pool = getenv("KAMA_PTHREAD_POOL");   // build-time override; unset => 0 (grow on demand)
                 cmd << "-pthread -sPROXY_TO_PTHREAD "
@@ -5195,11 +5222,41 @@ int main(int argc, char** argv)
         // by --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.
         // Keying this on the host was the sharpest example of the cross-compilation blocker: a Windows
         // build produced on Linux silently omitted the socket library.
-        if (!wasm && !embedded && g_target.isWindows()) cmd << "-lws2_32 ";
+        if (!wasm && !stopsAtObject && g_target.isWindows()) cmd << "-lws2_32 ";
         // The target's own link flags from kama.json, last so they can override anything above.
-        if (!embedded) for (const auto& f : g_target.ldflags) cmd << f << " ";
-        cmd << "-o \"" << outPath << "\"";
-        int rc = runCmd(cmd.str());
+        if (!stopsAtObject) for (const auto& f : g_target.ldflags) cmd << f << " ";
+
+        int rc;
+        if (outStatic) {
+            // A static library is compile-each-TU then archive. `ar` comes from the target spec when the
+            // project declared one, so a cross build archives with the matching binutils rather than the
+            // host's (an ar from another toolchain writes an index the target linker cannot read).
+            std::string base = cmd.str();
+            std::vector<std::string> objs;
+            rc = 0;
+            for (auto& cf : cFiles) {
+                std::string obj = stripExtension(cf) + ".o";
+                rc = runCmd(base + "\"" + cf + "\" -o \"" + obj + "\"");
+                if (rc != 0) break;
+                objs.push_back(obj);
+                genFiles.push_back(obj);
+            }
+            if (rc == 0) {
+                std::ostringstream ar;
+                ar << (g_target.ar.empty() ? std::string("ar") : g_target.ar) << " rcs \"" << outPath << "\"";
+                for (auto& o : objs) ar << " \"" << o << "\"";
+                rc = runCmd(ar.str());
+                if (rc != 0) fprintf(stderr, "kama: ar failed (exit %d)\n", rc);
+            }
+        } else {
+            if (outObject && cFiles.size() > 1) {
+                fprintf(stderr, "kama: OUTPUT=OBJECT builds a single translation unit, but this program has "
+                                "%zu — use OUTPUT=STATIC to get one archive instead\n", cFiles.size());
+                return 2;
+            }
+            cmd << "-o \"" << outPath << "\"";
+            rc = runCmd(cmd.str());
+        }
 
         if (!keepC) for (auto& gf : genFiles) remove(gf.c_str());
         if (rc != 0) {

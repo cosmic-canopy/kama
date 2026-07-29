@@ -165,6 +165,44 @@ if ! "$KAMA" transpile --no-line "$spec/app.kama" --target RPI -o "$spec/app.c" 
     exit 1
 fi
 
+# 10. OUTPUT AXIS — the artifact kind is its own single-select group rather than a `--shared` boolean plus
+#     "bare metal implies object". STATIC is new capability (kama could not produce a `.a` at all), and
+#     OBJECT on a HOSTED target proves object output is no longer welded to bare metal.
+lib="$tmp/lib"
+mkdir -p "$lib"
+cp "$FIXTURE" "$lib/mathlib.kama"
+"$KAMA" build "$lib/mathlib.kama" --select OUTPUT=STATIC >/dev/null 2>"$tmp/static.err" || {
+    echo "check-target: FAIL — OUTPUT=STATIC did not build:" >&2; sed 's/^/  /' "$tmp/static.err" >&2; exit 1; }
+if [ ! -f "$lib/libmathlib.a" ]; then
+    echo "check-target: FAIL — OUTPUT=STATIC did not produce lib<name>.a" >&2
+    exit 1
+fi
+# a real archive with a symbol table, not an empty or truncated file
+if ! nm "$lib/libmathlib.a" 2>/dev/null | grep -q "kama_main"; then
+    echo "check-target: FAIL — the static library holds no kama_main symbol" >&2
+    exit 1
+fi
+"$KAMA" build "$lib/mathlib.kama" --select OUTPUT=OBJECT -o "$lib/m.o" >/dev/null 2>"$tmp/obj.err" || {
+    echo "check-target: FAIL — OUTPUT=OBJECT on a hosted target did not build:" >&2
+    sed 's/^/  /' "$tmp/obj.err" >&2; exit 1; }
+if [ ! -s "$lib/m.o" ]; then
+    echo "check-target: FAIL — OUTPUT=OBJECT produced no object on a hosted target" >&2
+    exit 1
+fi
+# --shared remains sugar for OUTPUT=SHARED, defaulting its name to the target's convention
+"$KAMA" build "$lib/mathlib.kama" --shared >/dev/null 2>&1
+if [ ! -f "$lib/mathlib.dylib" ] && [ ! -f "$lib/mathlib.so" ] && [ ! -f "$lib/mathlib.dll" ]; then
+    echo "check-target: FAIL — --shared produced no shared library" >&2
+    exit 1
+fi
+# and an EXE is still an EXE
+"$KAMA" build "$lib/mathlib.kama" -o "$lib/exe" >/dev/null 2>&1
+if "$lib/exe"; then rc=0; else rc=$?; fi
+if [ "$rc" != 42 ]; then
+    echo "check-target: FAIL — the default EXE build returned $rc, expected 42" >&2
+    exit 1
+fi
+
 echo "check-target: PASS (link/compile flags follow the selected target, not the host: winsock, section GC,
   shared-library extension, freestanding keyed on os=none rather than a target name; cross builds refuse
-  without a toolchain, transpile always works, zig cc gets -target, kama.json target specs apply)"
+  without a toolchain, transpile always works, zig cc gets -target, kama.json target specs apply;\n  OUTPUT selects exe/shared/static/object, incl. static archives and hosted object output)"
