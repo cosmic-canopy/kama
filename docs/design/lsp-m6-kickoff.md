@@ -7,12 +7,15 @@
 M6 is the last LSP milestone. It has three parts, and only the first is what the milestone is named for:
 
 1. **Editor clients** — thin configs pointing at `kama lsp`, plus `docs/editors.md`.
-2. **The syntax-highlighting audit** — already scoped in detail at [lsp.md](lsp.md):229-240. Do not
+2. **The syntax-highlighting audit** — already scoped in detail at [lsp.md](lsp.md):262-273. Do not
    re-derive it; that section has the motivating evidence (the VS Code grammar disagreed with the
    compiler four ways on numeric literals alone) and the compiler-as-oracle method.
 3. **Three deferred items** carried from M4 and M5, written up below so they are not lost.
 
-Everything below was verified against the tree at `6d295e1`.
+**Every line number below was re-verified against `2dbf6a3`** (the tip after M5), not carried over from
+an earlier brief. M5 itself moved `kama.driver.cpp` by ~75 lines, and stale references are the single
+most common way a brief in this campaign has misled the next session — check them again if you land
+anything before starting.
 
 ---
 
@@ -34,7 +37,7 @@ the reference index — and every kama argument is named, so this is not a niche
 
 ### 3b. Promote the undeclared-import warning to a diagnostic (carried from M4)
 
-`loadProgramUnits` ([kama.driver.cpp](../kama.driver.cpp):560-583) prints "package X imports Y but does
+`loadProgramUnits` ([kama.driver.cpp](../kama.driver.cpp):633-656) prints "package X imports Y but does
 not declare it" to stderr, warn-once per process — so in an editor it lands in the log channel nobody
 reads rather than the Problems pane. It should be a `publishDiagnostics` entry against the offending
 `kama.json`.
@@ -43,16 +46,17 @@ Two things to get right, both already learned the hard way in the workspace-deps
 
 - **Never blame a package the user cannot fix** — the gate already clears the owner when it resolves
   under the content-addressed store prefix. Keep that.
-- **It is warn-once per process** (a `static std::set` at :484, added precisely so `kama lsp` would not
-  repeat it per keystroke). A diagnostic must be *republished* every analysis or it vanishes on the next
-  keystroke, so the warn-once set and the diagnostic path need different lifetimes.
+- **It is warn-once per process** (`static std::set<std::string> warnedFreeRide`, :557, added precisely
+  so `kama lsp` would not repeat it per keystroke). A diagnostic must be *republished* every analysis or
+  it vanishes on the next keystroke, so the warn-once set and the diagnostic path need different
+  lifetimes.
 
 ### 3c. The LSP never calls `setBuildFlags` (found during M5, pre-existing)
 
 `lspAnalyze` and `lspAnalyzeWorkspace` do not call `setBuildFlags`, while `kama check`
-([kama.driver.cpp](../kama.driver.cpp):4065) and `kama query` (:4130) do. So `_activeFlags` is empty in
-the server, and `pruneInactiveDecls` drops every `@compileFor`-gated declaration that a real build would
-keep — the editor sees a different program from the compiler.
+([kama.driver.cpp](../kama.driver.cpp):4269), `kama query` (:4335) and both build paths (:1802, :1849)
+do. So `_activeFlags` is empty in the server, and `pruneInactiveDecls` drops every `@compileFor`-gated
+declaration that a real build would keep — the editor sees a different program from the compiler.
 
 Unrelated to M5 and deliberately not fixed there (M5 touched that pass's *reuse* invariant, not its
 inputs, and mixing the two would have muddied a bisect). It needs a decision, not just a patch: **which
