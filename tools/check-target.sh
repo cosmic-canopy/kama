@@ -86,5 +86,85 @@ if ccline aarch64-linux-gnu | grep -qF -- "-nostdlib"; then
     exit 1
 fi
 
+# 6. CROSS-COMPILATION REFUSAL — the default C compiler only targets its own host, so asking for a
+#    foreign target must fail with a message naming the ways out, not with a link error from clang that
+#    says nothing about targets. (Skipped when host == the target being asked for.)
+hostos=$(uname -s)
+foreign=WINDOWS
+[ "$hostos" = "Linux" ] && foreign=WINDOWS
+if ! "$KAMA" build "$FIXTURE" --target "$foreign" -o "$tmp/x" >/dev/null 2>"$tmp/cross.err"; then
+    if ! grep -qF "only targets this host" "$tmp/cross.err"; then
+        echo "check-target: FAIL — a cross build failed, but not with the toolchain diagnostic:" >&2
+        sed 's/^/  /' "$tmp/cross.err" >&2
+        exit 1
+    fi
+else
+    echo "check-target: FAIL — a cross build with the host compiler was accepted" >&2
+    exit 1
+fi
+
+# 6b. …but "crossing" means the host compiler genuinely CANNOT do the job, not merely that the triple
+#     string differs. Bare metal on the host's OWN arch is `-ffreestanding -nostdlib -c` stopping at an
+#     object — something the host clang does perfectly well, and what has always made bare-metal builds
+#     triple-agnostic. A foreign ARCH is a real cross build and must still refuse. Getting this wrong in
+#     either direction is invisible until someone actually builds firmware, hence both halves.
+if ! "$KAMA" build "$FIXTURE" --target EMBEDDED -o "$tmp/host.o" >/dev/null 2>"$tmp/emb.err"; then
+    echo "check-target: FAIL — bare metal on the host's own arch was treated as a cross build:" >&2
+    sed 's/^/  /' "$tmp/emb.err" >&2
+    exit 1
+fi
+if "$KAMA" build "$FIXTURE" --target riscv32-none-elf -o "$tmp/rv.o" >/dev/null 2>"$tmp/rv.err"; then
+    echo "check-target: FAIL — a foreign-arch bare-metal target built with the host compiler" >&2
+    exit 1
+fi
+
+# 7. TRANSPILE IS ALWAYS ALLOWED — emitting C for someone else's toolchain needs no toolchain here, and
+#    it is the escape hatch the refusal above points at, so it must actually work.
+if ! "$KAMA" transpile --no-line "$FIXTURE" --target "$foreign" -o "$tmp/foreign.c" >/dev/null 2>&1; then
+    echo "check-target: FAIL — transpile refused a foreign target (it needs no toolchain)" >&2
+    exit 1
+fi
+
+# 8. `zig cc` TAKES ITS TARGET AS A FLAG. A cross gcc has the triple baked into its NAME and must not be
+#    given -target; zig is one binary for every target and must be. Our triple is already Zig's 3-part
+#    <arch>-<os>-<abi> form, so it passes straight through. Stubbed with echo — this asserts kama's
+#    plumbing, which is kama's half; whether zig then emits a PE binary is zig's.
+zigline=$("$KAMA" build "$FIXTURE" --target x86_64-windows-gnu --cc "echo zig cc" -o "$tmp/z" 2>/dev/null || true)
+if ! printf '%s' "$zigline" | grep -qF -- "-target x86_64-windows-gnu"; then
+    echo "check-target: FAIL — zig cc did not receive -target for a cross build" >&2
+    exit 1
+fi
+hostline=$("$KAMA" build "$FIXTURE" --cc "echo zig cc" -o "$tmp/z2" 2>/dev/null || true)
+if printf '%s' "$hostline" | grep -qF -- "-target "; then
+    echo "check-target: FAIL — a same-host build passed -target (it should be left alone)" >&2
+    exit 1
+fi
+
+# 9. TARGET SPECS — a target declared in kama.json carries its own toolchain, so a team shares one
+#    checked-in cross setup instead of each developer remembering flags.
+spec="$tmp/spec"
+mkdir -p "$spec"
+cat > "$spec/kama.json" <<'JSON'
+{ "name": "cross-demo", "version": "0.1.0",
+  "select": { "TARGET": { "RPI": { "triple": "aarch64-linux-gnu", "cc": "echo RPICC:",
+                                   "sysroot": "/opt/rpi-sysroot",
+                                   "cflags": ["-mcpu=cortex-a72"], "ldflags": ["-Wl,--as-needed"] } } } }
+JSON
+cp "$FIXTURE" "$spec/app.kama"
+specline=$("$KAMA" build "$spec/app.kama" --target RPI -o "$spec/app" 2>/dev/null || true)
+for want in "RPICC:" "--sysroot=" "-mcpu=cortex-a72" "-Wl,--as-needed"; do
+    if ! printf '%s' "$specline" | grep -qF -- "$want"; then
+        echo "check-target: FAIL — a kama.json target spec did not contribute '$want'" >&2
+        printf '%s\n' "$specline" | sed 's/^/    /' >&2
+        exit 1
+    fi
+done
+# and its derived flags come from the DECLARED triple, not the host
+if ! "$KAMA" transpile --no-line "$spec/app.kama" --target RPI -o "$spec/app.c" >/dev/null 2>&1; then
+    echo "check-target: FAIL — a declared cross target could not be transpiled" >&2
+    exit 1
+fi
+
 echo "check-target: PASS (link/compile flags follow the selected target, not the host: winsock, section GC,
-  shared-library extension, and freestanding keyed on os=none rather than a target name)"
+  shared-library extension, freestanding keyed on os=none rather than a target name; cross builds refuse
+  without a toolchain, transpile always works, zig cc gets -target, kama.json target specs apply)"
