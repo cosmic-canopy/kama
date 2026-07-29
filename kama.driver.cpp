@@ -24,6 +24,7 @@
 #include <map>
 #include <deque>
 #include <algorithm>
+#include <chrono>               // steady_clock — KAMA_TIMING phase timing (LSP M5.0)
 
 #include <limits.h>
 #include <sys/stat.h>           // stat / S_ISDIR (directory check) — POSIX + mingw-w64 UCRT
@@ -409,6 +410,75 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
 
+// ---- phase timing (LSP M5.0) -----------------------------------------------------------------------
+// `KAMA_TIMING=1` prints one `kama-timing:` line per analysis to STDERR — never stdout, which `kama lsp`
+// owns for JSON-RPC framing. `KAMA_TIMING=2` adds a line per parsed/cached unit. Off by default and free
+// when off (one getenv, then a bool test).
+//
+// This exists because the M5 cold-start brief sized the whole incremental-perf plan on an UNMEASURED
+// split: it assumed a parse cache would take a 240 ms analysis to ~20 ms, but the per-unit cost is parse
+// AND analyze, and only the parse share is cacheable. Timing before caching is what makes the staging
+// decisions data rather than guesses — and it makes the brief's table reproducible from a checkout,
+// which it was not.
+bool timingOn(int level = 1)
+{
+    static int lvl = [] { const char* e = getenv("KAMA_TIMING"); return (e && *e) ? atoi(e) : 0; }();
+    return lvl >= level;
+}
+
+struct Timing {
+    double bufferParse = 0;    // parseForQuery — the live editor buffer
+    double closureParse = 0;   // parseFile — the transitive import closure, off disk
+    double preludeParse = 0;   // parseString — the embedded prelude + built-in modules
+    double analyze = 0;        // CEmitter::analyze over every unit
+    double query = 0;          // answering the request off the built index
+    long   parsedUnits = 0;
+    long   cachedUnits = 0;
+};
+Timing& timing() { static Timing t; return t; }
+
+// RAII accumulator. Records nothing and costs a bool test when timing is off.
+struct Stopwatch {
+    double* slot;
+    std::chrono::steady_clock::time_point t0;
+    explicit Stopwatch(double* s) : slot(timingOn() ? s : nullptr)
+    {
+        if (slot) t0 = std::chrono::steady_clock::now();
+    }
+    ~Stopwatch()
+    {
+        if (slot)
+            *slot += std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - t0).count();
+    }
+};
+
+void timingDump(const char* what, const std::string& subject);
+
+// RAII dump, for a scope with many early returns (the `kama query` dispatch). Declare it BEFORE the
+// Stopwatch it should report, so reverse destruction order lets the watch stop first.
+struct TimingScope {
+    const char* what;
+    std::string subject;
+    TimingScope(const char* w, std::string s) : what(w), subject(std::move(s)) {}
+    ~TimingScope() { timingDump(what, subject); }
+};
+
+// Print the accumulated phases and reset. `what` names the entry point so the TWO analyses one editor
+// request can trigger (the didChange analysis, then M4.6's repair) are distinguishable in the log.
+void timingDump(const char* what, const std::string& subject)
+{
+    if (!timingOn()) return;
+    Timing& t = timing();
+    double total = t.bufferParse + t.closureParse + t.preludeParse + t.analyze + t.query;
+    fprintf(stderr,
+            "kama-timing: %s %s buffer-parse=%.2f closure-parse=%.2f closure-units=%ld/%ld "
+            "prelude-parse=%.2f analyze=%.2f query=%.2f total=%.2f\n",
+            what, subject.c_str(), t.bufferParse, t.closureParse, t.parsedUnits, t.cachedUnits,
+            t.preludeParse, t.analyze, t.query, total);
+    t = Timing();
+}
+
 // The directory of the manifest DRIVING this build: next to the first input, else the CWD. "" if none.
 // Note this is whoever is compiling, which for a monorepo is not necessarily the package a given source
 // file belongs to — that distinction is the whole of the per-package import check below.
@@ -597,6 +667,11 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
 // Parse one kama file into a CompilationUnit. Returns nullptr on failure.
 SharedCompilationUnit parseFile(const std::string& inputFile)
 {
+    // parseFile is reached only for on-disk files — the import closure and lspImportSymbols; the live
+    // editor buffer goes through parseForQuery. So this slot is exactly "import-closure parse".
+    Stopwatch sw(&timing().closureParse);
+    ++timing().parsedUnits;
+
     yyscan_t scanner;
     struct LexerInstanceData extra = {
         KAMA_LEXERINSTANCE_DEFAULT_LINE_ONE,
@@ -633,6 +708,10 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
 // Parse an in-memory kama source string into a CompilationUnit (flex string buffer). nullptr on error.
 SharedCompilationUnit parseString(const char* src, const std::string& name)
 {
+    // Its only callers are preludeUnit / preludeModuleUnits below, so this slot is exactly
+    // "prelude parse" with no extra plumbing.
+    Stopwatch sw(&timing().preludeParse);
+
     yyscan_t scanner;
     struct LexerInstanceData extra = {
         KAMA_LEXERINSTANCE_DEFAULT_LINE_ONE,
@@ -656,6 +735,8 @@ SharedCompilationUnit parseString(const char* src, const std::string& name)
 struct ParseResult { SharedCompilationUnit unit; SharedCodeGenContext ctx; };
 ParseResult parseForQuery(const char* src, const std::string& name)
 {
+    Stopwatch sw(&timing().bufferParse);
+
     yyscan_t scanner;
     struct LexerInstanceData extra = {
         KAMA_LEXERINSTANCE_DEFAULT_LINE_ONE,
@@ -3313,7 +3394,10 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
 {
     ParseResult pr = parseForQuery(text.c_str(), path);
     if (pr.ctx) for (const auto& d : pr.ctx->diagnostics) diags.push_back(d);
-    if (!pr.unit) return nullptr;                  // parse failed — diags carry the errors; no queryable index
+    if (!pr.unit) {                                // parse failed — diags carry the errors; no queryable index
+        timingDump("analyze-failed", path);
+        return nullptr;
+    }
 
     // Load the whole program so cross-module names resolve (imported modules parsed from disk, exactly as
     // `kama check`/`build` do), then substitute the in-memory buffer for the open file's on-disk unit so
@@ -3336,13 +3420,14 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
     auto emitter = std::make_shared<CEmitter>(path);   // analysis mode: no C emitted
     emitter->setPrelude(preludeUnit());            // Optional/Result implicitly in scope
     for (auto& m : preludeModuleUnits()) emitter->addPreludeModule(m);
-    emitter->analyze(units);
+    { Stopwatch sw(&timing().analyze); emitter->analyze(units); }
     // Only the OPEN file's diagnostics go back to the editor (the server publishes to one URI); imported
     // modules are analyzed for context, not surfaced. Their diagnostics carry a different `file`.
     for (const auto& d : emitter->diagnostics()) if (d.file == path) diags.push_back(d);
     auto h = std::make_shared<LspIndex>();
     h->idx = emitter;
     h->path = path;
+    timingDump("analyze", path);
     return h;
 }
 
@@ -3523,10 +3608,11 @@ SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
     auto emitter = std::make_shared<CEmitter>(files.front());
     emitter->setPrelude(preludeUnit());
     for (auto& m : preludeModuleUnits()) emitter->addPreludeModule(m);
-    emitter->analyze(units);
+    { Stopwatch sw(&timing().analyze); emitter->analyze(units); }
     auto h = std::make_shared<LspIndex>();
     h->idx  = emitter;
     h->path = files.front();
+    timingDump("workspace", files.front());
     return h;
 }
 
@@ -4065,7 +4151,8 @@ int main(int argc, char** argv)
         idx.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);
         idx.setLogDefault(g_logDefault);
         for (auto& m : preludeModuleUnits()) idx.addPreludeModule(m);
-        idx.analyze(units);
+        { Stopwatch sw(&timing().analyze); idx.analyze(units); }
+        timingDump("check", input);
         const auto& diags = idx.diagnostics();
         for (const auto& d : diags) {
             const char* sev = d.severity == DiagSeverity::Error ? "error"
@@ -4130,7 +4217,13 @@ int main(int argc, char** argv)
         idx.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);
         idx.setLogDefault(g_logDefault);
         for (auto& m : preludeModuleUnits()) idx.addPreludeModule(m);
-        idx.analyze(units);
+        { Stopwatch sw(&timing().analyze); idx.analyze(units); }
+
+        // `kama query <f> --symbols` is a faithful proxy for one lspAnalyze, so timing it here is what
+        // makes the LSP's per-keystroke cost measurable without a JSON-RPC session. The dispatch below has
+        // a return in every arm, hence the RAII pair (dump declared first, so it fires last).
+        TimingScope tdump("query", input);
+        Stopwatch qw(&timing().query);
 
         auto parseLC = [](const std::string& s, int& l, int& c) -> bool {
             auto colon = s.find(':');
