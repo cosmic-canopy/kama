@@ -1414,6 +1414,10 @@ struct ManifestReader {
     LogConfig* logOut = nullptr;                          // set to capture the `log` config (M5)
     std::map<std::string, TargetSpec>* targetsOut = nullptr;  // set to capture `select.TARGET` entries
     std::map<std::string, SelectGroup>* groupsOut = nullptr;  // set to capture the other `select` groups
+    // The `select.TARGET` value carrying `"default": true`. TARGET needs its own sink because it is
+    // deliberately NOT a `g_selectGroups` entry (its values are triples with toolchains, not bare names),
+    // so it has no `SelectGroup::dflt` to write into.
+    std::string* defaultTargetOut = nullptr;
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -1553,6 +1557,14 @@ struct ManifestReader {
                 else if (k == "sysroot") { if (!str(t.sysroot))   return false; }
                 else if (k == "cflags")  { if (!stringArray(t.cflags))  return false; }
                 else if (k == "ldflags") { if (!stringArray(t.ldflags)) return false; }
+                // Same spelling every other select value uses (see valueGroup) — a project that only ever
+                // builds for one target declares it once instead of retyping `--target`, and the editor
+                // can then analyze for it too. `--target` still wins.
+                else if (k == "default") {
+                    if      (s.compare(i, 4, "true")  == 0) { if (defaultTargetOut) *defaultTargetOut = name; i += 4; }
+                    else if (s.compare(i, 5, "false") == 0) { i += 5; }
+                    else if (!skipValue()) return false;
+                }
                 else if (!skipValue()) return false;   // future target keys tolerated
                 ws();
                 if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -1791,7 +1803,8 @@ struct ManifestReader {
 // Load a `kama.json` manifest → the `select.TARGET` catalog. Reuses ManifestReader (unknown keys
 // tolerated), so this is orthogonal to the flag load.
 static bool loadManifestTargets(const std::string& path, std::map<std::string, TargetSpec>& out,
-                                std::map<std::string, SelectGroup>& groupsOut, std::string& err)
+                                std::map<std::string, SelectGroup>& groupsOut, std::string& err,
+                                std::string* defaultTargetOut = nullptr)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
@@ -1800,6 +1813,7 @@ static bool loadManifestTargets(const std::string& path, std::map<std::string, T
     ManifestReader r(src, ignoredDeclared, ignoredDefaults);
     r.targetsOut = &out;
     r.groupsOut  = &groupsOut;
+    r.defaultTargetOut = defaultTargetOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -1813,13 +1827,15 @@ static bool isReservedFlagName(const std::string& n)
         || builtinTargets().count(n) != 0;   // and every built-in TARGET name, so `--target X` stays unambiguous
 }
 
-// Reject a `flags` object that redeclares a build-configuration name. Prints and returns false.
-static bool reservedFlagCheck(const std::string& manifest, const std::set<std::string>& declared)
+// Reject a `flags` object that redeclares a build-configuration name. Fills `err` and returns false —
+// the caller decides whether that becomes stderr (CLI) or a `window/showMessage` (the LSP, M6 A1).
+static bool reservedFlagCheck(const std::string& manifest, const std::set<std::string>& declared,
+                              std::string& err)
 {
     for (const auto& d : declared)
         if (isReservedFlagName(d)) {
-            fprintf(stderr, "kama: %s: `%s` is a build-configuration name (set by --target/--release) "
-                            "and cannot be declared in `flags`\n", manifest.c_str(), d.c_str());
+            err = manifest + ": `" + d + "` is a build-configuration name (set by --target/--release) "
+                  "and cannot be declared in `flags`";
             return false;
         }
     return true;
@@ -1982,6 +1998,225 @@ static bool loadManifestNameVersion(const std::string& path, std::string& nameOu
     ManifestReader r(src, declared, defaults);
     r.nameOut = &nameOut; r.versionOut = &versionOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// ---- build configuration resolution ----------------------------------------------------------------
+// The manifest -> target -> flag-set sequence, lifted out of `main`. `kama lsp` returns ~185 lines
+// BEFORE this used to run inline, and that is precisely why the server's `@compileFor` set was empty:
+// not that the LSP forgot to call this, but that this was not callable. One copy of the precedence
+// rules, because two would drift (LSP M6 A1).
+//
+// `manifest` is already DISCOVERED by the caller, deliberately: the CLI looks next to the input then in
+// CWD, while an editor walks UP from the open file bounded by the workspace folder. Those are different
+// policies, and a `bool walkUp` parameter would smuggle an editor concern in here. Empty manifest =
+// permissive mode (no declared universe, no strict validation, host target, BUILD_TYPE=DEBUG).
+//
+// NOT included: the `.kama/deps` view-existence check. That is a BUILD precondition — a build reading a
+// missing view is wrong, but an editor in a freshly cloned repo still owes you diagnostics on what it
+// can see — so it stays in `main`, keyed off the manifest this echoes back.
+struct BuildConfigRequest {
+    std::string              manifest;                 // discovered kama.json ("" = permissive)
+    std::string              target = "HOST";          // --target: a catalog/manifest NAME or a triple
+    bool                     targetExplicit = false;   // was --target passed? (a manifest default must lose to it)
+    std::vector<std::string> selects, defines, undefines;
+    bool                     release = false;          // --release/--debug value
+    bool                     releaseExplicit = false;  // was either passed? (sugar must lose to --select)
+};
+struct BuildConfigResult {
+    std::string manifest;        // echoed back — the caller's dep-view check keys off it
+    std::string localManifest;   // the kama.local.json merged over it ("" = none)
+    std::string buildType;       // the winning BUILD_TYPE value (the editor reports it)
+    bool        release = false; // resolved BUILD_TYPE after `inherits` — main's `release` local
+};
+
+// Resolve `req` into the eight file-scope configuration globals. Returns false + `err` (no printing) on
+// a malformed manifest, an unknown target, a bad --select or an undeclared flag.
+static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult& out, std::string& err)
+{
+    // RESET first. Four of these accumulate (`insert` / `operator[]`), which never mattered while `main`
+    // was the only caller and called once. The LSP re-resolves on every manifest save, and without this
+    // the second resolve would be the UNION of both configurations — flags that should have gone away
+    // would linger, which is the one failure mode a config switch must not have.
+    g_activeFlags.clear();
+    g_declaredFlags.clear();
+    g_selectGroups.clear();
+    g_manifestTargets.clear();
+    g_strictFlags = false;
+    g_logDefault.clear();
+    g_target  = TargetSpec();
+    g_release = false;
+
+    bool        release = req.release;
+    std::string selTarget = req.target;
+
+    // Built-in groups first: a project may EXTEND BUILD_TYPE/OUTPUT, so they must exist before the
+    // manifest is read. `seedBuiltinSelectGroups` assigns rather than merges, so it is re-entrant.
+    seedBuiltinSelectGroups();
+
+    if (!req.manifest.empty()) {
+        const std::string& manifest = req.manifest;
+        std::set<std::string> declared, defaults;
+        std::string dfltTarget;                       // `select.TARGET` value carrying `"default": true`
+        if (!loadManifestFlags(manifest, declared, defaults, err)) { err = manifest + ": " + err; return false; }
+        if (!reservedFlagCheck(manifest, declared, err)) return false;
+        if (!loadManifestTargets(manifest, g_manifestTargets, g_selectGroups, err, &dfltTarget)) {
+            err = manifest + ": " + err;
+            return false;
+        }
+        // Baked log default (M5): the manifest `log` section becomes the project's compiled-in KAMA_LOG
+        // spec, seeded into the process env in `main` (overwrite=0, so `--log`/env still win).
+        LogConfig logCfg;
+        if (!loadManifestLog(manifest, logCfg, err)) { err = manifest + ": " + err; return false; }
+
+        // `kama.local.json` (M5.2): a gitignored sibling of the manifest that DEEP-MERGES over it for the
+        // fields the compiler reads directly here — `flags` (union: local declares/enables more), `select`
+        // (local targets win) and `log` (per-tag merge, local wins). Local-only by construction (never
+        // committed / never in the lockfile), so it can never perturb a reproducible or CI build. Its dep
+        // `overrides` + `registries` + `toolchain` local overrides (M5.3) are read on the install/selector
+        // paths (`resolveProject`, `resolvePin`), not here.
+        //
+        // It is ALSO the LSP's build-configuration override channel (M6 A1): the VS Code status-bar
+        // picker writes this file, so the editor and a plain `kama build` cannot disagree — one
+        // mechanism, honoured by every editor and by the CLI, and gitignored so CI never sees it.
+        std::string mdir = dirName(manifest);
+        std::string localManifest = (mdir == "." ? std::string() : mdir + "/") + "kama.local.json";
+        if (std::ifstream(localManifest).good()) {
+            out.localManifest = localManifest;
+            std::set<std::string> ldeclared, ldefaults;
+            if (!loadManifestFlags(localManifest, ldeclared, ldefaults, err)) {
+                err = localManifest + ": " + err;
+                return false;
+            }
+            if (!reservedFlagCheck(localManifest, ldeclared, err)) return false;
+            declared.insert(ldeclared.begin(), ldeclared.end());   // union — local extends the universe
+            defaults.insert(ldefaults.begin(), ldefaults.end());
+            std::map<std::string, TargetSpec> ltargets;
+            std::map<std::string, SelectGroup> lgroups;
+            std::string ldfltTarget;
+            if (!loadManifestTargets(localManifest, ltargets, lgroups, err, &ldfltTarget)) {
+                err = localManifest + ": " + err;
+                return false;
+            }
+            for (auto& kv : ltargets) g_manifestTargets[kv.first] = kv.second;   // local wins
+            for (auto& kv : lgroups) {                                            // local extends/wins
+                SelectGroup& g = g_selectGroups[kv.first];
+                for (const auto& v : kv.second.values) if (!g.has(v)) g.values.push_back(v);
+                for (const auto& iv : kv.second.inherits) g.inherits[iv.first] = iv.second;
+                if (!kv.second.dflt.empty()) g.dflt = kv.second.dflt;
+            }
+            if (!ldfltTarget.empty()) dfltTarget = ldfltTarget;
+            LogConfig localLog;
+            if (!loadManifestLog(localManifest, localLog, err)) { err = localManifest + ": " + err; return false; }
+            logCfg.applyLocal(localLog);
+        }
+
+        g_declaredFlags = declared;
+        // A declared select VALUE is a legitimate `@compileFor` name too — it enters the active set
+        // when its group selects it — so strict validation must accept it without the project also
+        // listing it under `flags`. (Built-in target names stay out: see kamaIsBuildConfigFlag.)
+        for (const auto& kv : g_selectGroups)
+            for (const auto& v : kv.second.values) g_declaredFlags.insert(v);
+        for (const auto& kv : g_manifestTargets) g_declaredFlags.insert(kv.first);
+        g_strictFlags   = true;
+        for (auto& d : defaults) g_activeFlags.insert(d);
+        g_logDefault = logCfg.canonical();
+
+        // A project that only ever builds for one target declares it once instead of retyping --target
+        // (and the editor then analyzes for it too). An explicit --target still wins.
+        if (!req.targetExplicit && !dfltTarget.empty()) selTarget = dfltTarget;
+    }
+    out.manifest = req.manifest;
+
+    // Resolve `--target` to a triple, against the built-in catalog plus whatever the manifest declared.
+    // An unknown NAME is an error, but anything containing '-' is an anonymous triple, so a one-off
+    // cross build needs no config file.
+    if (!resolveTarget(selTarget, g_manifestTargets, g_target, err)) return false;
+
+    // Build the active `@compileFor` flag set (the "structure" axis — reproducible, from the explicit
+    // build invocation, never ambient env). The selected target contributes its NAME plus one flag per
+    // triple component (ARCH_/OS_/ABI_) and `HOSTED`; `--release` contributes DEBUG/RELEASE. User flags
+    // come from `--define`, with the manifest's `"default": true` ones layered in above.
+    for (const auto& f : derivedTargetFlags(g_target, builtinTargets().count(g_target.name) != 0))
+        g_activeFlags.insert(f);
+
+    // Single-select groups. `--release`/`--debug` are sugar for `--select BUILD_TYPE=…`, and lose to an
+    // explicit `--select` on the same group so there is exactly one answer to "who won".
+    {
+        std::map<std::string, std::string> explicitSel;   // from --select only
+        for (const auto& sel : req.selects) {
+            size_t eq = sel.find('=');
+            if (eq == std::string::npos || eq == 0 || eq + 1 == sel.size()) {
+                err = "--select expects GROUP=VALUE (got '" + sel + "')";
+                return false;
+            }
+            std::string group = sel.substr(0, eq), value = sel.substr(eq + 1);
+            if (group == "TARGET") { err = "use --target for the TARGET group"; return false; }
+            auto g = g_selectGroups.find(group);
+            if (g == g_selectGroups.end()) {
+                std::string known;
+                for (const auto& kv : g_selectGroups) known += (known.empty() ? "" : ", ") + kv.first;
+                err = "--select names no such group '" + group + "' (declare it under `select` in "
+                      "kama.json; known: TARGET, " + known + ")";
+                return false;
+            }
+            if (!g->second.has(value)) {
+                std::string vals;
+                for (const auto& v : g->second.values) vals += (vals.empty() ? "" : "|") + v;
+                err = "'" + value + "' is not a value of select group " + group + " (expected " + vals + ")";
+                return false;
+            }
+            // One value per group is the whole point of a single-select axis: `--define WINDOWS --define
+            // LINUX` used to be silently accepted, and that ambiguity is what this replaces.
+            auto prev = explicitSel.find(group);
+            if (prev != explicitSel.end() && prev->second != value) {
+                err = "select group " + group + " given two values ('" + prev->second + "' and '" + value +
+                      "') — it is single-select";
+                return false;
+            }
+            explicitSel[group] = value;
+        }
+
+        // Precedence, lowest first: the group's own built-in default, the manifest's `default: true`,
+        // the `--release`/`--debug` sugar, then an explicit `--select`.
+        std::map<std::string, std::string> chosen;
+        chosen["BUILD_TYPE"] = "DEBUG";
+        for (const auto& kv : g_selectGroups)
+            if (!kv.second.dflt.empty()) chosen[kv.first] = kv.second.dflt;
+        if (req.releaseExplicit) chosen["BUILD_TYPE"] = release ? "RELEASE" : "DEBUG";
+        for (const auto& kv : explicitSel) chosen[kv.first] = kv.second;
+
+        for (const auto& kv : chosen) {
+            auto g = g_selectGroups.find(kv.first);
+            if (g == g_selectGroups.end()) continue;
+            std::set<std::string> chain;                             // the value plus what it inherits
+            collectInherited(g->second, kv.second, chain);
+            for (const auto& f : chain) g_activeFlags.insert(f);
+        }
+        // A user BUILD_TYPE inherits its base's driver behavior, so `FAST: {inherits: RELEASE}` gets
+        // -O3/-DNDEBUG/strip and `debugAssert` stripping without redeclaring any of it.
+        release        = g_activeFlags.count("RELEASE") != 0;
+        out.buildType  = chosen["BUILD_TYPE"];
+    }
+    g_release = release;   // release also strips `debugAssert` (threaded to the emitter via setRelease)
+    out.release = release;
+
+    // User flags: under strict mode (a manifest was loaded) validate names against the declared
+    // universe before applying. `--define` adds; `--undefine` removes (e.g. turning off a default).
+    for (const auto& d : req.defines) {
+        if (g_strictFlags && !isReservedFlagName(d) && !g_declaredFlags.count(d)) {
+            err = "--define references undeclared flag `" + d + "` (add it to the `flags` object in kama.json)";
+            return false;
+        }
+        g_activeFlags.insert(d);
+    }
+    for (const auto& u : req.undefines) {
+        if (g_strictFlags && !isReservedFlagName(u) && !g_declaredFlags.count(u)) {
+            err = "--undefine references undeclared flag `" + u + "` (add it to the `flags` object in kama.json)";
+            return false;
+        }
+        g_activeFlags.erase(u);
+    }
     return true;
 }
 
@@ -4415,6 +4650,7 @@ int main(int argc, char** argv)
     std::string output;
     std::string cc;                       // empty => pick default per target
     std::string target     = "HOST";      // a catalog/manifest NAME, or an <arch>-<os>-<abi> triple
+    bool targetExplicit    = false;        // was --target passed? (a manifest `"default": true` must lose to it)
     std::vector<std::string> links;        // -l libraries (FFI)
     bool        emitLines  = true;
     bool        keepC      = false;
@@ -4444,7 +4680,7 @@ int main(int argc, char** argv)
         else if (a == "-o" && i + 1 < argc)       output = argv[++i];
         else if (a == "--cc" && i + 1 < argc)     cc = argv[++i];
         else if (a == "--link" && i + 1 < argc)   links.push_back(argv[++i]);
-        else if (a == "--target" && i + 1 < argc) target = argv[++i];
+        else if (a == "--target" && i + 1 < argc) { target = argv[++i]; targetExplicit = true; }
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
         else if (a == "--webgpu")                 webgpu = true;
@@ -4499,121 +4735,59 @@ int main(int argc, char** argv)
     if (inputs.empty()) { fprintf(stderr, "kama: no input file\n"); usage(); return 2; }
     const std::string& input = inputs[0];   // first input drives default output naming
 
-    // Load the `kama.json` manifest if present (explicit `--config`, else auto-discovered next to the
-    // input file, else CWD). It DECLARES the valid user-flag universe — enabling STRICT validation of
-    // `@compileFor`/`--define` names (a typo like `WINODWS` is then rejected, not silently dropped) —
-    // may mark flags `"default": true` (active unless `--undefine`'d), and may declare `select` groups
-    // including project-specific targets. No manifest -> permissive: undeclared flags are simply
-    // inactive, so bare per-file builds need no config.
+    // Resolve the build configuration: the manifest's declared flag universe + `select` groups, the
+    // target triple and its derived flags, BUILD_TYPE, and the user `--define` set. All of it lives in
+    // `resolveBuildConfig` rather than inline here, because `kama lsp` returns ~185 lines above this
+    // point and so could never reach it — which is exactly why the server used to analyze with an empty
+    // `@compileFor` set (M6 A1). DISCOVERY stays here: the CLI looks next to the input file then in CWD,
+    // while the editor walks up from the open buffer bounded by its workspace folder.
+    BuildConfigRequest bcReq;
+    bcReq.manifest = configPath;
+    if (bcReq.manifest.empty()) {
+        std::string dir; size_t slash = input.find_last_of('/');
+        if (slash != std::string::npos) dir = input.substr(0, slash + 1);
+        if      (std::ifstream(dir + "kama.json").good()) bcReq.manifest = dir + "kama.json";
+        else if (std::ifstream("kama.json").good())       bcReq.manifest = "kama.json";
+    }
+    bcReq.target          = target;
+    bcReq.targetExplicit  = targetExplicit;
+    bcReq.selects         = selects;
+    bcReq.defines         = defines;
+    bcReq.undefines       = undefines;
+    bcReq.release         = release;
+    bcReq.releaseExplicit = releaseExplicit;
+
+    BuildConfigResult bcfg;
+    {
+        std::string cerr;
+        if (!resolveBuildConfig(bcReq, bcfg, cerr)) { fprintf(stderr, "kama: %s\n", cerr.c_str()); return 2; }
+    }
+    release = bcfg.release;
+
+    // Package deps (M2): if the manifest declares dependencies, the resolved view must already be
+    // materialized. The build is a pure, reproducible READ of the view — it never fetches — so a missing
+    // view is a user error pointing at `kama pkg install`, not a silent build. Under `--dev` the
+    // dev-dependency view must exist too (else the dev build silently misses them).
     //
-    // This runs BEFORE target resolution because a project may declare the very target being selected.
-    seedBuiltinSelectGroups();
-    {
-        std::string manifest = configPath;
-        if (manifest.empty()) {
-            std::string dir; size_t slash = input.find_last_of('/');
-            if (slash != std::string::npos) dir = input.substr(0, slash + 1);
-            if      (std::ifstream(dir + "kama.json").good()) manifest = dir + "kama.json";
-            else if (std::ifstream("kama.json").good())       manifest = "kama.json";
-        }
-        if (!manifest.empty()) {
-            std::set<std::string> declared, defaults; std::string err;
-            if (!loadManifestFlags(manifest, declared, defaults, err)) {
-                fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str());
+    // A BUILD precondition, deliberately NOT part of `resolveBuildConfig`: an editor in a freshly cloned
+    // repo still owes you diagnostics on what it can see, so it must not inherit this hard failure.
+    if (!bcfg.manifest.empty()) {
+        std::string mdir = dirName(bcfg.manifest);
+        std::map<std::string, DepSpec> deps, devDeps; std::string derr;
+        if (loadManifestDeps(bcfg.manifest, deps, derr, &devDeps)) {
+            if (!deps.empty() && !dirExists(mdir + "/.kama/deps")) {
+                fprintf(stderr, "kama: %s declares dependencies but %s/.kama/deps is missing — run `kama pkg install`\n",
+                        bcfg.manifest.c_str(), mdir.c_str());
                 return 2;
             }
-            if (!reservedFlagCheck(manifest, declared)) return 2;
-            if (!loadManifestTargets(manifest, g_manifestTargets, g_selectGroups, err)) {
-                fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str());
+            if (devBuild && !devDeps.empty() && !dirExists(mdir + "/.kama/dev-deps")) {
+                fprintf(stderr, "kama: %s declares dev-dependencies but %s/.kama/dev-deps is missing — run `kama pkg install`\n",
+                        bcfg.manifest.c_str(), mdir.c_str());
                 return 2;
-            }
-            // Baked log default (M5): the manifest `log` section becomes the project's compiled-in KAMA_LOG
-            // spec, seeded into the process env in `main` (overwrite=0, so `--log`/env still win).
-            LogConfig logCfg; std::string logErr;
-            if (!loadManifestLog(manifest, logCfg, logErr)) {
-                fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), logErr.c_str());
-                return 2;
-            }
-
-            // `kama.local.json` (M5.2): a gitignored sibling of the manifest that DEEP-MERGES over it for the
-            // fields the compiler reads directly here — `flags` (union: local declares/enables more), `select`
-            // (local targets win) and `log` (per-tag merge, local wins). Local-only by construction (never
-            // committed / never in the lockfile), so it can never perturb a reproducible or CI build. Its dep
-            // `overrides` + `registries` + `toolchain` local overrides (M5.3) are read on the install/selector
-            // paths (`resolveProject`, `resolvePin`), not here.
-            std::string mdir = dirName(manifest);
-            std::string localManifest = (mdir == "." ? std::string() : mdir + "/") + "kama.local.json";
-            if (std::ifstream(localManifest).good()) {
-                std::set<std::string> ldeclared, ldefaults; std::string lerr;
-                if (!loadManifestFlags(localManifest, ldeclared, ldefaults, lerr)) {
-                    fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
-                    return 2;
-                }
-                if (!reservedFlagCheck(localManifest, ldeclared)) return 2;
-                declared.insert(ldeclared.begin(), ldeclared.end());   // union — local extends the universe
-                defaults.insert(ldefaults.begin(), ldefaults.end());
-                std::map<std::string, TargetSpec> ltargets;
-                std::map<std::string, SelectGroup> lgroups;
-                if (!loadManifestTargets(localManifest, ltargets, lgroups, lerr)) {
-                    fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
-                    return 2;
-                }
-                for (auto& kv : ltargets) g_manifestTargets[kv.first] = kv.second;   // local wins
-                for (auto& kv : lgroups) {                                            // local extends/wins
-                    SelectGroup& g = g_selectGroups[kv.first];
-                    for (const auto& v : kv.second.values) if (!g.has(v)) g.values.push_back(v);
-                    for (const auto& iv : kv.second.inherits) g.inherits[iv.first] = iv.second;
-                    if (!kv.second.dflt.empty()) g.dflt = kv.second.dflt;
-                }
-                LogConfig localLog;
-                if (!loadManifestLog(localManifest, localLog, lerr)) {
-                    fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
-                    return 2;
-                }
-                logCfg.applyLocal(localLog);
-            }
-
-            g_declaredFlags = declared;
-            // A declared select VALUE is a legitimate `@compileFor` name too — it enters the active set
-            // when its group selects it — so strict validation must accept it without the project also
-            // listing it under `flags`. (Built-in target names stay out: see kamaIsBuildConfigFlag.)
-            for (const auto& kv : g_selectGroups)
-                for (const auto& v : kv.second.values) g_declaredFlags.insert(v);
-            for (const auto& kv : g_manifestTargets) g_declaredFlags.insert(kv.first);
-            g_strictFlags   = true;
-            for (auto& d : defaults) g_activeFlags.insert(d);
-            g_logDefault = logCfg.canonical();
-
-            // Package deps (M2): if the manifest declares dependencies, the resolved view must already
-            // be materialized. The build is a pure, reproducible READ of the view — it never fetches —
-            // so a missing view is a user error pointing at `kama pkg install`, not a silent build. Under
-            // `--dev` the dev-dependency view must exist too (else the dev build silently misses them).
-            std::map<std::string, DepSpec> deps, devDeps; std::string derr;
-            if (loadManifestDeps(manifest, deps, derr, &devDeps)) {
-                if (!deps.empty() && !dirExists(mdir + "/.kama/deps")) {
-                    fprintf(stderr, "kama: %s declares dependencies but %s/.kama/deps is missing — run `kama pkg install`\n",
-                            manifest.c_str(), mdir.c_str());
-                    return 2;
-                }
-                if (devBuild && !devDeps.empty() && !dirExists(mdir + "/.kama/dev-deps")) {
-                    fprintf(stderr, "kama: %s declares dev-dependencies but %s/.kama/dev-deps is missing — run `kama pkg install`\n",
-                            manifest.c_str(), mdir.c_str());
-                    return 2;
-                }
             }
         }
     }
 
-    // Resolve `--target` to a triple, against the built-in catalog plus whatever the manifest declared.
-    // An unknown NAME is an error, but anything containing '-' is an anonymous triple, so a one-off
-    // cross build needs no config file.
-    {
-        std::string terr;
-        if (!resolveTarget(target, g_manifestTargets, g_target, terr)) {
-            fprintf(stderr, "kama: %s\n", terr.c_str());
-            return 2;
-        }
-    }
     // Everything downstream keys off the RESOLVED target rather than the spelling the user typed:
     //   wasm     — the wasm backend (emcc, an .html/.js/.wasm harness)
     //   embedded — bare metal: no OS, hence freestanding (`-ffreestanding -nostdlib`) and stopping at an
@@ -4629,86 +4803,6 @@ int main(int argc, char** argv)
         fprintf(stderr, "kama run is native-only (wasm needs node/a browser; a bare-metal target emits a "
                         "freestanding object) — use `kama build --target %s`\n", target.c_str());
         return 2;
-    }
-
-    // Build the active `@compileFor` flag set (the "structure" axis — reproducible, from the explicit
-    // build invocation, never ambient env). The selected target contributes its NAME plus one flag per
-    // triple component (ARCH_/OS_/ABI_) and `HOSTED`; `--release` contributes DEBUG/RELEASE. User flags
-    // come from `--define`, with the manifest's `"default": true` ones layered in above.
-    for (const auto& f : derivedTargetFlags(g_target, builtinTargets().count(g_target.name) != 0))
-        g_activeFlags.insert(f);
-
-    // Single-select groups. `--release`/`--debug` are sugar for `--select BUILD_TYPE=…`, and lose to an
-    // explicit `--select` on the same group so there is exactly one answer to "who won".
-    {
-        std::map<std::string, std::string> explicitSel;   // from --select only
-        for (const auto& sel : selects) {
-            size_t eq = sel.find('=');
-            if (eq == std::string::npos || eq == 0 || eq + 1 == sel.size()) {
-                fprintf(stderr, "kama: --select expects GROUP=VALUE (got '%s')\n", sel.c_str());
-                return 2;
-            }
-            std::string group = sel.substr(0, eq), value = sel.substr(eq + 1);
-            if (group == "TARGET") { fprintf(stderr, "kama: use --target for the TARGET group\n"); return 2; }
-            auto g = g_selectGroups.find(group);
-            if (g == g_selectGroups.end()) {
-                std::string known;
-                for (const auto& kv : g_selectGroups) known += (known.empty() ? "" : ", ") + kv.first;
-                fprintf(stderr, "kama: --select names no such group '%s' (declare it under `select` in "
-                                "kama.json; known: TARGET, %s)\n", group.c_str(), known.c_str());
-                return 2;
-            }
-            if (!g->second.has(value)) {
-                std::string vals;
-                for (const auto& v : g->second.values) vals += (vals.empty() ? "" : "|") + v;
-                fprintf(stderr, "kama: '%s' is not a value of select group %s (expected %s)\n",
-                        value.c_str(), group.c_str(), vals.c_str());
-                return 2;
-            }
-            // One value per group is the whole point of a single-select axis: `--define WINDOWS --define
-            // LINUX` used to be silently accepted, and that ambiguity is what this replaces.
-            auto prev = explicitSel.find(group);
-            if (prev != explicitSel.end() && prev->second != value) {
-                fprintf(stderr, "kama: select group %s given two values ('%s' and '%s') — it is "
-                                "single-select\n", group.c_str(), prev->second.c_str(), value.c_str());
-                return 2;
-            }
-            explicitSel[group] = value;
-        }
-
-        // Precedence, lowest first: the group's own built-in default, the manifest's `default: true`,
-        // the `--release`/`--debug` sugar, then an explicit `--select`.
-        std::map<std::string, std::string> chosen;
-        chosen["BUILD_TYPE"] = "DEBUG";
-        for (const auto& kv : g_selectGroups)
-            if (!kv.second.dflt.empty()) chosen[kv.first] = kv.second.dflt;
-        if (releaseExplicit) chosen["BUILD_TYPE"] = release ? "RELEASE" : "DEBUG";
-        for (const auto& kv : explicitSel) chosen[kv.first] = kv.second;
-
-        for (const auto& kv : chosen) {
-            auto g = g_selectGroups.find(kv.first);
-            if (g == g_selectGroups.end()) continue;
-            std::set<std::string> chain;                             // the value plus what it inherits
-            collectInherited(g->second, kv.second, chain);
-            for (const auto& f : chain) g_activeFlags.insert(f);
-        }
-        // A user BUILD_TYPE inherits its base's driver behavior, so `FAST: {inherits: RELEASE}` gets
-        // -O3/-DNDEBUG/strip and `debugAssert` stripping without redeclaring any of it.
-        release = g_activeFlags.count("RELEASE") != 0;
-    }
-    g_release = release;   // release also strips `debugAssert` (threaded to the emitter via setRelease)
-
-    // User flags: under strict mode (a manifest was loaded) validate names against the declared
-    // universe before applying. `--define` adds; `--undefine` removes (e.g. turning off a default).
-    {
-        auto validate = [&](const std::string& name, const char* what) -> bool {
-            if (!g_strictFlags || isReservedFlagName(name) || g_declaredFlags.count(name)) return true;
-            fprintf(stderr, "kama: %s references undeclared flag `%s` (add it to the `flags` object in "
-                            "kama.json)\n", what, name.c_str());
-            return false;
-        };
-        for (auto& d : defines)   { if (!validate(d, "--define"))   return 2; g_activeFlags.insert(d); }
-        for (auto& u : undefines) { if (!validate(u, "--undefine")) return 2; g_activeFlags.erase(u); }
     }
 
     // Resolve the OUTPUT axis. `--shared` is sugar for `--select OUTPUT=SHARED`; the default depends on

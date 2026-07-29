@@ -192,6 +192,46 @@ if ! "$KAMA" transpile --no-line "$spec/app.kama" --target RPI -o "$spec/app.c" 
     exit 1
 fi
 
+# 9b. A DECLARED DEFAULT TARGET (LSP M6 A1.2). Every other select value could carry `"default": true`,
+#     but `select.TARGET` parsed only triple/cc/ar/sysroot/cflags/ldflags — so a project that only ever
+#     builds for one board had to retype `--target` forever, and (the reason this got fixed here) an
+#     editor had no way to know which target to analyze for. Precedence must be:
+#         built-in HOST  <  kama.json default  <  kama.local.json default  <  --target
+dflt="$tmp/dflt"
+mkdir -p "$dflt"
+cat > "$dflt/kama.json" <<'JSON'
+{ "name": "board-only", "version": "0.1.0",
+  "select": { "TARGET": { "BOARD": { "triple": "riscv32-none-elf", "default": true } } } }
+JSON
+cat > "$dflt/gated.kama" <<'KAMA'
+@compileFor(OS_NONE)  fn int32 bare() { return 1; }
+@compileFor(!OS_NONE) fn int32 hosted() { return 0; }
+KAMA
+symbols() { "$KAMA" query "$dflt/gated.kama" --symbols 2>/dev/null; }
+if ! symbols | grep -q 'function bare'; then
+    echo "check-target: FAIL — a kama.json default target did not take effect (expected OS_NONE)" >&2
+    symbols | sed 's/^/    /' >&2; exit 1
+fi
+if symbols | grep -q 'function hosted'; then
+    echo "check-target: FAIL — the default target was declared bare-metal but HOSTED decls survived" >&2
+    exit 1
+fi
+# an explicit --target still wins over the manifest default
+if ! "$KAMA" query "$dflt/gated.kama" --symbols --target HOST 2>/dev/null | grep -q 'function hosted'; then
+    echo "check-target: FAIL — --target did not override the manifest's default target" >&2
+    exit 1
+fi
+# and kama.local.json overrides the manifest default (this is the LSP's configuration channel, so it
+# has to work through exactly the same precedence the CLI uses — one mechanism, not two)
+cat > "$dflt/kama.local.json" <<'JSON'
+{ "select": { "TARGET": { "HOSTDEV": { "triple": "aarch64-macos-none", "default": true } } } }
+JSON
+if ! symbols | grep -q 'function hosted'; then
+    echo "check-target: FAIL — kama.local.json did not override the manifest's default target" >&2
+    symbols | sed 's/^/    /' >&2; exit 1
+fi
+rm -f "$dflt/kama.local.json"
+
 # 10. OUTPUT AXIS — the artifact kind is its own single-select group rather than a `--shared` boolean plus
 #     "bare metal implies object". STATIC is new capability (kama could not produce a `.a` at all), and
 #     OBJECT on a HOSTED target proves object output is no longer welded to bare metal.
@@ -232,4 +272,5 @@ fi
 
 echo "check-target: PASS (link/compile flags follow the selected target, not the host: winsock, section GC,
   shared-library extension, freestanding keyed on os=none rather than a target name; cross builds refuse
-  without a toolchain, transpile always works, zig cc gets -target, kama.json target specs apply;\n  OUTPUT selects exe/shared/static/object, incl. static archives and hosted object output)"
+  without a toolchain, transpile always works, zig cc gets -target, kama.json target specs apply;
+  a declared default target applies and loses to --target;\n  OUTPUT selects exe/shared/static/object, incl. static archives and hosted object output)"
