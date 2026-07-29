@@ -1,6 +1,6 @@
 # Build configuration — selection groups, target triples, cross-compilation
 
-**Status: IN PROGRESS (started 2026-07-29).** Design of record for the build-configuration campaign.
+**Status: ✅ SHIPPED 2026-07-29** (`fdc9a75`, `d8e8950`, `69b95fd`, `45756a1`, `0c6cd7c` on dev). Design of record for the build-configuration campaign.
 Supersedes the flag-source decisions in [conditional-compilation.md](conditional-compilation.md)
 (open-Q4 in particular, which leaned "`--define` for v1, a dedicated axis later" — this is that
 axis). Sequenced **before** [LSP M6](lsp-m6-kickoff.md), which needs a flag model to point the editor
@@ -29,10 +29,13 @@ targets — mac, Windows, Linux, web (wasm) — plus real cross-compilation.**
 
 ## The primitive — one named selection group
 
-A **selection group** has a name, a set of values, and a selection mode: `single` (mutually
-exclusive — a dropdown) or `multi` (a checkbox bag). **A selected value's name is inserted into the
-active flag set**, so `@compileFor(WINDOWS)` needs no language change — `compileForActive`
-(kama.cemit.cpp:13923) is already set-membership, and `pruneInactiveDecls` is untouched.
+A **selection group** is single-select: pick exactly one value, and its name joins the active flag
+set. `@compileFor(XBOX)` therefore needs no language change — `compileForActive` is already
+set-membership, and `pruneInactiveDecls` is untouched.
+
+There is deliberately **no user-declared MULTI group**: `flags` already *is* the one multi-select bag,
+and a second grouping mechanism would buy only presentation. Every group shares one manifest shape —
+`{ "<VALUE>": { … } }`, the same as `flags` — rather than inventing a second spelling.
 
 This is the MSBuild Configuration×Platform model and Gradle's flavor dimensions, generalized. Related
 prior art: Cargo user-definable profiles (`[profile.x] inherits`) and features; Zig's typed build
@@ -43,24 +46,24 @@ a dropdown).
 
 | Group | Mode | Values | Drives |
 |---|---|---|---|
-| `TARGET` | single | `HOST` (default), `MACOS`, `WINDOWS`, `LINUX`, `WASM` — a catalog of triples | the C toolchain + every platform-derived flag |
+| `TARGET` | single | `HOST` (default), `MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED` — a catalog of triples | the C toolchain + every platform-derived flag |
 | `BUILD_TYPE` | single | `DEBUG` (default), `RELEASE` | optimization, stripping, `debugAssert`, log-level baking |
 | `OUTPUT` | single | `EXE` (default), `SHARED`, `STATIC`, `OBJECT` | link mode and artifact kind |
 | `flags` | multi | user-declared | nothing but `@compileFor` |
 
 All three are **user-extendible**. `flags` is the existing multi-select bag, unchanged.
 
-### `NATIVE` and `EMBEDDED` are retired
+### `NATIVE` and `EMBEDDED` stop being modes
 
-Both were special cases standing in for facts a triple already carries. Removing them removes special
-cases rather than adding them:
+Both were special cases standing in for facts a triple already carries. `NATIVE` is gone outright;
+`EMBEDDED` survives only as a catalog NAME (an `os=none` shortcut), never as a gate:
 
 - **`EMBEDDED` → `os=none`.** Freestanding (`-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED`), no
   entry point, weak panic hook, `OUTPUT` defaulting to `OBJECT` — all keyed on the derived `OS_NONE`
   flag, so *any* bare-metal triple gets it (`xtensa-none-elf`, `riscv32-none-elf`,
   `thumbv7em-none-eabihf`), not one blessed value.
-- **`WASM`'s driver behavior** (emcc, `.html`+`.js`+`.wasm` harness, `-Oz`) keys on `ARCH_WASM32` /
-  `ABI_EMSCRIPTEN`. `WASM` becomes an ordinary catalog entry, not a mode.
+- **`WASM`'s driver behavior** (emcc, `.html`+`.js`+`.wasm` harness, `-Oz`) keys on `ARCH_WASM32`
+  (`wasm32-emscripten-none`). `WASM` becomes an ordinary catalog entry, not a mode.
 - **`NATIVE` → `HOST`**, which resolves to a *real* triple. So `OS_MACOS` / `ARCH_AARCH64` exist for
   plain native builds — capability kama does not have today.
 
@@ -70,8 +73,11 @@ A `TARGET` value is a **name that declares a triple**. Selecting it inserts the 
 component flags**:
 
 ```
---target RPI          where RPI = aarch64-linux-gnu
+--target RPI          where RPI = aarch64-linux-gnu (declared by the project)
   → { RPI, ARCH_AARCH64, OS_LINUX, ABI_GNU, HOSTED }
+
+--target EMBEDDED     a built-in shortcut for <host-arch>-none-none
+  → { ARCH_AARCH64, OS_NONE, ABI_NONE }      note: no `EMBEDDED` flag — see below
 ```
 
 **Form: Zig's 3-part `arch-os-abi`**, not GNU's 4-part `arch-vendor-os-abi`. `vendor` is vestigial
@@ -83,6 +89,12 @@ way to `cc`.
 | arch | `x86_64`, `aarch64`, `riscv64`, `wasm32`, `thumbv7em`, `xtensa` | `ARCH_<UPPER>` |
 | os | `linux`, `windows`, `macos`, `wasi`, `none` | `OS_<UPPER>` |
 | abi | `gnu`, `musl`, `msvc`, `eabihf`, `emscripten` | `ABI_<UPPER>` |
+
+A **built-in catalog name is NOT a flag.** `MACOS`/`EMBEDDED` are shortcuts for a triple family, so
+gating on one would gate on how the build was *spelled*: `@compileFor(EMBEDDED)` would silently stop
+applying the moment a real board triple (`xtensa-none-elf`) replaced the shortcut. `@compileFor(OS_NONE)`
+is the fact, and holds for both. A **user-declared** target name *is* a fact about a target the project
+defined, so it does become a flag — that is the `@compileFor(RPI)` granularity.
 
 Plus exactly **one synthesized flag: `HOSTED`** (any `os != none`). "Do I have an OS and a libc" is
 the most common gate in a systems language and `!OS_NONE` reads badly. Everything else is a literal
@@ -109,7 +121,7 @@ Names are conveniences, triples are exact.
                                "sysroot": "/opt/rpi-sysroot", "cflags": [], "ldflags": [] },
                     "ESP32": { "triple": "xtensa-none-elf" } },
     "BUILD_TYPE": { "FAST":  { "inherits": "RELEASE" } },
-    "CONSOLE":    { "values": ["XBOX", "PS5", "SWITCH"] }
+    "CONSOLE":    { "XBOX": { "default": true }, "PS5": {}, "SWITCH": {} }
   },
   "flags": { "TELEMETRY": { "default": true }, "PROFILING": {} }
 }

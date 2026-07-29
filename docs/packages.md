@@ -362,6 +362,9 @@ entry it declares *extends* the valid flag universe.
 {
   "log":        { "level": "debug", "tags": { "audio": "trace" } },  // build-time (compiler)
   "flags":      { "MY_EXPERIMENT": { "default": true } },            // build-time (compiler)
+  "select":     { "TARGET": { "RPI": { "triple": "aarch64-linux-gnu",  // build configuration groups
+                                       "cc": "aarch64-linux-gnu-gcc" } },
+                  "BUILD_TYPE": { "FAST": { "inherits": "RELEASE" } } },
   "overrides":  { "geometry": { "path": "../geometry" } },           // install-time (kama pkg install)
   "registries": { "default": ["file:///srv/mirror"] },              // install-time (kama pkg install)
   "toolchain":  "1.3.0"                                              // selector (which compiler runs)
@@ -370,7 +373,13 @@ entry it declares *extends* the valid flag universe.
 
 Precedence, high to low: **`--log`/`KAMA_LOG` (runtime) > `kama.local.json` > `kama.json`**.
 
-**Build-time fields** (`log`, `flags`) are read by the compiler and merge field-by-field, as above.
+**Build-time fields** (`log`, `flags`, `select`) are read by the compiler and merge field-by-field, as
+above. **`select`** declares this project's build-configuration groups — extra targets (each with an
+optional cross toolchain), extra build types, and any single-select axis of your own. It is described
+in full in [design/build-configuration.md](design/build-configuration.md); the short version is that a
+group takes exactly one value, that value's name becomes a `@compileFor` flag, and `--select
+GROUP=VALUE` picks it. A local manifest may add targets and change defaults, so a developer can point
+a cross target at their own sysroot without editing the committed file.
 
 **Install-time fields** are read by `kama pkg install`:
 

@@ -523,6 +523,34 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
 
 ## 10. Tooling / distribution (deferred)
 
+- **Build configuration + cross-compilation — ✅ SHIPPED 2026-07-29** (`fdc9a75`…`0c6cd7c`). Design of
+  record: [design/build-configuration.md](design/build-configuration.md). Replaces the half-formed flag
+  model `@compileFor` shipped with, and **resolves conditional-compilation open-Q4** ("how are
+  WINDOWS/MAC/LINUX/XBOX set?", which had leaned "`--define` for v1, a dedicated axis later").
+  - **Targets are `<arch>-<os>-<abi>` triples**, not a three-valued backend enum. Each component derives
+    a `@compileFor` flag (`ARCH_AARCH64`, `OS_LINUX`, `ABI_GNU`, plus `HOSTED`), which is Rust's
+    `cfg(target_os)`/`cfg(target_arch)` in kama's flat-boolean vocabulary — **no new language
+    mechanism**; `compileForActive` was already set-membership. Built-in catalog: `HOST`, `MACOS`,
+    `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`; a project adds its own; a bare triple needs no config.
+    `NATIVE`/`EMBEDDED` stop being hardcoded gates — bare metal is now `os=none`, so a real board triple
+    gets the freestanding treatment without the compiler having heard of that board.
+  - **One primitive: the single-select group.** `TARGET`, `BUILD_TYPE` and `OUTPUT` are built-in
+    instances; a project declares its own under `select` in `kama.json`, with `inherits` (Cargo
+    profiles / Gradle `initWith`). `--select GROUP=VALUE`; one value per group is enforced, which is
+    the ambiguity `--define WINDOWS --define LINUX` accepted silently. `flags` remains the one
+    multi-select bag. This is MSBuild's Configuration×Platform, generalized.
+  - **Real cross-compilation.** Every compile/link flag now follows the selected target instead of
+    `#ifdef` on the machine the compiler was built on — the one hard blocker, most sharply `-lws2_32`,
+    which a Windows build produced on Linux silently omitted. `zig cc` (already bundled for machines
+    with no C compiler) cross-compiles to any triple with one `-target`; a project can also declare a
+    `cc`/`ar`/`sysroot`/`cflags`/`ldflags` per target; `kama transpile --target …` always works.
+  - **Library output.** `OUTPUT = EXE|SHARED|STATIC|OBJECT`. **Static libraries are new** (kama could
+    not emit a `.a` at all), as is object output on a *hosted* target — previously welded to bare metal.
+  - Guard: `tools/check-target.sh` (stubs the C compiler with `--cc echo`, so it proves the target
+    keying with no cross toolchain installed), plus 10 new `tools/check-compilefor.sh` cases.
+  - **Follow-ons, recorded not built:** per-value `BUILD_TYPE` settings (own opt-level/LTO/strip — kept
+    out so `kama.json` does not become a build-settings language); numeric build options surfaced as
+    `comptime` constants rather than as flag comparisons (`@compileFor` stays tagging, not logic).
 - **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
   deferred. (What ships today in `editor/vscode/`: TextMate **syntax highlighting** + language-configuration
   + **zero-config source-level debugging** — F5 builds and launches under CodeLLDB with breakpoints mapped

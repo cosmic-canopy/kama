@@ -1037,19 +1037,43 @@ type contract Clock for both { fn int32 tick(); }
 @compileFor(WASM)   type value WasmClock   implements Clock { ... }   // wasm build keeps this
 ```
 
-**Flags** are reproducible — from the explicit build invocation, never ambient environment:
+**Flags** are reproducible — from the explicit build invocation, never ambient environment. They come
+from two places: **single-select groups** (pick one value; its name becomes a flag) and the
+**multi-select `flags` bag** (any number on at once).
 
-- **Built-in**: `NATIVE`/`WASM`/`EMBEDDED` from `--target`; `DEBUG`/`RELEASE` from `--release`.
-- **User**: repeatable `--define NAME` / `--undefine NAME`.
-- **`kama.json` manifest** (a *user-project* file, auto-discovered next to the source or via `--config
-  PATH`) DECLARES the valid user-flag universe and turns on **strict validation** — an undeclared
-  `@compileFor`/`--define` name is then rejected (typo protection). Without a manifest, builds are
-  permissive (an undeclared flag is simply inactive), so bare single-file builds need no config.
+- **`TARGET`** — the platform this runs on, selected with `--target`. Its value is a
+  `<arch>-<os>-<abi>` **triple**, and each component becomes a flag: `ARCH_AARCH64`, `OS_LINUX`,
+  `ABI_GNU`, plus `HOSTED` for any `os != none`. Built-ins: `HOST` (the default — this machine),
+  `MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`. A project adds its own; anything containing `-` is
+  taken as a bare triple, so `--target aarch64-linux-gnu` needs no config at all.
+- **`BUILD_TYPE`** — `DEBUG` (default) / `RELEASE`, selected with `--release`/`--debug`.
+- **`OUTPUT`** — `EXE` (default) / `SHARED` / `STATIC` / `OBJECT`.
+- **User flags** — repeatable `--define NAME` / `--undefine NAME`, declared in `kama.json`.
+
+Gate on the **derived** flag rather than a target name: `@compileFor(OS_NONE)` holds for `EMBEDDED`
+*and* for a real board triple like `xtensa-none-elf`, whereas a built-in name describes only how the
+build was spelled — which is why built-in target names are not flags at all.
+
+**`kama.json`** (a *user-project* file, auto-discovered next to the source or via `--config PATH`)
+declares the valid user-flag universe and any extra groups, and turns on **strict validation** — an
+undeclared `@compileFor`/`--define` name is then rejected (typo protection). Without a manifest, builds
+are permissive (an undeclared flag is simply inactive), so bare single-file builds need no config.
 
 ```json
 { "name": "myapp", "version": "0.1.0",
-  "flags": { "WINDOWS": {}, "MAC": {}, "LINUX": {}, "TELEMETRY": { "default": true } } }
+  "select": {
+    "TARGET":     { "RPI":  { "triple": "aarch64-linux-gnu", "cc": "aarch64-linux-gnu-gcc" } },
+    "BUILD_TYPE": { "FAST": { "inherits": "RELEASE" } },
+    "CONSOLE":    { "XBOX": { "default": true }, "PS5": {} }
+  },
+  "flags": { "TELEMETRY": { "default": true }, "PROFILING": {} } }
 ```
+
+A **single-select group** takes exactly one value — `--select CONSOLE=PS5 --select CONSOLE=XBOX` is an
+error — and `inherits` pulls the base in with it, so `FAST` activates `RELEASE` and gets its
+optimization/stripping behavior without redeclaring it. `kama.local.json` overrides defaults per
+machine. Precedence: CLI > `kama.local.json` > `kama.json` > the built-in default. Full design:
+[docs/design/build-configuration.md](design/build-configuration.md).
 
 `kama.json` is the seed of the future package-management manifest (deps/versions). It is parsed by the
 compiler driver (C++), not by the language's own JSON library — the compiler is not self-hosted, so its
@@ -1980,18 +2004,27 @@ Result<Shared<Node>, DeError> g = decode::<Shared<Node>>(src: give wire);
 ## Building & debugging ✅
 
 ```sh
-kama build app.kama                 # native debug (-g, breakpoints in .kama via #line)
-kama build app.kama --release       # optimized, stripped, NDEBUG
-kama build app.kama --target wasm   # browser: .html + .js + .wasm
-kama build app.kama --target embedded   # bare-metal: a -ffreestanding -nostdlib object (.o)
+kama build app.kama                          # this host, debug (-g, breakpoints in .kama via #line)
+kama build app.kama --release                # optimized, stripped, NDEBUG
+kama build app.kama --target wasm            # browser: .html + .js + .wasm
+kama build app.kama --target EMBEDDED        # bare-metal: a -ffreestanding -nostdlib object (.o)
+kama build app.kama --target aarch64-linux-gnu --cc "zig cc"   # cross-compile to any triple
+kama build lib.kama --select OUTPUT=STATIC   # a static library (libapp.a)
 ```
 
-**`--target embedded`** is the freestanding bare-metal build (MCU): it compiles to a `-ffreestanding
--nostdlib` **object** rather than a linked executable. The synthesized entry becomes `int main(void) {
+**`--target`** takes a built-in name (`HOST`, `MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`), a target
+your `kama.json` declares, or a bare `<arch>-<os>-<abi>` triple. Every compile and link flag follows the
+selected target rather than the machine you are building on, so cross-compiling is a matter of having a
+C compiler that can reach the target: `zig cc` does out of the box (it ships musl/mingw-w64/wasi-libc),
+or declare a `cc` for the target in `kama.json`. Without one, `kama transpile --target …` always works —
+emit the C and build it with someone else's toolchain.
+
+**A bare-metal target** (any triple with `os=none`, of which `EMBEDDED` is the shortcut for this host's
+arch) compiles to a `-ffreestanding -nostdlib` **object** rather than a linked executable. The synthesized entry becomes `int main(void) {
 kama_main(); for(;;){} }` — no `argc/argv` (there is none), and `main` never returns (a startup/crt0 calls
 it and it spins). Fatal conditions (bounds/panic/OOM) route through an overridable **weak `kama_panic_handler`**
-(default `for(;;) __builtin_trap()`) — provide a strong symbol to blink/reset/breakpoint. It is triple-agnostic:
-pass the CPU triple (e.g. `--cc "clang -target thumbv7em-none-eabi -mcpu=cortex-m4"`), and link the object with
+(default `for(;;) __builtin_trap()`) — provide a strong symbol to blink/reset/breakpoint. Name the board's triple directly
+(`--target thumbv7em-none-eabihf`, with a `cc` that can reach it), and link the object with
 your chip's startup object + linker script (memory map) as a separate step — turnkey triples, linker scripts,
 and vendor HALs are a later milestone. A module `static hardware Ptr<T>` lowers to a `volatile T*` MMIO register,
 and module `static`s become plain zero-cost `static`s (one core = one isolate).

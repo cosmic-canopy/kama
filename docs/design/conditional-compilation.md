@@ -1,6 +1,15 @@
 # Conditional compilation via decl-level tags (`@compileFor`) — design of record
 
-**Status: ✅ SHIPPED 2026-07-24.** All three stages landed green (native 752 / ASan 735 / wasm). This is
+**Status: ✅ SHIPPED 2026-07-24.** ⚠️ Its *flag-source* decisions were SUPERSEDED on 2026-07-29 by
+[build-configuration.md](build-configuration.md) — read that for where flags come from today. The
+`@compileFor` gate itself (decl-level tagging, membership + `!` + comma-AND, one `pruneInactiveDecls`
+pass) is unchanged; what changed is that `NATIVE`/`WASM`/`EMBEDDED` are no longer hardcoded built-ins.
+Targets are now `<arch>-<os>-<abi>` triples whose components DERIVE the flags (`OS_LINUX`,
+`ARCH_AARCH64`, `ABI_GNU`, `HOSTED`), and single-select groups replace the `--define WINDOWS`
+convention — **which resolves open-Q4 below** ("how are WINDOWS/MAC/LINUX/XBOX set?", leaned
+"`--define` for v1, a dedicated axis later"). That axis is `TARGET` for platforms and a user-declared
+`select` group for things like consoles.
+ All three stages landed green (native 752 / ASan 735 / wasm). This is
 the **structure** axis that pairs with const-eval's **value** axis: const-eval bakes compile-time *values*
 (tables, sizes); this feature selects which whole *declarations* exist for a given build. Roadmap of
 record: ROADMAP.md §5 (the "Conditional / platform-specific compilation" bullet); user reference:
