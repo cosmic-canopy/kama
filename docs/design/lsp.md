@@ -1,7 +1,20 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
 **Status: M5 COMPLETE — all of M0–M5 shipped (M5 on 2026-07-28, dev). NEXT = M6** — editor clients;
-cold-start brief: **[lsp-m6-kickoff.md](lsp-m6-kickoff.md)**. M5 made the server feel good rather than
+cold-start brief: **[lsp-m6-kickoff.md](lsp-m6-kickoff.md)**.
+
+> **Interleaved before M6: the build-configuration campaign** (✅ shipped 2026-07-29,
+> `fdc9a75`…`fbe69f5`; [build-configuration.md](build-configuration.md)). Sequenced first because M6's
+> deferred item 3c — *the LSP never calls `setBuildFlags`, so the editor analyzes a different program
+> than the compiler* — turned out to need a **decision** about what an editor should analyze under, and
+> the flag model it would have pointed at was half-formed. Targets are now `<arch>-<os>-<abi>` triples
+> whose components derive the `@compileFor` flags, `TARGET`/`BUILD_TYPE`/`OUTPUT` are user-extensible
+> single-select groups declared in `kama.json`, cross-compilation works, and static libraries exist.
+> M6 3c is now a wiring job with a settled answer, and the group model is what the VS Code client's
+> configuration switcher will read. **M7 is now the tree-sitter grammar** (Neovim/Helix/Zed
+> highlighting + a Zed extension), moved out of M6 by the user on 2026-07-28.
+
+M5 made the server feel good rather than
 merely work: error recovery (many diagnostics instead of one, and queries keep answering on a broken
 buffer) and a per-keystroke cost inside the 100 ms budget on every measured file
 ([lsp-m5-kickoff.md](lsp-m5-kickoff.md)). Interleaved before M4: workspace-internal dependencies
@@ -249,10 +262,15 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
   ⚠️ The brief was wrong in three load-bearing places (the perf thesis, "analysis never mutates the AST",
   and the recovery staging, which was backwards and would have silently regressed completion) — see its
   "Three places the original brief was wrong".
+- **M7 — tree-sitter grammar + Zed extension. `M/L`. POST-1.0.** Unlocks real syntax highlighting in
+  Neovim, Helix and Zed (and GitHub linguist), and a Zed extension cannot exist without it. Split out of
+  M6 by the user (2026-07-28) because it is a *third* grammar to keep in sync with `kama.l`/`kama.y` and
+  wants its own drift guard. Does not gate 1.0.
 - **M6 — Editor/IDE matrix + packaging + tests. `S/M`. NEXT / ACTIVE.** Cold-start brief:
   [lsp-m6-kickoff.md](lsp-m6-kickoff.md), which also carries the three items M4 and M5 deliberately
   deferred (argument-label indexing, the undeclared-import diagnostic, and the LSP's missing
-  `setBuildFlags`). One `kama lsp` server, thin clients — wire up
+  `setBuildFlags` — the last now unblocked by the build-configuration campaign), the ten already-found
+  TextMate grammar defects, and `textDocument/semanticTokens`. One `kama lsp` server, thin clients — wire up
   every editor with a generic LSP client and document each in `docs/editors.md`. `tools/check-lsp.sh`-style
   harness driving the server over stdio with fixture requests/responses.
   - **Target matrix (each = a few lines of config pointing at `kama lsp`):** **VS Code** (✅ done — the
