@@ -57,19 +57,78 @@ fi
 proj="$tmp/proj"
 mkdir -p "$proj"
 cat > "$proj/kama.json" <<'JSON'
-{ "name": "strict-demo", "version": "0.1.0", "flags": { "WINDOWS": {} } }
+{ "name": "strict-demo", "version": "0.1.0", "flags": { "TELEMETRY": {} } }
 JSON
 cat > "$proj/app.kama" <<'KAMA'
-@compileFor(WINODWS) fn int32 typo() { return 1; }
+@compileFor(TELMETRY) fn int32 typo() { return 1; }
 fn int32 main() { return 0; }
 KAMA
 if "$KAMA" build "$proj/app.kama" -o "$proj/app" >/dev/null 2>"$tmp/strict.err"; then
-    echo "check-compilefor: FAIL — strict manifest accepted an undeclared @compileFor flag (WINODWS)" >&2
+    echo "check-compilefor: FAIL — strict manifest accepted an undeclared @compileFor flag (TELMETRY)" >&2
     exit 1
 fi
 if ! grep -qF "undeclared flag" "$tmp/strict.err"; then
     echo "check-compilefor: FAIL — undeclared-flag rejected, but not with the expected diagnostic:" >&2
     sed 's/^/  /' "$tmp/strict.err" >&2
+    exit 1
+fi
+
+# 4b. RESERVED NAMES — the build configuration owns DEBUG/RELEASE/HOSTED, the OS_/ARCH_/ABI_ namespaces
+#     and every built-in TARGET name. A `flags` entry may not claim one: before targets were triples,
+#     `--define WINDOWS` was the platform convention, and silently allowing it back would give a project
+#     two different `WINDOWS`es that mean different things.
+res="$tmp/reserved"
+mkdir -p "$res"
+cat > "$res/kama.json" <<'JSON'
+{ "name": "reserved-demo", "version": "0.1.0", "flags": { "WINDOWS": {} } }
+JSON
+cat > "$res/app.kama" <<'KAMA'
+fn int32 main() { return 0; }
+KAMA
+if "$KAMA" build "$res/app.kama" -o "$res/app" >/dev/null 2>"$tmp/reserved.err"; then
+    echo "check-compilefor: FAIL — a manifest declared the built-in target name WINDOWS as a user flag" >&2
+    exit 1
+fi
+if ! grep -qF "build-configuration name" "$tmp/reserved.err"; then
+    echo "check-compilefor: FAIL — reserved-name rejection used an unexpected diagnostic:" >&2
+    sed 's/^/  /' "$tmp/reserved.err" >&2
+    exit 1
+fi
+
+# 4c. TARGET RESOLUTION — a bare NAME comes from the built-in catalog (case-insensitively), anything with
+#     a '-' is an anonymous <arch>-<os>-<abi> triple needing no config at all, and an unknown name is a
+#     hard error that lists what IS available.
+if ! "$KAMA" transpile --no-line "$ROOT/tests/arith.kama" --target aarch64-linux-gnu -o "$tmp/tri.c" >/dev/null 2>&1; then
+    echo "check-compilefor: FAIL — an anonymous target triple was rejected" >&2
+    exit 1
+fi
+if "$KAMA" transpile --no-line "$ROOT/tests/arith.kama" --target NOSUCHTARGET -o "$tmp/no.c" >/dev/null 2>"$tmp/tgt.err"; then
+    echo "check-compilefor: FAIL — an unknown target name was accepted" >&2
+    exit 1
+fi
+if ! grep -qF "unknown target" "$tmp/tgt.err"; then
+    echo "check-compilefor: FAIL — unknown-target rejection used an unexpected diagnostic:" >&2
+    sed 's/^/  /' "$tmp/tgt.err" >&2
+    exit 1
+fi
+
+# 4d. DERIVED FLAGS — selecting a target inserts one flag per triple component, so a gate can name the OS
+#     without the project declaring anything. `wasm32-emscripten-none` must satisfy ARCH_WASM32 and not
+#     OS_LINUX; `aarch64-linux-gnu` the reverse. This is what makes `@compileFor(OS_LINUX)` work with no
+#     manifest, and it is the mechanism the retired NATIVE/EMBEDDED names used to hardcode.
+cat > "$tmp/derived.kama" <<'KAMA'
+@compileFor(OS_LINUX)  fn int32 pick() { return 1; }
+@compileFor(!OS_LINUX) fn int32 pick() { return 2; }
+fn int32 main() { return pick(); }
+KAMA
+"$KAMA" transpile --no-line "$tmp/derived.kama" --target aarch64-linux-gnu -o "$tmp/derived_linux.c" >/dev/null
+if ! grep -q '__ret_0 = 1;' "$tmp/derived_linux.c"; then
+    echo "check-compilefor: FAIL — a linux triple did not activate the derived OS_LINUX flag" >&2
+    exit 1
+fi
+"$KAMA" transpile --no-line "$tmp/derived.kama" --target wasm32-emscripten-none -o "$tmp/derived_wasm.c" >/dev/null
+if ! grep -q '__ret_0 = 2;' "$tmp/derived_wasm.c"; then
+    echo "check-compilefor: FAIL — a non-linux triple still activated the derived OS_LINUX flag" >&2
     exit 1
 fi
 
@@ -80,18 +139,18 @@ fi
 platc="$tmp/platform.c"
 "$KAMA" transpile --no-line "$ROOT/tests/compilefor_platform.kama" -o "$platc" >/dev/null
 if ! grep -q 'NativeClock' "$platc"; then
-    echo "check-compilefor: FAIL — native build dropped the @compileFor(NATIVE) type (NativeClock)" >&2
+    echo "check-compilefor: FAIL — host build dropped the @compileFor(!ARCH_WASM32) type (NativeClock)" >&2
     exit 1
 fi
 if grep -q 'WasmClock' "$platc"; then
-    echo "check-compilefor: FAIL — native build STILL contains the @compileFor(WASM) type (WasmClock);" >&2
+    echo "check-compilefor: FAIL — host build STILL contains the @compileFor(ARCH_WASM32) type (WasmClock);" >&2
     echo "  a gated-out TYPE (struct + methods + vtable) must not reach the emitted C" >&2
     exit 1
 fi
 
 # 6. kama.local.json (M5.2) — a gitignored sibling deep-merges over kama.json: a flag it declares extends the
 #    valid universe (no longer "undeclared"), and one it marks `default:true` is active. Reuse the strict proj:
-#    its kama.json declares only WINDOWS, so LOCALFLAG is undeclared until the local manifest adds it.
+#    its kama.json declares only TELEMETRY, so LOCALFLAG is undeclared until the local manifest adds it.
 cat > "$proj/kama.local.json" <<'JSON'
 { "flags": { "LOCALFLAG": { "default": true } } }
 JSON
@@ -111,4 +170,4 @@ if ! grep -q 'gated' "$localc"; then
 fi
 rm -f "$proj/kama.local.json"
 
-echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C; strict manifest rejects undeclared flags; kama.local.json extends the flag universe)"
+echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C;\n  strict manifest rejects undeclared AND reserved flag names; target names/triples resolve and derive\n  ARCH_/OS_/ABI_ flags; kama.local.json extends the flag universe)"

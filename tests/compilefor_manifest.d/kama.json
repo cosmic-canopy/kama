@@ -2,8 +2,7 @@
   "name": "compilefor-demo",
   "version": "0.1.0",
   "flags": {
-    "WINDOWS": {},
-    "LINUX": {},
-    "TELEMETRY": { "default": true }
+    "TELEMETRY": { "default": true },
+    "PROFILING": {}
   }
 }

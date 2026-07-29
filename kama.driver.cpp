@@ -883,6 +883,191 @@ static std::set<std::string> g_activeFlags;
 static std::set<std::string> g_declaredFlags;
 static bool g_strictFlags = false;
 
+// ---- build configuration: target triples ------------------------------------------------------
+// A target is an `<arch>-<os>-<abi>` triple — Zig's 3-part form, because GNU's `vendor` field is
+// vestigial (`unknown`/`pc`); a 4-part spelling is accepted and its vendor dropped, so pasting a Rust
+// or clang triple works. Selecting a target inserts its NAME plus its derived component flags into the
+// active `@compileFor` set, which is why `@compileFor(OS_LINUX)` needs no language machinery:
+// membership is all `compileForActive` ever tested. Design: docs/design/build-configuration.md.
+struct TargetSpec {
+    std::string name;                            // catalog/user name ("WINDOWS", "RPI"); the triple if anonymous
+    std::string arch, os, abi;
+    std::string cc, ar, sysroot;                 // toolchain override (empty -> the default resolution)
+    std::vector<std::string> cflags, ldflags;
+    std::string triple() const { return arch + "-" + os + "-" + abi; }
+    bool hosted()      const { return os != "none"; }         // has an OS and a libc
+    bool isWasm()      const { return arch == "wasm32" || arch == "wasm64"; }
+};
+
+// The one legitimate host `#ifdef` in the build path: deciding what `HOST` *means*. Everything else
+// keys off the SELECTED target's flags (see targetLinkFlags), which is what makes cross-compiling
+// possible at all.
+static const TargetSpec& hostTarget()
+{
+    static const TargetSpec h = [] {
+        TargetSpec t;
+        t.name = "HOST";
+#if   defined(__aarch64__) || defined(_M_ARM64)
+        t.arch = "aarch64";
+#elif defined(__x86_64__)  || defined(_M_X64)
+        t.arch = "x86_64";
+#elif defined(__riscv) && (__riscv_xlen == 64)
+        t.arch = "riscv64";
+#elif defined(__arm__)     || defined(_M_ARM)
+        t.arch = "arm";
+#elif defined(__i386__)    || defined(_M_IX86)
+        t.arch = "i686";
+#else
+        t.arch = "unknown";
+#endif
+#if   defined(_WIN32)
+        t.os = "windows";
+#elif defined(__APPLE__)
+        t.os = "macos";
+#elif defined(__linux__)
+        t.os = "linux";
+#elif defined(__FreeBSD__)
+        t.os = "freebsd";
+#else
+        t.os = "unknown";
+#endif
+#if   defined(_MSC_VER)
+        t.abi = "msvc";
+#elif defined(__APPLE__)
+        t.abi = "none";                          // Darwin has no separate ABI field in practice
+#else
+        t.abi = "gnu";                           // glibc/mingw; a musl host spells its triple explicitly
+#endif
+        return t;
+    }();
+    return h;
+}
+
+// Split `<arch>-<os>[-<abi>]` or `<arch>-<vendor>-<os>-<abi>`. A value containing '-' is a triple; a
+// bare token is a NAME to look up in the catalog. That one rule is the whole disambiguation.
+static bool parseTriple(const std::string& s, TargetSpec& out, std::string& err)
+{
+    std::vector<std::string> parts;
+    size_t start = 0;
+    while (true) {
+        size_t dash = s.find('-', start);
+        parts.push_back(s.substr(start, dash == std::string::npos ? std::string::npos : dash - start));
+        if (dash == std::string::npos) break;
+        start = dash + 1;
+    }
+    for (const auto& p : parts)
+        if (p.empty()) { err = "empty component in target triple '" + s + "'"; return false; }
+    if (parts.size() == 2)      { out.arch = parts[0]; out.os = parts[1]; out.abi = "none"; }
+    else if (parts.size() == 3) { out.arch = parts[0]; out.os = parts[1]; out.abi = parts[2]; }
+    else if (parts.size() == 4) { out.arch = parts[0]; out.os = parts[2]; out.abi = parts[3]; }  // drop vendor
+    else { err = "target triple '" + s + "' must be <arch>-<os>[-<abi>] (2 to 4 components)"; return false; }
+    out.name = s;
+    return true;
+}
+
+// Derived `@compileFor` flags for a target: the selected NAME, one flag per triple component, and the
+// single synthesized convenience `HOSTED` ("do I have an OS and a libc" is the most common gate in a
+// systems language, and `!OS_NONE` reads badly). Nothing else is synthesized.
+static std::set<std::string> derivedTargetFlags(const TargetSpec& t)
+{
+    auto up = [](std::string v) {
+        for (char& c : v) c = (char)toupper((unsigned char)c);
+        return v;
+    };
+    std::set<std::string> f;
+    if (!t.name.empty() && t.name.find('-') == std::string::npos) f.insert(t.name);   // named, not anonymous
+    f.insert("ARCH_" + up(t.arch));
+    f.insert("OS_"   + up(t.os));
+    f.insert("ABI_"  + up(t.abi));
+    if (t.hosted()) f.insert("HOSTED");
+    return f;
+}
+
+static const std::map<std::string, TargetSpec>& builtinTargets();   // defined just below
+
+// The resolved build target, and the manifest-declared target catalog it was resolved against. File-scope
+// like the other build config: set in main, read by the compile/link path (targetLinkFlags) and by the
+// emitter setup. Defaults to the host so a bare `kama build` needs no configuration at all.
+static TargetSpec g_target;
+static std::map<std::string, TargetSpec> g_manifestTargets;
+
+// Resolve a `--target` value. Order matters: a manifest entry MERGES onto a built-in of the same name
+// (so a project can attach a cross toolchain to `LINUX` without redefining it), a bare name otherwise
+// comes from the catalog, and anything containing '-' is parsed as an anonymous triple — the
+// `zig cc -target` gesture, usable with no config file at all.
+static bool resolveTarget(const std::string& selRaw,
+                          const std::map<std::string, TargetSpec>& manifestTargets,
+                          TargetSpec& out, std::string& err)
+{
+    // Names are case-insensitive (`--target wasm` and `--target WASM` are the same thing); triples are
+    // lowercase by convention and pass through untouched, since they contain '-' and skip this path.
+    std::string sel = selRaw;
+    if (sel.find('-') == std::string::npos)
+        for (char& c : sel) c = (char)toupper((unsigned char)c);
+    // Legacy spellings from before targets were triples. TODO(C1.2): remove with the tree-wide migration.
+    if (sel == "NATIVE")   sel = "HOST";
+    if (sel == "EMBEDDED") sel = "FREESTANDING";
+
+    bool known = false;
+    auto b = builtinTargets().find(sel);
+    if (b != builtinTargets().end()) { out = b->second; known = true; }
+
+    auto m = manifestTargets.find(sel);
+    if (m != manifestTargets.end()) {
+        const TargetSpec& u = m->second;
+        if (!known) out = TargetSpec();
+        out.name = sel;
+        if (!u.arch.empty()) { out.arch = u.arch; out.os = u.os; out.abi = u.abi; }   // a declared triple wins whole
+        if (!u.cc.empty())      out.cc      = u.cc;
+        if (!u.ar.empty())      out.ar      = u.ar;
+        if (!u.sysroot.empty()) out.sysroot = u.sysroot;
+        out.cflags.insert(out.cflags.end(),  u.cflags.begin(),  u.cflags.end());
+        out.ldflags.insert(out.ldflags.end(), u.ldflags.begin(), u.ldflags.end());
+        if (out.arch.empty() || out.os.empty()) {
+            err = "target '" + sel + "' declares no `triple` and is not a built-in";
+            return false;
+        }
+        return true;
+    }
+    if (known) return true;
+
+    if (sel.find('-') != std::string::npos) return parseTriple(sel, out, err);   // anonymous triple
+
+    std::string names;
+    for (const auto& kv : builtinTargets()) names += (names.empty() ? "" : "|") + kv.first;
+    for (const auto& kv : manifestTargets)  names += "|" + kv.first;
+    err = "unknown target '" + sel + "' (expected " + names + ", or an <arch>-<os>-<abi> triple)";
+    return false;
+}
+
+// The built-in catalog: sane defaults for the standard targets. A named shortcut does NOT pin an arch —
+// it resolves arch to the host's — so `--target LINUX` on an arm Mac means aarch64. A build that needs
+// precision spells the triple. Names are conveniences; triples are exact.
+static const std::map<std::string, TargetSpec>& builtinTargets()
+{
+    static const std::map<std::string, TargetSpec> cat = [] {
+        const TargetSpec& h = hostTarget();
+        auto mk = [&](const char* name, const char* arch, const char* os, const char* abi) {
+            TargetSpec t;
+            t.name = name;
+            t.arch = (arch && *arch) ? arch : h.arch;      // empty -> follow the host
+            t.os = os; t.abi = abi;
+            return t;
+        };
+        std::map<std::string, TargetSpec> m;
+        m["HOST"]         = h;
+        m["MACOS"]        = mk("MACOS",        "", "macos",      "none");
+        m["WINDOWS"]      = mk("WINDOWS",      "", "windows",    "gnu");
+        m["LINUX"]        = mk("LINUX",        "", "linux",      "gnu");
+        m["WASM"]         = mk("WASM",         "wasm32", "emscripten", "none");
+        // Bare metal on the host's own arch — the exact shape the retired `--target embedded` produced
+        // (freestanding, no OS, object output). A real board spells its own triple.
+        m["FREESTANDING"] = mk("FREESTANDING", "", "none",       "none");
+        return m;
+    }();
+    return cat;
+}
+
 // The project's baked default `KAMA_LOG` spec (from the manifest `log` section), threaded to the emitter and
 // compiled into `main` so a shipped binary carries its default log filter (M5). Empty = no baked default.
 static std::string g_logDefault;
@@ -1150,6 +1335,7 @@ struct ManifestReader {
     RegConfig* registriesOut = nullptr;                   // set to capture the `registries` config (M3.1b)
     std::map<std::string, DepSpec>* overridesOut = nullptr;// set to capture `overrides` (kama.local.json, M5.3)
     LogConfig* logOut = nullptr;                          // set to capture the `log` config (M5)
+    std::map<std::string, TargetSpec>* targetsOut = nullptr;  // set to capture `select.TARGET` entries
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -1203,6 +1389,70 @@ struct ManifestReader {
             return fail("unbalanced brackets in manifest");
         }
         while (i < s.size() && s[i]!=','&&s[i]!='}'&&s[i]!=']'&&s[i]!=' '&&s[i]!='\t'&&s[i]!='\n'&&s[i]!='\r') ++i;
+        return true;
+    }
+
+    // `select`: { "<GROUP>": { "<VALUE>": { ... }, ... }, ... }. Only the `TARGET` group is consumed
+    // here; other groups are skipped (tolerated, not validated) so this reader stays the one place that
+    // knows the manifest's shape. A TARGET value is a triple plus an optional toolchain:
+    //   "RPI": { "triple": "aarch64-linux-gnu", "cc": "...", "ar": "...", "sysroot": "...",
+    //            "cflags": [...], "ldflags": [...] }
+    bool selectObject() {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`select` must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string group; if (!str(group)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a select group name");
+            ++i; ws();
+            if (group == "TARGET" && targetsOut) { if (!targetGroup()) return false; }
+            else if (!skipValue()) return false;
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `select`");
+        }
+        return true;
+    }
+
+    bool targetGroup() {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`select.TARGET` must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string name; if (!str(name)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a target name");
+            ++i; ws();
+            if (i >= s.size() || s[i] != '{') return fail("a `select.TARGET` value must be an object");
+            TargetSpec t; t.name = name;
+            std::string triple;
+            ++i; ws();
+            if (i < s.size() && s[i] == '}') ++i;
+            else while (true) {
+                std::string k; if (!str(k)) return false;
+                ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a target body");
+                ++i; ws();
+                if      (k == "triple")  { if (!str(triple))      return false; }
+                else if (k == "cc")      { if (!str(t.cc))        return false; }
+                else if (k == "ar")      { if (!str(t.ar))        return false; }
+                else if (k == "sysroot") { if (!str(t.sysroot))   return false; }
+                else if (k == "cflags")  { if (!stringArray(t.cflags))  return false; }
+                else if (k == "ldflags") { if (!stringArray(t.ldflags)) return false; }
+                else if (!skipValue()) return false;   // future target keys tolerated
+                ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == '}') { ++i; break; }
+                return fail("expected ',' or '}' in a target body");
+            }
+            if (!triple.empty()) {
+                std::string terr; TargetSpec parsed;
+                if (!parseTriple(triple, parsed, terr)) return fail(terr.c_str());
+                t.arch = parsed.arch; t.os = parsed.os; t.abi = parsed.abi;
+            }
+            (*targetsOut)[name] = t;
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `select.TARGET`");
+        }
         return true;
     }
 
@@ -1399,6 +1649,7 @@ struct ManifestReader {
             ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a key");
             ++i;
             if (key == "flags") { if (!flagsObject()) return false; }
+            else if (key == "select") { if (!selectObject()) return false; }   // build-config groups
             else if (key == "dependencies" && deps) { if (!depsObject(deps)) return false; }
             else if (key == "dev-dependencies" && devDeps) { if (!depsObject(devDeps)) return false; }
             else if (key == "registries" && registriesOut) { if (!registriesObject(registriesOut)) return false; }
@@ -1419,6 +1670,45 @@ struct ManifestReader {
         return true;
     }
 };
+
+// Load a `kama.json` manifest → the `select.TARGET` catalog. Reuses ManifestReader (unknown keys
+// tolerated), so this is orthogonal to the flag load.
+static bool loadManifestTargets(const std::string& path, std::map<std::string, TargetSpec>& out,
+                                std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> ignoredDeclared, ignoredDefaults;
+    ManifestReader r(src, ignoredDeclared, ignoredDefaults);
+    r.targetsOut = &out;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// Names the build configuration owns: a user `flags` entry may not claim one, and `--define` of one is
+// always "valid" (it just cannot be declared). Covers the two build types, the synthesized `HOSTED`, the
+// three derived triple-component namespaces, and every built-in target name.
+static bool isReservedFlagName(const std::string& n)
+{
+    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED") return true;
+    if (n.compare(0, 4, "OS_")   == 0) return true;
+    if (n.compare(0, 5, "ARCH_") == 0) return true;
+    if (n.compare(0, 4, "ABI_")  == 0) return true;
+    return builtinTargets().count(n) != 0;
+}
+
+// Reject a `flags` object that redeclares a build-configuration name. Prints and returns false.
+static bool reservedFlagCheck(const std::string& manifest, const std::set<std::string>& declared)
+{
+    for (const auto& d : declared)
+        if (isReservedFlagName(d)) {
+            fprintf(stderr, "kama: %s: `%s` is a build-configuration name (set by --target/--release) "
+                            "and cannot be declared in `flags`\n", manifest.c_str(), d.c_str());
+            return false;
+        }
+    return true;
+}
 
 // Load a `kama.json` manifest → declared flag names + defaults. Returns false + sets `err` on failure.
 static bool loadManifestFlags(const std::string& path,
@@ -4019,7 +4309,7 @@ int main(int argc, char** argv)
     std::vector<std::string> inputs;      // one or more .kama source files
     std::string output;
     std::string cc;                       // empty => pick default per target
-    std::string target     = "native";    // native | wasm
+    std::string target     = "HOST";      // a catalog/manifest NAME, or an <arch>-<os>-<abi> triple
     std::vector<std::string> links;        // -l libraries (FFI)
     bool        emitLines  = true;
     bool        keepC      = false;
@@ -4101,38 +4391,14 @@ int main(int argc, char** argv)
     if (inputs.empty()) { fprintf(stderr, "kama: no input file\n"); usage(); return 2; }
     const std::string& input = inputs[0];   // first input drives default output naming
 
-    if (target != "native" && target != "wasm" && target != "embedded") {
-        fprintf(stderr, "kama: unknown --target '%s' (expected native|wasm|embedded)\n", target.c_str());
-        return 2;
-    }
-    const bool wasm     = (target == "wasm");
-    // --target embedded (MCU campaign step 3): a freestanding bare-metal build. It stops at a
-    // `-ffreestanding -nostdlib` OBJECT (.o) — the board-specific link (crt0/startup + linker script /
-    // memory map) is inherently per-chip and is the user's link step (or the turnkey step-6 toolchain),
-    // exactly as every bare-metal toolchain separates compilation from the linker-script'd final image.
-    const bool embedded = (target == "embedded");
-
-    // `kama run` is native-only: it builds a hosted executable and execs it. wasm needs node/a browser;
-    // embedded emits a freestanding object with no runnable entry — point those at `kama build`.
-    if (runMode && (wasm || embedded)) {
-        fprintf(stderr, "kama run is native-only (wasm needs node/a browser; embedded emits a freestanding "
-                        "object) — use `kama build --target %s`\n", target.c_str());
-        return 2;
-    }
-
-    // Build the active `@compileFor` flag set (the "structure" axis — reproducible, from the explicit
-    // build invocation, never ambient env). Built-ins are auto-derived: NATIVE/WASM/EMBEDDED from
-    // `--target`, DEBUG/RELEASE from `--release`. User flags come from `--define` (a `kama.json`
-    // manifest layers declared defaults in on top — Stage 2). `--undefine` then removes.
-    g_activeFlags.insert(embedded ? "EMBEDDED" : (wasm ? "WASM" : "NATIVE"));
-    g_activeFlags.insert(release ? "RELEASE" : "DEBUG");
-    g_release = release;   // `--release` also strips `debugAssert` (threaded to the emitter via setRelease)
-
     // Load the `kama.json` manifest if present (explicit `--config`, else auto-discovered next to the
     // input file, else CWD). It DECLARES the valid user-flag universe — enabling STRICT validation of
     // `@compileFor`/`--define` names (a typo like `WINODWS` is then rejected, not silently dropped) —
-    // and may mark flags `"default": true` (active unless `--undefine`'d). No manifest -> permissive:
-    // undeclared flags are simply inactive, so bare per-file builds need no config.
+    // may mark flags `"default": true` (active unless `--undefine`'d), and may declare `select` groups
+    // including project-specific targets. No manifest -> permissive: undeclared flags are simply
+    // inactive, so bare per-file builds need no config.
+    //
+    // This runs BEFORE target resolution because a project may declare the very target being selected.
     {
         std::string manifest = configPath;
         if (manifest.empty()) {
@@ -4147,13 +4413,11 @@ int main(int argc, char** argv)
                 fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str());
                 return 2;
             }
-            // Built-in flags (from --target/--release) are always valid and must not be redeclared.
-            for (const char* r : {"NATIVE","WASM","EMBEDDED","DEBUG","RELEASE"})
-                if (declared.count(r)) {
-                    fprintf(stderr, "kama: %s: `%s` is a built-in flag (set by --target/--release) and "
-                                    "cannot be declared in `flags`\n", manifest.c_str(), r);
-                    return 2;
-                }
+            if (!reservedFlagCheck(manifest, declared)) return 2;
+            if (!loadManifestTargets(manifest, g_manifestTargets, err)) {
+                fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str());
+                return 2;
+            }
             // Baked log default (M5): the manifest `log` section becomes the project's compiled-in KAMA_LOG
             // spec, seeded into the process env in `main` (overwrite=0, so `--log`/env still win).
             LogConfig logCfg; std::string logErr;
@@ -4163,11 +4427,11 @@ int main(int argc, char** argv)
             }
 
             // `kama.local.json` (M5.2): a gitignored sibling of the manifest that DEEP-MERGES over it for the
-            // fields the compiler reads directly here — `flags` (union: local declares/enables more) and `log`
-            // (per-tag merge, local wins). Local-only by construction (never committed / never in the lockfile),
-            // so it can never perturb a reproducible or CI build. Its dep `overrides` + `registries` +
-            // `toolchain` local overrides (M5.3) are read on the install/selector paths (`resolveProject`,
-            // `resolvePin`), not here.
+            // fields the compiler reads directly here — `flags` (union: local declares/enables more), `select`
+            // (local targets win) and `log` (per-tag merge, local wins). Local-only by construction (never
+            // committed / never in the lockfile), so it can never perturb a reproducible or CI build. Its dep
+            // `overrides` + `registries` + `toolchain` local overrides (M5.3) are read on the install/selector
+            // paths (`resolveProject`, `resolvePin`), not here.
             std::string mdir = dirName(manifest);
             std::string localManifest = (mdir == "." ? std::string() : mdir + "/") + "kama.local.json";
             if (std::ifstream(localManifest).good()) {
@@ -4176,14 +4440,15 @@ int main(int argc, char** argv)
                     fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
                     return 2;
                 }
-                for (const char* r : {"NATIVE","WASM","EMBEDDED","DEBUG","RELEASE"})
-                    if (ldeclared.count(r)) {
-                        fprintf(stderr, "kama: %s: `%s` is a built-in flag (set by --target/--release) and "
-                                        "cannot be declared in `flags`\n", localManifest.c_str(), r);
-                        return 2;
-                    }
+                if (!reservedFlagCheck(localManifest, ldeclared)) return 2;
                 declared.insert(ldeclared.begin(), ldeclared.end());   // union — local extends the universe
                 defaults.insert(ldefaults.begin(), ldefaults.end());
+                std::map<std::string, TargetSpec> ltargets;
+                if (!loadManifestTargets(localManifest, ltargets, lerr)) {
+                    fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
+                    return 2;
+                }
+                for (auto& kv : ltargets) g_manifestTargets[kv.first] = kv.second;   // local wins
                 LogConfig localLog;
                 if (!loadManifestLog(localManifest, localLog, lerr)) {
                     fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
@@ -4203,7 +4468,6 @@ int main(int argc, char** argv)
             // `--dev` the dev-dependency view must exist too (else the dev build silently misses them).
             std::map<std::string, DepSpec> deps, devDeps; std::string derr;
             if (loadManifestDeps(manifest, deps, derr, &devDeps)) {
-                std::string mdir = dirName(manifest);
                 if (!deps.empty() && !dirExists(mdir + "/.kama/deps")) {
                     fprintf(stderr, "kama: %s declares dependencies but %s/.kama/deps is missing — run `kama pkg install`\n",
                             manifest.c_str(), mdir.c_str());
@@ -4218,12 +4482,46 @@ int main(int argc, char** argv)
         }
     }
 
+    // Resolve `--target` to a triple, against the built-in catalog plus whatever the manifest declared.
+    // An unknown NAME is an error, but anything containing '-' is an anonymous triple, so a one-off
+    // cross build needs no config file.
+    {
+        std::string terr;
+        if (!resolveTarget(target, g_manifestTargets, g_target, terr)) {
+            fprintf(stderr, "kama: %s\n", terr.c_str());
+            return 2;
+        }
+    }
+    // Everything downstream keys off the RESOLVED target rather than the spelling the user typed:
+    //   wasm     — the wasm backend (emcc, an .html/.js/.wasm harness)
+    //   embedded — bare metal: no OS, hence freestanding (`-ffreestanding -nostdlib`) and stopping at an
+    //              OBJECT (.o). The board-specific link (crt0/startup + linker script / memory map) is
+    //              inherently per-chip and stays the user's step, exactly as every bare-metal toolchain
+    //              separates compilation from the linker-script'd final image.
+    const bool wasm     = g_target.isWasm();
+    const bool embedded = !g_target.hosted();
+
+    // `kama run` builds an executable and execs it, so it needs a hosted target it can actually run:
+    // wasm needs node/a browser, and bare metal emits a freestanding object with no runnable entry.
+    if (runMode && (wasm || embedded)) {
+        fprintf(stderr, "kama run is native-only (wasm needs node/a browser; a bare-metal target emits a "
+                        "freestanding object) — use `kama build --target %s`\n", target.c_str());
+        return 2;
+    }
+
+    // Build the active `@compileFor` flag set (the "structure" axis — reproducible, from the explicit
+    // build invocation, never ambient env). The selected target contributes its NAME plus one flag per
+    // triple component (ARCH_/OS_/ABI_) and `HOSTED`; `--release` contributes DEBUG/RELEASE. User flags
+    // come from `--define`, with the manifest's `"default": true` ones layered in above.
+    for (const auto& f : derivedTargetFlags(g_target)) g_activeFlags.insert(f);
+    g_activeFlags.insert(release ? "RELEASE" : "DEBUG");
+    g_release = release;   // `--release` also strips `debugAssert` (threaded to the emitter via setRelease)
+
     // User flags: under strict mode (a manifest was loaded) validate names against the declared
     // universe before applying. `--define` adds; `--undefine` removes (e.g. turning off a default).
     {
-        static const std::set<std::string> builtinFlags = {"NATIVE","WASM","EMBEDDED","DEBUG","RELEASE"};
         auto validate = [&](const std::string& name, const char* what) -> bool {
-            if (!g_strictFlags || builtinFlags.count(name) || g_declaredFlags.count(name)) return true;
+            if (!g_strictFlags || isReservedFlagName(name) || g_declaredFlags.count(name)) return true;
             fprintf(stderr, "kama: %s references undeclared flag `%s` (add it to the `flags` object in "
                             "kama.json)\n", what, name.c_str());
             return false;

@@ -8,21 +8,26 @@
 // the wasm leg doubles as the platform test (it builds with WasmClock while NativeClock is dropped).
 // tools/check-compilefor.sh greps the native transpile to prove NativeClock is present and WasmClock
 // is absent, i.e. the selection happens in the compiler.
+//
+// The gates are DERIVED from the target triple (`ARCH_WASM32` comes from `wasm32-emscripten-none`),
+// not from a hardcoded backend name — and they are spelled as a flag and its negation because that is
+// what makes them exhaustive AND mutually exclusive. `HOSTED` would not do: emscripten has a libc, so
+// it is hosted too, and both impls would survive the wasm build.
 type contract Clock for both { fn int32 tick(); }
 
-@compileFor(NATIVE)
+@compileFor(!ARCH_WASM32)
 type value NativeClock implements Clock {
     public ctor make() { NativeClock c; return give c; }
     public fn int32 tick() { return 42; }
 }
 
-@compileFor(WASM)
+@compileFor(ARCH_WASM32)
 type value WasmClock implements Clock {
     public ctor make() { WasmClock c; return give c; }
     public fn int32 tick() { return 42; }
 }
 
-@compileFor(NATIVE) fn int32 platformTick() { NativeClock c = NativeClock.make(); return c.tick(); }
-@compileFor(WASM)   fn int32 platformTick() { WasmClock   c = WasmClock.make();   return c.tick(); }
+@compileFor(!ARCH_WASM32) fn int32 platformTick() { NativeClock c = NativeClock.make(); return c.tick(); }
+@compileFor(ARCH_WASM32) fn int32 platformTick() { WasmClock   c = WasmClock.make();   return c.tick(); }
 
 fn int32 main() { return platformTick(); }
