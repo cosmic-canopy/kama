@@ -277,6 +277,23 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
     `editor/vscode/` client), **Neovim** (`nvim-lspconfig`), **Vim** (coc.nvim), **Emacs** (eglot /
     lsp-mode), **Sublime Text** (LSP package), **Helix**, **Zed**, **Kate**. Feature parity is automatic —
     all read the same server, so each gains hover/def/outline/refs/rename/completion as the server does.
+  - **A1 (`setBuildFlags`) ✅ SHIPPED.** Two decisions worth not re-deriving:
+    - **The build-configuration override channel is `kama.local.json`, not `initializationOptions` and not
+      editor settings** (user, 2026-07-29 — this supersedes the kickoff brief). It is a gitignored sibling of
+      `kama.json` that every CLI path already deep-merges, so the editor and a plain `kama build` cannot
+      disagree, the F5 debug path needs no arguments of its own to stay in step, and a Neovim user overrides
+      configuration exactly the way a VS Code user does. One mechanism, not two per editor.
+    - **`workspace/didChangeConfiguration` is therefore deliberately NOT wired.** The server reads no client
+      settings, so the notification carries nothing actionable: a handler would be either dead code that
+      reads as though configuration flowed through it, or a `workspace/configuration` *pull* — a
+      server→client request the server has no machinery for, and which the same reasoning already ruled out
+      for watcher registration. Because the channel is a file, the change trigger is
+      `workspace/didChangeWatchedFiles` on `kama.json`/`kama.local.json` instead.
+    - **Known limit: one configuration per server process**, pinned from the first opened document that
+      resolves a manifest. In a monorepo whose packages declare *different* flag universes, the unpinned
+      packages get the pinned one's configuration. Declare the shared flag universe in the **root** manifest,
+      or use one window per package. Per-project configuration needs per-configuration parse caches, since
+      cached units are pruned in place — its own milestone.
   - **A full syntax-highlighting audit belongs here (user, 2026-07-27).** One pass over *every* highlight
     pattern so each editor renders kama faithfully — not just the keyword list `tools/check-syntax-drift.sh`
     already guards. Motivating evidence: an ad-hoc look at the numeric rules alone found the VS Code grammar

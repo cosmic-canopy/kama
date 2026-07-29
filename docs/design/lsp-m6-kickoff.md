@@ -132,9 +132,16 @@ editor analyze under?" — it now has a definite answer, and the machinery to pr
   are empty. Either factor the manifest-load + target-resolve + flag-derive sequence (:4480-4700ish)
   into a function both paths call, or resolve inside `runLspServer` before the loop. The former is
   better: two copies of the precedence rules will drift.
-- **The override channel is `initializationOptions` + `workspace/didChangeConfiguration`**, carrying
-  `{ select: {GROUP: VALUE}, define: [], undefine: [] }` — the shape `--select`/`--define` already
-  validate, so reuse that validation rather than writing a second one.
+- ~~**The override channel is `initializationOptions` + `workspace/didChangeConfiguration`**, carrying
+  `{ select: {GROUP: VALUE}, define: [], undefine: [] }`.~~ **WRONG — superseded (user, 2026-07-29).**
+  The channel is **`kama.local.json`**, kama's existing gitignored sibling of `kama.json`, already
+  deep-merged by every CLI path for `flags`/`select`/`log`. That makes the editor and a plain `kama build`
+  agree *by construction* rather than by remembering to pass the same flags twice — which is the entire
+  point of A1 — so the F5 path needs no arguments of its own, and every editor gets the same override with
+  no per-client settings schema. `workspace/didChangeConfiguration` is consequently **not wired at all**;
+  because the channel is a file, the trigger is `workspace/didChangeWatchedFiles` on the two manifests.
+  Prerequisite this exposed and A1 shipped: `select.TARGET` had no `"default": true`, so no manifest could
+  declare a default target.
 
 ⚠️ **The M5 parse cache assumes a FIXED flag set per process** (`kama.driver.cpp`, the `g_parseCache`
 comment): `pruneInactiveDecls` destructively rewrites cached units in place. So on a configuration

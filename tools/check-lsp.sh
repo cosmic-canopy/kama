@@ -451,7 +451,10 @@ expect '"line":2,"character":17' "recovery reports the broken class member (erro
 expect '"line":6,"character":4'  "...and the missing semicolon in fn a (error 2 of 3)"
 expect '"line":10,"character":4' "...and the one in fn main, a LATER declaration (error 3 of 3)"
 # Count them, so a coincidental substring match elsewhere in the session cannot carry the assertion.
-n=$(printf '%s' "$out" | tr '\r' '\n' | grep -o 'recover.kama","diagnostics":\[[^]]*\]' | grep -o '"code":"Parse"' | wc -l | tr -d ' ')
+# `head -1` is load-bearing: the claim is "ONE publishDiagnostics carries three", and this buffer can now
+# legitimately be republished (a manifest change re-analyzes every open document — M6 A1), which without
+# it would count 6 and fail for a reason that has nothing to do with recovery.
+n=$(printf '%s' "$out" | tr '\r' '\n' | grep -o 'recover.kama","diagnostics":\[[^]]*\]' | head -1 | grep -o '"code":"Parse"' | wc -l | tr -d ' ')
 if [ "${n:-0}" -eq 3 ]; then
     echo "  ok: exactly 3 parse diagnostics published for one buffer (was 1 before recovery)"
 else
@@ -472,6 +475,124 @@ case "$drop" in
     *'unknown type'*) echo "  FAIL: semantic cascade published from a dropped top-level decl" >&2; fail=1 ;;
     *) echo "  ok: no 'unknown type' cascade from the decl the top-level arm discarded" ;;
 esac
+
+# --- M6 A1: the editor analyzes the program the BUILD analyzes ---------------------------------------
+# The build configuration is resolved ONCE PER PROCESS (the M5 parse cache holds units pruneInactiveDecls
+# rewrote in place, so two configurations cannot share it), which is exactly why these cannot ride the
+# session above: proving the outline CHANGES with the manifest needs a fresh server per configuration.
+#
+# Before A1 the server never called setBuildFlags, so with an empty `_activeFlags` it dropped every
+# `@compileFor(FEATURE_A)` declaration and kept every `@compileFor(!FEATURE_A)` one — the exact inverse of
+# a debug host build — no matter what any manifest said.
+echo "check-lsp: M6 A1 build configuration"
+
+# cfgsession <sessionfile> <root> <file>: a whole short server run over one buffer. id 47 = documentSymbol.
+cfgsession() {
+    cfgsess="$1"; cfgroot="$2"; cfgfile="$3"
+    : > "$cfgsess"
+    cfgtext=$(sed 's/\\/\\\\/g; s/"/\\"/g' "$cfgfile" | awk '{printf "%s\\n", $0}')
+    session="$cfgsess"      # frame() appends to $session
+    frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$cfgroot"'","capabilities":{}}}'
+    frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
+    frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://'"$cfgfile"'","languageId":"kama","version":1,"text":"'"$cfgtext"'"}}}'
+    frame '{"jsonrpc":"2.0","id":47,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file://'"$cfgfile"'"}}}'
+    frame '{"jsonrpc":"2.0","id":48,"method":"shutdown","params":null}'
+    frame '{"jsonrpc":"2.0","method":"exit"}'
+    "$KAMA" lsp < "$cfgsess" 2>/dev/null || true
+}
+
+# cfgexpect <output> <substring> <description> / cfgreject: assert on one session's stdout.
+cfgexpect() {
+    if printf '%s' "$1" | grep -qF -- "$2"; then echo "  ok: $3"
+    else echo "  FAIL: $3 — expected substring: $2" >&2; fail=1; fi
+}
+cfgreject() {
+    if printf '%s' "$1" | grep -qF -- "$2"; then echo "  FAIL: $3 — must NOT contain: $2" >&2; fail=1
+    else echo "  ok: $3"; fi
+}
+
+# A. The committed project. Its kama.json declares FEATURE_A `"default": true`, so a plain build keeps
+#    `onlyWithA` and drops `onlyWithoutA` — and so must the editor.
+CFGDIR="$ROOT/tests/query/cfg"
+CFGA=$(cfgsession "$tmp/cfgA" "$ROOT/tests/query" "$CFGDIR/app.kama")
+cfgexpect "$CFGA" '"name":"onlyWithA"'   "documentSymbol shows the decl the manifest's default flag KEEPS"
+cfgreject "$CFGA" '"name":"onlyWithoutA"' "...and not the negated one a build would drop"
+cfgexpect "$CFGA" '"name":"always"'      "the ungated decl is there either way"
+cfgreject "$CFGA" '"severity":1'         "no phantom diagnostic from conditional compilation"
+
+# A'. THE STRONGEST ASSERTION OF THE MILESTONE: the editor and the CLI must return the SAME symbol set.
+#     Comparing the two sets, rather than each against a literal, is what makes this a statement about
+#     agreement instead of two independent guesses that happen to match today.
+# Scope the scrape to the id:47 frame — the initialize response carries `serverInfo:{"name":"kama"}`, which
+# would otherwise join the symbol set and make this compare two different things.
+cfglsp=$(printf '%s' "$CFGA" | tr '\r' '\n' | tr -d '\n' | sed 's/.*"id":47,"result"://' \
+         | tr ',' '\n' | grep -o '"name":"[A-Za-z_]*"' | sed 's/.*:"//; s/"//' | sort | tr '\n' ' ')
+cfgcli=$("$KAMA" query "$CFGDIR/app.kama" --symbols 2>/dev/null | awk '{print $NF}' | sort | tr '\n' ' ')
+if [ "$cfglsp" = "$cfgcli" ]; then
+    echo "  ok: the LSP and \`kama query\` agree on the symbol set ($cfgcli)"
+else
+    echo "  FAIL: editor and CLI disagree — lsp: [$cfglsp] cli: [$cfgcli]" >&2; fail=1
+fi
+
+# B. Drop the default from a COPY's manifest -> the exact complement. This is what proves the flags come
+#    from the manifest rather than from some hard-coded default that happens to match case A.
+CFGSRC="$tmp/cfgcopy"
+mkdir -p "$CFGSRC"
+cp "$CFGDIR/app.kama" "$CFGSRC/app.kama"
+printf '{"name":"cfgprobe","version":"0.1.0","sources":["."],"flags":{"FEATURE_A":{}}}' > "$CFGSRC/kama.json"
+CFGB=$(cfgsession "$tmp/cfgB" "$tmp" "$CFGSRC/app.kama")
+cfgexpect "$CFGB" '"name":"onlyWithoutA"' "with the default off, the NEGATED decl is what survives"
+cfgreject "$CFGB" '"name":"onlyWithA"'    "...and the gated one is dropped, as a build would"
+
+# C. kama.local.json re-enables it over that manifest. This is the LSP's configuration override channel,
+#    and because it is a file the compiler already reads, `kama build` in the same directory agrees — which
+#    is why the F5 debug path needs no arguments of its own.
+printf '{"flags":{"FEATURE_A":{"default":true}}}' > "$CFGSRC/kama.local.json"
+CFGC=$(cfgsession "$tmp/cfgC" "$tmp" "$CFGSRC/app.kama")
+cfgexpect "$CFGC" '"name":"onlyWithA"'    "kama.local.json is the override channel (flag back on)"
+cfgreject "$CFGC" '"name":"onlyWithoutA"' "...and the complement is gone again"
+cfgexpect "$CFGC" 'kama.local.json'       "the config log line names the local override that was applied"
+
+# D. Visibility. This bug survived five milestones because nothing ever SAID what the server analyzed
+#    under — a server quietly analyzing the wrong program looks exactly like one analyzing the right one.
+cfgexpect "$CFGA" 'window/logMessage'   "the server announces its configuration"
+cfgexpect "$CFGA" 'kama.json | target'  "...naming the manifest and the resolved target"
+cfgexpect "$CFGA" '| strict |'          "...and that a manifest turned strict flag validation on"
+cfgexpect "$CFGA" 'FEATURE_A'           "...and the active flag set it derived"
+
+# E. Honest failure. A malformed override must not take the editor down with it: report it visibly, then
+#    analyze under permissive defaults rather than a half-applied configuration.
+printf '{"flags":{ this is not json' > "$CFGSRC/kama.local.json"
+CFGBAD=$(cfgsession "$tmp/cfgE" "$tmp" "$CFGSRC/app.kama")
+cfgexpect "$CFGBAD" 'window/showMessage' "a malformed kama.local.json is reported to the user"
+cfgexpect "$CFGBAD" '"name":"always"'    "...and the editor keeps answering under permissive defaults"
+rm -f "$CFGSRC/kama.local.json"
+
+# F. Strict validation reaches the editor: the same typo the BUILD rejects must squiggle here. Editor and
+#    build now agree about what is a valid flag name, not just about which decls survive.
+printf 'namespace cfgtypo;\n@compileFor(TELMETRY)\nfn int32 oops() { return 1; }\n' > "$CFGSRC/typo.kama"
+CFGTYPO=$(cfgsession "$tmp/cfgF" "$tmp" "$CFGSRC/typo.kama")
+cfgexpect "$CFGTYPO" 'undeclared flag' "a typo'd @compileFor flag is a diagnostic, as it is for a build"
+
+# G. The reconfigure path: a manifest change must RE-RESOLVE, not merely evict the parse cache. Two config
+#    log lines is the proof — one from the pin, one from the re-resolve.
+: > "$tmp/cfgG"
+session="$tmp/cfgG"
+cfggtext=$(sed 's/\\/\\\\/g; s/"/\\"/g' "$CFGSRC/app.kama" | awk '{printf "%s\\n", $0}')
+frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$tmp"'","capabilities":{}}}'
+frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://'"$CFGSRC"'/app.kama","languageId":"kama","version":1,"text":"'"$cfggtext"'"}}}'
+frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"file://'"$CFGSRC"'/kama.json","type":2}]}}'
+frame '{"jsonrpc":"2.0","id":48,"method":"shutdown","params":null}'
+frame '{"jsonrpc":"2.0","method":"exit"}'
+CFGG=$("$KAMA" lsp < "$tmp/cfgG" 2>/dev/null || true)
+cfgreject "$CFGG" 'method not found' "workspace/didChangeWatchedFiles on a manifest is handled"
+cfgn=$(printf '%s' "$CFGG" | tr '\r' '\n' | grep -c 'config: ' || true)
+if [ "${cfgn:-0}" -ge 2 ]; then
+    echo "  ok: a manifest change RE-RESOLVED the configuration (${cfgn} config lines), not just evicted"
+else
+    echo "  FAIL: a manifest change did not re-resolve — saw ${cfgn:-0} config log line(s)" >&2; fail=1
+fi
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

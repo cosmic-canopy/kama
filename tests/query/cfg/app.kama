@@ -1,0 +1,18 @@
+// LSP M6 A1 fixture — does the EDITOR analyze the program the BUILD analyzes?
+//
+// Owned by tools/check-lsp.sh (and cross-checked by `kama query --symbols`, which is the point: the two
+// must agree). Its kama.json declares FEATURE_A `"default": true`, so a plain build keeps `onlyWithA` and
+// drops `onlyWithoutA`. Before M6 A1 the server never called setBuildFlags, so with an empty flag set it
+// did the exact opposite — dropping every `@compileFor(X)` and keeping every `@compileFor(!X)`.
+//
+// `sources` keeps this a DECLARED project, so it is never widened by inference. Deliberately NO `main`:
+// tests/query is enumerated as an inferred project by other cases, and a second `main` would collide.
+namespace cfgprobe;
+
+@compileFor(FEATURE_A)
+fn int32 onlyWithA() { return 1; }
+
+@compileFor(!FEATURE_A)
+fn int32 onlyWithoutA() { return 0; }
+
+fn int32 always() { return 2; }

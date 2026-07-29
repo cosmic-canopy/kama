@@ -482,6 +482,25 @@ struct Server {
     std::string    wsRootOfIndex;       // which project root wsIndex was built for
     bool           wsDirty = true;      // a buffer or watched file changed since wsIndex was built
 
+    // ---- build configuration (M6 A1) -----------------------------------------------------------
+    // ONE configuration per process, pinned by the first opened document that resolves a manifest. It has
+    // to be per-process rather than per-file: the M5 parse cache holds units `pruneInactiveDecls` rewrote
+    // IN PLACE under the flag set in force, so two configurations cannot share it.
+    //
+    // KNOWN LIMIT, documented rather than papered over: in a monorepo whose packages declare DIFFERENT
+    // flag universes, packages other than the pinned one get the pinned one's configuration — their
+    // `@compileFor`-gated declarations may be dropped, and their own flag names may read as undeclared
+    // under strict validation. Workarounds, in order: declare the shared flag universe in the ROOT
+    // manifest (strict validation then accepts every member's names), or one editor window per package.
+    // The real fix is per-project configuration, which needs per-configuration parse caches.
+    //
+    // Re-pinning on tab switch is deliberately NOT done: it would evict the cache and re-analyze every
+    // open closure on every switch between packages — the 86 ms path, repeatedly — to solve a case one
+    // window per package already solves.
+    std::string configManifest;         // the kama.json this process pinned ("" = none)
+    std::string configHint;             // the document that pinned it (a re-resolve replays the same walk)
+    bool        configPinned = false;
+
     void sendResponse(const Json& id, Json result) {
         Json resp = Json::object();
         resp.set("jsonrpc", "2.0");
@@ -510,6 +529,63 @@ struct Server {
         note.set("method", "textDocument/publishDiagnostics");
         note.set("params", std::move(params));
         writeMessage(serialize(note));
+    }
+
+    // window/logMessage and window/showMessage. `type`: 1=Error 2=Warning 3=Info 4=Log. logMessage lands in
+    // the editor's output channel; showMessage is a visible toast, so it is reserved for a real failure.
+    void sendWindowMessage(const char* method, int type, const std::string& msg) {
+        Json params = Json::object();
+        params.set("type", type);
+        params.set("message", msg);
+        Json note = Json::object();
+        note.set("jsonrpc", "2.0");
+        note.set("method", method);
+        note.set("params", std::move(params));
+        writeMessage(serialize(note));
+    }
+    void logMessage(int type, const std::string& msg)  { sendWindowMessage("window/logMessage", type, msg); }
+    void showMessage(int type, const std::string& msg) { sendWindowMessage("window/showMessage", type, msg); }
+
+    // What the server is analyzing under, in one line. This bug survived five milestones precisely because
+    // nothing ever SAID which flags were in force — a server that quietly analyzes the wrong program looks
+    // exactly like a server that analyzes the right one. Now it announces itself.
+    static std::string describeConfig(const LspBuildConfig& c) {
+        std::string s = "config: ";
+        s += c.manifest.empty() ? "(no kama.json — permissive defaults)" : c.manifest;
+        if (!c.localManifest.empty()) s += " + kama.local.json";
+        s += " | target " + c.targetName;
+        if (!c.targetTriple.empty()) s += " (" + c.targetTriple + ")";
+        s += " | BUILD_TYPE " + c.buildType;
+        if (c.strict) s += " | strict";
+        s += " | flags:";
+        for (const auto& f : c.activeFlags) s += " " + f;
+        return s;
+    }
+
+    // Resolve and install the build configuration, and if it CHANGED, make every open document agree with
+    // it. Returns true when it re-analyzed, so a caller that was about to analyze does not do it twice.
+    //
+    // The eviction is not caution. `pruneInactiveDecls` already rewrote every cached unit in place under
+    // the OLD flag set, deleting declarations that the new set may want back — and a dropped declaration
+    // cannot be recovered from the pruned AST. The cache must go.
+    bool applyConfig(const std::string& hintPath) {
+        LspBuildConfig cfg;
+        std::string err;
+        if (!lspResolveBuildConfig(hintPath, workspaceRoot, cfg, err))
+            showMessage(1, "kama: " + err + " — analyzing with default build flags");
+        logMessage(3, describeConfig(cfg));
+
+        bool changed = (cfg.manifest != configManifest);
+        configManifest = cfg.manifest;
+        if (!cfg.manifest.empty()) { configPinned = true; configHint = hintPath; }
+        if (!changed) return false;
+
+        lspEvictParsedFile("");            // the fixed-flag-set invariant — see kama.lsp.h
+        wsIndex = nullptr;
+        wsRootOfIndex.clear();
+        wsDirty = true;
+        for (auto& kv : docs) analyzeAndPublish(kv.first);
+        return true;
     }
 
     // Analyze the stored buffer for `uri`, cache the queryable index, and publish (empty array clears old
@@ -551,6 +627,16 @@ struct Server {
                 if (!first.empty()) rootUri = first;
             }
         if (!rootUri.empty()) workspaceRoot = uriToPath(rootUri);
+
+        // Install host defaults now, so nothing is EVER analyzed with a truly empty `@compileFor` set even
+        // if the first document resolves no manifest. The real configuration is pinned on the first
+        // didOpen, from that file's nearest kama.json — see applyConfig / lspResolveBuildConfig.
+        {
+            LspBuildConfig cfg;
+            std::string err;
+            lspResolveBuildConfig("", "", cfg, err);
+            logMessage(3, describeConfig(cfg));
+        }
 
         // M1 advertised full-document sync only; M2 turns on the first interactive features.
         Json caps = Json::object();
@@ -596,6 +682,10 @@ struct Server {
         doc.text = td->getStr("text");
         docs[uri] = std::move(doc);
         wsDirty = true;              // a new buffer joins the overlay set
+        // Pin the build configuration from the FIRST document that resolves a manifest, before its first
+        // analysis — so in the common case this buffer is analyzed exactly once, under the right flags.
+        // applyConfig re-analyzes every open document when it changes anything, hence the early return.
+        if (!configPinned && applyConfig(uriToPath(uri))) return;
         analyzeAndPublish(uri);
     }
 
@@ -626,6 +716,31 @@ struct Server {
         // the editor may have saved without the file watcher firing (or being registered at all).
         lspEvictParsedFile(uriToPath(uri));
         publish(uri, {});                        // clear any lingering squiggles
+    }
+
+    // A watched file changed on disk — created, deleted, or edited outside the editor. The client only
+    // sends this if it registered watchers (ours does; see editor/vscode/extension.js).
+    //
+    // Drop the workspace index so the next gesture re-reads the tree, and drop the parse cache wholesale —
+    // the notification may name a directory, and one extra closure re-parse is invisible next to serving a
+    // stale AST.
+    //
+    // A MANIFEST change is different in kind: it changes the PROGRAM BEING ANALYZED, not just a file in it.
+    // Every open buffer's diagnostics are now answers to the wrong question, so re-resolve and republish.
+    // `configManifest.clear()` forces applyConfig to treat it as changed even when the path is identical
+    // and only the CONTENTS moved — which is the whole case.
+    void handleDidChangeWatchedFiles(const Json& params) {
+        bool manifestChanged = false;
+        if (const Json* ch = params.get("changes"))
+            if (ch->type == Json::Arr)
+                for (const auto& c : ch->arr)
+                    if (lspIsManifestPath(uriToPath(c.getStr("uri")))) { manifestChanged = true; break; }
+        wsDirty = true;
+        lspEvictParsedFile("");
+        if (manifestChanged) {
+            configManifest.clear();
+            applyConfig(configHint);
+        }
     }
 
     // ---- M2 query requests (reads off the doc's cached last-good index) --------------------------
@@ -1018,12 +1133,13 @@ struct Server {
         if (method == "workspace/symbol")            { if (isRequest) handleWorkspaceSymbol(*idp, params); return true; }
         if (method == "textDocument/completion")     { if (isRequest) handleCompletion(*idp, params);     return true; }
         if (method == "textDocument/signatureHelp")  { if (isRequest) handleSignatureHelp(*idp, params);  return true; }
-        // A watched .kama file changed on disk — created, deleted, or edited outside the editor. The client
-        // only sends this if it registered watchers (ours does; see editor/vscode/extension.js). Nothing to
-        // re-publish: drop the workspace index so the next gesture re-reads the tree, and drop the parse
-        // cache wholesale — the notification may name a directory, and one extra closure re-parse is
-        // invisible next to serving a stale AST.
-        if (method == "workspace/didChangeWatchedFiles") { wsDirty = true; lspEvictParsedFile(""); return true; }
+        if (method == "workspace/didChangeWatchedFiles") { handleDidChangeWatchedFiles(params); return true; }
+        // `workspace/didChangeConfiguration` is deliberately NOT handled — see kama.lsp.h. The one
+        // configuration channel is `kama.local.json`, which arrives through the watcher above, so this
+        // notification carries nothing actionable; a handler would be dead code that reads as though
+        // configuration flowed through it. Unhandled NOTIFICATIONS fall through legally (only requests get
+        // an error below), so a client that volunteers one — nvim sends `settings = {}` on attach — is
+        // silently and correctly ignored.
 
         // Anything else: a request needs a response (or the client hangs); notifications are ignored.
         if (isRequest) sendError(*idp, -32601, "method not found: " + method);

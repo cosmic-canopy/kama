@@ -1,0 +1,6 @@
+{
+  "name": "cfgprobe",
+  "version": "0.1.0",
+  "sources": ["."],
+  "flags": { "FEATURE_A": { "default": true } }
+}

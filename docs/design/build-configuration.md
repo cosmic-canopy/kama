@@ -116,7 +116,7 @@ Names are conveniences, triples are exact.
 ```json
 {
   "select": {
-    "TARGET":     { "RPI":   { "triple": "aarch64-linux-gnu",
+    "TARGET":     { "RPI":   { "triple": "aarch64-linux-gnu", "default": true,
                                "cc": "aarch64-linux-gnu-gcc", "ar": "aarch64-linux-gnu-ar",
                                "sysroot": "/opt/rpi-sysroot", "cflags": [], "ldflags": [] },
                     "ESP32": { "triple": "xtensa-none-elf" } },
@@ -134,7 +134,14 @@ Names are conveniences, triples are exact.
 - **`TARGET` values carry toolchain settings; `BUILD_TYPE` values do not** (v1). A target genuinely
   *is* a toolchain; a build-type override would turn `kama.json` into a build-settings language.
   "RELEASE plus my flags" is already useful. Per-value build settings are a recorded follow-on.
-- `kama.local.json` overrides **defaults only**, extending the existing `flags` deep-merge rule.
+- **`"default": true` works on a `TARGET` value too** (added by LSP M6 A1), so a project that only ever
+  builds for one board declares it once instead of retyping `--target` — and an editor can know which
+  target to analyze for. An explicit `--target` still wins.
+- `kama.local.json` overrides **defaults only**, extending the existing `flags` deep-merge rule. It is
+  also **the build-configuration channel the editor reads** (LSP M6 A1): the VS Code status-bar picker
+  writes this file rather than an editor-private setting, so the editor and `kama build` cannot disagree,
+  and every other editor overrides configuration the same way. Note the `flags` merge is a *union* — it
+  can declare a flag or turn one on, but not turn a `"default": true` one off.
 
 **Precedence: CLI > `kama.local.json` > `kama.json` > built-in default.**
 

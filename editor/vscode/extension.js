@@ -93,7 +93,18 @@ function startLanguageServer() {
     // watcher HERE, client-side, is deliberate: the alternative is server-driven registration via
     // `client/registerCapability`, a server->client request the server has no machinery for. Every
     // editor's LSP client offers the same client-side hook, so M6's other clients wire it the same way.
-    synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/*.kama') },
+    //
+    // The two manifests are watched for a DIFFERENT reason (M6 A1): they carry the build configuration the
+    // server analyzes under, so editing one changes which `@compileFor` declarations exist — not just a
+    // file in the program, but the program. The server re-resolves and republishes every open buffer.
+    // Spelled out separately because `**/kama.json` does not match `kama.local.json`.
+    synchronize: {
+      fileEvents: [
+        vscode.workspace.createFileSystemWatcher('**/*.kama'),
+        vscode.workspace.createFileSystemWatcher('**/kama.json'),
+        vscode.workspace.createFileSystemWatcher('**/kama.local.json'),
+      ],
+    },
   };
   client = new LanguageClient('kama', 'kama Language Server', serverOptions, clientOptions);
   client.start();

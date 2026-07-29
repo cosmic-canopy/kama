@@ -110,6 +110,58 @@ std::string lspRealPath(const std::string& path);
 void lspSetParseCache(bool on);
 void lspEvictParsedFile(const std::string& path);
 
+// ---- build configuration (M6 A1) -------------------------------------------------------------------
+//
+// Which program is the editor looking at? Until M6 the answer was "not the one you are building":
+// `lspAnalyze` never called `setBuildFlags`, so `_activeFlags` was empty, and `pruneInactiveDecls`
+// dropped every `@compileFor(X)` declaration a real build keeps while keeping every `@compileFor(!X)`
+// one. Any project using conditional compilation saw phantom "undeclared" errors.
+//
+// The configuration an editor analyzes under is DEFINED as what a plain `kama build` in that project
+// does: the resolved TARGET's derived flags, BUILD_TYPE=DEBUG, and the manifest's `default: true` flags.
+//
+// THERE IS NO EDITOR-SPECIFIC OVERRIDE CHANNEL, BY DESIGN. `kama.local.json` is the one channel — a
+// gitignored sibling of `kama.json` that every CLI path already deep-merges — so the editor and
+// `kama build` cannot disagree, the F5 debug path needs no extra arguments to stay in step, and a
+// Neovim user overrides configuration exactly the way a VS Code user does. That is also why
+// `workspace/didChangeConfiguration` is deliberately NOT wired: the server reads no client settings, so
+// handling it would be either dead code that reads as though configuration flowed through it, or a
+// `workspace/configuration` pull the server has no machinery for.
+struct LspBuildConfig {
+    std::string manifest;        // the kama.json that was read ("" = none: permissive host defaults)
+    std::string localManifest;   // the kama.local.json merged over it ("" = none)
+    std::string targetName;      // e.g. "HOST"
+    std::string targetTriple;    // e.g. "aarch64-macos-none"
+    std::string buildType;       // e.g. "DEBUG"
+    std::vector<std::string> activeFlags;   // the full `@compileFor` set, sorted
+    bool        strict = false;  // a manifest declared the flag universe, so typos are errors
+};
+
+// Resolve and INSTALL the configuration this process analyzes under. Discovery mirrors the CLI's, in the
+// direction an editor needs: walk UP from `hintPath`'s directory looking for a kama.json, never above
+// `workspaceRoot`, stopping at any `.kama` component so a vendored dependency keeps its own manifest.
+// `hintPath` empty installs permissive host defaults without touching the filesystem.
+//
+// The NEAREST manifest wins, not the outermost — deliberately different from lspFindProject's ownership
+// walk. `main` discovers the input file's own kama.json first, so nearest is what makes "the editor
+// agrees with `kama build <this file>`" literally true; pinning a monorepo's root manifest instead would
+// put a member package's own flag names outside the declared universe and manufacture "undeclared flag"
+// errors on correct code.
+//
+// PER PROCESS, and that is load-bearing: the M5 parse cache holds units that `pruneInactiveDecls`
+// rewrote IN PLACE, so reuse is sound only under a fixed flag set (see parseFile in kama.driver.cpp).
+// Any re-resolve MUST be followed by `lspEvictParsedFile("")` and a re-analysis of every open document.
+//
+// Returns false + `err` on a malformed manifest / unknown target / undeclared flag. On failure the
+// configuration is left PERMISSIVE rather than half-applied, so the server keeps answering.
+bool lspResolveBuildConfig(const std::string& hintPath, const std::string& workspaceRoot,
+                           LspBuildConfig& out, std::string& err);
+
+// Is `path` a file lspResolveBuildConfig reads? The server asks so workspace/didChangeWatchedFiles can
+// tell a CONFIGURATION change from a source change — the manifest file names stay knowledge of the
+// driver, which owns the manifest format.
+bool lspIsManifestPath(const std::string& path);
+
 // Was this index built from a buffer that did NOT fully parse (M5.4)? Since M5.3 the grammar recovers,
 // so a mid-edit buffer still yields a live, current index off the parts that survived — which is what
 // makes completion on a broken file work off a fresh index rather than a stale one. The server asks in

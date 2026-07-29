@@ -4241,6 +4241,69 @@ void lspEvictParsedFile(const std::string& path)
         it = (it->second.abs == abs) ? g_parseCacheMap.erase(it) : std::next(it);
 }
 
+// ---- build configuration, from the editor's side (M6 A1) --------------------------------------------
+
+bool lspIsManifestPath(const std::string& path)
+{
+    std::string base = baseName(path);
+    return base == "kama.json" || base == "kama.local.json";
+}
+
+bool lspResolveBuildConfig(const std::string& hintPath, const std::string& workspaceRoot,
+                           LspBuildConfig& out, std::string& err)
+{
+    out = LspBuildConfig();
+
+    // Find the NEAREST kama.json at or above the open file. Deliberately NOT lspFindProject, which also
+    // enumerates every .kama under the root — that is the workspace-index cost and has no business on a
+    // path that runs before the first analysis. Only the walk SHAPE is shared: a `.kama` component stops
+    // it so a vendored dependency keeps its own manifest, and the editor's folder bounds it so a stray
+    // kama.json in $HOME can never be picked up.
+    std::string manifest;
+    if (!hintPath.empty()) {
+        std::string wsRoot = workspaceRoot.empty() ? std::string() : absolutePath(workspaceRoot);
+        std::string cur    = dirName(absolutePath(hintPath));
+        bool underWorkspace = !wsRoot.empty() &&
+                              (cur == wsRoot || cur.compare(0, wsRoot.size() + 1, wsRoot + "/") == 0);
+        for (;;) {
+            if (baseName(cur) == ".kama") break;
+            if (fileExists(cur + "/kama.json")) { manifest = cur + "/kama.json"; break; }
+            if (underWorkspace && cur == wsRoot) break;      // examined it, go no higher
+            std::string parent = dirName(cur);
+            if (parent == cur || parent == ".") break;       // filesystem root
+            cur = parent;
+        }
+    }
+
+    BuildConfigRequest req;
+    req.manifest = manifest;   // no --target/--select/--define: the editor's configuration comes from files
+
+    BuildConfigResult res;
+    if (!resolveBuildConfig(req, res, err)) {
+        // Never leave a HALF-APPLIED configuration: a partially-populated flag set would analyze a program
+        // that is neither what the manifest asked for nor a sane default. Fall back to permissive host
+        // defaults (which cannot fail — no manifest is read) and report the error to the client.
+        BuildConfigRequest bare;
+        std::string ignored;
+        BuildConfigResult bres;
+        resolveBuildConfig(bare, bres, ignored);
+        out.targetName   = g_target.name;
+        out.targetTriple = g_target.triple();
+        out.buildType    = bres.buildType;
+        for (const auto& f : g_activeFlags) out.activeFlags.push_back(f);
+        return false;
+    }
+
+    out.manifest      = res.manifest;
+    out.localManifest = res.localManifest;
+    out.targetName    = g_target.name;
+    out.targetTriple  = g_target.triple();
+    out.buildType     = res.buildType;
+    out.strict        = g_strictFlags;
+    for (const auto& f : g_activeFlags) out.activeFlags.push_back(f);   // a std::set: already sorted
+    return true;
+}
+
 LspProject lspFindProject(const std::string& openFilePath, const std::string& workspaceRoot)
 {
     LspProject p;
