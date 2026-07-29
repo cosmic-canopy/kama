@@ -755,19 +755,41 @@ ParseResult parseForQuery(const char* src, const std::string& name)
     return r;
 }
 
-SharedCompilationUnit preludeUnit() { return parseString(KAMA_PRELUDE_SRC, "<prelude>"); }
+// Parsed ONCE per process (M5.1). The prelude source is a compile-time constant, so its AST is one
+// too: a build calls this once and cannot tell the difference, while `kama lsp` called it on every
+// keystroke — 772 lines of embedded kama re-parsed per analysis, measured at ~28 ms and the entire
+// fixed cost of analyzing a 3-line file.
+//
+// Sharing one prelude AST between two live CEmitters is safe, and it is not obvious. Everything the
+// emitter records ABOUT a prelude unit is a per-emitter member keyed by node pointer (_unitCtx,
+// _preludeEnums, ClassInfo, the `unit == _preludeUnit` identity tests), so two emitters never see each
+// other's state. The one pass that writes THROUGH to the AST is CEmitter::pruneInactiveDecls, which
+// rewrites codeDeclarationList and each kept decl's attribute list in place and runs over the prelude
+// too (kama.cemit.cpp:13971 / :14021) — safe here twice over: the prelude carries no `@compileFor`, so
+// the prune drops nothing, and the pass is idempotent under a fixed build-flag set, which one process
+// always has. Re-check both claims if the emitter grows another in-place AST rewrite.
+SharedCompilationUnit preludeUnit()
+{
+    static SharedCompilationUnit u = parseString(KAMA_PRELUDE_SRC, "<prelude>");
+    return u;
+}
 
 // The namespaced built-in modules (the smart-pointer triad, std::memory) — embedded like the prelude
 // so they're always in scope with no `import std::memory`, in both the full and `--no-std` installs.
 // Each keeps its own `namespace`/`export`; the emitter collects them under that scope + an implicit
 // `using` (see CEmitter::collectProgram / ctxOf). nullptr units (a parse failure) are dropped.
-std::vector<SharedCompilationUnit> preludeModuleUnits()
+// Parsed once per process for the same reasons as preludeUnit above — read its comment before
+// touching either.
+const std::vector<SharedCompilationUnit>& preludeModuleUnits()
 {
-    std::vector<SharedCompilationUnit> units;
-    for (int i = 0; i < KAMA_PRELUDE_MODULE_COUNT; ++i) {
-        SharedCompilationUnit u = parseString(KAMA_PRELUDE_MODULES[i].src, "<prelude-module>");
-        if (u) units.push_back(u);
-    }
+    static const std::vector<SharedCompilationUnit> units = [] {
+        std::vector<SharedCompilationUnit> v;
+        for (int i = 0; i < KAMA_PRELUDE_MODULE_COUNT; ++i) {
+            SharedCompilationUnit u = parseString(KAMA_PRELUDE_MODULES[i].src, "<prelude-module>");
+            if (u) v.push_back(u);
+        }
+        return v;
+    }();
     return units;
 }
 
