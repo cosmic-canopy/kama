@@ -132,6 +132,67 @@ if ! grep -q '__ret_0 = 2;' "$tmp/derived_wasm.c"; then
     exit 1
 fi
 
+# 4e. SELECT GROUPS — a project declares its own single-select axes under `select`, and `--select
+#     GROUP=VALUE` picks one. The value's name joins the active flag set (so no separate `flags` entry is
+#     needed), `inherits` pulls the base in with it, and asking for two values of one group is an error —
+#     the ambiguity `--define XBOX --define PS5` used to allow silently.
+sel="$tmp/sel"
+mkdir -p "$sel"
+cat > "$sel/kama.json" <<'JSON'
+{ "name": "sel-demo", "version": "0.1.0",
+  "select": { "BUILD_TYPE": { "FAST": { "inherits": "RELEASE" } },
+              "CONSOLE":    { "XBOX": { "default": true }, "PS5": {} } } }
+JSON
+cat > "$sel/app.kama" <<'KAMA'
+@compileFor(FAST)     fn int32 a() { return 1; }
+@compileFor(!FAST)    fn int32 a() { return 0; }
+@compileFor(RELEASE)  fn int32 b() { return 20; }
+@compileFor(!RELEASE) fn int32 b() { return 0; }
+@compileFor(XBOX)     fn int32 c() { return 100; }
+@compileFor(PS5)      fn int32 c() { return 200; }
+fn int32 main() { return a() + b() + c(); }
+KAMA
+# default: BUILD_TYPE=DEBUG (built-in), CONSOLE=XBOX (manifest `default: true`) -> 0 + 0 + 100
+"$KAMA" build "$sel/app.kama" -o "$sel/dflt" >/dev/null 2>&1
+if "$sel/dflt"; then rc=0; else rc=$?; fi
+if [ "$rc" != 100 ]; then
+    echo "check-compilefor: FAIL — select defaults gave $rc, expected 100 (DEBUG + the manifest's XBOX)" >&2
+    exit 1
+fi
+# --select overrides the manifest default
+"$KAMA" build --select CONSOLE=PS5 "$sel/app.kama" -o "$sel/ps5" >/dev/null 2>&1
+if "$sel/ps5"; then rc=0; else rc=$?; fi
+if [ "$rc" != 200 ]; then
+    echo "check-compilefor: FAIL — --select CONSOLE=PS5 gave $rc, expected 200" >&2
+    exit 1
+fi
+# a user BUILD_TYPE inherits its base: FAST is active AND so is RELEASE (and its -O3/strip driver behavior)
+"$KAMA" build --select BUILD_TYPE=FAST "$sel/app.kama" -o "$sel/fast" >/dev/null 2>&1
+if "$sel/fast"; then rc=0; else rc=$?; fi
+if [ "$rc" != 121 ]; then
+    echo "check-compilefor: FAIL — --select BUILD_TYPE=FAST gave $rc, expected 121 (FAST + inherited RELEASE + XBOX)" >&2
+    exit 1
+fi
+# single-select really is single
+if "$KAMA" build --select CONSOLE=PS5 --select CONSOLE=XBOX "$sel/app.kama" -o "$sel/dup" >/dev/null 2>"$tmp/dup.err"; then
+    echo "check-compilefor: FAIL — a single-select group accepted two values" >&2
+    exit 1
+fi
+if ! grep -qF "single-select" "$tmp/dup.err"; then
+    echo "check-compilefor: FAIL — two-values rejection used an unexpected diagnostic:" >&2
+    sed 's/^/  /' "$tmp/dup.err" >&2
+    exit 1
+fi
+# an undeclared value / group is rejected, not silently ignored
+if "$KAMA" build --select CONSOLE=WII "$sel/app.kama" -o "$sel/bad" >/dev/null 2>"$tmp/badval.err"; then
+    echo "check-compilefor: FAIL — --select accepted a value the group does not declare" >&2
+    exit 1
+fi
+if "$KAMA" build --select NOSUCHGROUP=X "$sel/app.kama" -o "$sel/bad2" >/dev/null 2>"$tmp/badgrp.err"; then
+    echo "check-compilefor: FAIL — --select accepted an undeclared group" >&2
+    exit 1
+fi
+
 # 5. PLATFORM SEAM — `@compileFor` on a `type` (not just a fn): a contract + per-target gated impls,
 #    exactly one surviving. On the native transpile the NativeClock impl is present and the WasmClock
 #    impl is wholly absent (struct + ctor + methods + vtable) — proving whole-type selection. The wasm
@@ -170,4 +231,4 @@ if ! grep -q 'gated' "$localc"; then
 fi
 rm -f "$proj/kama.local.json"
 
-echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C;\n  strict manifest rejects undeclared AND reserved flag names; target names/triples resolve and derive\n  ARCH_/OS_/ABI_ flags; kama.local.json extends the flag universe)"
+echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C;\n  strict manifest rejects undeclared AND reserved flag names; target names/triples resolve and derive\n  ARCH_/OS_/ABI_ flags; select groups pick one value, inherit, and reject duplicates;\n  kama.local.json extends the flag universe)"

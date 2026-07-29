@@ -2,7 +2,7 @@
 // invoking a C compiler to produce a native executable.
 //
 //   kama transpile <in.kama> [-o out.c] [--no-line]
-//   kama build     <in.kama> [-o out] [--target native|wasm|embedded] [--webgpu]
+//   kama build     <in.kama> [-o out] [--target HOST|MACOS|WINDOWS|LINUX|WASM|EMBEDDED|<triple>] [--webgpu]
 //                              [--cc <compiler>] [--no-line] [--keep-c]
 //
 // native builds invoke clang; wasm builds invoke emcc (Emscripten), keying the
@@ -965,17 +965,23 @@ static bool parseTriple(const std::string& s, TargetSpec& out, std::string& err)
     return true;
 }
 
-// Derived `@compileFor` flags for a target: the selected NAME, one flag per triple component, and the
-// single synthesized convenience `HOSTED` ("do I have an OS and a libc" is the most common gate in a
-// systems language, and `!OS_NONE` reads badly). Nothing else is synthesized.
-static std::set<std::string> derivedTargetFlags(const TargetSpec& t)
+// Derived `@compileFor` flags for a target: one flag per triple component, the single synthesized
+// convenience `HOSTED` ("do I have an OS and a libc" is the most common gate in a systems language, and
+// `!OS_NONE` reads badly), and — for a target the PROJECT declared — its name.
+//
+// A BUILT-IN catalog name deliberately does not become a flag. `MACOS`/`EMBEDDED` are shortcuts for a
+// triple family, so gating on one would gate on how the build was spelled rather than on a fact about
+// the target: `@compileFor(EMBEDDED)` would silently stop applying the moment a real board triple
+// (`xtensa-none-elf`) was used instead of the shortcut. `@compileFor(OS_NONE)` is the fact, and it holds
+// for both. A user-declared name IS a fact about a target the project defined, so it does become a flag.
+static std::set<std::string> derivedTargetFlags(const TargetSpec& t, bool nameIsBuiltin)
 {
     auto up = [](std::string v) {
         for (char& c : v) c = (char)toupper((unsigned char)c);
         return v;
     };
     std::set<std::string> f;
-    if (!t.name.empty() && t.name.find('-') == std::string::npos) f.insert(t.name);   // named, not anonymous
+    if (!nameIsBuiltin && !t.name.empty() && t.name.find('-') == std::string::npos) f.insert(t.name);
     f.insert("ARCH_" + up(t.arch));
     f.insert("OS_"   + up(t.os));
     f.insert("ABI_"  + up(t.abi));
@@ -985,11 +991,52 @@ static std::set<std::string> derivedTargetFlags(const TargetSpec& t)
 
 static const std::map<std::string, TargetSpec>& builtinTargets();   // defined just below
 
+// A single-select group: pick exactly one value, and its name (plus anything it inherits) joins the
+// active flag set. `TARGET` and `BUILD_TYPE` are the built-in instances; a project declares its own the
+// same way. There is no user-declared MULTI group on purpose — `flags` already IS the one multi-select
+// bag, and a second grouping mechanism would only buy presentation.
+struct SelectGroup {
+    std::vector<std::string> values;                  // declaration order (error messages, IDE dropdowns)
+    std::map<std::string, std::string> inherits;      // value -> base value, e.g. FAST -> RELEASE
+    std::string dflt;                                 // selected when the build does not say
+    bool has(const std::string& v) const {
+        for (const auto& x : values) if (x == v) return true;
+        return false;
+    }
+};
+
 // The resolved build target, and the manifest-declared target catalog it was resolved against. File-scope
 // like the other build config: set in main, read by the compile/link path (targetLinkFlags) and by the
 // emitter setup. Defaults to the host so a bare `kama build` needs no configuration at all.
 static TargetSpec g_target;
 static std::map<std::string, TargetSpec> g_manifestTargets;
+
+// Every single-select group except TARGET (whose values are triples and carry a toolchain, so it has its
+// own catalog). Seeded with the built-in BUILD_TYPE, then extended by the manifest.
+static std::map<std::string, SelectGroup> g_selectGroups;
+
+// The built-in BUILD_TYPE group. It must stay built-in — unlike a user group, its values drive real
+// behavior on both sides: the compiler strips `debugAssert` and bakes a log level, and the driver picks
+// -O3/-Oz + -DNDEBUG + section GC + strip. A user value inherits all of that from whichever it names.
+static void seedBuiltinSelectGroups()
+{
+    SelectGroup bt;
+    bt.values = { "DEBUG", "RELEASE" };
+    bt.dflt   = "DEBUG";
+    g_selectGroups["BUILD_TYPE"] = bt;
+}
+
+// Walk a value's `inherits` chain, innermost first, into `out`. Cycles are broken by the visited set —
+// a manifest can legally (if uselessly) say A inherits B inherits A, and that must not hang the build.
+static void collectInherited(const SelectGroup& g, const std::string& value, std::set<std::string>& out)
+{
+    std::string v = value;
+    while (!v.empty() && out.insert(v).second) {
+        auto it = g.inherits.find(v);
+        if (it == g.inherits.end()) break;
+        v = it->second;
+    }
+}
 
 // Resolve a `--target` value. Order matters: a manifest entry MERGES onto a built-in of the same name
 // (so a project can attach a cross toolchain to `LINUX` without redefining it), a bare name otherwise
@@ -1004,9 +1051,6 @@ static bool resolveTarget(const std::string& selRaw,
     std::string sel = selRaw;
     if (sel.find('-') == std::string::npos)
         for (char& c : sel) c = (char)toupper((unsigned char)c);
-    // Legacy spellings from before targets were triples. TODO(C1.2): remove with the tree-wide migration.
-    if (sel == "NATIVE")   sel = "HOST";
-    if (sel == "EMBEDDED") sel = "FREESTANDING";
 
     bool known = false;
     auto b = builtinTargets().find(sel);
@@ -1060,9 +1104,9 @@ static const std::map<std::string, TargetSpec>& builtinTargets()
         m["WINDOWS"]      = mk("WINDOWS",      "", "windows",    "gnu");
         m["LINUX"]        = mk("LINUX",        "", "linux",      "gnu");
         m["WASM"]         = mk("WASM",         "wasm32", "emscripten", "none");
-        // Bare metal on the host's own arch — the exact shape the retired `--target embedded` produced
-        // (freestanding, no OS, object output). A real board spells its own triple.
-        m["FREESTANDING"] = mk("FREESTANDING", "", "none",       "none");
+        // Bare metal on the host's own arch. `os=none` is the whole of it: freestanding, no libc, object
+        // output. A real board spells its own triple (`xtensa-none-elf`) and gets the same `OS_NONE`.
+        m["EMBEDDED"]     = mk("EMBEDDED",     "", "none",       "none");
         return m;
     }();
     return cat;
@@ -1336,6 +1380,7 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* overridesOut = nullptr;// set to capture `overrides` (kama.local.json, M5.3)
     LogConfig* logOut = nullptr;                          // set to capture the `log` config (M5)
     std::map<std::string, TargetSpec>* targetsOut = nullptr;  // set to capture `select.TARGET` entries
+    std::map<std::string, SelectGroup>* groupsOut = nullptr;  // set to capture the other `select` groups
     ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
         : s(src), declared(d), defaults(df) {}
 
@@ -1404,12 +1449,51 @@ struct ManifestReader {
             std::string group; if (!str(group)) return false;
             ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a select group name");
             ++i; ws();
-            if (group == "TARGET" && targetsOut) { if (!targetGroup()) return false; }
+            if      (group == "TARGET" && targetsOut) { if (!targetGroup()) return false; }
+            else if (groupsOut)                       { if (!valueGroup(group)) return false; }
             else if (!skipValue()) return false;
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
             if (i < s.size() && s[i] == '}') { ++i; break; }
             return fail("expected ',' or '}' in `select`");
+        }
+        return true;
+    }
+
+    // An ordinary single-select group: { "<VALUE>": { "inherits": "<BASE>", "default": true }, ... }.
+    // Same shape as `flags` and `select.TARGET` — one manifest idiom, not three.
+    bool valueGroup(const std::string& group) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("a `select` group must be a JSON object");
+        ++i; ws();
+        SelectGroup& g = (*groupsOut)[group];
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string name; if (!str(name)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a select value name");
+            ++i; ws();
+            if (i >= s.size() || s[i] != '{') return fail("a `select` value must be an object");
+            if (!g.has(name)) g.values.push_back(name);
+            ++i; ws();
+            if (i < s.size() && s[i] == '}') ++i;
+            else while (true) {
+                std::string k; if (!str(k)) return false;
+                ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a select value body");
+                ++i; ws();
+                if (k == "inherits") { std::string base; if (!str(base)) return false; g.inherits[name] = base; }
+                else if (k == "default") {
+                    if      (s.compare(i, 4, "true")  == 0) { g.dflt = name; i += 4; }
+                    else if (s.compare(i, 5, "false") == 0) { i += 5; }
+                    else if (!skipValue()) return false;
+                } else if (!skipValue()) return false;   // future per-value keys tolerated
+                ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == '}') { ++i; break; }
+                return fail("expected ',' or '}' in a select value body");
+            }
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in a `select` group");
         }
         return true;
     }
@@ -1674,7 +1758,7 @@ struct ManifestReader {
 // Load a `kama.json` manifest → the `select.TARGET` catalog. Reuses ManifestReader (unknown keys
 // tolerated), so this is orthogonal to the flag load.
 static bool loadManifestTargets(const std::string& path, std::map<std::string, TargetSpec>& out,
-                                std::string& err)
+                                std::map<std::string, SelectGroup>& groupsOut, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
@@ -1682,6 +1766,7 @@ static bool loadManifestTargets(const std::string& path, std::map<std::string, T
     std::set<std::string> ignoredDeclared, ignoredDefaults;
     ManifestReader r(src, ignoredDeclared, ignoredDefaults);
     r.targetsOut = &out;
+    r.groupsOut  = &groupsOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -1691,11 +1776,8 @@ static bool loadManifestTargets(const std::string& path, std::map<std::string, T
 // three derived triple-component namespaces, and every built-in target name.
 static bool isReservedFlagName(const std::string& n)
 {
-    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED") return true;
-    if (n.compare(0, 4, "OS_")   == 0) return true;
-    if (n.compare(0, 5, "ARCH_") == 0) return true;
-    if (n.compare(0, 4, "ABI_")  == 0) return true;
-    return builtinTargets().count(n) != 0;
+    return kamaIsBuildConfigFlag(n)          // DEBUG/RELEASE/HOSTED + the OS_/ARCH_/ABI_ namespaces
+        || builtinTargets().count(n) != 0;   // and every built-in TARGET name, so `--target X` stays unambiguous
 }
 
 // Reject a `flags` object that redeclares a build-configuration name. Prints and returns false.
@@ -3506,7 +3588,9 @@ void usage()
     fprintf(stderr,
         "usage:\n"
         "  kama transpile <in.kama> [-o out.c] [--no-line] [--dev]\n"
-        "  kama build     <in.kama>... [-o out] [--target native|wasm|embedded] [--release|--debug] [--shared]\n"
+        "  kama build     <in.kama>... [-o out] [--target <name-or-triple>] [--release|--debug] [--shared]\n"
+        "                  (--target: HOST|MACOS|WINDOWS|LINUX|WASM|EMBEDDED, a kama.json `select.TARGET`\n"
+        "                   entry, or a bare <arch>-<os>-<abi> triple such as aarch64-linux-gnu)\n"
         "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
@@ -4315,8 +4399,10 @@ int main(int argc, char** argv)
     bool        keepC      = false;
     bool        webgpu     = false;
     bool        release    = false;        // debug by default
+    bool releaseExplicit   = false;        // was --release/--debug passed? (sugar must not beat a manifest default)
     bool        shared     = false;        // --shared: build a native .so/.dylib/.dll (expose entry points)
     std::vector<std::string> defines;      // --define NAME: activate a `@compileFor` flag (repeatable)
+    std::vector<std::string> selects;      // --select GROUP=VALUE: pick a single-select group (repeatable)
     std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
     std::string configPath;                // --config PATH: explicit kama.json (else auto-discovered)
     bool        devBuild   = false;        // --dev: also put .kama/dev-deps on the import path (dev-dependencies)
@@ -4343,8 +4429,9 @@ int main(int argc, char** argv)
         else if (a == "--webgpu")                 webgpu = true;
         else if (a == "--shared")                 shared = true;
         else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
-        else if (a == "--release")                release = true;
-        else if (a == "--debug")                  release = false;
+        else if (a == "--release")              { release = true;  releaseExplicit = true; }
+        else if (a == "--debug")                { release = false; releaseExplicit = true; }
+        else if (a == "--select" && i + 1 < argc)   selects.push_back(argv[++i]);    // GROUP=VALUE
         else if (a == "--define" && i + 1 < argc)   defines.push_back(argv[++i]);    // `@compileFor` flag on
         else if (a == "--undefine" && i + 1 < argc) undefines.push_back(argv[++i]);  // `@compileFor` flag off
         else if (a == "--config" && i + 1 < argc)   configPath = argv[++i];          // explicit kama.json
@@ -4399,6 +4486,7 @@ int main(int argc, char** argv)
     // inactive, so bare per-file builds need no config.
     //
     // This runs BEFORE target resolution because a project may declare the very target being selected.
+    seedBuiltinSelectGroups();
     {
         std::string manifest = configPath;
         if (manifest.empty()) {
@@ -4414,7 +4502,7 @@ int main(int argc, char** argv)
                 return 2;
             }
             if (!reservedFlagCheck(manifest, declared)) return 2;
-            if (!loadManifestTargets(manifest, g_manifestTargets, err)) {
+            if (!loadManifestTargets(manifest, g_manifestTargets, g_selectGroups, err)) {
                 fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str());
                 return 2;
             }
@@ -4444,11 +4532,18 @@ int main(int argc, char** argv)
                 declared.insert(ldeclared.begin(), ldeclared.end());   // union — local extends the universe
                 defaults.insert(ldefaults.begin(), ldefaults.end());
                 std::map<std::string, TargetSpec> ltargets;
-                if (!loadManifestTargets(localManifest, ltargets, lerr)) {
+                std::map<std::string, SelectGroup> lgroups;
+                if (!loadManifestTargets(localManifest, ltargets, lgroups, lerr)) {
                     fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
                     return 2;
                 }
                 for (auto& kv : ltargets) g_manifestTargets[kv.first] = kv.second;   // local wins
+                for (auto& kv : lgroups) {                                            // local extends/wins
+                    SelectGroup& g = g_selectGroups[kv.first];
+                    for (const auto& v : kv.second.values) if (!g.has(v)) g.values.push_back(v);
+                    for (const auto& iv : kv.second.inherits) g.inherits[iv.first] = iv.second;
+                    if (!kv.second.dflt.empty()) g.dflt = kv.second.dflt;
+                }
                 LogConfig localLog;
                 if (!loadManifestLog(localManifest, localLog, lerr)) {
                     fprintf(stderr, "kama: %s: %s\n", localManifest.c_str(), lerr.c_str());
@@ -4458,6 +4553,12 @@ int main(int argc, char** argv)
             }
 
             g_declaredFlags = declared;
+            // A declared select VALUE is a legitimate `@compileFor` name too — it enters the active set
+            // when its group selects it — so strict validation must accept it without the project also
+            // listing it under `flags`. (Built-in target names stay out: see kamaIsBuildConfigFlag.)
+            for (const auto& kv : g_selectGroups)
+                for (const auto& v : kv.second.values) g_declaredFlags.insert(v);
+            for (const auto& kv : g_manifestTargets) g_declaredFlags.insert(kv.first);
             g_strictFlags   = true;
             for (auto& d : defaults) g_activeFlags.insert(d);
             g_logDefault = logCfg.canonical();
@@ -4513,9 +4614,68 @@ int main(int argc, char** argv)
     // build invocation, never ambient env). The selected target contributes its NAME plus one flag per
     // triple component (ARCH_/OS_/ABI_) and `HOSTED`; `--release` contributes DEBUG/RELEASE. User flags
     // come from `--define`, with the manifest's `"default": true` ones layered in above.
-    for (const auto& f : derivedTargetFlags(g_target)) g_activeFlags.insert(f);
-    g_activeFlags.insert(release ? "RELEASE" : "DEBUG");
-    g_release = release;   // `--release` also strips `debugAssert` (threaded to the emitter via setRelease)
+    for (const auto& f : derivedTargetFlags(g_target, builtinTargets().count(g_target.name) != 0))
+        g_activeFlags.insert(f);
+
+    // Single-select groups. `--release`/`--debug` are sugar for `--select BUILD_TYPE=…`, and lose to an
+    // explicit `--select` on the same group so there is exactly one answer to "who won".
+    {
+        std::map<std::string, std::string> explicitSel;   // from --select only
+        for (const auto& sel : selects) {
+            size_t eq = sel.find('=');
+            if (eq == std::string::npos || eq == 0 || eq + 1 == sel.size()) {
+                fprintf(stderr, "kama: --select expects GROUP=VALUE (got '%s')\n", sel.c_str());
+                return 2;
+            }
+            std::string group = sel.substr(0, eq), value = sel.substr(eq + 1);
+            if (group == "TARGET") { fprintf(stderr, "kama: use --target for the TARGET group\n"); return 2; }
+            auto g = g_selectGroups.find(group);
+            if (g == g_selectGroups.end()) {
+                std::string known;
+                for (const auto& kv : g_selectGroups) known += (known.empty() ? "" : ", ") + kv.first;
+                fprintf(stderr, "kama: --select names no such group '%s' (declare it under `select` in "
+                                "kama.json; known: TARGET, %s)\n", group.c_str(), known.c_str());
+                return 2;
+            }
+            if (!g->second.has(value)) {
+                std::string vals;
+                for (const auto& v : g->second.values) vals += (vals.empty() ? "" : "|") + v;
+                fprintf(stderr, "kama: '%s' is not a value of select group %s (expected %s)\n",
+                        value.c_str(), group.c_str(), vals.c_str());
+                return 2;
+            }
+            // One value per group is the whole point of a single-select axis: `--define WINDOWS --define
+            // LINUX` used to be silently accepted, and that ambiguity is what this replaces.
+            auto prev = explicitSel.find(group);
+            if (prev != explicitSel.end() && prev->second != value) {
+                fprintf(stderr, "kama: select group %s given two values ('%s' and '%s') — it is "
+                                "single-select\n", group.c_str(), prev->second.c_str(), value.c_str());
+                return 2;
+            }
+            explicitSel[group] = value;
+        }
+
+        // Precedence, lowest first: the group's own built-in default, the manifest's `default: true`,
+        // the `--release`/`--debug` sugar, then an explicit `--select`.
+        std::map<std::string, std::string> chosen;
+        chosen["BUILD_TYPE"] = "DEBUG";
+        for (const auto& kv : g_selectGroups)
+            if (!kv.second.dflt.empty()) chosen[kv.first] = kv.second.dflt;
+        if (releaseExplicit) chosen["BUILD_TYPE"] = release ? "RELEASE" : "DEBUG";
+        for (const auto& kv : explicitSel) chosen[kv.first] = kv.second;
+
+        for (const auto& kv : chosen) {
+            auto g = g_selectGroups.find(kv.first);
+            if (g == g_selectGroups.end()) continue;
+            std::set<std::string> chain;                             // the value plus what it inherits
+            collectInherited(g->second, kv.second, chain);
+            for (const auto& f : chain) g_activeFlags.insert(f);
+        }
+        // A user BUILD_TYPE inherits its base's driver behavior, so `FAST: {inherits: RELEASE}` gets
+        // -O3/-DNDEBUG/strip and `debugAssert` stripping without redeclaring any of it.
+        release = g_activeFlags.count("RELEASE") != 0;
+    }
+    g_release = release;   // release also strips `debugAssert` (threaded to the emitter via setRelease)
 
     // User flags: under strict mode (a manifest was loaded) validate names against the declared
     // universe before applying. `--define` adds; `--undefine` removes (e.g. turning off a default).

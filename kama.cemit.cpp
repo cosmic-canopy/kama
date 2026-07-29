@@ -13917,16 +13917,29 @@ std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, Share
 // when there is no `@compileFor`, or when every gate arg holds. Args are ANDed: a bare `FLAG` holds
 // iff FLAG is active; a negated `!FLAG` holds iff FLAG is inactive. Membership + `!` + comma-AND is
 // v1's deliberately-small logic (full `&&`/`||`/parens are a later comptime-bool fold, out of scope).
-// Under strict mode (a `kama.json` manifest was loaded) every referenced flag must be a built-in or
-// declared in `flags` — a typo like `@compileFor(WINODWS)` is then rejected rather than silently
-// dropping the decl.
+// Names the BUILD CONFIGURATION owns, as opposed to a project's own `flags`. Purely lexical, so an
+// inactive-but-legitimate gate (`@compileFor(OS_FREEBSD)` in a linux build) is not mistaken for a typo.
+// The driver shares this predicate — it is also what `flags` may not redeclare — so the rule has exactly
+// one definition. Built-in TARGET names are deliberately NOT here: they are CLI shortcuts for a triple
+// family and never become flags, so `@compileFor(MACOS)` should indeed be rejected in favour of
+// `@compileFor(OS_MACOS)`, which is the fact rather than the spelling.
+bool kamaIsBuildConfigFlag(const std::string& n)
+{
+    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED") return true;
+    return n.compare(0, 3, "OS_")   == 0
+        || n.compare(0, 5, "ARCH_") == 0
+        || n.compare(0, 4, "ABI_")  == 0;
+}
+
+// Under strict mode (a `kama.json` manifest was loaded) every referenced flag must be a build-config
+// name or declared in `flags`/`select` — a typo like `@compileFor(WINODWS)` is then rejected rather than
+// silently dropping the decl.
 bool CEmitter::compileForActive(const SharedAttributeList& attrs, int line)
 {
     if (!attrs) return true;
-    static const std::set<std::string> builtinFlags = {"NATIVE","WASM","EMBEDDED","DEBUG","RELEASE"};
     auto validate = [&](const std::string& name) {
         if (!_strictFlags) return;
-        if (builtinFlags.count(name) || _declaredFlags.count(name)) return;
+        if (kamaIsBuildConfigFlag(name) || _declaredFlags.count(name)) return;
         unsupported(("`@compileFor` references undeclared flag `" + name +
                      "` (add it to the `flags` object in kama.json)").c_str(), line);
     };
