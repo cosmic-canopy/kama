@@ -41,39 +41,60 @@ the squiggle is usually just "wherever I am right now".
 | `%expect 1`, `%locations`, `%define api.pure full`, `%define parse.error detailed`, `%define parse.lac full` | [kama.y:141-150](../kama.y) |
 | `yyerror` takes `YYLTYPE*` and forwards to `handleError` | [kama.y:1700-1707](../kama.y) |
 | `handleError` increments a counter, prints to stderr, AND appends a `Diagnostic` | [kama.context.h:51-62](../kama.context.h) |
-| **A 10-error budget exists and is unreachable for syntax errors** | `CodeGenContext(…, int maxErrorCount = 10)` + `isErrorLimitReached()`, [kama.context.h:34,47](../kama.context.h) |
+| **A 10-error budget exists and is DEAD CODE** — `isErrorLimitReached()` has zero callers repo-wide | `CodeGenContext(…, int maxErrorCount = 10)`, [kama.context.h:34,47](../kama.context.h) |
+| `yyerror` keeps only `first_line`/`first_column`, so every parse diagnostic is a **zero-width point**, never a range | [kama.y:1704-1706](../kama.y) |
+| The LEXER has a separate error path that does NOT abort — `section = "Lexical"` — so multiple *lexical* errors CAN be reported | [kama.l:566-574](../kama.l), catch-all at :349 |
+| `parseFile` / `parseString` destroy the `CodeGenContext` on return, so an **imported module's** parse errors reach stderr but never the editor; only `parseForQuery` keeps them | [kama.driver.cpp:596,634,651](../kama.driver.cpp) |
 
-That last row is the shape of the whole problem: the machinery for reporting *many* errors is already
-there and has never been reachable, because nothing recovers to find a second one. `parse.lac full`
-improves the error *message*; it does not recover.
+The 10-error row is the shape of the whole problem: the machinery for reporting *many* errors is already
+there and has never once been reached, because nothing recovers to find a second one. `parse.lac full`
+improves the error *message*; it does not recover. Note also that "one diagnostic" is specifically one
+**parse** diagnostic — the lexer's own error path keeps scanning, so lexical errors already accumulate.
 
-### ⚠️ Settle this before adding a single `error` production
+### ⚠️ A latent hard input limit, found while checking recovery readiness
 
-**`YYSTYPE` is a plain `struct kamayystype` of `shared_ptr` fields** ([kama.y:89-133](../kama.y)) — **not a
-`%union`**. That is mostly good news: the usual C++/Bison hazard (a union of raw pointers that leaks on
-discard) does not apply, and semantic values are default-constructible and destructible.
+**`YYSTYPE` is a plain `struct kamayystype` of 40 `shared_ptr` fields** ([kama.y:89-133](../kama.y)) —
+**not a `%union`**. Chasing what that means for discarding symbols during recovery turned up something
+more important, and it is not what the macro definitions suggest.
 
-But the generated parser reveals a real complication, and it is not the one you would guess:
+The generated parser's `YYCOPY` *is* `__builtin_memcpy` under Clang/GCC — but **that code is unreachable**.
+Stack relocation is guarded by `YYSTYPE_IS_TRIVIAL`, which Bison only defines for a generated `%union`:
 
 ```c
-/* build/<os>-<arch>/kama.parser.cpp:789-795 */
-#  if defined __GNUC__ && 1 < __GNUC__
-#   define YYCOPY(Dst, Src, Count) \
-      __builtin_memcpy (Dst, Src, YY_CAST (YYSIZE_T, (Count)) * sizeof (*(Src)))
+/* build/<os>-<arch>/kama.parser.cpp:743-746 */
+#if (! defined yyoverflow \
+     && (! defined __cplusplus \
+         || (defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL \
+             && defined YYSTYPE_IS_TRIVIAL && YYSTYPE_IS_TRIVIAL)))
 ```
 
-Under Clang and GCC, Bison **memcpy's the value stack** when it grows past `YYINITDEPTH`. A byte copy of
-a stack of `shared_ptr`-bearing structs is benign *today* only because the old buffer is abandoned without
-running destructors, so refcounts stay balanced by accident. Add `%destructor` — the normal way to clean
-up symbols discarded during error recovery — and that accident becomes a double-decrement.
+Verified by preprocessing (`c++ -E … | grep -c yyvs_alloc` → **0**). Two consequences, and they point in
+opposite directions:
 
-**Decide the discard policy first**, and write it down:
-- (a) No `%destructor`, accept that discarded values leak a refcount until the parse's nodes are dropped
-  wholesale. Bounded per parse; the server parses on every keystroke, so measure the drift.
-- (b) `%destructor`, and override `YYCOPY` to the assignment loop Bison already provides for
-  non-GCC compilers (the `#else` branch two lines down). One `%define`/`#define` in the prologue.
+**Good:** the classic Bison-plus-C++ hazard does not exist here. The value stack is a real
+`YYSTYPE yyvsa[YYINITDEPTH]` whose 200 elements are default-constructed and destructed normally, and
+`*++yyvsp = yylval` is a proper `shared_ptr` copy-assign. **Adding `error` productions is memory-safe with
+no `%destructor`.** Discarded subtrees merely stay alive until `yyparse` returns; `%destructor` is a
+promptness optimization, not a correctness requirement.
 
-(b) is the honest one. It is also two lines. Do not discover this from a crash.
+**Bad, and it is a real bug independent of M5:** because relocation is compiled out, the parse stack
+**cannot grow**. [kama.parser.cpp:2935](../kama.y) reduces to `if (yyss + yystacksize - 1 <= yyssp)
+YYNOMEM;`, so depth is hard-capped at `YYINITDEPTH 200` and `YYMAXDEPTH 10000` is irrelevant. Measured on
+the shipped compiler:
+
+| input | result |
+|---|---|
+| 120 nested parens `((((…1…))))` | OK |
+| 200 nested parens | `Parse error: memory exhausted` |
+| **30 nested `if` blocks** | OK |
+| **40 nested `if` blocks** | **`Parse error: memory exhausted`** |
+
+Nested parens are pathological; **40 nested `if`s is not** — generated code, decision tables and deeply
+nested logic reach it, and the diagnostic ("memory exhausted") tells the user nothing true. This is a
+one-line fix (`#define YYINITDEPTH` higher in the prologue, or provide `yyoverflow`), and it is worth
+doing in M5.2 while the grammar is already open. Note the cost of the current constant: 200 × ~648 B
+≈ **127 KB of C++ stack plus 8,000 `shared_ptr` ctor/dtor pairs per `yyparse` call**, which is also a
+per-keystroke latency item — so raise it deliberately rather than to a huge number.
 
 ### Where to put the recovery points
 
@@ -97,7 +118,7 @@ command after each recovery arm and read `kama.output`; adjust `%expect` deliber
 [lsp.md](lsp.md):174-181 frames Bison-vs-RDP as the campaign's biggest size swing, leaning "keep Bison for
 v1, escalate only if latency or recovery quality demands it". **Latency does not demand it** (Part 2
 shows the cost is re-parsing imports, not parsing). Recovery quality might, but a hand-written RDP is a
-1,708-line rewrite plus every action in it, and M4 shipped a completion experience that is already good
+1,708-line rewrite plus all 483 hand-written productions and their actions (981 LALR states), and M4 shipped a completion experience that is already good
 on unparseable buffers via the M4.6 repair. **Recommendation: do (1) and (2) above, measure how many
 files recover usefully, and only then revisit.** The RDP remains the right long-term move for
 self-hosting, which is a different justification on a different schedule.
@@ -171,7 +192,7 @@ so. The cache reuses **units**, not the emitter.
 |---|---|
 | **M5.0** | The parse cache: `path -> (mtime, size, unit)` inside the driver, consulted by `loadProgramUnits`. Invalidate on `workspace/didChangeWatchedFiles` as well as mtime. Expect ~240 ms → ~20 ms on `process.kama`. |
 | **M5.1** | Stop M4.6 re-analyzing per request: cache the repaired index against `(version, cursor line)`, or reuse the previous repair when the line count and the cursor line are unchanged. |
-| **M5.2** | Error recovery: the `%destructor`/`YYCOPY` decision, then top-level and class-member resync productions. Assert on a fixture with 3+ independent errors. |
+| **M5.2** | Error recovery: top-level and class-member resync productions (no `%destructor` needed — see above). Raise `YYINITDEPTH` while the grammar is open. Assert on a fixture with 3+ independent errors, and on 40 nested `if`s. |
 | **M5.3** | Optional: statement-level resync, if M5.2's measurements justify the conflict risk. |
 
 Measure after each. The numbers above are the baseline; put the new ones next to them.

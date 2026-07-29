@@ -176,7 +176,7 @@ front end; `kama.cemit.cpp` (14,785) + `kama.cemit.h` (1,334) semantic analysis 
    recovery and no incremental reparse** — both are what make an LSP feel good on half-typed code. Options:
    (a) keep Bison, add error-recovery productions + full-file reparse on each edit (simplest; adequate for
    small/medium files); (b) replace `kama.y` with a hand-written RDP for real recovery + incremental reparse
-   (a large sub-project — rewrites 1,643 lines of grammar, but ROADMAP flags it as the "right" long-term move
+   (a large sub-project — rewrites `kama.y`, 1,708 lines / 483 hand-written productions / 981 LALR states as of M4, but ROADMAP flags it as the "right" long-term move
    and it also benefits self-hosting). *Lean:* **(a) for v1** (Bison + recovery + whole-file reparse; files are
    small, reparse is milliseconds), **revisit (b)** only if latency/recovery quality demands it. Settle before
    M0 because it changes the M0 refactor's shape.
