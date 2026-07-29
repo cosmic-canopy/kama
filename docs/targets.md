@@ -109,7 +109,30 @@ kama build app.kama --target WINDOWS --cc "/path/to/zig cc"
 ```
 
 Kama installs that ship without a system C compiler bundle zig for exactly this reason, and that copy
-is used the same way.
+is used the same way — so on such a machine zig compiles *every* build, not just cross builds.
+
+#### Is `zig cc` as fast as clang?
+
+**Yes — because it *is* clang.** zig bundles LLVM and exposes `zig cc` as a drop-in clang driver, so
+the optimizer and code generator are the same ones; `zig cc --version` reports a clang version. kama
+passes both compilers identical flags (`-O3 -DNDEBUG -ffunction-sections -fdata-sections` in release)
+and **no** `-march`/`-mcpu`, so neither tunes for a specific CPU — both target the architecture's
+generic baseline.
+
+Measured on this repo's benchmarks (`bench/src/kama/`), native release builds, best of 5:
+
+| bench | clang | `zig cc` | ratio |
+|---|---|---|---|
+| collatz | 0.065 s | 0.065 s | **1.00×** |
+| pi | 0.012 s | 0.012 s | 1.00× |
+| math | 0.007 s | 0.007 s | 0.98× |
+
+(The sub-10 ms rows are dominated by process startup; collatz is the only one long enough to mean
+much.) zig's binaries are larger *as files* — but their `__TEXT` is actually **smaller** (1.4 KB vs
+16 KB on collatz); the difference is linker metadata and segment padding, not more code.
+
+So there is no performance reason to prefer one, and **your host build does not change** either way:
+zig is only substituted when the host compiler genuinely cannot reach the target.
 
 ### Always available: emit the C
 
@@ -166,6 +189,12 @@ is exactly what you declared.
 **"cannot build for X — the default C compiler has no libc for it"**
 kama will not guess a toolchain that cannot work. Pick a route from *Getting a cross toolchain* above,
 or `kama transpile` and build the C elsewhere.
+
+**I want to tune for a specific CPU.**
+kama passes no `-march`/`-mcpu`/`-mtune`, so builds target the architecture's generic baseline — which
+is what makes them portable. To override, put it in the target's `cflags`:
+`"RPI": { "triple": "aarch64-linux-gnu", "cflags": ["-mcpu=cortex-a72"] }`. There is deliberately no
+`--march=native` shorthand yet; it is a recorded follow-on (ROADMAP §10).
 
 **A `@compileFor` gate isn't firing.**
 Gate on the **derived** facts, not on how you spelled the build. `--target EMBEDDED` and

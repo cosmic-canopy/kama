@@ -240,6 +240,12 @@ linker error.
 
 ## Follow-ons (recorded, not built)
 
+- **A CPU-tuning knob.** kama passes no `-march`/`-mcpu`/`-mtune`, so everything targets the
+  architecture's generic baseline. Good default, but the only way to override is `cflags` on a declared
+  target — so a plain `kama build --release` cannot tune for the host. Peers all have a shorthand
+  (Rust `-C target-cpu=native`, Zig `-mcpu=native`). Likely shape: a `cpu` field on a target spec plus
+  a `native` spelling. See ROADMAP §10 for the fuller note.
+
 - Per-value `BUILD_TYPE` settings (own opt-level / LTO / strip).
 - Numeric build options surfaced as comptime constants — the non-tagging half of the value question.
 - A full Rust-style target-spec JSON file, if named manifest entries prove too coarse.

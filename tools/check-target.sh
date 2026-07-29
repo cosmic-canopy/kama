@@ -86,21 +86,34 @@ if ccline aarch64-linux-gnu | grep -qF -- "-nostdlib"; then
     exit 1
 fi
 
-# 6. CROSS-COMPILATION REFUSAL — the default C compiler only targets its own host, so asking for a
-#    foreign target must fail with a message naming the ways out, not with a link error from clang that
-#    says nothing about targets. (Skipped when host == the target being asked for.)
-hostos=$(uname -s)
-foreign=WINDOWS
-[ "$hostos" = "Linux" ] && foreign=WINDOWS
-if ! "$KAMA" build "$FIXTURE" --target "$foreign" -o "$tmp/x" >/dev/null 2>"$tmp/cross.err"; then
+# 6. NO TOOLCHAIN -> a clear refusal; A TOOLCHAIN -> it just works. Which of the two we assert depends
+#    on whether this machine has a zig, since zig is picked up automatically for a cross build (it is the
+#    one widely-available compiler that bundles every target's libc, so it is the only thing kama can
+#    substitute unprompted and expect to succeed).
+if command -v zig >/dev/null 2>&1; then
+    if ! "$KAMA" build "$FIXTURE" --target WINDOWS -o "$tmp/auto.exe" >/dev/null 2>"$tmp/auto.err"; then
+        echo "check-target: FAIL — a cross build did not pick up the zig on PATH:" >&2
+        sed 's/^/  /' "$tmp/auto.err" >&2
+        exit 1
+    fi
+    # ...and it must be a real binary FOR THAT TARGET, not a host one with a foreign name.
+    if command -v file >/dev/null 2>&1; then
+        if ! file "$tmp/auto.exe" | grep -qi "MS Windows"; then
+            echo "check-target: FAIL — --target WINDOWS produced something that is not a PE binary:" >&2
+            file "$tmp/auto.exe" | sed 's/^/  /' >&2
+            exit 1
+        fi
+    fi
+else
+    if "$KAMA" build "$FIXTURE" --target WINDOWS -o "$tmp/x" >/dev/null 2>"$tmp/cross.err"; then
+        echo "check-target: FAIL — a cross build with no cross toolchain was accepted" >&2
+        exit 1
+    fi
     if ! grep -qF "has no libc for it" "$tmp/cross.err"; then
         echo "check-target: FAIL — a cross build failed, but not with the toolchain diagnostic:" >&2
         sed 's/^/  /' "$tmp/cross.err" >&2
         exit 1
     fi
-else
-    echo "check-target: FAIL — a cross build with the host compiler was accepted" >&2
-    exit 1
 fi
 
 # 6b. …but "crossing" means the host compiler genuinely CANNOT do the job, not merely that the triple
@@ -120,7 +133,7 @@ fi
 
 # 7. TRANSPILE IS ALWAYS ALLOWED — emitting C for someone else's toolchain needs no toolchain here, and
 #    it is the escape hatch the refusal above points at, so it must actually work.
-if ! "$KAMA" transpile --no-line "$FIXTURE" --target "$foreign" -o "$tmp/foreign.c" >/dev/null 2>&1; then
+if ! "$KAMA" transpile --no-line "$FIXTURE" --target WINDOWS -o "$tmp/foreign.c" >/dev/null 2>&1; then
     echo "check-target: FAIL — transpile refused a foreign target (it needs no toolchain)" >&2
     exit 1
 fi
@@ -152,19 +165,6 @@ gccline=$("$KAMA" build "$FIXTURE" --target x86_64-linux-gnu --cc "echo x86_64-l
 if printf '%s' "$gccline" | grep -qF -- "-target "; then
     echo "check-target: FAIL — a per-target gcc was handed -target (its triple is in its name)" >&2
     exit 1
-fi
-
-# 8b. SANE DEFAULT — with a `zig` on PATH and nothing configured, a cross build should just work: zig is
-#     the one widely-available compiler that bundles every target's libc, so it is the only thing kama can
-#     pick unprompted and expect to succeed. Skipped where zig is absent (it is not a build dependency).
-if command -v zig >/dev/null 2>&1; then
-    if ! "$KAMA" build "$FIXTURE" --target x86_64-linux-musl -o "$tmp/auto" >/dev/null 2>"$tmp/auto.err"; then
-        echo "check-target: FAIL — a cross build did not pick up the zig on PATH:" >&2
-        sed 's/^/  /' "$tmp/auto.err" >&2
-        exit 1
-    fi
-else
-    echo "check-target: (skipping the zig-on-PATH default — no zig installed)"
 fi
 
 # 9. TARGET SPECS — a target declared in kama.json carries its own toolchain, so a team shares one

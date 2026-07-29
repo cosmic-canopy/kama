@@ -4939,9 +4939,16 @@ int main(int argc, char** argv)
             if (!tmpDir.empty() && tmpDir.back() == '/') tmpDir.pop_back();
             output = tmpDir + "/kama-run-" + std::to_string((long)getpid());
         }
-        // Compiler selection, most specific first: an explicit `--cc`, then the target's own toolchain
-        // from `select.TARGET` in kama.json, then emcc for wasm, then the default resolution (a bundled
-        // `zig cc` if the install shipped one, else system clang).
+        // ---- Compiler selection + cross-compilation -------------------------------------------
+        // kama emits ISO C and shells out, so reaching another platform is "invoke the right C
+        // compiler", not "write a backend". Order of operations, and it matters:
+        //   1. pick a compiler (explicit > the target's own > emcc for wasm > the host default)
+        //   2. decide whether this is really a CROSS build
+        //   3. if so and nobody chose a compiler, substitute one that can actually do it
+        //   4. hand the triple to the compiler, if it is the kind that takes one
+
+        // (1) Most specific first. `ccIsExplicit` means the user named a toolchain — either on the
+        // command line or on the target in kama.json — which is them telling us they have one.
         std::string compiler = cc;
         bool ccIsExplicit = !compiler.empty();
         if (compiler.empty() && !g_target.cc.empty()) { compiler = g_target.cc; ccIsExplicit = true; }
@@ -4950,26 +4957,36 @@ int main(int argc, char** argv)
                 const char* env = getenv("EMCC");
                 compiler = env ? env : "emcc";
             } else {
-                compiler = resolveCCompiler(argv[0]);   // bundled zig cc, else system clang
+                compiler = resolveCCompiler(argv[0]);   // bundled `zig cc` if the install shipped one, else clang
             }
         }
-        // Two shapes of C compiler, and they need opposite treatment when crossing:
-        //   * a MULTI-TARGET DRIVER — `clang` or `zig cc` — is one binary for every target and takes the
-        //     triple as a `-target` flag. (clang has always been cross-capable; what it needs from you is
-        //     the target's headers and libraries, i.e. a sysroot. zig bundles those, which is the only
-        //     real difference.)
-        //   * a PER-TARGET BINARY — `aarch64-linux-gnu-gcc`, a vendor ARM gcc, an NDK wrapper — already
-        //     has its triple baked into its name, and passing `-target` would confuse or break it.
-        // Detected from the command string, so it works for the bundled zig, `--cc "zig cc"`, a plain
-        // `--cc clang`, or a `cc` declared on the target in kama.json.
-        bool ccTakesTargetFlag =
-               compiler.find("clang") != std::string::npos
-            || (compiler.find("zig") != std::string::npos && compiler.find(" cc") != std::string::npos);
-        // Sane default for a cross build nobody configured: if a `zig` is on PATH, use it. Zig is the one
-        // widely-available compiler that bundles every target's libc, so it is the only thing we can pick
-        // unprompted and expect to WORK — picking host clang would produce a confusing sysroot error
-        // instead. Checked only when crossing, so a normal build never pays for the probe.
-        if (!ccIsExplicit && !ccTakesTargetFlag) {
+
+        // (2) "Crossing" means the host compiler genuinely CANNOT do the job — not merely that the
+        // triple string differs. A different ARCH always needs a cross compiler. A different OS needs one
+        // only for a HOSTED target, where a foreign libc and linker are involved; a freestanding build on
+        // the host's own arch (`-ffreestanding -nostdlib -c`, stopping at an object) is something the
+        // host clang does perfectly well — which is what has always made bare-metal builds
+        // triple-agnostic, and `--no-heap --target embedded` regressed when this was got wrong.
+        const bool crossing = !wasm
+            && (g_target.arch != hostTarget().arch
+                || (g_target.hosted() && g_target.os != hostTarget().os));
+
+        // Does this compiler take the triple as a FLAG? Two shapes, needing opposite treatment:
+        //   * multi-target driver — `clang`, `zig cc` — one binary for every target, `-target <triple>`.
+        //   * per-target binary — `aarch64-linux-gnu-gcc`, a vendor ARM gcc, an NDK wrapper — the triple
+        //     is already in its NAME, and passing `-target` would confuse or break it.
+        auto takesTargetFlag = [](const std::string& c) {
+            return c.find("clang") != std::string::npos
+                || (c.find("zig") != std::string::npos && c.find(" cc") != std::string::npos);
+        };
+        auto isZig = [](const std::string& c) { return c.find("zig") != std::string::npos; };
+
+        // (3) Nobody chose a toolchain and this is a cross build. The host default was resolved for the
+        // HOST: plain clang takes `-target` but has no libc for anywhere else, so using it would produce
+        // a confusing missing-header error rather than a binary. zig is the one widely-available compiler
+        // that bundles every target's libc (musl / glibc stubs / mingw-w64 / wasi-libc), so it is the
+        // only thing we can substitute unprompted and expect to WORK. Probe only when crossing.
+        if (crossing && !ccIsExplicit && !isZig(compiler)) {
             static const bool zigOnPath = [] {
 #ifdef _WIN32
                 return runCmd("zig version >NUL 2>&1") == 0;
@@ -4977,54 +4994,28 @@ int main(int argc, char** argv)
                 return runCmd("zig version >/dev/null 2>&1") == 0;
 #endif
             }();
-            if (zigOnPath && !wasm
-                && (g_target.arch != hostTarget().arch
-                    || (g_target.hosted() && g_target.os != hostTarget().os))) {
-                compiler = "zig cc";
-                ccTakesTargetFlag = true;
-            }
+            if (zigOnPath) compiler = "zig cc";
         }
 
-        // Only the bundled/host default is presumed unable to cross: an explicitly chosen compiler is the
-        // user telling us they have a toolchain, so we hand it the target and let IT complain if not.
+        // Still nothing that can reach the target: refuse with the routes, rather than letting clang emit
+        // a link error that never mentions targets.
+        if (crossing && !ccIsExplicit && !isZig(compiler)) {
+            fprintf(stderr,
+                    "kama: cannot build for %s (%s) — the default C compiler has no libc for it.\n"
+                    "  Any of:\n"
+                    "    install zig                       (bundles every target's libc; picked up automatically)\n"
+                    "    a `cc` on this target in kama.json  (your own cross toolchain, shared with the team;\n"
+                    "                                         `sysroot`/`cflags`/`ldflags` go there too)\n"
+                    "    --cc \"clang\" + a sysroot         (if you already have the target's headers/libs)\n"
+                    "    kama transpile --target %-14s (emit C and build it with someone else's toolchain)\n",
+                    g_target.name.c_str(), g_target.triple().c_str(), g_target.name.c_str());
+            return 2;
+        }
 
-
-        // Cross-compiling. kama emits ISO C and shells out, so this is "invoke the right C compiler",
-        // not "write a backend" — but the DEFAULT compiler is a plain host clang, which cannot produce a
-        // foreign binary. Three ways to have a toolchain, checked in that order:
-        //   * `zig cc` — it ships musl/mingw-w64/wasi-libc sources and headers, so ONE `-target` flag
-        //     cross-compiles to essentially anything with no further setup. Our triple is already Zig's
-        //     3-part `<arch>-<os>-<abi>` form, so it passes straight through.
-        //   * a `cc` declared on the target in kama.json (or `--cc`) — the user's own cross toolchain.
-        //   * neither, in which case refuse with a message naming both, rather than emitting a link error
-        //     from clang that says nothing about targets.
+        // (4) Our triple is already Zig's 3-part <arch>-<os>-<abi> form (chosen in part for this), so it
+        // passes straight through to either driver.
         std::string crossFlags;   // appended right after the compiler name
-        // "Crossing" means the host compiler genuinely cannot do the job — NOT merely that the triple
-        // string differs. A different ARCH always needs a cross compiler. A different OS needs one only
-        // for a HOSTED target, where a foreign libc and linker are involved; a freestanding build on the
-        // host's own arch (`-ffreestanding -nostdlib -c`, stopping at an object) is something the host
-        // clang does perfectly well, which is what has always made bare-metal builds triple-agnostic.
-        const bool crossing = !wasm
-            && (g_target.arch != hostTarget().arch
-                || (g_target.hosted() && g_target.os != hostTarget().os));
-        if (crossing) {
-            if (ccTakesTargetFlag && ccIsExplicit) {
-                crossFlags = " -target " + g_target.triple();   // clang / zig cc: one binary, target as a flag
-            } else if (ccTakesTargetFlag && compiler.find("zig") != std::string::npos) {
-                crossFlags = " -target " + g_target.triple();   // bundled or PATH zig ships the target's libc
-            } else if (!ccIsExplicit) {
-                fprintf(stderr,
-                        "kama: cannot build for %s (%s) — the default C compiler has no libc for it.\n"
-                        "  Any of:\n"
-                        "    --cc \"clang\" + a sysroot         (if you already have the target's headers/libs)\n"
-                        "    a `cc` on this target in kama.json  (your own cross toolchain, shared with the team;\n"
-                        "                                         `sysroot`/`cflags`/`ldflags` go there too)\n"
-                        "    --cc \"zig cc\"                     (bundles the target's libc — no sysroot needed)\n"
-                        "    kama transpile --target %-14s (emit C and build it with someone else's toolchain)\n",
-                        g_target.name.c_str(), g_target.triple().c_str(), g_target.name.c_str());
-                return 2;
-            }
-        }
+        if (crossing && takesTargetFlag(compiler)) crossFlags = " -target " + g_target.triple();
 
         // Default output: native -> bare exe name (or lib<name>.<so|dylib|dll> for --shared);
         // wasm -> an HTML harness (emcc also emits the .js + .wasm alongside it).
@@ -5160,8 +5151,13 @@ int main(int argc, char** argv)
         // --target embedded: a freestanding, hosted-runtime-free compile that stops at an OBJECT. No libc
         // (`-nostdlib`), no OS/hosting assumptions (`-ffreestanding`), and `-c` so no link is attempted —
         // the crt0/startup + linker script are the user's per-chip link step. `-DKAMA_TARGET_EMBEDDED`
-        // selects the freestanding `main`/panic forms in the emitted C + runtime. The CPU triple
-        // (`-target thumbv*-none-eabi -mcpu=...`) is deliberately NOT baked in v1 — pass it via `--cc`.
+        // selects the freestanding `main`/panic forms in the emitted C + runtime.
+        //
+        // The board's TRIPLE is now the TARGET axis (`--target thumbv7em-none-eabihf`), and its CPU model
+        // goes in that target's `cflags` (`"cflags": ["-mcpu=cortex-m4"]`) — not through `--cc`, which is
+        // what this said before the build-configuration campaign. kama itself passes NO -march/-mcpu/
+        // -mtune anywhere, so every build targets the architecture's generic baseline unless a target
+        // spec says otherwise. A first-class CPU-tuning knob is a recorded follow-on (ROADMAP §10).
         if (embedded)      cmd << "-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED ";   // no OS: os=none
         if (stopsAtObject) cmd << "-c ";                                                // no link step
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";

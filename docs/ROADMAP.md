@@ -551,6 +551,17 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   - **Follow-ons, recorded not built:** per-value `BUILD_TYPE` settings (own opt-level/LTO/strip — kept
     out so `kama.json` does not become a build-settings language); numeric build options surfaced as
     `comptime` constants rather than as flag comparisons (`@compileFor` stays tagging, not logic).
+  - **⚠️ GAP — no CPU-tuning knob.** kama passes **no** `-march`/`-mcpu`/`-mtune` anywhere, so every
+    build targets the architecture's *generic baseline*. That is the right default (portable binaries,
+    and it is why `zig cc` and clang measure identical — neither tunes), but there is no first-class way
+    to say otherwise. Today the only route is `"cflags": ["-mcpu=…"]` on a declared `select.TARGET`
+    entry, which means **a plain `kama build --release` cannot tune for the host at all** — you must
+    declare a target first. Peers all have a shorthand: Rust `-C target-cpu=native`, Zig `-mcpu=native`,
+    gcc/clang `-march=native`. Likely shape: a `cpu` field on a target spec (so it sits with the rest of
+    that target's toolchain description) plus a `native` spelling for host builds. Wants a benchmark
+    before/after to show it is worth anything — kama's emitted C is fairly generic, so the win may be
+    small outside float/SIMD-heavy code. Surfaced 2026-07-29 while checking whether zig and clang tune
+    differently; the answer was "neither does".
 - **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
   deferred. (What ships today in `editor/vscode/`: TextMate **syntax highlighting** + language-configuration
   + **zero-config source-level debugging** — F5 builds and launches under CodeLLDB with breakpoints mapped
