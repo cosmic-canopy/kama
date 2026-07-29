@@ -897,6 +897,14 @@ struct TargetSpec {
     std::string triple() const { return arch + "-" + os + "-" + abi; }
     bool hosted()      const { return os != "none"; }         // has an OS and a libc
     bool isWasm()      const { return arch == "wasm32" || arch == "wasm64"; }
+    // Compile/link decisions ask the TARGET these, never the host. Before this campaign they were
+    // `#ifdef __APPLE__` / `_WIN32` evaluated when the COMPILER was built — correct only while host and
+    // target were always the same machine, and the one hard blocker to cross-compiling.
+    bool isMacOS()     const { return os == "macos"; }
+    bool isWindows()   const { return os == "windows"; }
+    const char* sharedLibExt() const {
+        return isWindows() ? ".dll" : isMacOS() ? ".dylib" : ".so";
+    }
 };
 
 // The one legitimate host `#ifdef` in the build path: deciding what `HOST` *means*. Everything else
@@ -4923,13 +4931,7 @@ int main(int argc, char** argv)
 
         // Default output: native -> bare exe name (or lib<name>.<so|dylib|dll> for --shared);
         // wasm -> an HTML harness (emcc also emits the .js + .wasm alongside it).
-#if defined(_WIN32)
-        const char* sharedExt = ".dll";
-#elif defined(__APPLE__)
-        const char* sharedExt = ".dylib";
-#else
-        const char* sharedExt = ".so";
-#endif
+        const char* sharedExt = g_target.sharedLibExt();
         std::string defaultOut = wasm     ? (stripExtension(input) + ".html")
                                : embedded ? (stripExtension(input) + ".o")
                                : shared   ? (stripExtension(input) + sharedExt)
@@ -5025,13 +5027,11 @@ int main(int argc, char** argv)
             // --gc-sections let the linker drop unused (std)library code — the
             // "pay for what you use" pruning lever. Native also strips symbols.
             cmd << (wasm ? "-Oz " : "-O3 ") << "-DNDEBUG -ffunction-sections -fdata-sections ";
-            if (!wasm && !embedded) {   // -Wl,*/-s are link-time; embedded stops at -c (see below)
-#ifdef __APPLE__
-                cmd << "-Wl,-dead_strip ";
-#else
-                cmd << "-Wl,--gc-sections ";
-#endif
-                cmd << "-s ";
+            if (!wasm && !embedded) {   // -Wl,* is link-time; a bare-metal build stops at -c (see below)
+                // ld64 spells section GC differently from GNU ld/lld, and treats `-s` as obsolete (it
+                // warns on every release link), so the strip flag is for the GNU-style linkers only.
+                if (g_target.isMacOS()) cmd << "-Wl,-dead_strip ";
+                else                    cmd << "-Wl,--gc-sections -s ";
             }
         } else {
             // Debug: faithful stepping + breakpoints in .kama via #line (DWARF `-g`). We intentionally do
@@ -5070,10 +5070,9 @@ int main(int argc, char** argv)
         // The WebGPU platform seam (kama_gpu.h) — its include dir on BOTH targets (web = header-only
         // static-inline; native also compiles kama_gpu.c below). Only when the program externs it.
         if (needsGpu) cmd << "-I\"" << (resolveStdlibDir(argv[0]) + "/std/gpu") << "\" ";
-#if defined(__APPLE__)
-        // GLFW usually lives under a Homebrew prefix the bare compiler doesn't search by default.
-        if (!wasm && needsGpu) cmd << "-I/opt/homebrew/include -I/usr/local/include ";
-#endif
+        // GLFW usually lives under a Homebrew prefix the bare compiler doesn't search by default. A
+        // nonexistent -I is harmless, so this is safe to key on the target rather than the host.
+        if (!wasm && needsGpu && g_target.isMacOS()) cmd << "-I/opt/homebrew/include -I/usr/local/include ";
         // std::net::web (WebSocket / WebTransport) is a thin JS-glue --js-library, linked only when the
         // program actually externs its header. Both the header (compile) and the glue (link) live next to the
         // module in the stdlib. The glue moves bytes across the wasm/JS boundary via the exported heap views.
@@ -5095,32 +5094,28 @@ int main(int argc, char** argv)
         // kama_gpu.h AND targets native (the web seam is header-only static-inline, compiled nowhere).
         if (!wasm && needsGpu) {
             std::string seam = resolveStdlibDir(argv[0]) + "/std/gpu/kama_gpu.c";
-#if defined(__APPLE__)
-            cmd << "-x objective-c \"" << seam << "\" -x none ";
-#else
-            cmd << "\"" << seam << "\" ";
-#endif
+            // On macOS the surface TU is Objective-C (it attaches a CAMetalLayer to the NSWindow).
+            if (g_target.isMacOS()) cmd << "-x objective-c \"" << seam << "\" -x none ";
+            else                    cmd << "\"" << seam << "\" ";
         }
         // Native --webgpu: link wgpu-native, with an rpath so the .dylib/.so is found at run time (dev
         // loop — a shipped app would bundle it). The link stays out of the wasm path (emcc port covers it).
         if (!wasm && webgpu) {
             cmd << "-L\"" << wgpuDir << "/lib\" -lwgpu_native ";
-#if !defined(_WIN32)
-            cmd << "-Wl,-rpath,\"" << absolutePath(wgpuDir) << "/lib\" ";
-#endif
+            if (!g_target.isWindows())   // no rpath concept in PE/COFF
+                cmd << "-Wl,-rpath,\"" << absolutePath(wgpuDir) << "/lib\" ";
         }
         // The seam's window/surface libraries (GLFW + platform frameworks). Split from wgpu-native
         // above so a windowless native build (e.g. the link-gate smoke) links only libwgpu_native.
         if (!wasm && needsGpu) {
-#if defined(__APPLE__)
-            cmd << "-L/opt/homebrew/lib -L/usr/local/lib -lglfw "
-                   "-framework Cocoa -framework Metal -framework QuartzCore -framework IOKit "
-                   "-framework CoreFoundation -framework CoreVideo -lobjc ";
-#elif defined(_WIN32)
-            cmd << "-lglfw3 -lgdi32 -luser32 -ld3dcompiler ";
-#else
-            cmd << "-lglfw -lX11 -ldl -lpthread ";
-#endif
+            if (g_target.isMacOS())
+                cmd << "-L/opt/homebrew/lib -L/usr/local/lib -lglfw "
+                       "-framework Cocoa -framework Metal -framework QuartzCore -framework IOKit "
+                       "-framework CoreFoundation -framework CoreVideo -lobjc ";
+            else if (g_target.isWindows())
+                cmd << "-lglfw3 -lgdi32 -luser32 -ld3dcompiler ";
+            else
+                cmd << "-lglfw -lX11 -ldl -lpthread ";
         }
         // Link-time libraries (skipped for --target embedded: it stops at `-c`, so its board link — where
         // the user supplies startup + linker script — owns library selection).
@@ -5151,11 +5146,11 @@ int main(int argc, char** argv)
             const char* pfw = getenv("KAMA_PARFOR_WORKERS");
             cmd << "-DKAMA_PARFOR_WORKERS_DEFAULT=" << (pfw && *pfw ? pfw : "0") << " ";
         }
-#if defined(_WIN32)
-        // std::net uses Winsock (kama_os.h). Link ws2_32 on native Windows builds; harmless (and pruned by
-        // --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.
-        if (!wasm && !embedded) cmd << "-lws2_32 ";
-#endif
+        // std::net uses Winsock (kama_os.h). Link ws2_32 when the TARGET is Windows; harmless (and pruned
+        // by --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.
+        // Keying this on the host was the sharpest example of the cross-compilation blocker: a Windows
+        // build produced on Linux silently omitted the socket library.
+        if (!wasm && !embedded && g_target.isWindows()) cmd << "-lws2_32 ";
         cmd << "-o \"" << outPath << "\"";
         int rc = runCmd(cmd.str());
 

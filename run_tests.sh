@@ -135,6 +135,13 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-emb
     if sh tools/check-embedded.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# Build configuration: the toolchain flags a build hands to the C compiler must follow the SELECTED
+# TARGET, not the machine this compiler was built on (the cross-compilation blocker). Stubs the C
+# compiler with `echo`, so it needs no cross toolchain and is as host-agnostic as the drift guard.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-target.sh ]; then
+    if sh tools/check-target.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # LSP M0: the query-index guard (documentSymbols / definitionAt / typeAtPosition over the analysis-mode
 # front end). Host-checkable, native-only pass (the query path is target-agnostic; no need to re-run under
 # SAN/WASM, though it is sanitizer-clean).
