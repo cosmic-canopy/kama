@@ -110,6 +110,12 @@ std::string lspRealPath(const std::string& path);
 void lspSetParseCache(bool on);
 void lspEvictParsedFile(const std::string& path);
 
+// Was this index built from a buffer that did NOT fully parse (M5.4)? Since M5.3 the grammar recovers,
+// so a mid-edit buffer still yields a live, current index off the parts that survived — which is what
+// makes completion on a broken file work off a fresh index rather than a stale one. The server asks in
+// order to decide whether the M4.6 line-blanking repair is still worth running.
+bool lspIndexIsPartial(const SharedLspIndex& idx);
+
 // Analyze a whole project: `files` (every project source) plus their transitive imports, with `overlays`
 // — (path, live buffer text) for each open document — substituted for their on-disk copies so unsaved
 // edits are reflected. Diagnostics are deliberately NOT returned: the per-document index still owns

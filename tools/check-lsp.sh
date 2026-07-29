@@ -50,6 +50,23 @@ NEWB='namespace nb;\ntype value P { public int32 x; public fn int32 twice() { re
 SPURI="file:///span.kama"
 SPAN='namespace sp;\ntype value Box<T> { public T v; public ctor of(T v) { Box<T> b; b.v = v; return give b; } }\ntype resource R { public ctor make() { R r; return give r; } ~R() { } }\n'
 
+# M5.3/M5.4 fixture: THREE independent syntax errors at three grains — a malformed class member (LSP
+# line 2), and a missing semicolon in each of two DIFFERENT functions (LSP lines 6 and 10). Before error
+# recovery this file produced exactly ONE diagnostic and no index at all; the whole milestone is that it
+# now produces three and still answers queries. The `H`/`x` outline is the second half of the claim: the
+# broken member is discarded but the TYPE stays declared, which is what keeps a half-typed member from
+# cascading "undeclared type" over every use of it.
+RURI="file:///recover.kama"
+RECOV='type value H {\n    public int32 x;\n    public int32 = ;\n}\nfn int32 a() {\n    int32 v = 1\n    return v;\n}\nfn int32 main() {\n    int32 w = 2\n    return w;\n}\n'
+
+# M5.4 fixture: the one recovery outcome that MUST suppress semantics. A malformed type HEAD is dropped
+# whole by the top-level arm while the functions after it survive and still use the name — so every use
+# reads as an undeclared type. Measured: without the droppedTopLevelDecl guard this buffer publishes the
+# 1 real parse error plus 2 false "unknown type `Widget`" errors, and a real file with 20 uses would get
+# 20. The finer arms lose a statement or a member and cascade barely at all, so they publish normally.
+XURI="file:///drop.kama"
+XDROP='type value ! Widget {\n    public int32 w;\n}\nfn int32 use() {\n    Widget a;\n    Widget b;\n    return 0;\n}\n'
+
 QURI="file:///shapes.kama"
 SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p; Point q = mid(a: p); return q.x; }\n'
 
@@ -246,6 +263,12 @@ frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"ch
 frame '{"jsonrpc":"2.0","id":43,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$IURI"'","version":2},"contentChanges":[{"text":"'"$IMP"'"}]}}'
 frame '{"jsonrpc":"2.0","id":44,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
+# --- M5.3/M5.4: error recovery reaches the editor. 45: the outline off a PARTIAL parse. 46: hover on a
+#     type whose own body contained the error, proving the index is live rather than a stale last-good.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$RURI"'","languageId":"kama","version":1,"text":"'"$RECOV"'"}}}'
+frame '{"jsonrpc":"2.0","id":45,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"'"$RURI"'"}}}'
+frame '{"jsonrpc":"2.0","id":46,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$RURI"'"},"position":{"line":0,"character":11}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$XURI"'","languageId":"kama","version":1,"text":"'"$XDROP"'"}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -420,6 +443,35 @@ for id in 43 44; do
         *) echo "  FAIL: id $id did not resolve into dynamic_array.kama — got: ${got:-<nothing>}" >&2; fail=1 ;;
     esac
 done
+
+echo "check-lsp: M5.3/M5.4 error recovery reaches the editor"
+# The headline. Before recovery the parse aborted at error one, so this buffer produced exactly ONE
+# diagnostic; all three must now be present, at their own ranges, in a single publishDiagnostics.
+expect '"line":2,"character":17' "recovery reports the broken class member (error 1 of 3)"
+expect '"line":6,"character":4'  "...and the missing semicolon in fn a (error 2 of 3)"
+expect '"line":10,"character":4' "...and the one in fn main, a LATER declaration (error 3 of 3)"
+# Count them, so a coincidental substring match elsewhere in the session cannot carry the assertion.
+n=$(printf '%s' "$out" | tr '\r' '\n' | grep -o 'recover.kama","diagnostics":\[[^]]*\]' | grep -o '"code":"Parse"' | wc -l | tr -d ' ')
+if [ "${n:-0}" -eq 3 ]; then
+    echo "  ok: exactly 3 parse diagnostics published for one buffer (was 1 before recovery)"
+else
+    echo "  FAIL: expected 3 parse diagnostics on recover.kama, got ${n:-0}" >&2; fail=1
+fi
+# The other half: a partial parse still yields a LIVE index. The type survives even though the error was
+# inside its own body — the member-level arm discards the member, not the shell.
+expect '"id":45,"result":[{"name":"H"' "outline still answers off a partially-parsed buffer"
+expect '"id":46,"result":{"contents"' "hover still answers on a type whose body held the error"
+# ...and the one case where semantics MUST be suppressed: a dropped top-level decl turns every use of
+# its name into a false "unknown type". The real parse error stays; the cascade does not.
+drop=$(printf '%s' "$out" | tr '\r' '\n' | grep -o 'drop.kama","diagnostics":\[[^]]*\]' || true)
+case "$drop" in
+    *'unexpected !'*) echo "  ok: the real parse error on a dropped declaration is still reported" ;;
+    *) echo "  FAIL: no parse error published for drop.kama — got: ${drop:-<nothing>}" >&2; fail=1 ;;
+esac
+case "$drop" in
+    *'unknown type'*) echo "  FAIL: semantic cascade published from a dropped top-level decl" >&2; fail=1 ;;
+    *) echo "  ok: no 'unknown type' cascade from the decl the top-level arm discarded" ;;
+esac
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

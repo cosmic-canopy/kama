@@ -783,10 +783,19 @@ SharedCompilationUnit parseString(const char* src, const std::string& name)
 }
 
 // Parse a buffer for the LSP: mirrors parseString but keeps the CodeGenContext alive so parse
-// diagnostics survive a failed parse (as-you-type buffers are usually mid-edit). `unit` is non-null only
-// when the parse fully succeeded, so a consumer serves the last good AST on a parse error. Internal to
-// this TU; the LSP reaches it through the external `lspAnalyzeBuffer` seam (defined at end of file).
-struct ParseResult { SharedCompilationUnit unit; SharedCodeGenContext ctx; };
+// diagnostics survive a failed parse (as-you-type buffers are usually mid-edit). Internal to this TU;
+// the LSP reaches it through the external `lspAnalyzeBuffer` seam (defined at end of file).
+//
+// `unit` is non-null whenever the start rule reduced — which since M5.3 includes a PARTIAL unit whose
+// broken declarations the recovery arms discarded. `partial` says which of those two it is, and
+// `droppedTopLevelDecl` says how badly: only the top-level arm loses a whole type/fn, and only that
+// makes semantic diagnostics worth suppressing (see lspAnalyze).
+struct ParseResult {
+    SharedCompilationUnit unit;
+    SharedCodeGenContext  ctx;
+    bool partial = false;
+    int  droppedTopLevelDecl = 0;
+};
 ParseResult parseForQuery(const char* src, const std::string& name)
 {
     Stopwatch sw(&timing().bufferParse);
@@ -804,8 +813,14 @@ ParseResult parseForQuery(const char* src, const std::string& name)
     int rc = yyparse(scanner);
     yylex_destroy(scanner);
     ParseResult r;
-    r.ctx  = extra.codeGenContext;
-    r.unit = (rc == 0 && extra.codeGenContext->errorCount() == 0) ? extra.compilationUnit : nullptr;
+    r.ctx = extra.codeGenContext;
+    // Self-gating (M5.4): `compilationUnit` is assigned only by the `compilation_unit` action, which
+    // only runs if the start rule reduced — so this is null when the parse truly aborted and non-null
+    // (possibly partial) otherwise. No rc/errorCount bookkeeping needed. parseFile and parseString keep
+    // their strict gates, so kama build/check/transpile see no partial units at all.
+    r.unit    = extra.compilationUnit;
+    r.partial = (rc != 0 || extra.codeGenContext->errorCount() > 0);
+    r.droppedTopLevelDecl = extra.codeGenContext->droppedTopLevelDecl;
     return r;
 }
 
@@ -3463,15 +3478,20 @@ void maybeReExec(char** argv, const std::string& subcommand)
 // The opaque handle body: it keeps the analyzed CEmitter alive so the query facade (documentSymbols /
 // definitionAt / typeAtPosition — instance methods reading the index analyze() built) can answer
 // hover/def/outline as instant reads, not a re-analysis per cursor move.
-struct LspIndex { std::shared_ptr<CEmitter> idx; std::string path; };
+// `partial` (M5.4): this index was built from a buffer that did NOT fully parse — the recovery arms
+// discarded the broken parts and analysis ran on what was left. It is a live, current index rather than
+// a stale one, which is the whole point; callers that care (the M4.6 repair fallback) can ask.
+struct LspIndex { std::shared_ptr<CEmitter> idx; std::string path; bool partial = false; };
+
+bool lspIndexIsPartial(const SharedLspIndex& idx) { return idx && idx->partial; }
 
 SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
                           std::vector<Diagnostic>& diags, const char* argv0)
 {
     ParseResult pr = parseForQuery(text.c_str(), path);
     if (pr.ctx) for (const auto& d : pr.ctx->diagnostics) diags.push_back(d);
-    if (!pr.unit) {                                // parse failed — diags carry the errors; no queryable index
-        timingDump("analyze-failed", path);
+    if (!pr.unit) {   // the parse aborted outright (garbage at the very first token, essentially) —
+        timingDump("analyze-failed", path);   // the diags carry the errors; there is no AST to index
         return nullptr;
     }
 
@@ -3499,10 +3519,20 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
     { Stopwatch sw(&timing().analyze); emitter->analyze(units); }
     // Only the OPEN file's diagnostics go back to the editor (the server publishes to one URI); imported
     // modules are analyzed for context, not surfaced. Their diagnostics carry a different `file`.
-    for (const auto& d : emitter->diagnostics()) if (d.file == path) diags.push_back(d);
+    //
+    // ...EXCEPT when the top-level recovery arm fired (M5.4). Losing a whole `type` or `fn` makes every
+    // reference to it read as undeclared, so the file fills with squiggles describing the recovery
+    // rather than the code — noise that hides the one real error above it. The finer arms lose a single
+    // statement or member and cascade barely at all, so their semantics are published normally. This is
+    // the same bargain TypeScript, clangd and rust-analyzer strike: publish semantics on a broken file,
+    // and rely on recovery preserving the declaration SHELL to keep the cascade small. Parse
+    // diagnostics always publish — reporting many errors instead of one is the point of M5.3.
+    if (pr.droppedTopLevelDecl == 0)
+        for (const auto& d : emitter->diagnostics()) if (d.file == path) diags.push_back(d);
     auto h = std::make_shared<LspIndex>();
     h->idx = emitter;
     h->path = path;
+    h->partial = pr.partial;
     timingDump("analyze", path);
     return h;
 }
