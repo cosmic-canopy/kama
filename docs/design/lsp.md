@@ -1,8 +1,10 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M4 COMPLETE — all of M0–M4.9 shipped (M4 on 2026-07-28, dev). NEXT = M5** — error recovery +
-incremental reparse; cold-start brief with a measured baseline: **[lsp-m5-kickoff.md](lsp-m5-kickoff.md)**.
-Then M6 (editor clients). Interleaved before M4: workspace-internal dependencies
+**Status: M5 COMPLETE — all of M0–M5 shipped (M5 on 2026-07-28, dev). NEXT = M6** — editor clients;
+cold-start brief: **[lsp-m6-kickoff.md](lsp-m6-kickoff.md)**. M5 made the server feel good rather than
+merely work: error recovery (many diagnostics instead of one, and queries keep answering on a broken
+buffer) and a per-keystroke cost inside the 100 ms budget on every measured file
+([lsp-m5-kickoff.md](lsp-m5-kickoff.md)). Interleaved before M4: workspace-internal dependencies
 ([workspace-deps-kickoff.md](workspace-deps-kickoff.md)). The **confirmed next-highest post-1.0 priority** (user, 2026-07-26;
 [ROADMAP.md](../ROADMAP.md) §1 post-1.0 sequence + §10). This doc is the cold-start handoff: what exists to
 reuse, the decisions to settle FIRST, a milestone plan, and a size gauge. **Read [GOALS.md](../GOALS.md) and
@@ -131,6 +133,30 @@ ROADMAP §10 before designing.**
   vectors, a `paths` index bounded by `units.size()`), present since the workspace-deps campaign and
   invisible in a plain build. The sanitized-compiler run of the LSP harnesses is what caught it — it is a
   manual step, not part of `run_tests.sh`, so **run it at the end of every LSP milestone**.
+- **M5 — error recovery + incremental/perf. ✅ SHIPPED 2026-07-28** (`dfdbb9a`…`6d295e1`). As-shipped
+  record: [lsp-m5-kickoff.md](lsp-m5-kickoff.md). The milestone that makes the server feel good rather
+  than merely work.
+  - **Recovery.** `error` arms at three grains added **innermost-first** — statement, class member, top
+    level — because Bison pops to the nearest state carrying an `error` action, so a broken statement
+    now costs one statement instead of the enclosing function. A buffer reports every independent error
+    instead of one, and hover/outline/completion keep answering off a live *partial* index rather than a
+    stale last-good one. Semantic diagnostics publish from a partial parse **except** when the top-level
+    arm fired (the one case that cascades — measured at 1 real diagnostic vs 3 on a two-use file), which
+    is the same bargain TypeScript, clangd and rust-analyzer strike.
+  - **Perf.** Prelude parsed once per process; the import closure cached across analyses (opt-in,
+    `kama lsp` only, keyed by path *spelling*). Worst measured file: **237 → 86 ms per keystroke**,
+    inside the 100 ms budget at :253, and every other measured file 10–46 ms.
+  - **M4.6's repair deleted.** It cost a full 229 ms re-analysis on every completion against an
+    unparseable buffer; recovery keeps the index fresh, so completion is a lookup again. Retired against
+    a criterion — `KAMA_LSP_NO_REPAIR=1 tools/check-lsp.sh` had to pass the whole harness *including*
+    the two M4.6 assertions — not a hunch.
+  - **A real compiler bug fixed en route:** 40 nested `if`s reported "memory exhausted", because
+    `YYSTYPE` is a plain struct so Bison's stack-relocation path is compiled out and the parse stack
+    could not grow. Raised `YYINITDEPTH`; do **not** "fix" it with `YYSTYPE_IS_TRIVIAL`/`yyoverflow`,
+    which memcpy a stack of `shared_ptr`s.
+  - New tool: **`tools/lsp-bench.sh`**, the reproducible perf oracle (the brief's original numbers were
+    ad hoc and not reproducible from a checkout). ⚠️ The brief was wrong in three load-bearing places,
+    one of which would have silently *regressed* completion — see its "As shipped" section.
 
 ## Why (from the ROADMAP)
 
@@ -208,18 +234,25 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
   than go-to-def; rename = workspace edits + safety checks.
 - **M4 — Completion + signature help. `L`.** The quality-hard one: context-sensitive (members after `.`,
   names-in-scope, import paths, keywords). Delivers the `global::` floor-completion payoff.
-- **M5 — Robustness: error recovery + incremental/perf. `L`. NEXT / ACTIVE.** Cold-start brief:
-  [lsp-m5-kickoff.md](lsp-m5-kickoff.md), written 2026-07-28 with everything measured on the shipped M4
-  server. Two independent halves. **Recovery:** the grammar has zero `error` productions, so one syntax
-  error yields exactly one diagnostic and blanks the whole semantic layer — and the 10-error budget in
-  `CodeGenContext` has never been reachable. **Perf:** per-keystroke cost is *own file + the entire import
-  closure* at ~13 ms/unit, so any file importing a std module runs 172-240 ms against the sub-100 ms budget
-  set at :253; worse, M4.6's repair makes completion cost a full re-analysis (235 ms) on every request
-  while the buffer is unparseable, which is most of the time. A `path -> (mtime, unit)` parse cache is the
-  fix, and its prerequisite — that analysis never mutates a parsed AST — is now VERIFIED exhaustively
-  rather than assumed. **Decision 2 (Bison vs RDP) resolves toward keeping Bison**: latency is import
-  re-parsing, not parsing.
-- **M6 — Editor/IDE matrix + packaging + tests. `S/M`.** One `kama lsp` server, thin clients — wire up
+- **M5 — Robustness: error recovery + incremental/perf. `L`. ✅ SHIPPED 2026-07-28** (`dfdbb9a`…`6d295e1`).
+  As-shipped record: [lsp-m5-kickoff.md](lsp-m5-kickoff.md). **Recovery:** error arms at three grains,
+  added innermost-first (statement → class member → top level), so a broken statement discards one
+  statement rather than the enclosing function; a buffer now reports every independent error instead of
+  one and still answers hover/def/outline/completion off a live partial index. Semantic diagnostics are
+  published from a partial parse except when the top-level arm fired — the one case that cascades.
+  Also fixed a real parse-depth bug: 40 nested `if`s used to report "memory exhausted". **Perf:** the
+  prelude is parsed once per process and the import closure is cached across analyses, taking the worst
+  measured file from 237 ms to **86 ms per keystroke** — inside the budget at :253 — and letting M4.6's
+  229 ms repair be deleted, so completion is a lookup again. **Decision 2 (Bison vs RDP) resolved toward
+  keeping Bison**, as predicted: latency was import re-parsing, not parsing, and recovery quality did not
+  demand an RDP either. `tools/lsp-bench.sh` is the reproducible oracle for all of these numbers.
+  ⚠️ The brief was wrong in three load-bearing places (the perf thesis, "analysis never mutates the AST",
+  and the recovery staging, which was backwards and would have silently regressed completion) — see its
+  "Three places the original brief was wrong".
+- **M6 — Editor/IDE matrix + packaging + tests. `S/M`. NEXT / ACTIVE.** Cold-start brief:
+  [lsp-m6-kickoff.md](lsp-m6-kickoff.md), which also carries the three items M4 and M5 deliberately
+  deferred (argument-label indexing, the undeclared-import diagnostic, and the LSP's missing
+  `setBuildFlags`). One `kama lsp` server, thin clients — wire up
   every editor with a generic LSP client and document each in `docs/editors.md`. `tools/check-lsp.sh`-style
   harness driving the server over stdio with fixture requests/responses.
   - **Target matrix (each = a few lines of config pointing at `kama lsp`):** **VS Code** (✅ done — the

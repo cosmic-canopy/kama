@@ -548,15 +548,25 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   unusable from a query path; see the "As shipped" section of
   [design/lsp-m4-kickoff.md](design/lsp-m4-kickoff.md). The campaign-exit STAMP_LOC checklist is CLOSED
   (M4.9) — measured, not assumed: renaming a generic type would have deleted its type-parameter list.
-  **NEXT / ACTIVE: M5** — error recovery + incremental reparse; cold-start brief
-  [design/lsp-m5-kickoff.md](design/lsp-m5-kickoff.md), with the baseline measured on the shipped M4 server
-  rather than estimated. One syntax error currently yields exactly one diagnostic and blanks the whole
-  semantic layer (the grammar has no `error` productions, and the 10-error budget in `CodeGenContext` has
-  never been reachable); per-keystroke cost is the entire import closure — 172-240 ms against the sub-100 ms
-  budget — and a `path -> (mtime, unit)` parse cache is the fix, now that its prerequisite (analysis never
-  mutates a parsed AST) is verified rather than assumed. The hand-written recursive-descent parser stays the
-  right long-term move for self-hosting, but M5 does not need it: the latency is import re-parsing, not
-  parsing. Then **M6** clients for all major editors. Status of record: [design/lsp.md](design/lsp.md).
+  **M5 error recovery + incremental/perf — SHIPPED (2026-07-28)**, `dfdbb9a`…`6d295e1`; as-shipped record
+  [design/lsp-m5-kickoff.md](design/lsp-m5-kickoff.md). The grammar recovers at three grains, added
+  **innermost-first** (statement → class member → top level), so one syntax error no longer blanks the
+  file: a buffer reports every independent error and still answers hover/outline/completion off a live
+  partial index. Semantic diagnostics publish from a partial parse except when a whole top-level decl was
+  dropped — the only case that cascades. Per-keystroke cost went from 237 ms to **86 ms** on the worst
+  measured file (prelude parsed once per process; import closure cached across analyses), inside the
+  sub-100 ms budget, which also let M4.6's 229 ms per-request repair be deleted so completion is a lookup
+  again. The 10-error budget in `CodeGenContext`, dead code since the beginning because nothing could
+  reach it, is now live. Two things fixed en route that were not LSP bugs at all: **40 nested `if`s
+  reported "memory exhausted"** (the parse stack could not grow — `YYSTYPE` is a plain struct, so Bison's
+  relocation path is compiled out), and the compiler gained its first timing instrumentation
+  (`KAMA_TIMING`, `tools/lsp-bench.sh`) — the brief's central perf claim had been a guess about a
+  parse-vs-analyze split nobody had measured, and it was wrong. **Decision 2 resolved toward keeping
+  Bison**: an RDP stays the right long-term move for self-hosting, but neither latency nor recovery
+  quality demanded it. **NEXT / ACTIVE: M6** — editor clients, the syntax-highlighting audit, and the
+  three carried items (argument-label indexing, the undeclared-import diagnostic, and the LSP's missing
+  `setBuildFlags`); cold-start brief [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md).
+  Status of record: [design/lsp.md](design/lsp.md).
 - **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
   liftable out of the monorepo to stand alone. Design of record:
   [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:

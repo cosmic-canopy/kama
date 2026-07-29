@@ -11,7 +11,7 @@
 #
 #   tools/lsp-bench.sh                     # the default fixture set, `kama query` mode
 #   tools/lsp-bench.sh a.kama b.kama       # your own files
-#   tools/lsp-bench.sh --lsp               # a real `kama lsp` stdio session
+#   tools/lsp-bench.sh --lsp [file]        # a real `kama lsp` stdio session (steady-state cost)
 #   REPS=11 tools/lsp-bench.sh             # more samples (default 7; the first is discarded)
 #
 # Numbers only mean something next to a baseline, so record one BEFORE touching anything — build/ is
@@ -91,8 +91,10 @@ bench_lsp() {
         printf 'Content-Length: %s\r\n\r\n%s' "$len" "$body" >> "$session"
     }
 
-    # A real file, so module resolution actually runs and the import closure is non-trivial.
-    src="$ROOT/lib/std/process/process.kama"
+    # A real file, so module resolution actually runs and the import closure is non-trivial. Override
+    # with `tools/lsp-bench.sh --lsp <file>` to measure the steady-state cost of any other buffer.
+    src="${1:-$ROOT/lib/std/process/process.kama}"
+    [ -f "$src" ] || { echo "lsp-bench: no such file: $src" >&2; exit 1; }
     uri="file://$src"
     text=$(sed 's/\\/\\\\/g; s/"/\\"/g' "$src" | awk '{printf "%s\\n", $0}')
 
@@ -127,7 +129,8 @@ bench_lsp() {
 }
 
 if [ "${1:-}" = "--lsp" ]; then
-    bench_lsp
+    shift
+    bench_lsp "$@"
 else
     if [ "$#" -gt 0 ]; then
         bench_query "$@"
