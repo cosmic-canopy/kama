@@ -234,7 +234,18 @@ frame '{"jsonrpc":"2.0","id":40,"method":"textDocument/completion","params":{"te
 #     name spans just the name, not the declarator.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$SPURI"'","languageId":"kama","version":1,"text":"'"$SPAN"'"}}}'
 frame '{"jsonrpc":"2.0","id":41,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$SPURI"'"},"position":{"line":1,"character":11}}}'
-frame '{"jsonrpc":"2.0","id":42,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$SPURI"'"},"position":{"line":2,"character":32}}}' 
+frame '{"jsonrpc":"2.0","id":42,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$SPURI"'"},"position":{"line":2,"character":32}}}'
+# --- M5.2: the parse cache must be INVISIBLE. Every request above already ran against a warm cache
+#     (the server enables it for its whole life), so 43/44 pin the two ways it could go wrong and not
+#     be noticed: a stale entry surviving an eviction, and a served unit carrying the WRONG PATH
+#     SPELLING. The cache is keyed by the spelling parseFile was handed, because a unit is named by
+#     that string and unitForUri matches names exactly — key it by absolute path instead and one file
+#     reachable by two spellings starts answering with the other's name, silently rewriting every
+#     go-to-def URI. Both requests repeat id 7's query, so the expected Location is identical.
+frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"'"$IURI"'","type":2}]}}'
+frame '{"jsonrpc":"2.0","id":43,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$IURI"'","version":2},"contentChanges":[{"text":"'"$IMP"'"}]}}'
+frame '{"jsonrpc":"2.0","id":44,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -396,6 +407,19 @@ expect '"id":41,"result":{"start":{"line":1,"character":11},"end":{"line":1,"cha
        "a generic type decl name spans the NAME, not Name<T>"
 expect '"id":42,"result":{"start":{"line":2,"character":30},"end":{"line":2,"character":34}}' \
        "a named ctor spans its name, not the declarator"
+
+echo "check-lsp: M5.2 the parse cache is invisible"
+expect '"id":43,' "go-to-def still answers after workspace/didChangeWatchedFiles evicts the cache"
+expect '"id":44,' "...and after a didChange re-analyzes off cached units"
+# The payload, not just the id: a wrong-spelling cache hit would still answer, just with another
+# unit's name in the URI. Both must land in the std source exactly as id 7 did.
+for id in 43 44; do
+    got=$(printf '%s' "$out" | tr '\r' '\n' | grep -o '"id":'"$id"',"result":{"uri":"[^"]*"' || true)
+    case "$got" in
+        *dynamic_array.kama*) echo "  ok: id $id resolves into the std source (cache serves the right spelling)" ;;
+        *) echo "  FAIL: id $id did not resolve into dynamic_array.kama — got: ${got:-<nothing>}" >&2; fail=1 ;;
+    esac
+done
 
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2

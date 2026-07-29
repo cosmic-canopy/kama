@@ -96,6 +96,20 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
 // happily rewrite it. Normalize both sides before comparing. Falls back to the input if it doesn't exist.
 std::string lspRealPath(const std::string& path);
 
+// The driver's path -> parsed-unit cache (M5.2). Every analysis re-reads and re-parses the whole
+// transitive import closure from disk, and in a server that closure is stable while you type — measured
+// at ~118 ms of a 203 ms per-keystroke analysis on a file importing std::process.
+//
+// Enabled for the lifetime of the server ONLY. A build parses each file once, so it would gain nothing,
+// and a cached unit is rewritten in place by CEmitter::pruneInactiveDecls, which makes reuse sound only
+// under a fixed build-flag set — see parseFile in kama.driver.cpp for the full invariant.
+//
+// `lspEvictParsedFile("")` drops everything, which is what workspace/didChangeWatchedFiles does: the
+// notification may name a directory, and over-evicting costs one re-parse while under-evicting serves a
+// stale AST.
+void lspSetParseCache(bool on);
+void lspEvictParsedFile(const std::string& path);
+
 // Analyze a whole project: `files` (every project source) plus their transitive imports, with `overlays`
 // — (path, live buffer text) for each open document — substituted for their on-disk copies so unsaved
 // edits are reflected. Diagnostics are deliberately NOT returned: the per-document index still owns

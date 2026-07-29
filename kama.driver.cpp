@@ -25,6 +25,9 @@
 #include <deque>
 #include <algorithm>
 #include <chrono>               // steady_clock — KAMA_TIMING phase timing (LSP M5.0)
+#include <ctime>                // time() — the parse cache's "still being written?" guard (LSP M5.2).
+                                // Explicit: macOS libc++ pulls it in transitively, the container's
+                                // libstdc++ does not — the same divergence that broke the M4 build.
 
 #include <limits.h>
 #include <sys/stat.h>           // stat / S_ISDIR (directory check) — POSIX + mingw-w64 UCRT
@@ -664,12 +667,55 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     return !(strictImports && undeclaredImport);   // reported every one above, then fail once
 }
 
+// ---- parse cache (M5.2) -----------------------------------------------------------------------
+// loadProgramUnits re-reads and re-parses the ENTIRE transitive import closure on every call. A build
+// calls it once; `kama lsp` calls it per keystroke, and 16 of the 17 units in a std-importing file's
+// closure cannot possibly have changed while you type. Measured at ~118 ms of a 203 ms analysis.
+//
+// OPT-IN, enabled only by `kama lsp`, for two reasons that are not caution:
+//   * build/check/transpile parse each file exactly once, so a cache is pure overhead there;
+//   * a cached unit is DESTRUCTIVELY REWRITTEN by CEmitter::pruneInactiveDecls (kama.cemit.cpp:13971)
+//     — `@compileFor`-inactive decls are dropped from codeDeclarationList in place. Reuse is therefore
+//     sound only while the build-flag set is fixed, which one `kama lsp` process guarantees and a
+//     future multi-configuration caller would not. Opt-in makes that a decision, not an accident.
+//
+// The key is the path SPELLING, not the absolute path. A unit is NAMED by the string parseFile was
+// handed, and CEmitter::unitForUri matches unit names EXACTLY — while one file is reachable here by
+// two spellings (the URI-derived absolute path the LSP passes as an input, vs `dir + "/" + name` built
+// by module resolution). Serving one spelling's unit for the other would silently rewrite every query's
+// URI, every diagnostic's `file`, and every go-to-definition Location. Two spellings cost two entries,
+// which is exactly what happens today.
+struct CachedUnit { SharedCompilationUnit unit; std::string abs; time_t mtime; off_t size; };
+const size_t kParseCacheMax = 2000;   // a runaway backstop, far above any real workspace — see below
+bool g_parseCache = false;
+std::map<std::string, CachedUnit> g_parseCacheMap;
+
 // Parse one kama file into a CompilationUnit. Returns nullptr on failure.
 SharedCompilationUnit parseFile(const std::string& inputFile)
 {
     // parseFile is reached only for on-disk files — the import closure and lspImportSymbols; the live
     // editor buffer goes through parseForQuery. So this slot is exactly "import-closure parse".
     Stopwatch sw(&timing().closureParse);
+
+    // Validity is (st_mtime, st_size). st_mtime is second-granular on some filesystems, so a file
+    // rewritten twice within one second at the same size would go unseen; that is closed from both
+    // ends — a file whose mtime is within a second of now is never cached (it may still be being
+    // written), and the server evicts on workspace/didChangeWatchedFiles. Deliberately NOT
+    // st_mtimespec/st_mtim: the former is macOS-only, the latter needs _POSIX_C_SOURCE >= 200809 and
+    // is absent from mingw-w64, and the two invalidations above make sub-second resolution moot.
+    struct stat st;
+    bool cacheable = false;
+    if (g_parseCache && stat(inputFile.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+        cacheable = (st.st_mtime + 1 < time(nullptr));
+        if (cacheable) {
+            auto it = g_parseCacheMap.find(inputFile);
+            if (it != g_parseCacheMap.end() && it->second.mtime == st.st_mtime
+                                            && it->second.size  == st.st_size) {
+                ++timing().cachedUnits;
+                return it->second.unit;
+            }
+        }
+    }
     ++timing().parsedUnits;
 
     yyscan_t scanner;
@@ -696,7 +742,15 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
     fclose(input);
 
     if (rc != 0 || extra.codeGenContext->errorCount() > 0)
-        return nullptr;
+        return nullptr;   // a FAILED parse is never cached: the file is about to be fixed, and a null
+                          // entry would need the same mtime check that would have re-parsed it anyway
+    if (cacheable) {
+        // Wholesale clear rather than an LRU: this can only trip on a tree far larger than the
+        // workspace indexer will index at all, and recovery costs one cold analysis.
+        if (g_parseCacheMap.size() >= kParseCacheMax) g_parseCacheMap.clear();
+        g_parseCacheMap[inputFile] = CachedUnit{ extra.compilationUnit, absolutePath(inputFile),
+                                                 st.st_mtime, st.st_size };
+    }
     return extra.compilationUnit;
 }
 
@@ -3513,6 +3567,18 @@ static void collectPackageTree(const std::string& dir, std::vector<std::string>&
 }
 
 std::string lspRealPath(const std::string& path) { return absolutePath(path); }
+
+void lspSetParseCache(bool on) { g_parseCache = on; if (!on) g_parseCacheMap.clear(); }
+
+void lspEvictParsedFile(const std::string& path)
+{
+    if (path.empty()) { g_parseCacheMap.clear(); return; }
+    // Match on the ABSOLUTE path even though the map is keyed by spelling: one file can be cached under
+    // two spellings and both must go. The map is small and this runs per file-change, not per keystroke.
+    std::string abs = absolutePath(path);
+    for (auto it = g_parseCacheMap.begin(); it != g_parseCacheMap.end();)
+        it = (it->second.abs == abs) ? g_parseCacheMap.erase(it) : std::next(it);
+}
 
 LspProject lspFindProject(const std::string& openFilePath, const std::string& workspaceRoot)
 {

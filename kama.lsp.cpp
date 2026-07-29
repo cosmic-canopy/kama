@@ -630,6 +630,9 @@ struct Server {
         std::string uri = td->getStr("uri");
         docs.erase(uri);
         wsDirty = true;              // its overlay is gone; the on-disk copy takes over
+        // ...and the on-disk copy is now authoritative, so drop whatever the parse cache holds for it:
+        // the editor may have saved without the file watcher firing (or being registered at all).
+        lspEvictParsedFile(uriToPath(uri));
         publish(uri, {});                        // clear any lingering squiggles
     }
 
@@ -1048,8 +1051,10 @@ struct Server {
         if (method == "textDocument/signatureHelp")  { if (isRequest) handleSignatureHelp(*idp, params);  return true; }
         // A watched .kama file changed on disk — created, deleted, or edited outside the editor. The client
         // only sends this if it registered watchers (ours does; see editor/vscode/extension.js). Nothing to
-        // re-publish: just drop the workspace index so the next gesture re-reads the tree.
-        if (method == "workspace/didChangeWatchedFiles") { wsDirty = true; return true; }
+        // re-publish: drop the workspace index so the next gesture re-reads the tree, and drop the parse
+        // cache wholesale — the notification may name a directory, and one extra closure re-parse is
+        // invisible next to serving a stale AST.
+        if (method == "workspace/didChangeWatchedFiles") { wsDirty = true; lspEvictParsedFile(""); return true; }
 
         // Anything else: a request needs a response (or the client hangs); notifications are ignored.
         if (isRequest) sendError(*idp, -32601, "method not found: " + method);
@@ -1070,6 +1075,10 @@ struct Server {
 } // namespace
 
 int runLspServer(const char* argv0) {
+    // Reuse parsed units across analyses for this process only — see lspSetParseCache in kama.lsp.h for
+    // why a build deliberately does not opt in. Enabled here rather than inside the driver so the
+    // decision reads where the long-lived process is, not where the cache is.
+    lspSetParseCache(true);
     Server server;
     server.argv0 = argv0;
     return server.run();
