@@ -31,6 +31,13 @@ public:
     // consumer (the LSP) reads these instead of scraping stderr; the CLI is unchanged.
     std::vector<Diagnostic> diagnostics;
 
+    // How many times the TOP-LEVEL error-recovery arm fired (LSP M5.3, bumped in kama.y). Nonzero means
+    // a whole `type`/`fn` was discarded, so every reference to it now reads as undeclared — the one
+    // recovery outcome that carpets a file with false semantic errors. The LSP publishes semantic
+    // diagnostics from a partial parse only when this is 0; the statement- and member-level arms lose
+    // far less and do not set it.
+    int droppedTopLevelDecl = 0;
+
     explicit CodeGenContext(SharedString moduleName, int maxErrorCount = 10)
         : _mMaxErrorCount(maxErrorCount)
         , _mCurrentErrorCount(0)
@@ -46,6 +53,10 @@ public:
 
     bool isErrorLimitReached() { return _mCurrentErrorCount >= _mMaxErrorCount; }
     int  errorCount() const { return _mCurrentErrorCount; }
+
+    // Count an error past the reporting budget: no stderr line, no Diagnostic, but errorCount() must
+    // still rise so every `errorCount() > 0` gate keeps failing the parse (see yyerror in kama.y).
+    void countErrorOnly() { ++_mCurrentErrorCount; }
 
     // Returns non-zero (used as yyerror's return) so callers can propagate failure.
     bool handleError(int line, int column, const std::string& section, const std::string& error)

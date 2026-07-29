@@ -1,6 +1,24 @@
 %{
 #define YYERROR_VERBOSE
 #define YYDEBUG 1
+
+/* Parse-stack depth (LSP M5.3). YYSTYPE below is a plain struct of shared_ptrs, NOT a %union, so Bison
+ * never defines YYSTYPE_IS_TRIVIAL, so its stack-relocation path is compiled out entirely and the stack
+ * CANNOT GROW: depth was hard-capped at Bison's YYINITDEPTH default of 200 and YYMAXDEPTH was moot.
+ * 40 nested `if` blocks hit it and reported "memory exhausted", which is both a real limit for generated
+ * code and decision tables and a diagnostic that tells the user nothing true.
+ *
+ * Raising the constant is the ONLY correct fix here. Do NOT "fix" it by defining YYSTYPE_IS_TRIVIAL or
+ * by providing yyoverflow: both enable the relocation path, whose YYCOPY is __builtin_memcpy under
+ * Clang/GCC — over a stack of shared_ptrs. Memcpying those is a use-after-free waiting to happen.
+ *
+ * The cost is paid per yyparse() call, which in `kama lsp` means per keystroke: 1200 x sizeof(YYSTYPE)
+ * (~648 B) of C++ stack, default-constructed and destructed. Measured with KAMA_TIMING on a 363-line
+ * buffer, buffer-parse moved 11.6 -> 12.1 ms — real, not noise, and worth 0.5 ms out of an 85 ms
+ * analysis to stop lying to anyone with deeply nested code. Raise it deliberately, not to a huge
+ * number: 1200 clears 200 nested ifs with room to spare (verified), which is far past hand-written
+ * code and into generated-code territory. */
+#define YYINITDEPTH 1200
 #include <memory>
 #include <string>
 #include <cstdlib>
@@ -358,6 +376,17 @@ code_opt
 code_declarations
   : code_declaration   { $$ = std::make_shared<StatementList>(); $$->push_back($1); }
   | code_declarations code_declaration   { $1->push_back($2); }
+  /* Error recovery, LAST RESORT (LSP M5.3). Only reached when the statement- and member-level arms
+   * above could not resync — an unbalanced brace, typically. Unlike those, this one loses a whole
+   * `type` or `fn`, which makes every reference to it read as undeclared: that is the one recovery
+   * outcome that carpets a file with false semantic errors. Hence the counter — the LSP publishes
+   * semantic diagnostics from a partial parse EXCEPT when this arm fired (see lspAnalyze).
+   *
+   * Note this cannot recover garbage as the very first token of the file: with `parse.lac full` the
+   * header nonterminals have not reduced yet at the initial state, so nothing on the stack carries an
+   * `error` action. A file whose first character is garbage has nothing worth recovering anyway. */
+  | error   { $$ = std::make_shared<StatementList>(); yyget_extra(scanner)->codeGenContext->droppedTopLevelDecl++; }
+  | code_declarations error   { $$ = $1; yyget_extra(scanner)->codeGenContext->droppedTopLevelDecl++; }
   ;
 code_declaration
   : function_declaration
@@ -807,6 +836,28 @@ statement_list_opt
 statement_list
   : statement   { $$ = std::make_shared<StatementList>(); $$->push_back($1); }
   | statement_list statement   { $1->push_back($2); }
+  /* Error recovery, innermost grain (LSP M5.3). This is the load-bearing arm: Bison pops to the
+   * NEAREST state with an `error` action, so a broken statement discards one statement and leaves the
+   * enclosing function — its signature, its other locals, its remaining statements — intact. That is
+   * what makes the partial AST worth having: `P p; p.<cursor>` keeps `p` in the index, which
+   * declaration-level recovery alone would throw away along with the whole function.
+   *
+   * Both a leading and a trailing arm are needed. With only the trailing one, a block whose FIRST
+   * statement is broken has no statement_list on the stack, so no state carries an `error` action and
+   * the parse aborts — and "the first thing I typed isn't finished yet" is the commonest editing state
+   * there is.
+   *
+   * The arms contribute NO node, deliberately. Downstream passes dereference every element
+   * unconditionally, so a half-built node with a null body is a shape the emitter has never been asked
+   * to survive, whereas a SHORTER well-formed list is one it already handles on every build — that is
+   * exactly what pruneInactiveDecls produces for `@compileFor`.
+   *
+   * No %destructor is needed and none should be added: YYSTYPE is a plain struct rather than a %union,
+   * so the value stack is a real array of default-constructed YYSTYPEs and a discarded subtree simply
+   * stays alive until yyparse returns. `yyerrok` is deliberately absent too — Bison's 3-token
+   * suppression window is what stops one broken statement from reporting an error per discarded token. */
+  | error   { $$ = std::make_shared<StatementList>(); }
+  | statement_list error   { $$ = $1; }
   ;
 embedded_statement
   : block   { $$ = $1; }
@@ -1361,6 +1412,11 @@ class_member_declarations_opt
 class_member_declarations
   : class_member_declaration   { $$ = std::make_shared<ClassMemberDeclarationList>(); $$->push_back($1); }
   | class_member_declarations class_member_declaration   { $1->push_back($2); }
+  /* Error recovery, member grain (LSP M5.3) — one bad member must not hide its siblings, and the TYPE
+   * stays declared either way, which is what keeps a half-typed member from cascading "undeclared type"
+   * over every use of it. Same shape and same reasoning as the statement_list arms above. */
+  | error   { $$ = std::make_shared<ClassMemberDeclarationList>(); }
+  | class_member_declarations error   { $$ = $1; }
   ;
 class_member_declaration
   : constant_declaration   { $$ = $1; }
@@ -1700,6 +1756,16 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
 int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg)
 {
     LexerInstanceData* data = yyget_extra(scanner);
+    // The 10-error budget in CodeGenContext existed from the beginning and was DEAD CODE — nothing
+    // could ever reach it, because without recovery the parse stopped at error one. M5.3's recovery
+    // arms make it reachable, and reachable it must be: a buffer mid-refactor can otherwise emit an
+    // error per line, per keystroke, straight into publishDiagnostics. Past the budget the errors are
+    // still COUNTED (so every caller's `errorCount() > 0` gate still fails the parse) but no longer
+    // reported — the first 10 are the ones a human reads anyway.
+    if (data->codeGenContext->isErrorLimitReached()) {
+        data->codeGenContext->countErrorOnly();
+        return 1;
+    }
     // %locations gives the error's precise start (the offending token), better than the lexer counter.
     int line = llocp ? llocp->first_line : data->codeGenContext->line;
     int col  = llocp ? llocp->first_column : data->codeGenContext->col;

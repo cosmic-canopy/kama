@@ -1,0 +1,92 @@
+// Deeply nested blocks (LSP M5.3). Before this fixture the parse stack was hard-capped at
+// Bison's YYINITDEPTH default of 200 — YYSTYPE is a plain struct rather than a %union, so the
+// stack-relocation path was compiled out and could not grow — and 40 nested `if`s failed with
+// "memory exhausted", a diagnostic that tells the user nothing true. 40 is not pathological:
+// generated code and decision tables reach it. Guards the constant against a well-meaning trim.
+fn int32 nested(int32 seed) {
+    int32 acc = seed;
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+    if (acc >= 0) {
+        acc = acc + 2;
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    return acc;
+}
+
+fn int32 main() { return nested(seed: 40); }   // 40 + 2

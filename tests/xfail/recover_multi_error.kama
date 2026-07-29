@@ -1,0 +1,30 @@
+// Error recovery across independent declarations (LSP M5.3).
+//
+// Before recovery the parse aborted at error one, so this file produced exactly ONE diagnostic — you
+// fixed it, saw the next, fixed that, saw the next. There are three independent errors here, at three
+// different grains, and each is recovered by a different arm:
+//
+//   line 16  a malformed class member  -> class_member_declarations: error
+//   line 22  a missing semicolon       -> statement_list: error
+//   line 27  a second missing semicolon in a LATER function
+//
+// The companion .msg pins the line of the LAST one, which is the actual assertion: reaching line 27 is
+// only possible if the parser recovered from both errors above it. It still has to FAIL to build —
+// recovery reports more, it does not forgive.
+type value Holder {
+    public int32 x;
+    public int32 = ;
+    public fn int32 get() { return this.x; }
+}
+
+fn int32 first() {
+    int32 a = 1
+    return a;
+}
+
+fn int32 second() {
+    int32 b = 2
+    return b;
+}
+
+fn int32 main() { return 0; }
