@@ -4953,12 +4953,21 @@ int main(int argc, char** argv)
                 compiler = resolveCCompiler(argv[0]);   // bundled zig cc, else system clang
             }
         }
-        // `zig cc` takes its target as a flag rather than being a per-target binary, so it needs
-        // `-target` added; a cross gcc (`aarch64-linux-gnu-gcc`) has the triple baked into its name and
-        // must not. Detected the same way whether zig came from the bundled install or the user's own
-        // `--cc "zig cc"` — the latter is the realistic path on a machine that already has clang.
-        const bool usingZigCC = compiler.find("zig") != std::string::npos
-                             && compiler.find(" cc")  != std::string::npos;
+        // Two shapes of C compiler, and they need opposite treatment when crossing:
+        //   * a MULTI-TARGET DRIVER — `clang` or `zig cc` — is one binary for every target and takes the
+        //     triple as a `-target` flag. (clang has always been cross-capable; what it needs from you is
+        //     the target's headers and libraries, i.e. a sysroot. zig bundles those, which is the only
+        //     real difference.)
+        //   * a PER-TARGET BINARY — `aarch64-linux-gnu-gcc`, a vendor ARM gcc, an NDK wrapper — already
+        //     has its triple baked into its name, and passing `-target` would confuse or break it.
+        // Detected from the command string, so it works for the bundled zig, `--cc "zig cc"`, a plain
+        // `--cc clang`, or a `cc` declared on the target in kama.json.
+        const bool ccTakesTargetFlag =
+               compiler.find("clang") != std::string::npos
+            || (compiler.find("zig") != std::string::npos && compiler.find(" cc") != std::string::npos);
+        // Only the bundled/host default is presumed unable to cross: an explicitly chosen compiler is the
+        // user telling us they have a toolchain, so we hand it the target and let IT complain if not.
+
 
         // Cross-compiling. kama emits ISO C and shells out, so this is "invoke the right C compiler",
         // not "write a backend" — but the DEFAULT compiler is a plain host clang, which cannot produce a
@@ -4979,14 +4988,18 @@ int main(int argc, char** argv)
             && (g_target.arch != hostTarget().arch
                 || (g_target.hosted() && g_target.os != hostTarget().os));
         if (crossing) {
-            if (usingZigCC) {
-                crossFlags = " -target " + g_target.triple();
+            if (ccTakesTargetFlag && ccIsExplicit) {
+                crossFlags = " -target " + g_target.triple();   // clang / zig cc: one binary, target as a flag
+            } else if (ccTakesTargetFlag && !ccIsExplicit && compiler.find("zig") != std::string::npos) {
+                crossFlags = " -target " + g_target.triple();   // the bundled zig ships the target's libc
             } else if (!ccIsExplicit) {
                 fprintf(stderr,
-                        "kama: cannot build for %s (%s) — the default C compiler only targets this host.\n"
+                        "kama: cannot build for %s (%s) — the default C compiler has no libc for it.\n"
                         "  Any of:\n"
-                        "    --cc \"zig cc\"                     (zig cross-compiles to any target out of the box)\n"
-                        "    a `cc` on this target in kama.json  (your own cross toolchain, shared with the team)\n"
+                        "    --cc \"clang\" + a sysroot         (if you already have the target's headers/libs)\n"
+                        "    a `cc` on this target in kama.json  (your own cross toolchain, shared with the team;\n"
+                        "                                         `sysroot`/`cflags`/`ldflags` go there too)\n"
+                        "    --cc \"zig cc\"                     (bundles the target's libc — no sysroot needed)\n"
                         "    kama transpile --target %-14s (emit C and build it with someone else's toolchain)\n",
                         g_target.name.c_str(), g_target.triple().c_str(), g_target.name.c_str());
                 return 2;

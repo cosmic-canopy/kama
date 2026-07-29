@@ -167,6 +167,18 @@ compiler's own predefined macros select them correctly with no work.
 **Tier 0 (works today):** `kama transpile` emits portable C for anyone's toolchain; `OUTPUT=OBJECT`
 stops at an object.
 
+**Your existing toolchain is a first-class path — zig is a convenience, not a requirement.** kama
+recognizes two shapes of C compiler and treats them oppositely when crossing:
+
+| Shape | Examples | Treatment |
+|---|---|---|
+| **multi-target driver** — one binary for every target, triple as a flag | `clang`, `zig cc` | gets `-target <triple>` |
+| **per-target binary** — triple baked into the name | `aarch64-linux-gnu-gcc`, a vendor ARM gcc, an NDK wrapper | left alone |
+
+clang has always been cross-capable; what it needs from you is the target's **headers and libraries**
+(a sysroot). That is the *only* thing zig adds — it bundles musl / glibc stubs / mingw-w64 / wasi-libc,
+so no sysroot hunt. If you already have a sysroot or a cross toolchain, use it and skip zig entirely.
+
 **Tier 1 — target specs.** A `TARGET` value carries `cc` / `ar` / `sysroot` / `cflags` / `ldflags`,
 declared once in `kama.json` and checked in so the team shares it. Rust's target-spec model. The
 `triple` field feeds all three consumers: derived flags, the toolchain invocation, and the link-flag

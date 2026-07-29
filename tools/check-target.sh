@@ -93,7 +93,7 @@ hostos=$(uname -s)
 foreign=WINDOWS
 [ "$hostos" = "Linux" ] && foreign=WINDOWS
 if ! "$KAMA" build "$FIXTURE" --target "$foreign" -o "$tmp/x" >/dev/null 2>"$tmp/cross.err"; then
-    if ! grep -qF "only targets this host" "$tmp/cross.err"; then
+    if ! grep -qF "has no libc for it" "$tmp/cross.err"; then
         echo "check-target: FAIL — a cross build failed, but not with the toolchain diagnostic:" >&2
         sed 's/^/  /' "$tmp/cross.err" >&2
         exit 1
@@ -137,6 +137,20 @@ fi
 hostline=$("$KAMA" build "$FIXTURE" --cc "echo zig cc" -o "$tmp/z2" 2>/dev/null || true)
 if printf '%s' "$hostline" | grep -qF -- "-target "; then
     echo "check-target: FAIL — a same-host build passed -target (it should be left alone)" >&2
+    exit 1
+fi
+# Plain clang is a multi-target driver too — it has always been able to cross, it just needs the
+# target's headers/libs. So an EXISTING toolchain is a first-class path; zig is only the one that
+# bundles the libc. Whereas a per-target binary (aarch64-linux-gnu-gcc) has its triple in its NAME and
+# must NOT be handed -target, or it breaks.
+clangline=$("$KAMA" build "$FIXTURE" --target x86_64-linux-gnu --cc "echo clang" -o "$tmp/c1" 2>/dev/null || true)
+if ! printf '%s' "$clangline" | grep -qF -- "-target x86_64-linux-gnu"; then
+    echo "check-target: FAIL — clang did not receive -target for a cross build" >&2
+    exit 1
+fi
+gccline=$("$KAMA" build "$FIXTURE" --target x86_64-linux-gnu --cc "echo x86_64-linux-gnu-gcc" -o "$tmp/c2" 2>/dev/null || true)
+if printf '%s' "$gccline" | grep -qF -- "-target "; then
+    echo "check-target: FAIL — a per-target gcc was handed -target (its triple is in its name)" >&2
     exit 1
 fi
 
