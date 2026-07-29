@@ -1132,6 +1132,23 @@ static const std::map<std::string, TargetSpec>& builtinTargets()
 // compiled into `main` so a shipped binary carries its default log filter (M5). Empty = no baked default.
 static std::string g_logDefault;
 
+// Every CEmitter in this process is configured HERE, in one place. The build configuration lives in the
+// file-scope globals above, and there are six construction sites — two of which (the LSP's `lspAnalyze`
+// and `lspAnalyzeWorkspace`) called only `setPrelude` + `addPreludeModule`. With `_activeFlags` empty,
+// `compileForActive` answers false for every `@compileFor(X)`, so `pruneInactiveDecls` DROPPED every
+// gated declaration a real build keeps and KEPT every negated one — the editor described a program
+// nobody was building (LSP M6 A1). Collapsing the block makes a missing setter impossible rather than
+// merely unlikely: the next construction site cannot forget what it never spells out.
+static void configureEmitter(CEmitter& e)
+{
+    e.setPrelude(preludeUnit());       // Optional/Result available implicitly
+    e.setNoHeap(g_noHeap);             // `--no-heap`: reject heap allocation program-wide
+    e.setRelease(g_release);           // `--release`: strip `debugAssert`
+    e.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
+    e.setLogDefault(g_logDefault);     // baked `KAMA_LOG` project default (M5), compiled into main
+    for (auto& m : preludeModuleUnits()) e.addPreludeModule(m);       // the always-in-scope triad
+}
+
 // Minimal purpose-built reader for the `kama.json` project manifest. v1 needs only the declared flag
 // NAMES and which carry `"default": true`; every other key (`name`/`version`/… — the future
 // package-management surface) is skipped generically. Tolerant of unknown fields, strict enough to
@@ -2184,12 +2201,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
         return 1;
     }
     CEmitter emitter(out, srcPath, emitLines);
-    emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
-    emitter.setNoHeap(g_noHeap);         // `--no-heap`: reject heap allocation program-wide
-    emitter.setRelease(g_release);       // `--release`: strip `debugAssert`
-    emitter.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
-    emitter.setLogDefault(g_logDefault);   // baked `KAMA_LOG` project default (M5), compiled into main
-    for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
+    configureEmitter(emitter);
     int unsupported = emitter.emit(unit);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
@@ -2231,12 +2243,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     }
 
     CEmitter emitter(header, "", emitLines);
-    emitter.setPrelude(preludeUnit());   // Optional/Result available implicitly
-    emitter.setNoHeap(g_noHeap);         // `--no-heap`: reject heap allocation program-wide
-    emitter.setRelease(g_release);       // `--release`: strip `debugAssert`
-    emitter.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
-    emitter.setLogDefault(g_logDefault);   // baked `KAMA_LOG` project default (M5), compiled into main
-    for (auto& m : preludeModuleUnits()) emitter.addPreludeModule(m);   // the always-in-scope triad
+    configureEmitter(emitter);
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
@@ -3904,8 +3911,7 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
     }
 
     auto emitter = std::make_shared<CEmitter>(path);   // analysis mode: no C emitted
-    emitter->setPrelude(preludeUnit());            // Optional/Result implicitly in scope
-    for (auto& m : preludeModuleUnits()) emitter->addPreludeModule(m);
+    configureEmitter(*emitter);   // M6 A1: the SAME configuration a build uses, not a subset of it
     { Stopwatch sw(&timing().analyze); emitter->analyze(units); }
     // Only the OPEN file's diagnostics go back to the editor (the server publishes to one URI); imported
     // modules are analyzed for context, not surfaced. Their diagnostics carry a different `file`.
@@ -4114,8 +4120,7 @@ SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
     }
 
     auto emitter = std::make_shared<CEmitter>(files.front());
-    emitter->setPrelude(preludeUnit());
-    for (auto& m : preludeModuleUnits()) emitter->addPreludeModule(m);
+    configureEmitter(*emitter);   // M6 A1: refs/rename must span the same decls the build compiles
     { Stopwatch sw(&timing().analyze); emitter->analyze(units); }
     auto h = std::make_shared<LspIndex>();
     h->idx  = emitter;
@@ -4751,12 +4756,7 @@ int main(int argc, char** argv)
         if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
 
         CEmitter idx(input);                 // analysis mode: no output stream
-        idx.setPrelude(preludeUnit());       // Optional/Result available implicitly
-        idx.setNoHeap(g_noHeap);
-        idx.setRelease(g_release);
-        idx.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);
-        idx.setLogDefault(g_logDefault);
-        for (auto& m : preludeModuleUnits()) idx.addPreludeModule(m);
+        configureEmitter(idx);
         { Stopwatch sw(&timing().analyze); idx.analyze(units); }
         timingDump("check", input);
         const auto& diags = idx.diagnostics();
@@ -4817,12 +4817,7 @@ int main(int argc, char** argv)
         const std::string queryUri = queryProject ? absolutePath(input) : input;
 
         CEmitter idx(input);
-        idx.setPrelude(preludeUnit());
-        idx.setNoHeap(g_noHeap);
-        idx.setRelease(g_release);
-        idx.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);
-        idx.setLogDefault(g_logDefault);
-        for (auto& m : preludeModuleUnits()) idx.addPreludeModule(m);
+        configureEmitter(idx);
         { Stopwatch sw(&timing().analyze); idx.analyze(units); }
 
         // `kama query <f> --symbols` is a faithful proxy for one lspAnalyze, so timing it here is what
