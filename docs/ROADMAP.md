@@ -548,9 +548,15 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   unusable from a query path; see the "As shipped" section of
   [design/lsp-m4-kickoff.md](design/lsp-m4-kickoff.md). The campaign-exit STAMP_LOC checklist is CLOSED
   (M4.9) — measured, not assumed: renaming a generic type would have deleted its type-parameter list.
-  **Remaining:** M5 error recovery + incremental reparse (where a hand-written recursive-descent parser
-  replacing Bison would be the escalation), M6 clients for all major editors. Status of record:
-  [design/lsp.md](design/lsp.md).
+  **NEXT / ACTIVE: M5** — error recovery + incremental reparse; cold-start brief
+  [design/lsp-m5-kickoff.md](design/lsp-m5-kickoff.md), with the baseline measured on the shipped M4 server
+  rather than estimated. One syntax error currently yields exactly one diagnostic and blanks the whole
+  semantic layer (the grammar has no `error` productions, and the 10-error budget in `CodeGenContext` has
+  never been reachable); per-keystroke cost is the entire import closure — 172-240 ms against the sub-100 ms
+  budget — and a `path -> (mtime, unit)` parse cache is the fix, now that its prerequisite (analysis never
+  mutates a parsed AST) is verified rather than assumed. The hand-written recursive-descent parser stays the
+  right long-term move for self-hosting, but M5 does not need it: the latency is import re-parsing, not
+  parsing. Then **M6** clients for all major editors. Status of record: [design/lsp.md](design/lsp.md).
 - **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
   liftable out of the monorepo to stand alone. Design of record:
   [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:
