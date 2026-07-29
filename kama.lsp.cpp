@@ -456,9 +456,8 @@ Json diagnosticsArray(const std::vector<Diagnostic>& diags) {
 // ============================================================================================
 struct Doc {
     std::string    text;
-    long           version = 0;
-    SharedLspIndex lastGoodIndex;    // last cleanly-analyzed index; kept across a parse failure (queries stay live)
-    size_t         linesAtLastGood = 0;   // M4.6: line count when it was built — the geometry it still describes
+    SharedLspIndex lastGoodIndex;    // last analyzed index; since M5.4 a mid-edit buffer still produces
+                                     // one (recovery keeps what parsed), so this stays current, not stale
 };
 
 struct Server {
@@ -522,10 +521,7 @@ struct Server {
         std::string path = uriToPath(uri);
         std::vector<Diagnostic> diags;
         SharedLspIndex idx = lspAnalyze(path, it->second.text, diags, argv0);
-        if (idx) {
-            it->second.lastGoodIndex = idx;
-            it->second.linesAtLastGood = countLines(it->second.text);
-        }
+        if (idx) it->second.lastGoodIndex = idx;
         publish(uri, diags);
     }
 
@@ -598,8 +594,6 @@ struct Server {
         std::string uri = td->getStr("uri");
         Doc doc;
         doc.text = td->getStr("text");
-        const Json* ver = td->get("version");
-        doc.version = ver ? (long)ver->asNum() : 0;
         docs[uri] = std::move(doc);
         wsDirty = true;              // a new buffer joins the overlay set
         analyzeAndPublish(uri);
@@ -618,8 +612,6 @@ struct Server {
             const Json* t = last.get("text");
             if (t) it->second.text = t->asStr();
         }
-        const Json* ver = td->get("version");
-        if (ver) it->second.version = (long)ver->asNum();
         wsDirty = true;              // the workspace index holds a now-stale copy of this buffer
         analyzeAndPublish(uri);
     }
@@ -708,46 +700,23 @@ struct Server {
     // (typing `p.` adds no lines). Neither handler may touch the workspace index: completion fires on
     // every keystroke, and rebuilding a project per character is not a thing an editor survives.
 
-    static size_t countLines(const std::string& t) {
-        size_t n = 1;
-        for (char c : t) if (c == '\n') ++n;
-        return n;
-    }
-
-    // The index to answer a request at `kamaLine` with.
+    // The index to answer a request with: the last good one, always, in one lookup.
     //
-    // Normally that is `lastGoodIndex`, and it is CORRECT rather than merely tolerable: the realistic
-    // sequence — press Enter (still parses, index refreshes), then type `p.` (breaks the parse, adds no
-    // lines) — leaves the last good index geometry-accurate for the whole file. Every single-line
-    // statement, which is essentially every completion, lands in that case.
+    // M4.6 needed more than that. Without grammar-level error recovery a mid-edit buffer produced no AST
+    // at all, so `lastGoodIndex` went stale the moment you typed `p.` and a buffer that had NEVER parsed
+    // — a new file, where completion is wanted most — had nothing to answer from. The fix was to blank
+    // the cursor's line and RE-ANALYZE per request, which cost a measured 229 ms on every completion
+    // against an unparseable buffer, i.e. the common case while typing rather than an edge case.
     //
-    // Two cases do not: a buffer that has NEVER parsed (a new file — where completion is most wanted and
-    // there is nothing at all to answer from), and one whose LINE COUNT has moved since the last good
-    // parse, where every position below the edit is off. Both are repaired by blanking the cursor's line
-    // and re-analyzing. Blanking rather than substituting a placeholder is deliberate twice over: it needs
-    // no grammar knowledge (`p.__hole;` is not a legal statement — `statement_expression` is invocation /
-    // assignment / increment only), and it preserves line and column geometry EXACTLY, which is the whole
-    // invariant. The lexical context still comes from the UNTOUCHED buffer, so the receiver the user typed
-    // is not lost.
-    //
-    // Cost is one analysis, and only on that gate; `didChange` already runs one per keystroke, so this is
-    // at worst a second one on a file that is not currently parseable.
-    SharedLspIndex indexForRequest(Doc& doc, const std::string& path, int kamaLine) {
-        if (doc.lastGoodIndex && countLines(doc.text) == doc.linesAtLastGood) return doc.lastGoodIndex;
-        size_t off = 0;
-        for (int i = 1; i < kamaLine; ++i) {
-            off = doc.text.find('\n', off);
-            if (off == std::string::npos) return doc.lastGoodIndex;
-            ++off;
-        }
-        if (off > doc.text.size()) return doc.lastGoodIndex;
-        std::string repaired = doc.text;
-        size_t eol = repaired.find('\n', off);
-        if (eol == std::string::npos) eol = repaired.size();
-        for (size_t i = off; i < eol; ++i) repaired[i] = ' ';
-        std::vector<Diagnostic> ignored;   // the repaired buffer is not what the user has; never publish it
-        SharedLspIndex idx = lspAnalyze(path, repaired, ignored, argv0);
-        return idx ? idx : doc.lastGoodIndex;
+    // M5.3/M5.4 removed the need for it. Recovery discards the broken statement and keeps the rest, so
+    // `didChange` builds a fresh, geometry-accurate index every keystroke even mid-edit, and
+    // `analyzeAndPublish` stores it — which is exactly what the repair was reconstructing, one request
+    // at a time. Retired against a criterion rather than a hunch: `KAMA_LSP_NO_REPAIR=1
+    // tools/check-lsp.sh` passed the ENTIRE harness including the two M4.6 assertions (ids 37/38) that
+    // motivated the repair in the first place. Those assertions stay, and they are the guard: weaken
+    // recovery and they fail here, where the cause is obvious.
+    SharedLspIndex indexForRequest(Doc& doc, const std::string&, int) {
+        return doc.lastGoodIndex;
     }
 
     // textDocument/completion -> CompletionList. `isIncomplete: false` is load-bearing — it tells the

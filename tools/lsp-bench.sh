@@ -24,7 +24,7 @@
 # Default mode drives `kama query <f> --symbols`, a faithful proxy for one lspAnalyze (same
 # loadProgramUnits + prelude + fresh-CEmitter setup), with no JSON-RPC session — that is what makes it
 # runnable from a plain checkout. It CANNOT see anything that only pays off in a process which
-# analyzes more than once (the prelude cache, the closure cache, M4.6's repair); use --lsp for those.
+# analyzes more than once (the prelude cache, the closure cache); use --lsp for those.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -107,21 +107,21 @@ bench_lsp() {
         frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$uri"'","version":'"$((i + 1))"'},"contentChanges":[{"text":"'"$text"'// keystroke '"$i"'\n"}]}}'
     done
     # One completion on a buffer that does NOT parse, with the LINE COUNT MOVED since the last good
-    # parse — that pair is what defeats indexForRequest's fast path and fires M4.6's repair, which is
-    # the 235 ms number M5 is here to fix. Appending a broken line at the SAME line count would take
-    # the fast path instead and silently measure nothing, which is the whole reason the blank line
-    # below is deliberate rather than cosmetic.
+    # parse. That pair used to defeat indexForRequest's fast path and fire M4.6's repair — a second
+    # full analysis, measured here at 229 ms, on a request that should be a lookup. M5.5 retired the
+    # repair (recovery keeps the index fresh instead), so the assertion inverted: there must now be
+    # exactly ONE timing line per request. A second one means the repair is back.
     frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$uri"'","version":99},"contentChanges":[{"text":"'"$text"'\nfn int32 zz() { Command c; c.\n"}]}}'
     # The file ends in a newline, so with one blank line inserted the broken line is 1-based kama line
-    # wc+2 == 0-based LSP line wc+1. Off by one here puts the cursor past EOF, indexForRequest bails
-    # before the repair, and the run silently measures nothing. Column 29 is just past the `.`.
+    # wc+2 == 0-based LSP line wc+1. Column 29 is just past the `.`.
     frame '{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$uri"'"},"position":{"line":'"$(( $(wc -l < "$src" | tr -d ' ') + 1 ))"',"character":29}}}'
     frame '{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}'
     frame '{"jsonrpc":"2.0","method":"exit","params":null}'
 
     echo "# one 'kama lsp' process: didOpen, 10x didChange, then a completion on an unparseable buffer."
-    echo "# Watch closure-parse/prelude-parse collapse after the first line once caching lands, and"
-    echo "# watch for TWO lines against the completion (the second is M4.6's repair)."
+    echo "# closure-parse/prelude-parse collapse to 0 after the first line (M5.1/M5.2 caching), and"
+    echo "# there is exactly ONE line per request — a second against the completion means M4.6's"
+    echo "# retired repair is back."
     echo
     KAMA_TIMING=1 "$KAMA" lsp < "$session" 2>&1 >/dev/null | grep '^kama-timing:' | cat -n
 }
