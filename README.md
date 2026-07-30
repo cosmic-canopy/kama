@@ -126,6 +126,13 @@ is debuggable in lldb/gdb with breakpoints in your `.kama` source, and a WASM
 `-g -gsource-map` build steps through `.kama` in browser devtools. A VSCode extension
 (`editor/vscode/`) ships a CodeLLDB launch config and Build tasks.
 
+## Editor support
+
+The compiler is its own language server: `kama lsp` serves diagnostics, hover, go-to-definition,
+find-references, project-wide rename, completion, signature help and semantic highlighting. VS Code has a
+packaged extension; Neovim, Vim, Emacs, Sublime Text, Helix and Kate need a few lines of config —
+see **[editor setup](docs/editors.md)**.
+
 ## Layout
 
 - `kama.l`, `kama.y` — Flex lexer and Bison grammar (the language front end)
@@ -140,7 +147,8 @@ is debuggable in lldb/gdb with breakpoints in your `.kama` source, and a WASM
 - `Dockerfile`, `tools/cdev` — containerized toolchain
 - `./dev serve` — preview the site locally, served by the Kama-written `examples/httpd` (dogfooding; → http://localhost:8080)
 - `docs/` — `SPEC.md` (language reference), `grammar.bnf` (generated from `kama.y`),
-  `TYPE_MODEL.md`, `KEYWORDS.md`, `ROADMAP.md`
+  `TYPE_MODEL.md`, `KEYWORDS.md`, `ROADMAP.md`, `editors.md` (editor setup),
+  `packages.md`, `targets.md`, `mcu.md`, `FLOOR.md`, and `design/` (per-campaign design notes)
 - `llms.txt`, `GOALS.md` — LLM-discovery entry point and design philosophy
 
 MIT licensed — see [LICENSE](LICENSE).

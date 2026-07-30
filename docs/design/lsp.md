@@ -1,13 +1,37 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M0–M5 shipped; M6 STAGES A + B1/B2 shipped (2026-07-29); M6 B3 COMPLETE (2026-07-30, dev)** —
+**Status: M0–M5 shipped; M6 STAGES A + B1/B2 + B3 shipped; M6 STAGE C COMPLETE (2026-07-30, dev)** —
 the three deferred correctness items are closed, the TextMate grammar agrees with the compiler and is
-guarded by a real tokenizer, `textDocument/semanticTokens/full` colours by what the resolver concluded, and
-**the reference index no longer loses work**: renaming a method, a contract method, an enum behind a `::`
-qualifier, an exported type or a generic argument now rewrites every spelling of it, including inside a
-generic body and across units. **NEXT = Stage C** (editor clients + `docs/editors.md`), which has its own
-cold-start brief: [lsp-m6-c-kickoff.md](lsp-m6-c-kickoff.md). Then Stage D exit, then M7's tree-sitter
-grammar. **All of it is pre-launch** (user, 2026-07-29).
+guarded by a real tokenizer, `textDocument/semanticTokens/full` colours by what the resolver concluded,
+**the reference index no longer loses work** (renaming a method, a contract method, an enum behind a `::`
+qualifier, an exported type or a generic argument rewrites every spelling of it, including inside a generic
+body and across units), and **the campaign's headline claim is now cashed**: [editors.md](../editors.md)
+wires up eight editors against one server, and VS Code has a build-configuration status bar and picker.
+**NEXT = Stage D** (campaign exit), then M7's tree-sitter grammar. **All of it is pre-launch**
+(user, 2026-07-29).
+
+⚠️ **Stage C's brief was wrong in two load-bearing places, and both were found by checking a claim rather
+than building on it.** Recorded here because both generalize past this campaign:
+
+1. **"Every other LSP client offers a client-side static watcher list."** It does not exist. VS Code's
+   `synchronize.fileEvents` is a *vscode-languageclient library* convenience; at the PROTOCOL level,
+   dynamic registration via `client/registerCapability` is the only route by which a server ever receives
+   `workspace/didChangeWatchedFiles`. Three independent clients confirm it and none has a static list:
+   Neovim (`vim/lsp/_watchfiles.lua` — and note it advertises `dynamicRegistration: false` on Linux/BSD on
+   purpose), Helix (`did_change_watched_files.dynamic_registration: true`, one of the few it enables at
+   all) and eglot. The whole "Stage C adds no server code" design rested on this, and had it been trusted,
+   six clients would have shipped *looking* wired up while silently never re-resolving a manifest — a
+   failure a documentation page cannot catch and a grep-based guard cannot see.
+2. **`kama.local.json` was not a deep merge for TARGETs**, though `packages.md` and
+   `build-configuration.md` both say deep merge. Local target entries replaced whole-value, so the
+   picker's natural write — `{"RPI": {"default": true}}` — erased the triple `kama.json` declared, and the
+   build then failed with *"target 'RPI' declares no `triple`"*. A pre-existing bug that only a client
+   writing that file could ever have surfaced, now merged field-by-field.
+
+Two smaller corrections: **`activationEvents` did not need adding** (VS Code ≥1.74 generates
+`onLanguage:kama` from `contributes.languages`, and its linter flags the redundant key — the brief's first
+C1 item), and **the picker needs no client restart**, because writing `kama.local.json` trips the watcher
+the server already handles, which re-resolves and republishes every open buffer.
 
 **One decision from B3 that generalizes beyond the LSP:** a MODULE path is a navigation target and never a
 rename target. In kama the namespace is the module path is the directory path, so renaming one is a
@@ -392,6 +416,40 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
     grammar regex) rather than eyeballing; (b) consider **semantic tokens** (`textDocument/semanticTokens`)
     once the index is rich enough — the LSP can then colour a local differently from a field or a type,
     which no regex grammar can do, and every client gets it at once.
+  - **C (editor clients + `docs/editors.md`) ✅ SHIPPED 2026-07-30.** 804/804 native, emission
+    byte-identical (537 fixtures), check-lsp **136 → 153**, check-query 227, ~93 ms/keystroke (budget 100),
+    both harnesses ASan/UBSan-clean on macOS **and** in the container. New guard `tools/check-editors.sh`.
+    Beyond the two brief corrections at the top of this doc, the decisions of record:
+    - **The status bar reads a structured `kama/buildConfig` notification, not the prose `config:` log
+      line** (user, 2026-07-30). This is the shape every comparable server uses for the same job —
+      rust-analyzer `experimental/serverStatus`, Metals `metals/status`, clangd
+      `textDocument/clangd.fileStatus`, Dart `$/analyzerStatus`. Sent unconditionally, since the spec
+      requires an unknown notification to be ignored, so no capability negotiation is needed.
+    - **The payload carries what is SELECTABLE, not just what is selected.** `LspBuildConfig::groups`
+      ships each single-select group's values and winner, so the picker never rebuilds the catalog (which
+      is built-in targets ∪ built-in groups ∪ the manifest's own) client-side. `BuildConfigResult` gained
+      `selected` for the same reason: the precedence ladder (built-in default < manifest default <
+      `--release` sugar < `--select`) is subtle enough that a second implementation would drift.
+      `SelectGroup::values` was already commented "declaration order — for IDE dropdowns"; this is the
+      consumer it was written for.
+    - **The picker writes `kama.local.json`, and that is the whole design.** One mechanism for every
+      editor and for the CLI, so the editor, `kama build` and F5 cannot disagree — and a Neovim user
+      overrides configuration exactly the way a VS Code user does. It refuses when no `kama.json` was
+      resolved, because a `kama.local.json` is only ever read as a sibling of one.
+    - **`kama.restartServer` exists for the one-configuration-per-process limit, not for the picker.**
+      Re-pinning on tab switch stays rejected (it would evict the cache and re-analyze every open closure
+      on every switch); the status-bar tooltip now warns when the active file is outside the pinned
+      project, which is the cheap half of the fix.
+    - **Non-VS-Code clients are documented snippets, not checked-in config files** — what rust-analyzer,
+      gopls, clangd and zls all do. Nothing in a compiler repo installs someone's `init.lua`, so per-editor
+      files would be surface that drifts with no consumer. The real user-facing win is *upstream*
+      registration (nvim-lspconfig, Helix's built-in `languages.toml`, `eglot-server-programs`), which is
+      a PR to another project and gated on a public release — recorded in §10, not done here.
+    - **`tools/check-editors.sh` is a drift check and says so.** Exercising six editors on every machine
+      that runs the suite is not worth it. ⚠️ Its section check needs `grep -xF`: a substring match let a
+      heading renamed to `## Helixx` pass, and the anchored ERE that replaced it then matched
+      `## Vim coc.nvim` because the real heading's parentheses are a capture group. Neither was visible
+      until the guard was deliberately broken — **negative-test a new guard, always.**
   - **⚠️ Xcode is out of scope (no supported path).** Xcode exposes **no** hook to register a third-party
     LSP server — its editor intelligence (SourceKit-LSP) is wired for Swift/C/C++/ObjC only, and Source
     Editor Extensions can do only menu-triggered text transforms (no live diagnostics/hover/def/completion).

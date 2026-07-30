@@ -36,6 +36,9 @@ examples read the test fixtures.
   toolchain (your own / clang+sysroot / zig), output kinds, and per-platform notes.
 - [Build configuration](docs/design/build-configuration.md): the design — target triples
   (`<arch>-<os>-<abi>`), single-select groups (TARGET / BUILD_TYPE / OUTPUT), `@compileFor` flags.
+- [Editor setup](docs/editors.md): `kama lsp` is a JSON-RPC/stdio language server built into the
+  compiler — one server, thin clients. Config for VS Code, Neovim, Vim, Emacs, Sublime, Helix, Kate,
+  plus which editors get syntax colour from what.
 - [Runtime header](kama_runtime.h): the small C runtime included by generated code.
 - [Repo guide for AI assistants](CLAUDE.md): working conventions and build commands.
 

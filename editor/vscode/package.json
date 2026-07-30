@@ -14,6 +14,7 @@
   "bugs": { "url": "https://github.com/cosmic-canopy/kama/issues" },
   "homepage": "https://kama-lang.org",
   "main": "./extension.js",
+  "comment-activationEvents": "Deliberately absent. VS Code >= 1.74 GENERATES `onLanguage:kama` from the `contributes.languages` entry below, and `engines.vscode` is ^1.75.0 — spelling it out again is redundant and the extension linter flags it. Opening a .kama is already the activation point the status-bar item needs.",
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
   },
@@ -38,8 +39,35 @@
         "command": "kama.debugCurrentFile",
         "title": "Debug Current File",
         "category": "kama"
+      },
+      {
+        "command": "kama.selectBuildConfig",
+        "title": "Select Build Configuration",
+        "category": "kama"
+      },
+      {
+        "command": "kama.restartServer",
+        "title": "Restart Language Server",
+        "category": "kama"
       }
     ],
+    "comment-configuration": "Two settings, and neither mirrors the BUILD configuration: that channel is kama.local.json, so the editor and `kama build` cannot disagree and every other editor overrides it the same way. See docs/editors.md.",
+    "configuration": {
+      "title": "kama",
+      "properties": {
+        "kama.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the kama compiler. Empty searches the workspace (build/<os>-<arch>/kama, then ./kama) and falls back to PATH. The binary must be native to this OS — a container-built one will not launch."
+        },
+        "kama.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Log the JSON-RPC traffic to and from `kama lsp` in the kama Language Server output channel."
+        }
+      }
+    },
     "keybindings": [
       {
         "command": "kama.debugCurrentFile",

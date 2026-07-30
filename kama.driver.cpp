@@ -2065,6 +2065,11 @@ struct BuildConfigResult {
     std::string localManifest;   // the kama.local.json merged over it ("" = none)
     std::string buildType;       // the winning BUILD_TYPE value (the editor reports it)
     bool        release = false; // resolved BUILD_TYPE after `inherits` — main's `release` local
+    // Which value won in EVERY single-select group, not just BUILD_TYPE (TARGET excepted — it has its own
+    // catalog). Exported so the editor's build-config picker reports who won rather than re-deriving it:
+    // the precedence ladder below is subtle enough (built-in default < manifest default < --release sugar
+    // < --select) that a second implementation in a client would drift.
+    std::map<std::string, std::string> selected;
 };
 
 // Resolve `req` into the eight file-scope configuration globals. Returns false + `err` (no printing) on
@@ -2135,7 +2140,26 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 err = localManifest + ": " + err;
                 return false;
             }
-            for (auto& kv : ltargets) g_manifestTargets[kv.first] = kv.second;   // local wins
+            // ⚠️ FIELD-BY-FIELD, not whole-value. `kama.local.json` is documented everywhere as a
+            // DEEP merge (docs/packages.md), and a whole-value replace broke that for targets alone: an
+            // override naming a target to say one thing about it — which is exactly what the editor's
+            // build-config picker writes, `{"RPI": {"default": true}}` — silently erased the triple and
+            // toolchain kama.json had declared for it, and the build then failed with "target 'RPI'
+            // declares no `triple`". Local wins per FIELD it actually sets.
+            for (auto& kv : ltargets) {
+                auto ex = g_manifestTargets.find(kv.first);
+                if (ex == g_manifestTargets.end()) { g_manifestTargets[kv.first] = kv.second; continue; }
+                TargetSpec& t = ex->second;
+                const TargetSpec& l = kv.second;
+                if (!l.arch.empty())    t.arch    = l.arch;
+                if (!l.os.empty())      t.os      = l.os;
+                if (!l.abi.empty())     t.abi     = l.abi;
+                if (!l.cc.empty())      t.cc      = l.cc;
+                if (!l.ar.empty())      t.ar      = l.ar;
+                if (!l.sysroot.empty()) t.sysroot = l.sysroot;
+                if (!l.cflags.empty())  t.cflags  = l.cflags;
+                if (!l.ldflags.empty()) t.ldflags = l.ldflags;
+            }
             for (auto& kv : lgroups) {                                            // local extends/wins
                 SelectGroup& g = g_selectGroups[kv.first];
                 for (const auto& v : kv.second.values) if (!g.has(v)) g.values.push_back(v);
@@ -2234,6 +2258,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         // -O3/-DNDEBUG/strip and `debugAssert` stripping without redeclaring any of it.
         release        = g_activeFlags.count("RELEASE") != 0;
         out.buildType  = chosen["BUILD_TYPE"];
+        out.selected   = chosen;
     }
     g_release = release;   // release also strips `debugAssert` (threaded to the emitter via setRelease)
     out.release = release;
@@ -4310,6 +4335,33 @@ bool lspIsManifestPath(const std::string& path)
     return base == "kama.json" || base == "kama.local.json";
 }
 
+// The single-select axes an editor may switch between, read off the globals a resolve just installed.
+// TARGET leads because it is the one a user changes most; the rest follow in map order.
+//
+// TARGET's catalog is the union of the built-in names and the manifest's own — the same union
+// `resolveTarget` resolves against, so the picker can only ever offer something a build would accept.
+// Anonymous triples are deliberately absent: they are a one-off CLI gesture (`--target aarch64-linux-gnu`
+// with no declaration), and there is no finite list of them to put in a menu.
+static void lspCollectSelectGroups(const BuildConfigResult& res, std::vector<LspSelectGroup>& out)
+{
+    LspSelectGroup t;
+    t.name = "TARGET";
+    for (const auto& kv : builtinTargets())  t.values.push_back(kv.first);
+    for (const auto& kv : g_manifestTargets)
+        if (!builtinTargets().count(kv.first)) t.values.push_back(kv.first);
+    t.selected = g_target.name;
+    out.push_back(std::move(t));
+
+    for (const auto& kv : g_selectGroups) {
+        LspSelectGroup g;
+        g.name   = kv.first;
+        g.values = kv.second.values;
+        auto sel = res.selected.find(kv.first);
+        if (sel != res.selected.end()) g.selected = sel->second;
+        out.push_back(std::move(g));
+    }
+}
+
 bool lspResolveBuildConfig(const std::string& hintPath, const std::string& workspaceRoot,
                            LspBuildConfig& out, std::string& err)
 {
@@ -4352,6 +4404,7 @@ bool lspResolveBuildConfig(const std::string& hintPath, const std::string& works
         out.targetTriple = g_target.triple();
         out.buildType    = bres.buildType;
         for (const auto& f : g_activeFlags) out.activeFlags.push_back(f);
+        lspCollectSelectGroups(bres, out.groups);   // a broken manifest still gets a working picker
         return false;
     }
 
@@ -4362,6 +4415,7 @@ bool lspResolveBuildConfig(const std::string& hintPath, const std::string& works
     out.buildType     = res.buildType;
     out.strict        = g_strictFlags;
     for (const auto& f : g_activeFlags) out.activeFlags.push_back(f);   // a std::set: already sorted
+    lspCollectSelectGroups(res, out.groups);
     return true;
 }
 

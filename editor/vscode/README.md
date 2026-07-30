@@ -10,7 +10,7 @@ From this folder (install the JS deps first — the language client is an npm de
 ```sh
 npm install
 # symlink into your VSCode extensions (dev install)
-ln -s "$(pwd)" ~/.vscode/extensions/kama-0.1.0
+ln -s "$(pwd)" ~/.vscode/extensions/kama-0.2.0
 # then reload VSCode
 ```
 
@@ -20,8 +20,11 @@ Or package + install (`vsce package` bundles `node_modules`, so run `npm install
 npm install
 npm i -g @vscode/vsce
 vsce package
-code --install-extension kama-0.1.0.vsix
+code --install-extension kama-0.2.0.vsix
 ```
+
+Using a different editor? See **[docs/editors.md](../../docs/editors.md)** — the same server, `kama lsp`,
+serves Neovim, Vim, Emacs, Sublime Text, Helix and Kate too.
 
 ## Live diagnostics (language server)
 
@@ -38,16 +41,38 @@ a JSON-RPC server over stdio built into the compiler) and provides, as you type
 - **semantic highlighting**, layered over the TextMate grammar — the resolver knows
   which names are types, fields, locals or parameters, which a regex cannot
 
-It uses the same `kama` binary as the debugger (workspace-local `./kama` if present,
-else `PATH`).
+It uses the same `kama` binary as the debugger: **`kama.path`** if you set it, else a
+workspace-local `build/<os>-<arch>/kama` or `./kama`, else `PATH`.
 
-**Build configuration.** The server analyzes the program a plain `kama build` in that
-project builds — the resolved target's derived flags, `BUILD_TYPE=DEBUG`, and the
-manifest's default flags — so the editor and the compiler cannot disagree about which
-`@compileFor` declarations exist. To override, edit **`kama.local.json`** (the gitignored
-sibling of `kama.json`); the extension watches both and re-analyzes on save. There is no
-editor-specific setting for this on purpose: one mechanism, and F5 debugging stays in step
-with what you are looking at.
+## Build configuration (the status bar)
+
+The server analyzes the program a plain `kama build` in that project builds — the resolved
+target's derived flags, `BUILD_TYPE=DEBUG`, and the manifest's default flags — so the editor
+and the compiler cannot disagree about which `@compileFor` declarations exist.
+
+The **status bar** (bottom right, on a `.kama`) shows what it resolved — `⚙ HOST · DEBUG` —
+with the manifest, triple and active flags in its tooltip. Click it, or run
+*"kama: Select Build Configuration"*, to switch any single-select group the project
+declares: `TARGET`, `BUILD_TYPE`, `OUTPUT`, and any group of your own.
+
+The picker **writes `kama.local.json`** (the gitignored sibling of `kama.json`) rather than an
+editor setting. That is deliberate and worth knowing: it is the same file `kama build` merges,
+so the editor, the CLI and F5 debugging cannot get out of step, and a Neovim user overrides
+configuration exactly the way you do. Saving it re-analyzes every open buffer — no restart.
+
+> **One configuration per server process**, pinned by the first file that resolved a manifest.
+> Open a second project in the same window and it is analyzed under the first one's flags —
+> the status-bar tooltip warns when the current file is outside the pinned project. Fix it with
+> *"kama: Restart Language Server"*, or use one window per project.
+
+## Settings
+
+| setting | what it does |
+|---|---|
+| `kama.path` | Path to the kama compiler. Empty = search the workspace, then `PATH`. |
+| `kama.trace.server` | `off` \| `messages` \| `verbose` — log JSON-RPC traffic to the output channel. |
+
+There is deliberately **no** setting mirroring the build configuration — see above.
 
 > **The `kama` binary must be native to your OS.** The extension runs `kama lsp`
 > as a normal host process, so a container-built `./kama` (e.g. a Linux binary from

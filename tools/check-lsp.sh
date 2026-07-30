@@ -882,6 +882,62 @@ else
     echo "  FAIL: a manifest change did not re-resolve — saw ${cfgn:-0} config log line(s)" >&2; fail=1
 fi
 
+echo "check-lsp: M6 C0 dynamic watched-file registration"
+# H. The watcher is registered BY THE SERVER when the client asks for dynamic registration. VS Code's
+#    client-side `synchronize.fileEvents` list is a vscode-languageclient convenience, not a protocol
+#    feature — Neovim, Helix and eglot all have dynamic registration and no static list, so without this
+#    every non-VS-Code client silently never hears about a manifest change.
+: > "$tmp/cfgH"
+session="$tmp/cfgH"
+frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$tmp"'","capabilities":{"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true}}}}}'
+frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
+# A RESPONSE to the registration we just sent. It has an id and no method; the dispatch loop must ignore
+# it rather than answer `method not found` addressed to the client's own id, which is a protocol violation.
+frame '{"jsonrpc":"2.0","id":1,"result":null}'
+frame '{"jsonrpc":"2.0","id":68,"method":"shutdown","params":null}'
+frame '{"jsonrpc":"2.0","method":"exit"}'
+CFGDYN=$("$KAMA" lsp < "$tmp/cfgH" 2>/dev/null || true)
+cfgexpect "$CFGDYN" 'client/registerCapability'          "a client offering dynamicRegistration gets the watcher registered"
+cfgexpect "$CFGDYN" 'workspace/didChangeWatchedFiles'    "...for workspace/didChangeWatchedFiles"
+cfgexpect "$CFGDYN" '"globPattern":"**/*.kama"'          "...watching every .kama (the workspace index)"
+cfgexpect "$CFGDYN" '"globPattern":"**/kama.json"'       "...and the manifest"
+cfgexpect "$CFGDYN" '"globPattern":"**/kama.local.json"' "...and the local override, which **/kama.json does NOT match"
+cfgreject "$CFGDYN" 'method not found'                   "a RESPONSE arriving on stdin is ignored, not answered"
+cfgexpect "$CFGDYN" '"id":68,"result":null'              "...and the session still completes normally"
+
+# H'. A client that does not offer it must not be registered at — Neovim advertises FALSE on Linux/BSD on
+#     purpose, and registering anyway would be noise the client is entitled to reject.
+cfgreject "$CFGA" 'client/registerCapability' "a client that stays silent about dynamicRegistration is not registered at"
+
+echo "check-lsp: M6 C1 kama/buildConfig"
+# I. The configuration as DATA, not as a prose log line. A status bar parsing `describeConfig`'s English
+#    would break silently the first time that string changed; this is the channel a client reads.
+cfgexpect "$CFGA" '"method":"kama/buildConfig"' "the server announces its configuration as structured data"
+cfgexpect "$CFGA" '"groups":'                   "...carrying the single-select groups"
+cfgexpect "$CFGA" '"TARGET":{"values":'         "...TARGET, with the values a picker may offer"
+cfgexpect "$CFGA" '"BUILD_TYPE":{"values":["DEBUG","RELEASE"'  "...BUILD_TYPE, in declaration order"
+cfgexpect "$CFGA" '"selected":"DEBUG"'          "...and which value is actually in force"
+cfgexpect "$CFGA" '"flags":['                   "...plus the resolved @compileFor set"
+
+# I'. A project's OWN groups and targets reach the picker, or it could only ever offer the built-ins.
+#     `"default": true` on a value is what the picker writes, so `selected` must follow it.
+CFGSEL="$tmp/cfgsel"
+mkdir -p "$CFGSEL"
+cp "$CFGDIR/app.kama" "$CFGSEL/app.kama"
+printf '{"name":"cfgsel","version":"0.1.0","sources":["."],"flags":{"FEATURE_A":{}},"select":{"TARGET":{"RPI":{"triple":"aarch64-linux-gnu"}},"CONSOLE":{"XBOX":{"default":true},"PS5":{}}}}' > "$CFGSEL/kama.json"
+CFGGRP=$(cfgsession "$tmp/cfgI" "$tmp" "$CFGSEL/app.kama")
+cfgexpect "$CFGGRP" '"CONSOLE":{"values":["XBOX","PS5"],"selected":"XBOX"}' "a project's own select group reaches the picker, with its default selected"
+cfgexpect "$CFGGRP" '"RPI"'                                                 "...and its own TARGET joins the built-in catalog"
+
+# I''. The re-announcement. A picker writes kama.local.json and expects the status bar to follow without a
+#      restart, which only works if a manifest change re-announces as well as re-analyzing.
+cfgbcn=$(printf '%s' "$CFGG" | tr '\r' '\n' | grep -c 'kama/buildConfig' || true)
+if [ "${cfgbcn:-0}" -ge 2 ]; then
+    echo "  ok: a manifest change RE-ANNOUNCES the configuration (${cfgbcn} notifications), so a picker needs no restart"
+else
+    echo "  FAIL: a manifest change did not re-announce — saw ${cfgbcn:-0} kama/buildConfig notification(s)" >&2; fail=1
+fi
+
 if [ "$fail" != 0 ]; then
     echo "check-lsp: FAILED. Server stdout was:" >&2
     printf '%s\n' "$out" | sed 's/^/      /' >&2

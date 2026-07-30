@@ -617,11 +617,37 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   never fires, `tools/check-syntax.sh` now runs the real vscode-textmate engine over `tests/syntax/` and
   layers committed snapshots, `kama check` agreement, and the 13 findings asserted by name. On top of it,
   `textDocument/semanticTokens/full` colours by what the RESOLVER concluded — free, being a read off the
-  cached index. **M6 B3 COMPLETE (2026-07-30). NEXT / ACTIVE: Stage C** (editor
-  clients + `docs/editors.md` + the VS Code status-bar picker), then Stage D exit. Cold-start briefs:
-  [design/lsp-m6-c-kickoff.md](design/lsp-m6-c-kickoff.md) for Stage C, with
+  cached index. **M6 STAGE C SHIPPED (2026-07-30)** — the campaign's headline claim, *one server, many
+  thin clients*, is finally cashed: [editors.md](editors.md) wires up Neovim, Vim, Emacs, Sublime, Helix
+  and Kate beside VS Code, and states honestly which of them gets syntax colour from what (Zed and Helix
+  colouring both wait on M7's tree-sitter grammar). VS Code gained a build-configuration **status bar +
+  picker** that writes `kama.local.json`, so switching target or build type needs no restart and no
+  editor-private setting. **Two of the Stage C brief's load-bearing claims were wrong**, both found by
+  checking rather than trusting — see the Stage C sub-bullet below. **NEXT / ACTIVE: Stage D** (campaign
+  exit). Cold-start briefs: [design/lsp-m6-c-kickoff.md](design/lsp-m6-c-kickoff.md) for Stage C, with
   [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md) as the parent. Status of record:
   [design/lsp.md](design/lsp.md).
+  - **M6 Stage C — the two brief corrections, because both generalize.**
+    - **"Every other LSP client offers a client-side static watcher list" is FALSE**, and it was the
+      premise the whole no-server-code design rested on. VS Code's `synchronize.fileEvents` is a
+      *vscode-languageclient library* convenience, not a protocol feature; at the protocol level
+      **dynamic registration via `client/registerCapability` is the only way** a server ever receives
+      `workspace/didChangeWatchedFiles`. Verified against three independent clients, none of which has a
+      static list: Neovim (`_watchfiles.lua`), Helix (`did_change_watched_files.dynamic_registration:
+      true` — one of the few it enables) and eglot. So the server now registers the three globs itself on
+      `initialized`, and the dispatch loop learned to ignore an incoming RESPONSE (it previously answered
+      one with `method not found` aimed at the client's own id). Without this every non-VS-Code client
+      would have *looked* wired up and silently never re-resolved a manifest.
+    - **`kama.local.json` was not actually a deep merge for TARGETs**, though every doc says it is. Local
+      target entries replaced whole-value, so the picker's natural write — `{"RPI": {"default": true}}` —
+      erased the triple `kama.json` had declared and the build failed with *"target 'RPI' declares no
+      `triple`"*. Now merged field-by-field, matching the documented contract. A pre-existing bug that
+      only a client writing that file would ever have surfaced.
+    - Also: **`activationEvents` did not need adding** (VS Code ≥1.74 generates `onLanguage:kama` from
+      `contributes.languages`; the extension linter flags the redundant key), and **the picker needs no
+      client restart** — writing `kama.local.json` trips the existing watcher, which re-resolves and
+      republishes every open buffer. The restart command exists for a different reason: the
+      one-configuration-per-process limit when a second project is opened in the same window.
   - **M6 B3a/B3b SHIPPED 2026-07-30 — a method's call sites, and the inside of a generic body, are now
     indexed.** Both were one fix: record the referent's DECLARATION NODE rather than a key, generalizing
     the inversion M6 A2 paid for. A key built at record time embeds ambient context that is wrong for the

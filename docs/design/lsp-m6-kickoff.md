@@ -220,12 +220,12 @@ issues one after every edit so a future re-analysing implementation shows up as 
 fixture 80 lines below with the assertions still "passing" against the wrong buffer. Currently taken:
 
 ```
-UPPERCASE: BAD CFGA CFGB CFGBAD CFGC CFGDIR CFGG CFGSRC CFGTYPO DSRC DURI FRSRC FRSRC2 FRURI GOOD
-           IMP IURI LSRC LURI M34 MGEN MGURI MREN MRURI MURI NEWB NURI OSRC OURI QREN QRURI QURI
-           CIURI CISRC RECOV ROOT RURI SEM SHP SPAN SPURI SURI TOKB TOKG TOKGURI TOKURI URI WW
-           WWURI XDROP XURI
-lowercase: cfgcli cfggtext cfglsp cfgn dep depok drop fail frok frws n out session tmp
-request ids: 1-30, 32-49, 53-67   (FREE: 31, 50-52, 68+)
+UPPERCASE: BAD CFGA CFGB CFGBAD CFGC CFGDIR CFGDYN CFGG CFGGRP CFGSEL CFGSRC CFGTYPO DSRC DURI
+           FRSRC FRSRC2 FRURI GOOD IMP IURI LSRC LURI M34 MGEN MGURI MREN MRURI MURI NEWB NURI
+           OSRC OURI QREN QRURI QURI CIURI CISRC RECOV ROOT RURI SEM SHP SPAN SPURI SURI TOKB
+           TOKG TOKGURI TOKURI URI WW WWURI XDROP XURI
+lowercase: cfgbcn cfgcli cfggtext cfglsp cfgn dep depok drop fail frok frws n out session tmp
+request ids: 1-30, 32-49, 53-68   (FREE: 31, 50-52, 69+)
 ```
 
 (`MRURI`/`MREN` + `MGURI`/`MGEN` and ids 57-59 are M6 B3a's method-rename fixtures, added 2026-07-30.
@@ -234,7 +234,10 @@ Ids 63-65 reuse `IURI`; ⚠️ that document is open with the COMPACT `$IMP` buf
 on disk, and coordinates must come from the buffer — the on-disk layout cost one debug cycle here.
 `CIURI`/`CISRC` and ids 66-67 are B3c's std-contract implementation, in its own `$tmp/impl` project.)
 
-Assertion counts to grow, not shrink: **check-lsp 136**, **check-query 227** (as of B3h; they were
+(`CFGDYN` and id 68 are Stage C0's dynamic-watcher-registration session; `CFGSEL`/`CFGGRP` are its
+select-group fixture, in its own `$tmp/cfgsel` project.)
+
+Assertion counts to grow, not shrink: **check-lsp 153** (136 before Stage C), **check-query 227** (as of B3h; they were
 123/198 after B3g and 119/180 before B3). ⚠️ Count them as `ok:` lines from a green run
 (`sh tools/check-lsp.sh | grep -c '  ok:'`). This brief once claimed 108/173, which was wrong in both
 directions of confusion: `grep -c '^expect '` under-counts, because many assertions wrap their description

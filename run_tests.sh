@@ -138,6 +138,14 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-syn
     if sh tools/check-syntax.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# LSP M6 C4: docs/editors.md must keep documenting the server it points at — every committed editor still
+# has a section, every snippet still names `kama lsp`, and the three watched-file globs are spelled the same
+# in the server's dynamic registration and the VS Code client's static list. A drift check, not a behaviour
+# test: exercising the snippets would need six editors installed.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-editors.sh ]; then
+    if sh tools/check-editors.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # MCU step 3: `--target embedded` freestanding-build guard (emitted entry shape + libc-free object). Like
 # the drift guard, run once on the plain native pass (the SAN/WASM re-runs build the fixture hosted anyway).
 if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-embedded.sh ]; then

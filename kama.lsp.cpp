@@ -536,6 +536,28 @@ struct Server {
     std::string configHint;             // the document that pinned it (a re-resolve replays the same walk)
     bool        configPinned = false;
 
+    // ---- watched files (M6 C0) -------------------------------------------------------------------
+    // Whether the client asked us to register the file watcher ourselves. VS Code's client-side
+    // `synchronize.fileEvents` list is a vscode-languageclient LIBRARY convenience, not a protocol
+    // feature — at the protocol level, DYNAMIC REGISTRATION is the only way a server ever receives
+    // `workspace/didChangeWatchedFiles`. Verified against three independent clients, none of which
+    // exposes a static glob list: Neovim (`vim/lsp/_watchfiles.lua`, registration-driven), Helix
+    // (`did_change_watched_files.dynamic_registration: true` — one of the few it enables at all) and
+    // eglot (`eglot-register-capability … workspace/didChangeWatchedFiles`). So without this the other
+    // clients would LOOK wired up and silently never re-resolve a manifest — the failure mode a
+    // documentation page cannot catch.
+    bool clientWatchesDynamically = false;
+    int  nextOutgoingId = 1;            // ids for the requests WE send; the client's ids are its own space
+
+    // The globs to watch, in one place because two things must agree on them: this registration and the
+    // VS Code client's static list (editor/vscode/extension.js). `tools/check-editors.sh` asserts they do.
+    // ⚠️ `**/kama.json` does NOT match `kama.local.json` — the two manifests are separate patterns.
+    static const char* const* watchedGlobs(size_t& n) {
+        static const char* const kGlobs[] = { "**/*.kama", "**/kama.json", "**/kama.local.json" };
+        n = sizeof(kGlobs) / sizeof(kGlobs[0]);
+        return kGlobs;
+    }
+
     void sendResponse(const Json& id, Json result) {
         Json resp = Json::object();
         resp.set("jsonrpc", "2.0");
@@ -553,6 +575,50 @@ struct Server {
         resp.set("id", id);
         resp.set("error", std::move(err));
         writeMessage(serialize(resp));
+    }
+
+    // A server->client REQUEST. The reply comes back on the same stdin stream as everything else and is
+    // deliberately ignored (see dispatch) — nothing the server does depends on the answer, so there is no
+    // pending-request table to keep. Every prior message the server sent was a response or a notification;
+    // this is the first thing it asks FOR.
+    void sendRequest(const char* method, Json params) {
+        Json req = Json::object();
+        req.set("jsonrpc", "2.0");
+        req.set("id", nextOutgoingId++);
+        req.set("method", method);
+        req.set("params", std::move(params));
+        writeMessage(serialize(req));
+    }
+
+    // Register `workspace/didChangeWatchedFiles` for the three globs, if the client said it accepts
+    // dynamic registration. Sent on `initialized`, which is the point the spec designates for it.
+    //
+    // ⚠️ A client may legitimately decline: Neovim advertises this as FALSE on Linux/BSD on purpose (its
+    // watcher backends are too limited). Registering anyway would be ignored at best, so we don't — and
+    // docs/editors.md states what such a user loses (an out-of-editor manifest edit needs a restart).
+    void registerFileWatchers() {
+        if (!clientWatchesDynamically) return;
+        size_t n = 0;
+        const char* const* globs = watchedGlobs(n);
+        Json watchers = Json::array();
+        for (size_t i = 0; i < n; ++i) {
+            Json w = Json::object();
+            w.set("globPattern", globs[i]);
+            // No `kind` — omitting it means create|change|delete, which is what we want: a .kama being
+            // deleted invalidates the workspace index exactly as much as one being edited.
+            watchers.push(std::move(w));
+        }
+        Json opts = Json::object();
+        opts.set("watchers", std::move(watchers));
+        Json reg = Json::object();
+        reg.set("id", "kama-watched-files");     // stable: we never unregister, so it need not be unique
+        reg.set("method", "workspace/didChangeWatchedFiles");
+        reg.set("registerOptions", std::move(opts));
+        Json regs = Json::array();
+        regs.push(std::move(reg));
+        Json params = Json::object();
+        params.set("registrations", std::move(regs));
+        sendRequest("client/registerCapability", std::move(params));
     }
 
     void publish(const std::string& uri, const std::vector<Diagnostic>& diags) {
@@ -597,6 +663,40 @@ struct Server {
         return s;
     }
 
+    // The same facts as describeConfig, as data (M6 C1). The prose line is for a human reading the output
+    // channel; this is for a client that renders a status bar and offers a picker, and it carries what
+    // could be SELECTED as well as what is in force so no client re-derives the catalog.
+    //
+    // `kama/…` is a vendor-namespaced custom notification, the shape every comparable server uses for the
+    // same job (rust-analyzer `experimental/serverStatus`, Metals `metals/status`, clangd
+    // `textDocument/clangd.fileStatus`). Sent unconditionally: per the spec an unknown notification MUST
+    // be ignored, so a client that does not want it is unharmed and one that does needs no negotiation.
+    void notifyBuildConfig(const LspBuildConfig& c) {
+        Json groups = Json::object();
+        for (const auto& g : c.groups) {
+            Json values = Json::array();
+            for (const auto& v : g.values) values.push(Json(v));
+            Json obj = Json::object();
+            obj.set("values", std::move(values));
+            obj.set("selected", g.selected);
+            groups.set(g.name, std::move(obj));
+        }
+        Json flags = Json::array();
+        for (const auto& f : c.activeFlags) flags.push(Json(f));
+        Json params = Json::object();
+        params.set("manifest", c.manifest);            // "" = no kama.json: the picker must refuse, since
+        params.set("localManifest", c.localManifest);  // kama.local.json is only read BESIDE a kama.json
+        params.set("triple", c.targetTriple);
+        params.set("strict", c.strict);
+        params.set("flags", std::move(flags));
+        params.set("groups", std::move(groups));
+        Json note = Json::object();
+        note.set("jsonrpc", "2.0");
+        note.set("method", "kama/buildConfig");
+        note.set("params", std::move(params));
+        writeMessage(serialize(note));
+    }
+
     // Resolve and install the build configuration, and if it CHANGED, make every open document agree with
     // it. Returns true when it re-analyzed, so a caller that was about to analyze does not do it twice.
     //
@@ -609,6 +709,7 @@ struct Server {
         if (!lspResolveBuildConfig(hintPath, workspaceRoot, cfg, err))
             showMessage(1, "kama: " + err + " — analyzing with default build flags");
         logMessage(3, describeConfig(cfg));
+        notifyBuildConfig(cfg);
 
         bool changed = (cfg.manifest != configManifest);
         configManifest = cfg.manifest;
@@ -663,14 +764,21 @@ struct Server {
             }
         if (!rootUri.empty()) workspaceRoot = uriToPath(rootUri);
 
+        // Does this client want the server to register the file watcher? (M6 C0 — see watchedGlobs.)
+        if (const Json* caps = params.get("capabilities"))
+            if (const Json* wsc = caps->get("workspace"))
+                if (const Json* dcwf = wsc->get("didChangeWatchedFiles"))
+                    if (const Json* dyn = dcwf->get("dynamicRegistration"))
+                        clientWatchesDynamically = (dyn->type == Json::Bool && dyn->b);
+
         // Install host defaults now, so nothing is EVER analyzed with a truly empty `@compileFor` set even
         // if the first document resolves no manifest. The real configuration is pinned on the first
         // didOpen, from that file's nearest kama.json — see applyConfig / lspResolveBuildConfig.
+        LspBuildConfig hostCfg;
         {
-            LspBuildConfig cfg;
             std::string err;
-            lspResolveBuildConfig("", "", cfg, err);
-            logMessage(3, describeConfig(cfg));
+            lspResolveBuildConfig("", "", hostCfg, err);
+            logMessage(3, describeConfig(hostCfg));
         }
 
         // M1 advertised full-document sync only; M2 turns on the first interactive features.
@@ -722,6 +830,10 @@ struct Server {
         result.set("serverInfo", std::move(info));
         sendResponse(id, std::move(result));
         initialized = true;
+        // AFTER the result, unlike the log line above. `window/logMessage` is one of the few notifications
+        // the spec lets a server send before initialization completes; a custom one is not, and a client
+        // that has not yet processed the result may have no handler for it.
+        notifyBuildConfig(hostCfg);
     }
 
     void handleDidOpen(const Json& params) {
@@ -1194,6 +1306,12 @@ struct Server {
         const Json* paramsp = msg.get("params");
         Json params = paramsp ? *paramsp : Json::object();
 
+        // A RESPONSE to one of our own requests: it carries an `id` but no `method`. Since M6 C0 the server
+        // sends `client/registerCapability`, so replies now arrive on this stream. Drop it — nothing waits
+        // on the answer. Without this it would look like a request for the method "" and draw a
+        // `method not found` ERROR RESPONSE aimed at the client's own id, which is a protocol violation.
+        if (method.empty() && idp) return true;
+
         if (method == "exit") {
             exitCode = shutdownReceived ? 0 : 1;
             return false;
@@ -1207,7 +1325,9 @@ struct Server {
             if (isRequest) sendError(*idp, -32002, "server not initialized");
             return true;
         }
-        if (method == "initialized") return true;    // notification, no-op
+        // `initialized` is where the spec says a server registers dynamic capabilities, and it is the only
+        // thing we do with it.
+        if (method == "initialized") { registerFileWatchers(); return true; }
         if (method == "shutdown") {
             shutdownReceived = true;
             if (isRequest) sendResponse(*idp, Json());   // result: null

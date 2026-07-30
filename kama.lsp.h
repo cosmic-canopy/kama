@@ -127,6 +127,15 @@ void lspEvictParsedFile(const std::string& path);
 // `workspace/didChangeConfiguration` is deliberately NOT wired: the server reads no client settings, so
 // handling it would be either dead code that reads as though configuration flowed through it, or a
 // `workspace/configuration` pull the server has no machinery for.
+// One single-select axis, as an editor's configuration picker needs it: what could be chosen, and what
+// was. TARGET is one of these too — the picker treats every group identically, which is the whole point of
+// the build-configuration campaign's one-primitive model.
+struct LspSelectGroup {
+    std::string name;                    // "TARGET", "BUILD_TYPE", "OUTPUT", or a project's own
+    std::vector<std::string> values;     // declaration order — `SelectGroup::values` was written for this
+    std::string selected;                // the winning value ("" = the group has no default and none won)
+};
+
 struct LspBuildConfig {
     std::string manifest;        // the kama.json that was read ("" = none: permissive host defaults)
     std::string localManifest;   // the kama.local.json merged over it ("" = none)
@@ -135,6 +144,11 @@ struct LspBuildConfig {
     std::string buildType;       // e.g. "DEBUG"
     std::vector<std::string> activeFlags;   // the full `@compileFor` set, sorted
     bool        strict = false;  // a manifest declared the flag universe, so typos are errors
+    // What the editor could switch TO, alongside what is in force. Carried here rather than left for a
+    // client to work out from kama.json: the catalog is the built-in target list plus the built-in groups
+    // plus whatever the manifest declared, and a client re-deriving that union would drift from the
+    // compiler the first time either side gained a value (M6 C1).
+    std::vector<LspSelectGroup> groups;
 };
 
 // Resolve and INSTALL the configuration this process analyzes under. Discovery mirrors the CLI's, in the

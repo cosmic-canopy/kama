@@ -79,7 +79,17 @@ node hello.js; echo $?              # -> 42  (browser: use the .html target)
 
 `kama transpile hello.kama -o hello.c` emits the generated C if you want to read it.
 
-## 4. Debug in VSCode (breakpoints, call stack, locals)
+## 4. Set up your editor
+
+The compiler is its own language server, so you get live diagnostics, hover, go-to-definition,
+find-references, project-wide rename, completion and signature help in any editor with a generic LSP
+client — VS Code, Neovim, Vim, Emacs, Sublime Text, Helix and Kate. Each is a few lines pointing at
+`kama lsp`: see **[editor setup](docs/editors.md)**.
+
+VS Code has a packaged extension that also brings syntax highlighting, a build-configuration picker, and
+the F5 debugging below.
+
+## 5. Debug in VSCode (breakpoints, call stack, locals)
 
 kama debug builds embed `#line` directives back to your `.kama` and keep your variable names, so you get
 real source-level debugging.
@@ -115,5 +125,6 @@ kama build app.kama --target wasm -o app.html   # debug is the default; emits ap
 ## Next
 
 - Language reference: [docs/SPEC.md](docs/SPEC.md) · grammar: [docs/grammar.bnf](docs/grammar.bnf)
+- Editor setup: [docs/editors.md](docs/editors.md)
 - Examples: [tests/](tests/) (each `.kama` is a runnable program)
 - Design goals: [GOALS.md](GOALS.md)
