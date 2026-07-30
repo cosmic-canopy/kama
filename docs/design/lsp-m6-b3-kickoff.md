@@ -1,10 +1,128 @@
 # LSP M6 B3 — the member reference index (cold-start brief)
 
-**Status: Stage 0 + B3a + B3b + B3d + B3e SHIPPED 2026-07-30** (`2a9ba07`, `95fd0f2`, `18ee951`), and
-both LSP harnesses are ASan/UBSan-clean on macOS AND in the container (the leak check only exists there).
-**Remaining: B3c, B3d's `::` form, B3f** — enumerated below, not waiting to be thought of.
-Everything here was verified by running it, not reasoned about.
+**Status: Stage 0 + B3a + B3b + B3d + B3e + B3g SHIPPED 2026-07-30** (`2a9ba07`, `95fd0f2`, `18ee951`,
+`9c87583`), and both LSP harnesses are ASan/UBSan-clean on macOS AND in the container (the leak check only
+exists there). **Remaining: two tasks, both cold-start ready — see ► NEXT SESSION immediately below.**
+Everything here was verified by running it, not reasoned about; the few places that are reasoning are
+marked as such.
 Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](lsp.md).
+
+## ► NEXT SESSION — two tasks, both cold-start ready
+
+Everything else in B3 is shipped and green (`2a9ba07`…`7264001`, dev). These two are independent of each
+other; do them in either order, one commit each.
+
+⚠️ **The line numbers in the ORIGINAL BRIEF further down predate the B3 commits and have shifted.** The
+two task briefs here were re-derived against `7264001`. Prefer grepping the named symbol over trusting any
+`file:line` in this document.
+
+**Gates for both** (campaign non-negotiables, unchanged):
+
+```sh
+make && ./run_tests.sh                                     # 803/803 before you start, and after
+tools/lspref.sh > build/lspref-<tag>.txt
+diff build/lspref-before.txt build/lspref-<tag>.txt        # MUST be byte-identical, 537 fixtures
+sh tools/check-lsp.sh && sh tools/check-query.sh
+tools/lsp-bench.sh --lsp                                   # ~89 ms; the budget is 100 ms
+# then MANUALLY, and in the CONTAINER too (macOS ASan has no LeakSanitizer):
+make EXTRA_CXXFLAGS="-fsanitize=address,undefined" && sh tools/check-lsp.sh && sh tools/check-query.sh
+```
+
+**And regenerate the coverage tables** — that diff is the proof the task worked:
+`./kama query tests/query/coverage/<name>.kama --coverage > tests/query/coverage/<name>.coverage`.
+Never regenerate one to make a test pass; read it, and justify every changed line in the commit message.
+
+---
+
+### Task 1 — positions for `::`-separated name lists (unblocks three gaps at once)
+
+**The problem, verified.** Three lists keep their spellings as plain strings with no line or column, so
+there is no node to anchor a `PosEntry` to:
+
+| gap | field | grammar production |
+|---|---|---|
+| `Color` in `Color::Green`, `Point` in `Point::origin()` | `IdentifierNode::qualifier` (kama.ast.h) | `qualifier`, kama.y ~479 |
+| `std`, `collections` in an import path | `ImportDeclarationNode::modulePath` | `import_path`, kama.y ~359 |
+| `export { Box, … }` | `CompilationUnit::exportList` | `export_name_list`, kama.y ~329 |
+
+All three are `%type <strings>` productions that accumulate `IDENTIFIER` tokens, so the `@N` location is
+in hand at exactly the moment each string is pushed. `STAMP_LOC` (kama.y:66) is the existing idiom.
+
+**Do NOT retype the lists to identifier lists.** `kama.cemit.cpp` alone dereferences `->qualifier` /
+`.qualifier` at **107 places** (measured; 137 lines mention it), and the `%type <strings>` declarations
+would have to change with them.
+
+**Recommended shape — a side table keyed by the LIST POINTER, transferred at the consuming reduction.**
+
+- In `CodeGenContext` (kama.context.h) add `std::map<const StringList*, std::vector<SrcRange>> listSegPos;`.
+  That class already carries exactly this kind of per-parse, LSP-only data (`diagnostics`,
+  `droppedTopLevelDecl`), and `SCANNER_CODEGENCONTEXT` reaches it from every action.
+- Each accumulating production stamps as it pushes: `ctx.listSegPos[$$.get()].push_back(<@N as SrcRange>)`.
+- Each CONSUMING production copies the vector into a new parallel field on the owning node —
+  `IdentifierNode::qualifierPos`, `ImportDeclarationNode::modulePathPos`,
+  `CompilationUnit::exportListPos` — looking it up by the list pointer it already holds in `$1`.
+- `buildPositions` then emits one `PosEntry{range, nullptr, false, key}` per segment. **A null `id` is
+  already a supported shape** — every declaration entry uses it (step (1) of `buildPositions`).
+
+⚠️ **Why the pointer key, and not a single "pending" vector** (this part is reasoned, not run — verify it):
+qualifiers NEST. In `A::B<C::D>` the inner `C::` reduces while `A::B<…>`'s own reduction is still pending,
+so a single scratch vector would be clobbered before the outer consumer reads it. Keying by the
+`StringList` pointer removes any dependence on reduction order — each list object is one source occurrence
+(the recursive arms push onto `$1` and return it).
+
+⚠️ This touches `kama.y`, so lspref before/after is mandatory, and **every `_opt` rule must set `$$`** (the
+uninitialized-`$$` trap from the MCU step-2 work — an empty rule with no `$$=` yields garbage).
+
+**What must become true.** `--def` on `Color` in `Color::Green` lands on the enum; renaming a type rewrites
+`export { … }`; the coverage tables lose the `::`-qualifier, import-path and namespace `-` lines. And
+**`tools/check-query.sh` has a `reject` pinning the export gap as a fact** (in the M6 B3 block, on
+`tests/query/generics/lib.kama:11:9`) — **it must flip to an `expect`.** That is deliberate: it is what
+makes closing the gap visible rather than silent.
+
+---
+
+### Task 2 — B3c, contract methods (the only remaining item needing a DESIGN, not wiring)
+
+**The problem, verified.** `fn int32 speak();` inside a `type contract` is indexed nowhere, and neither is
+any call that dispatches through the contract's fat pointer. Two causes:
+
+1. `InterfaceMethod` (kama.cemit.h ~347) carries `name`, `returnType`, `params` and **no declaration
+   node**. It is built at ONE place — `ii.methods.push_back({*md->name->value, md->returnType, md->params,
+   md->isRef, md->isCtor})` in `collectClasses`, where `md` is the `ClassMethodDeclarationNode*` — so
+   adding a `SharedIdentifier nameId` set to `md->name` is a one-field, one-site change. (The sibling
+   operator arm has no name node; leave it null, as `MethodInfo::node` already is for operators.)
+2. `buildDefSites` registers contracts but **not their methods** (the `_interfaces` / `_genericContracts`
+   loop adds one entry for the type). So there is no def-site to point a reference at.
+
+Once those exist, the call site is small: `emitInterfaceDispatch` already iterates `it->second.methods` and
+matches by name, and its callers have the spelling in hand (`recv->identifier` in `emitMethodCall`; a
+`site` parameter now threaded through `emitSmartPtrCall`). It was deliberately NOT threaded in B3a
+precisely because there was nothing to point at yet.
+
+**The design question — decide this FIRST, it is the whole task.** Renaming a contract-implementing method
+must rename the contract declaration, every OTHER implementation, and every call site, or it half-applies
+in a new way. Today it is already half-applying (B3a made direct calls rename; contract-dispatched ones
+still do not), so this is not a regression — but it is not closed either. Two shapes:
+
+- **(a) Collapse onto one symbol.** Give an implementing method's DefSite the CONTRACT's key instead of its
+  own. Simple, and rename is correct by construction. Cost: go-to-definition from a call lands on the
+  contract declaration rather than the concrete implementation, and a type implementing two contracts that
+  both declare `speak` needs a tie-break.
+- **(b) Keep separate DefSites plus a rename-GROUP relation** consulted only by `referencesAt` /
+  `renameRangeAt`. More correct (go-to-def keeps landing on the implementation), at the cost of a new
+  relation in the index and a rename path that unions across it.
+
+**Either way the pairing already exists and is free**: the conformance-completeness loop in
+`collectProgram` (`if (const std::vector<InterfaceMethod>* need = contractMethods(contract)) for (auto& nm
+: *need) if (!tci.methods.count(nm.name))`) is walking exactly the "this type's method X implements
+contract Y's method X" relation. Build the group there rather than re-deriving it.
+
+**Test it with a fixture that dispatches BOTH ways** — a concrete-typed call and a fat-pointer call on the
+same method — because a fixture with only one of them passes under a design that gets the other wrong.
+`tests/query/coverage/dispatch.kama` already has both (`c.speak()` and `s.speak()` through
+`Owned<Speaker>`); its `10:42 speak -` and `38:26 speak -` lines are the acceptance criterion.
+
+---
 
 > ## Stage 0 — how the rest of B3 gets found, instead of thought of
 >
