@@ -647,18 +647,32 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
     <file> --coverage` (B3 stage 0) asks the other question: for every identifier the SOURCE spells, what
     does the index know? `tests/query/coverage/*.kama` spell every naming construct the language has and
     the checked-in `*.coverage` tables beside them are compared whole by `tools/check-query.sh`, so a gap
-    is a diff. It took the gap list from 64 identifiers to 35, and named four remaining items:
-    - **B3c — contract methods.** `InterfaceMethod` carries no declaration node, and `buildDefSites`
-      registers contracts but not their methods, so neither `fn int32 speak();` inside a `type contract`
-      nor any fat-pointer call site can be indexed. Renaming a contract-implementing method still
-      half-applies — less broken than before B3a (direct calls now rename), but the real fix needs a
-      symbol-group/override-set design so the contract decl, every implementation and every call site
-      rename together.
-    - **B3d — the type QUALIFIER of a member call.** `Point` in `Point.at(…)`, `Color` in `Color::Green`,
-      `DynamicArray` in `DynamicArray.empty()`. The same spelling as a type ANNOTATION indexes fine; these
-      paths just resolve without passing a `site`.
-    - **B3e — enum payload fields**, at their declaration and at the construction label.
-    - **B3f — import paths and namespace names.**
+    is a diff. **It took the gap list from 64 identifiers to 25** — of which ~11 are permanent and correct
+    (contextual type-kind words, which are not lexer keywords and name nothing; and type PARAMETERS, which
+    substitute to a concrete type inside an instance).
+    - **✅ B3d/B3e/B3g SHIPPED** (`18ee951`, `9c87583`): the receiver of `Type.name(…)`; a generic free
+      function's call site, which `_callInst` routes past the resolveFunc that records every other call;
+      `Union::Variant(args)`, where only the payload-LESS read had a recorder; enum PAYLOAD fields, which
+      had no declaration anywhere in the index because they live only on the variant backing ClassInfo;
+      and an `import`'s symbol list.
+    - **⚠️ B3g was a TENTH gap, found by pulling on the ninth, and another silent edit.** Renaming a type
+      rewrote its declaration and every use and left `import lib::{Box, …}` spelling the old name — so the
+      rename broke a file it had just edited. The import side is fixed; `export { Box, … };` is not, and
+      `tools/check-query.sh` pins that as a `reject`.
+    - **⚠️ ONE blocker is behind three remaining gaps.** A `::`-separated name list keeps its spellings as
+      plain strings with no line or column — `IdentifierNode::qualifier`, `ImportDeclarationNode::
+      modulePath`, `CompilationUnit::exportList` — so `Color` in `Color::Green`, the `std`/`collections`
+      of an import path, and the export surface have no node to anchor a position to, and no amount of
+      passing a `site` reaches them. The brief carries a suggested shape: a PARALLEL `SrcRange` vector
+      stamped in `kama.y` (`STAMP_LOC` already exists) plus a null-`id` `PosEntry` per segment, rather
+      than retyping the lists — dozens of consumers read them as strings. Touches `kama.y`, so it is under
+      the lspref before/after rule. Its own commit.
+    - **B3c — contract methods**, the largest remaining item and the only one needing a DESIGN rather than
+      wiring. `InterfaceMethod` carries no declaration node, and `buildDefSites` registers contracts but
+      not their methods, so neither `fn int32 speak();` inside a `type contract` nor any fat-pointer call
+      site can be indexed. Renaming a contract-implementing method still half-applies — less broken than
+      before B3a, since direct calls now rename — but the real fix needs a symbol-group/override-set so
+      the contract declaration, every implementation and every call site rename together.
 - **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
   liftable out of the monorepo to stand alone. Design of record:
   [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:
