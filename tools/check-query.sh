@@ -529,6 +529,28 @@ expect --refs 14:5 -- "spellings.kama:59:4"     # the type ANNOTATION, indexed s
 reject --refs 14:5 -- "spellings.kama:59:21"    # `Green` belongs to the enum MEMBER, not the enum
 
 # ---------------------------------------------------------------------------------------------------
+# M6 B3f — a MODULE path is a navigation target, never a rename target.
+#
+# In kama the namespace IS the module path IS the directory path (SPEC § Modules / namespaces:
+# `import a::b::c` resolves to a/b/c.kama or a/b/c/), so renaming a namespace is a file-and-directory
+# move rather than a symbol rename. `module:` keys therefore name NO def-site — which is what makes
+# rename and find-references skip them with no extra flag — while go-to-definition opens the module,
+# the same gesture clangd gives `#include` and gopls gives an import path.
+FIXTURE="$ROOT/tests/query/imports.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo 'check-query: M6 B3f module paths'
+expect --def 6:12 -- "/lib/std/collections/"     # `collections` opens the module it names
+expect --type 6:12 -- "module std::collections"
+expect --type 6:7  -- "module std"               # a path PREFIX no file declares...
+expect --def 6:7   -- "no definition"            # ...has nothing to open, as clangd answers a partial include
+expect --type 4:11 -- "module importsprobe"      # the file's own `namespace` declaration
+expect --def 4:11  -- "imports.kama:4:10"
+# The imported SYMBOL is a real symbol and keeps its own def-site (B3g) — the module key must not
+# swallow it.
+expect --type 6:32 -- "generic-type DynamicArray"
+
+# ---------------------------------------------------------------------------------------------------
 # M6 B3 — the reference index's COVERAGE ORACLE.
 #
 # Every assertion above tests a spelling somebody thought of. That is exactly how a method's call sites

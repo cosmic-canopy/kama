@@ -392,6 +392,12 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":60,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":0,"character":5},"newName":"Hue"}}'
 frame '{"jsonrpc":"2.0","id":61,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":1,"character":30}}}'
 frame '{"jsonrpc":"2.0","id":62,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":1,"character":30}}}'
+# --- M6 B3f: a module PATH segment. `$IURI` was opened above with the COMPACT $IMP buffer (three lines),
+#     not the ten-line file on disk — take the coordinates from $IMP:
+#     L1 `import std::collections::{DynamicArray};` -> `std` at 7, `collections` at 12.
+frame '{"jsonrpc":"2.0","id":63,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":13}}}'
+frame '{"jsonrpc":"2.0","id":64,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":13}}}'
+frame '{"jsonrpc":"2.0","id":65,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":13}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -590,6 +596,15 @@ expect '"id":61,"result":{"uri":"file:///qualrename.kama","range":{"start":{"lin
        "go-to-definition FROM a qualifier lands on the enum declaration"
 expect '"id":62,"result":{"contents":{"kind":"plaintext","value":"enum Color"}}' \
        "hover on a qualifier names the enum"
+# A module PATH is a NAVIGATION target and never a rename target: in kama the namespace is the module path
+# is the DIRECTORY path, so renaming one is a file move, not a symbol rename. `module:` keys name no
+# def-site, which is exactly what makes prepareRename refuse without needing a new flag — the same line
+# clangd draws for `#include` and gopls for an import path.
+expect '"id":63,"result":{"uri":"file://'                "go-to-definition on `collections` opens the module"
+expect '/lib/std/collections/'                           "...the module's own source, not the importer"
+expect '"id":64,"result":{"contents":{"kind":"plaintext","value":"module std::collections"}}' \
+       "hover on a module path segment names the module"
+expect '"id":65,"result":null'                           "prepareRename REFUSES a module path segment"
 
 echo "check-lsp: M4 completion + signature help"
 # The list is complete as sent: `isIncomplete:false` tells the client to filter it itself as the user

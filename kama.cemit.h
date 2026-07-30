@@ -541,6 +541,13 @@ private:
                              const ASTNode* declNode; };
     std::vector<RecordedNodeRef> _nodeRefs;
     std::map<std::string, std::vector<Location>> _refIndex;   // DefSite key -> every USE site of that symbol
+    // What a `module:` position points at (M6 B3f). Deliberately NOT a DefSite: a module is a directory on
+    // disk, so it is a NAVIGATION target and never a rename target. Keeping it out of _defSites is what
+    // makes rename, find-references and semantic tokens ignore these positions with no new flag. `unit` is
+    // null for a path PREFIX no file declares (`std` in `std::collections`) — clangd answers a partial
+    // include path the same way.
+    struct ModuleSite { std::string display; const CompilationUnit* unit = nullptr; SrcRange range; };
+    std::map<std::string, ModuleSite> _modules;
     const CompilationUnit* _refUnit = nullptr;   // unit whose bodies are being walked (set in emitModuleContent)
     bool _analysis = false;                      // analysis-mode ctor => record references; a build records none
     void recordRef(const std::string& key, const IdentifierNode* site);  // pure append; no diagnostics, no cType
@@ -561,7 +568,9 @@ private:
     static std::string fieldKey(const std::string& ownerKey, const std::string& name);       // "field:Owner::name"
     static std::string enumMemberKey(const std::string& enumKey, const std::string& name);   // "enum:Enum::name"
     // Segment `i` of a `::`-separated name list, qualified by the segments to its left (M6 B3f).
-    std::string listSegmentKey(const StringList& segs, size_t i);
+    // `dotted` is that same prefix as a source spelling, for the module case.
+    std::string listSegmentKey(const StringList& segs, size_t i, const std::string& dotted);
+    std::string moduleKeyOf(const std::string& dotted) const;   // "module:<mangled>", or "" if not one
     // The binding key `name` currently resolves to: innermost enclosing scope first, then the parameters of
     // the function being emitted. Empty when `name` is neither (recordRef/recordDef ignore an empty key).
     std::string bindingKeyOf(const std::string& name) const;

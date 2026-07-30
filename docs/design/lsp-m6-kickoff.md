@@ -223,13 +223,15 @@ UPPERCASE: BAD CFGA CFGB CFGBAD CFGC CFGDIR CFGG CFGSRC CFGTYPO DSRC DURI FRSRC 
            IMP IURI LSRC LURI M34 MGEN MGURI MREN MRURI MURI NEWB NURI OSRC OURI QREN QRURI QURI
            RECOV ROOT RURI SEM SHP SPAN SPURI SURI TOKB TOKG TOKGURI TOKURI URI WW WWURI XDROP XURI
 lowercase: cfgcli cfggtext cfglsp cfgn dep depok drop fail frok frws n out session tmp
-request ids: 1-30, 32-49, 53-62   (FREE: 31, 50-52, 63+)
+request ids: 1-30, 32-49, 53-65   (FREE: 31, 50-52, 66+)
 ```
 
 (`MRURI`/`MREN` + `MGURI`/`MGEN` and ids 57-59 are M6 B3a's method-rename fixtures, added 2026-07-30.
-`QRURI`/`QREN` and ids 60-62 are B3f's `::`-qualifier fixture — note `QURI` was already taken.)
+`QRURI`/`QREN` and ids 60-62 are B3f's `::`-qualifier fixture — note `QURI` was already taken.
+Ids 63-65 reuse `IURI`; ⚠️ that document is open with the COMPACT `$IMP` buffer, not the ten-line file
+on disk, and coordinates must come from the buffer — the on-disk layout cost one debug cycle here.)
 
-Assertion counts to grow, not shrink: **check-lsp 127**, **check-query 205** (as of B3f; they were
+Assertion counts to grow, not shrink: **check-lsp 131**, **check-query 212** (as of B3f; they were
 123/198 after B3g and 119/180 before B3). ⚠️ Count them as `ok:` lines from a green run
 (`sh tools/check-lsp.sh | grep -c '  ok:'`). This brief once claimed 108/173, which was wrong in both
 directions of confusion: `grep -c '^expect '` under-counts, because many assertions wrap their description

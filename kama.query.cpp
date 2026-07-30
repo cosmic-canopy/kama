@@ -665,21 +665,45 @@ std::string CEmitter::enumMemberKey(const std::string& enumKey, const std::strin
     return "enum:" + enumKey + "::" + name;
 }
 
-// The DefSite key for ONE segment of a `::`-separated name list (M6 B3f) — segment `i` of `segs`,
-// qualified by everything to its left. Requires `_nsCtx` to be the segment's own unit.
+// The index key for a MODULE/NAMESPACE path, given its dotted source spelling — or "" if the path names
+// no namespace in this program (M6 B3f).
 //
-// A segment is a TYPE (`Color` in `Color::Green`) or a MODULE/NAMESPACE (`std` in `std::collections`).
+// `module:` keys are deliberately NOT def-site keys. In kama the namespace IS the module path IS the
+// directory path (SPEC § Modules / namespaces: `import a::b::c` resolves to `a/b/c.kama` or `a/b/c/`),
+// so renaming a namespace is a file-and-directory move, not a symbol rename. Every mature server draws
+// the same line — clangd's `#include`, TypeScript's module specifier and gopls' import path are all
+// go-to-definition targets that rename never touches. Because nothing registers a DefSite under this
+// key, `_refIndex`, rename and semantic tokens never learn it, and that refusal costs no new flag.
+std::string CEmitter::moduleKeyOf(const std::string& dotted) const
+{
+    if (dotted.empty()) return "";
+    auto a = _nsCtx.aliases.find(dotted);      // `import physics as phys;` -> phys:: and physics:: are one
+    if (a != _nsCtx.aliases.end()) return "module:" + a->second;
+    std::string m = mangleNs(dotted);
+    if (_namespaces.count(m)) return "module:" + m;
+    // A PREFIX of a declared namespace: no file declares `namespace std;`, but `std` in `std::collections`
+    // still names a real module directory. _namespaces is sorted, so this is a lower_bound, not a scan.
+    auto it = _namespaces.lower_bound(m + "__");
+    if (it != _namespaces.end() && it->compare(0, m.size() + 2, m + "__") == 0) return "module:" + m;
+    return "";
+}
+
+// The index key for ONE segment of a `::`-separated name list (M6 B3f) — segment `i` of `segs`, qualified
+// by everything to its left. Requires `_nsCtx` to be the segment's own unit.
+//
+// A segment is a TYPE (`Color` in `Color::Green`) or a MODULE (`std` in `std::collections::DynamicArray`).
 // The type case resolves through the ordinary resolver and gets a real def-site, so go-to-definition and
-// rename work on it — that is the gap this closes. Anything the resolver does not land on a declaration
-// is left unindexed rather than given a fabricated key; `resolveUserName` hands an unresolved name back
-// VERBATIM, so a key with no def-site behind it says nothing and could collide with a real one.
-std::string CEmitter::listSegmentKey(const StringList& segs, size_t i)
+// rename work on it — that is the gap this closes. Anything that is neither is left unindexed rather than
+// given a fabricated key; `resolveUserName` hands an unresolved name back VERBATIM, so a key with no
+// def-site behind it says nothing and could collide with a real one.
+std::string CEmitter::listSegmentKey(const StringList& segs, size_t i, const std::string& dotted)
 {
     if (i >= segs.size() || !segs[i]) return "";
     SharedStringList pre = std::make_shared<StringList>();
     for (size_t j = 0; j < i; ++j) pre->push_back(segs[j]);
     std::string k = resolveUserName(*segs[i], pre);   // no `site` => records nothing
-    return _defSites.count(k) ? k : std::string();
+    if (_defSites.count(k)) return k;
+    return moduleKeyOf(dotted);
 }
 
 void CEmitter::registerBinding(const IdentifierNode* declSite, SymKind kind)
@@ -706,6 +730,20 @@ void CEmitter::buildPositions()
 {
     _positions.clear();
     _refIndex.clear();
+    _modules.clear();
+
+    // (0) Which unit does a module PATH open? A file's own `namespace a::b;` declaration answers it, so
+    // no import-resolution state has to be threaded in from the driver. A DIRECTORY module is several
+    // units under one namespace — pick by lowest path spelling, never by map iteration order, or
+    // go-to-definition on the same import would land in a different file run to run.
+    for (auto& u : _units) {
+        if (!u || !u->nameSpace || !u->nameSpace->name || !u->name) continue;
+        std::string key = "module:" + mangleNs(qualifiedName(u->nameSpace->name));
+        ModuleSite& ms = _modules[key];
+        if (ms.unit && !(*u->name < *ms.unit->name)) continue;
+        ms.unit  = u.get();
+        ms.range = rangeOfId(u->nameSpace->name);
+    }
 
     // (1) Declaration names — one entry per user-unit DefSite (prelude/std have unit==nullptr, skipped).
     for (auto& kv : _defSites) {
@@ -822,18 +860,68 @@ void CEmitter::buildPositions()
             // dedup structure, which is why it is built lazily down below.
             const CompilationUnit* u = kv.first;
             std::vector<PosEntry> segs;
+            // Register a module key's source spelling as we go, so hover can name it and
+            // go-to-definition can find its unit without unmangling anything.
+            auto noteModule = [&](const std::string& key, const std::string& dotted) {
+                if (key.compare(0, 7, "module:") != 0) return;
+                ModuleSite& ms = _modules[key];
+                if (ms.display.empty()) {
+                    ms.display = dotted;
+                    for (size_t p = ms.display.find('.'); p != std::string::npos;
+                         p = ms.display.find('.', p + 2))
+                        ms.display.replace(p, 1, "::");
+                }
+            };
 
-            // A qualifier: `Color` in `Color::Green`, `Point` in `Point::origin()`, `ns::Type`.
+            // A qualifier: `Color` in `Color::Green`, `Point` in `Point::origin()`, `std::collections::X`.
             for (const auto& e : kv.second) {
                 const IdentifierNode* id = e.id;
                 if (!id || !id->qualifier || id->qualifier->empty()) continue;
                 if (id->qualifierPos.size() != id->qualifier->size()) continue;   // synthesized: no spans
+                std::string dotted;
                 for (size_t i = 0; i < id->qualifier->size(); ++i) {
+                    if (!(*id->qualifier)[i]) break;
+                    if (i) dotted += ".";
+                    dotted += *(*id->qualifier)[i];
                     const SrcRange& r = id->qualifierPos[i];
                     if (r.line <= 0) continue;
-                    std::string k = listSegmentKey(*id->qualifier, i);
-                    if (!k.empty()) segs.push_back(PosEntry{ r, nullptr, false, k });
+                    std::string k = listSegmentKey(*id->qualifier, i, dotted);
+                    if (k.empty()) continue;
+                    noteModule(k, dotted);
+                    segs.push_back(PosEntry{ r, nullptr, false, k });
                 }
+            }
+            // An import PATH, and the file's own `namespace` declaration — both name modules end to end.
+            auto addModulePath = [&](const StringList& names, const std::vector<SrcRange>& pos) {
+                if (pos.size() != names.size()) return;
+                std::string dotted;
+                for (size_t i = 0; i < names.size(); ++i) {
+                    if (!names[i]) return;
+                    if (i) dotted += ".";
+                    dotted += *names[i];
+                    if (pos[i].line <= 0) continue;
+                    std::string k = moduleKeyOf(dotted);
+                    if (k.empty()) continue;
+                    noteModule(k, dotted);
+                    segs.push_back(PosEntry{ pos[i], nullptr, false, k });
+                }
+            };
+            if (u->importDeclarationList)
+                for (const auto& imp : *u->importDeclarationList)
+                    if (imp && imp->modulePath) addModulePath(*imp->modulePath, imp->modulePathPos);
+            // `namespace a::b;` — the qualifier segments plus the name itself, which is the only one of
+            // these lists whose last element is a real identifier NODE rather than a bare string.
+            if (u->nameSpace && u->nameSpace->name && u->nameSpace->name->value) {
+                const IdentifierNode* n = u->nameSpace->name.get();
+                StringList names;
+                std::vector<SrcRange> pos;
+                if (n->qualifier && n->qualifierPos.size() == n->qualifier->size()) {
+                    names = *n->qualifier;
+                    pos   = n->qualifierPos;
+                }
+                names.push_back(n->value);
+                pos.push_back(SrcRange{ n->line, n->column, n->endLine, n->endColumn });
+                addModulePath(names, pos);
             }
             // An export manifest. The key is `qualify(name)` — the same key the export-validation loop
             // builds, and deliberately NOT a scope search: SPEC requires a listed name to be a top-level
@@ -940,6 +1028,14 @@ Location CEmitter::definitionAt(const std::string& uri, int line, int col) const
     const PosEntry* e = posAt(unit, line, col);
     if (!e) return Location{};
 
+    // A MODULE path segment opens the module (M6 B3f) — the `#include` / import-specifier gesture. There
+    // is no def-site behind the key, on purpose; see moduleKeyOf.
+    if (e->declKey.compare(0, 7, "module:") == 0) {
+        auto m = _modules.find(e->declKey);
+        if (m == _modules.end() || !m->second.unit || !m->second.unit->name) return Location{};
+        return Location{ *m->second.unit->name, m->second.range };
+    }
+
     // Cursor on a declaration name: the definition is here.
     if (e->isDeclName) {
         auto it = _defSites.find(e->declKey);
@@ -960,6 +1056,8 @@ std::string CEmitter::typeAtPosition(const std::string& uri, int line, int col) 
     const PosEntry* e = posAt(unit, line, col);
     if (!e) return "";
 
+    auto m = _modules.find(e->declKey);
+    if (m != _modules.end()) return "module " + m->second.display;
     auto it = _defSites.find(e->declKey);
     if (it != _defSites.end()) return std::string(symKindName(it->second.kind)) + " " + it->second.display;
     if (e->isDeclName || !e->id || !e->id->value) return "";
