@@ -516,16 +516,17 @@ expect '"semanticTokensProvider":{"legend":{"tokenTypes":["class","struct","inte
 #   L3c27 v     parameter+decl  L3c32 P   struct          L3c34 r    variable+decl
 #   L3c37 r     variable        L3c39 x   property        L3c43 v    parameter
 #   L3c58 r     variable        L5c9  main function+decl  L5c18 P    struct
-#   L5c20 p     variable+decl   L5c26 make METHOD         L5c31 v    parameter
-#   L5c45 p     variable        L5c47 x   property
-# Three of those carry a milestone. ONE token at `P`'s decl name, though `_positions` holds two entries
+#   L5c20 p     variable+decl   L5c24 P   STRUCT          L5c26 make METHOD
+#   L5c31 v     parameter       L5c45 p   variable        L5c47 x    property
+# Four of those carry a milestone. ONE token at `P`'s decl name, though `_positions` holds two entries
 # there (the ctor's implicit result type resolves through the class's own decl identifier, and the existing
 # de-duplication lives only in `_refIndex`) — the protocol forbids overlap, so the facade's own filter is
-# what makes that true. `v` at L5c31 is an argument LABEL scoped as the callee's PARAMETER (M6 A2). And
+# what makes that true. `v` at L5c31 is an argument LABEL scoped as the callee's PARAMETER (M6 A2).
 # `make` at L5c26 is M6 B3a: until B3 a method CALL was in the index for no type at all, so this token did
-# not exist and F2 on `make` rewrote the declaration alone. Note `P` at L5c24 — the type QUALIFIER of the
-# call — is still absent; that is B3d, and it is deliberately still open here.
-expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,5,1,1,0,0,2,1,8,1,0,3,1,8,0,0,2,1,7,0,0,4,1,9,0,0,15,1,8,0,2,9,4,5,1,0,9,1,1,0,0,2,1,8,1,0,6,4,6,0,0,5,1,9,0,0,14,1,8,0,0,2,1,7,0]}' \
+# not exist and F2 on `make` rewrote the declaration alone. And `P` at L5c24 is B3d — the type RECEIVER of
+# a `Type.name(...)` call, which resolved without passing a site while the same spelling in an annotation
+# (L5c18) indexed fine.
+expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,5,1,1,0,0,2,1,8,1,0,3,1,8,0,0,2,1,7,0,0,4,1,9,0,0,15,1,8,0,2,9,4,5,1,0,9,1,1,0,0,2,1,8,1,0,4,1,1,0,0,2,4,6,0,0,5,1,9,0,0,14,1,8,0,0,2,1,7,0]}' \
        "semanticTokens/full -> delta-encoded tokens, deduped, non-overlapping, ascending"
 # This assertion PINNED the pre-B3 gap as an exact array so that closing it could not be silent. B3 closed
 # it, so it changed — which is the whole point. In

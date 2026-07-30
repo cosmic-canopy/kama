@@ -33,11 +33,11 @@ Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](
 > | 1 | **method CALL SITES** — `p.area()`, `base.kind()`, `this.kind()`, `Point::origin()`, `Derived.make()`, `xs.add()`, `new Cat.loud()` | ✅ B3a |
 > | 2 | **generic BODIES** — `Box<T>`'s `v`/`get` decls and uses; `firstOr<T>`'s params and body | ✅ B3b |
 > | 3 | **a generic instance's member** — `bi.v` indexes as `field:Box_int32::v`, a key with no def-site (`unresolved`) | ✅ B3b |
-> | 4 | **the TYPE QUALIFIER of a member call** — `Point` in `Point.at(…)`, `Color` in `Color::Green`, `Shape` in `Shape::Circle(…)`, `DynamicArray` in `DynamicArray.empty()`. The same spelling as a type ANNOTATION indexes fine, so these paths resolve without passing a `site` | B3d |
+> | 4 | **the TYPE QUALIFIER of a member call** — `Point` in `Point.at(…)`, `Color` in `Color::Green`, `Shape` in `Shape::Circle(…)`, `DynamicArray` in `DynamicArray.empty()`. The same spelling as a type ANNOTATION indexes fine, so these paths resolve without passing a `site` | ✅ the `.` form (B3d); ⚠️ the `::` form is BLOCKED — see below |
 > | 5 | **contract METHOD declarations** — `fn int32 speak();` inside a `type contract`. `InterfaceMethod` carries no decl node, so neither the declaration nor any fat-pointer call site can be indexed | B3c |
-> | 6 | **enum payload fields** — `r` in `Circle(int32 r)`, at both its declaration and the `Shape::Circle(r: 7)` label | B3e |
-> | 7 | **argument labels to a library or generic callee** — `item:`, `xs:`, `fallback:`. M6 A2 works; these callees' `ParamSig::declSite` is null | B3e |
-> | 8 | **a generic free function's CALL SITE** — `firstOr(xs: …)` | B3b (partial: labels + body ✅, the callee name is B3d-shaped) |
+> | 6 | **enum payload fields** — `r` in `Circle(int32 r)`, at both its declaration and the `Shape::Circle(r: 7)` label | ✅ B3e |
+> | 7 | **argument labels to a library or generic callee** — `item:`, `xs:`, `fallback:`. M6 A2 works; these callees' `ParamSig::declSite` is null | ✅ B3b (they were generic-instance callees all along) |
+> | 8 | **a generic free function's CALL SITE** — `firstOr(xs: …)` | ✅ B3d |
 > | 9 | **import paths and namespace names** — `std`, `collections`, `DynamicArray` in an `import`; the `namespace` name itself | B3f |
 >
 > Permanently `-`, and correctly so: the contextual type-kind words (`value`, `resource`, `contract`,
@@ -68,6 +68,24 @@ Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](
 >   now prefers the declaration on an exact span tie.
 > - Cost: **+3 ms per keystroke** (86 -> 89 ms median, measured A/B against the parent commit), because
 >   generic bodies are now walked for records at all. Inside the 100 ms budget.
+>
+> ### As shipped (B3d/B3e) — 35 gaps -> 26
+>
+> All small, all the same shape: a path that resolved a real symbol and returned before reaching any
+> recorder. `Type.name(…)`'s receiver (recorded as `typeName`, the TEMPLATE key — `tn` is the mangled
+> instance and has no def-site); a generic free function's call, which `_callInst` routes past the
+> `resolveFunc` that records every other call; `Union::Variant(args)`, where only the payload-LESS read had
+> a recorder; and enum payload fields, which needed def-sites first — they live on the variant BACKING
+> ClassInfo, which `buildDefSites` skips as compiler-synthesized, so they had none anywhere.
+>
+> ### ⚠️ B3d's `::` form is BLOCKED on the AST, and it is the one thing here that is not a small fix
+>
+> `Point::origin()`, `Color::Green`, `Shape::Circle(…)` — the qualifier is **not a node**.
+> `IdentifierNode::qualifier` is a `SharedStringList` ([kama.ast.h:244](../kama.ast.h#L244)): plain strings
+> with no line or column, so there is nothing to anchor a `PosEntry` to and no amount of passing a `site`
+> can fix it. Closing it means the grammar retaining a position per qualifier segment — a `kama.y` +
+> `kama.ast.h` change, which also puts it under the campaign's lspref before/after rule. It is the only
+> remaining gap that is not additive to the index alone, and it should be its own commit.
 
 ---
 

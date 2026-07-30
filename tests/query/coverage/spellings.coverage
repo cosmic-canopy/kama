@@ -5,7 +5,7 @@
 14:25 Blue decl:enum-member
 16:5 Shape decl:enum
 16:13 Circle decl:enum-member
-16:26 r -
+16:26 r decl:field
 16:30 Empty decl:enum-member
 18:5 contract -
 18:14 Area decl:contract
@@ -73,7 +73,7 @@
 52:9 main decl:function
 53:4 Point ref:value
 53:10 p decl:local
-53:14 Point -
+53:14 Point ref:value
 53:20 at ref:ctor
 53:23 px ref:param
 53:30 py ref:param
@@ -103,8 +103,8 @@
 62:4 Shape ref:enum
 62:10 sh decl:local
 62:15 Shape -
-62:22 Circle -
-62:29 r -
+62:22 Circle ref:enum-member
+62:29 r ref:field
 63:10 sv decl:local
 63:22 sh ref:local
 63:33 Circle ref:enum-member
@@ -124,7 +124,7 @@
 67:17 get ref:method
 69:4 Derived ref:resource
 69:12 d decl:local
-69:16 Derived -
+69:16 Derived ref:resource
 69:24 make ref:ctor
 70:10 k decl:local
 70:14 d ref:local

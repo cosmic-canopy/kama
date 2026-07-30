@@ -10329,6 +10329,11 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 unsupported(("missing payload field '" + f.name + "' for '" + ci.name + "::" + variant + "'").c_str(), srcLine);
                 continue;
             }
+            // M6 B3e: the payload LABEL is a reference to the payload field, exactly as an argument label
+            // is to a parameter. This construction does its own named-arg matching rather than going
+            // through emitReorderedCall, so A2's one line does not cover it. By node, so a generic union's
+            // instances collapse onto the template's declaration.
+            recordNodeRef(ai->second->name.get(), f.nameId.get());
             std::string fcls = cType(f.type);            // the payload field's C type (Shared_Probe / int32_t / …)
             SharedExpression argExpr = ai->second->expression;
             int handoff = 0;                             // 0 none, 1 give, 2 copy
@@ -10515,6 +10520,10 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (ci != _callInst.end()) {
             const GenericInst& gi = _genericInsts[ci->second];
             const FuncSig& tmpl = _funcs[gi.templateKey];
+            // M6 B3: the call names the TEMPLATE, not the instantiation it was routed to — the instance's
+            // mangled name has no def-site, and two instantiations must not split one declaration's
+            // references. This path returns before the resolveFunc that records every other call.
+            recordRef(gi.templateKey, call->identifier.get());
             return placeWrap(emitReorderedCall(gi.mangledName, "", tmpl.params, call->args, call->line),
                              tmpl.isPlaceReturn);
         }
@@ -10630,8 +10639,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         for (size_t i = 0; i + 1 < qual->size(); ++i) tq->push_back((*qual)[i]);
         if (ClassInfo* vt = resolveVariantType(resolveUserName(*qual->back(), tq)))
             for (auto& v : vt->variants)
-                if (v.name == name)
+                if (v.name == name) {
+                    // M6 B3e: `Union::Variant(args)` names the variant just as a payload-less
+                    // `Union::Variant` read does (the IdentifierNode branch already records that one) —
+                    // the CONSTRUCTION form simply returned before reaching any recorder.
+                    recordRef(enumMemberKey(vt->name, name), call->identifier.get());
                     return emitVariantConstruction(*vt, name, call->args, call->line);
+                }
         // `Type::method(args)` — a static method (no implicit `self`). The qualifier head
         // resolves to a class; the named method must be `static`.
         std::string typeName = resolveUserName(*qual->back(), tq);
@@ -13514,6 +13528,12 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     }
     ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : nullptr;
     if (!stci) { unsupported(("unknown type in constructor call `" + disp + "`").c_str(), call->line); return "0"; }
+    // M6 B3d: the RECEIVER of `Type.name(...)` is a reference to the type, exactly as the same spelling in
+    // an annotation is — it was missing only because this path resolves without passing a site. Record
+    // `typeName`, not `tn`: for a generic the latter is the mangled INSTANCE, which has no def-site, while
+    // the former is the template key the declaration is registered under. Recorded here rather than in
+    // isTypeReceiver, which is a predicate that also runs on non-types.
+    recordRef(typeName, dynamic_cast<IdentifierNode*>(recv->expression.get()));
     if (stci->isAbstractClass) {   // instantiating one leaves a NULL vtable slot (the nameless `emitCtorCall` path checked this too)
         unsupported(("cannot instantiate abstract class '" + disp + "' (it has an unimplemented method)").c_str(), call->line);
         return "0";

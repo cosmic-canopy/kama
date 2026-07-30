@@ -535,8 +535,21 @@ void CEmitter::buildDefSites()
         if (!en->body) continue;
         for (auto& m : *en->body) {
             if (!m || !m->identifier || !m->identifier->value) continue;
-            addDefSite(enumMemberKey(kv.first, *m->identifier->value), SymKind::EnumMember, unit,
-                       m.get(), m->identifier, *m->identifier->value, bare);
+            const std::string mkey = enumMemberKey(kv.first, *m->identifier->value);
+            addDefSite(mkey, SymKind::EnumMember, unit, m.get(), m->identifier, *m->identifier->value, bare);
+            // A tagged variant's PAYLOAD fields (`Circle(int32 r)`) — M6 B3e. They are real named
+            // declarations that construction sites spell as labels, but they live only on the variant
+            // BACKING ClassInfo, which the _classes loop skips as compiler-synthesized, so this is their
+            // only def-site. Keyed under the member (an index-only key, like every other prefixed one) and
+            // noded on the payload parameter's own identifier — which a generic union instance shares, so
+            // `Optional<int32>` and `Optional<string>` stay one symbol.
+            if (!m->payload) continue;
+            for (auto& p : *m->payload) {
+                if (!p || !p->identifier || !p->identifier->value) continue;
+                addDefSite(fieldKey(mkey, *p->identifier->value), SymKind::Field, unit,
+                           p->identifier.get(), p->identifier, *p->identifier->value,
+                           bare + "." + *m->identifier->value);
+            }
         }
     }
 
