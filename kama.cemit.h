@@ -346,7 +346,10 @@ struct CollectionInfo {
 // `type contract` (ClassMethodDeclarationNode).
 struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedParameterList params;
                          bool isPlaceReturn = false;     // `fn ref T m()` — vtbl slot/cast spells `T*`
-                         bool isCtor = false; };         // a contract-required `ctor` (M8a) — compile-time guarantee, NOT a vtbl slot
+                         bool isCtor = false;            // a contract-required `ctor` (M8a) — compile-time guarantee, NOT a vtbl slot
+                         // The declaration's NAME identifier, for the reference index (M6 B3c). Null for
+                         // the operator arm, which has no name node — as MethodInfo::node already is.
+                         SharedIdentifier nameId; };
 struct InterfaceInfo {
     std::string                  name;
     std::vector<InterfaceMethod> methods;
@@ -470,6 +473,9 @@ public:
     // prepareRename (M3): the identifier range at the cursor IF it names a renameable user symbol
     // (a DefSite in a user unit), else an empty range. Never matches prelude/std/builtins.
     SrcRange renameRangeAt(const std::string& uri, int line, int col) const;
+    // Every DECLARATION a rename here would rewrite — the symbol plus its rename group (M6 B3c). The
+    // rename path's ownership guard needs all of them, not just the one under the cursor.
+    std::vector<Location> declarationsAt(const std::string& uri, int line, int col) const;
     // workspace/symbol (M3.5): every user symbol in the index whose name contains `query`
     // (case-insensitive; "" matches all), each carrying its declaring file in SymbolInfo::uri. Spans every
     // unit, including std — restricting to one project is the driver seam's job (it needs real-path
@@ -567,6 +573,8 @@ private:
     std::string bindingKey(const IdentifierNode* declSite) const;        // "local:<file>:<line>:<col>:<name>"
     static std::string fieldKey(const std::string& ownerKey, const std::string& name);       // "field:Owner::name"
     static std::string enumMemberKey(const std::string& enumKey, const std::string& name);   // "enum:Enum::name"
+    // "contract:Contract::name" — a contract method declares a vtbl slot, so it has no cName to key on.
+    static std::string contractMethodKey(const std::string& contractKey, const std::string& name);
     // Segment `i` of a `::`-separated name list, qualified by the segments to its left (M6 B3f).
     // `dotted` is that same prefix as a source spelling, for the module case.
     std::string listSegmentKey(const StringList& segs, size_t i, const std::string& dotted);
@@ -583,6 +591,12 @@ private:
     // long before buildDefSites. Depends on nothing but _units, and is idempotent.
     void buildDeclUnits();
     void buildDefSites();                        // fill _defSites/_declUnit from the tables (T4a)
+    void buildRenameGroups();                    // contract method <-> its implementations (M6 B3c)
+    // Def-site keys that must be renamed TOGETHER: a contract's method declaration and every
+    // implementation of it. Each member maps to the whole sorted group; singletons are absent, so a
+    // symbol in no group costs the query paths one failed lookup. Read only by referencesAt /
+    // declarationsAt — go-to-definition deliberately stays precise.
+    std::map<std::string, std::vector<std::string>> _renameGroup;
     void buildPositions();                       // fill _positions + _refIndex (decls, sig refs, body refs)
     // Point the reference recorders at `unit` for a dynamic extent. Save/restore rather than assign, so a
     // nested emission (a generic instance emitted inside a module body walk) cannot strand the pointer.
@@ -1297,9 +1311,12 @@ private:
     void emitClassInterfaceVtables(ClassInfo& ci);            // the C__as_I instances
     // (I){ (void*)&<obj>, &<C>__as_I } — wrap a concrete lvalue as an interface value
     std::string fatPointer(const std::string& iface, const std::string& concrete, const std::string& addrExpr);
+    // `site` is the method-NAME identifier at the call, for the reference index (M6 B3c) — the same
+    // defaulted-trailing-parameter idiom emitDispatch/emitSmartPtrCall use.
     std::string emitInterfaceDispatch(const std::string& fatExpr, const std::string& iface,
                                       const std::string& method, SharedArgumentList args, int srcLine,
-                                      const std::string& recvCType = "");
+                                      const std::string& recvCType = "",
+                                      const IdentifierNode* site = nullptr);
 
     // Declarations / top level
     bool paramByRef(FunctionParameterNode* p);

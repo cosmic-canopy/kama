@@ -5,7 +5,7 @@
 10:5 contract -
 10:14 Speaker decl:contract
 10:26 both -
-10:42 speak -
+10:42 speak decl:method
 12:5 value -
 12:11 Cat decl:value
 12:26 Speaker ref:contract
@@ -64,7 +64,7 @@
 37:31 loud ref:ctor
 38:10 viaContract decl:local
 38:24 s ref:local
-38:26 speak -
+38:26 speak ref:method
 40:4 DynamicArray ref:generic-type
 40:24 xs decl:local
 40:29 DynamicArray ref:generic-type

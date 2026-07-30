@@ -3589,7 +3589,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         unsupported(("a `contract` method (`" + (md->name && md->name->value ? *md->name->value : std::string())
                                      + "`) has no body — it is a guarantee, not an implementation").c_str(), md->line);
                     if (md->name && md->name->value)
-                        ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor});
+                        ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor, md->name});
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                     // an operator in a `contract` is a bound for generic math: `IArithmetic`
                     // declares `This operator+(This rhs)`. Register it under the SAME synthetic name
@@ -7201,7 +7201,7 @@ std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string
         return emitDispatch(cls, "&(" + recvExpr + ")", method, args, srcLine, site);
     // an owned INTERFACE handle dispatches polymorphically through its own {obj, vtbl}.
     if (isInterface(_classes[cls].collElemClass) && smartKind(cls) != CollKind::Weak)
-        return emitInterfaceDispatch(recvExpr, _classes[cls].collElemClass, method, args, srcLine, cls);
+        return emitInterfaceDispatch(recvExpr, _classes[cls].collElemClass, method, args, srcLine, cls, site);
     // Otherwise auto-deref to the pointee T (Owned/Shared expose a T* ptr).
     if (smartKind(cls) != CollKind::Weak)
         return emitDispatch(_classes[cls].collElemClass, "(" + recvExpr + ").ptr", method, args, srcLine, site);
@@ -11294,7 +11294,7 @@ static bool isSimpleIdent(const std::string& s)
 // safety). Needs a hoistable statement context; a bare identifier is free to re-read as-is.
 std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const std::string& iface,
                                             const std::string& method, SharedArgumentList args, int srcLine,
-                                            const std::string& recvCType)
+                                            const std::string& recvCType, const IdentifierNode* site)
 {
     auto it = _interfaces.find(iface);
     if (it == _interfaces.end()) { unsupported("dispatch on unknown contract", srcLine); return "0"; }
@@ -11309,6 +11309,7 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
     }
     for (auto& m : it->second.methods) {
         if (m.name != method) continue;
+        recordNodeRef(site, m.nameId.get());   // M6 B3c: a fat-pointer call references the CONTRACT's method
         std::vector<ParamSig> params = paramSigsOf(m.params);
         return emitReorderedCall("(" + recv + ").vtbl->" + method, "(" + recv + ").obj",
                                  params, args, srcLine);
@@ -13811,7 +13812,8 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         return emitSmartPtrCall(cls, emitExpression(receiver), method, call->args, call->line,
                                 recv->identifier.get());
     if (isInterface(cls))
-        return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line);
+        return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line, "",
+                                     recv->identifier.get());
     // A PRIMITIVE receiver with a retroactive conformance (`implements Hashable for int32`): the method's
     // `this` is the SCALAR itself, passed BY VALUE. `exprClass` is "" for a primitive, so recover the
     // receiver's C type from `_localCTypes` (params/locals record it there). Resolve on `_primConformances`;

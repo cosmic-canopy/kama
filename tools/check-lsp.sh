@@ -200,6 +200,28 @@ KAMA
 OURI="file://$tmp/own/proj/app.kama"
 OSRC='namespace shared;\nfn int32 main() { Leak l; l.v = 1; return l.v; }\n'
 printf 'namespace shared;\nfn int32 main() { Leak l; l.v = 1; return l.v; }\n' > "$tmp/own/proj/app.kama"
+
+# M6 B3c fixture: a project resource implementing a STD contract. `write` here and `Writer.write` in
+# lib/std/io/streams.kama are ONE renameable name, and the contract's half is not ours to rewrite — so
+# rename must refuse outright rather than rewrite the implementation and silently break conformance.
+# Before B3c the two were unrelated symbols and this rename went through.
+# Layout (LSP 0-based): L4 `    public fn Result<usize, IoError> write(...` -> `write` at 37..42.
+mkdir -p "$tmp/impl"
+cat > "$tmp/impl/kama.json" <<'JSON'
+{ "name": "impl", "version": "0.1.0", "sources": ["."] }
+JSON
+cat > "$tmp/impl/sink.kama" <<'KAMA'
+namespace sink;
+import std::io::{Writer, IoError};
+type resource Sink implements Writer {
+    int32 n;
+    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+}
+KAMA
+CIURI="file://$tmp/impl/sink.kama"
+CISRC='namespace sink;\nimport std::io::{Writer, IoError};\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
+
 DURI="file://$dep/app/app.kama"
 DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
 
@@ -398,6 +420,13 @@ frame '{"jsonrpc":"2.0","id":62,"method":"textDocument/hover","params":{"textDoc
 frame '{"jsonrpc":"2.0","id":63,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":13}}}'
 frame '{"jsonrpc":"2.0","id":64,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":13}}}'
 frame '{"jsonrpc":"2.0","id":65,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":13}}}'
+# --- M6 B3c: a project type implementing a STD contract. F2 on its `write` must REFUSE — the contract's
+#     own declaration lives in lib/std and is not ours to rewrite, and renaming only our half would leave
+#     the type no longer satisfying Writer. 66: prepareRename still OFFERS (it is a real symbol here).
+#     67: the rename itself is refused, by the group-wide ownership check.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$CIURI"'","languageId":"kama","version":1,"text":"'"$CISRC"'"}}}'
+frame '{"jsonrpc":"2.0","id":66,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$CIURI"'"},"position":{"line":4,"character":37},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":67,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CIURI"'"},"position":{"line":4,"character":37},"newName":"emit"}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -459,7 +488,7 @@ echo "check-lsp: module loading (imports resolve across files)"
 expect 'imports.kama","diagnostics":[]'   "import-using file analyzes clean (std::collections loaded; no false 'does not export')"
 expect 'dynamic_array.kama'               "cross-module go-to-def resolves DynamicArray into the std source"
 expect '"id":16,"error"'                             "rename still REFUSES a symbol we do not own"
-expect 'this symbol is defined outside the project'   "...and now says WHY: DynamicArray is declared in std"
+expect 'this name is also declared outside the project'   "...and now says WHY: DynamicArray is declared in std"
 
 echo "check-lsp: M3.4 bindings (locals / params / fields / enum members)"
 # Each of these asserts the FULL range. An `end` past the name is the data-loss bug the M3.4 grammar
@@ -520,7 +549,7 @@ fi
 if [ "$depok" = 1 ]; then
     echo "check-lsp: M3.5 installed dependency"
     expect '"id":32,"error"'                          "rename REFUSES a type declared in a dependency"
-    expect 'defined outside the project'              "...naming the dependency source it lives in"
+    expect 'declared outside the project'             "...naming the dependency source it lives in"
     expect '/.kama/deps/geo/geo.kama'                 "...which is under the project's package store"
     expect '"id":33,"result":[]'                      "workspace/symbol does not offer a dependency's symbols"
 else
@@ -605,6 +634,17 @@ expect '/lib/std/collections/'                           "...the module's own so
 expect '"id":64,"result":{"contents":{"kind":"plaintext","value":"module std::collections"}}' \
        "hover on a module path segment names the module"
 expect '"id":65,"result":null'                           "prepareRename REFUSES a module path segment"
+
+echo "check-lsp: M6 B3c contract methods are one name with their implementations"
+# find-references from the implementation reaches the CONTRACT's declaration in the stdlib, and the other
+# implementation of it — that is the group, and it is why the rename below has to refuse.
+expect '/lib/std/io/streams.kama","range":{"start":{"line":20,"character":30}' \
+       "references from an impl reach the std contract's own declaration"
+expect '/lib/std/io/streams.kama","range":{"start":{"line":92,"character":37}' \
+       "...and StringWriter, the stdlib's other implementation of it"
+expect '"id":67,"error"'                                "rename REFUSES a method that implements a std contract"
+expect 'this name is also declared outside the project'  "...because the group straddles the project boundary"
+expect '/lib/std/io/streams.kama'                        "...and it names the file it cannot rewrite"
 
 echo "check-lsp: M4 completion + signature help"
 # The list is complete as sent: `isIncomplete:false` tells the client to filter it itself as the user

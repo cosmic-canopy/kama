@@ -1120,13 +1120,21 @@ struct Server {
         if (target.line == 0) { sendError(id, -32602, "there is nothing renameable here"); return; }
 
         if (haveProject) {
-            // Refuse on the DEFINITION's location, not on the uses: a symbol we don't own (std, a
+            // Refuse on the DECLARATIONS' locations, not on the uses: a symbol we don't own (std, a
             // dependency) may legitimately be used from project files, and rewriting only those callers
             // while leaving the declaration alone would break the build.
-            Location def = lspDefinition(idx, path, l, c);
-            if (!def.uri.empty() && !ownsFile(def.uri, proj.files)) {
-                sendError(id, -32803, "cannot rename: this symbol is defined outside the project, in " +
-                                      def.uri + ". Only this project's own sources can be rewritten.");
+            //
+            // Plural since M6 B3c: a contract method and its implementations are ONE name, and a group can
+            // straddle the project boundary — a type here implementing `std::Iterator` has an owned
+            // definition at the cursor and an unowned one in the stdlib. Checking only the cursor's would
+            // pass, and the edit loop below would then silently drop the contract's declaration and leave
+            // conformance broken. Every mature server refuses this case instead.
+            for (const Location& def : lspRenameDeclarations(idx, path, l, c)) {
+                if (!def.uri.empty() && ownsFile(def.uri, proj.files)) continue;
+                std::string where = def.uri.empty() ? std::string("the compiler's own prelude")
+                                                    : def.uri;
+                sendError(id, -32803, "cannot rename: this name is also declared outside the project, in " +
+                                      where + ". Only this project's own sources can be rewritten.");
                 return;
             }
         }

@@ -4516,6 +4516,13 @@ Location lspDefinition(const SharedLspIndex& idx, const std::string& path, int l
     return idx->idx->definitionAt(path, line, col);
 }
 
+std::vector<Location> lspRenameDeclarations(const SharedLspIndex& idx, const std::string& path,
+                                            int line, int col)
+{
+    if (!idx || !idx->idx) return {};
+    return idx->idx->declarationsAt(path, line, col);
+}
+
 std::string lspHover(const SharedLspIndex& idx, const std::string& path, int line, int col)
 {
     if (!idx || !idx->idx) return "";

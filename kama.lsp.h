@@ -191,6 +191,12 @@ std::string             lspHover(const SharedLspIndex& idx, const std::string& p
 // so each Location carries its own path — map it through pathToUri rather than assuming the open document.
 std::vector<Location>   lspReferences(const SharedLspIndex& idx, const std::string& path,
                                       int line, int col, bool includeDecl);
+// Every DECLARATION a rename at the cursor would rewrite: the symbol itself plus its rename group — a
+// contract method and its implementations are one name (M6 B3c). The rename path must check ownership on
+// ALL of them, since a group can straddle the project boundary (an impl here, the contract in std). A
+// Location with an empty uri is a def-site the index owns no file for, i.e. never project-owned.
+std::vector<Location>   lspRenameDeclarations(const SharedLspIndex& idx, const std::string& path,
+                                              int line, int col);
 // prepareRename (M3): the identifier range at the cursor if it names a renameable user symbol, else a
 // zero range (SrcRange::line == 0) — the server turns that into a null result so the editor greys out F2.
 SrcRange                lspPrepareRename(const SharedLspIndex& idx, const std::string& path, int line, int col);

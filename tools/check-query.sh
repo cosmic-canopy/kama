@@ -551,6 +551,41 @@ expect --def 4:11  -- "imports.kama:4:10"
 expect --type 6:32 -- "generic-type DynamicArray"
 
 # ---------------------------------------------------------------------------------------------------
+# M6 B3c — a contract method and its implementations are ONE renameable name.
+#
+# `fn int32 speak();` inside a `type contract` was indexed nowhere, and neither was any call dispatched
+# through the contract's fat pointer, so renaming an implementation rewrote that one method and left the
+# contract and every sibling implementation saying the old name.
+#
+# The fixture dispatches BOTH ways on purpose — `c.speak()` on the concrete type and `s.speak()` through
+# `Owned<Speaker>` — because a fixture with only one of them passes under a design that gets the other
+# wrong. The members keep SEPARATE def-sites (go-to-definition stays precise); only references and rename
+# consult the group.
+FIXTURE="$ROOT/tests/query/coverage/dispatch.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo 'check-query: M6 B3c contract methods'
+# From the CONTRACT's declaration: the contract, both implementations, both direct calls, the fat-pointer
+# call. Renaming any one of them has to move all six or the program stops compiling.
+expect --refs 10:42 -- "dispatch.kama:10:42"    # the contract declaration
+expect --refs 10:42 -- "dispatch.kama:15:20"    # Cat's implementation
+expect --refs 10:42 -- "dispatch.kama:20:20"    # Dog's implementation
+expect --refs 10:42 -- "dispatch.kama:34:21"    # c.speak() — a concrete call
+expect --refs 10:42 -- "dispatch.kama:34:33"    # d.speak() — the other concrete call
+expect --refs 10:42 -- "dispatch.kama:38:26"    # s.speak() — through the fat pointer
+# ...and the same set from ONE implementation, which is the direction the rename actually comes from.
+expect --refs 15:20 -- "dispatch.kama:10:42"
+expect --refs 15:20 -- "dispatch.kama:20:20"
+expect --refs 15:20 -- "dispatch.kama:38:26"
+# Go-to-definition does NOT collapse onto the contract: a concrete-typed call lands on THAT type's
+# implementation, and only a fat-pointer call — whose static type IS the contract — lands on the contract.
+# This is the whole reason the group is a separate relation rather than a shared def-site.
+expect --def 34:21 -- "dispatch.kama:15:20"
+expect --def 34:33 -- "dispatch.kama:20:20"
+expect --def 38:26 -- "dispatch.kama:10:42"
+expect --type 10:42 -- "method speak"
+
+# ---------------------------------------------------------------------------------------------------
 # M6 B3 — the reference index's COVERAGE ORACLE.
 #
 # Every assertion above tests a spelling somebody thought of. That is exactly how a method's call sites

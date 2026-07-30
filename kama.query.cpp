@@ -518,8 +518,18 @@ void CEmitter::buildDefSites()
             InterfaceInfo& ii = kv.second;
             if (!ii.node) continue;
             const CompilationUnit* unit = unitOfDecl(ii.node);
-            addDefSite(kv.first, SymKind::Contract, unit, ii.node, ii.node->name,
-                       bareOf(ii.node->name, kv.first), "");
+            std::string bare = bareOf(ii.node->name, kv.first);
+            addDefSite(kv.first, SymKind::Contract, unit, ii.node, ii.node->name, bare, "");
+            // The contract's METHOD declarations (M6 B3c). They have no `cName` — a contract declares a
+            // vtbl slot, not a function — so they get an index-only key in the same style as `field:` /
+            // `enum:`. Without these there is no def-site for a fat-pointer call to point at, and renaming
+            // an implementing method half-applied: it rewrote the implementation and left the contract
+            // saying the old name.
+            for (const auto& im : ii.methods) {
+                if (!im.nameId) continue;                      // the operator arm carries no name node
+                addDefSite(contractMethodKey(kv.first, im.name), SymKind::Method, unit,
+                           im.nameId.get(), im.nameId, im.name, bare);
+            }
         }
     }
 
@@ -578,6 +588,74 @@ void CEmitter::buildDefSites()
     }
     _localDefs.clear();
     _localDefs.shrink_to_fit();
+
+    buildRenameGroups();
+}
+
+// M6 B3c — the contract-method rename GROUP.
+//
+// A contract's `fn int32 speak();` and every implementation of it must be renamed together, or the rename
+// half-applies: B3a made the direct calls follow the implementation, and this makes the contract
+// declaration, the OTHER implementations and the fat-pointer call sites follow it too. This is what every
+// mature server does — clangd rewrites the whole override set, rust-analyzer the trait item plus every
+// impl, TypeScript the interface member plus all implementations.
+//
+// The members keep SEPARATE def-sites on purpose (shape (b), not "collapse onto the contract's key"), so
+// go-to-definition from `c.speak()` still lands on Cat's implementation rather than on the contract. Only
+// referencesAt / renameRangeAt / declarationsAt consult the group.
+//
+// Union is TRANSITIVE, and that is correct: if one type implements two contracts that both declare
+// `speak`, the name genuinely has to move in all three places at once.
+//
+// Derived from the tables rather than from the conformance loops in collectProgram, so the emission path
+// is untouched and both the direct `implements` and the retroactive `implements C for T` forms are covered
+// at once (a retro conformance pushes onto `ci.interfaces` too).
+void CEmitter::buildRenameGroups()
+{
+    _renameGroup.clear();
+
+    std::map<std::string, std::string> parent;          // DSU over def-site keys
+    std::function<std::string(std::string)> find = [&](std::string k) {
+        while (parent.count(k) && parent[k] != k) k = parent[k];
+        return k;
+    };
+    auto unite = [&](const std::string& a, const std::string& b) {
+        if (a.empty() || b.empty() || !_defSites.count(a) || !_defSites.count(b)) return;
+        if (!parent.count(a)) parent[a] = a;
+        if (!parent.count(b)) parent[b] = b;
+        std::string ra = find(a), rb = find(b);
+        if (ra != rb) parent[ra] = rb;
+    };
+
+    for (auto* table : { &_classes, &_genericTypes }) {
+        for (auto& kv : *table) {
+            ClassInfo& ci = kv.second;
+            if (ci.isGenericInst || ci.isIntrinsicColl || ci.isExternStruct) continue;
+            for (const auto& ifn : ci.interfaces) {
+                auto it = _interfaces.find(ifn);
+                if (it == _interfaces.end()) continue;
+                for (const auto& im : it->second.methods) {
+                    if (!im.nameId) continue;                 // the operator arm has no name node
+                    ClassInfo* owner = nullptr;
+                    // findMethod, not ci.methods: the implementation may be INHERITED from a base, which
+                    // is the same rule emitClassInterfaceVtables uses to fill the vtbl slot.
+                    MethodInfo* mi = findMethod(&ci, im.name, &owner);
+                    if (!mi) continue;
+                    unite(contractMethodKey(ifn, im.name), mi->cName);
+                }
+            }
+        }
+    }
+
+    // Flatten once, here, so every query stays a pure lookup — the same discipline as buildPositions'
+    // resolve-fill. Singletons are dropped: a symbol in no group must cost the query paths nothing.
+    std::map<std::string, std::vector<std::string>> byRoot;
+    for (const auto& kv : parent) byRoot[find(kv.first)].push_back(kv.first);
+    for (auto& g : byRoot) {
+        if (g.second.size() < 2) continue;
+        std::sort(g.second.begin(), g.second.end());
+        for (const auto& k : g.second) _renameGroup[k] = g.second;
+    }
 }
 
 // ---- position index (T4b) -------------------------------------------------------------------------------
@@ -663,6 +741,12 @@ std::string CEmitter::enumMemberKey(const std::string& enumKey, const std::strin
 {
     if (enumKey.empty() || name.empty()) return "";
     return "enum:" + enumKey + "::" + name;
+}
+
+std::string CEmitter::contractMethodKey(const std::string& contractKey, const std::string& name)
+{
+    if (contractKey.empty() || name.empty()) return "";
+    return "contract:" + contractKey + "::" + name;
 }
 
 // The index key for a MODULE/NAMESPACE path, given its dotted source spelling — or "" if the path names
@@ -1078,12 +1162,49 @@ std::vector<Location> CEmitter::referencesAt(const std::string& uri, int line, i
 
     auto d = _defSites.find(key);
     if (d == _defSites.end() || !d->second.unit) return out;   // builtin / prelude / unresolved: not renameable
-    if (includeDecl) {
-        const DefSite& s = d->second;
-        out.push_back(Location{ s.unit->name ? *s.unit->name : uri, s.selectionRange });
+
+    // A contract method and its implementations are ONE renameable name (M6 B3c) — see buildRenameGroups.
+    // A symbol in no group answers for itself, which is every symbol but these.
+    auto g = _renameGroup.find(key);
+    const std::vector<std::string> self{ key };
+    const std::vector<std::string>& keys = g == _renameGroup.end() ? self : g->second;
+
+    for (const auto& k : keys) {
+        auto s = _defSites.find(k);
+        if (s == _defSites.end() || !s->second.unit) continue;
+        if (includeDecl)
+            out.push_back(Location{ s->second.unit->name ? *s->second.unit->name : uri,
+                                    s->second.selectionRange });
+        auto r = _refIndex.find(k);
+        if (r != _refIndex.end()) out.insert(out.end(), r->second.begin(), r->second.end());
     }
-    auto r = _refIndex.find(key);
-    if (r != _refIndex.end()) out.insert(out.end(), r->second.begin(), r->second.end());
+    return out;
+}
+
+// Every DECLARATION the cursor's rename would have to rewrite — the symbol itself, plus the rest of its
+// rename group (M6 B3c). The rename path's ownership guard needs this and not `definitionAt`: with groups,
+// renaming a type's `next` that implements `std::Iterator` has an OWNED definition at the cursor while the
+// contract's declaration sits in the stdlib, and rewriting one without the other silently breaks
+// conformance. Every mature server refuses exactly this case.
+std::vector<Location> CEmitter::declarationsAt(const std::string& uri, int line, int col) const
+{
+    std::vector<Location> out;
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return out;
+    std::string key = declKeyAt(unit, line, col);
+    if (key.empty()) return out;
+
+    auto g = _renameGroup.find(key);
+    const std::vector<std::string> self{ key };
+    const std::vector<std::string>& keys = g == _renameGroup.end() ? self : g->second;
+    for (const auto& k : keys) {
+        auto s = _defSites.find(k);
+        if (s == _defSites.end()) continue;
+        // An unowned def-site with no unit (prelude/builtin) still has to be REPORTED, or the guard cannot
+        // refuse on it. Name it with the empty uri the caller already treats as "not a project file".
+        out.push_back(Location{ s->second.unit && s->second.unit->name ? *s->second.unit->name : std::string(),
+                                s->second.selectionRange });
+    }
     return out;
 }
 
