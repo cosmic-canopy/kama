@@ -157,6 +157,42 @@ printf 'namespace shared;\nfn int32 main() { Leak l; l.v = 1; return l.v; }\n' >
 DURI="file://$dep/app/app.kama"
 DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
 
+# M6 A3 fixture: a FREE-RIDING sub-project. `libs/net` imports `config`, but only the top-level app
+# declares it — so net builds where it sits and nowhere else, and nothing in an editor said so. A build
+# makes this a hard error; the editor path stays lenient (refusing to analyze over a *manifest* problem
+# would strip cross-module hover and definitions while the code itself resolves fine), so the finding has
+# to arrive as a DIAGNOSTIC on the import statement instead.
+frws="$tmp/frws"
+mkdir -p "$frws/apps/server" "$frws/libs/net" "$frws/libs/config"
+cat > "$frws/kama.json" <<'JSON'
+{ "name": "frws", "version": "0.1.0", "projects": ["apps/*", "libs/*"] }
+JSON
+cat > "$frws/libs/config/kama.json" <<'JSON'
+{ "name": "config", "version": "0.1.0", "sources": ["."] }
+JSON
+cat > "$frws/libs/config/config.kama" <<'KAMA'
+namespace config;
+export { limit };
+fn int32 limit() { return 5; }
+KAMA
+printf 'namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n' > "$frws/libs/net/net.kama"
+# Two steps, because the check only fires for an import that RESOLVES through a dependency view: declare
+# `config` and install (which materializes net/.kama/deps), then remove the declaration while the view
+# remains. That is a real editing state — someone dropped the line from the manifest — and it is the state
+# in which the editor must speak up, since the code still resolves and builds where it sits.
+cat > "$frws/libs/net/kama.json" <<'JSON'
+{ "name": "net", "version": "0.1.0", "sources": ["."],
+  "dependencies": { "config": { "path": "../config" } } }
+JSON
+frok=0
+"$KAMA" pkg install "$frws/libs/net" >/dev/null 2>&1 && frok=1
+cat > "$frws/libs/net/kama.json" <<'JSON'
+{ "name": "net", "version": "0.1.0", "sources": ["."] }
+JSON
+FRURI="file://$frws/libs/net/net.kama"
+FRSRC='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n'
+FRSRC2='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit() + 0; }\n'
+
 frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$ROOT"'/tests/query","capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$URI"'","languageId":"kama","version":1,"text":"'"$BAD"'"}}}'
@@ -283,6 +319,13 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":49,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$LURI"'"},"position":{"line":2,"character":15}}}'
 frame '{"jsonrpc":"2.0","id":53,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$LURI"'"},"position":{"line":0,"character":19},"newName":"left"}}'
 frame '{"jsonrpc":"2.0","id":54,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$LURI"'"},"position":{"line":2,"character":15},"context":{"includeDeclaration":true}}}'
+# --- M6 A3: the free-ride finding is a DIAGNOSTIC, and it survives a keystroke. The second didChange is
+#     the assertion that matters: the stderr message is warn-once per process, so a diagnostic sharing that
+#     lifetime would vanish the moment you typed a character.
+if [ "$frok" = 1 ]; then
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$FRURI"'","languageId":"kama","version":1,"text":"'"$FRSRC"'"}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$FRURI"'","version":2},"contentChanges":[{"text":"'"$FRSRC2"'"}]}}'
+fi
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -489,6 +532,27 @@ case "$drop" in
     *'unknown type'*) echo "  FAIL: semantic cascade published from a dropped top-level decl" >&2; fail=1 ;;
     *) echo "  ok: no 'unknown type' cascade from the decl the top-level arm discarded" ;;
 esac
+
+echo "check-lsp: M6 A3 the undeclared-import finding reaches the Problems pane"
+if [ "$frok" = 1 ]; then
+    expect '"code":"undeclared-import"' "a free-riding package's missing declaration is a DIAGNOSTIC, not just stderr"
+    expect '"severity":2'               "...as a warning (the code resolves; it is the manifest that is wrong)"
+    # On the `import` statement itself. Its module-path segments carry no spans of their own, so statement
+    # granularity is the honest limit — but it must be the import line, not the file's first line.
+    expect '{"start":{"line":1,"character":0},"end":{"line":1,"character":23}},"severity":2,"code":"undeclared-import"' \
+           "...positioned on the import statement, spanning exactly it"
+    expect 'add it under \"dependencies\"' "...and it names the remedy"
+    # THE LIFETIME ASSERTION. stderr is warn-once per process so a server does not repeat itself forever;
+    # a diagnostic must be re-pushed every analysis or the squiggle disappears on the next keystroke.
+    frn=$(printf '%s' "$out" | tr '\r' '\n' | grep -c '"code":"undeclared-import"' || true)
+    if [ "${frn:-0}" -ge 2 ]; then
+        echo "  ok: republished on every analysis (${frn}x), unlike the warn-once stderr message"
+    else
+        echo "  FAIL: the diagnostic was published ${frn:-0}x — it must survive a keystroke" >&2; fail=1
+    fi
+else
+    echo "  skip: free-ride fixture did not install (no pkg support in this environment)"
+fi
 
 echo "check-lsp: M6 A2 argument labels"
 # THE SPAN GUARD, and it comes first for a reason: rename REPLACES the range it is handed, so this asserts

@@ -533,12 +533,19 @@ std::string owningPackageDir(const std::string& fromDir)
 // file's OWN package does: fail the build (every command that produces something) or merely report it.
 // The LSP and the `query` CLI that mirrors it pass false — refusing to analyze would strip an editor of
 // cross-module hover, definitions and diagnostics over a *manifest* problem, when the code is fine and
-// resolves. The right home for it there is a diagnostic against the offending `kama.json` (LSP M4).
+// resolves.
+//
+// `diagsOut` (M6 A3) collects that same finding as a structured Diagnostic on the `import` statement, so in
+// an editor it reaches the Problems pane instead of a log channel nobody reads. Non-null only from the LSP
+// path; the CLI's five call sites are unchanged. NOTE the two have deliberately DIFFERENT lifetimes — the
+// stderr message is warn-once per process (a server would otherwise repeat it forever), while a diagnostic
+// must be re-pushed on every analysis or it vanishes on the next keystroke.
 bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* argv0,
                       std::vector<SharedCompilationUnit>& units,
                       std::vector<std::string>& paths,
                       bool includeDevDeps = false,
-                      bool strictImports = true)
+                      bool strictImports = true,
+                      std::vector<Diagnostic>* diagsOut = nullptr)
 {
     std::string stdlibDir = resolveStdlibDir(argv0);
     std::vector<std::string> extraRoots = splitSearchPath(getenv("KAMA_PATH"));
@@ -636,6 +643,25 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 if (!owner.empty() && !declaredImportNames(owner).count(segs[0])) {
                     std::string ownerManifest = owner + "/kama.json";
                     undeclaredImport = true;
+                    // M6 A3: pushed EVERY call, outside the warn-once gate below — a squiggle has to be
+                    // republished on each analysis or it disappears on the next keystroke. Positioned on the
+                    // `import` statement (its module-path segments carry no spans of their own), in the file
+                    // that does the importing, so the caller can filter it to the open buffer the way it
+                    // filters every other diagnostic. The message still names the kama.json to fix.
+                    if (diagsOut) {
+                        Diagnostic d;
+                        d.line      = imp->line;
+                        d.column    = imp->column;
+                        d.endLine   = imp->endLine;
+                        d.endColumn = imp->endColumn;
+                        d.severity  = DiagSeverity::Warning;
+                        d.code      = "undeclared-import";
+                        d.file      = paths[i];
+                        d.message   = "module '" + segs[0] + "' is not declared by this package (" +
+                                      ownerManifest + "), so it will not build on its own — add it under "
+                                      "\"dependencies\"";
+                        diagsOut->push_back(d);
+                    }
                     if (warnedFreeRide.insert(ownerManifest + "\n" + segs[0]).second) {
                         // Suggest the concrete line. The dependency's own package root is the nearest
                         // manifest above its sources, which for a workspace sibling is a path away.
@@ -4135,7 +4161,13 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
     // best-effort diagnostics then, but hover/def/outline for the open file still work.
     std::vector<SharedCompilationUnit> units;
     std::vector<std::string> paths;
-    if (loadProgramUnits({ path }, argv0, units, paths, /*includeDevDeps*/ false, /*strictImports*/ false) && !units.empty()) {
+    // M6 A3: manifest findings (an import this package uses but never declared) come back as structured
+    // diagnostics rather than only as stderr, and are pushed onto `diags` DIRECTLY — deliberately not
+    // through `emitter->diagnostics()` below, which the droppedTopLevelDecl gate suppresses. This is a
+    // manifest fact, not a semantic cascade, so a broken `type` elsewhere in the buffer must not hide it.
+    std::vector<Diagnostic> importDiags;
+    if (loadProgramUnits({ path }, argv0, units, paths, /*includeDevDeps*/ false, /*strictImports*/ false,
+                         &importDiags) && !units.empty()) {
         std::string abs = absolutePath(path);
         bool swapped = false;
         for (size_t i = 0; i < paths.size(); ++i)     // paths bounds the scan; the two are parallel
@@ -4143,6 +4175,24 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
         if (!swapped) units.insert(units.begin(), pr.unit);   // defensive: keep the live buffer in the set
     } else {
         units = { pr.unit };                       // single-file fallback (unsaved/new file or unresolved import)
+    }
+
+    // Only the OPEN file's, for the same reason the semantic filter below exists: the server publishes to
+    // one URI, and a sibling package's manifest problem is not this buffer's squiggle.
+    //
+    // ⚠️ Compare CANONICALIZED, and hand back the buffer's own SPELLING. These diagnostics are stamped with
+    // `paths[i]`, which is `absolutePath(...)` — on macOS that resolves /var -> /private/var, while `path`
+    // came from the editor's file:// URI and did not. A plain `d.file == path` therefore matched nothing and
+    // the squiggle silently never appeared. Same path-spelling hazard M3.5 hit with `underRoot`; here it is
+    // exact equality rather than a prefix, but it is the same lesson.
+    {
+        std::string selfAbs = absolutePath(path);
+        for (const auto& d : importDiags)
+            if (d.file == selfAbs || d.file == path) {
+                Diagnostic mine = d;
+                mine.file = path;   // publish under the spelling the server keys documents by
+                diags.push_back(mine);
+            }
     }
 
     auto emitter = std::make_shared<CEmitter>(path);   // analysis mode: no C emitted

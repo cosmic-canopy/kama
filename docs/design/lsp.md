@@ -313,6 +313,20 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
       `emitHeaderContent`, which runs before the per-unit loop that sets `_refUnit`, so every `recordRef`/
       `recordDef` there is dropped. It covers all of `lib/std`'s containers. Not fixed here: it needs a
       template → declaring-unit map during the header pass and touches the emission path.
+  - **A3 (undeclared-import diagnostic) ✅ SHIPPED.** The split it needed already existed in the right
+    place: the *detection* is per-call while only the stderr message is warn-once-per-process, so the
+    `Diagnostic` is built beside the flag and the `warnedFreeRide` set is untouched. Two things learned:
+    - **It must bypass the `droppedTopLevelDecl` gate.** This is a manifest fact, not a semantic cascade, so
+      a broken `type` elsewhere in the buffer must not hide it — it is pushed onto `diags` directly rather
+      than through `emitter->diagnostics()`.
+    - **⚠️ The open-file filter has to canonicalize.** These diagnostics are stamped with `absolutePath(...)`,
+      which on macOS resolves `/var` → `/private/var`, while the buffer path comes from a `file://` URI and
+      does not. A plain `d.file == path` matched nothing and the squiggle silently never appeared — the same
+      path-spelling hazard M3.5 hit with `underRoot`, as exact equality this time instead of a prefix.
+      Compare canonicalized; publish under the spelling the server keys documents by.
+    - The check only fires for an import that resolves **through a dependency view**, so the fixture has to
+      declare the dep, install it, then remove the declaration while the view remains. That is a real
+      editing state, and the state in which an editor most needs to speak up.
   - **A full syntax-highlighting audit belongs here (user, 2026-07-27).** One pass over *every* highlight
     pattern so each editor renders kama faithfully — not just the keyword list `tools/check-syntax-drift.sh`
     already guards. Motivating evidence: an ad-hoc look at the numeric rules alone found the VS Code grammar
