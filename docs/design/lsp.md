@@ -1,13 +1,11 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M0–M5 shipped; M6 STAGES A + B1/B2 + B3 shipped; M6 STAGE C COMPLETE (2026-07-30, dev)** —
-the three deferred correctness items are closed, the TextMate grammar agrees with the compiler and is
-guarded by a real tokenizer, `textDocument/semanticTokens/full` colours by what the resolver concluded,
-**the reference index no longer loses work** (renaming a method, a contract method, an enum behind a `::`
-qualifier, an exported type or a generic argument rewrites every spelling of it, including inside a generic
-body and across units), and **the campaign's headline claim is now cashed**: [editors.md](../editors.md)
-wires up eight editors against one server, and VS Code has a build-configuration status bar and picker.
-**NEXT = Stage D** (campaign exit), then M7's tree-sitter grammar — cold-start brief for both:
+**Status: ✅ THE LSP v1 CAMPAIGN IS COMPLETE — M0 through M6, closed at Stage D on 2026-07-30 (dev).**
+This file is the campaign's record of what shipped and why; the per-milestone briefs
+(`lsp-m*-kickoff.md`) carry the working detail, each with its own as-shipped section. What the server does
+is in [editors.md](../editors.md) (user-facing) and § Acceptance below (the deliverable, restated against
+what actually shipped). **NEXT is M7 — the tree-sitter grammar + Zed extension, its own campaign**, which
+unlocks Helix and Zed and is the only thing still blocking them; cold-start brief:
 [lsp-m6-d-kickoff.md](lsp-m6-d-kickoff.md). **All of it is pre-launch** (user, 2026-07-29).
 
 ⚠️ **Stage C's brief was wrong in two load-bearing places, and both were found by checking a claim rather
@@ -64,10 +62,10 @@ M5 made the server feel good rather than
 merely work: error recovery (many diagnostics instead of one, and queries keep answering on a broken
 buffer) and a per-keystroke cost inside the 100 ms budget on every measured file
 ([lsp-m5-kickoff.md](lsp-m5-kickoff.md)). Interleaved before M4: workspace-internal dependencies
-([workspace-deps-kickoff.md](workspace-deps-kickoff.md)). The **confirmed next-highest post-1.0 priority** (user, 2026-07-26;
-[ROADMAP.md](../ROADMAP.md) §1 post-1.0 sequence + §10). This doc is the cold-start handoff: what exists to
-reuse, the decisions to settle FIRST, a milestone plan, and a size gauge. **Read [GOALS.md](../GOALS.md) and
-ROADMAP §10 before designing.**
+([workspace-deps-kickoff.md](workspace-deps-kickoff.md)). It was the **confirmed next-highest post-1.0
+priority** (user, 2026-07-26). Below the Progress record, this doc is still the original cold-start
+handoff — what existed to reuse, the decisions settled first, the milestone plan and the size gauge —
+kept because the reasoning behind each decision is what a later campaign borrows.
 
 ## Progress
 
@@ -216,6 +214,89 @@ ROADMAP §10 before designing.**
   - New tool: **`tools/lsp-bench.sh`**, the reproducible perf oracle (the brief's original numbers were
     ad hoc and not reproducible from a checkout). ⚠️ The brief was wrong in three load-bearing places,
     one of which would have silently *regressed* completion — see its "As shipped" section.
+- **M6 — the editor matrix, the deferred correctness items, and the colouring layer. ✅ SHIPPED
+  2026-07-29/30** (`5061875`…`d5c8f96`). Briefs, each carrying its own as-shipped section:
+  [lsp-m6-kickoff.md](lsp-m6-kickoff.md) (Stages A + B1/B2), [lsp-m6-b3-kickoff.md](lsp-m6-b3-kickoff.md)
+  (B3), [lsp-m6-c-kickoff.md](lsp-m6-c-kickoff.md) (Stage C).
+  - **Stage A — the three items M4 and M5 deferred, all closed.** **A1:** the server now calls
+    `setBuildFlags`, so *the editor analyzes the program the build analyzes* — with an empty flag set
+    `pruneInactiveDecls` had been dropping every `@compileFor(X)` and keeping every `@compileFor(!X)`,
+    the exact inverse of a debug build. One `configureEmitter()` replaced a six-call setup duplicated at
+    four CLI sites and truncated to two in the LSP. The override channel an editor writes is
+    **`kama.local.json`** (user, 2026-07-29 — this reversed the brief's `initializationOptions`): the same
+    file the CLI already merges, so the editor and `kama build` cannot disagree, F5 needs no arguments and
+    every editor gets it free. The server therefore does **not** wire `workspace/didChangeConfiguration`;
+    the trigger is `didChangeWatchedFiles` on the manifests. Configuration is announced on connect —
+    nothing had ever *said* what the server was analyzing under, which is how this survived five
+    milestones. **A2:** argument labels are references to the callee's parameter, so renaming a parameter
+    rewrites its call sites. ⚠️ The brief's design would have shipped a silent bug — a key built at record
+    time embeds the **caller's** unit while the def-site is keyed under the **declaring** unit, so every
+    cross-unit label would key to nothing *and same-file labels would still appear to work*. The fix,
+    storing the declaration NODE and resolving it after `buildDefSites`, is the inversion B3 later
+    generalized. **A3:** the undeclared-import finding reaches the Problems pane instead of a log channel
+    nobody reads; it must bypass the `droppedTopLevelDecl` gate (a manifest fact, not a semantic cascade),
+    and the open-file filter must **canonicalize** — `d.file` is an `absolutePath()` while the buffer path
+    is the URI spelling, so `/private/var/…` never matched `/var/…` and the squiggle never appeared.
+  - **Stage B1/B2 — colouring.** The hand-maintained TextMate grammar was audited rule-by-rule against
+    `kama.l`/`kama.y` **with the compiler as the oracle** (write the literal, run `kama check`, compare)
+    and 13 disagreements closed — two of them rules that were *present, correct and unreachable*, because
+    TextMate breaks a same-position tie in favour of the earlier `include`, so `#keywords` starved
+    `#declarations` and `#cast`. No grep can see a rule that never fires, so `tools/check-syntax.sh` now
+    runs the real vscode-textmate engine over `tests/syntax/`, layering committed snapshots, `kama check`
+    agreement, and the 13 findings asserted by name. On top of it, `textDocument/semanticTokens/full`
+    colours by what the **resolver** concluded — a read off the cached index, so it is nearly free.
+  - **B3 — the member reference index, and the campaign's most transferable lesson.** ⚠️ **The index is
+    built by INSTRUMENTING the emitter, so it is exactly as complete as the set of sites someone
+    remembered to instrument** — and every test asserted a spelling somebody had thought of, so a spelling
+    nobody thought of failed nothing. `kama query <file> --coverage` (B3 stage 0) asks the other question:
+    for every identifier the SOURCE spells, what does the index know? `tests/query/coverage/*.kama` spell
+    every naming construct the language has, and the checked-in `*.coverage` tables beside them are
+    compared **whole**, so a gap is a diff rather than a discovery. **It took the gap list from 64
+    identifiers to 14, and all 14 are correct.** It found nine gaps where the brief had named two, then a
+    tenth, then an eleventh. ⚠️ **This is a standing obligation, not a finished task: extend
+    `tests/query/coverage/` whenever the LANGUAGE gains a naming construct.**
+    - **The recurring bug class was a rename that is OFFERED and then UNDER-APPLIES**, leaving a buffer
+      that no longer compiles: method call sites (B3a), an `import`'s symbol list (B3g), a `::` qualifier
+      and an `export { … }` manifest (B3f), contract methods (B3c), a generic argument (B3h).
+    - **The fix shape: record the DECLARATION NODE, not a key** (A2's inversion, generalized) — a key
+      built at record time embeds ambient context that is wrong for the symbol, while every instantiation
+      walks the SAME template AST nodes, so `Box<int32>` and `Box<string>` collapse onto one key with no
+      mapping table. ⚠️ **CONVERT record sites, never ADD one**: `buildPositions` dedups by node and
+      first-wins, so a leftover key-based record shadows the node-based one.
+    - **A MODULE path is a navigation target and NEVER a rename target.** In kama the namespace is the
+      module path is the directory path, so renaming one is a file-and-directory move — the line clangd
+      draws for `#include`, TypeScript for a module specifier and gopls for an import path. Its `module:`
+      key names no def-site, so go-to-definition opens the module while rename, find-references and
+      semantic tokens ignore it with no extra flag.
+    - **A contract method plus its implementations are ONE renameable name** — separate def-sites plus a
+      rename GROUP, so go-to-definition still lands on the concrete implementation (the shape clangd,
+      rust-analyzer, TypeScript, JDT and gopls all use). ⚠️ It exposed a real bug in the rename ownership
+      guard: it checked only the definition **at the cursor**, so renaming a project type's method that
+      implements a `std` contract passed the check and then silently dropped the contract's declaration
+      from the edit set. **Any future symbol-group relation must teach that guard about itself.**
+    - Cost: ~+3 ms per keystroke (86 → 89 ms, controlled A/B), because generic bodies are now walked for
+      records at all. ⚠️ Perf claims here need a **same-window A/B** — the reference machine drifts ±3 ms
+      between windows, and two readings that looked like regressions were pure drift.
+  - **Stage C — one server, eight editors.** The campaign's headline claim, cashed:
+    [editors.md](../editors.md) wires up Neovim, Vim, Emacs, Sublime, Helix and Kate beside VS Code, and
+    states per editor which gets syntax colour from what (Zed and Helix colouring both wait on M7). VS Code
+    gained a build-configuration **status bar + picker** that writes `kama.local.json`, so switching target
+    or build type needs no restart and no editor-private setting; it reads a structured `kama/buildConfig`
+    notification whose payload carries what is **selectable**, not only what is selected, so no client
+    rebuilds the catalog (the shape rust-analyzer's `experimental/serverStatus`, Metals' `metals/status`
+    and clangd all use). Non-VS-Code clients ship as **documented snippets, not checked-in files** — what
+    rust-analyzer, gopls, clangd and zls all do; nothing in a compiler repo installs someone's `init.lua`.
+    ⚠️ **The brief was wrong twice, both load-bearing, both caught by checking a claim rather than building
+    on it** — see the two items at the top of this file: there is no client-side static watcher list at the
+    protocol level (dynamic registration is the only route, so six clients would have shipped *looking*
+    wired up), and `kama.local.json` was not actually a deep merge for TARGETs.
+- **Stage D — campaign exit. ✅ 2026-07-30.** Acceptance restated below against what shipped, this file
+  made the consolidated record, and ROADMAP §10 pruned to what is next. Carried forward deliberately, each
+  now a forward item on ROADMAP §10 rather than a loose end here: the ~10 ms fixed prelude-**analysis**
+  floor per keystroke; **one build configuration per server process** (pinned by the first document that
+  resolves a manifest — the real fix needs per-configuration parse caches, because `pruneInactiveDecls`
+  rewrites cached units in place); upstream editor registration (PRs to *other* projects, gated on a public
+  release); and the three editor snippets that are documented but not verified against a running editor.
 
 ## Why (from the ROADMAP)
 
@@ -308,13 +389,19 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
   ⚠️ The brief was wrong in three load-bearing places (the perf thesis, "analysis never mutates the AST",
   and the recovery staging, which was backwards and would have silently regressed completion) — see its
   "Three places the original brief was wrong".
-- **M7 — tree-sitter grammar + Zed extension. `M/L`. PRE-LAUNCH** (user, 2026-07-29 — supersedes the
-  "POST-1.0 / does not gate 1.0" note below: the whole LSP campaign now finishes before the website work
-  and before 1.0). Unlocks real syntax highlighting in
+- **M7 — tree-sitter grammar + Zed extension. `M/L`. ►► NEXT, and its own campaign. PRE-LAUNCH**
+  (user, 2026-07-29 — supersedes the "POST-1.0 / does not gate 1.0" note below: the whole LSP campaign now
+  finishes before the website work and before 1.0). Unlocks real syntax highlighting in
   Neovim, Helix and Zed (and GitHub linguist), and a Zed extension cannot exist without it. Split out of
   M6 by the user (2026-07-28) because it is a *third* grammar to keep in sync with `kama.l`/`kama.y` and
-  wants its own drift guard. Does not gate 1.0.
-- **M6 — Editor/IDE matrix + packaging + tests. `S/M`. NEXT / ACTIVE.** Cold-start brief:
+  wants its own drift guard. Does not gate 1.0. Cold-start brief:
+  [lsp-m6-d-kickoff.md](lsp-m6-d-kickoff.md), which carries the three things to settle before writing any
+  grammar rule: the `kama check` oracle method (B1's, which rejected six invented spellings), the
+  drift-guard **pair** (a corpus test that a rule FIRES plus agreement with `kama check` over
+  `tests/syntax/` — B1 proved a grep-only guard cannot see an unreachable rule), and whether the grammar
+  lives in this repo or its own, since Helix and Zed both fetch a grammar by git URL.
+- **M6 — Editor/IDE matrix + packaging + tests. `S/M`. ✅ SHIPPED 2026-07-29/30** (consolidated record in
+  § Progress above; the detail below is as-shipped). Cold-start brief:
   [lsp-m6-kickoff.md](lsp-m6-kickoff.md), which also carries the three items M4 and M5 deliberately
   deferred (argument-label indexing, the undeclared-import diagnostic, and the LSP's missing
   `setBuildFlags` — the last now unblocked by the build-configuration campaign), the ten already-found
@@ -356,11 +443,13 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
       because a std/dependency parameter has no def-site the project owns and `includeDeclaration` puts the
       declaration among the references, so both the `ownsFile` check and the project-less "used in another
       file" check fire. Verified, not assumed.
-    - **Found en route: nothing inside a generic type's or generic function's body is in the reference index
-      at all** — see the ROADMAP entry under this bullet's parent. Generic instances are emitted from
+    - **Found en route: nothing inside a generic type's or generic function's body was in the reference
+      index at all** — covering all of `lib/std`'s containers. Generic instances are emitted from
       `emitHeaderContent`, which runs before the per-unit loop that sets `_refUnit`, so every `recordRef`/
-      `recordDef` there is dropped. It covers all of `lib/std`'s containers. Not fixed here: it needs a
-      template → declaring-unit map during the header pass and touches the emission path.
+      `recordDef` there was dropped. Deferred out of A2 because it needs a template → declaring-unit map
+      during the header pass; **fixed in B3b** ([lsp-m6-b3-kickoff.md](lsp-m6-b3-kickoff.md)), where
+      `_declUnit`'s fill split into `buildDeclUnits()` so an instance attributes a template's body to the
+      TEMPLATE's unit rather than the instantiation's use site.
   - **A3 (undeclared-import diagnostic) ✅ SHIPPED.** The split it needed already existed in the right
     place: the *detection* is per-call while only the stderr message is warn-once-per-process, so the
     `Diagnostic` is built beside the flag and the `warnedFreeRide` set is untouched. Two things learned:
@@ -503,8 +592,38 @@ Settle decisions 1-4 → **M0** (library + query index + spans, `kama build` sta
 diagnostics = walking skeleton in VSCode) → **M2** (hover/def/symbols) → **M6** partial (client wiring so it's
 usable) → **M3** (refs/rename) → **M4** (completion/sig-help) → **M5** (recovery/incremental hardening).
 
-## Acceptance (v1)
+## Acceptance (v1) — restated at Stage D against what shipped
 
-In VSCode over the real extension: live diagnostics as you type, hover shows types, go-to-definition jumps,
-outline populates — driven by the C++ server reusing the compiler front end, with `kama build` unregressed and
-a stdio-driven test harness (`tools/check-lsp.sh`).
+The original acceptance, written at M0, read: *"In VSCode over the real extension: live diagnostics as you
+type, hover shows types, go-to-definition jumps, outline populates."* The campaign overshot it by enough
+that it no longer named the deliverable. What v1 actually is:
+
+**One server — `kama lsp`, a subcommand of the compiler reusing its front end — serving every editor with a
+generic LSP client.** Features, all live as you type and all answering off a partial index on a broken
+buffer: diagnostics (parse **and** semantic), hover, go-to-definition, document outline, find-references,
+**project-wide rename**, workspace symbol search, completion (members after `.` and `::`, names in scope,
+keywords, import paths, and **argument labels** — the language's most-used context, since kama has no
+positional arguments), signature help, semantic tokens, and build-configuration awareness (the editor
+analyzes the program `kama build` analyzes, switchable without a restart through `kama.local.json`).
+
+**Editors ([editors.md](../editors.md)) — eight, of which four were verified against a running editor:**
+VS Code (the in-repo client, with a build-configuration status bar and picker), **Neovim 0.12.4**,
+**Emacs 30.2** (eglot) and **Helix 25.07.1** — each attaching, receiving the server's watcher registration,
+and answering hover/definition/references/rename/outline. Documented but **not** verified, and the page says
+so per editor: Vim (coc.nvim), Sublime Text and Kate — each needs a human at a GUI.
+
+**Unregressed and guarded:**
+
+| Gate | Standing at Stage D |
+| --- | --- |
+| `./run_tests.sh` | 804 / 804 |
+| `tools/lspref.sh` — emission byte-identical | 537 fixtures, 0 `TRANSPILE_FAILED` |
+| `tools/check-lsp.sh` (stdio JSON-RPC session) | 153 assertions |
+| `tools/check-query.sh` (CLI query + coverage tables) | 227 assertions |
+| `tools/check-editors.sh` | one status line asserted per editor |
+| `tools/lsp-bench.sh --lsp` | ~91 ms per keystroke (measured at Stage D; 12 timing lines), budget 100 |
+| Sanitized compiler (`-fsanitize=address,undefined`), both harnesses | clean on macOS **and** in the container |
+
+⚠️ That last row is a **manual** step — the `KAMA_SAN=1` leg sanitizes *generated programs* and gates
+check-lsp/check-query off, so the LSP C++ needs its own run. It is what caught M4's out-of-bounds read, and
+macOS ASan has no LeakSanitizer, which is why it runs on both platforms.

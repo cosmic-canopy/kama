@@ -711,6 +711,13 @@ Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Ma
 — `fn Ordering compareTo(ref This other)` with retro-impls for every int/float/string — the bound for
 `PriorityQueue` + the sorted containers.)
 
+**Fixed-point — `Q16_16`.** A signed 16.16 `type value` in the same module, for FPU-less targets and for
+exact fractional arithmetic: `+ - * /` through operator overloading (multiply and divide widen through
+`int64` and re-scale), `fromInt`/`toInt`/`fromFloat`/`toFloat`, and saturating `satAdd`/`satSub`/`satMul`.
+The base operators trap on overflow like every other integer op above; the `sat*` forms clamp. Pure
+library, no compiler support. (A generic `Fixed<intBits, fracBits>` stays optional — see
+[MCU_READINESS.md](MCU_READINESS.md) for the no-FPU story it belongs to.)
+
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:
 - **Signed overflow** (`+`/`-`/`*`) **traps** in debug builds (catches the accidental-overflow bug during
