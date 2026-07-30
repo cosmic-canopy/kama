@@ -1,0 +1,24 @@
+// LSP M6 B3 fixture, DECLARING half — a generic type whose members are the symbols under test.
+//
+// Owned by tools/check-query.sh; the layout is asserted, so adding or reflowing a line means updating it.
+// Deliberately a SEPARATE unit from use.kama, and instantiated TWICE there: a generic member's def-site
+// belongs to the TEMPLATE, and every instantiation re-walks these very nodes. Getting that wrong two ways
+// still passes a one-file, one-instantiation test — which is why this fixture is neither.
+//
+// Its own kama.json (with `sources`) keeps it a declared project, so it is never widened by inference.
+namespace lib;
+
+export { Box, firstOr };
+
+type value Box<T> {
+    // L15: col 13 = `v` (the field declaration), col 41 = its use in the method body below
+    public T v;
+    // L17: col 17 = `get` (the method declaration), col 39 = the `this.v` inside a generic BODY
+    public fn T get() { return this.v; }
+    // L19: col 21 = `replace`, col 33 = its parameter `next`, col 51 = the body use
+    public fn void replace(T next) { this.v = next; }
+}
+
+// A generic FREE function: its body is a template too, re-emitted once per instantiation.
+// L24: col 8 = `firstOr`, col 20 = the param `fallback`, col 39 = the body use
+fn T firstOr<T>(T fallback) { return fallback; }

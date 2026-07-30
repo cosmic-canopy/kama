@@ -456,6 +456,48 @@ expect --type 14:12 -- "param amount"
 reject --type 10:22 -- "param 3"
 
 # ---------------------------------------------------------------------------------------------------
+# M6 B3a/B3b — METHOD CALL SITES, and the inside of a GENERIC body.
+#
+# Before B3 a method's uses were in the index for no type at all, generic or not, while its DECLARATION was
+# — so rename offered itself and then rewrote the declaration alone, leaving a buffer that no longer
+# compiled. And nothing inside a generic body was indexed, because instances are emitted from
+# emitHeaderContent, before the loop that sets `_refUnit`.
+#
+# TWO instantiations, in a unit that is not the declaring one. That combination is the whole test: a
+# one-file, one-instantiation fixture passes under designs that canonicalize the instance key onto the
+# template, and those break the moment a second key shape exists.
+FIXTURE="$ROOT/tests/query/generics/lib.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo "check-query: M6 B3 generic members + method calls"
+# A generic type's FIELD is ONE symbol: its declaration, both uses inside the template body, and the use
+# through EACH instantiation. `Box<int32>` and `Box<bool>` resolve through different instances
+# (`Box_int32__v`, `Box_bool__v`); only the template's own declaration node is common to both.
+expect --project --refs 15:13 -- "lib.kama:15:13"        # the declaration
+expect --project --refs 15:13 -- "lib.kama:17:36"        # `this.v` inside the generic BODY (B3b)
+expect --project --refs 15:13 -- "lib.kama:19:42"        # and in a second method of the same template
+expect --project --refs 15:13 -- "use.kama:12:7"         # through Box<int32>
+expect --project --refs 15:13 -- "use.kama:17:7"         # through Box<bool> — the SAME symbol
+# ONE def-site however many instantiations exist: exactly one line names the declaration itself.
+n=$("$KAMA" query "$FIXTURE" --project --refs 15:13 2>&1 | grep -c "lib.kama:15:13")
+if [ "$n" = 1 ]; then echo "  ok: two instantiations yield ONE def-site for the field"
+else echo "  FAIL: expected 1 def-site line for the field, got $n" >&2; fail=1; fi
+# A generic type's METHOD, likewise — and these are CALL sites, which is B3a.
+expect --project --refs 17:16 -- "lib.kama:17:16"
+expect --project --refs 17:16 -- "use.kama:13:17"
+expect --project --refs 17:16 -- "use.kama:18:16"
+
+FIXTURE="$ROOT/tests/query/generics/use.kama"
+# From the call site: go-to-definition lands on the template's declaration, not on any instance, and hover
+# names the member through the TEMPLATE (`Box.get`, never `Box_int32.get`).
+expect --def 13:17  -- "lib.kama:17:16"
+expect --type 13:17 -- "method Box.get"
+expect --def 12:7   -- "lib.kama:15:13"
+expect --type 12:7  -- "field v"
+# A generic method's PARAMETER reaches its call-site label too (the A2 path, through a template body).
+expect --def 19:15  -- "lib.kama:19:29"
+
+# ---------------------------------------------------------------------------------------------------
 # M6 B3 — the reference index's COVERAGE ORACLE.
 #
 # Every assertion above tests a spelling somebody thought of. That is exactly how a method's call sites

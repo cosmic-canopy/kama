@@ -1121,7 +1121,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (owner) {
                 if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);
                 checkFieldAccess(owner, nm, v->line);
-                recordRef(fieldKey(owner->name, nm), v);   // implicit `this.` field read
+                recordFieldRef(owner, nm, v);   // implicit `this.` field read
                 return "self->" + basePathTo(_currentClass, owner) + nm;
             }
         }
@@ -1153,7 +1153,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (_currentClass && _currentClass->base) {
             ClassInfo* owner = findFieldOwner(_currentClass->base, name);
             if (owner) { checkFieldAccess(owner, name, ba->line);
-                         recordRef(fieldKey(owner->name, name), ba->identifier.get());
+                         recordFieldRef(owner, name, ba->identifier.get());
                          return "self->__base." + basePathTo(_currentClass->base, owner) + name; }
         }
         unsupported("base access", ba->line);
@@ -6106,6 +6106,12 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     if (tit == _generics.end()) return;
     FunctionDeclarationNode* tmpl = tit->second;
 
+    // M6 B3: this body is the TEMPLATE's source, re-walked once per instantiation, so every use-site it
+    // records belongs to the template's unit — never the instantiation's use site, which would scatter one
+    // declaration's references across every caller's file at the template's own coordinates. A prelude/std
+    // template yields nullptr, which correctly disables recording for a body the user cannot edit.
+    RefUnitScope refScope(this, unitOfDecl(tmpl));
+
     NsCtx savedCtx = _nsCtx;
     auto cit = _genericCtx.find(gi.templateKey);
     if (cit != _genericCtx.end()) _nsCtx = cit->second;
@@ -7187,17 +7193,18 @@ std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
 }
 
 std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
-                                       const std::string& method, SharedArgumentList args, int srcLine)
+                                       const std::string& method, SharedArgumentList args, int srcLine,
+                                       const IdentifierNode* site)
 {
     // An intrinsic on the pointer itself (lock/expired/valid)?
     if (_classes[cls].methods.count(method))
-        return emitDispatch(cls, "&(" + recvExpr + ")", method, args, srcLine);
+        return emitDispatch(cls, "&(" + recvExpr + ")", method, args, srcLine, site);
     // an owned INTERFACE handle dispatches polymorphically through its own {obj, vtbl}.
     if (isInterface(_classes[cls].collElemClass) && smartKind(cls) != CollKind::Weak)
         return emitInterfaceDispatch(recvExpr, _classes[cls].collElemClass, method, args, srcLine, cls);
     // Otherwise auto-deref to the pointee T (Owned/Shared expose a T* ptr).
     if (smartKind(cls) != CollKind::Weak)
-        return emitDispatch(_classes[cls].collElemClass, "(" + recvExpr + ").ptr", method, args, srcLine);
+        return emitDispatch(_classes[cls].collElemClass, "(" + recvExpr + ").ptr", method, args, srcLine, site);
     unsupported(("Weak<T> has no member '" + method + "'; call .tryUpgrade()").c_str(), srcLine);
     return "0";
 }
@@ -8297,7 +8304,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         // (free fns, methods, virtual dispatch, ctors, bound closures, operators — 29 call sites), so one
         // line covers them all. A no-op in build mode, and free of duplicates: buildPositions dedups by
         // IdentifierNode*, so a generic body re-emitted per instantiation records the same label once.
-        recordLabelRef(f->second->name.get(), p.declSite);
+        recordNodeRef(f->second->name.get(), p.declSite);
         // unwrap a give/copy hand-off marker. The inner value is what we emit;
         // the marker (give=move / copy=retain) only matters for a smart pointer passed
         // BY VALUE (ownership transfer) — it's meaningless on a borrow.
@@ -9456,6 +9463,7 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
                     ClassInfo* owner = nullptr;
                     MethodInfo* mi = findMethod(&_classes[cls], *id->value, &owner);
                     if (mi) {
+                        recordNodeRef(id, mi->node);   // M6 B3a: `Type::m` as a fn pointer references m
                         FuncSig full;                          // receiver-first signature
                         full.cName    = mi->cName;
                         full.retCType = cType(mi->returnType);
@@ -9522,6 +9530,7 @@ void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
     ClassInfo* owner = nullptr;
     MethodInfo* mi = _classes.count(cls) ? findMethod(&_classes[cls], *mid->value, &owner) : nullptr;
     if (!mi) { unsupported("unknown method in BindableFunctionPtr method:", ln); return; }
+    recordNodeRef(mid, mi->node);   // M6 B3a: `method:` names the method, same as any other call site
     if (cls != T) {
         unsupported("BindableFunctionPtr obj: type does not match the method's class", ln); return;
     }
@@ -10488,6 +10497,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 ClassInfo* owner = nullptr;
                 MethodInfo* mi = findMethod(_currentClass->base, m, &owner);
                 if (!mi) { unsupported("unknown base method", call->line); return "0"; }
+                recordNodeRef(ba->identifier.get(), mi->node);   // M6 B3a: `base.m()` references the base's m
                 std::string self = "(" + owner->name + "*)&self->__base";
                 return emitReorderedCall(mi->cName, self, mi->params, call->args, call->line);
             }
@@ -10654,6 +10664,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             MethodInfo* mi = findMethod(stci, name, &owner);
             if (mi && mi->isStatic) {
                 canAccess(owner, mi->visibility, name, call->line);
+                recordNodeRef(call->identifier.get(), mi->node);   // M6 B3a: `Type::m()` references m
                 // a place-returning `static fn ref T` returns a `T*` — deref like a free fn (no self)
                 return placeWrap(emitReorderedCall(mi->cName, "", mi->params, call->args, call->line),
                                  mi->isPlaceReturn);
@@ -12477,6 +12488,10 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     auto cit = _classes.find(gi.mangledName);
     if (cit == _classes.end()) return;
     ClassInfo& ci = cit->second;
+    // M6 B3: attribute the instance's bodies to the TEMPLATE's unit — see emitGenericInst for why. The
+    // template ClassInfo lives in _genericTypes (never in _classes), and its `.node` is the template decl.
+    auto tmplIt = _genericTypes.find(gi.templateKey);
+    RefUnitScope refScope(this, tmplIt == _genericTypes.end() ? nullptr : unitOfDecl(tmplIt->second.node));
     NsCtx savedCtx = _nsCtx;
     // emit under the USE-SITE ctx (so a prelude template's user-type args resolve); for a
     // same-scope user generic this equals the template's home ctx.
@@ -12864,14 +12879,14 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         std::string basePath;
         ClassInfo* owner = findFieldOwner(&_classes[T], field);
         if (owner) { basePath = basePathTo(&_classes[T], owner); checkFieldAccess(owner, field, ma->line);
-                     recordRef(fieldKey(owner->name, field), ma->identifier.get()); }
+                     recordFieldRef(owner, field, ma->identifier.get()); }
         return "(" + emitExpression(ma->expression) + ").ptr->" + basePath + field;
     }
     std::string basePath;
     if (!cls.empty() && _classes.count(cls)) {
         ClassInfo* owner = findFieldOwner(&_classes[cls], field);
         if (owner) { basePath = basePathTo(&_classes[cls], owner); checkFieldAccess(owner, field, ma->line);
-                     recordRef(fieldKey(owner->name, field), ma->identifier.get()); }
+                     recordFieldRef(owner, field, ma->identifier.get()); }
         else {
             // the field is NOT on the wrapper itself — auto-deref via a `Deref<T>` contract to the
             // pointee: `w.field` -> `Cls__deref(&(w))->[base]field` (a T*). (Only when not on `cls`.)
@@ -12882,7 +12897,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
                 MethodInfo* dref = findMethod(&_classes[cls], "deref", &dc);
                 std::string bp = basePathTo(&_classes[dtgt], fo);
                 checkFieldAccess(fo, field, ma->line);
-                recordRef(fieldKey(fo->name, field), ma->identifier.get());
+                recordFieldRef(fo, field, ma->identifier.get());
                 if (dref) return dref->cName + "(&(" + emitExpression(ma->expression) + "))->" + bp + field;
             }
         }
@@ -12899,7 +12914,8 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
 
 // Dispatch a method call on a receiver of static class `clsName`.
 std::string CEmitter::emitDispatch(const std::string& clsName, const std::string& recvPtr,
-                                   const std::string& method, SharedArgumentList args, int srcLine)
+                                   const std::string& method, SharedArgumentList args, int srcLine,
+                                   const IdentifierNode* site)
 {
     if (!_classes.count(clsName)) { unsupported("call on unknown class", srcLine); return "0"; }
     ClassInfo* owner = nullptr;
@@ -12913,11 +12929,18 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
         MethodInfo* dref = tgt.empty() ? nullptr : findMethod(&_classes[clsName], "deref", &dc);
         if (dref && _classes.count(tgt) && findMethod(&_classes[tgt], method, nullptr)) {
             std::string derefed = dref->cName + "((" + clsName + "*)" + recvPtr + ")";
-            return emitDispatch(tgt, derefed, method, args, srcLine);
+            return emitDispatch(tgt, derefed, method, args, srcLine, site);
         }
         unsupported("unknown method", srcLine); return "0";
     }
     if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);
+    // M6 B3a: the spelling at `site` is a REFERENCE to the method just resolved — the single most common
+    // one in the language, and until B3 it reached the index from nowhere, so F2 on a method rewrote the
+    // declaration and left every call spelling the old name. One record here covers the virtual, the
+    // devirtualized and the direct paths; the auto-deref fallback above passes `site` down and records at
+    // the level that actually resolves. Recorded by NODE (mi->node is null for an intrinsic, which drops
+    // it) so a generic instance's call collapses onto the template's one declaration.
+    recordNodeRef(site, mi->node);
 
     if (mi->isVirtual) {
         // Devirtualize when the concrete target is unique for every possible dynamic type: a
@@ -13000,6 +13023,7 @@ std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode*
                      + disp + "`").c_str(), lineNo);
         return "";
     }
+    recordNodeRef(oc->ctorName.get(), mi->node);   // M6 B3a: `new Type.name(...)` references the ctor
     if (mi->returnType && mi->returnType->value && *mi->returnType->value == "Result") {
         // Reached only from an INFALLIBLE box path (concrete/interface/library smart-ptr target) — a fallible
         // ctor there means the declared result type is wrong. Fallible `new` into a concrete `Owned`/`Shared`
@@ -13060,6 +13084,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         return "";
     }
     canAccess(owner, mi->visibility, cn, srcLine);
+    recordNodeRef(oc->ctorName.get(), mi->node);   // M6 B3a: fallible `new Type.name(...)`, same reference
 
     // The declared result must be `Result<Owned<T>|Shared<T>, E>`. Pull the inner smart-ptr `S` and the
     // error field straight off the monomorphized `Result` ClassInfo — its payload types are substituted-concrete.
@@ -13535,6 +13560,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         return "0";
     }
     canAccess(owner, mi->visibility, method, call->line);
+    recordNodeRef(recv->identifier.get(), mi->node);   // M6 B3a: `Type.name(...)` references the ctor
     return emitReorderedCall(mi->cName, "", mi->params, call->args, call->line);
 }
 
@@ -13762,7 +13788,8 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     }
     // Smart-pointer receiver: an intrinsic (lock/expired/valid) or auto-deref to T.
     if (isSmartPtrClass(cls))
-        return emitSmartPtrCall(cls, emitExpression(receiver), method, call->args, call->line);
+        return emitSmartPtrCall(cls, emitExpression(receiver), method, call->args, call->line,
+                                recv->identifier.get());
     if (isInterface(cls))
         return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line);
     // A PRIMITIVE receiver with a retroactive conformance (`implements Hashable for int32`): the method's
@@ -13865,7 +13892,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             recvPtr = addrOfOperand(receiver, cls, call->line);
         }
     }
-    std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line);
+    std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line, recv->identifier.get());
     // a place-returning `fn ref T m(…)` returns a `T*`; deref it so the call is an lvalue EVERYWHERE
     // (read copies out; `m(…) = x` writes through; `m(…).f` / `ref m(…)` / nesting all compose via the
     // existing lvalue paths). `&(*…)` folds, so a chained `a.at(i).at(j)` stays clean ISO C.
@@ -14039,6 +14066,12 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // symbol never exists and no downstream pass needs to know the feature exists. Prelude/built-in
     // units carry no `@compileFor`, so pruning them is a harmless no-op.
     for (auto& u : units) pruneInactiveDecls(u);
+
+    // Decl -> owning unit, needed DURING emission (M6 B3): a generic instance's body is emitted from the
+    // header pass, and its use-sites belong to the TEMPLATE's unit, which only unitOfDecl can name. Must
+    // come after pruning, which rewrites the decl lists in place. buildDefSites rebuilds this later anyway;
+    // analysis-only, so a build pays nothing.
+    if (_analysis) buildDeclUnits();
 
     // Assign each file its namespace context (public namespace or _F<idx> private)
     // and register public namespaces, before any name resolution.
@@ -14798,15 +14831,10 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
 void CEmitter::emitModuleContent(SharedCompilationUnit unit)
 {
     _nsCtx = _unitCtx[unit.get()];   // resolve this file's body references in its scope
-    // M3: attribute every body use-site recorded below to this unit. Save/restore rather than assign so a
-    // nested emission (nothing does this today) can't strand the pointer; outside here recordRef sees
-    // nullptr and drops the record — header/prelude type refs are covered by buildPositions' own walk.
-    const CompilationUnit* savedRefUnit = _refUnit;
-    _refUnit = unit.get();
-    struct RefUnitGuard {
-        const CompilationUnit** slot; const CompilationUnit* prev;
-        ~RefUnitGuard() { *slot = prev; }
-    } refUnitGuard{ &_refUnit, savedRefUnit };
+    // M3: attribute every body use-site recorded below to this unit. Outside a scope like this one
+    // recordRef sees nullptr and drops the record — header/prelude type refs are covered by
+    // buildPositions' own walk, and a generic instance sets its own (the TEMPLATE's unit; M6 B3).
+    RefUnitScope refScope(this, unit.get());
     auto classOf = [&](ASTNode* d) -> ClassInfo* {
         auto* cd = dynamic_cast<ClassDeclarationNode*>(d);
         if (cd && cd->name && cd->name->value) {

@@ -617,55 +617,48 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   never fires, `tools/check-syntax.sh` now runs the real vscode-textmate engine over `tests/syntax/` and
   layers committed snapshots, `kama check` agreement, and the 13 findings asserted by name. On top of it,
   `textDocument/semanticTokens/full` colours by what the RESOLVER concluded — free, being a read off the
-  cached index. **NEXT / ACTIVE: M6 B3** (the generic-body reference index), then **Stage C** (editor
+  cached index. **M6 B3a/B3b SHIPPED; NEXT / ACTIVE: the rest of B3** (B3c-B3f, enumerated below by the
+  coverage oracle), then **Stage C** (editor
   clients + `docs/editors.md` + the VS Code status-bar picker), then Stage D exit. Cold-start brief:
   [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md), which carries an as-shipped record of Stage A and a
   re-derived seam map for B/C. Status of record: [design/lsp.md](design/lsp.md).
-  - **⚠️⚠️ RENAMING A METHOD SILENTLY BREAKS THE BUFFER — found 2026-07-29, fixed by M6 B3.** A method's
-    CALL SITES are in the reference index for **no type at all**, generic or not: of the 13 `recordRef`
-    sites in the emitter, none is a method invocation (they are types, FREE functions, fields, enum
-    members and bindings). The method still gets a def-site from the `_classes` loop, so
-    `prepareRename` OFFERS F2 and `rename` returns exactly one edit — the declaration — leaving every
-    `p.get()` spelling the old name. Verified end-to-end over the protocol, not inferred.
-    This is strictly worse than the generic gap below, where an absent def-site makes rename correctly
-    REFUSE. Reproduce: `--refs` on a field returns its uses; `--refs` on a method beside it returns only
-    its own declaration. Brief: [design/lsp-m6-b3-kickoff.md](design/lsp-m6-b3-kickoff.md).
-  - **⚠️ KNOWN GAP, found during M6 A2 — nothing inside a GENERIC type's or generic function's body is in
-    the reference index.** Params, locals, `foreach`/`match` bindings and body use-sites all go
-    unrecorded, so find-references, rename, hover and semantic tokens answer nothing there. It covers all
-    of `lib/std`'s containers (`DynamicArray<T>.add(item:)` and friends), which is most of what a user
-    calls. **This is M6 B3, and it was attempted and deliberately stopped in the Stage B session** under a
-    fallback agreed with the user beforehand — it is a milestone, not the wiring job this entry used to
-    describe. The diagnosis below is verified, not reasoned; the full write-up with seams is in
-    [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md) § B3.
-    - **The cause this entry already named is real, and it is the EASY half.** Generic instances are
-      emitted from `emitHeaderContent` (`emitGenericInst` / `emitGenericTypeInst`), which runs before the
-      per-unit loop that sets `_refUnit`, and `recordRef`/`recordDef` drop everything while it is null.
-      Splitting `_declUnit`'s fill out of `buildDefSites` (it needs nothing but `_units`, so
-      `collectProgram` can call it once `pruneInactiveDecls` has settled the decl list) and setting
-      `_refUnit` to the template's declaring unit **works, and keeps emission byte-identical across all
-      537 lspref fixtures**. The duplicate-per-instantiation worry is already handled: `buildPositions`
-      dedupes by (unit, `IdentifierNode*`) and `buildDefSites` overwrites `_defSites[key]`.
-    - **⚠️ Two blockers this entry did NOT name are the actual work.** (1) A generic template's MEMBERS
-      have no def-sites at all — the `_genericTypes` loop registers only the template's own name, and the
-      loop that registers fields/methods/ctors skips `isGenericInst` while the template is deliberately
-      kept out of `_classes`. (2) Recorded refs carry the INSTANCE key (`field:Box_int32::v`), not the
-      template's, so `Box<int32>` and `Box<string>` would each own a private copy of one source
-      declaration. Splitting references per instantiation is *worse* than answering nothing: rename would
-      rewrite some call sites and silently miss others.
-    - **The good solution is A2's inversion, generalized: record the declaration NODE, not a key.**
-      Canonicalizing instance keys onto the template is string surgery over two key shapes that a third
-      will outgrow. But a key built at record time embeds ambient context that is wrong — for labels the
-      caller's unit, here the instance's mangled name — and A2 already answered that by storing the
-      declaration node and resolving node → key after `buildDefSites`. It works here because every
-      instantiation walks the SAME template AST nodes, which the code already relies on, so all instances
-      collapse onto one key with no mapping table. `_labelRefs` + `paramKeyOf` is the working precedent;
-      B3 generalizes it from parameters to members, and `FieldInfo::nameId` / `MethodInfo::node` are
-      already what the member lookup returns. Test against TWO instantiations from the start: a
-      single-instantiation fixture passes under several wrong designs.
-    - Silver lining while it is open: because a def-site is absent, rename correctly *refuses* on these
-      rather than half-rewriting them. `tools/check-lsp.sh` pins the gap as an exact-array assertion
-      (request id 56) so closing it cannot be silent.
+  - **M6 B3a/B3b SHIPPED 2026-07-30 — a method's call sites, and the inside of a generic body, are now
+    indexed.** Both were one fix: record the referent's DECLARATION NODE rather than a key, generalizing
+    the inversion M6 A2 paid for. A key built at record time embeds ambient context that is wrong for the
+    symbol (the caller's unit for a label, the *instance's* mangled name for a generic member), while every
+    instantiation walks the SAME template AST nodes — an instance `ClassInfo` is a copy of the template
+    shape — so `Box<int32>` and `Box<string>` collapse onto one key with no mapping table.
+    - What it took: `_labelRefs` generalized into one node-keyed `_nodeRefs` store; the 5 field record
+      sites CONVERTED (not added to — `buildPositions` dedups by node and first-wins, so a leftover
+      key-based record would shadow the node-based one); method records added at `emitDispatch` and at the
+      static, `base.`, named-ctor, `new`, and fn-pointer-bind forms; the generic template's MEMBERS given
+      def-sites (the `_genericTypes` loop registered only the template's own name); and `_declUnit`'s fill
+      split into `buildDeclUnits()` so instance emission can attribute a template's body to the TEMPLATE's
+      unit rather than the instantiation's use site.
+    - **Renaming a method now rewrites its call sites** — including through two different instantiations,
+      as one symbol. `tools/check-lsp.sh` asserts the rename itself (ids 57-59), not only a query: the
+      query returning nothing was survivable, the rename half-applying was not. The id-56 exact-array pin
+      changed, which is exactly what it was there for.
+    - Cost: ~+3 ms per keystroke (86 -> 89 ms median, controlled A/B), because generic bodies are now
+      walked for records at all. Inside the 100 ms budget. Emission byte-identical across 537 fixtures.
+  - **The gaps that remain are ENUMERATED, not waiting to be thought of.** B3a survived the whole campaign
+    because the index is built by instrumenting the emitter, so it is exactly as complete as the set of
+    sites someone remembered — and every test asserted a spelling somebody had thought of. `kama query
+    <file> --coverage` (B3 stage 0) asks the other question: for every identifier the SOURCE spells, what
+    does the index know? `tests/query/coverage/*.kama` spell every naming construct the language has and
+    the checked-in `*.coverage` tables beside them are compared whole by `tools/check-query.sh`, so a gap
+    is a diff. It took the gap list from 64 identifiers to 35, and named four remaining items:
+    - **B3c — contract methods.** `InterfaceMethod` carries no declaration node, and `buildDefSites`
+      registers contracts but not their methods, so neither `fn int32 speak();` inside a `type contract`
+      nor any fat-pointer call site can be indexed. Renaming a contract-implementing method still
+      half-applies — less broken than before B3a (direct calls now rename), but the real fix needs a
+      symbol-group/override-set design so the contract decl, every implementation and every call site
+      rename together.
+    - **B3d — the type QUALIFIER of a member call.** `Point` in `Point.at(…)`, `Color` in `Color::Green`,
+      `DynamicArray` in `DynamicArray.empty()`. The same spelling as a type ANNOTATION indexes fine; these
+      paths just resolve without passing a `site`.
+    - **B3e — enum payload fields**, at their declaration and at the construction label.
+    - **B3f — import paths and namespace names.**
 - **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
   liftable out of the monorepo to stand alone. Design of record:
   [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:

@@ -1,0 +1,23 @@
+// LSP M6 B3 fixture, CONSUMING half — two instantiations of the same template, in a unit that is not the
+// declaring one. One declaration must stay ONE symbol: `Box<int32>` and `Box<bool>` resolve through two
+// different instances (`Box_int32__get`, `Box_bool__get`), and only the node the template declared is
+// common to both.
+
+
+import lib::{Box, firstOr};
+
+fn int32 main() {
+    Box<int32> bi;
+    // L11: col 7 = `v` through Box<int32>, L12 col 7 = `get` through the same instance
+    bi.v = 1;
+    int32 a = bi.get();
+
+    Box<bool> bs;
+    // L16/L17: the SECOND instantiation — a different instance, the same two symbols
+    bs.v = false;
+    bool b = bs.get();
+    bs.replace(next: true);
+
+    int32 f = firstOr(fallback: 7);       // L20 col 14 = the generic free fn, col 22 = its label
+    return a + f + (b ? 0 : 1);
+}

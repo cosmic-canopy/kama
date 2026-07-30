@@ -75,11 +75,31 @@ XDROP='type value ! Widget {\n    public int32 w;\n}\nfn int32 use() {\n    Widg
 TOKURI="file:///semtok.kama"
 TOKB='type value P {\n    int32 x;\n    public ctor make(int32 v) { P r; r.x = v; return give r; }\n}\nfn int32 main() { P p = P.make(v: 1); return p.x; }\n'
 
-# TOKG documents the KNOWN GAP (ROADMAP §10, found in M6 A2): nothing inside a GENERIC type's body reaches
-# the reference index, because generic instances are emitted from emitHeaderContent — before the per-unit
-# loop that sets `_refUnit`, and recordRef/recordDef drop everything while it is null. So `T`, `v`, `r` and
-# `get` produce NO tokens here while the type NAME does. Asserted as an exact array on purpose: when B3
-# closes the gap this assertion must be updated, which makes the fix visible rather than silent.
+# TOKG is the GENERIC-body fixture. It documented the M6 A2-era gap (nothing inside a generic type's body
+# reached the reference index) as an exact array, precisely so that closing it in B3 could not be silent —
+# and B3 closed it. Two things are asserted through it now: that a template's members are indexed at all,
+# and that one declaration stays ONE symbol however many instantiations exist.
+# M6 B3a fixtures: RENAMING A METHOD — the assertion that would have caught the bug. A `--refs` query
+# returning nothing was survivable; rename half-applying was not, because prepareRename still OFFERED F2
+# (the method HAS a def-site, from the _classes loop — it was only its uses that were missing) and the
+# resulting WorkspaceEdit rewrote the declaration while every call kept the old name. That does not fail
+# loudly: it produces a buffer that no longer compiles.
+#
+# Layout (LSP 0-based lines, 0-based chars):
+#   L2 `    public fn int32 get() { return this.x; }` -> `get` decl at 20..23
+#   L4 `fn int32 main() { P p; p.x = 1; return p.get(); }` -> the CALL `get` at 41..44
+MRURI="file:///methodrename.kama"
+MREN='type value P {\n    public int32 x;\n    public fn int32 get() { return this.x; }\n}\nfn int32 main() { P p; p.x = 1; return p.get(); }\n'
+
+# The generic half. TWO instantiations, each with its OWN call, on purpose: a single-instantiation fixture
+# passes under designs that canonicalize the instance key onto the template, which would break the moment a
+# second key shape appeared. `Box<int32>` and `Box<bool>` resolve through different instances and must land
+# on ONE symbol — three edits, no duplicate over any range, and none at the instances' mangled names.
+#   L2 `    public fn T get() { return this.v; }` -> `get` decl at 16..19
+#   L4 `... return bs.get() ? bi.get() : 0; }`   -> the two calls at 80..83 and 91..94
+MGURI="file:///genrename.kama"
+MGEN='type value Box<T> {\n    public T v;\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> bi; bi.v = 1; Box<bool> bs; bs.v = false; return bs.get() ? bi.get() : 0; }\n'
+
 TOKGURI="file:///semtokgen.kama"
 TOKG='type value Box<T> {\n    T v;\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> b; b.v = 7; return b.get(); }\n'
 
@@ -347,6 +367,15 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":55,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"'"$TOKURI"'"}}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$TOKGURI"'","languageId":"kama","version":1,"text":"'"$TOKG"'"}}}'
 frame '{"jsonrpc":"2.0","id":56,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"'"$TOKGURI"'"}}}'
+# --- M6 B3a: RENAMING A METHOD. 57 = prepareRename on the declaration (F2 was already offered before B3 —
+#     that is what made this a silent edit rather than a missing feature); 58 = the rename itself, which
+#     must reach the CALL SITE; 59 = the same from a generic template, where two instantiations must still
+#     leave one symbol.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$MRURI"'","languageId":"kama","version":1,"text":"'"$MREN"'"}}}'
+frame '{"jsonrpc":"2.0","id":57,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MRURI"'"},"position":{"line":2,"character":20}}}'
+frame '{"jsonrpc":"2.0","id":58,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$MRURI"'"},"position":{"line":2,"character":20},"newName":"fetch"}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$MGURI"'","languageId":"kama","version":1,"text":"'"$MGEN"'"}}}'
+frame '{"jsonrpc":"2.0","id":59,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$MGURI"'"},"position":{"line":2,"character":17},"newName":"fetch"}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -487,25 +516,47 @@ expect '"semanticTokensProvider":{"legend":{"tokenTypes":["class","struct","inte
 #   L3c27 v     parameter+decl  L3c32 P   struct          L3c34 r    variable+decl
 #   L3c37 r     variable        L3c39 x   property        L3c43 v    parameter
 #   L3c58 r     variable        L5c9  main function+decl  L5c18 P    struct
-#   L5c20 p     variable+decl   L5c31 v   parameter       L5c45 p    variable
-#   L5c47 x     property
-# Two of those carry the milestone: ONE token at `P`'s decl name, though `_positions` holds two entries
+#   L5c20 p     variable+decl   L5c26 make METHOD         L5c31 v    parameter
+#   L5c45 p     variable        L5c47 x   property
+# Three of those carry a milestone. ONE token at `P`'s decl name, though `_positions` holds two entries
 # there (the ctor's implicit result type resolves through the class's own decl identifier, and the existing
 # de-duplication lives only in `_refIndex`) — the protocol forbids overlap, so the facade's own filter is
-# what makes that true. And `v` at L5c31 is an argument LABEL scoped as the callee's PARAMETER, which is
-# M6 A2's indexing showing up as colour.
-expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,5,1,1,0,0,2,1,8,1,0,3,1,8,0,0,2,1,7,0,0,4,1,9,0,0,15,1,8,0,2,9,4,5,1,0,9,1,1,0,0,2,1,8,1,0,11,1,9,0,0,14,1,8,0,0,2,1,7,0]}' \
+# what makes that true. `v` at L5c31 is an argument LABEL scoped as the callee's PARAMETER (M6 A2). And
+# `make` at L5c26 is M6 B3a: until B3 a method CALL was in the index for no type at all, so this token did
+# not exist and F2 on `make` rewrote the declaration alone. Note `P` at L5c24 — the type QUALIFIER of the
+# call — is still absent; that is B3d, and it is deliberately still open here.
+expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,5,1,1,0,0,2,1,8,1,0,3,1,8,0,0,2,1,7,0,0,4,1,9,0,0,15,1,8,0,2,9,4,5,1,0,9,1,1,0,0,2,1,8,1,0,6,4,6,0,0,5,1,9,0,0,14,1,8,0,0,2,1,7,0]}' \
        "semanticTokens/full -> delta-encoded tokens, deduped, non-overlapping, ascending"
-# ⚠️ KNOWN GAP (ROADMAP §10) asserted as a FACT so closing it cannot be silent. In
+# This assertion PINNED the pre-B3 gap as an exact array so that closing it could not be silent. B3 closed
+# it, so it changed — which is the whole point. In
 #   type value Box<T> {\n    T v;\n    public fn T get() { return this.v; }\n}\n
 #   fn int32 main() { Box<int32> b; b.v = 7; return b.get(); }
-# the only tokens are L1c11 Box (class+decl), L5c9 main, L5c18 Box, L5c29 b, L5c32 b, L5c48 b. There is NO
-# token for `T`, for `v` (neither its declaration NOR the `b.v` use), nor for `get` — nothing inside a
-# generic type's body reaches the reference index at all, because generic instances are emitted from
-# emitHeaderContent, before the per-unit loop that sets `_refUnit`. When B3 fixes that, THIS ASSERTION MUST
-# CHANGE; that is the point of spelling it out rather than counting tokens.
-expect '"id":56,"result":{"data":[0,11,3,0,1,4,9,4,5,1,0,9,3,0,0,0,11,1,8,1,0,3,1,8,0,0,16,1,8,0]}' \
-       "a generic type's BODY yields no tokens — the known index gap, pinned until B3 closes it"
+# the tokens are now L1c11 Box (class+decl), L2c6 v (property+decl), L3c16 get (method+decl), L3c36 v
+# (property, the `this.v` inside the generic BODY), L5c9 main, L5c18 Box, L5c29/32/48 b, L5c34 v, L5c50 get.
+# Before B3 only Box, main, Box and the three `b`s were here: nothing inside a generic body reached the
+# index (instances are emitted from emitHeaderContent, before the loop that sets `_refUnit`), and `b.v`
+# resolved to `field:Box_int32::v`, a key with no def-site behind it.
+#
+# `T` still yields NO token, and that is correct rather than a residual gap: inside the instance it is
+# substituted to `int32`, a builtin with no def-site, and semanticTokensFor emits nothing for a key it
+# cannot resolve. One `v` in the template also yields ONE symbol however many instantiations exist.
+expect '"id":56,"result":{"data":[0,11,3,0,1,1,6,1,7,1,1,16,3,6,1,0,20,1,7,0,2,9,4,5,1,0,9,3,0,0,0,11,1,8,1,0,3,1,8,0,0,2,1,7,0,0,14,1,8,0,0,2,3,6,0]}' \
+       "a generic type's BODY is indexed — declarations, uses, and one symbol per template (M6 B3b)"
+
+echo "check-lsp: M6 B3a renaming a method"
+# F2 was ALREADY offered before B3 — assert it, so the record shows this was never a refusal problem.
+expect '"id":57,"result":{"start":{"line":2,"character":20},"end":{"line":2,"character":23}}' \
+       "prepareRename on a method declaration spans the name"
+# The pair that matters. Before B3 the reply held the FIRST edit and not the second, and the buffer that
+# came back no longer compiled.
+expect '"id":58,"result":{"changes":{"file:///methodrename.kama":[{"range":{"start":{"line":2,"character":20},"end":{"line":2,"character":23}},"newText":"fetch"}' \
+       "renaming a method rewrites its declaration"
+expect '{"range":{"start":{"line":4,"character":41},"end":{"line":4,"character":44}},"newText":"fetch"}]}}' \
+       "...AND its call site, which was silently left behind before B3a"
+# A generic template: the declaration is inside a body that is re-emitted once per instantiation, and the
+# call resolves through the INSTANCE. One symbol, so exactly two edits — no duplicate over one range.
+expect '"id":59,"result":{"changes":{"file:///genrename.kama":[{"range":{"start":{"line":2,"character":16},"end":{"line":2,"character":19}},"newText":"fetch"},{"range":{"start":{"line":4,"character":81},"end":{"line":4,"character":84}},"newText":"fetch"},{"range":{"start":{"line":4,"character":92},"end":{"line":4,"character":95}},"newText":"fetch"}]}}' \
+       "renaming a generic method reaches BOTH instantiations' calls, as one symbol (M6 B3b)"
 
 echo "check-lsp: M4 completion + signature help"
 # The list is complete as sent: `isIncomplete:false` tells the client to filter it itself as the user

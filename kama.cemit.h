@@ -520,27 +520,39 @@ private:
     struct RecordedDef { const CompilationUnit* unit; const IdentifierNode* id; std::string key;
                          SymKind kind; std::string container; };
     std::vector<RecordedDef> _localDefs;
-    // M6 A2: a named-argument LABEL at a call site, which is a reference to the callee's PARAMETER. Every
-    // kama argument is named, so this is most of the call syntax, not a niche gesture — without it,
-    // renaming a parameter silently left every call site spelling the old label.
+    // A use-site recorded by the DECLARATION NODE it refers to, rather than by a key — the inversion M6 A2
+    // paid for and M6 B3 generalized. It exists because a key built at record time embeds AMBIENT CONTEXT
+    // that is wrong for the symbol being named. Two independent proofs of that:
     //
-    // Recorded as a POINTER TO THE PARAMETER'S DECLARATION rather than a key, and resolved to a key only
-    // after buildDefSites(). That inversion is not a style choice: `bindingKey` reads `_refUnit` for its
-    // file component, and at a call site `_refUnit` is the CALLER's unit while the parameter's DefSite was
-    // keyed under the DECLARING unit. Building the key here would therefore mismatch on every cross-unit
-    // call — and same-file calls would still appear to work, which is the worst possible failure mode for
-    // a test suite to face.
-    struct RecordedLabelRef { const CompilationUnit* unit; const IdentifierNode* label;
-                              const IdentifierNode* paramDecl; };
-    std::vector<RecordedLabelRef> _labelRefs;
+    //   - a named-argument LABEL (A2): `bindingKey` reads `_refUnit` for its file component, and at a call
+    //     site `_refUnit` is the CALLER's unit while the parameter's DefSite was keyed under the DECLARING
+    //     unit. Every cross-unit call would mismatch — while same-file calls kept working, which is the
+    //     worst possible failure mode for a test suite to face.
+    //   - a generic MEMBER (B3): `b.v` on a `Box<int32>` resolves through the INSTANCE, so the key spells
+    //     `field:Box_int32::v` while the only def-site is the template's. Canonicalizing the key would be
+    //     string surgery over two shapes that a third would outgrow.
+    //
+    // Recording the node dissolves both, because every instantiation walks the SAME template AST nodes
+    // (an instance ClassInfo is a copy of the template shape — see the `_genericTypes[tmpl]` copy in
+    // registerGenericTypeInst). `Box<int32>` and `Box<string>` therefore arrive at one node and collapse
+    // onto one key with no mapping table, and the answer cannot drift when a new key shape appears.
+    // buildPositions resolves node -> key after buildDefSites, so it is also independent of walk order.
+    struct RecordedNodeRef { const CompilationUnit* unit; const IdentifierNode* site;
+                             const ASTNode* declNode; };
+    std::vector<RecordedNodeRef> _nodeRefs;
     std::map<std::string, std::vector<Location>> _refIndex;   // DefSite key -> every USE site of that symbol
     const CompilationUnit* _refUnit = nullptr;   // unit whose bodies are being walked (set in emitModuleContent)
     bool _analysis = false;                      // analysis-mode ctor => record references; a build records none
     void recordRef(const std::string& key, const IdentifierNode* site);  // pure append; no diagnostics, no cType
     void recordDef(const std::string& key, const IdentifierNode* site, SymKind kind,
                    const std::string& container);                        // pure append (M3.4 bindings)
-    // pure append (M6 A2 argument labels) — keyed later, off the parameter's declaration node
-    void recordLabelRef(const IdentifierNode* label, const IdentifierNode* paramDecl);
+    // pure append, keyed later off the referent's DECLARATION node (see RecordedNodeRef above). `declNode`
+    // is whatever buildDefSites keyed that symbol's DefSite on: a parameter's identifier, a field's
+    // `nameId`, a method's ClassMethodDeclarationNode.
+    void recordNodeRef(const IdentifierNode* site, const ASTNode* declNode);
+    // A FIELD use-site, by node. `owner` is the DECLARING class (findFieldOwner), which for a generic
+    // instance still carries the template's own `nameId` — that is what makes one field one symbol.
+    void recordFieldRef(const ClassInfo* owner, const std::string& name, const IdentifierNode* site);
     // M3.4 keys. These name symbols the resolvers never produce a mangled name for, so they are PREFIXED —
     // an index-only namespace that cannot collide with a resolveUserName/resolveFunc result. A binding is
     // keyed by its DECLARATION SITE, which is what makes two same-named locals in sibling scopes (or in two
@@ -555,8 +567,21 @@ private:
     // rest of its scope (SymKind::Param goes to _paramDeclKeys, everything else to the innermost scope).
     // A no-op outside analysis mode, so `kama build` pays nothing.
     void registerBinding(const IdentifierNode* declSite, SymKind kind);
+    // Attribute every top-level decl to its owning USER unit (_declUnit). Split out of buildDefSites and
+    // ALSO called from collectProgram, because generic-instance emission needs unitOfDecl while it runs —
+    // long before buildDefSites. Depends on nothing but _units, and is idempotent.
+    void buildDeclUnits();
     void buildDefSites();                        // fill _defSites/_declUnit from the tables (T4a)
     void buildPositions();                       // fill _positions + _refIndex (decls, sig refs, body refs)
+    // Point the reference recorders at `unit` for a dynamic extent. Save/restore rather than assign, so a
+    // nested emission (a generic instance emitted inside a module body walk) cannot strand the pointer.
+    // Setting it to nullptr is meaningful: it DISABLES recording, which is what a prelude/std template's
+    // body should do.
+    struct RefUnitScope {
+        CEmitter* e; const CompilationUnit* prev;
+        RefUnitScope(CEmitter* em, const CompilationUnit* u) : e(em), prev(em->_refUnit) { e->_refUnit = u; }
+        ~RefUnitScope() { e->_refUnit = prev; }
+    };
     const PosEntry* posAt(const CompilationUnit* unit, int line, int col) const;  // smallest span at cursor
     void addDefSite(const std::string& key, SymKind kind, const CompilationUnit* unit,
                     ASTNode* declNode, const SharedIdentifier& nameId,
@@ -1125,7 +1150,8 @@ private:
     // Dispatch `recv.method(args)` on a smart-pointer receiver: an intrinsic
     // (lock/expired/valid) on the pointer itself, else auto-deref to the pointee.
     std::string emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
-                                 const std::string& method, SharedArgumentList args, int srcLine);
+                                 const std::string& method, SharedArgumentList args, int srcLine,
+                                 const IdentifierNode* site = nullptr);
 
     void linkBases();
     // Merge each contract's refined-parent methods (`type contract A implements B`) into its own `methods`
@@ -1325,8 +1351,12 @@ private:
     bool invocationReturnsPlace(InvocationNode* iv);
     // Dispatch a call on a receiver of static class `clsName`, given the C pointer
     // expression `recvPtr` (e.g. "self" or "&(c)"): virtual -> via __vptr; else direct.
+    // `site`, when non-null, is the source identifier the method was spelled at: the resolved method is
+    // recorded against it for the reference index (M6 B3). Defaulted, like resolveUserName/resolveFunc,
+    // so the compiler-internal callers with no user spelling in hand are unaffected.
     std::string emitDispatch(const std::string& clsName, const std::string& recvPtr,
-                             const std::string& method, SharedArgumentList args, int srcLine);
+                             const std::string& method, SharedArgumentList args, int srcLine,
+                             const IdentifierNode* site = nullptr);
     // `new T(args)` reordered against the ctor signature -> "T__ctor(&dst, a0, ...)"
     std::string emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine);
     void checkNamelessNewBanned(ObjectCreationNode* oc, int line);   // M8 Phase E: ban nameless `new Type(...)`

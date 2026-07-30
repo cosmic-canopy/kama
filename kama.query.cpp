@@ -425,23 +425,63 @@ void CEmitter::addDefSite(const std::string& key, SymKind kind, const Compilatio
     _defSites[key] = d;   // one entry per resolved mangled name (map keys are already unique)
 }
 
-void CEmitter::buildDefSites()
+// Attribute decls to their owning USER unit. Only user units go in the map, so prelude/std decls fall
+// through to nullptr (unitOfDecl) and are excluded from documentSymbols while still resolvable.
+//
+// Split out of buildDefSites (M6 B3) because generic-instance emission needs unitOfDecl WHILE IT RUNS, to
+// attribute a template's body to the template's own unit — and that happens in the header pass, long
+// before buildDefSites. collectProgram calls this after pruneInactiveDecls, which is the one real ordering
+// constraint: pruning rewrites the decl list in place, so a dropped decl must never get an entry here.
+// Idempotent, so buildDefSites still calls it and stays self-sufficient.
+void CEmitter::buildDeclUnits()
 {
-    _defSites.clear();
     _declUnit.clear();
-
-    // Attribute decls to their owning USER unit. Only user units go in the map, so prelude/std decls fall
-    // through to nullptr (unitOfDecl) and are excluded from documentSymbols while still resolvable.
     for (auto& u : _units) {
         if (!u || !u->codeDeclarationList) continue;
         for (auto& decl : *u->codeDeclarationList)
             if (decl) _declUnit[decl.get()] = u.get();
     }
+}
+
+void CEmitter::buildDefSites()
+{
+    _defSites.clear();
+    buildDeclUnits();
 
     auto bareOf = [](const SharedIdentifier& id, const std::string& key) -> std::string {
         if (id && id->value) return *id->value;                 // the source spelling, when we have the name id
         auto p = key.rfind("__");                               // else demangle the trailing segment
         return p == std::string::npos ? key : key.substr(p + 2);
+    };
+
+    // A type's members. Methods + ctors share the type's owning unit (their nodes aren't top-level decls).
+    // Used for concrete types AND for generic templates — one body, because a template's members are
+    // declared exactly like anyone else's, and a generic member with no def-site would leave B3's node-keyed
+    // references pointing at nothing.
+    auto addMembers = [&](ClassInfo& ci, const std::string& key, const CompilationUnit* unit,
+                          const std::string& bare) {
+        for (auto& mkv : ci.methods) {
+            MethodInfo& mi = mkv.second;
+            ASTNode* mnode = mi.node ? (ASTNode*)mi.node : (ASTNode*)mi.opDecl;
+            if (!mnode) continue;   // intrinsic / synthesized (serde, bag ctor) — no source site
+            SharedIdentifier mname = mi.node ? mi.node->name : SharedIdentifier();
+            addDefSite(mi.cName, mi.isCtor ? SymKind::Ctor : SymKind::Method, unit, mnode, mname,
+                       bare + "." + mkv.first, bare);
+        }
+        // Fields (M3.4). Only the DECLARING type gets an entry: a generic INSTANCE shares the template's
+        // field nodes, and instances are skipped by the caller, so a field can never be keyed twice.
+        for (auto& fi : ci.fields) {
+            if (!fi.nameId) continue;   // synthesized (variant payload of an instantiated template, etc.)
+            addDefSite(fieldKey(key, fi.name), SymKind::Field, unit, fi.nameId.get(), fi.nameId, fi.name, bare);
+        }
+        for (auto& ckv : ci.ctors) {
+            CtorInfo& ctor = ckv.second;
+            if (!ctor.node) continue;
+            // key the ctor under a synthetic "<type>::ctor <name>" — it is not a resolveFunc target, but it
+            // gives the outline a construction entry with a real span.
+            addDefSite(key + "::ctor:" + ckv.first, SymKind::Ctor, unit, ctor.node,
+                       SharedIdentifier(), bare + "." + ckv.first, bare);
+        }
     };
 
     // Concrete user types (value/resource). Skip compiler-synthesized entries: generic instances, intrinsic
@@ -455,39 +495,21 @@ void CEmitter::buildDefSites()
         const CompilationUnit* unit = unitOfDecl(ci.node);
         std::string bare = bareOf(ci.node->name, kv.first);
         addDefSite(kv.first, k, unit, ci.node, ci.node->name, bare, "");
-        // Methods + ctors share the type's owning unit (their nodes aren't top-level decls).
-        for (auto& mkv : ci.methods) {
-            MethodInfo& mi = mkv.second;
-            ASTNode* mnode = mi.node ? (ASTNode*)mi.node : (ASTNode*)mi.opDecl;
-            if (!mnode) continue;   // intrinsic / synthesized (serde, bag ctor) — no source site
-            SharedIdentifier mname = mi.node ? mi.node->name : SharedIdentifier();
-            addDefSite(mi.cName, mi.isCtor ? SymKind::Ctor : SymKind::Method, unit, mnode, mname,
-                       bare + "." + mkv.first, bare);
-        }
-        // Fields (M3.4). Only the declaring type gets an entry: a generic INSTANCE shares the template's
-        // field nodes, and instances are skipped above, so a field can never be keyed twice.
-        for (auto& fi : ci.fields) {
-            if (!fi.nameId) continue;   // synthesized (variant payload of an instantiated template, etc.)
-            addDefSite(fieldKey(kv.first, fi.name), SymKind::Field, unit,
-                       fi.nameId.get(), fi.nameId, fi.name, bare);
-        }
-        for (auto& ckv : ci.ctors) {
-            CtorInfo& ctor = ckv.second;
-            if (!ctor.node) continue;
-            // key the ctor under a synthetic "<type>::ctor <name>" — it is not a resolveFunc target, but it
-            // gives the outline a construction entry with a real span.
-            addDefSite(kv.first + "::ctor:" + ckv.first, SymKind::Ctor, unit, ctor.node,
-                       SharedIdentifier(), bare + "." + ckv.first, bare);
-        }
+        addMembers(ci, kv.first, unit, bare);
     }
 
     // Generic type templates (Box<T>) — parked out of _classes; the ClassInfo.node is the template decl.
+    // Their MEMBERS are registered here and nowhere else (M6 B3): the template is deliberately kept out of
+    // _classes and every instance is skipped there, so this is the only place `Box<T>`'s `v` and `get` can
+    // get a def-site. Every instantiation shares these very nodes, which is what makes one declaration one
+    // symbol however many instantiations exist.
     for (auto& kv : _genericTypes) {
         ClassInfo& ci = kv.second;
         if (!ci.node) continue;
         const CompilationUnit* unit = unitOfDecl(ci.node);
-        addDefSite(kv.first, SymKind::GenericType, unit, ci.node, ci.node->name,
-                   bareOf(ci.node->name, kv.first), "");
+        std::string bare = bareOf(ci.node->name, kv.first);
+        addDefSite(kv.first, SymKind::GenericType, unit, ci.node, ci.node->name, bare, "");
+        addMembers(ci, kv.first, unit, bare);
     }
 
     // Contracts (non-generic + generic templates). node is the `type contract` ClassDeclarationNode.
@@ -588,15 +610,24 @@ void CEmitter::recordDef(const std::string& key, const IdentifierNode* site, Sym
     _localDefs.push_back(RecordedDef{ _refUnit, site, key, kind, container });
 }
 
-// A named-argument LABEL at a call site (M6 A2). Deliberately stores the callee parameter's DECLARATION
-// NODE rather than a key: `bindingKey` reads `_refUnit`, which here is the CALLER's unit, while the
-// parameter's DefSite was keyed under the DECLARING unit — so a key built now would mismatch on every
-// cross-unit call while still appearing to work within one file. buildPositions resolves node -> key after
-// buildDefSites has run, which makes the answer independent of walk order.
-void CEmitter::recordLabelRef(const IdentifierNode* label, const IdentifierNode* paramDecl)
+// A use-site recorded by the DECLARATION NODE it names (M6 A2 for labels, M6 B3 for members). See
+// RecordedNodeRef in kama.cemit.h for why the key cannot be built here. Same pure-append discipline as
+// recordRef; there is no `key.empty()` guard because there is no key yet.
+void CEmitter::recordNodeRef(const IdentifierNode* site, const ASTNode* declNode)
 {
-    if (!_analysis || !_refUnit || !label || !paramDecl) return;
-    _labelRefs.push_back(RecordedLabelRef{ _refUnit, label, paramDecl });
+    if (!_analysis || !_refUnit || !site || !declNode) return;
+    _nodeRefs.push_back(RecordedNodeRef{ _refUnit, site, declNode });
+}
+
+// A field use-site. The FieldInfo's `nameId` is what buildDefSites keys the field's DefSite on, and a
+// generic instance shares the template's, so this collapses every instantiation onto one symbol. A
+// synthesized field (a variant payload of an instantiated template) has no nameId and no def-site, so it
+// records nothing — exactly as the key-based form dropped it.
+void CEmitter::recordFieldRef(const ClassInfo* owner, const std::string& name, const IdentifierNode* site)
+{
+    if (!_analysis || !_refUnit || !owner || !site) return;
+    for (const auto& fi : owner->fields)
+        if (fi.name == name) { recordNodeRef(site, fi.nameId.get()); return; }
 }
 
 // ---- M3.4 index-only keys -------------------------------------------------------------------------------
@@ -700,28 +731,37 @@ void CEmitter::buildPositions()
                 PosEntry{ SrcRange{ r.id->line, r.id->column, r.id->endLine, r.id->endColumn },
                           const_cast<IdentifierNode*>(r.id), false, r.key });
         }
-        // (3b) Named-argument LABELS (M6 A2). These arrive keyed by the callee PARAMETER'S DECLARATION NODE
-        // rather than by a key, because a key built at the call site would embed the CALLER's unit — see
-        // recordLabelRef. Invert it here instead: _defSites is already populated (buildDefSites ran before
-        // this function), so one pass builds param-node -> key and the answer no longer depends on whether
-        // the callee's module happened to be walked before the caller's.
-        // Keyed by ASTNode* and matched by UPCASTING the parameter node, never by downcasting the DefSite's:
+        // (3b) Use-sites recorded by DECLARATION NODE — argument labels (M6 A2) and members (M6 B3). These
+        // arrive without a key because a key built at the record site would embed ambient context that is
+        // wrong for the referent (the caller's unit for a label, the instance's mangled name for a generic
+        // member — see RecordedNodeRef). Invert it here instead: _defSites is already populated
+        // (buildDefSites ran before this function), so one pass builds decl-node -> key and the answer no
+        // longer depends on whether the callee's module happened to be walked before the caller's.
+        //
+        // Keyed by ASTNode* and matched by UPCASTING the recorded node, never by downcasting the DefSite's:
         // an upcast is unconditionally safe, and identity is all this needs.
-        std::map<const ASTNode*, const std::string*> paramKeyOf;
-        for (const auto& kv : _defSites)
-            if (kv.second.kind == SymKind::Param && kv.second.node)
-                paramKeyOf[kv.second.node] = &kv.first;
-        for (const auto& lr : _labelRefs) {
-            if (!lr.unit || !lr.label || !lr.paramDecl) continue;
-            auto k = paramKeyOf.find(static_cast<const ASTNode*>(lr.paramDecl));
-            if (k == paramKeyOf.end()) continue;   // prelude/builtin/intrinsic param: no def-site, so no rename
-            if (!seen[lr.unit].insert(lr.label).second) continue;
-            _positions[lr.unit].push_back(
-                PosEntry{ SrcRange{ lr.label->line, lr.label->column, lr.label->endLine, lr.label->endColumn },
-                          const_cast<IdentifierNode*>(lr.label), false, *k->second });
+        //
+        // Restricted to the MEMBER-ish kinds on purpose. Functions are excluded because a generic free fn's
+        // instances share the template's `sig.node`, so several keys would collapse onto one node and the
+        // last one to be walked would win.
+        std::map<const ASTNode*, const std::string*> keyOfDeclNode;
+        for (const auto& kv : _defSites) {
+            if (!kv.second.node) continue;
+            SymKind k = kv.second.kind;
+            if (k == SymKind::Param || k == SymKind::Field || k == SymKind::Method || k == SymKind::Ctor)
+                keyOfDeclNode[kv.second.node] = &kv.first;
         }
-        _labelRefs.clear();
-        _labelRefs.shrink_to_fit();
+        for (const auto& nr : _nodeRefs) {
+            if (!nr.unit || !nr.site || !nr.declNode) continue;
+            auto k = keyOfDeclNode.find(nr.declNode);
+            if (k == keyOfDeclNode.end()) continue;   // prelude/builtin/intrinsic: no def-site, so no rename
+            if (!seen[nr.unit].insert(nr.site).second) continue;
+            _positions[nr.unit].push_back(
+                PosEntry{ SrcRange{ nr.site->line, nr.site->column, nr.site->endLine, nr.site->endColumn },
+                          const_cast<IdentifierNode*>(nr.site), false, *k->second });
+        }
+        _nodeRefs.clear();
+        _nodeRefs.shrink_to_fit();
         _bodyRefs.clear();
         _bodyRefs.shrink_to_fit();
     }
@@ -785,7 +825,13 @@ const PosEntry* CEmitter::posAt(const CompilationUnit* unit, int line, int col) 
     const PosEntry* best = nullptr;
     for (const auto& e : it->second) {
         if (!e.range.contains(line, col)) continue;
-        if (!best || e.range.span() < best->range.span()) best = &e;
+        if (!best || e.range.span() < best->range.span()) { best = &e; continue; }
+        // Equal spans: prefer the DECLARATION. A type that declares a `ctor` gets both entries over one
+        // range (the ctor's implicit result type resolves through the class's own decl identifier — see
+        // the reverse-index note in buildPositions), and without this the winner is decided by an unstable
+        // sort. Both carry the same key, so only the decl/ref marker differed, but a query answer must not
+        // depend on sort order.
+        if (e.range.span() == best->range.span() && e.isDeclName && !best->isDeclName) best = &e;
     }
     return best;
 }

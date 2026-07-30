@@ -1,13 +1,22 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M0–M5 shipped, and M6 STAGES A + B1/B2 shipped (2026-07-29, dev) — the three deferred
-correctness items are closed, the TextMate grammar now agrees with the compiler and is guarded by a real
-tokenizer, and `textDocument/semanticTokens/full` colours by what the resolver concluded. NEXT = M6 B3**
-(the MEMBER reference index — its own brief, [lsp-m6-b3-kickoff.md](lsp-m6-b3-kickoff.md)), then Stage C
+**Status: M0–M5 shipped; M6 STAGES A + B1/B2 shipped (2026-07-29); M6 B3 STAGE 0 + B3a/B3b shipped
+(2026-07-30, dev)** — the three deferred correctness items are closed, the TextMate grammar agrees with the
+compiler and is guarded by a real tokenizer, `textDocument/semanticTokens/full` colours by what the
+resolver concluded, and **renaming a method now rewrites its call sites** (it used to rewrite the
+declaration alone and silently break the buffer), including through the inside of a generic body.
+**NEXT = the rest of B3** — B3c-B3f, which are *enumerated* rather than waiting to be discovered, by the
+coverage oracle stage 0 built: [lsp-m6-b3-kickoff.md](lsp-m6-b3-kickoff.md). Then Stage C
 (editor clients + `docs/editors.md`), then Stage D exit, then M7's tree-sitter grammar. **All of it is
-pre-launch** (user, 2026-07-29). ⚠️ **B3 is now the campaign's highest-severity item**: beyond the known
-generic-body gap it turns out a method's call sites are indexed for NO type, so F2 on a method is offered
-and rewrites only the declaration — silently breaking the buffer. Cold-start brief:
+pre-launch** (user, 2026-07-29).
+
+⚠️ **The campaign's most transferable lesson is stage 0's, not B3a's.** The reference index is built by
+INSTRUMENTING the emitter, so it is exactly as complete as the set of sites someone remembered to
+instrument — and every test asserted a spelling somebody had thought of, so a spelling nobody thought of
+failed nothing. That is not a bug you fix once. `kama query <file> --coverage` asks the other question (for
+every identifier the SOURCE spells, what does the index know?) and freezes the answer in a checked-in table
+per fixture, so a gap is a diff. It found nine gaps where the brief had named two. **Extend
+`tests/query/coverage/` whenever a construct is added to the language.** Cold-start brief:
 **[lsp-m6-kickoff.md](lsp-m6-kickoff.md)** — it carries an as-shipped record of Stage A, including the three
 places its own earlier text was wrong, and a seam map for B/C re-derived after Stage A moved four files.
 

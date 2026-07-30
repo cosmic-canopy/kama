@@ -1,7 +1,7 @@
 # LSP M6 B3 — the member reference index (cold-start brief)
 
-**Status: IN PROGRESS. Stage 0 (the coverage oracle) shipped; B3a/B3b next.**
-Everything below was verified by running it, not reasoned about.
+**Status: Stage 0 + B3a + B3b SHIPPED 2026-07-30. B3c-B3f remain, and are enumerated below.**
+Everything here was verified by running it, not reasoned about.
 Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](lsp.md).
 
 > ## Stage 0 — how the rest of B3 gets found, instead of thought of
@@ -30,18 +30,54 @@ Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](
 >
 > | # | gap | status |
 > |---|---|---|
-> | 1 | **method CALL SITES** — `p.area()`, `base.kind()`, `this.kind()`, `Point::origin()`, `Derived.make()`, `xs.add()`, `new Cat.loud()` | B3a, below |
-> | 2 | **generic BODIES** — `Box<T>`'s `v`/`get` decls and uses; `firstOr<T>`'s params and body | B3b, below |
-> | 3 | **a generic instance's member** — `bi.v` indexes as `field:Box_int32::v`, a key with no def-site (`unresolved`) | B3b, below |
+> | 1 | **method CALL SITES** — `p.area()`, `base.kind()`, `this.kind()`, `Point::origin()`, `Derived.make()`, `xs.add()`, `new Cat.loud()` | ✅ B3a |
+> | 2 | **generic BODIES** — `Box<T>`'s `v`/`get` decls and uses; `firstOr<T>`'s params and body | ✅ B3b |
+> | 3 | **a generic instance's member** — `bi.v` indexes as `field:Box_int32::v`, a key with no def-site (`unresolved`) | ✅ B3b |
 > | 4 | **the TYPE QUALIFIER of a member call** — `Point` in `Point.at(…)`, `Color` in `Color::Green`, `Shape` in `Shape::Circle(…)`, `DynamicArray` in `DynamicArray.empty()`. The same spelling as a type ANNOTATION indexes fine, so these paths resolve without passing a `site` | B3d |
 > | 5 | **contract METHOD declarations** — `fn int32 speak();` inside a `type contract`. `InterfaceMethod` carries no decl node, so neither the declaration nor any fat-pointer call site can be indexed | B3c |
 > | 6 | **enum payload fields** — `r` in `Circle(int32 r)`, at both its declaration and the `Shape::Circle(r: 7)` label | B3e |
 > | 7 | **argument labels to a library or generic callee** — `item:`, `xs:`, `fallback:`. M6 A2 works; these callees' `ParamSig::declSite` is null | B3e |
-> | 8 | **a generic free function's CALL SITE** — `firstOr(xs: …)` | B3b |
+> | 8 | **a generic free function's CALL SITE** — `firstOr(xs: …)` | B3b (partial: labels + body ✅, the callee name is B3d-shaped) |
 > | 9 | **import paths and namespace names** — `std`, `collections`, `DynamicArray` in an `import`; the `namespace` name itself | B3f |
 >
 > Permanently `-`, and correctly so: the contextual type-kind words (`value`, `resource`, `contract`,
-> `both`) are not lexer keywords and never name a symbol.
+> `both`) are not lexer keywords and never name a symbol. A type PARAMETER (`T`) reads `unresolved` rather
+> than `-`: it is indexed, but inside an instance it substitutes to a concrete type, so there is no
+> template-parameter symbol to resolve to. That is correct, not a residual gap.
+>
+> ### As shipped (B3a/B3b)
+>
+> 64 gaps -> 35. What it took, beyond the design below:
+>
+> - `_labelRefs` generalized into ONE node-keyed store, `_nodeRefs` + `recordNodeRef` — a struct and a
+>   function deleted rather than a second mechanism added. `keyOfDeclNode` in `buildPositions` (3b) is the
+>   A2 resolve pass widened from Param to Param/Field/Method/Ctor. ⚠️ Functions are deliberately EXCLUDED:
+>   a generic free fn's instances share the template's `sig.node`, so several keys would collapse onto one
+>   node and the last walked would win.
+> - The 5 field record sites were **converted**, not added to. `buildPositions` dedups by identifier node
+>   and first-wins, so a leftover key-based record would have shadowed the node-based one and left the
+>   generic case broken while every non-generic test still passed.
+> - `emitDispatch` / `emitSmartPtrCall` took a defaulted `const IdentifierNode* site`, the idiom
+>   `resolveUserName`/`resolveFunc` already use. One record inside `emitDispatch` covers the virtual,
+>   devirtualized and auto-deref paths; `emitInterfaceDispatch` was deliberately NOT threaded, since a
+>   contract method has no def-site to point at (that is B3c).
+> - ⚠️ **A latent nondeterminism surfaced and was fixed.** A type that declares a `ctor` gets TWO
+>   `_positions` entries over one range (the ctor's implicit result type resolves through the class's own
+>   decl identifier), and `posAt` broke the tie by unstable sort order. Both carry the same key, so only
+>   the decl/ref marker differed — invisible until the coverage table made the marker an assertion. `posAt`
+>   now prefers the declaration on an exact span tie.
+> - Cost: **+3 ms per keystroke** (86 -> 89 ms median, measured A/B against the parent commit), because
+>   generic bodies are now walked for records at all. Inside the 100 ms budget.
+
+---
+
+*Everything below is the original B3a/B3b design brief. It SHIPPED as written — the seam map and the
+warnings in it are accurate, and they are the map for B3c-B3f too, which sit on the same seams.*
+
+**One judgement call the brief raised was DECIDED: rename does NOT refuse a symbol with zero recorded
+references** (user, 2026-07-29). A genuinely-unused private method, or an uncalled public library API, is
+a real thing to rename; refusing would be a worse regression than the bug. The durable guard is the rename
+assertion in `tools/check-lsp.sh` and the coverage table — not a refusal.
 
 B3 closes the last correctness holes in the reference index. It is **two gaps with one fix**, and the
 first one is a silent data-loss bug rather than a missing feature:
