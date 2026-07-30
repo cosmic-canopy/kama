@@ -10,9 +10,18 @@ M6 is the last LSP milestone:
 | **A** | The three deferred correctness items (`setBuildFlags`, argument labels, the import diagnostic) | ✅ **SHIPPED** — `5061875`, `d78a1fd`, `7f8dfde`, `8dc90ab`, `cbdd284` |
 | **B1** | The TextMate grammar audit (13 defects) + a real tokenizer oracle | ✅ **SHIPPED** — `38fee77` |
 | **B2** | `textDocument/semanticTokens/full`, measured | ✅ **SHIPPED** — `cf993d2` |
-| **B3** | The generic-body reference index | **NEXT** — attempted and deliberately stopped; diagnosis below |
+| **B3** | The **member** reference index — methods (all types) + generic bodies | **NEXT** — own brief: [lsp-m6-b3-kickoff.md](lsp-m6-b3-kickoff.md) |
 | **C** | Editor clients for 7 more editors + `docs/editors.md` + the VS Code status-bar picker | pending |
 | **D** | Campaign exit | pending |
+
+**All of the above is PRE-LAUNCH (user, 2026-07-29)**, including M7's tree-sitter grammar — the campaign
+finishes before the website work and before 1.0. The earlier "M7 does not gate 1.0" note is superseded.
+
+⚠️ **B3 grew a second, worse half after this brief was written.** Beyond the known generic-body gap, a
+method's CALL SITES turn out not to be indexed **for any type, generic or not** — and because the method
+still has a def-site, `prepareRename` OFFERS F2 and rename rewrites the declaration alone, leaving every
+call site behind. That silently breaks the buffer, where the generic gap merely answers nothing. Both are
+one fix; see the B3 brief.
 
 ---
 

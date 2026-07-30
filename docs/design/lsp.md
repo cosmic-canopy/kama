@@ -3,8 +3,11 @@
 **Status: M0–M5 shipped, and M6 STAGES A + B1/B2 shipped (2026-07-29, dev) — the three deferred
 correctness items are closed, the TextMate grammar now agrees with the compiler and is guarded by a real
 tokenizer, and `textDocument/semanticTokens/full` colours by what the resolver concluded. NEXT = M6 B3**
-(the generic-body reference index — attempted and deliberately stopped with a verified diagnosis), then
-Stage C (editor clients + `docs/editors.md`), then Stage D exit. Cold-start brief:
+(the MEMBER reference index — its own brief, [lsp-m6-b3-kickoff.md](lsp-m6-b3-kickoff.md)), then Stage C
+(editor clients + `docs/editors.md`), then Stage D exit, then M7's tree-sitter grammar. **All of it is
+pre-launch** (user, 2026-07-29). ⚠️ **B3 is now the campaign's highest-severity item**: beyond the known
+generic-body gap it turns out a method's call sites are indexed for NO type, so F2 on a method is offered
+and rewrites only the declaration — silently breaking the buffer. Cold-start brief:
 **[lsp-m6-kickoff.md](lsp-m6-kickoff.md)** — it carries an as-shipped record of Stage A, including the three
 places its own earlier text was wrong, and a seam map for B/C re-derived after Stage A moved four files.
 
@@ -267,7 +270,9 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
   ⚠️ The brief was wrong in three load-bearing places (the perf thesis, "analysis never mutates the AST",
   and the recovery staging, which was backwards and would have silently regressed completion) — see its
   "Three places the original brief was wrong".
-- **M7 — tree-sitter grammar + Zed extension. `M/L`. POST-1.0.** Unlocks real syntax highlighting in
+- **M7 — tree-sitter grammar + Zed extension. `M/L`. PRE-LAUNCH** (user, 2026-07-29 — supersedes the
+  "POST-1.0 / does not gate 1.0" note below: the whole LSP campaign now finishes before the website work
+  and before 1.0). Unlocks real syntax highlighting in
   Neovim, Helix and Zed (and GitHub linguist), and a Zed extension cannot exist without it. Split out of
   M6 by the user (2026-07-28) because it is a *third* grammar to keep in sync with `kama.l`/`kama.y` and
   wants its own drift guard. Does not gate 1.0.

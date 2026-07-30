@@ -621,6 +621,15 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   clients + `docs/editors.md` + the VS Code status-bar picker), then Stage D exit. Cold-start brief:
   [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md), which carries an as-shipped record of Stage A and a
   re-derived seam map for B/C. Status of record: [design/lsp.md](design/lsp.md).
+  - **⚠️⚠️ RENAMING A METHOD SILENTLY BREAKS THE BUFFER — found 2026-07-29, fixed by M6 B3.** A method's
+    CALL SITES are in the reference index for **no type at all**, generic or not: of the 13 `recordRef`
+    sites in the emitter, none is a method invocation (they are types, FREE functions, fields, enum
+    members and bindings). The method still gets a def-site from the `_classes` loop, so
+    `prepareRename` OFFERS F2 and `rename` returns exactly one edit — the declaration — leaving every
+    `p.get()` spelling the old name. Verified end-to-end over the protocol, not inferred.
+    This is strictly worse than the generic gap below, where an absent def-site makes rename correctly
+    REFUSE. Reproduce: `--refs` on a field returns its uses; `--refs` on a method beside it returns only
+    its own declaration. Brief: [design/lsp-m6-b3-kickoff.md](design/lsp-m6-b3-kickoff.md).
   - **⚠️ KNOWN GAP, found during M6 A2 — nothing inside a GENERIC type's or generic function's body is in
     the reference index.** Params, locals, `foreach`/`match` bindings and body use-sites all go
     unrecorded, so find-references, rename, hover and semantic tokens answer nothing there. It covers all
