@@ -21,9 +21,42 @@ if [ ! -f "$FIXTURE" ]; then echo "check-target: missing $FIXTURE" >&2; exit 1; 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+# ⚠️ A "cross" triple has to be derived from THIS host, never hardcoded. Two assertions below used to
+# hardcode `x86_64-linux-gnu` and `x86_64-windows-gnu`, and each of those IS the host triple on one of the
+# CI runners (hostTarget() in kama.driver.cpp spells the Windows/MSYS2 host `x86_64-windows-gnu`). kama then
+# correctly omits `-target` for a same-host build — and the assertion failed for being wrong, not for the
+# compiler being wrong. Flipping the ARCH is enough: a differing arch makes the triple foreign on any host.
+case "$(uname -m)" in
+    x86_64|amd64) CROSS_ARCH=aarch64 ;;
+    *)            CROSS_ARCH=x86_64  ;;
+esac
+CROSS_LINUX="$CROSS_ARCH-linux-gnu"
+CROSS_WINDOWS="$CROSS_ARCH-windows-gnu"
+
 # The assembled cc command line for a given target, with the compiler stubbed out.
 ccline() {
     "$KAMA" build --release --cc "echo" "$FIXTURE" --target "$1" -o "$tmp/out" 2>/dev/null
+}
+
+# Run a stubbed build and echo its stdout, KEEPING stderr for a failure report. A bare `2>/dev/null` here
+# turns "the build errored" and "the build succeeded but printed the wrong thing" into the same message,
+# which is how the Windows `.dll` failure arrived with no way to tell which it was.
+tryline() {   # tryline <label> <args...>
+    _lbl=$1; shift
+    "$KAMA" "$@" >"$tmp/$_lbl.out" 2>"$tmp/$_lbl.err" || true
+    cat "$tmp/$_lbl.out"
+}
+why() {   # why <label> — print whatever the stubbed build said, for a failing assertion
+    if [ -s "$tmp/$1.err" ]; then
+        echo "  the build reported:" >&2
+        sed 's/^/    /' "$tmp/$1.err" >&2
+    fi
+    if [ -s "$tmp/$1.out" ]; then
+        echo "  its command line was:" >&2
+        sed 's/^/    /' "$tmp/$1.out" >&2
+    else
+        echo "  it produced NO command line at all (so it failed before the link step)." >&2
+    fi
 }
 
 want() {   # want <target> <substring> <description>
@@ -60,9 +93,11 @@ want   WINDOWS -Wl,--gc-sections "a mingw target links with a GNU-style linker"
 #    cross build does not produce a `.dylib` for Windows.
 for spec in "WINDOWS .dll" "MACOS .dylib" "LINUX .so"; do
     set -- $spec
-    out=$("$KAMA" build --shared --cc "echo" "$FIXTURE" --target "$1" 2>/dev/null | tr ' ' '\n' | grep -E "arith\\$2$" || true)
+    out=$(tryline "shared$1" build --shared --cc "echo" "$FIXTURE" --target "$1" \
+          | tr ' ' '\n' | grep -E "arith\\$2$" || true)
     if [ -z "$out" ]; then
         echo "check-target: FAIL — target $1 did not default its shared-library output to *$2" >&2
+        why "shared$1"
         exit 1
     fi
 done
@@ -142,28 +177,32 @@ fi
 #    given -target; zig is one binary for every target and must be. Our triple is already Zig's 3-part
 #    <arch>-<os>-<abi> form, so it passes straight through. Stubbed with echo — this asserts kama's
 #    plumbing, which is kama's half; whether zig then emits a PE binary is zig's.
-zigline=$("$KAMA" build "$FIXTURE" --target x86_64-windows-gnu --cc "echo zig cc" -o "$tmp/z" 2>/dev/null || true)
-if ! printf '%s' "$zigline" | grep -qF -- "-target x86_64-windows-gnu"; then
-    echo "check-target: FAIL — zig cc did not receive -target for a cross build" >&2
+zigline=$(tryline zig build "$FIXTURE" --target "$CROSS_WINDOWS" --cc "echo zig cc" -o "$tmp/z")
+if ! printf '%s' "$zigline" | grep -qF -- "-target $CROSS_WINDOWS"; then
+    echo "check-target: FAIL — zig cc did not receive -target for a cross build ($CROSS_WINDOWS)" >&2
+    why zig
     exit 1
 fi
-hostline=$("$KAMA" build "$FIXTURE" --cc "echo zig cc" -o "$tmp/z2" 2>/dev/null || true)
+hostline=$(tryline zighost build "$FIXTURE" --cc "echo zig cc" -o "$tmp/z2")
 if printf '%s' "$hostline" | grep -qF -- "-target "; then
     echo "check-target: FAIL — a same-host build passed -target (it should be left alone)" >&2
+    why zighost
     exit 1
 fi
 # Plain clang is a multi-target driver too — it has always been able to cross, it just needs the
 # target's headers/libs. So an EXISTING toolchain is a first-class path; zig is only the one that
 # bundles the libc. Whereas a per-target binary (aarch64-linux-gnu-gcc) has its triple in its NAME and
 # must NOT be handed -target, or it breaks.
-clangline=$("$KAMA" build "$FIXTURE" --target x86_64-linux-gnu --cc "echo clang" -o "$tmp/c1" 2>/dev/null || true)
-if ! printf '%s' "$clangline" | grep -qF -- "-target x86_64-linux-gnu"; then
-    echo "check-target: FAIL — clang did not receive -target for a cross build" >&2
+clangline=$(tryline clang build "$FIXTURE" --target "$CROSS_LINUX" --cc "echo clang" -o "$tmp/c1")
+if ! printf '%s' "$clangline" | grep -qF -- "-target $CROSS_LINUX"; then
+    echo "check-target: FAIL — clang did not receive -target for a cross build ($CROSS_LINUX)" >&2
+    why clang
     exit 1
 fi
-gccline=$("$KAMA" build "$FIXTURE" --target x86_64-linux-gnu --cc "echo x86_64-linux-gnu-gcc" -o "$tmp/c2" 2>/dev/null || true)
+gccline=$(tryline gcc build "$FIXTURE" --target "$CROSS_LINUX" --cc "echo $CROSS_LINUX-gcc" -o "$tmp/c2")
 if printf '%s' "$gccline" | grep -qF -- "-target "; then
     echo "check-target: FAIL — a per-target gcc was handed -target (its triple is in its name)" >&2
+    why gcc
     exit 1
 fi
 

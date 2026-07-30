@@ -73,11 +73,22 @@ std::string absolutePath(const std::string& path)
 {
     char buf[PATH_MAX];
 #ifdef _WIN32
-    if (_fullpath(buf, path.c_str(), PATH_MAX)) return std::string(buf);
+    // ⚠️ `_fullpath` returns BACKSLASHES, and everything else in this driver builds paths by joining with
+    // '/' (`dir + "/" + name`, the project enumeration, the module resolver). Mixing the two produces
+    // `D:\a\proj/app.kama` from one code path and `D:\a\proj\app.kama` from another for the SAME file — and
+    // several comparisons here are exact string equality (CEmitter::unitForUri re-picks a unit by name), so
+    // they silently match nothing. That is what made every `kama query --project` answer "no references" on
+    // Windows while the same queries passed on Linux and macOS. Normalize to '/' at the one place absolute
+    // paths are minted: Win32 and the CRT accept forward slashes everywhere, as do gcc/clang command lines.
+    // The fallback below is normalized too: a caller that handed us a backslash spelling of a file that
+    // does not exist yet must not be the one path that escapes the convention.
+    std::string s = _fullpath(buf, path.c_str(), PATH_MAX) ? std::string(buf) : path;
+    for (char& c : s) if (c == '\\') c = '/';
+    return s;
 #else
     if (realpath(path.c_str(), buf)) return std::string(buf);
-#endif
     return path; // fall back to as-given (e.g. file doesn't exist yet)
+#endif
 }
 
 // Split on either separator so the same code works on Windows paths.
