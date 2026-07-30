@@ -1,0 +1,16 @@
+// LSP M6 A2 fixture, CONSUMING half — the call-site labels. See lib.kama for why the pair exists.
+//
+// Every kama argument is named, so these labels are most of the call syntax rather than a niche gesture.
+// Before A2 they were absent from the reference index entirely: renaming a parameter rewrote its
+// declaration and its body uses, and silently left every call site spelling the old label.
+import lib::{scaleBy, Box};
+
+fn int32 useThem() {
+    // L10: col 22 = the `factor` LABEL -> lib.kama's parameter, ACROSS units
+    int32 a = scaleBy(factor: 3);
+    Box b;
+    b.v = 0;
+    // L14: col 12 = the `amount` LABEL -> Box.setTo's parameter (the method path)
+    b.setTo(amount: a);
+    return b.v;
+}

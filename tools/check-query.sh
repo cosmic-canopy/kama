@@ -422,5 +422,38 @@ expect --complete 124:27 -- "label	hi:	int32"
 expect --complete 124:34 -- "label	hi:	int32"
 reject --complete 124:34 -- "label	lo:"                              # ... but never one already supplied
 
+# ---------------------------------------------------------------------------------------------------
+# M6 A2 — NAMED-ARGUMENT LABELS are references to the callee's parameter.
+#
+# Every kama argument is named, so labels are most of the call syntax, not a niche gesture. Before A2 they
+# were absent from the reference index: renaming a parameter rewrote its declaration and body uses and
+# silently left every call site spelling the old label.
+#
+# The cross-unit direction is the one that matters. A label's key must come from the parameter's DECLARING
+# unit; building it at the call site would embed the CALLER's unit instead — and same-file labels would
+# still appear to work, which is the failure mode a test suite is least able to see.
+FIXTURE="$ROOT/tests/query/labels/lib.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo "check-query: M6 A2 argument labels"
+# A free function's parameter: declaration, its body use, and the label in the OTHER unit.
+expect --project --refs 14:23 -- "lib.kama:14:23"       # the declaration
+expect --project --refs 14:23 -- "lib.kama:14:40"       # its body use (M3.1)
+expect --project --refs 14:23 -- "use.kama:10:22"       # the call-site LABEL, across units (M6 A2)
+# A METHOD's parameter reaches its label too — a different ParamSig path through emitReorderedCall.
+expect --project --refs 19:31 -- "lib.kama:19:31"
+expect --project --refs 19:31 -- "use.kama:14:12"
+
+FIXTURE="$ROOT/tests/query/labels/use.kama"
+# From the label's side: go-to-definition lands on the parameter, and hover names it as a param rather
+# than echoing the bare spelling.
+expect --def 10:22  -- "lib.kama:14:23"
+expect --type 10:22 -- "param factor"
+expect --def 14:12  -- "lib.kama:19:31"
+expect --type 14:12 -- "param amount"
+# A label is NOT the argument expression: the value after the colon keeps answering as itself, so the
+# label's span cannot have swallowed it.
+reject --type 10:22 -- "param 3"
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

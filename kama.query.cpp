@@ -548,6 +548,17 @@ void CEmitter::recordDef(const std::string& key, const IdentifierNode* site, Sym
     _localDefs.push_back(RecordedDef{ _refUnit, site, key, kind, container });
 }
 
+// A named-argument LABEL at a call site (M6 A2). Deliberately stores the callee parameter's DECLARATION
+// NODE rather than a key: `bindingKey` reads `_refUnit`, which here is the CALLER's unit, while the
+// parameter's DefSite was keyed under the DECLARING unit — so a key built now would mismatch on every
+// cross-unit call while still appearing to work within one file. buildPositions resolves node -> key after
+// buildDefSites has run, which makes the answer independent of walk order.
+void CEmitter::recordLabelRef(const IdentifierNode* label, const IdentifierNode* paramDecl)
+{
+    if (!_analysis || !_refUnit || !label || !paramDecl) return;
+    _labelRefs.push_back(RecordedLabelRef{ _refUnit, label, paramDecl });
+}
+
 // ---- M3.4 index-only keys -------------------------------------------------------------------------------
 
 std::string CEmitter::bindingKey(const IdentifierNode* declSite) const
@@ -649,6 +660,28 @@ void CEmitter::buildPositions()
                 PosEntry{ SrcRange{ r.id->line, r.id->column, r.id->endLine, r.id->endColumn },
                           const_cast<IdentifierNode*>(r.id), false, r.key });
         }
+        // (3b) Named-argument LABELS (M6 A2). These arrive keyed by the callee PARAMETER'S DECLARATION NODE
+        // rather than by a key, because a key built at the call site would embed the CALLER's unit — see
+        // recordLabelRef. Invert it here instead: _defSites is already populated (buildDefSites ran before
+        // this function), so one pass builds param-node -> key and the answer no longer depends on whether
+        // the callee's module happened to be walked before the caller's.
+        // Keyed by ASTNode* and matched by UPCASTING the parameter node, never by downcasting the DefSite's:
+        // an upcast is unconditionally safe, and identity is all this needs.
+        std::map<const ASTNode*, const std::string*> paramKeyOf;
+        for (const auto& kv : _defSites)
+            if (kv.second.kind == SymKind::Param && kv.second.node)
+                paramKeyOf[kv.second.node] = &kv.first;
+        for (const auto& lr : _labelRefs) {
+            if (!lr.unit || !lr.label || !lr.paramDecl) continue;
+            auto k = paramKeyOf.find(static_cast<const ASTNode*>(lr.paramDecl));
+            if (k == paramKeyOf.end()) continue;   // prelude/builtin/intrinsic param: no def-site, so no rename
+            if (!seen[lr.unit].insert(lr.label).second) continue;
+            _positions[lr.unit].push_back(
+                PosEntry{ SrcRange{ lr.label->line, lr.label->column, lr.label->endLine, lr.label->endColumn },
+                          const_cast<IdentifierNode*>(lr.label), false, *k->second });
+        }
+        _labelRefs.clear();
+        _labelRefs.shrink_to_fit();
         _bodyRefs.clear();
         _bodyRefs.shrink_to_fit();
     }

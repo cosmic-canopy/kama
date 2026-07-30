@@ -1,0 +1,20 @@
+// LSP M6 A2 fixture, DECLARING half — the parameter a call-site label refers to.
+//
+// Owned by tools/check-query.sh and tools/check-lsp.sh; the layout is asserted, so adding or reflowing a
+// line means updating both. Deliberately a SEPARATE unit from use.kama: a label's key must come out of the
+// parameter's DECLARING unit, and building it at the call site would embed the CALLER's unit instead —
+// which would break exactly this case while leaving same-file labels apparently working.
+//
+// Its own kama.json (with `sources`) keeps it a declared project, so it is never widened by inference.
+namespace lib;
+
+export { scaleBy, Box };
+
+// L14: col 23 = `factor` (the declaration), col 40 = its body use
+fn int32 scaleBy(int32 factor) { return factor * 2; }
+
+type value Box {
+    public int32 v;
+    // L19: col 31 = `amount` (a METHOD parameter — a different ParamSig path), col 50 = its body use
+    public fn void setTo(int32 amount) { this.v = amount; }
+}

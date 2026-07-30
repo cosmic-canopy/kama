@@ -606,6 +606,21 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   three carried items (argument-label indexing, the undeclared-import diagnostic, and the LSP's missing
   `setBuildFlags`); cold-start brief [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md).
   Status of record: [design/lsp.md](design/lsp.md).
+  - **⚠️ KNOWN GAP, found during M6 A2 — nothing inside a GENERIC type's or generic function's body is in
+    the reference index.** Params, locals, `foreach`/`match` bindings and body use-sites all go
+    unrecorded, so find-references, rename and hover answer nothing there. It covers all of `lib/std`'s
+    containers (`DynamicArray<T>.add(item:)` and friends), which is most of what a user calls.
+    **One cause:** generic instances are emitted from `emitHeaderContent`
+    ([kama.cemit.cpp](../kama.cemit.cpp) — `emitGenericInst` / `emitGenericTypeInst`), which runs *before*
+    the per-unit `emitModuleContent` loop that sets `_refUnit` — and `recordRef`/`recordDef` both drop
+    everything when `_refUnit == nullptr`. **The fix is not a one-liner:** it needs a template →
+    declaring-unit map available during the header pass (`_declUnit` is built in `buildDefSites`, i.e.
+    after emission), and each instantiation re-walks the *same* template nodes, so the key must be
+    attributed to the template's own unit consistently rather than to whichever instance is current. It
+    also touches the emission path, where the campaign holds a byte-identical-output invariant. Deliberately
+    NOT bundled into A2, whose deferred-key design is what makes ordinary cross-unit labels work.
+    Silver lining: because a def-site is absent, rename correctly *refuses* on these rather than
+    half-rewriting them.
 - **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
   liftable out of the monorepo to stand alone. Design of record:
   [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:

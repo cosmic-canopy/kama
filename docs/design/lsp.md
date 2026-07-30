@@ -294,6 +294,25 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
       packages get the pinned one's configuration. Declare the shared flag universe in the **root** manifest,
       or use one window per package. Per-project configuration needs per-configuration parse caches, since
       cached units are pruned in place — its own milestone.
+  - **A2 (argument labels) ✅ SHIPPED.** `emitReorderedCall` is the single named-argument matcher for every
+    call form, so one line at its per-param loop covers free functions, methods, virtual dispatch, ctors,
+    bound closures and operators (29 call sites).
+    - **⚠️ The key must NOT be built at the call site.** `bindingKey` reads `_refUnit`, which there is the
+      *caller's* unit, while the parameter's DefSite was keyed under the *declaring* unit. A key built at
+      the call site therefore mismatches on every cross-unit call — and same-file labels would still appear
+      to work, which is the failure mode a test suite is least able to see. So `recordLabelRef` stores the
+      parameter's **declaration node** and `buildPositions` resolves node → key *after* `buildDefSites`,
+      making the answer independent of walk order. `tests/query/labels/` is a two-unit fixture precisely to
+      lock this down.
+    - **The std-parameter hazard does not materialize**, and it is worth knowing why: rename already refuses,
+      because a std/dependency parameter has no def-site the project owns and `includeDeclaration` puts the
+      declaration among the references, so both the `ownsFile` check and the project-less "used in another
+      file" check fire. Verified, not assumed.
+    - **Found en route: nothing inside a generic type's or generic function's body is in the reference index
+      at all** — see the ROADMAP entry under this bullet's parent. Generic instances are emitted from
+      `emitHeaderContent`, which runs before the per-unit loop that sets `_refUnit`, so every `recordRef`/
+      `recordDef` there is dropped. It covers all of `lib/std`'s containers. Not fixed here: it needs a
+      template → declaring-unit map during the header pass and touches the emission path.
   - **A full syntax-highlighting audit belongs here (user, 2026-07-27).** One pass over *every* highlight
     pattern so each editor renders kama faithfully — not just the keyword list `tools/check-syntax-drift.sh`
     already guards. Motivating evidence: an ad-hoc look at the numeric rules alone found the VS Code grammar

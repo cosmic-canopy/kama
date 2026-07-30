@@ -100,6 +100,14 @@ SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 MURI="file:///bindings.kama"
 M34='namespace m34;\nenum Code { Ok, Bad = 2 }\ntype value Cfg {\n    public int32 scale = 3;\n    public fn int32 twice(int32 bias) { return this.scale * bias; }\n}\nfn int32 run() {\n    int32 seeded = 7;\n    Code c = Code::Ok;\n    return seeded + cast<int32>(c);\n}\n'
 
+# M6 A2 fixture: a named-argument LABEL, single-file so it is renameable under the open-file rule. The
+# span is the whole point — rename REPLACES the range it is handed, so a span running past the label would
+# eat the argument expression with it. Layout (LSP 0-based lines, 0-based chars):
+#   L0 `fn int32 add(int32 lhs, int32 rhs) { return lhs + rhs; }` -> `lhs` decl 19..22, body use 44..47
+#   L2 `    return add(lhs: 1, rhs: 2);`                          -> the `lhs` LABEL 15..18, NOT 15..21
+LURI="file:///labels.kama"
+LSRC='fn int32 add(int32 lhs, int32 rhs) { return lhs + rhs; }\nfn int32 useIt() {\n    return add(lhs: 1, rhs: 2);\n}\n'
+
 # M3.5 dependency fixture: a real installed path dependency, so `.kama/deps` is populated. Built here
 # rather than committed — `.kama/deps` is install output, and a path dep needs no network. The guard under
 # test is that rename REFUSES a symbol whose definition lives in a dependency: `DefSite.unit == nullptr`
@@ -269,6 +277,12 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":45,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"'"$RURI"'"}}}'
 frame '{"jsonrpc":"2.0","id":46,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$RURI"'"},"position":{"line":0,"character":11}}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$XURI"'","languageId":"kama","version":1,"text":"'"$XDROP"'"}}}'
+# --- M6 A2: named-argument labels. 49 = prepareRename ON THE LABEL (the span guard); 53 = rename from the
+#     PARAMETER (must reach the label); 54 = references from the label's own position.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$LURI"'","languageId":"kama","version":1,"text":"'"$LSRC"'"}}}'
+frame '{"jsonrpc":"2.0","id":49,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$LURI"'"},"position":{"line":2,"character":15}}}'
+frame '{"jsonrpc":"2.0","id":53,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$LURI"'"},"position":{"line":0,"character":19},"newName":"left"}}'
+frame '{"jsonrpc":"2.0","id":54,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$LURI"'"},"position":{"line":2,"character":15},"context":{"includeDeclaration":true}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -475,6 +489,23 @@ case "$drop" in
     *'unknown type'*) echo "  FAIL: semantic cascade published from a dropped top-level decl" >&2; fail=1 ;;
     *) echo "  ok: no 'unknown type' cascade from the decl the top-level arm discarded" ;;
 esac
+
+echo "check-lsp: M6 A2 argument labels"
+# THE SPAN GUARD, and it comes first for a reason: rename REPLACES the range it is handed, so this asserts
+# the WHOLE {start,end} object rather than a prefix. An end at char 21 instead of 18 would mean a rename
+# silently deleted `: 1` along with the label.
+expect '"id":49,"result":{"start":{"line":2,"character":15},"end":{"line":2,"character":18}}' \
+       "prepareRename on a label spans the LABEL, not 'lhs: 1'"
+# Renaming the PARAMETER must reach all three sites: its declaration, its body use, and the call-site label.
+expect '"id":53,"result":{"changes":{"file:///labels.kama":[{"range":{"start":{"line":0,"character":19},"end":{"line":0,"character":22}},"newText":"left"}' \
+       "renaming a param rewrites its declaration"
+expect '{"range":{"start":{"line":0,"character":44},"end":{"line":0,"character":47}},"newText":"left"}' \
+       "...and its body use"
+expect '{"range":{"start":{"line":2,"character":15},"end":{"line":2,"character":18}},"newText":"left"}' \
+       "...AND the call-site label, which was silently left behind before A2"
+# From the label's own position, find-references sees the same symbol.
+expect '"id":54,"result":[{"uri":"file:///labels.kama","range":{"start":{"line":0,"character":19}' \
+       "references from a label finds the parameter declaration"
 
 # --- M6 A1: the editor analyzes the program the BUILD analyzes ---------------------------------------
 # The build configuration is resolved ONCE PER PROCESS (the M5 parse cache holds units pruneInactiveDecls

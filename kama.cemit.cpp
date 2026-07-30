@@ -3458,6 +3458,7 @@ std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
             ps.byRef = paramByRef(p.get());
             ps.isConst = p->isConst;
             ps.isHardware = p->isHardware;
+            ps.declSite = p->identifier.get();   // M6 A2: what a call-site label is a reference TO
             // Store the C type spelling; whether it's a class is checked at the
             // call site (paramSigsOf may run before the class table is built).
             ps.className = p->type ? cType(p->type) : "";
@@ -8291,6 +8292,12 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         first = false;
         auto f = byName.find(p.name);
         if (f == byName.end()) { unsupported("missing argument in call", srcLine); s += "0"; continue; }
+        // M6 A2: the label is a REFERENCE to the parameter it just matched, so renaming the parameter
+        // rewrites the call sites too. This is the single named-argument matcher for every call form
+        // (free fns, methods, virtual dispatch, ctors, bound closures, operators — 29 call sites), so one
+        // line covers them all. A no-op in build mode, and free of duplicates: buildPositions dedups by
+        // IdentifierNode*, so a generic body re-emitted per instantiation records the same label once.
+        recordLabelRef(f->second->name.get(), p.declSite);
         // unwrap a give/copy hand-off marker. The inner value is what we emit;
         // the marker (give=move / copy=retain) only matters for a smart pointer passed
         // BY VALUE (ownership transfer) — it's meaningless on a borrow.

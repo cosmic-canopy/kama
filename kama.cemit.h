@@ -25,6 +25,10 @@ struct ParamSig {
     std::string className;    // class type (for ref upcast at call sites), "" if primitive
     bool        isConst = false;   // `const` param — emits `const T*` for FFI pointers
     bool        isHardware = false; // `hardware Ptr<T>` param — emits `volatile T*` for MMIO
+    // The parameter's declaration identifier — the SAME node registerBinding keys its DefSite on, which
+    // is what lets a call-site LABEL be indexed as a reference to it (LSP M6 A2). Analysis-only; null for
+    // the synthesized signatures of string/collection intrinsics, which have no source declaration.
+    const IdentifierNode* declSite = nullptr;
 };
 
 struct FuncSig {
@@ -503,12 +507,27 @@ private:
     struct RecordedDef { const CompilationUnit* unit; const IdentifierNode* id; std::string key;
                          SymKind kind; std::string container; };
     std::vector<RecordedDef> _localDefs;
+    // M6 A2: a named-argument LABEL at a call site, which is a reference to the callee's PARAMETER. Every
+    // kama argument is named, so this is most of the call syntax, not a niche gesture — without it,
+    // renaming a parameter silently left every call site spelling the old label.
+    //
+    // Recorded as a POINTER TO THE PARAMETER'S DECLARATION rather than a key, and resolved to a key only
+    // after buildDefSites(). That inversion is not a style choice: `bindingKey` reads `_refUnit` for its
+    // file component, and at a call site `_refUnit` is the CALLER's unit while the parameter's DefSite was
+    // keyed under the DECLARING unit. Building the key here would therefore mismatch on every cross-unit
+    // call — and same-file calls would still appear to work, which is the worst possible failure mode for
+    // a test suite to face.
+    struct RecordedLabelRef { const CompilationUnit* unit; const IdentifierNode* label;
+                              const IdentifierNode* paramDecl; };
+    std::vector<RecordedLabelRef> _labelRefs;
     std::map<std::string, std::vector<Location>> _refIndex;   // DefSite key -> every USE site of that symbol
     const CompilationUnit* _refUnit = nullptr;   // unit whose bodies are being walked (set in emitModuleContent)
     bool _analysis = false;                      // analysis-mode ctor => record references; a build records none
     void recordRef(const std::string& key, const IdentifierNode* site);  // pure append; no diagnostics, no cType
     void recordDef(const std::string& key, const IdentifierNode* site, SymKind kind,
                    const std::string& container);                        // pure append (M3.4 bindings)
+    // pure append (M6 A2 argument labels) — keyed later, off the parameter's declaration node
+    void recordLabelRef(const IdentifierNode* label, const IdentifierNode* paramDecl);
     // M3.4 keys. These name symbols the resolvers never produce a mangled name for, so they are PREFIXED —
     // an index-only namespace that cannot collide with a resolveUserName/resolveFunc result. A binding is
     // keyed by its DECLARATION SITE, which is what makes two same-named locals in sibling scopes (or in two
