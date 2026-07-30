@@ -4799,6 +4799,7 @@ int main(int argc, char** argv)
     std::string queryRefs;                 // `kama query --refs L:C`: find-references at a cursor
     std::string queryComplete;             // `kama query --complete L:C`: completion candidates at a cursor
     std::string querySigHelp;              // `kama query --sighelp L:C`: signature help at a cursor
+    bool        queryCoverage = false;     // `kama query --coverage`: index coverage for every identifier
     bool        queryProject = false;      // `kama query --project`: index the whole project, not one closure
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
@@ -4829,6 +4830,7 @@ int main(int argc, char** argv)
         else if (a == "--refs" && i + 1 < argc)     queryRefs = argv[++i];           // `kama query` refs L:C
         else if (a == "--complete" && i + 1 < argc) queryComplete = argv[++i];       // `kama query` completion L:C
         else if (a == "--sighelp" && i + 1 < argc)  querySigHelp = argv[++i];        // `kama query` signature help L:C
+        else if (a == "--coverage")                 queryCoverage = true;            // `kama query` index coverage
         else if (a == "--project")                  queryProject = true;             // `kama query` workspace scope
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
@@ -5012,6 +5014,10 @@ int main(int argc, char** argv)
         //                                    (the LEXICAL context, from the file's raw text) then one
         //                                    `kind<TAB>label<TAB>detail` line per candidate
         //   kama query <file> --sighelp L:C  signature help at line:col — `sig=<label> active=<N>`
+        //   kama query <file> --coverage     the reference index's COVERAGE ORACLE: one
+        //                                    `L:C <name> <status>` line per identifier the SOURCE spells,
+        //                                    so a spelling the index never learned about shows up as `-`
+        //                                    instead of waiting for someone to think of it (M6 B3)
         //   kama query <file> --project      widen the unit set from <file>'s import closure to the whole
         //                                    project (M3.5 workspace indexing), so --refs sees files that
         //                                    use <file> without being imported by it
@@ -5088,6 +5094,17 @@ int main(int argc, char** argv)
                 printf("%s:%d:%d\n", r.uri.c_str(), r.range.line, r.range.column);
             return 0;
         }
+        if (queryCoverage) {
+            // The identifiers come from the file's RAW TEXT, never from the index — the whole point is to
+            // ask something the index cannot answer about itself. Deterministic source order, one line each.
+            std::ifstream in(input, std::ios::binary);
+            if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
+            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            for (const auto& id : sourceIdentifiers(text))
+                printf("%d:%d %s %s\n", id.line, id.column, id.name.c_str(),
+                       idx.coverageAt(queryUri, id.line, id.column).c_str());
+            return 0;
+        }
         if (!queryComplete.empty()) {
             int l, c;
             if (!parseLC(queryComplete, l, c)) { fprintf(stderr, "kama query: --complete wants L:C\n"); return 2; }
@@ -5129,7 +5146,7 @@ int main(int argc, char** argv)
             return 0;
         }
         fprintf(stderr, "kama query: pass --symbols, --def L:C, --type L:C, --refs L:C, --complete L:C, "
-                        "or --sighelp L:C\n");
+                        "--sighelp L:C, or --coverage\n");
         return 2;
     }
 

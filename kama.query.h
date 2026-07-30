@@ -107,6 +107,16 @@ struct CompletionContext {
 // scan and can never drift — the same single-source-of-truth reasoning that put kamaIsKeyword in the lexer.
 CompletionContext completionContextAt(const std::string& text, int line, int col);
 
+// Every identifier-shaped token in a buffer, in source order, with the keywords filtered out (asking the
+// lexer's own table, so the two can never disagree). Shares completionContextAt's literal/comment scan.
+//
+// This is the reference index's COVERAGE ORACLE (M6 B3). The index knows what it indexed; nothing knew what
+// it SHOULD have — so a gap could only be found by someone thinking of the spelling, which is exactly how a
+// method's call sites went unindexed for the whole campaign. The source's own identifiers are the missing
+// ground truth: whatever the parser could have named, it spelled here first.
+struct SourceIdent { int line = 0, column = 0; std::string name; };   // line 1-based, column 0-based
+std::vector<SourceIdent> sourceIdentifiers(const std::string& text);
+
 enum class CompletionKind { Field, Method, Ctor, Variant, EnumMember, Type, Contract,
                             Function, Local, Param, Label, Keyword, Module, Namespace, Constant };
 const char* completionKindName(CompletionKind k);   // stable lowercase tag, mirrors symKindName

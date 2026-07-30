@@ -348,6 +348,46 @@ CompletionContext completionContextAt(const std::string& text, int line, int col
     return ctx;
 }
 
+// Every identifier token in the buffer, keywords filtered out — the reference index's coverage oracle. See
+// the header for why this exists at all. Reuses sanitizePrefix over the WHOLE text (its return value only
+// reports the state at the end, which is not a question here), so a name in a comment or a string body can
+// never be mistaken for code, and the rule matches the one completion already scans by.
+std::vector<SourceIdent> sourceIdentifiers(const std::string& text)
+{
+    std::vector<SourceIdent> out;
+    std::string code;
+    sanitizePrefix(text, text.size(), code);
+
+    int line = 1, col = 0;
+    for (size_t i = 0; i < code.size(); ) {
+        if (code[i] == '\n') { ++line; col = 0; ++i; continue; }
+        if (!identStart(code[i])) { ++col; ++i; continue; }
+        size_t b = i;
+        while (i < code.size() && identChar(code[i])) ++i;
+        std::string name = code.substr(b, i - b);
+        // Ask the lexer's own table rather than carrying a keyword list here (kamaIsKeyword, kama.l).
+        if (!kamaIsKeyword(name.c_str())) out.push_back(SourceIdent{ line, col, name });
+        col += (int)(i - b);
+    }
+    return out;
+}
+
+// What the index knows at a position, as one stable token. Deliberately distinguishes the two ways a
+// position can answer nothing, because only one of them is a bug:
+//   `-`           nothing is indexed here at all — the spelling never reached the index (a GAP)
+//   `unresolved`  indexed, but the key names no def-site (a builtin like `int32`, a type parameter)
+// A pure read of _positions/_defSites: no resolution, and never cType (a query path must not diagnose).
+std::string CEmitter::coverageAt(const std::string& uri, int line, int col) const
+{
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return "-";
+    const PosEntry* e = posAt(unit, line, col);
+    if (!e) return "-";
+    auto it = _defSites.find(e->declKey);
+    if (it == _defSites.end()) return "unresolved";
+    return std::string(e->isDeclName ? "decl:" : "ref:") + symKindName(it->second.kind);
+}
+
 // ---- span extraction ------------------------------------------------------------------------------------
 
 static SrcRange rangeOfNode(const ASTNode* n)

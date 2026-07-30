@@ -1,7 +1,47 @@
 # LSP M6 B3 — the member reference index (cold-start brief)
 
-**Status: NOT STARTED. Everything below was verified by running it against `2c20be9`, not reasoned about.**
+**Status: IN PROGRESS. Stage 0 (the coverage oracle) shipped; B3a/B3b next.**
+Everything below was verified by running it, not reasoned about.
 Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](lsp.md).
+
+> ## Stage 0 — how the rest of B3 gets found, instead of thought of
+>
+> B3a existed for the whole campaign because the reference index is built by *instrumenting the emitter*,
+> and an instrumented emitter is only as complete as the set of sites someone remembered. Every test we
+> had asserted a spelling somebody had thought of, so a spelling nobody thought of failed nothing.
+>
+> **`kama query <file> --coverage`** asks the other question. `sourceIdentifiers()` ([kama.query.h](../kama.query.h))
+> enumerates every identifier token the SOURCE spells — reusing completion's own literal/comment scan, and
+> asking the lexer's `kamaIsKeyword` rather than carrying a keyword list — and `CEmitter::coverageAt` says
+> what the index knows at each one:
+>
+> | status | meaning |
+> |---|---|
+> | `decl:<kind>` / `ref:<kind>` | indexed and resolved to a def-site |
+> | `unresolved` | indexed, but the key names no def-site (a builtin, a type parameter, **or a key shape with no def-site behind it**) |
+> | `-` | nothing indexed here at all — **the gap signal** |
+>
+> `tests/query/coverage/*.kama` spell every naming construct the language has; the checked-in
+> `*.coverage` tables beside them are compared WHOLE by `tools/check-query.sh`. A gap is now a diff.
+>
+> ### What it found on its first run (240 identifiers, 64 gaps)
+>
+> The brief below named two of these. The oracle named nine:
+>
+> | # | gap | status |
+> |---|---|---|
+> | 1 | **method CALL SITES** — `p.area()`, `base.kind()`, `this.kind()`, `Point::origin()`, `Derived.make()`, `xs.add()`, `new Cat.loud()` | B3a, below |
+> | 2 | **generic BODIES** — `Box<T>`'s `v`/`get` decls and uses; `firstOr<T>`'s params and body | B3b, below |
+> | 3 | **a generic instance's member** — `bi.v` indexes as `field:Box_int32::v`, a key with no def-site (`unresolved`) | B3b, below |
+> | 4 | **the TYPE QUALIFIER of a member call** — `Point` in `Point.at(…)`, `Color` in `Color::Green`, `Shape` in `Shape::Circle(…)`, `DynamicArray` in `DynamicArray.empty()`. The same spelling as a type ANNOTATION indexes fine, so these paths resolve without passing a `site` | B3d |
+> | 5 | **contract METHOD declarations** — `fn int32 speak();` inside a `type contract`. `InterfaceMethod` carries no decl node, so neither the declaration nor any fat-pointer call site can be indexed | B3c |
+> | 6 | **enum payload fields** — `r` in `Circle(int32 r)`, at both its declaration and the `Shape::Circle(r: 7)` label | B3e |
+> | 7 | **argument labels to a library or generic callee** — `item:`, `xs:`, `fallback:`. M6 A2 works; these callees' `ParamSig::declSite` is null | B3e |
+> | 8 | **a generic free function's CALL SITE** — `firstOr(xs: …)` | B3b |
+> | 9 | **import paths and namespace names** — `std`, `collections`, `DynamicArray` in an `import`; the `namespace` name itself | B3f |
+>
+> Permanently `-`, and correctly so: the contextual type-kind words (`value`, `resource`, `contract`,
+> `both`) are not lexer keywords and never name a symbol.
 
 B3 closes the last correctness holes in the reference index. It is **two gaps with one fix**, and the
 first one is a silent data-loss bug rather than a missing feature:

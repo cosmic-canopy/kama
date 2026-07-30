@@ -1,0 +1,79 @@
+// LSP reference-index COVERAGE fixture — exercised by `kama query --coverage` via tools/check-query.sh,
+// NOT by the main run_tests loop (that scans tests/*.kama, tests/*.d and tests/xfail only).
+//
+// Every naming construct the language has, spelled at least once, so the checked-in table beside this file
+// (spellings.coverage) says what the index knows about EACH ONE. A `-` there means the spelling never
+// reached the reference index at all — which, before M6 B3, was true of every method call site in the
+// language and had gone unnoticed for the whole campaign because nobody thought to ask.
+//
+// Adding a construct here is how the next gap gets found. Re-generate the table with:
+//     ./kama query tests/query/coverage/spellings.kama --coverage > tests/query/coverage/spellings.coverage
+// and read the diff: a line that flips to `-` is a regression, a line that flips off `-` is a fix.
+namespace spellings;
+
+enum Color { Red, Green, Blue }
+
+enum Shape { Circle(int32 r), Empty }
+
+type contract Area for both { fn int32 area(); }
+
+type virtual resource Base {
+    int32 tag;
+    public ctor make() { Base b; b.tag = 1; return give b; }
+    protected virtual fn int32 kind() { return 1; }
+    public fn int32 tagIs() { return this.tag; }        // implicit `this.` field read
+}
+
+type final resource Derived extends Base {
+    public ctor make() { Derived d; return give d; }
+    protected override fn int32 kind() { return 2; }
+    public fn int32 viaBase() { return base.kind(); }   // the non-virtual base call
+    public fn int32 viaThis() { return this.kind(); }
+}
+
+type value Point implements Area {
+    public int32 x;
+    public int32 y;
+    public ctor at(int32 px, int32 py) { Point p; p.x = px; p.y = py; return p; }
+    public fn int32 area() { return this.x * this.y; }
+    public fn int32 sum() { return this.x + this.y; }
+    public static fn int32 origin() { return 0; }
+}
+
+// A generic type, instantiated twice below — one declaration must stay ONE symbol however many
+// instantiations exist.
+type value Box<T> {
+    public T v;
+    public fn T get() { return this.v; }
+}
+
+fn int32 doubled(int32 n) { return n * 2; }
+
+fn int32 main() {
+    Point p = Point.at(px: 3, py: 4);       // named ctor + argument LABELS
+    int32 a = p.area();                     // direct method call
+    int32 s = p.sum();
+    int32 o = Point::origin();              // static call
+    int32 f = p.x + p.y;                    // field reads through a receiver
+
+    Color c = Color::Green;                 // enum member
+    int32 cv = match (c) { case Red: 1; case Green: 2; case Blue: 3; };
+
+    Shape sh = Shape::Circle(r: 7);         // tagged-union variant construction
+    int32 sv = match (sh) { case Circle(r): r; case Empty: 0; };   // payload BINDING
+
+    Box<int32> bi;  bi.v = 1;               // generic instance one
+    Box<bool>  bb;  bb.v = true;            // generic instance two
+    int32 g = bi.get();
+
+    Derived d = Derived.make();
+    int32 k = d.viaBase() + d.viaThis();    // virtual dispatch
+
+    int32 dd = doubled(n: 5);               // free-function call + label
+
+    int32 total = 0;
+    InlineArray<int32, 3> arr = [1, 2, 3];
+    foreach (int32 e in arr) { total = total + e; }   // foreach BINDING
+
+    return a + s + o + f + cv + sv + g + k + dd + total;
+}

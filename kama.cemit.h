@@ -482,6 +482,12 @@ public:
     // this does NOT exclude prelude/std targets: not owning a symbol is a reason to refuse to rename it,
     // not a reason to refuse to colour it.
     std::vector<SemanticToken> semanticTokensFor(const std::string& uri) const;
+    // coverage oracle (M6 B3): what the index knows at one position, as a stable token — `decl:<kind>`,
+    // `ref:<kind>`, `unresolved` (indexed but naming no def-site: a builtin, a type parameter), or `-` for
+    // nothing at all. Paired with sourceIdentifiers() (kama.query.h) by `kama query --coverage`, it turns
+    // "which spellings does the reference index still miss" from a thing someone has to think of into a
+    // diffable table. `-` on a user symbol is a gap; see tests/query/coverage/.
+    std::string coverageAt(const std::string& uri, int line, int col) const;
     // completion (M4). `ctx` is the LEXICAL context recovered from the LIVE buffer (completionContextAt) —
     // NOT a cursor position: at completion time the buffer does not parse, so the receiver the user just
     // typed exists in no AST. NOT const, unlike the rest of the facade: resolving a type spelling means

@@ -455,5 +455,37 @@ expect --type 14:12 -- "param amount"
 # label's span cannot have swallowed it.
 reject --type 10:22 -- "param 3"
 
+# ---------------------------------------------------------------------------------------------------
+# M6 B3 — the reference index's COVERAGE ORACLE.
+#
+# Every assertion above tests a spelling somebody thought of. That is exactly how a method's call sites
+# stayed unindexed for the whole campaign: nobody thought of them, so nothing failed. `--coverage` asks the
+# other question — for EVERY identifier the source spells, what does the index know? — and the answer is
+# frozen in a checked-in table, so a gap is a diff rather than a discovery.
+#
+# The table is compared WHOLE, not by substring: a line silently disappearing is as much a regression as a
+# line changing. Regenerate deliberately (never to "make the test pass") with:
+#     ./kama query tests/query/coverage/<name>.kama --coverage > tests/query/coverage/<name>.coverage
+# and justify every changed line in the commit message.
+echo "check-query: M6 B3 index coverage"
+for cov in "$ROOT"/tests/query/coverage/*.kama; do
+    want="${cov%.kama}.coverage"
+    name=$(basename "$cov")
+    if [ ! -f "$want" ]; then
+        echo "  FAIL: $name has no checked-in coverage table ($want)" >&2
+        fail=1
+        continue
+    fi
+    got="$tmp/$(basename "$want")"
+    "$KAMA" query "$cov" --coverage > "$got" 2>/dev/null || true
+    if diff -u "$want" "$got" > "$tmp/cov.diff" 2>&1; then
+        echo "  ok: $name coverage table unchanged ($(wc -l < "$want" | tr -d ' ') identifiers)"
+    else
+        echo "  FAIL: $name coverage table changed — read the diff, then regenerate it ON PURPOSE:" >&2
+        sed 's/^/      /' "$tmp/cov.diff" >&2
+        fail=1
+    fi
+done
+
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"
