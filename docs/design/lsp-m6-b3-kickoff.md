@@ -1,126 +1,97 @@
 # LSP M6 B3 — the member reference index (cold-start brief)
 
-**Status: Stage 0 + B3a + B3b + B3d + B3e + B3g SHIPPED 2026-07-30** (`2a9ba07`, `95fd0f2`, `18ee951`,
-`9c87583`), and both LSP harnesses are ASan/UBSan-clean on macOS AND in the container (the leak check only
-exists there). **Remaining: two tasks, both cold-start ready — see ► NEXT SESSION immediately below.**
+**Status: ✅ B3 IS COMPLETE (2026-07-30).** Stage 0 + B3a/B3b/B3d/B3e/B3g (`2a9ba07`…`9c87583`), then
+B3f + B3c + B3h (`858f425`, `7500b5e`, `9d157f2`, `baee217`). 803/803 native AND container, emission
+byte-identical over 537 fixtures, both harnesses ASan/UBSan-clean on BOTH platforms, ~91 ms per keystroke
+against a 100 ms budget. **NEXT = M6 Stage C** — [lsp-m6-c-kickoff.md](lsp-m6-c-kickoff.md).
 Everything here was verified by running it, not reasoned about; the few places that are reasoning are
 marked as such.
 Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](lsp.md).
 
-## ► NEXT SESSION — two tasks, both cold-start ready
+## ► As shipped — the last three items
 
-Everything else in B3 is shipped and green (`2a9ba07`…`7264001`, dev). These two are independent of each
-other; do them in either order, one commit each.
+### B3f — positions for `::`-separated name lists (`858f425`, `7500b5e`)
 
-⚠️ **The line numbers in the ORIGINAL BRIEF further down predate the B3 commits and have shifted.** The
-two task briefs here were re-derived against `7264001`. Prefer grepping the named symbol over trusting any
-`file:line` in this document.
+Three gaps, one missing thing: a qualifier, an import path and an export manifest keep their spellings as
+plain strings with no line or column, so there was no node to anchor a `PosEntry` to. **Two of the three
+were silent under-applies**, the same class as B3a: renaming an enum left every `Color::` spelling behind,
+and renaming a type left `export { Box, … };` naming a symbol that no longer existed.
 
-**Gates for both** (campaign non-negotiables, unchanged):
+The recommended shape worked as written. `STAMP_SEG` stamps a span as each string is pushed, parked in
+`CodeGenContext::listSegPos`; `TAKE_SEGS` moves the vector onto the owning node at the consuming reduction
+(`IdentifierNode::qualifierPos` / `ImportDeclarationNode::modulePathPos` / `CompilationUnit::exportListPos`).
+Four things worth not re-deriving:
 
-```sh
-make && ./run_tests.sh                                     # 803/803 before you start, and after
-tools/lspref.sh > build/lspref-<tag>.txt
-diff build/lspref-before.txt build/lspref-<tag>.txt        # MUST be byte-identical, 537 fixtures
-sh tools/check-lsp.sh && sh tools/check-query.sh
-tools/lsp-bench.sh --lsp                                   # ~89 ms; the budget is 100 ms
-# then MANUALLY, and in the CONTAINER too (macOS ASan has no LeakSanitizer):
-make EXTRA_CXXFLAGS="-fsanitize=address,undefined" && sh tools/check-lsp.sh && sh tools/check-query.sh
-```
+- **The pointer key was necessary, as reasoned.** Keyed by the LIST OBJECT, not one pending vector, because
+  qualifiers nest (`A::B<C::D>`).
+- **TAKE, not read.** Erasing at the consuming reduction bounds the map to lists still in flight and stops
+  one discarded by an M5 error arm from leaving a stale entry for a recycled address.
+- ⚠️ **`SCANNER_CODEGENCONTEXT` expands to a `*deref`, and `.` binds tighter than unary `*`.** The macros
+  must parenthesize it. Cost one build cycle.
+- **Indexing belongs in `buildPositions` step (4b), not in a recorder.** Resolving a segment needs `_nsCtx`
+  set to its own unit, which that loop already does — so this took ZERO emitter edits.
 
-**And regenerate the coverage tables** — that diff is the proof the task worked:
-`./kama query tests/query/coverage/<name>.kama --coverage > tests/query/coverage/<name>.coverage`.
-Never regenerate one to make a test pass; read it, and justify every changed line in the commit message.
+Segment keys: a segment that resolves to a real declaration gets that def-site's key (the actual fix);
+otherwise `moduleKeyOf` may give it a `module:` key; otherwise it is left unindexed rather than handed a
+fabricated one, since `resolveUserName` returns an unresolved name VERBATIM.
 
----
+**MODULE PATHS ARE NAVIGATION TARGETS, NEVER RENAME TARGETS** — the one design decision here. SPEC §
+Modules / namespaces makes the namespace the module path and the module path the DIRECTORY path, so
+renaming one is a file-and-directory move. clangd, TypeScript and gopls all draw exactly this line: an
+`#include` / module specifier / import path is a go-to-definition target, and renaming a module is a
+separate file-move refactor. So a `module:<mangled>` key names NO def-site; `definitionAt` special-cases it
+and opens the module, while `_refIndex`, rename and semantic tokens never learn it and the refusal costs no
+new flag. Which unit a path opens comes from the files themselves (a unit's own `namespace a::b;`), so no
+import-resolution state is threaded in from the driver; a DIRECTORY module picks by lowest path spelling,
+never by map iteration order.
 
-### Task 1 — positions for `::`-separated name lists (unblocks three gaps at once)
+### B3c — contract methods (`9d157f2`)
 
-**The problem, verified.** Three lists keep their spellings as plain strings with no line or column, so
-there is no node to anchor a `PosEntry` to:
+**The design question resolved to shape (b): separate def-sites plus a rename GROUP.** That is what every
+mature server does — clangd rewrites the whole override set, rust-analyzer the trait item plus every impl,
+TypeScript the interface member plus all implementations, JDT the method hierarchy, gopls every
+interface-satisfying method — and all of them keep go-to-definition landing on the concrete implementation.
+Shape (a) would have made clicking `c.speak()` land on the contract. Verified both ways in the fixture: a
+concrete call reaches that type's method, a fat-pointer call reaches the contract (whose static type it is),
+and find-references from any of the six sites returns all six.
 
-| gap | field | grammar production |
-|---|---|---|
-| `Color` in `Color::Green`, `Point` in `Point::origin()` | `IdentifierNode::qualifier` (kama.ast.h) | `qualifier`, kama.y ~479 |
-| `std`, `collections` in an import path | `ImportDeclarationNode::modulePath` | `import_path`, kama.y ~359 |
-| `export { Box, … }` | `CompilationUnit::exportList` | `export_name_list`, kama.y ~329 |
+`InterfaceMethod` carries the declaration's `nameId`; `buildDefSites` registers it under an index-only
+`contract:C::m` key (a contract declares a vtbl slot, so there is no `cName`); `emitInterfaceDispatch` takes
+the defaulted trailing `site` B3a deliberately left off.
 
-All three are `%type <strings>` productions that accumulate `IDENTIFIER` tokens, so the `@N` location is
-in hand at exactly the moment each string is pushed. `STAMP_LOC` (kama.y:66) is the existing idiom.
+⚠️ **The group is built in `buildRenameGroups` from the TABLES, not from the conformance loops the brief
+pointed at.** That leaves the emission path untouched and covers the direct `implements` and the retroactive
+`implements C for T` forms at once, since a retro conformance also pushes onto `ci.interfaces`. It uses
+`findMethod`, not `ci.methods`, so an INHERITED implementation pairs the same way `emitClassInterfaceVtables`
+fills the slot. Union is transitive, which is correct. Flattened once at build time; singletons dropped.
 
-**Do NOT retype the lists to identifier lists.** `kama.cemit.cpp` alone dereferences `->qualifier` /
-`.qualifier` at **107 places** (measured; 137 lines mention it), and the `%type <strings>` declarations
-would have to change with them.
+⚠️⚠️ **AND B3C EXPOSED A REAL BUG IN THE RENAME GUARD.** `handleRename` checked ownership of the definition
+AT THE CURSOR and then silently skipped references outside the project. With groups, renaming a project
+type's `write` that implements `std::io::Writer` passes that check — our method is owned — and the edit loop
+then DROPS the contract's declaration, leaving the type no longer satisfying `Writer`. Exactly the
+silent-edit class B3 exists to kill. The guard now checks EVERY declaration in the group, via
+`declarationsAt` + the `lspRenameDeclarations` seam. **If you add any other symbol-group relation, this
+guard is the thing that has to learn about it.**
 
-**Recommended shape — a side table keyed by the LIST POINTER, transferred at the consuming reduction.**
+### B3h — a generic ARGUMENT is a reference (`baee217`)
 
-- In `CodeGenContext` (kama.context.h) add `std::map<const StringList*, std::vector<SrcRange>> listSegPos;`.
-  That class already carries exactly this kind of per-parse, LSP-only data (`diagnostics`,
-  `droppedTopLevelDecl`), and `SCANNER_CODEGENCONTEXT` reaches it from every action.
-- Each accumulating production stamps as it pushes: `ctx.listSegPos[$$.get()].push_back(<@N as SrcRange>)`.
-- Each CONSUMING production copies the vector into a new parallel field on the owning node —
-  `IdentifierNode::qualifierPos`, `ImportDeclarationNode::modulePathPos`,
-  `CompilationUnit::exportListPos` — looking it up by the list pointer it already holds in `$1`.
-- `buildPositions` then emits one `PosEntry{range, nullptr, false, key}` per segment. **A null `id` is
-  already a supported shape** — every declaration entry uses it (step (1) of `buildPositions`).
+`Speaker` in `Owned<Speaker>` was indexed nowhere, so renaming the contract left every such spelling behind.
+One cause, one word: `mangleElem`'s default arm is where a generic argument resolves and the only place it
+does, and it called `resolveUserName` with no `site`.
 
-⚠️ **Why the pointer key, and not a single "pending" vector** (this part is reasoned, not run — verify it):
-qualifiers NEST. In `A::B<C::D>` the inner `C::` reduces while `A::B<…>`'s own reduction is still pending,
-so a single scratch vector would be clobbered before the outer consumer reads it. Keying by the
-`StringList` pointer removes any dependence on reduction order — each list object is one source occurrence
-(the recursive arms push onto `$1` and return it).
+**It was not found by remembering it** — it was a `-` line the coverage oracle left standing after B3c.
+That is stage 0's thesis paying off a second time, after B3g.
 
-⚠️ This touches `kama.y`, so lspref before/after is mandatory, and **every `_opt` rule must set `$$`** (the
-uninitialized-`$$` trap from the MCU step-2 work — an empty rule with no `$$=` yields garbage).
+### What is permanently `-`, and correctly so
 
-**What must become true.** `--def` on `Color` in `Color::Green` lands on the enum; renaming a type rewrites
-`export { … }`; the coverage tables lose the `::`-qualifier, import-path and namespace `-` lines. And
-**`tools/check-query.sh` has a `reject` pinning the export gap as a fact** (in the M6 B3 block, on
-`tests/query/generics/lib.kama:11:9`) — **it must flip to an `expect`.** That is deliberate: it is what
-makes closing the gap visible rather than silent.
+Re-derive nothing here; these are decided:
 
----
-
-### Task 2 — B3c, contract methods (the only remaining item needing a DESIGN, not wiring)
-
-**The problem, verified.** `fn int32 speak();` inside a `type contract` is indexed nowhere, and neither is
-any call that dispatches through the contract's fat pointer. Two causes:
-
-1. `InterfaceMethod` (kama.cemit.h ~347) carries `name`, `returnType`, `params` and **no declaration
-   node**. It is built at ONE place — `ii.methods.push_back({*md->name->value, md->returnType, md->params,
-   md->isRef, md->isCtor})` in `collectClasses`, where `md` is the `ClassMethodDeclarationNode*` — so
-   adding a `SharedIdentifier nameId` set to `md->name` is a one-field, one-site change. (The sibling
-   operator arm has no name node; leave it null, as `MethodInfo::node` already is for operators.)
-2. `buildDefSites` registers contracts but **not their methods** (the `_interfaces` / `_genericContracts`
-   loop adds one entry for the type). So there is no def-site to point a reference at.
-
-Once those exist, the call site is small: `emitInterfaceDispatch` already iterates `it->second.methods` and
-matches by name, and its callers have the spelling in hand (`recv->identifier` in `emitMethodCall`; a
-`site` parameter now threaded through `emitSmartPtrCall`). It was deliberately NOT threaded in B3a
-precisely because there was nothing to point at yet.
-
-**The design question — decide this FIRST, it is the whole task.** Renaming a contract-implementing method
-must rename the contract declaration, every OTHER implementation, and every call site, or it half-applies
-in a new way. Today it is already half-applying (B3a made direct calls rename; contract-dispatched ones
-still do not), so this is not a regression — but it is not closed either. Two shapes:
-
-- **(a) Collapse onto one symbol.** Give an implementing method's DefSite the CONTRACT's key instead of its
-  own. Simple, and rename is correct by construction. Cost: go-to-definition from a call lands on the
-  contract declaration rather than the concrete implementation, and a type implementing two contracts that
-  both declare `speak` needs a tie-break.
-- **(b) Keep separate DefSites plus a rename-GROUP relation** consulted only by `referencesAt` /
-  `renameRangeAt`. More correct (go-to-def keeps landing on the implementation), at the cost of a new
-  relation in the index and a rename path that unions across it.
-
-**Either way the pairing already exists and is free**: the conformance-completeness loop in
-`collectProgram` (`if (const std::vector<InterfaceMethod>* need = contractMethods(contract)) for (auto& nm
-: *need) if (!tci.methods.count(nm.name))`) is walking exactly the "this type's method X implements
-contract Y's method X" relation. Build the group there rather than re-deriving it.
-
-**Test it with a fixture that dispatches BOTH ways** — a concrete-typed call and a fat-pointer call on the
-same method — because a fixture with only one of them passes under a design that gets the other wrong.
-`tests/query/coverage/dispatch.kama` already has both (`c.speak()` and `s.speak()` through
-`Owned<Speaker>`); its `10:42 speak -` and `38:26 speak -` lines are the acceptance criterion.
+| spelling | why it stays `-` |
+|---|---|
+| `value`, `resource`, `contract`, `both` | contextual type-kind words, not lexer keywords; they never name a symbol |
+| `InlineArray` in `InlineArray<int32, 3>` | a compiler intrinsic — grep lib/, there is no declaration anywhere to point at |
+| a type PARAMETER `T` | names no symbol — inside an instance it substitutes to a concrete type. Reads `unresolved` where the resolver walks it, `-` at its `<T>` declaration and in a `foreach` binding type |
+| a module path segment | reads `unresolved`: indexed and navigable, but deliberately given no def-site (see B3f above) |
 
 ---
 

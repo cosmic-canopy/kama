@@ -1,7 +1,7 @@
 # LSP M6 — editor clients + the campaign's loose ends (cold-start brief)
 
-**Status: STAGES A AND B1/B2 COMPLETE (2026-07-29). NEXT = B3, then C, then D — start at
-[§ B3 — the generic-body index gap](#b3--the-generic-body-index-gap-next).**
+**Status: STAGES A, B1, B2 AND B3 COMPLETE (B3 on 2026-07-30). NEXT = STAGE C — its own cold-start brief,
+[lsp-m6-c-kickoff.md](lsp-m6-c-kickoff.md) — then Stage D, the campaign exit.**
 
 M6 is the last LSP milestone:
 
@@ -10,18 +10,19 @@ M6 is the last LSP milestone:
 | **A** | The three deferred correctness items (`setBuildFlags`, argument labels, the import diagnostic) | ✅ **SHIPPED** — `5061875`, `d78a1fd`, `7f8dfde`, `8dc90ab`, `cbdd284` |
 | **B1** | The TextMate grammar audit (13 defects) + a real tokenizer oracle | ✅ **SHIPPED** — `38fee77` |
 | **B2** | `textDocument/semanticTokens/full`, measured | ✅ **SHIPPED** — `cf993d2` |
-| **B3** | The **member** reference index — methods (all types) + generic bodies | **NEXT** — own brief: [lsp-m6-b3-kickoff.md](lsp-m6-b3-kickoff.md) |
-| **C** | Editor clients for 7 more editors + `docs/editors.md` + the VS Code status-bar picker | pending |
+| **B3** | The **member** reference index — methods, generic bodies, `::` name lists, contract methods | ✅ **SHIPPED** — `2a9ba07`…`baee217`; own brief: [lsp-m6-b3-kickoff.md](lsp-m6-b3-kickoff.md) |
+| **C** | Editor clients for 7 more editors + `docs/editors.md` + the VS Code status-bar picker | **NEXT** — own brief: [lsp-m6-c-kickoff.md](lsp-m6-c-kickoff.md) |
 | **D** | Campaign exit | pending |
 
 **All of the above is PRE-LAUNCH (user, 2026-07-29)**, including M7's tree-sitter grammar — the campaign
 finishes before the website work and before 1.0. The earlier "M7 does not gate 1.0" note is superseded.
 
-⚠️ **B3 grew a second, worse half after this brief was written.** Beyond the known generic-body gap, a
-method's CALL SITES turn out not to be indexed **for any type, generic or not** — and because the method
-still has a def-site, `prepareRename` OFFERS F2 and rename rewrites the declaration alone, leaving every
-call site behind. That silently breaks the buffer, where the generic gap merely answers nothing. Both are
-one fix; see the B3 brief.
+⚠️ **B3 turned out to be four times the size this brief predicted, and mostly SILENT-EDIT bugs rather than
+missing features.** Beyond the known generic-body gap it held: a method's call sites indexed for no type at
+all (B3a), an import's symbol list (B3g), a `::` qualifier and an export manifest (B3f), a contract's
+methods (B3c), and a generic argument (B3h) — each one a rename that was OFFERED and then under-applied,
+leaving a buffer that no longer compiles. **Most of them were found by the coverage oracle, not by anyone
+remembering them**; see the B3 brief's stage 0, which is the campaign's most transferable lesson.
 
 ---
 

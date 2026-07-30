@@ -1,14 +1,19 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M0–M5 shipped; M6 STAGES A + B1/B2 shipped (2026-07-29); M6 B3 STAGE 0 + B3a/B3b shipped
-(2026-07-30, dev)** — the three deferred correctness items are closed, the TextMate grammar agrees with the
-compiler and is guarded by a real tokenizer, `textDocument/semanticTokens/full` colours by what the
-resolver concluded, and **renaming a method now rewrites its call sites** (it used to rewrite the
-declaration alone and silently break the buffer), including through the inside of a generic body.
-**NEXT = the rest of B3** — B3c-B3f, which are *enumerated* rather than waiting to be discovered, by the
-coverage oracle stage 0 built: [lsp-m6-b3-kickoff.md](lsp-m6-b3-kickoff.md). Then Stage C
-(editor clients + `docs/editors.md`), then Stage D exit, then M7's tree-sitter grammar. **All of it is
-pre-launch** (user, 2026-07-29).
+**Status: M0–M5 shipped; M6 STAGES A + B1/B2 shipped (2026-07-29); M6 B3 COMPLETE (2026-07-30, dev)** —
+the three deferred correctness items are closed, the TextMate grammar agrees with the compiler and is
+guarded by a real tokenizer, `textDocument/semanticTokens/full` colours by what the resolver concluded, and
+**the reference index no longer loses work**: renaming a method, a contract method, an enum behind a `::`
+qualifier, an exported type or a generic argument now rewrites every spelling of it, including inside a
+generic body and across units. **NEXT = Stage C** (editor clients + `docs/editors.md`), which has its own
+cold-start brief: [lsp-m6-c-kickoff.md](lsp-m6-c-kickoff.md). Then Stage D exit, then M7's tree-sitter
+grammar. **All of it is pre-launch** (user, 2026-07-29).
+
+**One decision from B3 that generalizes beyond the LSP:** a MODULE path is a navigation target and never a
+rename target. In kama the namespace is the module path is the directory path, so renaming one is a
+file-and-directory move — the same line clangd draws for `#include`, TypeScript for a module specifier and
+gopls for an import path. Keeping `module:` keys out of `_defSites` is what makes rename, find-references
+and semantic tokens ignore them with no extra flag.
 
 ⚠️ **The campaign's most transferable lesson is stage 0's, not B3a's.** The reference index is built by
 INSTRUMENTING the emitter, so it is exactly as complete as the set of sites someone remembered to

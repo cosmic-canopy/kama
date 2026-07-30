@@ -617,11 +617,11 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   never fires, `tools/check-syntax.sh` now runs the real vscode-textmate engine over `tests/syntax/` and
   layers committed snapshots, `kama check` agreement, and the 13 findings asserted by name. On top of it,
   `textDocument/semanticTokens/full` colours by what the RESOLVER concluded — free, being a read off the
-  cached index. **M6 B3a/B3b SHIPPED; NEXT / ACTIVE: the rest of B3** (B3c-B3f, enumerated below by the
-  coverage oracle), then **Stage C** (editor
-  clients + `docs/editors.md` + the VS Code status-bar picker), then Stage D exit. Cold-start brief:
-  [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md), which carries an as-shipped record of Stage A and a
-  re-derived seam map for B/C. Status of record: [design/lsp.md](design/lsp.md).
+  cached index. **M6 B3 COMPLETE (2026-07-30). NEXT / ACTIVE: Stage C** (editor
+  clients + `docs/editors.md` + the VS Code status-bar picker), then Stage D exit. Cold-start briefs:
+  [design/lsp-m6-c-kickoff.md](design/lsp-m6-c-kickoff.md) for Stage C, with
+  [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md) as the parent. Status of record:
+  [design/lsp.md](design/lsp.md).
   - **M6 B3a/B3b SHIPPED 2026-07-30 — a method's call sites, and the inside of a generic body, are now
     indexed.** Both were one fix: record the referent's DECLARATION NODE rather than a key, generalizing
     the inversion M6 A2 paid for. A key built at record time embeds ambient context that is wrong for the
@@ -641,15 +641,18 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
       changed, which is exactly what it was there for.
     - Cost: ~+3 ms per keystroke (86 -> 89 ms median, controlled A/B), because generic bodies are now
       walked for records at all. Inside the 100 ms budget. Emission byte-identical across 537 fixtures.
-  - **The gaps that remain are ENUMERATED, not waiting to be thought of.** B3a survived the whole campaign
+  - **The gaps were ENUMERATED rather than waited on.** B3a survived the whole campaign
     because the index is built by instrumenting the emitter, so it is exactly as complete as the set of
     sites someone remembered — and every test asserted a spelling somebody had thought of. `kama query
     <file> --coverage` (B3 stage 0) asks the other question: for every identifier the SOURCE spells, what
     does the index know? `tests/query/coverage/*.kama` spell every naming construct the language has and
     the checked-in `*.coverage` tables beside them are compared whole by `tools/check-query.sh`, so a gap
-    is a diff. **It took the gap list from 64 identifiers to 25** — of which ~11 are permanent and correct
-    (contextual type-kind words, which are not lexer keywords and name nothing; and type PARAMETERS, which
-    substitute to a concrete type inside an instance).
+    is a diff. **It took the gap list from 64 identifiers to 14, and all 14 are correct** — the contextual
+    type-kind words (`value`/`resource`/`contract`/`both`, not lexer keywords, naming nothing),
+    `InlineArray` (a compiler intrinsic with no declaration anywhere to point at), and type PARAMETERS.
+    A type param reads `unresolved` where the resolver walks it and `-` at its `<T>` declaration and in a
+    `foreach` binding type; either way it names no symbol, since inside an instance it substitutes to a
+    concrete type.
     - **✅ B3d/B3e/B3g SHIPPED** (`18ee951`, `9c87583`): the receiver of `Type.name(…)`; a generic free
       function's call site, which `_callInst` routes past the resolveFunc that records every other call;
       `Union::Variant(args)`, where only the payload-LESS read had a recorder; enum PAYLOAD fields, which
@@ -657,22 +660,36 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
       and an `import`'s symbol list.
     - **⚠️ B3g was a TENTH gap, found by pulling on the ninth, and another silent edit.** Renaming a type
       rewrote its declaration and every use and left `import lib::{Box, …}` spelling the old name — so the
-      rename broke a file it had just edited. The import side is fixed; `export { Box, … };` is not, and
-      `tools/check-query.sh` pins that as a `reject`.
-    - **⚠️ ONE blocker is behind three remaining gaps.** A `::`-separated name list keeps its spellings as
-      plain strings with no line or column — `IdentifierNode::qualifier`, `ImportDeclarationNode::
-      modulePath`, `CompilationUnit::exportList` — so `Color` in `Color::Green`, the `std`/`collections`
-      of an import path, and the export surface have no node to anchor a position to, and no amount of
-      passing a `site` reaches them. The brief carries a suggested shape: a PARALLEL `SrcRange` vector
-      stamped in `kama.y` (`STAMP_LOC` already exists) plus a null-`id` `PosEntry` per segment, rather
-      than retyping the lists — dozens of consumers read them as strings. Touches `kama.y`, so it is under
-      the lspref before/after rule. Its own commit.
-    - **B3c — contract methods**, the largest remaining item and the only one needing a DESIGN rather than
-      wiring. `InterfaceMethod` carries no declaration node, and `buildDefSites` registers contracts but
-      not their methods, so neither `fn int32 speak();` inside a `type contract` nor any fat-pointer call
-      site can be indexed. Renaming a contract-implementing method still half-applies — less broken than
-      before B3a, since direct calls now rename — but the real fix needs a symbol-group/override-set so
-      the contract declaration, every implementation and every call site rename together.
+      rename broke a file it had just edited.
+    - **✅ B3f SHIPPED** (`858f425`, `7500b5e`): one blocker was behind three gaps — a `::`-separated name
+      list keeps its spellings as plain strings with no line or column. The grammar now stamps a span per
+      segment as it pushes (`STAMP_SEG` → `CodeGenContext::listSegPos` → `TAKE_SEGS` onto the owning node),
+      keyed by the LIST OBJECT because qualifiers nest. That closed `Color` in `Color::Green` and the
+      `export { … }` manifest — both silent under-applies — and flipped the pinned `reject` to an `expect`.
+      **A MODULE path is a navigation target and never a rename target**: in kama the namespace is the
+      module path is the directory path, so renaming one is a file-and-directory move (clangd, TypeScript
+      and gopls all draw the same line). Its `module:` key names no def-site, so go-to-definition opens the
+      module while rename, find-references and semantic tokens ignore it with no extra flag.
+    - **✅ B3c SHIPPED** (`9d157f2`): a contract's method declarations and every fat-pointer call site are
+      indexed, and a contract method plus its implementations are ONE renameable name — separate def-sites
+      plus a rename GROUP, so go-to-definition still lands on the concrete implementation. That is the
+      shape clangd, rust-analyzer, TypeScript, JDT and gopls all use. **It also exposed a real bug in the
+      rename ownership guard**, fixed in the same commit: the guard checked only the definition at the
+      cursor, so renaming a project type's method that implements a `std` contract passed the check and
+      then silently dropped the contract's declaration from the edit set. It now checks every declaration
+      in the group. Any future symbol-group relation must teach that guard about itself.
+    - **✅ B3h SHIPPED** (`baee217`): a generic ARGUMENT (`Speaker` in `Owned<Speaker>`) resolves in
+      `mangleElem` and nowhere else, and that call passed no `site` — so renaming the argument type left
+      every such spelling behind. One word. **Found as a leftover `-` line in the coverage table, not by
+      anyone remembering it** — stage 0 paying off a third time.
+    - **What is permanently `-`, decided:** the contextual type-kind words (`value`/`resource`/`contract`/
+      `both`, not lexer keywords, never name a symbol) and `InlineArray` (a compiler intrinsic with no
+      declaration anywhere to point at). A type PARAMETER and a module path segment read `unresolved`
+      rather than `-`: indexed, deliberately resolving to no def-site.
+    - **⚠️ A STANDING OBLIGATION, not a finished task: extend `tests/query/coverage/` whenever the
+      LANGUAGE gains a naming construct.** The index is instrumented into the emitter, so it is only ever
+      as complete as the set of sites someone remembered; the oracle is what makes a gap a diff instead of
+      a discovery.
 - **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
   liftable out of the monorepo to stand alone. Design of record:
   [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:
