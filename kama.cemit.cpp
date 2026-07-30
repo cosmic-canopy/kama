@@ -14415,10 +14415,19 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             std::string path;
             for (auto& s : *imp->modulePath) path += (path.empty() ? "" : ".") + *s;
             std::string mod = mangleNs(path);
+            // M6 B3g: an `import`'s symbol list NAMES the things it imports, so renaming one of them has
+            // to rewrite the import too — otherwise the rename leaves a module importing a symbol that no
+            // longer exists, which is the B3a failure again, across files. `_refUnit` is null throughout
+            // collectProgram, so point it at the importing unit for this loop.
+            RefUnitScope refScope(this, u.get());
             for (auto& sym : *imp->symbols) {
                 if (!sym || !sym->identifier || !sym->identifier->value) continue;
                 if (!_exported.count(mod + "__" + *sym->identifier->value))
                     unsupported(("module `" + path + "` does not export `" + *sym->identifier->value + "`").c_str(), imp->line);
+                // The module-qualified name the export check just built IS the resolved key the symbol's
+                // def-site is registered under; an alias (`X as Y`) still refers to X, which is what
+                // `identifier` holds.
+                recordRef(mod + "__" + *sym->identifier->value, sym->identifier.get());
             }
         }
     }

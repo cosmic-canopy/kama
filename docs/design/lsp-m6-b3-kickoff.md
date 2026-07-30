@@ -40,7 +40,7 @@ Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](
 > | 6 | **enum payload fields** — `r` in `Circle(int32 r)`, at both its declaration and the `Shape::Circle(r: 7)` label | ✅ B3e |
 > | 7 | **argument labels to a library or generic callee** — `item:`, `xs:`, `fallback:`. M6 A2 works; these callees' `ParamSig::declSite` is null | ✅ B3b (they were generic-instance callees all along) |
 > | 8 | **a generic free function's CALL SITE** — `firstOr(xs: …)` | ✅ B3d |
-> | 9 | **import paths and namespace names** — `std`, `collections`, `DynamicArray` in an `import`; the `namespace` name itself | B3f |
+> | 9 | **import paths and namespace names** — `std`, `collections`, `DynamicArray` in an `import`; the `namespace` name itself | ✅ the imported SYMBOL (B3g); the PATH segments are blocked, same as `::` |
 >
 > Permanently `-`, and correctly so: the contextual type-kind words (`value`, `resource`, `contract`,
 > `both`) are not lexer keywords and never name a symbol. A type PARAMETER (`T`) reads `unresolved` rather
@@ -80,14 +80,40 @@ Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](
 > a recorder; and enum payload fields, which needed def-sites first — they live on the variant BACKING
 > ClassInfo, which `buildDefSites` skips as compiler-synthesized, so they had none anywhere.
 >
-> ### ⚠️ B3d's `::` form is BLOCKED on the AST, and it is the one thing here that is not a small fix
+> ### ⚠️ B3g — a TENTH gap, found by pulling on #9, and it is another silent edit
 >
-> `Point::origin()`, `Color::Green`, `Shape::Circle(…)` — the qualifier is **not a node**.
-> `IdentifierNode::qualifier` is a `SharedStringList` ([kama.ast.h:244](../kama.ast.h#L244)): plain strings
-> with no line or column, so there is nothing to anchor a `PosEntry` to and no amount of passing a `site`
-> can fix it. Closing it means the grammar retaining a position per qualifier segment — a `kama.y` +
-> `kama.ast.h` change, which also puts it under the campaign's lspref before/after rule. It is the only
-> remaining gap that is not additive to the index alone, and it should be its own commit.
+> An `import`'s symbol list is a REFERENCE, and it was not indexed. Renaming a type rewrote its declaration
+> and every use and left `import lib::{Box, …}` spelling the old name — so the rename broke a file it had
+> just edited. Same class as B3a, now across units. **Fixed** for the import side: the symbols carry real
+> `UsingDeclarationNode::identifier` nodes, and `_refUnit` just had to be pointed at the importing unit for
+> the export-check loop (it is null throughout `collectProgram`). The module-qualified name that check
+> already builds IS the key the def-site is registered under.
+>
+> **The matching `export { Box, … };` is still missing**, and it is blocked on the same thing as the two
+> below: `CompilationUnit::exportList` is a `SharedStringList`. `tools/check-query.sh` pins that as a
+> `reject`, so closing it cannot be silent.
+>
+> ### ⚠️ ONE blocker is now behind THREE remaining gaps, and it is the one thing here that is not a small fix
+>
+> Three separate gaps turn out to be one missing thing: **a `::`-separated name list keeps its spellings as
+> plain strings, with no line or column**, so there is nothing to anchor a `PosEntry` to and no amount of
+> passing a `site` reaches them.
+>
+> | gap | the list |
+> |---|---|
+> | `Point::origin()`, `Color::Green`, `Shape::Circle(…)` — the QUALIFIER (B3d's `::` form) | `IdentifierNode::qualifier`, [kama.ast.h:244](../kama.ast.h#L244) |
+> | `std`, `collections` — an import PATH's segments (B3f) | `ImportDeclarationNode::modulePath`, [kama.ast.h:107](../kama.ast.h#L107) |
+> | `export { Box, … }` — the export surface (B3g's other half) | `CompilationUnit::exportList`, [kama.ast.h:59](../kama.ast.h#L59) |
+>
+> **Suggested shape, additive rather than invasive.** Do NOT retype these to identifier lists: dozens of
+> consumers read `id->qualifier` as strings, and the grammar's `%type <strings>` would have to change with
+> them. Instead carry a PARALLEL `std::vector<SrcRange>` filled by `STAMP_LOC`-style stamping in `kama.y`
+> (the macro already exists, [kama.y:66](../kama.y#L66)), and have `buildPositions` emit a
+> `PosEntry{range, nullptr, false, key}` per segment — a null `id` is already a supported shape (every
+> declaration entry uses it). Nothing else has to change.
+>
+> ⚠️ This touches `kama.y`, so it is under the campaign's lspref before/after rule, and ⚠️ **every `_opt`
+> rule must set `$$`** (the uninitialized-`$$` trap recorded in the MCU step-2 notes). Its own commit.
 
 ---
 

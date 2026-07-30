@@ -1,7 +1,7 @@
 6:10 dispatch -
 8:7 std -
 8:12 collections -
-8:26 DynamicArray -
+8:26 DynamicArray ref:generic-type
 10:5 contract -
 10:14 Speaker decl:contract
 10:26 both -

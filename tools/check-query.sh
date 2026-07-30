@@ -497,6 +497,18 @@ expect --type 12:7  -- "field v"
 # A generic method's PARAMETER reaches its call-site label too (the A2 path, through a template body).
 expect --def 19:15  -- "lib.kama:19:29"
 
+FIXTURE="$ROOT/tests/query/generics/lib.kama"
+# M6 B3g: an `import`'s symbol list is a REFERENCE. Renaming `Box` used to rewrite its declaration and its
+# uses and leave `import lib::{Box, …}` spelling the old name — the module then imports a symbol that no
+# longer exists, so the rename breaks a file it did edit. Same class as B3a, across units.
+expect --project --refs 13:11 -- "use.kama:7:13"
+# ⚠️ STILL OPEN, asserted as a fact so closing it cannot be silent: the matching `export { Box, … };` is
+# NOT a reference, so that half of the rename is still missing. CompilationUnit::exportList is a
+# SharedStringList — plain strings with no line or column — so there is no node to anchor a position to.
+# It is the same blocker as the `::` qualifier and the import PATH; see the B3 brief. When the grammar
+# carries positions for those lists, THIS ASSERTION MUST FLIP to an `expect`.
+reject --project --refs 13:11 -- "lib.kama:11:9"
+
 # ---------------------------------------------------------------------------------------------------
 # M6 B3 — the reference index's COVERAGE ORACLE.
 #
