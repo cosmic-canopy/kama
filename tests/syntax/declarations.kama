@@ -1,0 +1,49 @@
+// Syntax-highlighting fixture — declarations, attributes, keywords, operators, asm, #region.
+//
+// tests/syntax/ is checked by tools/check-syntax.sh against TWO oracles, and has to satisfy both:
+//   1. the real vscode-textmate engine, whose full token/scope output is committed beside this file as
+//      declarations.kama.snap — same idea as a tests/*.expect file, so an unintended scope change is a
+//      diff rather than a judgement call;
+//   2. `kama check`, which must SUCCEED on every fixture here (and FAIL on bad.kama).
+// The second oracle is the point: a grammar assertion about a spelling the compiler rejects is worthless.
+// It corrected this file four times over — the drafts used `fn name() -> T` (kama has no `->`; a function
+// is `fn <returnType> name(…)`, C-style), a bare `ctor(…)` (a ctor is NAMED: `ctor make(…)`), a bare
+// `@generate` (it needs at least one of Serialize/Deserialize) and a `type abstract resource` with no
+// overridable method. Attributes are also top-level-only: `public @noheap fn` and every other ordering
+// fails to parse, so there is no indented attribute here to look at.
+
+#region folding marker — the lexer DROPS this line (reserved_preprocessor in kama.l)
+
+// `immutable` sits between `type` and the kind word, and `value` is an ordinary IDENTIFIER in kama.y —
+// nothing but the #declarations rule can colour it, and that rule used to be unreachable.
+type immutable value Point {
+    int32 x;
+    public ctor make(int32 x) { Point r; r.x = x; return give r; }
+    public fn int32 get() { return this.x; }
+}
+
+type final resource Handle {
+    int32 fd;
+    public ctor make(int32 fd) { Handle r; r.fd = fd; return give r; }
+    public fn int32 raw() { return this.fd; }
+}
+
+enum Color {
+    Red,
+    Green
+}
+
+// `compileFor` used to mis-scope as a FUNCTION CALL — #functions' trailing-`(` lookahead matched it.
+@compileFor(HOSTED)
+fn int32 twice(int32 n) { return n + n; }
+
+fn int32 main() {
+    Point p = Point.make(x: 20);
+    int32 a = p.get();
+    a += 1;
+    a = a * 2 - 1;
+    if (a == 40 && a != 0) { a = twice(n: a) - 41; }
+    int32 b = a > 0 ? 1 : 0;
+    unsafe { asm("nop"); }
+    return a + b;
+}

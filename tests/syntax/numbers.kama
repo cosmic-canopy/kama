@@ -1,0 +1,25 @@
+// Syntax-highlighting fixture — every numeric literal form kama.l ACCEPTS.
+//
+// See tests/syntax/declarations.kama for how the three oracles work. This family has the worst defect
+// history in the grammar — `139fb10` found it disagreeing with the compiler four ways at once — and the
+// rejected spellings (42u32, 42f32, 1_000, 0b1010) live in tests/syntax/bad.kama. What the snapshot pins
+// here is the SUFFIX SPLIT: `i32` in `42i32` must colour like the `int32` keyword, not like the digits.
+
+fn int32 main() {
+    int32 dec = 42;
+    int32 suf = 42i32;
+    uint32 usuf = 42ui32;
+    int32 hex = 0x2A;
+    int32 hexs = 0x2Ai32;
+    int32 oct = 0o52;
+    int32 based = 0b101010_2;
+    float64 f = 1.5;
+    float64 fe = 0.15e1;
+    float32 f32v = 1.5f32;
+    float64 f64v = 1.5f64;
+    float64 exp = 1e1;
+    if (dec == suf && hex == 42 && oct == 42 && based == 42) { return 0; }
+    if (usuf > 0ui32 && hexs == 42 && f > 0.0 && fe > 0.0) { return 0; }
+    if (f32v > 0.0f32 && f64v > 0.0 && exp > 0.0) { return 0; }
+    return 1;
+}

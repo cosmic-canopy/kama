@@ -1,0 +1,259 @@
+>// SYNTAX TEST "source.kama" "escapes, verbatim quote-escape, interpolation, char literals"
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>//
+#^^ source.kama comment.line.double-slash.kama
+>// See tests/syntax/declarations.kama for how the two oracles work. Every literal here is one the
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// COMPILER accepts (`kama check` must pass); the rejected spellings live in tests/syntax/bad.kama.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// The compiler oracle corrected this file twice: an interpolation hole takes only an identifier with
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// member/index accessors (no CALL — `${s.length()}` is a lexical error) and a format specifier is
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// `[-+.0-9A-Za-z]+`, so `${s:>8}` is one too.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>
+>fn int32 main() {
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^^ source.kama storage.type.primitive.kama
+#        ^ source.kama
+#         ^^^^ source.kama entity.name.function.kama
+#             ^^^^^ source.kama
+>    int32 n = 0;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^ source.kama constant.numeric.integer.kama
+#               ^^ source.kama
+>    string esc = "tab\there\nnewline \"quoted\" \\ back \$dollar \u{E9} \u{1F600}";
+#^^^^ source.kama
+#    ^^^^^^ source.kama storage.type.primitive.kama
+#          ^^^^^ source.kama
+#               ^ source.kama keyword.operator.assignment.kama
+#                ^ source.kama
+#                 ^ source.kama string.quoted.double.kama
+#                  ^^^ source.kama string.quoted.double.kama
+#                     ^^ source.kama string.quoted.double.kama constant.character.escape.kama
+#                       ^^^^ source.kama string.quoted.double.kama
+#                           ^^ source.kama string.quoted.double.kama constant.character.escape.kama
+#                             ^^^^^^^^ source.kama string.quoted.double.kama
+#                                     ^^ source.kama string.quoted.double.kama constant.character.escape.kama
+#                                       ^^^^^^ source.kama string.quoted.double.kama
+#                                             ^^ source.kama string.quoted.double.kama constant.character.escape.kama
+#                                               ^ source.kama string.quoted.double.kama
+#                                                ^^ source.kama string.quoted.double.kama constant.character.escape.kama
+#                                                  ^^^^^^ source.kama string.quoted.double.kama
+#                                                        ^^ source.kama string.quoted.double.kama constant.character.escape.kama
+#                                                          ^^^^^^^ source.kama string.quoted.double.kama
+#                                                                 ^^^^^^ source.kama string.quoted.double.kama constant.character.escape.kama
+#                                                                       ^ source.kama string.quoted.double.kama
+#                                                                        ^^^^^^^^^ source.kama string.quoted.double.kama constant.character.escape.kama
+#                                                                                 ^ source.kama string.quoted.double.kama
+#                                                                                  ^^ source.kama
+>    string verb = @"say ""hi"" — the doubled quote is the escape, and the line CONTINUES";
+#^^^^ source.kama
+#    ^^^^^^ source.kama storage.type.primitive.kama
+#          ^^^^^^ source.kama
+#                ^ source.kama keyword.operator.assignment.kama
+#                 ^ source.kama
+#                  ^^ source.kama string.quoted.verbatim.kama punctuation.definition.string.begin.kama
+#                    ^^^^ source.kama string.quoted.verbatim.kama
+#                        ^^ source.kama string.quoted.verbatim.kama constant.character.escape.kama
+#                          ^^ source.kama string.quoted.verbatim.kama
+#                            ^^ source.kama string.quoted.verbatim.kama constant.character.escape.kama
+#                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama string.quoted.verbatim.kama
+#                                                                                        ^ source.kama string.quoted.verbatim.kama punctuation.definition.string.end.kama
+#                                                                                         ^^ source.kama
+>    string interp = "value ${esc} and ${n:+06} and hex ${n:0X}";
+#^^^^ source.kama
+#    ^^^^^^ source.kama storage.type.primitive.kama
+#          ^^^^^^^^ source.kama
+#                  ^ source.kama keyword.operator.assignment.kama
+#                   ^ source.kama
+#                    ^ source.kama string.quoted.double.kama
+#                     ^^^^^^ source.kama string.quoted.double.kama
+#                           ^^ source.kama string.quoted.double.kama meta.interpolation.kama punctuation.definition.interpolation.begin.kama
+#                             ^^^ source.kama string.quoted.double.kama meta.interpolation.kama variable.other.kama
+#                                ^ source.kama string.quoted.double.kama meta.interpolation.kama punctuation.definition.interpolation.end.kama
+#                                 ^^^^^ source.kama string.quoted.double.kama
+#                                      ^^ source.kama string.quoted.double.kama meta.interpolation.kama punctuation.definition.interpolation.begin.kama
+#                                        ^ source.kama string.quoted.double.kama meta.interpolation.kama variable.other.kama
+#                                         ^^^^ source.kama string.quoted.double.kama meta.interpolation.kama keyword.other.format-spec.kama
+#                                             ^ source.kama string.quoted.double.kama meta.interpolation.kama punctuation.definition.interpolation.end.kama
+#                                              ^^^^^^^^^ source.kama string.quoted.double.kama
+#                                                       ^^ source.kama string.quoted.double.kama meta.interpolation.kama punctuation.definition.interpolation.begin.kama
+#                                                         ^ source.kama string.quoted.double.kama meta.interpolation.kama variable.other.kama
+#                                                          ^^^ source.kama string.quoted.double.kama meta.interpolation.kama keyword.other.format-spec.kama
+#                                                             ^ source.kama string.quoted.double.kama meta.interpolation.kama punctuation.definition.interpolation.end.kama
+#                                                              ^ source.kama string.quoted.double.kama
+#                                                               ^^ source.kama
+>    char c1 = 'a';
+#^^^^ source.kama
+#    ^^^^ source.kama storage.type.primitive.kama
+#        ^^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^^^ source.kama string.quoted.single.kama
+#                 ^^ source.kama
+>    char c2 = '\n';
+#^^^^ source.kama
+#    ^^^^ source.kama storage.type.primitive.kama
+#        ^^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^ source.kama string.quoted.single.kama
+#               ^^ source.kama string.quoted.single.kama constant.character.escape.kama
+#                 ^ source.kama string.quoted.single.kama
+#                  ^^ source.kama
+>    char c3 = '\'';
+#^^^^ source.kama
+#    ^^^^ source.kama storage.type.primitive.kama
+#        ^^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^ source.kama string.quoted.single.kama
+#               ^^ source.kama string.quoted.single.kama constant.character.escape.kama
+#                 ^ source.kama string.quoted.single.kama
+#                  ^^ source.kama
+>    char c4 = '\u{E9}';
+#^^^^ source.kama
+#    ^^^^ source.kama storage.type.primitive.kama
+#        ^^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^ source.kama string.quoted.single.kama
+#               ^^^^^^ source.kama string.quoted.single.kama constant.character.escape.kama
+#                     ^ source.kama string.quoted.single.kama
+#                      ^^ source.kama
+>    char c5 = 'é';
+#^^^^ source.kama
+#    ^^^^ source.kama storage.type.primitive.kama
+#        ^^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^^^ source.kama string.quoted.single.kama
+#                 ^^ source.kama
+>    char c6 = '😀';
+#^^^^ source.kama
+#    ^^^^ source.kama storage.type.primitive.kama
+#        ^^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^^^^ source.kama string.quoted.single.kama
+#                  ^^ source.kama
+>    if (esc.length() > 0) { n = n + 1; }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^^^ source.kama
+#            ^^^^^^ source.kama entity.name.function.kama
+#                  ^^^ source.kama
+#                     ^ source.kama keyword.operator.relational.kama
+#                      ^ source.kama
+#                       ^ source.kama constant.numeric.integer.kama
+#                        ^^^^^^ source.kama
+#                              ^ source.kama keyword.operator.assignment.kama
+#                               ^^^ source.kama
+#                                  ^ source.kama keyword.operator.arithmetic.kama
+#                                   ^ source.kama
+#                                    ^ source.kama constant.numeric.integer.kama
+#                                     ^^^^ source.kama
+>    if (verb.length() > 0) { n = n + 1; }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^^^^ source.kama
+#             ^^^^^^ source.kama entity.name.function.kama
+#                   ^^^ source.kama
+#                      ^ source.kama keyword.operator.relational.kama
+#                       ^ source.kama
+#                        ^ source.kama constant.numeric.integer.kama
+#                         ^^^^^^ source.kama
+#                               ^ source.kama keyword.operator.assignment.kama
+#                                ^^^ source.kama
+#                                   ^ source.kama keyword.operator.arithmetic.kama
+#                                    ^ source.kama
+#                                     ^ source.kama constant.numeric.integer.kama
+#                                      ^^^^ source.kama
+>    if (interp.length() > 0) { n = n + 1; }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^^^^^^ source.kama
+#               ^^^^^^ source.kama entity.name.function.kama
+#                     ^^^ source.kama
+#                        ^ source.kama keyword.operator.relational.kama
+#                         ^ source.kama
+#                          ^ source.kama constant.numeric.integer.kama
+#                           ^^^^^^ source.kama
+#                                 ^ source.kama keyword.operator.assignment.kama
+#                                  ^^^ source.kama
+#                                     ^ source.kama keyword.operator.arithmetic.kama
+#                                      ^ source.kama
+#                                       ^ source.kama constant.numeric.integer.kama
+#                                        ^^^^ source.kama
+>    if (c1 == 'a' && c2 == '\n' && c3 == '\'') { n = n + 1; }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^^ source.kama
+#           ^^ source.kama keyword.operator.comparison.kama
+#             ^ source.kama
+#              ^^^ source.kama string.quoted.single.kama
+#                 ^ source.kama
+#                  ^^ source.kama keyword.operator.logical.kama
+#                    ^^^^ source.kama
+#                        ^^ source.kama keyword.operator.comparison.kama
+#                          ^ source.kama
+#                           ^ source.kama string.quoted.single.kama
+#                            ^^ source.kama string.quoted.single.kama constant.character.escape.kama
+#                              ^ source.kama string.quoted.single.kama
+#                               ^ source.kama
+#                                ^^ source.kama keyword.operator.logical.kama
+#                                  ^^^^ source.kama
+#                                      ^^ source.kama keyword.operator.comparison.kama
+#                                        ^ source.kama
+#                                         ^ source.kama string.quoted.single.kama
+#                                          ^^ source.kama string.quoted.single.kama constant.character.escape.kama
+#                                            ^ source.kama string.quoted.single.kama
+#                                             ^^^^^^ source.kama
+#                                                   ^ source.kama keyword.operator.assignment.kama
+#                                                    ^^^ source.kama
+#                                                       ^ source.kama keyword.operator.arithmetic.kama
+#                                                        ^ source.kama
+#                                                         ^ source.kama constant.numeric.integer.kama
+#                                                          ^^^^ source.kama
+>    if (c4 == '\u{E9}' && c5 == 'é' && c6 == '😀') { n = n + 1; }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^^ source.kama
+#           ^^ source.kama keyword.operator.comparison.kama
+#             ^ source.kama
+#              ^ source.kama string.quoted.single.kama
+#               ^^^^^^ source.kama string.quoted.single.kama constant.character.escape.kama
+#                     ^ source.kama string.quoted.single.kama
+#                      ^ source.kama
+#                       ^^ source.kama keyword.operator.logical.kama
+#                         ^^^^ source.kama
+#                             ^^ source.kama keyword.operator.comparison.kama
+#                               ^ source.kama
+#                                ^^^ source.kama string.quoted.single.kama
+#                                   ^ source.kama
+#                                    ^^ source.kama keyword.operator.logical.kama
+#                                      ^^^^ source.kama
+#                                          ^^ source.kama keyword.operator.comparison.kama
+#                                            ^ source.kama
+#                                             ^^^^ source.kama string.quoted.single.kama
+#                                                 ^^^^^^ source.kama
+#                                                       ^ source.kama keyword.operator.assignment.kama
+#                                                        ^^^ source.kama
+#                                                           ^ source.kama keyword.operator.arithmetic.kama
+#                                                            ^ source.kama
+#                                                             ^ source.kama constant.numeric.integer.kama
+#                                                              ^^^^ source.kama
+>    return n;
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.control.kama
+#          ^^^^ source.kama
+>}
+#^^ source.kama
+>

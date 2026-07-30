@@ -1,0 +1,23 @@
+// SYNTAX TEST "source.kama" "spellings the COMPILER REJECTS — the grammar must colour them illegal"
+//
+// The inverse fixture. `tools/check-syntax.sh` asserts that `kama check` FAILS on this file, and that
+// every construct below carries an `invalid.illegal.*` scope. Colouring rejected code as valid is the
+// exact defect class this whole audit exists to close: before it, the grammar highlighted `42u32` as a
+// number (the suffix is `u?i…`, so it is `42ui32`), `\e` and `\x41` as escapes, `'abc'` and `''` as char
+// literals, and let `@"say ""hi"""` silently mis-colour the rest of its line.
+//
+// Nothing here needs to be reachable or type-correct — it needs to be REJECTED.
+
+fn int32 main() {
+    string e1 = "\e";
+    string e2 = "\x41";
+    string e3 = "\q";
+    string e4 = "\u{1234567}";
+    char c1 = 'abc';
+    char c2 = '';
+    int32 n1 = 42u32;
+    int32 n2 = 42f32;
+    int32 n3 = 1_000;
+    int32 n4 = 0b1010;
+    return 0;
+}

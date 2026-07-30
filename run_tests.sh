@@ -129,6 +129,15 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-syn
     if sh tools/check-syntax-drift.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# The OTHER half of the highlighting guard: check-syntax-drift greps the grammar, so it can only see that a
+# rule EXISTS. check-syntax.sh runs the real vscode-textmate engine over tests/syntax/ and can see whether a
+# rule FIRES — which is how M6 Stage B found `#declarations` and `#cast` present, correct, and unreachable.
+# SKIPs (counting as a pass) without node or editor/vscode/node_modules, so a fresh clone is not failed for
+# not having run `npm install`.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-syntax.sh ]; then
+    if sh tools/check-syntax.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # MCU step 3: `--target embedded` freestanding-build guard (emitted entry shape + libc-free object). Like
 # the drift guard, run once on the plain native pass (the SAN/WASM re-runs build the fixture hosted anyway).
 if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-embedded.sh ]; then

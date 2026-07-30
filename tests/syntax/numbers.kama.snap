@@ -1,0 +1,214 @@
+>// Syntax-highlighting fixture — every numeric literal form kama.l ACCEPTS.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>//
+#^^ source.kama comment.line.double-slash.kama
+>// See tests/syntax/declarations.kama for how the three oracles work. This family has the worst defect
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// history in the grammar — `139fb10` found it disagreeing with the compiler four ways at once — and the
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// rejected spellings (42u32, 42f32, 1_000, 0b1010) live in tests/syntax/bad.kama. What the snapshot pins
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// here is the SUFFIX SPLIT: `i32` in `42i32` must colour like the `int32` keyword, not like the digits.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>
+>fn int32 main() {
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^^ source.kama storage.type.primitive.kama
+#        ^ source.kama
+#         ^^^^ source.kama entity.name.function.kama
+#             ^^^^^ source.kama
+>    int32 dec = 42;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^^ source.kama constant.numeric.integer.kama
+#                  ^^ source.kama
+>    int32 suf = 42i32;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^^ source.kama constant.numeric.integer.kama
+#                  ^^^ source.kama storage.type.numeric.kama
+#                     ^^ source.kama
+>    uint32 usuf = 42ui32;
+#^^^^ source.kama
+#    ^^^^^^ source.kama storage.type.primitive.kama
+#          ^^^^^^ source.kama
+#                ^ source.kama keyword.operator.assignment.kama
+#                 ^ source.kama
+#                  ^^ source.kama constant.numeric.integer.kama
+#                    ^^^^ source.kama storage.type.numeric.kama
+#                        ^^ source.kama
+>    int32 hex = 0x2A;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^^^^ source.kama constant.numeric.hex.kama
+#                    ^^ source.kama
+>    int32 hexs = 0x2Ai32;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^^ source.kama
+#               ^ source.kama keyword.operator.assignment.kama
+#                ^ source.kama
+#                 ^^^^ source.kama constant.numeric.hex.kama
+#                     ^^^ source.kama storage.type.numeric.kama
+#                        ^^ source.kama
+>    int32 oct = 0o52;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^^^^ source.kama constant.numeric.octal.kama
+#                    ^^ source.kama
+>    int32 based = 0b101010_2;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^^^ source.kama
+#                ^ source.kama keyword.operator.assignment.kama
+#                 ^ source.kama
+#                  ^^^^^^^^^^ source.kama constant.numeric.other.kama
+#                            ^^ source.kama
+>    float64 f = 1.5;
+#^^^^ source.kama
+#    ^^^^^^^ source.kama storage.type.primitive.kama
+#           ^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^^^ source.kama constant.numeric.float.kama
+#                   ^^ source.kama
+>    float64 fe = 0.15e1;
+#^^^^ source.kama
+#    ^^^^^^^ source.kama storage.type.primitive.kama
+#           ^^^^ source.kama
+#               ^ source.kama keyword.operator.assignment.kama
+#                ^ source.kama
+#                 ^^^^^^ source.kama constant.numeric.float.kama
+#                       ^^ source.kama
+>    float32 f32v = 1.5f32;
+#^^^^ source.kama
+#    ^^^^^^^ source.kama storage.type.primitive.kama
+#           ^^^^^^ source.kama
+#                 ^ source.kama keyword.operator.assignment.kama
+#                  ^ source.kama
+#                   ^^^ source.kama constant.numeric.float.kama
+#                      ^^^ source.kama storage.type.numeric.kama
+#                         ^^ source.kama
+>    float64 f64v = 1.5f64;
+#^^^^ source.kama
+#    ^^^^^^^ source.kama storage.type.primitive.kama
+#           ^^^^^^ source.kama
+#                 ^ source.kama keyword.operator.assignment.kama
+#                  ^ source.kama
+#                   ^^^ source.kama constant.numeric.float.kama
+#                      ^^^ source.kama storage.type.numeric.kama
+#                         ^^ source.kama
+>    float64 exp = 1e1;
+#^^^^ source.kama
+#    ^^^^^^^ source.kama storage.type.primitive.kama
+#           ^^^^^ source.kama
+#                ^ source.kama keyword.operator.assignment.kama
+#                 ^ source.kama
+#                  ^^^ source.kama constant.numeric.float.kama
+#                     ^^ source.kama
+>    if (dec == suf && hex == 42 && oct == 42 && based == 42) { return 0; }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^^^ source.kama
+#            ^^ source.kama keyword.operator.comparison.kama
+#              ^^^^^ source.kama
+#                   ^^ source.kama keyword.operator.logical.kama
+#                     ^^^^^ source.kama
+#                          ^^ source.kama keyword.operator.comparison.kama
+#                            ^ source.kama
+#                             ^^ source.kama constant.numeric.integer.kama
+#                               ^ source.kama
+#                                ^^ source.kama keyword.operator.logical.kama
+#                                  ^^^^^ source.kama
+#                                       ^^ source.kama keyword.operator.comparison.kama
+#                                         ^ source.kama
+#                                          ^^ source.kama constant.numeric.integer.kama
+#                                            ^ source.kama
+#                                             ^^ source.kama keyword.operator.logical.kama
+#                                               ^^^^^^^ source.kama
+#                                                      ^^ source.kama keyword.operator.comparison.kama
+#                                                        ^ source.kama
+#                                                         ^^ source.kama constant.numeric.integer.kama
+#                                                           ^^^^ source.kama
+#                                                               ^^^^^^ source.kama keyword.control.kama
+#                                                                     ^ source.kama
+#                                                                      ^ source.kama constant.numeric.integer.kama
+#                                                                       ^^^^ source.kama
+>    if (usuf > 0ui32 && hexs == 42 && f > 0.0 && fe > 0.0) { return 0; }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^^^^ source.kama
+#             ^ source.kama keyword.operator.relational.kama
+#              ^ source.kama
+#               ^ source.kama constant.numeric.integer.kama
+#                ^^^^ source.kama storage.type.numeric.kama
+#                    ^ source.kama
+#                     ^^ source.kama keyword.operator.logical.kama
+#                       ^^^^^^ source.kama
+#                             ^^ source.kama keyword.operator.comparison.kama
+#                               ^ source.kama
+#                                ^^ source.kama constant.numeric.integer.kama
+#                                  ^ source.kama
+#                                   ^^ source.kama keyword.operator.logical.kama
+#                                     ^^^ source.kama
+#                                        ^ source.kama keyword.operator.relational.kama
+#                                         ^ source.kama
+#                                          ^^^ source.kama constant.numeric.float.kama
+#                                             ^ source.kama
+#                                              ^^ source.kama keyword.operator.logical.kama
+#                                                ^^^^ source.kama
+#                                                    ^ source.kama keyword.operator.relational.kama
+#                                                     ^ source.kama
+#                                                      ^^^ source.kama constant.numeric.float.kama
+#                                                         ^^^^ source.kama
+#                                                             ^^^^^^ source.kama keyword.control.kama
+#                                                                   ^ source.kama
+#                                                                    ^ source.kama constant.numeric.integer.kama
+#                                                                     ^^^^ source.kama
+>    if (f32v > 0.0f32 && f64v > 0.0 && exp > 0.0) { return 0; }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^^^^ source.kama
+#             ^ source.kama keyword.operator.relational.kama
+#              ^ source.kama
+#               ^^^ source.kama constant.numeric.float.kama
+#                  ^^^ source.kama storage.type.numeric.kama
+#                     ^ source.kama
+#                      ^^ source.kama keyword.operator.logical.kama
+#                        ^^^^^^ source.kama
+#                              ^ source.kama keyword.operator.relational.kama
+#                               ^ source.kama
+#                                ^^^ source.kama constant.numeric.float.kama
+#                                   ^ source.kama
+#                                    ^^ source.kama keyword.operator.logical.kama
+#                                      ^^^^^ source.kama
+#                                           ^ source.kama keyword.operator.relational.kama
+#                                            ^ source.kama
+#                                             ^^^ source.kama constant.numeric.float.kama
+#                                                ^^^^ source.kama
+#                                                    ^^^^^^ source.kama keyword.control.kama
+#                                                          ^ source.kama
+#                                                           ^ source.kama constant.numeric.integer.kama
+#                                                            ^^^^ source.kama
+>    return 1;
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.control.kama
+#          ^ source.kama
+#           ^ source.kama constant.numeric.integer.kama
+#            ^^ source.kama
+>}
+#^^ source.kama
+>

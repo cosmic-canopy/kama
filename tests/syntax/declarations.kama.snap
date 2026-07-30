@@ -1,0 +1,267 @@
+>// Syntax-highlighting fixture — declarations, attributes, keywords, operators, asm, #region.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>//
+#^^ source.kama comment.line.double-slash.kama
+>// tests/syntax/ is checked by tools/check-syntax.sh against TWO oracles, and has to satisfy both:
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>//   1. the real vscode-textmate engine, whose full token/scope output is committed beside this file as
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>//      declarations.kama.snap — same idea as a tests/*.expect file, so an unintended scope change is a
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>//      diff rather than a judgement call;
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>//   2. `kama check`, which must SUCCEED on every fixture here (and FAIL on bad.kama).
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// The second oracle is the point: a grammar assertion about a spelling the compiler rejects is worthless.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// It corrected this file four times over — the drafts used `fn name() -> T` (kama has no `->`; a function
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// is `fn <returnType> name(…)`, C-style), a bare `ctor(…)` (a ctor is NAMED: `ctor make(…)`), a bare
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// `@generate` (it needs at least one of Serialize/Deserialize) and a `type abstract resource` with no
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// overridable method. Attributes are also top-level-only: `public @noheap fn` and every other ordering
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// fails to parse, so there is no indented attribute here to look at.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>
+>#region folding marker — the lexer DROPS this line (reserved_preprocessor in kama.l)
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.number-sign.kama
+>
+>// `immutable` sits between `type` and the kind word, and `value` is an ordinary IDENTIFIER in kama.y —
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// nothing but the #declarations rule can colour it, and that rule used to be unreachable.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>type immutable value Point {
+#^^^^ source.kama storage.type.kama
+#    ^ source.kama
+#     ^^^^^^^^^^ source.kama keyword.other.modifier.kama
+#               ^^^^^ source.kama storage.modifier.kind.kama
+#                    ^ source.kama
+#                     ^^^^^ source.kama entity.name.type.kama
+#                          ^^^ source.kama
+>    int32 x;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^ source.kama
+>    public ctor make(int32 x) { Point r; r.x = x; return give r; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.kama
+#               ^ source.kama
+#                ^^^^ source.kama entity.name.function.kama
+#                    ^ source.kama
+#                     ^^^^^ source.kama storage.type.primitive.kama
+#                          ^^^^^^ source.kama
+#                                ^^^^^ source.kama entity.name.type.kama
+#                                     ^^^^^^^^ source.kama
+#                                             ^ source.kama keyword.operator.assignment.kama
+#                                              ^^^^ source.kama
+#                                                  ^^^^^^ source.kama keyword.control.kama
+#                                                        ^ source.kama
+#                                                         ^^^^ source.kama keyword.other.kama
+#                                                             ^^^^^^ source.kama
+>    public fn int32 get() { return this.x; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^ source.kama keyword.other.kama
+#             ^ source.kama
+#              ^^^^^ source.kama storage.type.primitive.kama
+#                   ^ source.kama
+#                    ^^^ source.kama entity.name.function.kama
+#                       ^^^^^ source.kama
+#                            ^^^^^^ source.kama keyword.control.kama
+#                                  ^ source.kama
+#                                   ^^^^ source.kama variable.language.kama
+#                                       ^^^^^^ source.kama
+>}
+#^^ source.kama
+>
+>type final resource Handle {
+#^^^^ source.kama storage.type.kama
+#    ^ source.kama
+#     ^^^^^^ source.kama keyword.other.modifier.kama
+#           ^^^^^^^^ source.kama storage.modifier.kind.kama
+#                   ^ source.kama
+#                    ^^^^^^ source.kama entity.name.type.kama
+#                          ^^^ source.kama
+>    int32 fd;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^ source.kama
+>    public ctor make(int32 fd) { Handle r; r.fd = fd; return give r; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.kama
+#               ^ source.kama
+#                ^^^^ source.kama entity.name.function.kama
+#                    ^ source.kama
+#                     ^^^^^ source.kama storage.type.primitive.kama
+#                          ^^^^^^^ source.kama
+#                                 ^^^^^^ source.kama entity.name.type.kama
+#                                       ^^^^^^^^^ source.kama
+#                                                ^ source.kama keyword.operator.assignment.kama
+#                                                 ^^^^^ source.kama
+#                                                      ^^^^^^ source.kama keyword.control.kama
+#                                                            ^ source.kama
+#                                                             ^^^^ source.kama keyword.other.kama
+#                                                                 ^^^^^^ source.kama
+>    public fn int32 raw() { return this.fd; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^ source.kama keyword.other.kama
+#             ^ source.kama
+#              ^^^^^ source.kama storage.type.primitive.kama
+#                   ^ source.kama
+#                    ^^^ source.kama entity.name.function.kama
+#                       ^^^^^ source.kama
+#                            ^^^^^^ source.kama keyword.control.kama
+#                                  ^ source.kama
+#                                   ^^^^ source.kama variable.language.kama
+#                                       ^^^^^^^ source.kama
+>}
+#^^ source.kama
+>
+>enum Color {
+#^^^^ source.kama storage.type.kama
+#    ^ source.kama
+#     ^^^^^ source.kama entity.name.type.kama
+#          ^^^ source.kama
+>    Red,
+#^^^^ source.kama
+#    ^^^ source.kama entity.name.type.kama
+#       ^^ source.kama
+>    Green
+#^^^^ source.kama
+#    ^^^^^ source.kama entity.name.type.kama
+>}
+#^^ source.kama
+>
+>// `compileFor` used to mis-scope as a FUNCTION CALL — #functions' trailing-`(` lookahead matched it.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>@compileFor(HOSTED)
+#^ source.kama punctuation.definition.annotation.kama
+# ^^^^^^^^^^ source.kama entity.name.function.decorator.kama
+#           ^ source.kama
+#            ^^^^^^ source.kama entity.name.type.kama
+#                  ^^ source.kama
+>fn int32 twice(int32 n) { return n + n; }
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^^ source.kama storage.type.primitive.kama
+#        ^ source.kama
+#         ^^^^^ source.kama entity.name.function.kama
+#              ^ source.kama
+#               ^^^^^ source.kama storage.type.primitive.kama
+#                    ^^^^^^ source.kama
+#                          ^^^^^^ source.kama keyword.control.kama
+#                                ^^^ source.kama
+#                                   ^ source.kama keyword.operator.arithmetic.kama
+#                                    ^^^^^^ source.kama
+>
+>fn int32 main() {
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^^ source.kama storage.type.primitive.kama
+#        ^ source.kama
+#         ^^^^ source.kama entity.name.function.kama
+#             ^^^^^ source.kama
+>    Point p = Point.make(x: 20);
+#^^^^ source.kama
+#    ^^^^^ source.kama entity.name.type.kama
+#         ^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^^^^^ source.kama entity.name.type.kama
+#                   ^ source.kama
+#                    ^^^^ source.kama entity.name.function.kama
+#                        ^^^^ source.kama
+#                            ^^ source.kama constant.numeric.integer.kama
+#                              ^^^ source.kama
+>    int32 a = p.get();
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^^^ source.kama
+#                ^^^ source.kama entity.name.function.kama
+#                   ^^^^ source.kama
+>    a += 1;
+#^^^^^^ source.kama
+#      ^^ source.kama keyword.operator.assignment.compound.kama
+#        ^ source.kama
+#         ^ source.kama constant.numeric.integer.kama
+#          ^^ source.kama
+>    a = a * 2 - 1;
+#^^^^^^ source.kama
+#      ^ source.kama keyword.operator.assignment.kama
+#       ^^^ source.kama
+#          ^ source.kama keyword.operator.arithmetic.kama
+#           ^ source.kama
+#            ^ source.kama constant.numeric.integer.kama
+#             ^ source.kama
+#              ^ source.kama keyword.operator.arithmetic.kama
+#               ^ source.kama
+#                ^ source.kama constant.numeric.integer.kama
+#                 ^^ source.kama
+>    if (a == 40 && a != 0) { a = twice(n: a) - 41; }
+#^^^^ source.kama
+#    ^^ source.kama keyword.control.kama
+#      ^^^^ source.kama
+#          ^^ source.kama keyword.operator.comparison.kama
+#            ^ source.kama
+#             ^^ source.kama constant.numeric.integer.kama
+#               ^ source.kama
+#                ^^ source.kama keyword.operator.logical.kama
+#                  ^^^ source.kama
+#                     ^^ source.kama keyword.operator.comparison.kama
+#                       ^ source.kama
+#                        ^ source.kama constant.numeric.integer.kama
+#                         ^^^^^^ source.kama
+#                               ^ source.kama keyword.operator.assignment.kama
+#                                ^ source.kama
+#                                 ^^^^^ source.kama entity.name.function.kama
+#                                      ^^^^^^^ source.kama
+#                                             ^ source.kama keyword.operator.arithmetic.kama
+#                                              ^ source.kama
+#                                               ^^ source.kama constant.numeric.integer.kama
+#                                                 ^^^^ source.kama
+>    int32 b = a > 0 ? 1 : 0;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^^^ source.kama
+#                ^ source.kama keyword.operator.relational.kama
+#                 ^ source.kama
+#                  ^ source.kama constant.numeric.integer.kama
+#                   ^ source.kama
+#                    ^ source.kama keyword.operator.ternary.kama
+#                     ^ source.kama
+#                      ^ source.kama constant.numeric.integer.kama
+#                       ^^^ source.kama
+#                          ^ source.kama constant.numeric.integer.kama
+#                           ^^ source.kama
+>    unsafe { asm("nop"); }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.kama
+#          ^^^ source.kama
+#             ^^^ source.kama string.quoted.double.asm.kama keyword.other.kama
+#                ^ source.kama string.quoted.double.asm.kama punctuation.section.parens.begin.kama
+#                 ^ source.kama string.quoted.double.asm.kama punctuation.definition.string.begin.kama
+#                  ^^^ source.kama string.quoted.double.asm.kama meta.embedded.assembly
+#                     ^ source.kama string.quoted.double.asm.kama punctuation.definition.string.end.kama
+#                      ^^^^^ source.kama
+>    return a + b;
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.control.kama
+#          ^^^ source.kama
+#             ^ source.kama keyword.operator.arithmetic.kama
+#              ^^^^ source.kama
+>}
+#^^ source.kama
+>

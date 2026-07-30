@@ -50,5 +50,9 @@
   },
   "extensionPack": [
     "vadimcn.vscode-lldb"
-  ]
+  ],
+  "comment-devDependencies": "Test-only: the TextMate tokenizer behind tools/check-syntax.sh. vsce ships production deps only, so this is not packaged into the .vsix.",
+  "devDependencies": {
+    "vscode-tmgrammar-test": "^0.1.3"
+  }
 }

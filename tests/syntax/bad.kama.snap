@@ -1,0 +1,125 @@
+>// SYNTAX TEST "source.kama" "spellings the COMPILER REJECTS — the grammar must colour them illegal"
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>//
+#^^ source.kama comment.line.double-slash.kama
+>// The inverse fixture. `tools/check-syntax.sh` asserts that `kama check` FAILS on this file, and that
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// every construct below carries an `invalid.illegal.*` scope. Colouring rejected code as valid is the
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// exact defect class this whole audit exists to close: before it, the grammar highlighted `42u32` as a
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// number (the suffix is `u?i…`, so it is `42ui32`), `\e` and `\x41` as escapes, `'abc'` and `''` as char
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// literals, and let `@"say ""hi"""` silently mis-colour the rest of its line.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>//
+#^^ source.kama comment.line.double-slash.kama
+>// Nothing here needs to be reachable or type-correct — it needs to be REJECTED.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>
+>fn int32 main() {
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^^ source.kama storage.type.primitive.kama
+#        ^ source.kama
+#         ^^^^ source.kama entity.name.function.kama
+#             ^^^^^ source.kama
+>    string e1 = "\e";
+#^^^^ source.kama
+#    ^^^^^^ source.kama storage.type.primitive.kama
+#          ^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^ source.kama string.quoted.double.kama
+#                 ^^ source.kama string.quoted.double.kama invalid.illegal.unknown-escape.kama
+#                   ^ source.kama string.quoted.double.kama
+#                    ^^ source.kama
+>    string e2 = "\x41";
+#^^^^ source.kama
+#    ^^^^^^ source.kama storage.type.primitive.kama
+#          ^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^ source.kama string.quoted.double.kama
+#                 ^^ source.kama string.quoted.double.kama invalid.illegal.unknown-escape.kama
+#                   ^^ source.kama string.quoted.double.kama
+#                     ^ source.kama string.quoted.double.kama
+#                      ^^ source.kama
+>    string e3 = "\q";
+#^^^^ source.kama
+#    ^^^^^^ source.kama storage.type.primitive.kama
+#          ^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^ source.kama string.quoted.double.kama
+#                 ^^ source.kama string.quoted.double.kama invalid.illegal.unknown-escape.kama
+#                   ^ source.kama string.quoted.double.kama
+#                    ^^ source.kama
+>    string e4 = "\u{1234567}";
+#^^^^ source.kama
+#    ^^^^^^ source.kama storage.type.primitive.kama
+#          ^^^^ source.kama
+#              ^ source.kama keyword.operator.assignment.kama
+#               ^ source.kama
+#                ^ source.kama string.quoted.double.kama
+#                 ^^ source.kama string.quoted.double.kama invalid.illegal.unknown-escape.kama
+#                   ^^^^^^^^^ source.kama string.quoted.double.kama
+#                            ^ source.kama string.quoted.double.kama
+#                             ^^ source.kama
+>    char c1 = 'abc';
+#^^^^ source.kama
+#    ^^^^ source.kama storage.type.primitive.kama
+#        ^^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^^^^^ source.kama invalid.illegal.char-literal.kama
+#                   ^^ source.kama
+>    char c2 = '';
+#^^^^ source.kama
+#    ^^^^ source.kama storage.type.primitive.kama
+#        ^^^^ source.kama
+#            ^ source.kama keyword.operator.assignment.kama
+#             ^ source.kama
+#              ^^ source.kama invalid.illegal.char-literal.kama
+#                ^^ source.kama
+>    int32 n1 = 42u32;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^ source.kama
+#             ^ source.kama keyword.operator.assignment.kama
+#              ^ source.kama
+#               ^^^^^ source.kama invalid.illegal.numeric.kama
+#                    ^^ source.kama
+>    int32 n2 = 42f32;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^ source.kama
+#             ^ source.kama keyword.operator.assignment.kama
+#              ^ source.kama
+#               ^^^^^ source.kama invalid.illegal.numeric.kama
+#                    ^^ source.kama
+>    int32 n3 = 1_000;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^ source.kama
+#             ^ source.kama keyword.operator.assignment.kama
+#              ^ source.kama
+#               ^^^^^ source.kama invalid.illegal.numeric.kama
+#                    ^^ source.kama
+>    int32 n4 = 0b1010;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^ source.kama
+#             ^ source.kama keyword.operator.assignment.kama
+#              ^ source.kama
+#               ^^^^^^ source.kama invalid.illegal.numeric.kama
+#                     ^^ source.kama
+>    return 0;
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.control.kama
+#          ^ source.kama
+#           ^ source.kama constant.numeric.integer.kama
+#            ^^ source.kama
+>}
+#^^ source.kama
+>

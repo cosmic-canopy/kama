@@ -14,9 +14,13 @@ LEXER="$ROOT/kama.l"
 GRAMMAR="$ROOT/editor/vscode/syntaxes/kama.tmLanguage.json"
 
 # Keywords the compiler reserves — the `{"word", TOKEN}` rows of the sorted keyword table in kama.l.
+# ⚠️ The character class MUST include digits. It was `[a-z_]+`, which silently excluded every
+# digit-bearing keyword — `int8`…`uint64`, `float32`, `float64` — so this guard could not have noticed
+# any of them going missing from the grammar. Nothing was missing when that was found (M6 Stage B); the
+# guard simply had no way to tell, which is the same blind spot in a different place.
 lexer_keywords() {
     sed -n '/static struct name_value keywords/,/};/p' "$LEXER" \
-        | grep -oE '\{"[a-z_]+"' | tr -d '{"'
+        | grep -oE '\{"[a-z0-9_]+"' | tr -d '{"'
 }
 
 # Every bare word the TextMate grammar highlights: the alternations inside `\b(...)\b`, plus the kind words

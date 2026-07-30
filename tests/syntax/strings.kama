@@ -1,0 +1,26 @@
+// SYNTAX TEST "source.kama" "escapes, verbatim quote-escape, interpolation, char literals"
+//
+// See tests/syntax/declarations.kama for how the two oracles work. Every literal here is one the
+// COMPILER accepts (`kama check` must pass); the rejected spellings live in tests/syntax/bad.kama.
+// The compiler oracle corrected this file twice: an interpolation hole takes only an identifier with
+// member/index accessors (no CALL — `${s.length()}` is a lexical error) and a format specifier is
+// `[-+.0-9A-Za-z]+`, so `${s:>8}` is one too.
+
+fn int32 main() {
+    int32 n = 0;
+    string esc = "tab\there\nnewline \"quoted\" \\ back \$dollar \u{E9} \u{1F600}";
+    string verb = @"say ""hi"" — the doubled quote is the escape, and the line CONTINUES";
+    string interp = "value ${esc} and ${n:+06} and hex ${n:0X}";
+    char c1 = 'a';
+    char c2 = '\n';
+    char c3 = '\'';
+    char c4 = '\u{E9}';
+    char c5 = 'é';
+    char c6 = '😀';
+    if (esc.length() > 0) { n = n + 1; }
+    if (verb.length() > 0) { n = n + 1; }
+    if (interp.length() > 0) { n = n + 1; }
+    if (c1 == 'a' && c2 == '\n' && c3 == '\'') { n = n + 1; }
+    if (c4 == '\u{E9}' && c5 == 'é' && c6 == '😀') { n = n + 1; }
+    return n;
+}

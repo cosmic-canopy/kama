@@ -2,23 +2,50 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "kama",
   "scopeName": "source.kama",
+  "comment": "Hand-maintained TextMate grammar. Two guards keep it honest and BOTH are load-bearing: tools/check-syntax-drift.sh greps kama.l's keyword + numeric-suffix tables (it can see that a rule EXISTS), and tools/check-syntax.sh runs the real vscode-textmate engine over tests/syntax/ (it can see that a rule FIRES). The second one exists because the first cannot catch a rule that is present, correct, and unreachable — see the ordering note on `patterns` below.",
   "patterns": [
     { "include": "#comments" },
+    { "include": "#preprocessor" },
+    { "include": "#asm" },
     { "include": "#strings" },
     { "include": "#chars" },
+    { "include": "#attributes" },
+    { "include": "#declarations" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#constants" },
     { "include": "#numbers" },
-    { "include": "#cast" },
-    { "include": "#declarations" },
+    { "include": "#operators" },
     { "include": "#functions" }
   ],
   "repository": {
     "comments": {
+      "comment": "`/*` does NOT nest in kama.l either (a single IN_COMMENT state, popped by the first `*/`), so the non-nesting rule below is CORRECT — do not 'fix' it.",
       "patterns": [
         { "name": "comment.line.double-slash.kama", "match": "//.*$" },
         { "name": "comment.block.kama", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "preprocessor": {
+      "comment": "kama has no preprocessor: the lexer SILENTLY DROPS `reserved_preprocessor ^[ \\t]*#.*` (kama.l), which exists only so `#region`/`#endregion` can drive editor folding. Colouring it like a comment is honest — that is exactly what the compiler does with the line.",
+      "name": "comment.line.number-sign.kama",
+      "match": "^[ \\t]*#.*$"
+    },
+    "asm": {
+      "comment": "`asm_statement : ASM LPAREN STRING_LITERAL RPAREN SEMICOLON` (kama.y) takes a PLAIN string literal, so the body deliberately does NOT include #interp-body: an interpolated `asm(\"${x}\")` does not parse, and a live-looking hole would colour un-compilable code as valid. Must be included BEFORE #keywords — `asm` is a reserved keyword, and TextMate breaks a same-position tie in favour of the EARLIER include, so #keywords would otherwise starve this rule of its `asm` anchor.",
+      "begin": "\\b(asm)\\s*(\\()\\s*(\")",
+      "end": "\"",
+      "name": "string.quoted.double.asm.kama",
+      "contentName": "meta.embedded.assembly",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.kama" },
+        "2": { "name": "punctuation.section.parens.begin.kama" },
+        "3": { "name": "punctuation.definition.string.begin.kama" }
+      },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.kama" } },
+      "patterns": [
+        { "name": "invalid.illegal.interpolation-in-asm.kama", "match": "\\$\\{" },
+        { "include": "#escapes" }
       ]
     },
     "strings": {
@@ -54,15 +81,26 @@
           "patterns": [ { "include": "#interp-body" } ]
         },
         {
+          "comment": "Verbatim `@\"…\"`: no escapes EXCEPT `quote_esc_seq \\\"\\\"` (kama.l), which is a literal quote. The end pattern needs the negative lookahead — TextMate prefers `end` over a content pattern at a tie, so a plain `\"` end would terminate the string on the first half of `\"\"` and mis-colour the rest of the line (which it did).",
           "name": "string.quoted.verbatim.kama",
           "begin": "@\"",
-          "end": "\""
+          "end": "\"(?!\")",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.kama" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.kama" } },
+          "patterns": [ { "name": "constant.character.escape.kama", "match": "\"\"" } ]
         }
+      ]
+    },
+    "escapes": {
+      "comment": "Mirrors kama.l EXACTLY: `simple_esc_seq \\\\['\\\"\\\\0abfnrtv$]` plus `uni_codepoint_esc_seq \\\\u\\{{hex_digit}{1,6}\\}`. Everything else after a backslash is NOT an escape — `\\e`, `\\x41` and `\\q` are all rejected by the compiler, and the hex run is bounded at 6 (U+10FFFF), so `\\u{1234567}` is invalid too. The catch-all second rule colours those as illegal instead of letting them pass as valid escapes, which is what the old single `\\\\(u\\{…\\}|.)` rule did.",
+      "patterns": [
+        { "name": "constant.character.escape.kama", "match": "\\\\(?:['\"\\\\0abfnrtv$]|u\\{[0-9A-Fa-f]{1,6}\\})" },
+        { "name": "invalid.illegal.unknown-escape.kama", "match": "\\\\." }
       ]
     },
     "interp-body": {
       "patterns": [
-        { "name": "constant.character.escape.kama", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" },
+        { "include": "#escapes" },
         {
           "comment": "string interpolation hole ${ident.field[index]:spec} — an identifier with .field/[index] accessors and an optional format spec",
           "name": "meta.interpolation.kama",
@@ -80,30 +118,35 @@
       ]
     },
     "chars": {
-      "name": "string.quoted.single.kama",
-      "begin": "'",
-      "end": "'",
-      "patterns": [
-        { "name": "constant.character.escape.kama", "match": "\\\\(u\\{[0-9A-Fa-f]+\\}|.)" }
-      ]
-    },
-    "keywords": {
-      "patterns": [
-        { "name": "keyword.control.kama", "match": "\\b(if|else|match|case|while|do|for|foreach|parallel_for|break|continue|return|spawn)\\b" },
-        { "name": "keyword.other.modifier.kama", "match": "\\b(abstract|override|virtual|final|static|default|private|protected|public|friend|const|comptime|hardware|immutable|ref|out|in|extern|export|expose)\\b" },
-        { "name": "keyword.other.kama", "match": "\\b(fn|fnptr|ctor|type|namespace|using|import|extends|implements|operator|unsafe|asm|scope|give|copy|cast|bitcast|as|when|sizeof|alignof)\\b" },
-        { "name": "keyword.operator.new.kama", "match": "\\b(new|try)\\b" },
-        { "name": "variable.language.kama", "match": "\\b(this|base)\\b" }
-      ]
-    },
-    "declarations": {
+      "comment": "A `char` is exactly ONE Unicode scalar value. kama.l offers four spellings and no more: `simple_esc_seq_literal` ('\\n'), `single_char_literal` ('a'), `uni_codepoint_char_literal` ('\\u{1..6 hex}') and `multibyte_char_literal` (one 2-4 byte UTF-8 scalar, 'é'/'😀'). This used to be a quoted SPAN, which accepted `'abc'` and `''` — a multi-codepoint grapheme is a string, not a char, so both are rejected by the compiler and are now coloured illegal. Match rules rather than a span also mean a stray `'` no longer swallows the rest of the line.",
       "patterns": [
         {
-          "match": "\\b(type)\\s+(value|resource|view|contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "name": "string.quoted.single.kama",
+          "match": "'(\\\\(?:['\"\\\\0abfnrtv$]|u\\{[0-9A-Fa-f]{1,6}\\}))'",
+          "captures": { "1": { "name": "constant.character.escape.kama" } }
+        },
+        { "name": "string.quoted.single.kama", "match": "'[^\\\\'\\n]'" },
+        { "comment": "Reached only when neither spelling above matched: `''`, `'abc'`, `'\\e'`, `'\\u{1234567}'`.", "name": "invalid.illegal.char-literal.kama", "match": "'[^'\\n]*'" }
+      ]
+    },
+    "attributes": {
+      "comment": "`@generate`, `@compileFor(FLAG)`, `@noheap`, `@skip`, `@interrupt`, `@section(...)`, `@builtin`, `@vertex`… There was no rule at all, so an attribute was invisible and — worse — one with arguments mis-scoped as a FUNCTION CALL (`compileFor` matched #functions' trailing-`(` lookahead). Anchored on the `@`, which is left of the name, so it wins on position regardless of include order; it is listed before #declarations anyway because `@generate(...) type …` is a legal prefix (kama.y marked_type_declaration).",
+      "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "punctuation.definition.annotation.kama" },
+        "2": { "name": "entity.name.function.decorator.kama" }
+      }
+    },
+    "declarations": {
+      "comment": "⚠️ MUST be included BEFORE #keywords. TextMate breaks a same-position tie in favour of the earlier include, so with #keywords first this rule was DEAD: `type` matched as a bare keyword, scanning resumed past it, and the contextual kind word — which is an ordinary IDENTIFIER in kama.y, so nothing else can colour it — came back with NO scope at all. Verified with the real tokenizer, not reasoned about; tests/syntax/declarations.kama locks it down. `modifiers_opt` sits between `type` and the kind word (kama.y `marked_type_declaration`), and `type immutable value` / `type abstract resource` / `type extern value` / `type final resource` / `type virtual value` are all in-tree.",
+      "patterns": [
+        {
+          "match": "\\b(type)\\s+((?:(?:abstract|extern|override|private|protected|public|final|static|default|virtual|immutable)\\s+)*)(value|resource|view|contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "storage.type.kama" },
-            "2": { "name": "storage.modifier.kama" },
-            "3": { "name": "entity.name.type.kama" }
+            "2": { "name": "keyword.other.modifier.kama" },
+            "3": { "name": "storage.modifier.kind.kama" },
+            "4": { "name": "entity.name.type.kama" }
           }
         },
         {
@@ -115,22 +158,25 @@
         }
       ]
     },
+    "keywords": {
+      "comment": "Every row of kama.l's `keywords[]` table must appear in a `\\b(…)\\b` alternation here or in #types/#constants/#declarations — tools/check-syntax-drift.sh fails the build otherwise. `using` was highlighted and is NOT a keyword: it was retired in favour of `import` (docs/KEYWORDS.md).",
+      "patterns": [
+        { "name": "keyword.control.kama", "match": "\\b(if|else|match|case|while|do|for|foreach|parallel_for|break|continue|return|spawn)\\b" },
+        { "name": "keyword.other.modifier.kama", "match": "\\b(abstract|override|virtual|final|static|default|private|protected|public|friend|const|comptime|hardware|immutable|ref|out|in|extern|export|expose)\\b" },
+        { "name": "keyword.other.kama", "match": "\\b(fn|fnptr|ctor|type|namespace|import|extends|implements|operator|unsafe|asm|scope|give|copy|cast|bitcast|as|when|sizeof|alignof)\\b" },
+        { "name": "keyword.operator.new.kama", "match": "\\b(new|try)\\b" },
+        { "name": "variable.language.kama", "match": "\\b(this|base)\\b" }
+      ]
+    },
     "types": {
       "patterns": [
         { "name": "storage.type.primitive.kama", "match": "\\b(bool|char|int|int8|int16|int32|int64|uint8|uint16|uint32|uint64|float32|float64|double|string|void)\\b" },
-        { "name": "entity.name.type.kama", "match": "\\b([A-Z][A-Za-z0-9_]*)\\b" }
+        { "comment": "A capitalized word is PROBABLY a type — a regex cannot know. `textDocument/semanticTokens` is the layer that corrects it, because only the resolver can tell a type from a value.", "name": "entity.name.type.kama", "match": "\\b([A-Z][A-Za-z0-9_]*)\\b" }
       ]
     },
     "constants": {
       "name": "constant.language.kama",
       "match": "\\b(true|false|null)\\b"
-    },
-    "cast": {
-      "match": "\\b(bitcast|cast)\\s*<\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*>",
-      "captures": {
-        "1": { "name": "keyword.operator.cast.kama" },
-        "2": { "name": "entity.name.type.kama" }
-      }
     },
     "numbers": {
       "comment": "Mirrors kama.l exactly; guarded by tools/check-syntax-drift.sh. Three things the earlier rules got wrong: the integer suffix is `u?i(8|16|32|64)`, so it is `42ui32` and there is NO bare `42u32`; kama has NO digit separators, so `1_000` is not a literal; and a float suffix needs a fractional part, so `42f32` is not one either. Each literal splits its digits from its TYPE SUFFIX via captures, so `i32` in `42i32` colors like the `int32` keyword rather than like the digits. Anything else starting with a digit is flagged illegal instead of being coloured as a valid number.",
@@ -179,7 +225,23 @@
         }
       ]
     },
+    "operators": {
+      "comment": "There were no operator rules at all. Every spelling below is a token in kama.l — note what is NOT here: kama has no `->` (a function is `fn <returnType> name(…)`, C-style, kama.y function_return_type), and bare `:` is deliberately unscoped because in kama it is overwhelmingly the NAMED-ARGUMENT separator (`f(item: x)`), not a ternary arm. `::` covers both qualification and the turbofish `::<T>` (tests/io_streams.kama:44).",
+      "patterns": [
+        { "name": "keyword.operator.assignment.compound.kama", "match": "(?:<<|>>|[*/+\\-%&|^])=" },
+        { "name": "keyword.operator.comparison.kama", "match": "==|!=|<=|>=" },
+        { "name": "keyword.operator.logical.kama", "match": "&&|\\|\\||!" },
+        { "name": "keyword.operator.bitwise.kama", "match": "<<|>>|[&|^~]" },
+        { "name": "keyword.operator.increment.kama", "match": "\\+\\+|--" },
+        { "name": "keyword.operator.arithmetic.kama", "match": "[+\\-*/%]" },
+        { "name": "keyword.operator.assignment.kama", "match": ":=|=" },
+        { "name": "keyword.operator.ternary.kama", "match": "\\?" },
+        { "name": "keyword.operator.relational.kama", "match": "[<>]" },
+        { "name": "punctuation.accessor.kama", "match": "::|\\.\\.\\." }
+      ]
+    },
     "functions": {
+      "comment": "Included LAST on purpose: the trailing-`(` lookahead also matches `if (`, `match (`, `asm (` and `@compileFor(`, so every rule that owns one of those words has to be reached first.",
       "patterns": [
         {
           "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
