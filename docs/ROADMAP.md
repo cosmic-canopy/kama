@@ -643,10 +643,17 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
       kept out of `_classes`. (2) Recorded refs carry the INSTANCE key (`field:Box_int32::v`), not the
       template's, so `Box<int32>` and `Box<string>` would each own a private copy of one source
       declaration. Splitting references per instantiation is *worse* than answering nothing: rename would
-      rewrite some call sites and silently miss others. The fix must canonicalize both key shapes
-      (`field:<owner>::<name>` and `<owner>__<method>`) onto the template globally — a use in ordinary
-      code resolves to the instance key too — and be tested against TWO instantiations from the start,
-      since a single-instantiation fixture passes under several wrong designs.
+      rewrite some call sites and silently miss others.
+    - **The good solution is A2's inversion, generalized: record the declaration NODE, not a key.**
+      Canonicalizing instance keys onto the template is string surgery over two key shapes that a third
+      will outgrow. But a key built at record time embeds ambient context that is wrong — for labels the
+      caller's unit, here the instance's mangled name — and A2 already answered that by storing the
+      declaration node and resolving node → key after `buildDefSites`. It works here because every
+      instantiation walks the SAME template AST nodes, which the code already relies on, so all instances
+      collapse onto one key with no mapping table. `_labelRefs` + `paramKeyOf` is the working precedent;
+      B3 generalizes it from parameters to members, and `FieldInfo::nameId` / `MethodInfo::node` are
+      already what the member lookup returns. Test against TWO instantiations from the start: a
+      single-instantiation fixture passes under several wrong designs.
     - Silver lining while it is open: because a def-site is absent, rename correctly *refuses* on these
       rather than half-rewriting them. `tools/check-lsp.sh` pins the gap as an exact-array assertion
       (request id 56) so closing it cannot be silent.

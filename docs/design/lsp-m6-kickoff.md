@@ -137,12 +137,28 @@ described. What follows is a *verified* diagnosis, not a plan: every claim below
    declaration. Splitting references per instantiation is worse than answering nothing: rename would
    rewrite some call sites and silently miss others.
 
-**The shape of the real fix** is to canonicalize instance keys onto their template before they are
-recorded (or as `_bodyRefs`/`_localDefs` are merged, which has full knowledge of `_genericTypeInsts`).
-Two key shapes need it — `field:<owner>::<name>` and `<owner>__<method>` — mapped through
-`_genericTypeInsts` (mangled name → `templateKey`). Do it **globally**, not only while an instantiation is
-being emitted: `b.v` in ordinary code also resolves to the instance key, and that use has to land on the
-same def-site as one inside the template body.
+**The good solution is to record the declaration NODE, not a key — the same inversion A2 made.** The
+obvious route is to canonicalize instance keys onto the template (map `field:Box_int32::v` →
+`field:Box::v` through `_genericTypeInsts`). Don't: it is string surgery over two key shapes
+(`field:<owner>::<name>` and `<owner>__<method>`) that a third shape will silently outgrow, and it has to
+apply globally rather than only while an instantiation is emitted, because `b.v` in ordinary code resolves
+to the instance key too.
+
+Instead, apply the lesson A2 already paid for. **A key built at record time embeds ambient context that is
+wrong** — for labels it was the caller's unit, here it is the instance's mangled name. A2's answer was to
+store the *declaration node* and resolve node → key in `buildPositions`, after `buildDefSites`. That works
+here for a reason the code already depends on: **every instantiation walks the SAME template AST nodes**
+(see the comment at [kama.query.cpp](../kama.query.cpp):437-438 — "a generic INSTANCE shares the template's
+field nodes"). So `Box<int32>` and `Box<string>` arrive at one node and collapse onto one key with no
+mapping table at all, and the answer cannot drift when a new key shape appears.
+
+The machinery exists and is proven: `_labelRefs` plus the `paramKeyOf` inversion
+([:670-682](../kama.query.cpp#L670-L682)) is exactly this, restricted to parameter declarations. B3
+generalizes it to any member declaration, and the nodes are in hand at the resolve sites — `FieldInfo`
+carries `nameId` and `MethodInfo` carries `node`, which is what the member lookup already returns.
+
+So B3 is two halves, each with a working precedent: **register the template's members as def-sites**
+(mechanical, mirrors the `_classes` member loops) and **generalize A2's node-keyed recording** to members.
 
 **Test it against multiple instantiations from the start.** A single-instantiation fixture passes under
 several wrong designs; `Box<int32>` *and* `Box<string>` in one program is what distinguishes them, and a
