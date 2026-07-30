@@ -1,15 +1,33 @@
 # kama roadmap
 
 The forward plan — near-term to long-term, read in sequence. The language's **history** lives in the git
-log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *what's next* — when a milestone
-ships, its record moves to SPEC / a `docs/design/*.md`, and it leaves at most a one-line pointer here.
+log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *what's next*.
+
+> ### ⚠️ Maintaining this file — read before editing it
+>
+> **When an item ships, DELETE it from this file.** A roadmap that also logs completions stops being
+> readable as a plan, and this one has drifted that way twice.
+>
+> Before deleting, confirm the record lives where it belongs, and **migrate it there if it does not**:
+>
+> | What shipped | Where its record goes |
+> | --- | --- |
+> | Language surface (syntax, semantics, stdlib API) | [SPEC.md](SPEC.md) |
+> | A campaign (its design, decisions, and as-shipped record) | its `docs/design/*.md` |
+> | A capability against a target domain | [MCU_READINESS.md](MCU_READINESS.md) · [ENGINE_READINESS.md](ENGINE_READINESS.md) · [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md) |
+> | User-facing behavior + workflow | [packages.md](packages.md) · [editors.md](editors.md) · [mcu.md](mcu.md) · [targets.md](targets.md) |
+> | *Why* a thing happened, and when | the git log — do not re-tell it here |
+>
+> What may stay behind is **at most a one-line pointer**, and only where a forward item depends on it.
+> A **residual** of shipped work (a gap, a follow-on, a deferred optimization) stays — as its own forward
+> item, stated as what is left to do, not as a recap of what was done.
 
 ## The shape
 
 - **1.0 — language complete.** The core language, the std I/O foundation (`std::io`/`fs`/`net`), and the
-  math layer (`std::math`) are in place (see [SPEC.md](SPEC.md)). The language surface is stable; the last
-  gate is one toolchain-packaging item (turnkey MCU cross-compile, §5) plus the docs/naming reconcile — you
-  build *with* the language, not *on* it.
+  math layer (`std::math`) are in place (see [SPEC.md](SPEC.md)). The language surface is stable and the
+  pre-1.0 work list is closed; **the last gate is the docs/naming reconcile** (§1) — you build *with* the
+  language, not *on* it.
 - **1.x — systems & runtime.** Capabilities built ON the finished language: deeper stdlib reach, more serde
   back ends, MCU toolchain packaging, engine/GPU library work. Mostly library + codegen, little new syntax.
 - **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted, via a shared IR
@@ -25,19 +43,22 @@ ships, its record moves to SPEC / a `docs/design/*.md`, and it leaves at most a 
 
 What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability matrices in
 [ENGINE_READINESS.md](ENGINE_READINESS.md) / [MCU_READINESS.md](MCU_READINESS.md); the history in the git log.
-The language surface is **complete** — the residual `match` subject-inference gaps and the `bitcast<T>`
-reinterpret both landed (see SPEC). What remains before the tag:
 
-1. **MCU toolchain packaging — turnkey Cortex-M path ✅ shipped + QEMU-proven; polish remains.** The
-   `--target embedded` freestanding object is now a **one-command flashable image**: an opt-in cross image
-   (`tools/Dockerfile.mcu`, `tools/cdev build-image-mcu`), a bundled reference startup/vector-table + board
-   linker script (`mcu/`), and `mcu/build.sh` → linked ELF + `mcu/run-qemu.sh`; `tools/check-mcu.sh` boots
-   `embedded_blink` firmware on QEMU (Cortex-M3) and asserts its result (see [mcu.md](mcu.md)). No compiler/
-   language change (kama stays board-agnostic; the wiring is a script layer). **Remaining (polish, not
-   1.0-blocking):** more board presets (STM32/Pico) + vendor-HAL glue + a real-hardware flash pass — detail in
-   §5 (embedded "Toolchain / build" row).
-2. **Standard-library follow-ups (tracked; mostly post-1.0, no new language surface).** The shipped I/O + math
-   subset is sufficient for 1.0; these extend the modules as pure library/codegen work:
+**The language surface is complete, and the pre-1.0 work list is closed.** Soft-float + fixed-point, the
+argv/env prelude floor, diagnostics & logging, and `std::process` (POSIX + Windows) have all shipped —
+records in [SPEC.md](SPEC.md) (`std::num::Q16_16`, "Command-line arguments + environment", `std::log`,
+`std::process`), [design/logging.md](design/logging.md), [design/std-process.md](design/std-process.md) and
+[MCU_READINESS.md](MCU_READINESS.md).
+
+**The one remaining gate is the docs/naming reconcile → then tag 1.0.** 1.0 is the API-stability point;
+naming and case conventions are fixed at the tag (PascalCase types, lowerCamel methods, no `I`-prefix on
+contracts, lowercase `string`).
+
+Everything else here is library or toolchain work that does **not** gate the tag:
+
+1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
+   output today; streaming a running child's stdout as it arrives is the piece left.
+2. **Standard-library follow-ups** (no new language surface — pure library/codegen):
    - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
    - **`std::fs` / `std::io`** — buffered readers, richer `Metadata` (mtime/perms), path helpers, `mkdir`.
    - **`std::io` transform adapters (compression et al.)** — `Writer`/`Reader` *wrappers* that transform bytes
@@ -50,85 +71,14 @@ reinterpret both landed (see SPEC). What remains before the tag:
      above this, in the engine.)
    - **Windows CI** — the `windows-latest` leg passes the full suite; promote it from best-effort to
      **required** so a Windows regression blocks a merge.
-3. **Docs reconcile → tag 1.0.** 1.0 is the API-stability point; naming/case conventions are fixed here
-   (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`).
-
-### Near-term execution order (ready to start cold)
-
-The concrete sequence to a production-ready 1.0 and its first steps past the tag. **None of the pre-1.0
-items need new language surface** — they are library + toolchain + one runtime-floor addition. Each lists its
-scope + acceptance so a fresh session can start immediately.
-
-1. **Soft-float + fixed-point (no-FPU MCU / DSP math) — ✅ SHIPPED.** Closed the last MCU_READINESS 🟡.
-   *Fixed-point* = the library `type value` `std::num::Q16_16` (16.16 signed; `+ - * /`, `fromInt`/`toInt`/
-   `fromFloat`/`toFloat`, saturating `sat*`; a later generic `Fixed<intBits, fracBits>` stays optional).
-   *Soft-float* = a turnkey no-FPU **board preset** `--board microbit` (QEMU Cortex-M0, triple
-   `thumbv6m-none-eabi`) in `mcu/build.sh`/`run-qemu.sh` + `mcu/boards/microbit/linker.ld`; the emitted C's
-   `float` ops lower to compiler-rt/libgcc libcalls automatically. Fixtures green native + wasm + QEMU M0
-   (`tests/num_fixed`, `tests/mcu_softfloat` via `tools/check-softfloat.sh`). Fixed a latent emitter bug en
-   route (whole-number `float64` literals kept a decimal point — `tests/float64_literal_div`).
-2. **argv / env in the prelude floor — ✅ SHIPPED.** The one runtime-floor language bit is closed. The
-   synthesized hosted `main` stashes `argc/argv` via `kama_args_init` (a no-op stub on `--target embedded`)
-   before `kama_main`; a small always-in-scope prelude surface reads it — `args() -> Args` (a value handle
-   that `foreach`-iterates *and* offers `count()`/`get(at:)`, since the floor can't hand back a
-   `std::collections` type), `programInvocation()` (argv[0] verbatim) + `programName()` (basename of argv[0])
-   + `programPath()` (OS-resolved exe path; `None` on wasm/MCU) — all `Optional<string>`, excluded from `args()`,
-   `env(name) -> Optional<string>`, and `envOr(name, dflt) -> string`. Lives in the baked-in floor (survives
-   `--no-std`), NOT an importable `std::env`; `main`'s signature is unchanged; `getenv`/`argv` are
-   block-scope externs so the header stays libc-leak-free. The inert `kama run -- <args>`
-   (package-management M2.3) now delivers args. Fixtures: `tests/args_env_empty` (no-arg path) +
-   `tools/check-argv-env.sh` (with-args / set-env + `kama run --`, native + ASan). See [SPEC.md](SPEC.md)
-   "Command-line arguments + environment".
-3. **Diagnostics & logging.** The console-output gap: kama can build text (`std::fmt`) but can't print it, and
-   `assert` is underbuilt. Phased: (a) **assert/panic polish** — auto-stringified condition + optional `msg:`
-   + `file:line` + `--release`-stripped `debugAssert` + a hosted `setPanicHandler` (graceful crash-report vs
-   `abort()`, with a re-entrancy/always-terminate/set-once contract); (b) **floor `print`/`println`/`eprint`/
-   `eprintln`** (bare, `--no-std`-surviving, embedded → weak `kama_log_sink`); (c) **`std::log` v1 ✅** —
-   `enum LogLevel` + facade (`logError`/`Warn`/`Info`/`Debug`/`Trace`) + `logEnabled` guard over a runtime
-   level+tag filter and a swappable **sink fnptr** (`setLogSink`, modeled on `setPanicHandler` — a stored
-   `Logger` *resource* can't be a module-static, so the design's contract became a runtime-held slot, no
-   capability lost), `--log`/`KAMA_LOG` config (the flag bridged into the process-global env in `main`, so the
-   config crosses module-scoped statics); a **baked `kama.json` `log` default ✅** (a `{level,tags}` object →
-   canonical spec seeded into `KAMA_LOG` in `main` at `overwrite=0`, so `--log` > env > baked > `info` floor —
-   M5.1); a **`kama.local.json` deep-merge ✅** (gitignored sibling; `log` per-tag merge + `flags` union — the
-   build-path fields; M5.2, + dep `overrides` [patch-style view-relink, never in `kama.lock`] + local
-   `registries` + `toolchain` overrides on the install/selector paths; M5.3 ✅); (d) a compiler-recognized
-   facade lowering for zero-cost **✅ (M7)** — the five facade call statements are recognized and lowered to a
-   guard with the **message built inside** it: a `--release` **physical strip** of `Debug`/`Trace` (like
-   `debugAssert`, at any `-O`) + an inlined runtime `kama_log_enabled(level, tag)` guard, so a filtered record
-   never assembles its message (`logEnabled` stays available but is no longer manually required). An AST pass,
-   **no preprocessor**; dispatch routes through a std::log-TU `logDispatch` helper so the swappable-sink static
-   slot stays correct across TUs. Also the `kama.local.json` general local-override + the "Floor reference" doc
-   page. **Design of record:
-   [design/logging.md](design/logging.md).** *Acceptance:* stdout/stderr print (native+wasm; embedded stub);
-   `assert`/`debugAssert` with message + location; `std::log` with runtime-reconfigurable level+tag on a
-   shipped binary; a `tools/check-*.sh` capturing stdout/stderr. Precedes `std::process` (a subprocess API +
-   a CLI both want console I/O).
-4. **`std::process` — subprocess handling — ✅ SHIPPED M1 (POSIX), 2026-07-26.** `Command` builder (argv
-   vector + `shell()` opt-in, `cwd`/`env`/`envClear`, per-stream `Stdio`) → owned `Process` (`wait`/`tryWait`/
-   `kill`/`signal`/`id`, piped streams as `std::fs::File`, `closeStdin`) or one-shot `run()` capturing
-   `Output`. Pure library over `kama_os.h` (fork/execvp/pipe/waitpid) — **no compiler/language change**.
-   Reap-on-drop is non-blocking (reap-or-park-for-later-sweep, never blocks — the original "the OS reparents
-   a detached child to init" premise was **false on POSIX** and stranded a zombie per drop; fixed 2026-07-27,
-   see design/std-process.md); `run()` drains both pipes concurrently via
-   `std::net::Poller` (no deadlock). NOTE: a `Process` gets ordinary RAII drop, **not** the isolate `scope`
-   join barrier (corrected in the design doc — a child shares no address space, so there's nothing to protect;
-   orphans are not structurally prevented, detach outlives the handle). Native 788 / ASan 761 / wasm 737
-   (proc fixtures skipped — no fork/exec in the sandbox), 0-fail. **M2 Windows parity — ✅ SHIPPED 2026-07-26:**
-   the same `process.kama` surface over the Windows `kama_os.h` branch (`CreateProcess`/`_pipe`/
-   `WaitForSingleObject`/`TerminateProcess` + byte-exact argv quoting). `run()`'s concurrent drain moved into
-   one platform-neutral `kama_capture2` seam (POSIX `poll` / Windows two threads), so `run()` is a single path
-   on both. `proc_*` now drive a bundled cross-platform test helper (`tests/support/procutil.kama`) instead of
-   POSIX utilities; the Windows CI skip guard was removed. Native 791 / ASan 764 / wasm 738, 0-fail; Windows
-   proven by the `windows-test` CI leg. **Design + as-shipped: [design/std-process.md](design/std-process.md).**
-   *Remaining:* async/Poller-driven *live* child-stream reads (post-v1).
-
-**With (1)–(4) + the docs reconcile, the language is production-ready — tag 1.0.**
+3. **MCU toolchain packaging — polish.** The turnkey Cortex-M path ships and is QEMU-proven
+   ([mcu.md](mcu.md)). What is left: more board presets (STM32/Pico), vendor-HAL glue, and a real-hardware
+   flash pass — detail in §5 (embedded "Toolchain / build" row).
 
 **Post-1.0 — the decided big-arc sequence (with the user, 2026-07-26):**
-1. **LSP first — the next-highest priority (§10).** Without it kama "won't feel like a professional language"
-   and developers feel lost. It also does double duty: it forces the front end into a **reusable query-API
-   with real source spans** (the `%locations`/span work deferred until now), groundwork every later tool reuses.
+1. **LSP first — v1 SHIPPED (§10).** It did the double duty it was chosen for: the front end is now a
+   **reusable query API with real source spans** (the `%locations` work deferred until then), which every
+   later tool rides on. **M7 — the tree-sitter grammar — is what remains of the arc** (§10).
 2. **Scripting / multimodal (§7) — the flagship 2.0.** The polymorphic-emitter → direct-wasm → bytecode-VM arc,
    driven by wanting a fast iteration/runtime tier for game engines + web. First concrete step: refactor the C
    emitter behind an abstract backend interface (C as the first impl), the shared lowering in the base.
@@ -164,17 +114,6 @@ to [SPEC.md](SPEC.md) / [docs/design/construction-model.md](design/construction-
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
-- **Command-line args / environment access — ✅ SHIPPED (§1 near-term #2).** In the baked-in prelude floor
-  (survives `--no-std`), not an importable `std::env`: `args()`, `programInvocation()`/`programName()`/
-  `programPath()`, `env()`, `envOr()`. See [SPEC.md](SPEC.md) "Command-line arguments + environment"
-  (as-shipped) and the §1 arc note above.
-- **Console output / logging — settled, scheduled as §1 near-term #3.** The gap (kama can build text via
-  `std::fmt` but can't print it; `assert` is underbuilt) now has a full design: floor `print`/`println`/
-  `eprint`/`eprintln` + assert/panic polish (`debugAssert`, hosted `setPanicHandler`, auto-stringified
-  condition + `msg:` + `file:line`) + a `std::log` `Logger`-contract logger with level+tag filtering and a
-  zero-cost compiler-recognized facade lowering (baked comptime min-level → DCE strip + runtime guard, **no
-  preprocessor**) + the general `kama.local.json` override + a "Floor reference" doc page. **Design of record:
-  [design/logging.md](design/logging.md).**
 - **Stdlib layering — 3 LOW-prio follow-ups ([design/stdlib-layering.md](design/stdlib-layering.md)).** The
   prelude-vs-`lib`-vs-primitive split is principled (contracts/syntax/intrinsics in the prelude; backends
   opt-in), so nothing is mis-placed. Recorded, none blocking: (a) split/MCU-promote `Atomic` so lock-free cells
@@ -353,8 +292,7 @@ Remaining forward work:
 
   | Piece | What's needed |
   |---|---|
-  | **Toolchain / build** *(turnkey Cortex-M path ✅ shipped + QEMU-proven — §1)* | `mcu/build.sh <in.kama>` turns the freestanding object into a linked **Cortex-M ELF** (bundled reference startup/vector-table `mcu/startup.c` + board linker script `mcu/boards/<b>/linker.ld` + newlib/rdimon), and `mcu/run-qemu.sh` boots it; `tools/check-mcu.sh` runs `embedded_blink` firmware on emulated silicon and asserts its result. Opt-in cross image (`tools/Dockerfile.mcu`). See [mcu.md](mcu.md). **Remaining:** more board presets (STM32/Pico), vendor-HAL glue (pico-sdk / esp-idf), a real-hardware flash pass, and (optional) folding the two-step link into `kama build --target <board>`. Arduino `setup()`/`loop()` is a later HAL nicety. |
-  | **Soft-float** *(✅ shipped — §1)* | Cortex-M0/AVR have no FPU. Turnkey no-FPU board preset `--board microbit` (QEMU Cortex-M0) — the emitted C's `float` ops lower to compiler-rt/libgcc libcalls automatically, QEMU-proven by `tools/check-softfloat.sh`. For fixed-point without the libcall cost, the `std::num::Q16_16` (16.16 signed) `type value` library ships alongside. |
+  | **Toolchain / build** | The turnkey Cortex-M path ships and is QEMU-proven ([mcu.md](mcu.md)). **Remaining:** more board presets (STM32/Pico), vendor-HAL glue (pico-sdk / esp-idf), a real-hardware flash pass, and (optional) folding the two-step link into `kama build --target <board>`. Arduino `setup()`/`loop()` is a later HAL nicety. |
   | **AVR (Harvard) family** *(deferred — Cortex-M/RISC-V first)* | Three AVR-specific pieces: (1) ISR — `@interrupt("VECTOR")` → the `ISR(VECTOR)` macro (`<avr/interrupt.h>`), not the parameterless `__attribute__((interrupt))`; (2) Harvard `PROGMEM` — flash const data needs `PROGMEM` + `pgm_read_*` accessors (a flash pointer can't be plain-deref'd), so `@section` alone doesn't cover it; (3) toolchain — `avr-gcc`-only (clang/zig don't target AVR cleanly). A bounded follow-on when demand warrants. |
 
   **Why kama fits:** no-GC + RAII → deterministic, no hidden pauses; allocation is explicit in the emitted C
@@ -386,14 +324,10 @@ have all **shipped** — see [design/comptime-fn.md](design/comptime-fn.md) and
 
 ## 6. Concurrency — shared-nothing by construction (shipped)
 
-**Shipped** (campaign complete). Spec of record: [docs/design/concurrency.md](design/concurrency.md) + the
-Concurrency section of [SPEC.md](SPEC.md). The model earns data-race freedom the way kama earns null-safety —
-by making the hazard *unrepresentable* (removing shared mutable state), not by a borrow checker: isolates
-(`spawn`) + ownership-transferring `channel<T>` + structured-concurrency `scope` (join-before-drop) +
-`Atomic<T>` (the one shared-mutable seam) + immutable-`Shared` cross-isolate reads + disjoint-slice
-`parallel_for`; native (OS threads) **and** wasm (Web Workers + SharedArrayBuffer), TSan/ASan-proven.
+**Shipped** — campaign complete, **no language work remains**. Spec of record:
+[docs/design/concurrency.md](design/concurrency.md) + the Concurrency section of [SPEC.md](SPEC.md).
 
-**No language work remains.** The higher-level **job system / event-loop scheduler are libraries** on these
+The higher-level **job system / event-loop scheduler are libraries** on these
 primitives (Go/Erlang-style block-on-channel, deliberately **not** `async/await` function-coloring) — see the
 engine track (§8) and [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md).
 
@@ -523,221 +457,68 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
 
 ## 10. Tooling / distribution (deferred)
 
-- **Build configuration + cross-compilation — ✅ SHIPPED 2026-07-29** (`fdc9a75`…`0c6cd7c`). Design of
-  record: [design/build-configuration.md](design/build-configuration.md). Replaces the half-formed flag
-  model `@compileFor` shipped with, and **resolves conditional-compilation open-Q4** ("how are
-  WINDOWS/MAC/LINUX/XBOX set?", which had leaned "`--define` for v1, a dedicated axis later").
-  - **Targets are `<arch>-<os>-<abi>` triples**, not a three-valued backend enum. Each component derives
-    a `@compileFor` flag (`ARCH_AARCH64`, `OS_LINUX`, `ABI_GNU`, plus `HOSTED`), which is Rust's
-    `cfg(target_os)`/`cfg(target_arch)` in kama's flat-boolean vocabulary — **no new language
-    mechanism**; `compileForActive` was already set-membership. Built-in catalog: `HOST`, `MACOS`,
-    `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`; a project adds its own; a bare triple needs no config.
-    `NATIVE`/`EMBEDDED` stop being hardcoded gates — bare metal is now `os=none`, so a real board triple
-    gets the freestanding treatment without the compiler having heard of that board.
-  - **One primitive: the single-select group.** `TARGET`, `BUILD_TYPE` and `OUTPUT` are built-in
-    instances; a project declares its own under `select` in `kama.json`, with `inherits` (Cargo
-    profiles / Gradle `initWith`). `--select GROUP=VALUE`; one value per group is enforced, which is
-    the ambiguity `--define WINDOWS --define LINUX` accepted silently. `flags` remains the one
-    multi-select bag. This is MSBuild's Configuration×Platform, generalized.
-  - **Real cross-compilation.** Every compile/link flag now follows the selected target instead of
-    `#ifdef` on the machine the compiler was built on — the one hard blocker, most sharply `-lws2_32`,
-    which a Windows build produced on Linux silently omitted. `zig cc` (already bundled for machines
-    with no C compiler) cross-compiles to any triple with one `-target`; a project can also declare a
-    `cc`/`ar`/`sysroot`/`cflags`/`ldflags` per target; `kama transpile --target …` always works.
-  - **Library output.** `OUTPUT = EXE|SHARED|STATIC|OBJECT`. **Static libraries are new** (kama could
-    not emit a `.a` at all), as is object output on a *hosted* target — previously welded to bare metal.
-  - Guard: `tools/check-target.sh` (stubs the C compiler with `--cc echo`, so it proves the target
-    keying with no cross toolchain installed), plus 10 new `tools/check-compilefor.sh` cases.
-  - **Follow-ons, recorded not built:** per-value `BUILD_TYPE` settings (own opt-level/LTO/strip — kept
-    out so `kama.json` does not become a build-settings language); numeric build options surfaced as
-    `comptime` constants rather than as flag comparisons (`@compileFor` stays tagging, not logic).
-  - **⚠️ GAP — no CPU-tuning knob.** kama passes **no** `-march`/`-mcpu`/`-mtune` anywhere, so every
-    build targets the architecture's *generic baseline*. That is the right default (portable binaries,
-    and it is why `zig cc` and clang measure identical — neither tunes), but there is no first-class way
-    to say otherwise. Today the only route is `"cflags": ["-mcpu=…"]` on a declared `select.TARGET`
-    entry, which means **a plain `kama build --release` cannot tune for the host at all** — you must
-    declare a target first. Peers all have a shorthand: Rust `-C target-cpu=native`, Zig `-mcpu=native`,
-    gcc/clang `-march=native`. Likely shape: a `cpu` field on a target spec (so it sits with the rest of
-    that target's toolchain description) plus a `native` spelling for host builds. Wants a benchmark
-    before/after to show it is worth anything — kama's emitted C is fairly generic, so the win may be
-    small outside float/SIMD-heavy code. Surfaced 2026-07-29 while checking whether zig and clang tune
-    differently; the answer was "neither does".
+- **Build configuration + cross-compilation — shipped; residuals.** Targets are `<arch>-<os>-<abi>` triples
+  whose components derive the `@compileFor` flags, `TARGET`/`BUILD_TYPE`/`OUTPUT` are single-select groups a
+  project extends in `kama.json`, cross-compilation follows the selected target rather than the build host,
+  and static/object library output exists. Record of what shipped and why:
+  [design/build-configuration.md](design/build-configuration.md); user docs: [targets.md](targets.md).
+  Forward work:
+  - **⚠️ No CPU-tuning knob.** kama passes **no** `-march`/`-mcpu`/`-mtune` anywhere, so every build targets
+    the architecture's *generic baseline*. That is the right default (portable binaries — and it is why
+    `zig cc` and clang measure identical, neither tunes), but there is no first-class way to say otherwise:
+    the only route today is `"cflags": ["-mcpu=…"]` on a declared `select.TARGET` entry, so **a plain
+    `kama build --release` cannot tune for the host at all**. Every peer has a shorthand (Rust
+    `-C target-cpu=native`, Zig `-mcpu=native`, gcc/clang `-march=native`). Likely shape: a `cpu` field on a
+    target spec, plus a `native` spelling for host builds. Wants a before/after benchmark first — kama's
+    emitted C is fairly generic, so the win may be small outside float/SIMD-heavy code.
+  - **Per-value `BUILD_TYPE` settings** (own opt-level/LTO/strip), deliberately deferred so `kama.json` does
+    not become a build-settings language; and **numeric build options surfaced as `comptime` constants**
+    rather than as flag comparisons (`@compileFor` stays tagging, not logic).
 - **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
-  deferred. (What ships today in `editor/vscode/`: TextMate **syntax highlighting** + language-configuration
-  + **zero-config source-level debugging** — F5 builds and launches under CodeLLDB with breakpoints mapped
-  back to the `.kama` via the emitter's `#line` directives. Missing pieces are the two below.)
-- **Language server (LSP) — IN PROGRESS, the CONFIRMED next-highest post-1.0 priority** (user, 2026-07-26 —
-  see the §1 post-1.0 sequence). **Shipped through M3.5 (all of M3):** `kama lsp` (a JSON-RPC/stdio
-  subcommand) serving live as-you-type diagnostics, hover, go-to-definition, document outline,
-  find-references, rename and project-wide symbol search — references and rename covering locals,
-  parameters, fields and enum members as well as types and functions, and now spanning the **whole
-  project** rather than one file's import closure, so cross-file rename is safe (M3.5). A project is the
-  **outermost `kama.json`** above the open file (workspace semantics, so monorepos rewrite across
-  packages), falling back to the editor's folder under a file cap; rename refuses only for a symbol
-  defined outside the project, an unindexable tree, or a file in no package.
-  Real **source spans** landed with it (Bison `%locations`, deferred until now), as did the
-  front-end-as-library **query API** the scripting/self-hosting tracks reuse: `collectProgram` turned out to
-  be a self-contained analysis pass already, so this was a facade over the existing tables rather than a
-  rewrite. **M4 completion + signature help — SHIPPED (2026-07-28)**, M4.0–M4.9:
-  members after `.` and `::`, names in scope, keywords, import paths, signature help, argument-label
-  completion (kama has no positional arguments, so that is the language's most-used context), and the
-  **`global::` root qualifier** it was the prerequisite for ([design/logging.md](design/logging.md) Part E
-  — now shipped, with the completion payoff it waited for). Both of the kickoff brief's "hard
-  prerequisites" turned out not to be prerequisites, and the three helpers it proposed reusing were all
-  unusable from a query path; see the "As shipped" section of
-  [design/lsp-m4-kickoff.md](design/lsp-m4-kickoff.md). The campaign-exit STAMP_LOC checklist is CLOSED
-  (M4.9) — measured, not assumed: renaming a generic type would have deleted its type-parameter list.
-  **M5 error recovery + incremental/perf — SHIPPED (2026-07-28)**, `dfdbb9a`…`6d295e1`; as-shipped record
-  [design/lsp-m5-kickoff.md](design/lsp-m5-kickoff.md). The grammar recovers at three grains, added
-  **innermost-first** (statement → class member → top level), so one syntax error no longer blanks the
-  file: a buffer reports every independent error and still answers hover/outline/completion off a live
-  partial index. Semantic diagnostics publish from a partial parse except when a whole top-level decl was
-  dropped — the only case that cascades. Per-keystroke cost went from 237 ms to **86 ms** on the worst
-  measured file (prelude parsed once per process; import closure cached across analyses), inside the
-  sub-100 ms budget, which also let M4.6's 229 ms per-request repair be deleted so completion is a lookup
-  again. The 10-error budget in `CodeGenContext`, dead code since the beginning because nothing could
-  reach it, is now live. Two things fixed en route that were not LSP bugs at all: **40 nested `if`s
-  reported "memory exhausted"** (the parse stack could not grow — `YYSTYPE` is a plain struct, so Bison's
-  relocation path is compiled out), and the compiler gained its first timing instrumentation
-  (`KAMA_TIMING`, `tools/lsp-bench.sh`) — the brief's central perf claim had been a guess about a
-  parse-vs-analyze split nobody had measured, and it was wrong. **Decision 2 resolved toward keeping
-  Bison**: an RDP stays the right long-term move for self-hosting, but neither latency nor recovery
-  quality demanded it. **M6 STAGE A SHIPPED (2026-07-29)** — the three carried items are closed: the server
-  now calls `setBuildFlags`, so the editor analyzes the program a build analyzes rather than its inverse
-  (an empty flag set dropped every `@compileFor(X)` and kept every `@compileFor(!X)`); argument labels are
-  references to the callee's parameter, so renaming a parameter finally rewrites its call sites; and the
-  undeclared-import finding reaches the Problems pane instead of a log channel nobody reads. The
-  build-configuration override channel an editor reads is **`kama.local.json`**, the same file the CLI
-  already merges — so the editor and `kama build` cannot disagree, and `select.TARGET` gained
-  `"default": true` on the way. **M6 STAGE B1/B2 SHIPPED (2026-07-29)** — the hand-maintained TextMate
-  grammar was audited rule-by-rule against `kama.l`/`kama.y` with the compiler as the oracle and 13
-  disagreements closed, two of which were rules that were *present, correct and unreachable* (TextMate
-  breaks a same-position tie in favour of the earlier include, so `#keywords` starved `#declarations` and
-  `#cast` — leaving a contextual kind word with no scope at all). Because no grep can catch a rule that
-  never fires, `tools/check-syntax.sh` now runs the real vscode-textmate engine over `tests/syntax/` and
-  layers committed snapshots, `kama check` agreement, and the 13 findings asserted by name. On top of it,
-  `textDocument/semanticTokens/full` colours by what the RESOLVER concluded — free, being a read off the
-  cached index. **M6 STAGE C SHIPPED (2026-07-30)** — the campaign's headline claim, *one server, many
-  thin clients*, is finally cashed: [editors.md](editors.md) wires up Neovim, Vim, Emacs, Sublime, Helix
-  and Kate beside VS Code, and states honestly which of them gets syntax colour from what (Zed and Helix
-  colouring both wait on M7's tree-sitter grammar). VS Code gained a build-configuration **status bar +
-  picker** that writes `kama.local.json`, so switching target or build type needs no restart and no
-  editor-private setting. **Two of the Stage C brief's load-bearing claims were wrong**, both found by
-  checking rather than trusting — see the Stage C sub-bullet below. **NEXT / ACTIVE: Stage D** (campaign
-  exit). Cold-start brief for Stage D **and** M7: [design/lsp-m6-d-kickoff.md](design/lsp-m6-d-kickoff.md).
-  Parent briefs: [design/lsp-m6-c-kickoff.md](design/lsp-m6-c-kickoff.md),
-  [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md). Status of record:
-  [design/lsp.md](design/lsp.md). **Follow-on recorded here, not done:** upstream editor registration —
-  a `kama` entry in `nvim-lspconfig`, in Helix's built-in `languages.toml` and in `eglot-server-programs`
-  — which turns six pasted lines into zero for users, but is a PR to another project and gates on a
-  public release.
-  - **M6 Stage C — the two brief corrections, because both generalize.**
-    - **"Every other LSP client offers a client-side static watcher list" is FALSE**, and it was the
-      premise the whole no-server-code design rested on. VS Code's `synchronize.fileEvents` is a
-      *vscode-languageclient library* convenience, not a protocol feature; at the protocol level
-      **dynamic registration via `client/registerCapability` is the only way** a server ever receives
-      `workspace/didChangeWatchedFiles`. Verified against three independent clients, none of which has a
-      static list: Neovim (`_watchfiles.lua`), Helix (`did_change_watched_files.dynamic_registration:
-      true` — one of the few it enables) and eglot. So the server now registers the three globs itself on
-      `initialized`, and the dispatch loop learned to ignore an incoming RESPONSE (it previously answered
-      one with `method not found` aimed at the client's own id). Without this every non-VS-Code client
-      would have *looked* wired up and silently never re-resolved a manifest.
-    - **`kama.local.json` was not actually a deep merge for TARGETs**, though every doc says it is. Local
-      target entries replaced whole-value, so the picker's natural write — `{"RPI": {"default": true}}` —
-      erased the triple `kama.json` had declared and the build failed with *"target 'RPI' declares no
-      `triple`"*. Now merged field-by-field, matching the documented contract. A pre-existing bug that
-      only a client writing that file would ever have surfaced.
-    - Also: **`activationEvents` did not need adding** (VS Code ≥1.74 generates `onLanguage:kama` from
-      `contributes.languages`; the extension linter flags the redundant key), and **the picker needs no
-      client restart** — writing `kama.local.json` trips the existing watcher, which re-resolves and
-      republishes every open buffer. The restart command exists for a different reason: the
-      one-configuration-per-process limit when a second project is opened in the same window.
-  - **M6 B3a/B3b SHIPPED 2026-07-30 — a method's call sites, and the inside of a generic body, are now
-    indexed.** Both were one fix: record the referent's DECLARATION NODE rather than a key, generalizing
-    the inversion M6 A2 paid for. A key built at record time embeds ambient context that is wrong for the
-    symbol (the caller's unit for a label, the *instance's* mangled name for a generic member), while every
-    instantiation walks the SAME template AST nodes — an instance `ClassInfo` is a copy of the template
-    shape — so `Box<int32>` and `Box<string>` collapse onto one key with no mapping table.
-    - What it took: `_labelRefs` generalized into one node-keyed `_nodeRefs` store; the 5 field record
-      sites CONVERTED (not added to — `buildPositions` dedups by node and first-wins, so a leftover
-      key-based record would shadow the node-based one); method records added at `emitDispatch` and at the
-      static, `base.`, named-ctor, `new`, and fn-pointer-bind forms; the generic template's MEMBERS given
-      def-sites (the `_genericTypes` loop registered only the template's own name); and `_declUnit`'s fill
-      split into `buildDeclUnits()` so instance emission can attribute a template's body to the TEMPLATE's
-      unit rather than the instantiation's use site.
-    - **Renaming a method now rewrites its call sites** — including through two different instantiations,
-      as one symbol. `tools/check-lsp.sh` asserts the rename itself (ids 57-59), not only a query: the
-      query returning nothing was survivable, the rename half-applying was not. The id-56 exact-array pin
-      changed, which is exactly what it was there for.
-    - Cost: ~+3 ms per keystroke (86 -> 89 ms median, controlled A/B), because generic bodies are now
-      walked for records at all. Inside the 100 ms budget. Emission byte-identical across 537 fixtures.
-  - **The gaps were ENUMERATED rather than waited on.** B3a survived the whole campaign
-    because the index is built by instrumenting the emitter, so it is exactly as complete as the set of
-    sites someone remembered — and every test asserted a spelling somebody had thought of. `kama query
-    <file> --coverage` (B3 stage 0) asks the other question: for every identifier the SOURCE spells, what
-    does the index know? `tests/query/coverage/*.kama` spell every naming construct the language has and
-    the checked-in `*.coverage` tables beside them are compared whole by `tools/check-query.sh`, so a gap
-    is a diff. **It took the gap list from 64 identifiers to 14, and all 14 are correct** — the contextual
-    type-kind words (`value`/`resource`/`contract`/`both`, not lexer keywords, naming nothing),
-    `InlineArray` (a compiler intrinsic with no declaration anywhere to point at), and type PARAMETERS.
-    A type param reads `unresolved` where the resolver walks it and `-` at its `<T>` declaration and in a
-    `foreach` binding type; either way it names no symbol, since inside an instance it substitutes to a
-    concrete type.
-    - **✅ B3d/B3e/B3g SHIPPED** (`18ee951`, `9c87583`): the receiver of `Type.name(…)`; a generic free
-      function's call site, which `_callInst` routes past the resolveFunc that records every other call;
-      `Union::Variant(args)`, where only the payload-LESS read had a recorder; enum PAYLOAD fields, which
-      had no declaration anywhere in the index because they live only on the variant backing ClassInfo;
-      and an `import`'s symbol list.
-    - **⚠️ B3g was a TENTH gap, found by pulling on the ninth, and another silent edit.** Renaming a type
-      rewrote its declaration and every use and left `import lib::{Box, …}` spelling the old name — so the
-      rename broke a file it had just edited.
-    - **✅ B3f SHIPPED** (`858f425`, `7500b5e`): one blocker was behind three gaps — a `::`-separated name
-      list keeps its spellings as plain strings with no line or column. The grammar now stamps a span per
-      segment as it pushes (`STAMP_SEG` → `CodeGenContext::listSegPos` → `TAKE_SEGS` onto the owning node),
-      keyed by the LIST OBJECT because qualifiers nest. That closed `Color` in `Color::Green` and the
-      `export { … }` manifest — both silent under-applies — and flipped the pinned `reject` to an `expect`.
-      **A MODULE path is a navigation target and never a rename target**: in kama the namespace is the
-      module path is the directory path, so renaming one is a file-and-directory move (clangd, TypeScript
-      and gopls all draw the same line). Its `module:` key names no def-site, so go-to-definition opens the
-      module while rename, find-references and semantic tokens ignore it with no extra flag.
-    - **✅ B3c SHIPPED** (`9d157f2`): a contract's method declarations and every fat-pointer call site are
-      indexed, and a contract method plus its implementations are ONE renameable name — separate def-sites
-      plus a rename GROUP, so go-to-definition still lands on the concrete implementation. That is the
-      shape clangd, rust-analyzer, TypeScript, JDT and gopls all use. **It also exposed a real bug in the
-      rename ownership guard**, fixed in the same commit: the guard checked only the definition at the
-      cursor, so renaming a project type's method that implements a `std` contract passed the check and
-      then silently dropped the contract's declaration from the edit set. It now checks every declaration
-      in the group. Any future symbol-group relation must teach that guard about itself.
-    - **✅ B3h SHIPPED** (`baee217`): a generic ARGUMENT (`Speaker` in `Owned<Speaker>`) resolves in
-      `mangleElem` and nowhere else, and that call passed no `site` — so renaming the argument type left
-      every such spelling behind. One word. **Found as a leftover `-` line in the coverage table, not by
-      anyone remembering it** — stage 0 paying off a third time.
-    - **What is permanently `-`, decided:** the contextual type-kind words (`value`/`resource`/`contract`/
-      `both`, not lexer keywords, never name a symbol) and `InlineArray` (a compiler intrinsic with no
-      declaration anywhere to point at). A type PARAMETER and a module path segment read `unresolved`
-      rather than `-`: indexed, deliberately resolving to no def-site.
-    - **⚠️ A STANDING OBLIGATION, not a finished task: extend `tests/query/coverage/` whenever the
-      LANGUAGE gains a naming construct.** The index is instrumented into the emitter, so it is only ever
-      as complete as the set of sites someone remembered; the oracle is what makes a gap a diff instead of
-      a discovery.
-- **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
-  liftable out of the monorepo to stand alone. Design of record:
+  deferred, and gates on a public release. The extension itself is complete: syntax highlighting, the
+  language client, a build-configuration status bar + picker, and zero-config source-level debugging (F5
+  under CodeLLDB, breakpoints mapped back to the `.kama` via the emitter's `#line` directives).
+- **Language server (LSP) — v1 SHIPPED (M0–M6, closed 2026-07-30).** `kama lsp` is a JSON-RPC/stdio
+  subcommand of the compiler serving diagnostics, hover, go-to-definition, outline, find-references,
+  project-wide rename, workspace symbols, completion, signature help, semantic tokens and
+  build-configuration awareness — **one server, eight editors**, four of them verified against a running
+  editor. Record of the campaign, its decisions and its acceptance: [design/lsp.md](design/lsp.md) (with
+  the per-milestone briefs beside it); user-facing setup: [editors.md](editors.md). Forward work:
+  - **►► M7 — tree-sitter grammar + Zed extension. NEXT, and its own campaign.** It is the **only** thing
+    blocking Helix syntax colouring (Helix colours *only* from tree-sitter) and a Zed extension **at all**
+    (a Zed extension registers a *language*, which requires a grammar — there is no grammar-less LSP-only
+    Zed extension). Also unlocks full Neovim/Vim colouring beyond semantic tokens, and GitHub linguist
+    recognizing `.kama`. It is a **third** grammar to keep in sync with `kama.l`/`kama.y`, so it needs its
+    own drift guard from day one. Three things to settle before writing a rule, all cold-start-briefed in
+    [design/lsp-m6-d-kickoff.md](design/lsp-m6-d-kickoff.md):
+    1. **The oracle** — write the literal, run `kama check`, compare. The compiler decides, not eyeballing;
+       that method rejected six invented spellings during the TextMate audit.
+    2. **The drift guard's shape** — a *pair*, because a grep can only see that a rule EXISTS while a real
+       engine can see that a rule FIRES: tree-sitter's own corpus test plus agreement with `kama check`
+       over the existing `tests/syntax/`.
+    3. **Where the grammar lives and how it is built** — a directory in this repo or its own repository.
+       Helix and Zed both fetch a grammar by git URL, and the toolchain is containerized, so a node build
+       step needs a decision.
+  - **The ~10 ms fixed prelude-ANALYSIS floor per keystroke.** M5 removed the prelude *parse* from every
+    keystroke; analyzing it again on every buffer change is what remains, and it is a floor no file can get
+    under. The fix is a pre-baked or forkable `CEmitter` — a real piece of work, not a tweak.
+  - **One build configuration per server process.** It is pinned by the first opened document that resolves
+    a manifest, so in a monorepo whose packages declare *different* flag universes the unpinned packages get
+    the pinned one's configuration. Softened, not fixed: the status bar says which is active and
+    `kama.restartServer` exists. The real fix needs **per-configuration parse caches**, because
+    `pruneInactiveDecls` rewrites cached units in place.
+  - **Upstream editor registration** — a `kama` entry in `nvim-lspconfig`, in Helix's built-in
+    `languages.toml` and in `eglot-server-programs`. Turns six pasted lines into zero for users, but these
+    are PRs to *other* projects and gate on a public release.
+  - **Three editor snippets are documented but unverified** — Vim (coc.nvim), Sublime Text and Kate. Each
+    needs a human at a GUI; Sublime additionally needs its LSP package installed through Package Control.
+- **Workspace-internal dependencies — shipped; one follow-on.** A sub-project is extractable: path deps
+  resolve against the manifest that declared them, module resolution consults a dependency's own `sources`,
+  path deps are permitted between members of one declared `projects` tree, and a file's imports are checked
+  against **its own** package's manifest (a hard error, lenient only in the LSP/`query` path). Record:
   [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:
-  [packages.md](packages.md). Four interlocking defects closed, in dependency order — path specs resolve
-  against the manifest that **declared** them and compare canonicalized (two spellings of one directory
-  are one package); module resolution consults a dependency's own `sources`, so the documented `src/`
-  layout is importable at all; path deps are permitted **between members of one declared `projects`
-  tree** (cargo's rule — reproducible because the workspace carries them) and still refused everywhere
-  else; and a file's imports are checked against **its own** package's manifest rather than whoever is
-  compiling, so free-riding on a top-level app's declaration **fails the build**, naming the exact line to
-  add. That last check shipped as a warning and was promoted to a hard error the same day, once the remedy
-  was shown to be always appliable wherever it fires — a guarantee nobody is forced to honor is not a
-  guarantee. It is deliberately **lenient in the LSP/`query` path**, where refusing to analyze would strip
-  an editor of cross-module answers over a manifest problem. Acceptance is mechanical and lives in
-  `tools/check-packages.sh` (case 36): every member installs and builds from its own directory with no
-  ancestor manifest in play.
-  **Follow-on, not done:** version reconciliation on publish — `kama publish` substituting a registry
-  version for a workspace path dep.
+  [packages.md](packages.md). **Forward:** version reconciliation on publish — `kama publish` substituting a
+  registry version for a workspace path dep.
 - **kama-aware debugger value formatting — polish on the working debugger.** Breakpoints/stepping are already
   kama-source-level, but inspected values render in their emitted-C form (a `string` shows as
   `kama_string {data,len,cap}`, `Optional<T>` as its tagged union, collections as C structs). Add LLDB type
@@ -748,9 +529,9 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
 - **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries distribute
   without vendoring — the point at which the **orphan rule** (§3, retroactive conformance) becomes load-bearing.
   Design of record: [design/package-management.md](design/package-management.md); user docs:
-  [packages.md](packages.md). **Nearly complete — all self-contained compiler work has shipped; only
-  hosted-services/ops work remains:**
-  - **REMAINING — both gated on hosted services / the repo being public + the website staged:**
+  [packages.md](packages.md). **All self-contained compiler work has shipped; what remains is
+  hosted-services/ops work:**
+  - **Both gated on hosted services / the repo being public + the website staged:**
     - **M3.3 — hosted deployment (pure ops, no compiler change).** Stand up the real registry host (Cloudflare
       Pages static index + GitHub Releases/R2 tarballs), wire the built-in default base URI (`kDefaultRegistry`,
       deliberately **empty** today so an unconfigured registry dep errors rather than reaching a dead URL) to the
