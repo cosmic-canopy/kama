@@ -233,7 +233,7 @@ Ids 63-65 reuse `IURI`; ⚠️ that document is open with the COMPACT `$IMP` buf
 on disk, and coordinates must come from the buffer — the on-disk layout cost one debug cycle here.
 `CIURI`/`CISRC` and ids 66-67 are B3c's std-contract implementation, in its own `$tmp/impl` project.)
 
-Assertion counts to grow, not shrink: **check-lsp 136**, **check-query 225** (as of B3c; they were
+Assertion counts to grow, not shrink: **check-lsp 136**, **check-query 227** (as of B3h; they were
 123/198 after B3g and 119/180 before B3). ⚠️ Count them as `ok:` lines from a green run
 (`sh tools/check-lsp.sh | grep -c '  ok:'`). This brief once claimed 108/173, which was wrong in both
 directions of confusion: `grep -c '^expect '` under-counts, because many assertions wrap their description

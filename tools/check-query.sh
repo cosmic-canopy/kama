@@ -585,6 +585,13 @@ expect --def 34:33 -- "dispatch.kama:20:20"
 expect --def 38:26 -- "dispatch.kama:10:42"
 expect --type 10:42 -- "method speak"
 
+# M6 B3h — a generic ARGUMENT is a reference to the type it names. `Speaker` inside `Owned<Speaker>`
+# resolves in mangleElem and nowhere else, and mangleElem passed no `site`, so renaming the contract
+# rewrote its declaration and its `implements` clauses and left every `Owned<Speaker>` spelling behind.
+# Found by pulling on a `-` line the coverage oracle left over after B3c, not by anyone remembering it.
+expect --refs 10:14 -- "dispatch.kama:37:10"    # `Owned<Speaker>` is a use of Speaker
+expect --def 37:10  -- "dispatch.kama:10:14"    # ...and go-to-definition from it reaches the contract
+
 # ---------------------------------------------------------------------------------------------------
 # M6 B3 — the reference index's COVERAGE ORACLE.
 #

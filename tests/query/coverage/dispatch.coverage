@@ -58,7 +58,7 @@
 34:31 d ref:local
 34:33 speak ref:method
 37:4 Owned ref:generic-type
-37:10 Speaker -
+37:10 Speaker ref:contract
 37:19 s decl:local
 37:27 Cat ref:value
 37:31 loud ref:ctor

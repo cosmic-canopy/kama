@@ -4517,7 +4517,11 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         case IDENTIFIER_FLOAT64_VAL: return "float64";
         default: {  // class / generic element — resolve to its mangled name (the suffix)
             if (!elem->value) return "void";
-            std::string base = resolveUserName(*elem->value, elem->qualifier);
+            // M6 B3h: pass the SITE. A generic ARGUMENT (`Sp` in `Owned<Sp>`, `Circle` in
+            // `List<Shared<Circle>>`) resolves here and nowhere else, so without this it was indexed
+            // nowhere and renaming the argument type left every such spelling behind — B3a's silent
+            // under-apply again. buildPositions dedups by identifier node, so the re-walks are free.
+            std::string base = resolveUserName(*elem->value, elem->qualifier, elem.get());
             // A generic INSTANCE (`Shared<C>`, `DynamicArray<int32>`) mangles through genericTypeMangle so
             // its DEFAULT type params + named overrides fill EXACTLY as in cType — a partially-applied
             // `Shared<C>` becomes `Shared_C_GlobalAllocator` (not `Shared_C`), matching the class struct
