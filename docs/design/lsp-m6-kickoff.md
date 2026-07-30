@@ -220,16 +220,19 @@ fixture 80 lines below with the assertions still "passing" against the wrong buf
 
 ```
 UPPERCASE: BAD CFGA CFGB CFGBAD CFGC CFGDIR CFGG CFGSRC CFGTYPO DSRC DURI FRSRC FRSRC2 FRURI GOOD
-           IMP IURI LSRC LURI M34 MURI NEWB NURI OSRC OURI QURI RECOV ROOT RURI SEM SHP SPAN
-           SPURI SURI TOKB TOKG TOKGURI TOKURI URI WW WWURI XDROP XURI
+           IMP IURI LSRC LURI M34 MGEN MGURI MREN MRURI MURI NEWB NURI OSRC OURI QURI RECOV ROOT
+           RURI SEM SHP SPAN SPURI SURI TOKB TOKG TOKGURI TOKURI URI WW WWURI XDROP XURI
 lowercase: cfgcli cfggtext cfglsp cfgn dep depok drop fail frok frws n out session tmp
-request ids: 1-30, 32-49, 53-56   (FREE: 31, 50-52, 57+)
+request ids: 1-30, 32-49, 53-59   (FREE: 31, 50-52, 60+)
 ```
 
-Assertion counts to grow, not shrink: **check-lsp 119**, **check-query 180**. ⚠️ Count them as `ok:` lines
-from a green run (`sh tools/check-lsp.sh | grep -c '  ok:'`). This brief previously claimed 108/173, which
-was wrong in both directions of confusion: `grep -c '^expect '` under-counts, because many assertions wrap
-their description onto a continuation line.
+(`MRURI`/`MREN` + `MGURI`/`MGEN` and ids 57-59 are M6 B3a's method-rename fixtures, added 2026-07-30.)
+
+Assertion counts to grow, not shrink: **check-lsp 123**, **check-query 198** (as of `9342310`; they were
+119/180 before B3). ⚠️ Count them as `ok:` lines from a green run
+(`sh tools/check-lsp.sh | grep -c '  ok:'`). This brief once claimed 108/173, which was wrong in both
+directions of confusion: `grep -c '^expect '` under-counts, because many assertions wrap their description
+onto a continuation line.
 
 ---
 
