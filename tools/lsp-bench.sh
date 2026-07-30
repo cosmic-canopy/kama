@@ -107,6 +107,11 @@ bench_lsp() {
     while [ "$i" -lt 10 ]; do
         i=$((i + 1))
         frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$uri"'","version":'"$((i + 1))"'},"contentChanges":[{"text":"'"$text"'// keystroke '"$i"'\n"}]}}'
+        # M6 B2: most clients re-request semantic tokens after EVERY edit, so the honest keystroke shape
+        # includes one. It must add no timing line: the answer is a read off the index the didChange above
+        # already built, and a line appearing here would mean it triggered a second full analysis — the
+        # same failure M4.6's retired repair used to cause, in a new place.
+        frame '{"jsonrpc":"2.0","id":'"$((100 + i))"',"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"'"$uri"'"}}}'
     done
     # One completion on a buffer that does NOT parse, with the LINE COUNT MOVED since the last good
     # parse. That pair used to defeat indexForRequest's fast path and fire M4.6's repair — a second
@@ -120,10 +125,11 @@ bench_lsp() {
     frame '{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}'
     frame '{"jsonrpc":"2.0","method":"exit","params":null}'
 
-    echo "# one 'kama lsp' process: didOpen, 10x didChange, then a completion on an unparseable buffer."
-    echo "# closure-parse/prelude-parse collapse to 0 after the first line (M5.1/M5.2 caching), and"
-    echo "# there is exactly ONE line per request — a second against the completion means M4.6's"
-    echo "# retired repair is back."
+    echo "# one 'kama lsp' process: didOpen, 10x (didChange + semanticTokens), then a completion on an"
+    echo "# unparseable buffer. closure-parse/prelude-parse collapse to 0 after the first line (M5.1/M5.2"
+    echo "# caching), and there are exactly 12 lines — one per ANALYSIS. The 10 semanticTokens requests"
+    echo "# must contribute NONE, since they read the index the didChange already built; an extra line"
+    echo "# means something here re-analyzes, which is what M4.6's retired repair used to do."
     echo
     KAMA_TIMING=1 "$KAMA" lsp < "$session" 2>&1 >/dev/null | grep '^kama-timing:' | cat -n
 }

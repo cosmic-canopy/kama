@@ -861,6 +861,61 @@ std::vector<SymbolInfo> CEmitter::documentSymbols(const std::string& uri) const
     return out;
 }
 
+// Semantic tokens for one file (M6 B2) — every indexed position in it that resolves to a known
+// declaration, classified by that declaration's kind. A pure read off the already-built index: no
+// re-analysis, no resolution replay, and `_positions[unit]` is ALREADY sorted by (line, column), which is
+// exactly the order the protocol's delta encoding wants.
+//
+// Unlike find-references this does NOT filter out prelude/std targets. A def-site with `unit == nullptr`
+// is one the project does not own — which is the right reason to refuse to RENAME it, and the wrong reason
+// to refuse to COLOUR it. `DynamicArray` should look like a type wherever it appears.
+//
+// Four properties of `_positions` make the filtering below load-bearing rather than defensive:
+//
+//   1. It contains DUPLICATE and potentially OVERLAPPING ranges. The dedup in buildPositions is keyed on
+//      `IdentifierNode*`, but decl-name entries are pushed with `id == nullptr` and so never enter that
+//      set; the known collision (a type declaring a `ctor`, whose implicit result type resolves through
+//      the class's own decl identifier) is filtered only in `_refIndex`, not here. The protocol FORBIDS
+//      overlapping tokens, so a token that starts before the previous one ended is dropped outright —
+//      which subsumes exact duplicates.
+//   2. `selectionRange` can be MULTI-LINE when a decl has no name identifier and falls back to the whole
+//      node's span. A token cannot span lines, so those are dropped.
+//   3. `endLine`/`endColumn == 0` means UNKNOWN, not "column zero". Length then comes from the
+//      identifier's own text, and the entry is dropped if even that is unavailable — guessing a length
+//      would mis-colour a range the editor then can't correct.
+//   4. An EMPTY `declKey` means the name resolved to nothing (a builtin like `int32`, or an unresolved
+//      identifier). Emitting nothing lets the TextMate layer underneath colour it, which for a builtin is
+//      already correct.
+std::vector<SemanticToken> CEmitter::semanticTokensFor(const std::string& uri) const
+{
+    std::vector<SemanticToken> out;
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return out;
+    auto it = _positions.find(unit);
+    if (it == _positions.end()) return out;
+
+    int lastLine = -1, lastEnd = -1;
+    for (const auto& e : it->second) {
+        if (e.declKey.empty()) continue;                                   // (4)
+        auto d = _defSites.find(e.declKey);
+        if (d == _defSites.end()) continue;
+        const SrcRange& r = e.range;
+        if (r.line <= 0 || r.column < 0) continue;
+        if (r.endLine != 0 && r.endLine != r.line) continue;               // (2)
+
+        int len = (r.endLine == r.line && r.endColumn > r.column) ? r.endColumn - r.column
+                : (e.id && e.id->value)                           ? (int)e.id->value->size()
+                : 0;                                                       // (3)
+        if (len <= 0) continue;
+        if (r.line == lastLine && r.column < lastEnd) continue;            // (1)
+
+        out.push_back(SemanticToken{ r.line, r.column, len, d->second.kind, e.isDeclName });
+        lastLine = r.line;
+        lastEnd  = r.column + len;
+    }
+    return out;
+}
+
 // Project-wide symbol search (M3.5) — documentSymbols without the single-unit filter, so every symbol
 // carries its own `uri`. Name matching only: restricting the result to the PROJECT (this index also holds
 // std and dependency units, which a project symbol picker must not offer) is the driver seam's job, since

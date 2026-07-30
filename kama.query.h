@@ -48,6 +48,18 @@ struct PosEntry {
     std::string     declKey;              // the DefSite key this identifier declares or references
 };
 
+// One classified source position for `textDocument/semanticTokens` — a TextMate grammar colours by regex,
+// this layer colours by what the RESOLVER concluded, which is the only thing that can tell a type from a
+// value or a local from a field. Deliberately NOT protocol-shaped: no legend indices, no delta encoding,
+// and kama-native coordinates (line 1-based, column 0-based), so kamaPos/lspRange in kama.lsp.cpp remain
+// the only two places a coordinate convention is converted. A LENGTH rather than an end, because the
+// protocol forbids a token from spanning lines.
+struct SemanticToken {
+    int     line = 0, column = 0, length = 0;
+    SymKind kind = SymKind::Class;
+    bool    isDecl = false;      // this position IS the declaration's own name, not a use of it
+};
+
 // Query results (LSP-shaped, framework-free).
 struct Location   { std::string uri; SrcRange range; };
 // `uri` is the declaring unit's path. It is redundant for documentSymbols (every symbol is in the file you

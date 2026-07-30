@@ -475,6 +475,13 @@ public:
     // unit, including std — restricting to one project is the driver seam's job (it needs real-path
     // resolution), as is capping the result.
     std::vector<SymbolInfo> workspaceSymbols(const std::string& query) const;
+    // semanticTokens (M6 B2): every indexed position in one file that resolves to a known declaration,
+    // classified by that declaration's kind — the layer that corrects what a regex cannot compute. Sorted
+    // ascending and guaranteed NON-OVERLAPPING (the protocol forbids overlap), in kama coordinates with a
+    // length; the server owns the legend mapping and the delta encoding. Unlike the rename/reference paths
+    // this does NOT exclude prelude/std targets: not owning a symbol is a reason to refuse to rename it,
+    // not a reason to refuse to colour it.
+    std::vector<SemanticToken> semanticTokensFor(const std::string& uri) const;
     // completion (M4). `ctx` is the LEXICAL context recovered from the LIVE buffer (completionContextAt) —
     // NOT a cursor position: at completion time the buffer does not parse, so the receiver the user just
     // typed exists in no AST. NOT const, unlike the rest of the facade: resolving a type spelling means

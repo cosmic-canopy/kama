@@ -371,6 +371,41 @@ int symKindToLsp(SymKind k) {
     return 5;
 }
 
+// The semanticTokens LEGEND (M6 B2). ⚠️ ORDER IS THE WIRE FORMAT: a token's type is sent as an INDEX into
+// this array, so appending a name is safe and reordering silently recolours every buffer in every client.
+// Only STANDARD LSP type names are used — a client styles a custom name only if its theme happens to know
+// it, whereas every theme has rules for these, so a standard name is the difference between colour and no
+// colour. This is the layer that corrects what a regex provably cannot: the TextMate grammar guesses that a
+// capitalized word is a type, and only the resolver knows whether `Box` is a type, a local or a field.
+static const char* kSemTokenTypes[] = {
+    "class", "struct", "interface", "enum", "enumMember",
+    "function", "method", "property", "variable", "parameter",
+};
+static const char* kSemTokenModifiers[] = { "declaration" };
+
+// SymKind -> index into kSemTokenTypes. A kama `value` type maps to "struct" and a `resource` to "class"
+// deliberately: the distinction a theme draws between them (a value vs. an entity with identity) is exactly
+// the one kama's two kinds draw.
+int semTokenType(SymKind k) {
+    switch (k) {
+        case SymKind::Class:
+        case SymKind::Resource:
+        case SymKind::GenericType: return 0;   // class
+        case SymKind::Value:       return 1;   // struct
+        case SymKind::Contract:    return 2;   // interface
+        case SymKind::Enum:        return 3;   // enum
+        case SymKind::EnumMember:  return 4;   // enumMember
+        case SymKind::Function:
+        case SymKind::GenericFn:   return 5;   // function
+        case SymKind::Method:
+        case SymKind::Ctor:        return 6;   // method
+        case SymKind::Field:       return 7;   // property
+        case SymKind::Local:       return 8;   // variable
+        case SymKind::Param:       return 9;   // parameter
+    }
+    return 0;
+}
+
 // CompletionItemKind — a DIFFERENT numbering from SymbolKind above, which is exactly the kind of thing
 // that goes unnoticed: a Class is 5 as a SymbolKind and 7 as a CompletionItemKind.
 int completionKindToLsp(CompletionKind k) {
@@ -660,6 +695,21 @@ struct Server {
         Json strig = Json::array(); strig.push(Json("(")); strig.push(Json(","));
         sighelp.set("triggerCharacters", std::move(strig));
         caps.set("signatureHelpProvider", std::move(sighelp));
+        // M6 B2. `full` only — deliberately no `range` and no delta variants. Range would save nothing (the
+        // answer is a read off an index that is already built for the whole file) and delta would trade a
+        // measured 0-cost request for per-document result-id bookkeeping. The legend's ORDER is the wire
+        // format; see kSemTokenTypes.
+        Json semtok = Json::object();
+        Json legend = Json::object();
+        Json sttypes = Json::array();
+        for (const char* t : kSemTokenTypes) sttypes.push(Json(t));
+        Json stmods = Json::array();
+        for (const char* m : kSemTokenModifiers) stmods.push(Json(m));
+        legend.set("tokenTypes", std::move(sttypes));
+        legend.set("tokenModifiers", std::move(stmods));
+        semtok.set("legend", std::move(legend));
+        semtok.set("full", true);
+        caps.set("semanticTokensProvider", std::move(semtok));
         Json folders = Json::object();
         folders.set("supported", true);
         Json ws = Json::object();
@@ -774,6 +824,40 @@ struct Server {
             }
         }
         sendResponse(id, std::move(arr));
+    }
+
+    // textDocument/semanticTokens/full -> {data: [...]}, five integers per token:
+    //   deltaLine, deltaStartChar, length, tokenType, tokenModifiers
+    // Both deltas are relative to the PREVIOUS TOKEN, and deltaStartChar is relative to the previous
+    // token's start only when they share a line — an absolute column otherwise. The facade hands back
+    // tokens already sorted and guaranteed non-overlapping, which is what makes that encoding expressible
+    // at all; it also means the loop below never has to sort or de-duplicate.
+    //
+    // This is the ONLY place the coordinate convention is converted (kama line 1-based -> LSP 0-based),
+    // keeping the campaign's invariant that kamaPos and lspRange are the sole conversion points. It cannot
+    // reuse lspRange: the protocol wants a length here, not a range.
+    void handleSemanticTokens(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        Json data = Json::array();
+        auto it = docs.find(uri);
+        if (it != docs.end()) {
+            int prevLine = 0, prevCol = 0;
+            for (const auto& t : lspSemanticTokens(it->second.lastGoodIndex, uriToPath(uri))) {
+                int line  = t.line - 1;                                  // kama 1-based -> LSP 0-based
+                int dLine = line - prevLine;
+                int dCol  = (dLine == 0) ? t.column - prevCol : t.column;
+                data.push(Json(dLine));
+                data.push(Json(dCol));
+                data.push(Json(t.length));
+                data.push(Json(semTokenType(t.kind)));
+                data.push(Json(t.isDecl ? 1 : 0));                       // bit 0 == "declaration"
+                prevLine = line;
+                prevCol  = t.column;
+            }
+        }
+        Json res = Json::object();
+        res.set("data", std::move(data));
+        sendResponse(id, std::move(res));
     }
 
     // textDocument/definition -> a Location {uri, range} at the decl, or null. Works on decl names +
@@ -1133,6 +1217,7 @@ struct Server {
         if (method == "workspace/symbol")            { if (isRequest) handleWorkspaceSymbol(*idp, params); return true; }
         if (method == "textDocument/completion")     { if (isRequest) handleCompletion(*idp, params);     return true; }
         if (method == "textDocument/signatureHelp")  { if (isRequest) handleSignatureHelp(*idp, params);  return true; }
+        if (method == "textDocument/semanticTokens/full") { if (isRequest) handleSemanticTokens(*idp, params); return true; }
         if (method == "workspace/didChangeWatchedFiles") { handleDidChangeWatchedFiles(params); return true; }
         // `workspace/didChangeConfiguration` is deliberately NOT handled — see kama.lsp.h. The one
         // configuration channel is `kama.local.json`, which arrives through the watcher above, so this

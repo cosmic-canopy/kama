@@ -4524,6 +4524,12 @@ SrcRange lspPrepareRename(const SharedLspIndex& idx, const std::string& path, in
     return idx->idx->renameRangeAt(path, line, col);
 }
 
+std::vector<SemanticToken> lspSemanticTokens(const SharedLspIndex& idx, const std::string& path)
+{
+    if (!idx || !idx->idx) return {};
+    return idx->idx->semanticTokensFor(path);
+}
+
 std::vector<CompletionItem> lspCompletion(const SharedLspIndex& idx, const std::string& path,
                                           const CompletionContext& ctx)
 {

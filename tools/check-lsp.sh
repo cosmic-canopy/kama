@@ -67,6 +67,22 @@ RECOV='type value H {\n    public int32 x;\n    public int32 = ;\n}\nfn int32 a(
 XURI="file:///drop.kama"
 XDROP='type value ! Widget {\n    public int32 w;\n}\nfn int32 use() {\n    Widget a;\n    Widget b;\n    return 0;\n}\n'
 
+# M6 B2 fixtures: semantic tokens. TOKB is deliberately a type that declares a ctor — that is the shape
+# whose implicit result type resolves through the class's OWN decl identifier, so `_positions` holds TWO
+# entries at `P`'s decl-name range. The protocol FORBIDS overlapping tokens, and the existing de-duplication
+# lives only in `_refIndex`, never in `_positions`, so an exact-array assertion here is what proves the
+# facade's own overlap filter runs.
+TOKURI="file:///semtok.kama"
+TOKB='type value P {\n    int32 x;\n    public ctor make(int32 v) { P r; r.x = v; return give r; }\n}\nfn int32 main() { P p = P.make(v: 1); return p.x; }\n'
+
+# TOKG documents the KNOWN GAP (ROADMAP §10, found in M6 A2): nothing inside a GENERIC type's body reaches
+# the reference index, because generic instances are emitted from emitHeaderContent — before the per-unit
+# loop that sets `_refUnit`, and recordRef/recordDef drop everything while it is null. So `T`, `v`, `r` and
+# `get` produce NO tokens here while the type NAME does. Asserted as an exact array on purpose: when B3
+# closes the gap this assertion must be updated, which makes the fix visible rather than silent.
+TOKGURI="file:///semtokgen.kama"
+TOKG='type value Box<T> {\n    T v;\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> b; b.v = 7; return b.get(); }\n'
+
 QURI="file:///shapes.kama"
 SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p; Point q = mid(a: p); return q.x; }\n'
 
@@ -326,6 +342,11 @@ if [ "$frok" = 1 ]; then
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$FRURI"'","languageId":"kama","version":1,"text":"'"$FRSRC"'"}}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$FRURI"'","version":2},"contentChanges":[{"text":"'"$FRSRC2"'"}]}}'
 fi
+# --- M6 B2: semanticTokens/full, on a ctor-bearing type and on a generic type.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$TOKURI"'","languageId":"kama","version":1,"text":"'"$TOKB"'"}}}'
+frame '{"jsonrpc":"2.0","id":55,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"'"$TOKURI"'"}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$TOKGURI"'","languageId":"kama","version":1,"text":"'"$TOKG"'"}}}'
+frame '{"jsonrpc":"2.0","id":56,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"'"$TOKGURI"'"}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -452,6 +473,39 @@ fi
 echo "check-lsp: M3.5 ownership is the file SET, not a path prefix"
 expect '"id":34,"result":{"changes":{'          "rename succeeds on a declared source outside the project dir"
 expect '/own/shared/shared.kama":[{"range"'     "...and rewrites that outside file, because the project declared it"
+
+echo "check-lsp: M6 B2 semantic tokens"
+# The legend's ORDER is the wire format — a token's type is sent as an INDEX into it, so this assertion is
+# not cosmetic: reorder the array and every buffer in every client silently recolours.
+expect '"semanticTokensProvider":{"legend":{"tokenTypes":["class","struct","interface","enum","enumMember","function","method","property","variable","parameter"],"tokenModifiers":["declaration"]},"full":true}' \
+       "initialize advertises semanticTokensProvider with the legend, full-only"
+# Exact array, because every interesting property of the encoding is positional. Decoded, 5 ints per token
+# (deltaLine, deltaStartChar, length, type, modifiers), against
+#   type value P {\n    int32 x;\n    public ctor make(int32 v) { P r; r.x = v; return give r; }\n}\n
+#   fn int32 main() { P p = P.make(v: 1); return p.x; }
+#   L1c11 P     struct+decl     L2c10 x   property+decl   L3c16 make method+decl
+#   L3c27 v     parameter+decl  L3c32 P   struct          L3c34 r    variable+decl
+#   L3c37 r     variable        L3c39 x   property        L3c43 v    parameter
+#   L3c58 r     variable        L5c9  main function+decl  L5c18 P    struct
+#   L5c20 p     variable+decl   L5c31 v   parameter       L5c45 p    variable
+#   L5c47 x     property
+# Two of those carry the milestone: ONE token at `P`'s decl name, though `_positions` holds two entries
+# there (the ctor's implicit result type resolves through the class's own decl identifier, and the existing
+# de-duplication lives only in `_refIndex`) — the protocol forbids overlap, so the facade's own filter is
+# what makes that true. And `v` at L5c31 is an argument LABEL scoped as the callee's PARAMETER, which is
+# M6 A2's indexing showing up as colour.
+expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,5,1,1,0,0,2,1,8,1,0,3,1,8,0,0,2,1,7,0,0,4,1,9,0,0,15,1,8,0,2,9,4,5,1,0,9,1,1,0,0,2,1,8,1,0,11,1,9,0,0,14,1,8,0,0,2,1,7,0]}' \
+       "semanticTokens/full -> delta-encoded tokens, deduped, non-overlapping, ascending"
+# ⚠️ KNOWN GAP (ROADMAP §10) asserted as a FACT so closing it cannot be silent. In
+#   type value Box<T> {\n    T v;\n    public fn T get() { return this.v; }\n}\n
+#   fn int32 main() { Box<int32> b; b.v = 7; return b.get(); }
+# the only tokens are L1c11 Box (class+decl), L5c9 main, L5c18 Box, L5c29 b, L5c32 b, L5c48 b. There is NO
+# token for `T`, for `v` (neither its declaration NOR the `b.v` use), nor for `get` — nothing inside a
+# generic type's body reaches the reference index at all, because generic instances are emitted from
+# emitHeaderContent, before the per-unit loop that sets `_refUnit`. When B3 fixes that, THIS ASSERTION MUST
+# CHANGE; that is the point of spelling it out rather than counting tokens.
+expect '"id":56,"result":{"data":[0,11,3,0,1,4,9,4,5,1,0,9,3,0,0,0,11,1,8,1,0,3,1,8,0,0,16,1,8,0]}' \
+       "a generic type's BODY yields no tokens — the known index gap, pinned until B3 closes it"
 
 echo "check-lsp: M4 completion + signature help"
 # The list is complete as sent: `isIncomplete:false` tells the client to filter it itself as the user

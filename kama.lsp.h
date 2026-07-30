@@ -194,6 +194,11 @@ std::vector<Location>   lspReferences(const SharedLspIndex& idx, const std::stri
 // prepareRename (M3): the identifier range at the cursor if it names a renameable user symbol, else a
 // zero range (SrcRange::line == 0) — the server turns that into a null result so the editor greys out F2.
 SrcRange                lspPrepareRename(const SharedLspIndex& idx, const std::string& path, int line, int col);
+// semanticTokens/full (M6 B2): every resolver-classified position in one file, ascending and
+// non-overlapping, in kama coordinates. The server owns the legend indices and the delta encoding — this
+// stays framework-free. A read off the cached index, so it costs nothing beyond the analysis that already
+// ran for diagnostics.
+std::vector<SemanticToken> lspSemanticTokens(const SharedLspIndex& idx, const std::string& path);
 
 // completion + signature help (M4). `ctx` is the LEXICAL context the server recovered from the LIVE buffer
 // (completionContextAt), deliberately NOT a bare cursor position: at completion time the buffer does not
