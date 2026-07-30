@@ -32,6 +32,13 @@ for ed in Neovim "Vim (coc.nvim)" "Emacs (eglot)" "Sublime Text" Helix Kate Zed;
     grep -qxF -- "## $ed" "$DOC" || bad "docs/editors.md has no '## $ed' section"
 done
 
+# 1b. Every configured editor states whether its snippet was VERIFIED against a running editor or merely
+#     documented from that editor's reference. Three were driven for real (Neovim, Emacs, Helix); three
+#     were not. Which is which is the kind of thing that silently becomes a lie, so it is asserted: the
+#     count of status lines must match the count of configured editors.
+statuses=$(grep -cE '^\*(Verified against|Documented from)' "$DOC" || true)
+[ "$statuses" -eq 6 ] || bad "docs/editors.md has $statuses verification-status lines; expected 6 (one per configured editor). A new editor must declare whether its snippet was actually run."
+
 # 2. Every editor that gets a CONFIG SNIPPET must name the server command. `kama lsp` is spelled several
 #    legitimate ways across config languages (lua/json/toml/elisp), so accept any of them — the point is
 #    that renaming the subcommand breaks this loudly rather than leaving six silently-wrong snippets.

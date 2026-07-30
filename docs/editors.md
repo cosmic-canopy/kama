@@ -44,6 +44,10 @@ and not every editor has all three:
 | **Helix** | all | **none yet** — Helix colours only from tree-sitter |
 | **Zed** | — | **no extension possible yet** — a Zed extension needs a tree-sitter grammar |
 
+Each section below says whether its snippet was **verified against a running editor** or is documented from
+the editor's own configuration reference. We would rather tell you which is which than imply we tested
+everything.
+
 Semantic tokens colour what the *resolver* concluded — types, fields, locals, parameters, enum members —
 which is strictly more accurate than a regex grammar, but it only covers identifiers. Keywords, strings,
 numbers and comments come from the editor's own grammar, so in a semantic-tokens-only editor those stay
@@ -90,6 +94,9 @@ Two things to know:
 
 ## Neovim
 
+*Verified against Neovim 0.12.4 — attaches, registers all three file watchers, and answers hover,
+definition, references, rename, outline and semantic tokens.*
+
 Requires Neovim 0.11+ for `vim.lsp.config`. Put this in `init.lua`:
 
 ```lua
@@ -116,6 +123,8 @@ into `require('lspconfig.configs').kama = { default_config = { … } }` followed
 
 ## Vim (coc.nvim)
 
+*Documented from coc.nvim's `languageserver` reference — **not** verified against a running Vim.*
+
 In `:CocConfig` (`coc-settings.json`):
 
 ```json
@@ -139,6 +148,9 @@ autocmd BufRead,BufNewFile *.kama set filetype=kama
 
 ## Emacs (eglot)
 
+*Verified against GNU Emacs 30.2 — connects, registers the file watcher, and answers hover, definition and
+outline.*
+
 eglot is built in from Emacs 29. In your init file:
 
 ```elisp
@@ -154,7 +166,12 @@ lsp-mode users: register with `lsp-register-client` and `(lsp-stdio-connection '
 
 ## Sublime Text
 
-Install the **LSP** package, then in *Preferences → Package Settings → LSP → Settings*:
+*Documented from the LSP package's client reference — **not** verified end-to-end against a running
+Sublime. Installing the LSP package from a bare git clone did not bring the client up here; install it
+through Package Control instead, which is the supported route.*
+
+Install the **LSP** package (via Package Control), then in *Preferences → Package Settings → LSP →
+Settings*:
 
 ```json
 {
@@ -173,8 +190,13 @@ plists, not as JSON, so the shipped file needs a format conversion — but only 
 are the same structure. On macOS that is one command:
 
 ```sh
-plutil -convert xml1 editor/vscode/syntaxes/kama.tmLanguage.json \
-       -o ~/Library/Application\ Support/Sublime\ Text/Packages/User/kama.tmLanguage
+ST=~/Library/Application\ Support/Sublime\ Text/Packages/User
+plutil -convert xml1 editor/vscode/syntaxes/kama.tmLanguage.json -o "$ST/kama.tmLanguage"
+# ⚠️ Required. The grammar carries no `fileTypes`, because VS Code takes file associations from the
+# extension's package.json instead. Sublime has no such second source, so without this the `.kama`
+# buffer never gets the `source.kama` scope — and the LSP `selector` above then never matches, which
+# looks exactly like a broken server rather than an unassigned syntax.
+plutil -insert fileTypes -json '["kama"]' "$ST/kama.tmLanguage"
 ```
 
 (Elsewhere, any plist converter or Sublime's own PackageDev will do it.) This is the same grammar VS Code
@@ -183,6 +205,9 @@ uses — audited rule-by-rule against `kama.l`/`kama.y` with the compiler as the
 copy would drift from the language on its first change.
 
 ## Helix
+
+*Verified against Helix 25.07.1 — `hx --health kama` resolves the server, and a real session initializes,
+registers all three file watchers and publishes diagnostics.*
 
 In `~/.config/helix/languages.toml`:
 
@@ -199,10 +224,13 @@ roots = ["kama.json"]
 language-servers = ["kama"]
 ```
 
-Helix will report `no tree-sitter grammar` for the language and colour the buffer as plain text. That is
-expected — see the table above; every LSP feature still works.
+`hx --health kama` will show the language server as `✓` and *Highlight queries* as `✘`, and the log says
+`Skipping syntax config for 'kama' because the parser's shared library does not exist`. That is expected —
+see the table above; the buffer is uncoloured and every LSP feature still works.
 
 ## Kate
+
+*Documented from Kate's LSP client reference — **not** verified against a running Kate.*
 
 *Settings → Configure Kate → LSP Client → User Server Settings*:
 

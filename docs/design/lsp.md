@@ -450,6 +450,29 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
       heading renamed to `## Helixx` pass, and the anchored ERE that replaced it then matched
       `## Vim coc.nvim` because the real heading's parentheses are a capture group. Neither was visible
       until the guard was deliberately broken — **negative-test a new guard, always.**
+    - **Three of the six snippets were driven against a real editor; three were not, and the page says
+      which.** Verified: **Neovim 0.12.4**, **Emacs 30.2 (eglot)**, **Helix 25.07.1** — each attaches,
+      each receives the C0 registration (all three globs land in Neovim's registration table, eglot's
+      `eglot--file-watches` and Helix's log), and hover/definition/references/rename/outline answer.
+      Not verified: **Vim/coc.nvim** (coc would not bootstrap headless), **Sublime** (the LSP package
+      would not come up from a bare git clone; Package Control is the supported route) and **Kate**
+      (GUI-only). `check-editors.sh` asserts a status line per configured editor so a future addition
+      cannot arrive unmarked.
+      - **Sublime found a real docs bug even without connecting**: the TextMate grammar carries no
+        `fileTypes`, because VS Code takes file associations from the extension's `package.json`
+        instead. Sublime has no second source, so a straight `plutil` conversion produces a grammar that
+        never attaches to a `.kama` buffer — the `source.kama` selector then never matches, and it
+        presents as a broken server rather than an unassigned syntax. The page now spells out the
+        `plutil -insert fileTypes` step.
+      - Two things the real clients settled that no amount of reading could: Helix logs
+        `Ignoring Unhandled notification` for `kama/buildConfig` — which is the spec-required behaviour
+        and confirms sending it unconditionally is safe — and the whole session is exactly 7 messages,
+        with the configuration announced twice (host defaults at `initialize`, then the resolved manifest
+        at the pinning `didOpen`).
+      - ⚠️ **The fixture is the trap, not the server.** A first pass had hover and definition returning
+        `nil` in Neovim; the buffer was invalid kama (`twice(21)` — the language has no positional
+        arguments). `kama check` said so in one command. Same lesson as B1: **ask the compiler before
+        believing a client is broken.**
   - **⚠️ Xcode is out of scope (no supported path).** Xcode exposes **no** hook to register a third-party
     LSP server — its editor intelligence (SourceKit-LSP) is wired for Swift/C/C++/ObjC only, and Source
     Editor Extensions can do only menu-triggered text transforms (no live diagnostics/hover/def/completion).
