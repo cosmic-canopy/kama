@@ -1,7 +1,10 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M5 COMPLETE — all of M0–M5 shipped (M5 on 2026-07-28, dev). NEXT = M6** — editor clients;
-cold-start brief: **[lsp-m6-kickoff.md](lsp-m6-kickoff.md)**.
+**Status: M0–M5 shipped, and M6 STAGE A shipped (2026-07-29, dev) — the three deferred correctness items
+are closed. NEXT = M6 Stage B** (the TextMate grammar audit + `textDocument/semanticTokens`), then Stage C
+(editor clients + `docs/editors.md`), then Stage D exit. Cold-start brief:
+**[lsp-m6-kickoff.md](lsp-m6-kickoff.md)** — it carries an as-shipped record of Stage A, including the three
+places its own earlier text was wrong, and a seam map for B/C re-derived after Stage A moved four files.
 
 > **Interleaved before M6: the build-configuration campaign** (✅ shipped 2026-07-29,
 > `fdc9a75`…`fbe69f5`; [build-configuration.md](build-configuration.md)). Sequenced first because M6's

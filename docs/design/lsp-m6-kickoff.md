@@ -1,29 +1,158 @@
 # LSP M6 — editor clients + the campaign's loose ends (cold-start brief)
 
-**Status: NOT STARTED — the ACTIVE next milestone.** M5 shipped 2026-07-28 (`dfdbb9a`…`6d295e1`), and
-the **build-configuration campaign** shipped 2026-07-29 (`fdc9a75`…`fbe69f5`) *between* M5 and this —
-sequenced first precisely because item 3c below needed a flag model to point the editor at. Read
-[lsp.md](lsp.md) for campaign context and [build-configuration.md](build-configuration.md) for the flag
-model, then this. Sized `S/M` in [lsp.md](lsp.md):222 — the client work genuinely is small, because
-every editor reads the same server.
+**Status: STAGE A COMPLETE (2026-07-29). NEXT = STAGE B, then C, then D — start at
+[§ Stage B/C — start here](#stage-bc--start-here).**
 
-> ⚠️ **Line numbers re-verified against `fbe69f5`** (2026-07-29). The build-configuration campaign moved
-> `kama.driver.cpp` by ~700 lines, so every driver reference below was re-derived; `kama.cemit.cpp` and
-> `kama.query.cpp` were not meaningfully touched and their seams are unchanged. **Re-derive again if you
-> land anything before starting** — a stale brief is how this campaign has repeatedly misled the next
-> session, and it has now happened twice.
+M6 is the last LSP milestone. It has four stages; **A is shipped**:
 
-M6 is the last LSP milestone. It has three parts, and only the first is what the milestone is named for:
+| Stage | What | Status |
+|---|---|---|
+| **A** | The three deferred correctness items (`setBuildFlags`, argument labels, the import diagnostic) | ✅ **SHIPPED** — `5061875`, `d78a1fd`, `7f8dfde`, `8dc90ab`, `cbdd284` |
+| **B1** | Fix the TextMate grammar (11 verified defects) + extend `check-syntax-drift.sh` | **NEXT** |
+| **B2** | `textDocument/semanticTokens` (`/full` only), measured | pending |
+| **C** | Editor clients for 7 more editors + `docs/editors.md` + the VS Code status-bar picker | pending |
+| **D** | Campaign exit | pending |
 
-1. **Editor clients** — thin configs pointing at `kama lsp`, plus `docs/editors.md`.
-2. **The syntax-highlighting audit** — already scoped in detail at [lsp.md](lsp.md):262-273. Do not
-   re-derive it; that section has the motivating evidence (the VS Code grammar disagreed with the
-   compiler four ways on numeric literals alone) and the compiler-as-oracle method.
-3. **Three deferred items** carried from M4 and M5, written up below so they are not lost.
+Read [lsp.md](lsp.md) for campaign context and [build-configuration.md](build-configuration.md) for the
+flag model. Session plan of record: `~/.claude/plans/let-s-continue-the-lsp-warm-wilkes.md`.
+
+> ⚠️ **Line numbers below were re-derived against `cbdd284`** (2026-07-29, after Stage A). Stage A moved
+> `kama.driver.cpp` by ~380 lines and touched `kama.lsp.cpp`, `kama.lsp.h`, `kama.query.cpp` and
+> `kama.cemit.{h,cpp}`. **Re-derive again if you land anything before starting** — a stale brief is how
+> this campaign has repeatedly misled the next session, and it had already happened twice before Stage A.
 
 ---
 
-## Part 2 — the syntax-highlighting audit, already done once
+## Stage A — as shipped, and where this brief was wrong
+
+Every prior milestone's brief was wrong somewhere load-bearing. This one was too, in three places:
+
+1. **The override channel was wrong.** The brief specified `initializationOptions` +
+   `workspace/didChangeConfiguration`. The user chose **`kama.local.json`** instead (see the struck-through
+   bullet under item 3c), and it is the better answer: the editor and `kama build` agree *by construction*
+   rather than by remembering to pass the same flags twice, the F5 path needs no arguments of its own, and
+   every editor gets the same override with no per-client settings schema. `didChangeConfiguration` is
+   consequently **not wired at all** — the trigger is `didChangeWatchedFiles` on the two manifests.
+2. **A2's key design would have shipped a silent, test-invisible bug.** The brief said to `recordRef` the
+   label with the param's `bindingKey`. `bindingKey` reads `_refUnit`, which at a call site is the
+   **caller's** unit while the DefSite was keyed under the **declaring** unit — so every cross-unit label
+   would produce a key matching nothing, be dropped, and *same-file labels would still appear to work*.
+   Fixed by inverting: store the param's declaration NODE, resolve node→key after `buildDefSites`.
+   `tests/query/labels/` is deliberately two units to lock this down.
+3. **The A2 std-parameter hazard was mis-diagnosed** (by the plan, not the brief). It does not
+   materialize — rename already refuses, because such a param has no def-site the project owns and
+   `includeDeclaration` puts the declaration among the references, so both the `ownsFile` check and the
+   project-less "used in another file" check fire. Verified end-to-end rather than reasoned about.
+
+**Two things found en route that were not on anyone's list:**
+
+- **⚠️ NOTHING INSIDE A GENERIC TYPE'S OR GENERIC FUNCTION'S BODY IS IN THE REFERENCE INDEX.** Params,
+  locals, `foreach`/`match` bindings and body use-sites alike, which covers all of `lib/std`'s containers
+  (`DynamicArray<T>.add(item:)` and friends). **One cause:** generic instances are emitted from
+  `emitHeaderContent` (`emitGenericInst` / `emitGenericTypeInst`), which runs *before* the per-unit
+  `emitModuleContent` loop that sets `_refUnit` — and `recordRef`/`recordDef` both drop everything when it
+  is null. Not fixed in A2: it needs a template → declaring-unit map available during the header pass
+  (`_declUnit` is built in `buildDefSites`, i.e. after emission), each instantiation re-walks the *same*
+  template nodes so attribution must be to the template's own unit, and it touches the emission path where
+  the campaign holds a byte-identical-output invariant. **Tracked in ROADMAP §10** under the LSP bullet.
+- **A latent trap in the harness**, fixed: `check-lsp.sh` counted `"code":"Parse"` across *every*
+  `recover.kama` publish in the session and demanded exactly 3, so any republish (which A1 introduces) would
+  fail it for a reason unrelated to recovery. Now `head -1`, which is what it always meant.
+
+**Also shipped, as an A1 prerequisite:** `select.TARGET` gained `"default": true` — every other select value
+already had it, so no manifest could declare a default target and a single-board project retyped `--target`
+forever. Precedence: built-in `HOST` < `kama.json` < `kama.local.json` < `--target`.
+Guarded by 4 new cases in `tools/check-target.sh`.
+
+**Stage A verification, all green:** 802/802 native **and** container; emission byte-identical across 537
+`lspref` fixtures; both LSP harnesses clean under `-fsanitize=address,undefined` on **both** platforms
+(LeakSanitizer included, which only the container has); per-keystroke 84–86 ms against the 100 ms budget,
+one timing line per request.
+
+---
+
+## Stage B/C — start here
+
+**Before the first edit**, regenerate the baselines (`build/` is gitignored — regenerate, never assume):
+
+```sh
+make && tools/lspref.sh > build/lspref-before.txt      # 537 lines, 0 TRANSPILE_FAILED
+tools/lsp-bench.sh       > build/lsp-bench-before.txt  # cold-process phase split
+tools/lsp-bench.sh --lsp > build/lsp-bench-lsp-before.txt   # steady state: 84-86 ms, 12 timing lines
+```
+
+**Seam map, verified against `cbdd284`:**
+
+| What | Where |
+|---|---|
+| `initialize` capabilities block | [kama.lsp.cpp](../kama.lsp.cpp):642-663 — add `semanticTokensProvider` after :662 (`signatureHelpProvider`), before :663; the nested `completionProvider` just above is the shape to copy |
+| Handler template | `handleDocumentSymbol` [kama.lsp.cpp](../kama.lsp.cpp):762 (uri → `docs.find` → seam → `Json::array()` → `sendResponse`) |
+| Dispatch table | insert after [kama.lsp.cpp](../kama.lsp.cpp):1135; :1136 is `didChangeWatchedFiles`, :1145 is the -32601 fallback. Method string `textDocument/semanticTokens/full` |
+| Seam declaration | [kama.lsp.h](../kama.lsp.h):196 (`lspPrepareRename`) — declare `lspSemanticTokens` beside it, before :202 |
+| Seam definition | [kama.driver.cpp](../kama.driver.cpp):4521 (`lspPrepareRename`) / :4527 (`lspCompletion`) — same 2-line null-guard-and-forward |
+| Facade | `documentSymbols` [kama.query.cpp](../kama.query.cpp):846; `workspaceSymbols` :869 — put `semanticTokensFor` beside them |
+| Token data | `_positions` per unit, **already sorted by (line, column)** at [kama.query.cpp](../kama.query.cpp):707-713 — exactly the order delta encoding wants. `DefSite.kind` classifies every key including the `local:`/`field:`/`enum:` ones |
+| Value shapes | [kama.query.h](../kama.query.h):16 `SrcRange`, :22 `SymKind` (14 values), :29 `DefSite`, :44 `PosEntry` |
+
+**B2's four real hazards** (all re-confirmed in the current tree):
+
+1. **`_positions` contains duplicate ranges.** Step (3)'s dedup is by `IdentifierNode*`, but decl-name
+   entries are pushed with `id == nullptr` ([kama.query.cpp](../kama.query.cpp):613), so they never enter
+   the `seen` set. The known collision — a type declaring a `ctor` whose implicit result type resolves
+   through the class's own decl identifier — is filtered **only in `_refIndex`**
+   ([:717-736](../kama.query.cpp#L717), the `selectionRange` equality test at :733-734), *not* in
+   `_positions`. LSP forbids overlapping tokens, so dedupe by (line, column) in the facade.
+2. **`selectionRange` can be multi-line** when `nameId` is null ([:380](../kama.query.cpp#L380) falls back
+   to the whole decl node's span). Tokens cannot span lines — drop any entry where `endLine != line`.
+3. **`endLine`/`endColumn` of 0 means UNKNOWN** — needs the collapse `lspRange` does, but expressed as a
+   *length* rather than a range.
+4. **Empty `declKey`** (builtins like `int32`, unresolved names) → emit nothing and let TextMate colour it.
+
+**`/full` only** — no range or delta variants. **Measure with `tools/lsp-bench.sh --lsp`**: semantic tokens
+fire on every edit in most clients, and this is the one M6 item that can move the budget.
+
+**Stage C's client work now has a settled shape**, and it is smaller than the brief implies:
+
+- The VS Code watcher **already** covers both manifests ([extension.js](../editor/vscode/extension.js), the
+  `synchronize.fileEvents` array) — Stage A extended it. Every other client wires the same client-side hook.
+- **The status-bar picker writes `kama.local.json`, not editor settings**, so the F5 path needs no changes
+  and the same override works in every editor. What VS Code still lacks: an explicit
+  `"activationEvents": ["onLanguage:kama"]` (there is none today), a `contributes.configuration` section,
+  and a `kama.selectBuildConfig` command. `activate()` is where the status-bar item goes, refreshed from
+  `onDidChangeActiveTextEditor`.
+- **`editor/vscode/README.md` is stale** — it still says find-references, rename and completion "arrive in
+  later milestones"; all three shipped in M3/M4.
+- `docs/editors.md` must state **honestly which editors get colour from what**: TextMate for VS Code and
+  Sublime (Sublime consumes the same `.tmLanguage` — reuse it), semantic tokens for VS Code / Neovim /
+  Emacs, and Helix + Zed getting LSP features with **no** syntax colouring until M7's tree-sitter grammar.
+  Register it in `README.md`'s layout bullet, `llms.txt` § Toolchain & runtime (which mentions neither the
+  LSP nor any editor today), `GETTING_STARTED.md` §4 (VS-Code-only), and ROADMAP.
+
+**⚠️ `tools/check-lsp.sh` is ONE FLAT SHELL SCOPE** — M5 lost time to a new `DURI` silently retargeting a
+fixture 80 lines below with the assertions still "passing" against the wrong buffer. Currently taken:
+
+```
+UPPERCASE: BAD CFGA CFGB CFGBAD CFGC CFGDIR CFGG CFGSRC CFGTYPO DSRC DURI FRSRC FRSRC2 FRURI GOOD
+           IMP IURI LSRC LURI M34 MURI NEWB NURI OSRC OURI QURI RECOV ROOT RURI SEM SHP SPAN
+           SPURI SURI URI WW WWURI XDROP XURI
+lowercase: cfgcli cfggtext cfglsp cfgn dep depok drop fail frok frws n out session tmp
+request ids: 1-30, 32-49, 53, 54   (FREE: 31, 50-52, 55+)
+```
+
+Assertion counts to grow, not shrink: **check-lsp 108** (90 `expect` + 18 `cfgexpect`/`cfgreject` + 4
+custom counters), **check-query 173**.
+
+---
+
+## Part 2 — the syntax-highlighting audit (Stage B1) — STILL TO DO, and re-verified
+
+> All ten defects below were **re-checked against the current file during Stage A planning and are
+> still present**, plus three more found then: (1b) the escape rule's `\u{…}` hex count is
+> unbounded where the lexer is `{1,6}`, so `\u{1234567}` mis-colours as valid; (11) `#declarations`
+> and `#cast` are *included after* `#keywords`, and TextMate breaks a position tie in favour of the
+> earlier include — so those two rules may be entirely dead. Verify (11) in the tokenizer before
+> relying on either. One thing the grammar gets RIGHT and must not be "fixed": `/*` does not nest
+> in `kama.l` either, so the non-nesting block-comment rule is correct.
 
 The grammar-vs-lexer comparison has been run (2026-07-29) and found **ten** concrete disagreements
 beyond the four numeric ones `139fb10` fixed. Method for each: write the literal, run `kama check`,
@@ -66,9 +195,14 @@ Code / Neovim / Emacs, and Helix + Zed getting LSP features with no syntax colou
 
 ---
 
-## Part 3 — the deferred items
+## Part 3 — the deferred items — ✅ ALL THREE SHIPPED IN STAGE A
 
-### 3a. Index argument labels (carried from M4, unblocked by M4.9)
+> **Kept verbatim below for the reasoning, not as a work list.** Read the "Stage A — as shipped" section at
+> the top first: it records the three places this part was wrong. In particular 3a's `recordRef` advice and
+> 3c's `initializationOptions` channel were both superseded, and following them now would reintroduce the
+> bugs Stage A fixed.
+
+### 3a. Index argument labels (carried from M4, unblocked by M4.9) — ✅ SHIPPED `8dc90ab`
 
 Renaming a parameter should rewrite its call sites. It cannot today, because argument labels are not in
 the reference index — and every kama argument is named, so this is not a niche gesture.
@@ -82,7 +216,7 @@ the reference index — and every kama argument is named, so this is not a niche
 - **Test the span before the feature.** `prepareRename` on a label must return the label's range and
   nothing more; the M3.4/M4.9 assertions in `tools/check-lsp.sh` are the pattern to copy.
 
-### 3b. Promote the undeclared-import warning to a diagnostic (carried from M4)
+### 3b. Promote the undeclared-import warning to a diagnostic (carried from M4) — ✅ SHIPPED `cbdd284`
 
 `loadProgramUnits` ([kama.driver.cpp](../kama.driver.cpp):537, the check at :633-651) prints "package X imports Y but does
 not declare it" to stderr, warn-once per process — so in an editor it lands in the log channel nobody
@@ -98,7 +232,7 @@ Two things to get right, both already learned the hard way in the workspace-deps
   it vanishes on the next keystroke, so the warn-once set and the diagnostic path need different
   lifetimes.
 
-### 3c. The LSP never calls `setBuildFlags` (found during M5; the DECISION is now made)
+### 3c. The LSP never calls `setBuildFlags` (found during M5) — ✅ SHIPPED `5061875`+`d78a1fd`+`7f8dfde`
 
 `lspAnalyze` ([kama.driver.cpp](../kama.driver.cpp):3878, emitter setup at :3906-3908) and
 `lspAnalyzeWorkspace` (:4083) still do not call `setBuildFlags`, while `kama check` (:4757), `kama

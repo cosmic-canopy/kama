@@ -602,10 +602,18 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   (`KAMA_TIMING`, `tools/lsp-bench.sh`) — the brief's central perf claim had been a guess about a
   parse-vs-analyze split nobody had measured, and it was wrong. **Decision 2 resolved toward keeping
   Bison**: an RDP stays the right long-term move for self-hosting, but neither latency nor recovery
-  quality demanded it. **NEXT / ACTIVE: M6** — editor clients, the syntax-highlighting audit, and the
-  three carried items (argument-label indexing, the undeclared-import diagnostic, and the LSP's missing
-  `setBuildFlags`); cold-start brief [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md).
-  Status of record: [design/lsp.md](design/lsp.md).
+  quality demanded it. **M6 STAGE A SHIPPED (2026-07-29)** — the three carried items are closed: the server
+  now calls `setBuildFlags`, so the editor analyzes the program a build analyzes rather than its inverse
+  (an empty flag set dropped every `@compileFor(X)` and kept every `@compileFor(!X)`); argument labels are
+  references to the callee's parameter, so renaming a parameter finally rewrites its call sites; and the
+  undeclared-import finding reaches the Problems pane instead of a log channel nobody reads. The
+  build-configuration override channel an editor reads is **`kama.local.json`**, the same file the CLI
+  already merges — so the editor and `kama build` cannot disagree, and `select.TARGET` gained
+  `"default": true` on the way. **NEXT / ACTIVE: M6 Stage B** (the TextMate grammar audit — 11 verified
+  defects — plus `textDocument/semanticTokens`), then **Stage C** (editor clients + `docs/editors.md` + the
+  VS Code status-bar picker), then Stage D exit. Cold-start brief:
+  [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md), which carries an as-shipped record of Stage A and a
+  re-derived seam map for B/C. Status of record: [design/lsp.md](design/lsp.md).
   - **⚠️ KNOWN GAP, found during M6 A2 — nothing inside a GENERIC type's or generic function's body is in
     the reference index.** Params, locals, `foreach`/`match` bindings and body use-sites all go
     unrecorded, so find-references, rename and hover answer nothing there. It covers all of `lib/std`'s
