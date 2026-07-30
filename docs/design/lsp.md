@@ -1,8 +1,10 @@
 # Language Server (LSP) — campaign kickoff / handoff
 
-**Status: M0–M5 shipped, and M6 STAGE A shipped (2026-07-29, dev) — the three deferred correctness items
-are closed. NEXT = M6 Stage B** (the TextMate grammar audit + `textDocument/semanticTokens`), then Stage C
-(editor clients + `docs/editors.md`), then Stage D exit. Cold-start brief:
+**Status: M0–M5 shipped, and M6 STAGES A + B1/B2 shipped (2026-07-29, dev) — the three deferred
+correctness items are closed, the TextMate grammar now agrees with the compiler and is guarded by a real
+tokenizer, and `textDocument/semanticTokens/full` colours by what the resolver concluded. NEXT = M6 B3**
+(the generic-body reference index — attempted and deliberately stopped with a verified diagnosis), then
+Stage C (editor clients + `docs/editors.md`), then Stage D exit. Cold-start brief:
 **[lsp-m6-kickoff.md](lsp-m6-kickoff.md)** — it carries an as-shipped record of Stage A, including the three
 places its own earlier text was wrong, and a seam map for B/C re-derived after Stage A moved four files.
 
@@ -330,6 +332,33 @@ Sizes are T-shirt (S≈part of a session, M≈1 session, L≈2-3, XL≈several).
     - The check only fires for an import that resolves **through a dependency view**, so the fixture has to
       declare the dep, install it, then remove the declaration while the view remains. That is a real
       editing state, and the state in which an editor most needs to speak up.
+  - **B1 (the syntax-highlighting audit) ✅ SHIPPED `38fee77`.** Thirteen grammar-vs-compiler
+    disagreements closed. Two decisions of record:
+    - **A grep cannot guard a highlighter.** `check-syntax-drift.sh` can see that a rule EXISTS; it can
+      never see that a rule FIRES — and two rules (`#declarations`, `#cast`) were present, correct and
+      UNREACHABLE, because TextMate breaks a same-position tie in favour of the earlier include and
+      `#keywords` matched bare `type`/`cast` first. The visible cost was a contextual kind word with no
+      scope at all. `tools/check-syntax.sh` runs the real vscode-textmate engine and layers three checks:
+      committed `.snap` files (the `tests/*.expect` idiom, covering every character), `kama check` agreeing
+      with every fixture, and the 13 findings asserted BY NAME so a careless `-u` re-bless cannot restore
+      one silently.
+    - **The compiler is the oracle, and it is not ceremony.** Writing the fixtures, `kama check` rejected
+      six invented spellings that would each have shipped a confidently-wrong grammar assertion — among
+      them `fn name() -> T` (kama has no `->`), a bare `ctor(…)`, and `${s.length()}`.
+  - **B2 (`textDocument/semanticTokens/full`) ✅ SHIPPED `cf993d2`.** The layer that corrects what a regex
+    cannot compute: the grammar guesses a capitalized word is a type, and only the resolver knows whether
+    `Box` is a type, a local or a field. A read off the cached index — 10 requests interleaved into the
+    keystroke loop add zero timing lines and no measurable wall clock — so `/full` only, with no range or
+    delta variants to justify.
+    - **Legend (decision of record), and its ORDER is the wire format** since a token's type travels as an
+      index into it: `class, struct, interface, enum, enumMember, function, method, property, variable,
+      parameter`, modifiers `[declaration]`. Only standard LSP names, because a theme styles what it knows.
+      A kama `value` maps to **struct** and a `resource` to **class** — the same distinction the two kinds
+      draw. Appending is safe; reordering silently recolours every buffer in every client.
+    - **The facade returns kama coordinates and a `SymKind`; the server owns legend indices and delta
+      encoding**, so `kamaPos`/`lspRange` remain the only two coordinate-conversion points.
+    - **It does NOT filter prelude/std targets, unlike find-references.** Not owning a symbol is a good
+      reason to refuse to RENAME it and a bad reason to refuse to COLOUR it.
   - **A full syntax-highlighting audit belongs here (user, 2026-07-27).** One pass over *every* highlight
     pattern so each editor renders kama faithfully — not just the keyword list `tools/check-syntax-drift.sh`
     already guards. Motivating evidence: an ad-hoc look at the numeric rules alone found the VS Code grammar

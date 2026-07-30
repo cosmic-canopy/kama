@@ -609,26 +609,47 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   undeclared-import finding reaches the Problems pane instead of a log channel nobody reads. The
   build-configuration override channel an editor reads is **`kama.local.json`**, the same file the CLI
   already merges — so the editor and `kama build` cannot disagree, and `select.TARGET` gained
-  `"default": true` on the way. **NEXT / ACTIVE: M6 Stage B** (the TextMate grammar audit — 11 verified
-  defects — plus `textDocument/semanticTokens`), then **Stage C** (editor clients + `docs/editors.md` + the
-  VS Code status-bar picker), then Stage D exit. Cold-start brief:
+  `"default": true` on the way. **M6 STAGE B1/B2 SHIPPED (2026-07-29)** — the hand-maintained TextMate
+  grammar was audited rule-by-rule against `kama.l`/`kama.y` with the compiler as the oracle and 13
+  disagreements closed, two of which were rules that were *present, correct and unreachable* (TextMate
+  breaks a same-position tie in favour of the earlier include, so `#keywords` starved `#declarations` and
+  `#cast` — leaving a contextual kind word with no scope at all). Because no grep can catch a rule that
+  never fires, `tools/check-syntax.sh` now runs the real vscode-textmate engine over `tests/syntax/` and
+  layers committed snapshots, `kama check` agreement, and the 13 findings asserted by name. On top of it,
+  `textDocument/semanticTokens/full` colours by what the RESOLVER concluded — free, being a read off the
+  cached index. **NEXT / ACTIVE: M6 B3** (the generic-body reference index), then **Stage C** (editor
+  clients + `docs/editors.md` + the VS Code status-bar picker), then Stage D exit. Cold-start brief:
   [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md), which carries an as-shipped record of Stage A and a
   re-derived seam map for B/C. Status of record: [design/lsp.md](design/lsp.md).
   - **⚠️ KNOWN GAP, found during M6 A2 — nothing inside a GENERIC type's or generic function's body is in
     the reference index.** Params, locals, `foreach`/`match` bindings and body use-sites all go
-    unrecorded, so find-references, rename and hover answer nothing there. It covers all of `lib/std`'s
-    containers (`DynamicArray<T>.add(item:)` and friends), which is most of what a user calls.
-    **One cause:** generic instances are emitted from `emitHeaderContent`
-    ([kama.cemit.cpp](../kama.cemit.cpp) — `emitGenericInst` / `emitGenericTypeInst`), which runs *before*
-    the per-unit `emitModuleContent` loop that sets `_refUnit` — and `recordRef`/`recordDef` both drop
-    everything when `_refUnit == nullptr`. **The fix is not a one-liner:** it needs a template →
-    declaring-unit map available during the header pass (`_declUnit` is built in `buildDefSites`, i.e.
-    after emission), and each instantiation re-walks the *same* template nodes, so the key must be
-    attributed to the template's own unit consistently rather than to whichever instance is current. It
-    also touches the emission path, where the campaign holds a byte-identical-output invariant. Deliberately
-    NOT bundled into A2, whose deferred-key design is what makes ordinary cross-unit labels work.
-    Silver lining: because a def-site is absent, rename correctly *refuses* on these rather than
-    half-rewriting them.
+    unrecorded, so find-references, rename, hover and semantic tokens answer nothing there. It covers all
+    of `lib/std`'s containers (`DynamicArray<T>.add(item:)` and friends), which is most of what a user
+    calls. **This is M6 B3, and it was attempted and deliberately stopped in the Stage B session** under a
+    fallback agreed with the user beforehand — it is a milestone, not the wiring job this entry used to
+    describe. The diagnosis below is verified, not reasoned; the full write-up with seams is in
+    [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md) § B3.
+    - **The cause this entry already named is real, and it is the EASY half.** Generic instances are
+      emitted from `emitHeaderContent` (`emitGenericInst` / `emitGenericTypeInst`), which runs before the
+      per-unit loop that sets `_refUnit`, and `recordRef`/`recordDef` drop everything while it is null.
+      Splitting `_declUnit`'s fill out of `buildDefSites` (it needs nothing but `_units`, so
+      `collectProgram` can call it once `pruneInactiveDecls` has settled the decl list) and setting
+      `_refUnit` to the template's declaring unit **works, and keeps emission byte-identical across all
+      537 lspref fixtures**. The duplicate-per-instantiation worry is already handled: `buildPositions`
+      dedupes by (unit, `IdentifierNode*`) and `buildDefSites` overwrites `_defSites[key]`.
+    - **⚠️ Two blockers this entry did NOT name are the actual work.** (1) A generic template's MEMBERS
+      have no def-sites at all — the `_genericTypes` loop registers only the template's own name, and the
+      loop that registers fields/methods/ctors skips `isGenericInst` while the template is deliberately
+      kept out of `_classes`. (2) Recorded refs carry the INSTANCE key (`field:Box_int32::v`), not the
+      template's, so `Box<int32>` and `Box<string>` would each own a private copy of one source
+      declaration. Splitting references per instantiation is *worse* than answering nothing: rename would
+      rewrite some call sites and silently miss others. The fix must canonicalize both key shapes
+      (`field:<owner>::<name>` and `<owner>__<method>`) onto the template globally — a use in ordinary
+      code resolves to the instance key too — and be tested against TWO instantiations from the start,
+      since a single-instantiation fixture passes under several wrong designs.
+    - Silver lining while it is open: because a def-site is absent, rename correctly *refuses* on these
+      rather than half-rewriting them. `tools/check-lsp.sh` pins the gap as an exact-array assertion
+      (request id 56) so closing it cannot be silent.
 - **Workspace-internal dependencies — SHIPPED (2026-07-28).** A sub-project is now *extractable*:
   liftable out of the monorepo to stand alone. Design of record:
   [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:

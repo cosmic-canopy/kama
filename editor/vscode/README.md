@@ -27,11 +27,27 @@ code --install-extension kama-0.1.0.vsix
 
 On opening a `.kama`, the extension starts the kama language server (`kama lsp`,
 a JSON-RPC server over stdio built into the compiler) and provides, as you type
-(no build required): **live diagnostics**, **hover** (kind + name), **go-to-definition**
-(F12 on a type/function reference), and the **document outline** (Ctrl-Shift-O /
-breadcrumbs). It uses the same `kama` binary as the debugger (workspace-local
-`./kama` if present, else `PATH`). Find-references, rename, and completion arrive
-in later milestones — the same server gains them and this client needs no change.
+(no build required):
+
+- **live diagnostics** — including semantic errors, not just parse errors
+- **hover** (kind + name) and **go-to-definition** (F12)
+- **find-references** (Shift-F12) and **rename** (F2), which refuses symbols the
+  project does not own; renaming a parameter also rewrites its argument labels
+- **completion** and **signature help**
+- the **document outline** (Ctrl-Shift-O / breadcrumbs) and **workspace symbols** (Ctrl-T)
+- **semantic highlighting**, layered over the TextMate grammar — the resolver knows
+  which names are types, fields, locals or parameters, which a regex cannot
+
+It uses the same `kama` binary as the debugger (workspace-local `./kama` if present,
+else `PATH`).
+
+**Build configuration.** The server analyzes the program a plain `kama build` in that
+project builds — the resolved target's derived flags, `BUILD_TYPE=DEBUG`, and the
+manifest's default flags — so the editor and the compiler cannot disagree about which
+`@compileFor` declarations exist. To override, edit **`kama.local.json`** (the gitignored
+sibling of `kama.json`); the extension watches both and re-analyzes on save. There is no
+editor-specific setting for this on purpose: one mechanism, and F5 debugging stays in step
+with what you are looking at.
 
 > **The `kama` binary must be native to your OS.** The extension runs `kama lsp`
 > as a normal host process, so a container-built `./kama` (e.g. a Linux binary from

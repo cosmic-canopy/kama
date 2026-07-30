@@ -1,17 +1,47 @@
 # LSP M6 — editor clients + the campaign's loose ends (cold-start brief)
 
-**Status: STAGE A COMPLETE (2026-07-29). NEXT = STAGE B, then C, then D — start at
-[§ Stage B/C — start here](#stage-bc--start-here).**
+**Status: STAGES A AND B1/B2 COMPLETE (2026-07-29). NEXT = B3, then C, then D — start at
+[§ B3 — the generic-body index gap](#b3--the-generic-body-index-gap-next).**
 
-M6 is the last LSP milestone. It has four stages; **A is shipped**:
+M6 is the last LSP milestone:
 
 | Stage | What | Status |
 |---|---|---|
 | **A** | The three deferred correctness items (`setBuildFlags`, argument labels, the import diagnostic) | ✅ **SHIPPED** — `5061875`, `d78a1fd`, `7f8dfde`, `8dc90ab`, `cbdd284` |
-| **B1** | Fix the TextMate grammar (11 verified defects) + extend `check-syntax-drift.sh` | **NEXT** |
-| **B2** | `textDocument/semanticTokens` (`/full` only), measured | pending |
+| **B1** | The TextMate grammar audit (13 defects) + a real tokenizer oracle | ✅ **SHIPPED** — `38fee77` |
+| **B2** | `textDocument/semanticTokens/full`, measured | ✅ **SHIPPED** — `cf993d2` |
+| **B3** | The generic-body reference index | **NEXT** — attempted and deliberately stopped; diagnosis below |
 | **C** | Editor clients for 7 more editors + `docs/editors.md` + the VS Code status-bar picker | pending |
 | **D** | Campaign exit | pending |
+
+---
+
+## Stage B — as shipped, and where the SESSION PLAN was wrong
+
+Four corrections worth not re-deriving:
+
+1. **A grep cannot guard a highlighter, and the plan half-knew it.** The plan proposed hand-written
+   `^^^` scope assertions. They are unmaintainable by hand — the first draft had four mis-counted
+   columns — and the mechanism that works is **committed snapshots** (`tests/syntax/*.kama.snap`), which
+   is also the idiom this repo already uses for `tests/*.expect`. But a snapshot is re-blessable by
+   accident, so the 13 findings are ALSO asserted by name. Three layers, each verified by regressing the
+   grammar and watching the right one fire: snapshot → compiler → named invariant.
+2. **`vscode-tmgrammar-test`'s `-g` flag is silently IGNORED** when a `package.json` is present (the
+   default `--config`). A regression probe passed for ten minutes because of it. The grammar always comes
+   from `contributes.grammars`, which is what VS Code reads too — so pass nothing.
+3. **`#cast` should be DELETED, not revived.** The plan said to reorder both dead rules ahead of
+   `#keywords`. For `#declarations` that is right — the kind word can be coloured by nothing else. For
+   `#cast` it is wrong: `#keywords` + `#types` already give `cast<int32>` a strictly BETTER result
+   (`int32` as `storage.type.primitive` rather than `entity.name.type`), so the rule was pure dead weight.
+4. **The brief's assertion counts were stale.** It said check-lsp 108 / check-query 173; the actual
+   pre-B2 numbers were **116 / 180**. Counting `ok:` lines from a green run is the reliable measure —
+   `grep -c '^expect '` under-counts, because many assertions wrap onto a continuation line.
+
+**Found en route, not on anyone's list:** the `@compileFor(HOSTED)` fixture appeared to prove the editor
+and the compiler still disagreed — the IDE flagged a call the CLI accepted. A freshly-launched `kama lsp`
+reports it clean. The culprit is Stage A's own **documented** limit: one configuration per server process,
+pinned from the first document that resolved a manifest. A long-running editor session pinned a different
+one. Worth knowing before anyone re-opens A1 to chase a phantom.
 
 Read [lsp.md](lsp.md) for campaign context and [build-configuration.md](build-configuration.md) for the
 flag model. Session plan of record: `~/.claude/plans/let-s-continue-the-lsp-warm-wilkes.md`.
@@ -71,7 +101,60 @@ one timing line per request.
 
 ---
 
-## Stage B/C — start here
+## B3 — the generic-body index gap (NEXT)
+
+**Nothing inside a generic type's or generic function's body is in the reference index**, so
+find-references, rename, hover and semantic tokens all answer nothing there — across every container in
+`lib/std`. Attempted in the Stage B session and **deliberately stopped** under the fallback agreed with
+the user up front, because the work turned out to be a milestone rather than the wiring job ROADMAP §10
+described. What follows is a *verified* diagnosis, not a plan: every claim below was run.
+
+**The ROADMAP entry is right about the cause and wrong about the size.** It says the fix "needs a template
+→ declaring-unit map available during the header pass". That half is real, and it is **easy**:
+
+- `_declUnit` is filled by a four-line loop over `_units`, which exists long before emission. Split it
+  into a `buildDeclUnits()` and call it from `collectProgram` — the ONE ordering constraint is that it
+  must run *after* `pruneInactiveDecls`, which rewrites the decl list in place.
+- Then wrap `emitGenericInst` / `emitGenericTypeInst` in a `_refUnit` save/restore set to
+  `unitOfDecl(<template node>)` — the TEMPLATE's unit, never the instantiation's use site.
+- **Verified working**: records start flowing, and emission stays byte-identical across all 537 `lspref`
+  fixtures. The duplicate-per-instantiation worry is already handled — `buildPositions` dedupes
+  `_bodyRefs` by (unit, `IdentifierNode*`) and `buildDefSites` overwrites `_defSites[key]`, and its
+  comment already says "a generic template body re-emitted per instantiation" out loud.
+
+**Two blockers the ROADMAP does not mention, and they are the actual work:**
+
+1. **A generic template's MEMBERS have no def-sites at all.** The `_genericTypes` loop
+   ([kama.query.cpp](../kama.query.cpp):455-461) registers only the template's own NAME. The loop that
+   registers fields/methods/ctors is the `_classes` one, which skips `ci.isGenericInst` — and the
+   template is deliberately kept OUT of `_classes` entirely. So `Box<T>`'s `v` and `get` are unknown to
+   the index no matter what gets recorded. Mechanical to fix: the template's `ClassInfo` carries
+   everything needed (verified: `methods` with `cName` `_F4__Box__get`, `fields` with a live `nameId`),
+   so it is a mirror of the `_classes` member loops keyed under the template key.
+2. **⚠️ Recorded refs carry the INSTANCE key, not the template's.** This is the design content. Emitting
+   `Box<int32>` records `field:_F4__Box_int32::v` and `_F4__Box_int32__get` — so even with (1) done,
+   nothing matches, and `Box<int32>` and `Box<string>` would each own a private copy of ONE source
+   declaration. Splitting references per instantiation is worse than answering nothing: rename would
+   rewrite some call sites and silently miss others.
+
+**The shape of the real fix** is to canonicalize instance keys onto their template before they are
+recorded (or as `_bodyRefs`/`_localDefs` are merged, which has full knowledge of `_genericTypeInsts`).
+Two key shapes need it — `field:<owner>::<name>` and `<owner>__<method>` — mapped through
+`_genericTypeInsts` (mangled name → `templateKey`). Do it **globally**, not only while an instantiation is
+being emitted: `b.v` in ordinary code also resolves to the instance key, and that use has to land on the
+same def-site as one inside the template body.
+
+**Test it against multiple instantiations from the start.** A single-instantiation fixture passes under
+several wrong designs; `Box<int32>` *and* `Box<string>` in one program is what distinguishes them, and a
+cross-unit pair (as `tests/query/labels/` does for A2) is what catches the attribution mistakes.
+
+**Gate:** `tools/lspref.sh` byte-identical against the baseline (537 fixtures, 0 TRANSPILE_FAILED), and
+flip the `"id":56` exact-array assertion in `tools/check-lsp.sh` — it currently pins the gap as a FACT
+precisely so closing it cannot be silent.
+
+---
+
+## Stage C/D — start here
 
 **Before the first edit**, regenerate the baselines (`build/` is gitignored — regenerate, never assume):
 
@@ -81,35 +164,14 @@ tools/lsp-bench.sh       > build/lsp-bench-before.txt  # cold-process phase spli
 tools/lsp-bench.sh --lsp > build/lsp-bench-lsp-before.txt   # steady state: 84-86 ms, 12 timing lines
 ```
 
-**Seam map, verified against `cbdd284`:**
-
-| What | Where |
-|---|---|
-| `initialize` capabilities block | [kama.lsp.cpp](../kama.lsp.cpp):642-663 — add `semanticTokensProvider` after :662 (`signatureHelpProvider`), before :663; the nested `completionProvider` just above is the shape to copy |
-| Handler template | `handleDocumentSymbol` [kama.lsp.cpp](../kama.lsp.cpp):762 (uri → `docs.find` → seam → `Json::array()` → `sendResponse`) |
-| Dispatch table | insert after [kama.lsp.cpp](../kama.lsp.cpp):1135; :1136 is `didChangeWatchedFiles`, :1145 is the -32601 fallback. Method string `textDocument/semanticTokens/full` |
-| Seam declaration | [kama.lsp.h](../kama.lsp.h):196 (`lspPrepareRename`) — declare `lspSemanticTokens` beside it, before :202 |
-| Seam definition | [kama.driver.cpp](../kama.driver.cpp):4521 (`lspPrepareRename`) / :4527 (`lspCompletion`) — same 2-line null-guard-and-forward |
-| Facade | `documentSymbols` [kama.query.cpp](../kama.query.cpp):846; `workspaceSymbols` :869 — put `semanticTokensFor` beside them |
-| Token data | `_positions` per unit, **already sorted by (line, column)** at [kama.query.cpp](../kama.query.cpp):707-713 — exactly the order delta encoding wants. `DefSite.kind` classifies every key including the `local:`/`field:`/`enum:` ones |
-| Value shapes | [kama.query.h](../kama.query.h):16 `SrcRange`, :22 `SymKind` (14 values), :29 `DefSite`, :44 `PosEntry` |
-
-**B2's four real hazards** (all re-confirmed in the current tree):
-
-1. **`_positions` contains duplicate ranges.** Step (3)'s dedup is by `IdentifierNode*`, but decl-name
-   entries are pushed with `id == nullptr` ([kama.query.cpp](../kama.query.cpp):613), so they never enter
-   the `seen` set. The known collision — a type declaring a `ctor` whose implicit result type resolves
-   through the class's own decl identifier — is filtered **only in `_refIndex`**
-   ([:717-736](../kama.query.cpp#L717), the `selectionRange` equality test at :733-734), *not* in
-   `_positions`. LSP forbids overlapping tokens, so dedupe by (line, column) in the facade.
-2. **`selectionRange` can be multi-line** when `nameId` is null ([:380](../kama.query.cpp#L380) falls back
-   to the whole decl node's span). Tokens cannot span lines — drop any entry where `endLine != line`.
-3. **`endLine`/`endColumn` of 0 means UNKNOWN** — needs the collapse `lspRange` does, but expressed as a
-   *length* rather than a range.
-4. **Empty `declKey`** (builtins like `int32`, unresolved names) → emit nothing and let TextMate colour it.
-
-**`/full` only** — no range or delta variants. **Measure with `tools/lsp-bench.sh --lsp`**: semantic tokens
-fire on every edit in most clients, and this is the one M6 item that can move the budget.
+**B2 as shipped (`cf993d2`)** — the four predicted hazards were all real, and all four filters live in
+`semanticTokensFor` ([kama.query.cpp](../kama.query.cpp)). The one worth remembering: `_positions` really
+does hold duplicate, overlapping ranges (its dedup is keyed on `IdentifierNode*`, and decl-name entries
+carry a null id), so the check-lsp fixture is deliberately a **ctor-bearing type** — disabling the overlap
+filter makes its exact-array assertion fail. `/full` only; the legend's ORDER is the wire format, since a
+token's type travels as an index into it. Cost is nil: 10 semanticTokens requests interleaved into the
+keystroke loop add zero timing lines and no measurable wall clock, and `tools/lsp-bench.sh --lsp` now
+issues one after every edit so a future re-analysing implementation shows up as an extra timing line.
 
 **Stage C's client work now has a settled shape**, and it is smaller than the brief implies:
 
@@ -120,8 +182,8 @@ fire on every edit in most clients, and this is the one M6 item that can move th
   `"activationEvents": ["onLanguage:kama"]` (there is none today), a `contributes.configuration` section,
   and a `kama.selectBuildConfig` command. `activate()` is where the status-bar item goes, refreshed from
   `onDidChangeActiveTextEditor`.
-- **`editor/vscode/README.md` is stale** — it still says find-references, rename and completion "arrive in
-  later milestones"; all three shipped in M3/M4.
+- ~~**`editor/vscode/README.md` is stale**~~ — fixed in Stage B; it now lists every shipped feature and
+  documents `kama.local.json` as the build-configuration channel.
 - `docs/editors.md` must state **honestly which editors get colour from what**: TextMate for VS Code and
   Sublime (Sublime consumes the same `.tmLanguage` — reuse it), semantic tokens for VS Code / Neovim /
   Emacs, and Helix + Zed getting LSP features with **no** syntax colouring until M7's tree-sitter grammar.
@@ -134,29 +196,37 @@ fixture 80 lines below with the assertions still "passing" against the wrong buf
 ```
 UPPERCASE: BAD CFGA CFGB CFGBAD CFGC CFGDIR CFGG CFGSRC CFGTYPO DSRC DURI FRSRC FRSRC2 FRURI GOOD
            IMP IURI LSRC LURI M34 MURI NEWB NURI OSRC OURI QURI RECOV ROOT RURI SEM SHP SPAN
-           SPURI SURI URI WW WWURI XDROP XURI
+           SPURI SURI TOKB TOKG TOKGURI TOKURI URI WW WWURI XDROP XURI
 lowercase: cfgcli cfggtext cfglsp cfgn dep depok drop fail frok frws n out session tmp
-request ids: 1-30, 32-49, 53, 54   (FREE: 31, 50-52, 55+)
+request ids: 1-30, 32-49, 53-56   (FREE: 31, 50-52, 57+)
 ```
 
-Assertion counts to grow, not shrink: **check-lsp 108** (90 `expect` + 18 `cfgexpect`/`cfgreject` + 4
-custom counters), **check-query 173**.
+Assertion counts to grow, not shrink: **check-lsp 119**, **check-query 180**. ⚠️ Count them as `ok:` lines
+from a green run (`sh tools/check-lsp.sh | grep -c '  ok:'`). This brief previously claimed 108/173, which
+was wrong in both directions of confusion: `grep -c '^expect '` under-counts, because many assertions wrap
+their description onto a continuation line.
 
 ---
 
-## Part 2 — the syntax-highlighting audit (Stage B1) — STILL TO DO, and re-verified
+## Part 2 — the syntax-highlighting audit (Stage B1) — ✅ ALL 13 SHIPPED IN `38fee77`
 
-> All ten defects below were **re-checked against the current file during Stage A planning and are
-> still present**, plus three more found then: (1b) the escape rule's `\u{…}` hex count is
-> unbounded where the lexer is `{1,6}`, so `\u{1234567}` mis-colours as valid; (11) `#declarations`
-> and `#cast` are *included after* `#keywords`, and TextMate breaks a position tie in favour of the
-> earlier include — so those two rules may be entirely dead. Verify (11) in the tokenizer before
-> relying on either. One thing the grammar gets RIGHT and must not be "fixed": `/*` does not nest
-> in `kama.l` either, so the non-nesting block-comment rule is correct.
+> **Kept below as the audit's record, not as a work list.** Every row is fixed and guarded by
+> `tools/check-syntax.sh`, which asserts each one BY NAME (see the § above for the three-layer design).
+> Defect 11 was **confirmed with the real tokenizer** rather than reasoned about: `value` in
+> `type value Point` came back with the scope `source.kama` and nothing else. Two outcomes differ from the
+> list: `#cast` was **deleted** rather than reordered (`#keywords` + `#types` already colour `cast<int32>`
+> better), and the turbofish got no rule of its own — `::` in `#operators` covers both it and
+> qualification. One thing the grammar gets RIGHT and must not be "fixed": `/*` does not nest in `kama.l`
+> either, so the non-nesting block-comment rule is correct.
+>
+> Two more modifiers turned up in-tree beyond the three row 5 lists — `type immutable value` and
+> `type virtual value`/`type virtual resource`. The shipped rule takes the full `modifiers_opt` set from
+> [kama.y](../kama.y):628-640 rather than an in-tree sample, which is the difference between a fix and
+> another sample-sized gap.
 
-The grammar-vs-lexer comparison has been run (2026-07-29) and found **ten** concrete disagreements
-beyond the four numeric ones `139fb10` fixed. Method for each: write the literal, run `kama check`,
-compare to the regex — compiler as oracle, not eyeballing. The work list, in
+The grammar-vs-lexer comparison found **ten** concrete disagreements beyond the four numeric ones
+`139fb10` fixed, plus (1b) and (11) below. Method for each: write the literal, run `kama check`,
+compare to the regex — compiler as oracle, not eyeballing. The list, in
 `editor/vscode/syntaxes/kama.tmLanguage.json`:
 
 | # | Defect | What the lexer actually accepts |
@@ -172,9 +242,9 @@ compare to the regex — compiler as oracle, not eyeballing. The work list, in
 | 9 | no rule for the ignored preprocessor line | the lexer silently drops `^[ \t]*#.*` (`#region`) |
 | 10 | `asm("…")` has no embedded-asm scope | and would colour `asm("${x}")` valid, which does not parse |
 
-Also a **blind spot in the guard itself**: `tools/check-syntax-drift.sh` extracts keywords with
+Also a **blind spot in the guard itself** (✅ fixed): `tools/check-syntax-drift.sh` extracted keywords with
 `grep -oE '\{"[a-z_]+"'`, which excludes every digit-bearing keyword (`int8`…`uint64`, `float32/64`).
-Nothing is missing today, but the guard cannot see it if something goes missing tomorrow.
+Nothing was missing; the guard simply had no way to tell. Now `[a-z0-9_]+`.
 
 **Semantic tokens are the second layer, and the user has approved both** (2026-07-28): every production
 server ships a grammar *and* `textDocument/semanticTokens` — TypeScript, rust-analyzer, clangd, gopls,
