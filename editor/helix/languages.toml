@@ -1,0 +1,37 @@
+# Helix configuration for kama — copy into ~/.config/helix/languages.toml.
+#
+# Kept in the repo as a REAL FILE rather than only as a snippet in docs/editors.md, so tools/check-editors.sh
+# can check the documentation against something executable instead of against prose.
+#
+# Helix colours ONLY from tree-sitter, so the [[grammar]] block is what turns colouring on. After editing
+# this file you must build the parser once:
+#
+#     hx --grammar build
+#     mkdir -p ~/.config/helix/runtime/queries/kama
+#     cp <repo>/tree-sitter-kama/queries/*.scm ~/.config/helix/runtime/queries/kama/
+#
+# `hx --health kama` should then show BOTH the language server and Highlight queries as ✓.
+
+[language-server.kama]
+command = "kama"
+args = ["lsp"]
+
+[[language]]
+name = "kama"
+scope = "source.kama"
+file-types = ["kama"]
+roots = ["kama.json"]
+comment-tokens = ["//"]
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 4, unit = "    " }
+language-servers = ["kama"]
+
+# Building from a LOCAL path needs no git, no commit and no network — this is the fast iteration loop.
+# Once the repository is public, swap in the git form (the grammar lives in a subdirectory, hence `subpath`):
+#
+#   [[grammar]]
+#   name = "kama"
+#   source = { git = "https://github.com/cosmic-canopy/kama", rev = "<commit>", subpath = "tree-sitter-kama" }
+[[grammar]]
+name = "kama"
+source = { path = "/Users/matt/Documents/cstar/tree-sitter-kama" }

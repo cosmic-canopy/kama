@@ -1,0 +1,423 @@
+================================================================================
+The contextual kind word gets its own node
+================================================================================
+
+type value Point
+{
+    int32 x;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (field_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier))))))
+
+================================================================================
+Modifiers sit between type and the kind word
+================================================================================
+
+type immutable value Config
+{
+    int32 n;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (modifier)
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (field_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier))))))
+
+================================================================================
+A contract declares which kinds it is for
+================================================================================
+
+type contract Drawable for value, resource
+{
+    fn void draw();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (for_kinds
+      (kind_name
+        (identifier))
+      (kind_name
+        (identifier)))
+    (class_body
+      (method_declaration
+        (void_type)
+        (method_name
+          (identifier))
+        (parameter_list)))))
+
+================================================================================
+value is still an ordinary identifier
+================================================================================
+
+fn void main()
+{
+    int32 value = 1;
+    int32 resource = 2;
+    int32 contract = 3;
+    int32 view = 4;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal))))))
+
+================================================================================
+The header order is namespace then imports then export
+================================================================================
+
+namespace a::b;
+import c::d;
+import e::f as g;
+import h::i::{J, K as L};
+export { M };
+
+fn void main() { }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (namespace_declaration
+    (identifier)
+    (identifier))
+  (import_declaration
+    (import_path
+      (identifier)
+      (identifier)))
+  (import_declaration
+    (import_path
+      (identifier)
+      (identifier))
+    (identifier))
+  (import_declaration
+    (import_path
+      (identifier)
+      (identifier))
+    (import_symbol
+      (identifier))
+    (import_symbol
+      (identifier)
+      (identifier)))
+  (export_manifest
+    (identifier))
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block)))
+
+================================================================================
+copy and give may name a method
+================================================================================
+
+type resource Buffer implements Copyable(bare: give)
+{
+    fn Buffer copy() { return this; }
+    fn void give() { }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_base
+      (implements_entry
+        (type_name
+          (identifier))
+        (identifier)
+        (handoff_default)))
+    (class_body
+      (method_declaration
+        (type_name
+          (identifier))
+        (method_name)
+        (parameter_list)
+        (block
+          (return_statement
+            (this_expression))))
+      (method_declaration
+        (void_type)
+        (method_name)
+        (parameter_list)
+        (block)))))
+
+================================================================================
+Enum members carry a typed named payload and allow a trailing comma
+================================================================================
+
+enum Shape : int32
+{
+    Empty,
+    Circle(float64 r),
+    Rect(float64 w, float64 h),
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (type_declaration_head
+      (identifier))
+    (primitive_type)
+    (enum_body
+      (enum_member
+        (identifier))
+      (enum_member
+        (identifier)
+        (parameter_list
+          (parameter
+            (primitive_type)
+            (identifier))))
+      (enum_member
+        (identifier)
+        (parameter_list
+          (parameter
+            (primitive_type)
+            (identifier))
+          (parameter
+            (primitive_type)
+            (identifier)))))))
+
+================================================================================
+Attributes including compileFor negation
+================================================================================
+
+@generate(Serialize, Format)
+type value Rec
+{
+    @field(name: "x") int32 x;
+}
+
+@compileFor(!RELEASE)
+fn void debugOnly() { }
+
+@section(".isr_vector")
+static int32 vec;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument
+          (identifier))
+        (attribute_argument
+          (identifier))))
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (field_declaration
+        (attribute_list
+          (attribute
+            (identifier)
+            (attribute_argument
+              (identifier)
+              (string_literal
+                (string_content)))))
+        (primitive_type)
+        (variable_declarator
+          (identifier)))))
+  (function_declaration
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument
+          (identifier))))
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block))
+  (module_variable_declaration
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument
+          (string_literal
+            (string_content)))))
+    (primitive_type)
+    (variable_declarator
+      (identifier))))
+
+================================================================================
+when clauses and friend use SQUARE brackets
+================================================================================
+
+type value Holder<T>
+{
+    friend Other[a, b];
+    friend Everything[...];
+    fn void each() when [T: Copyable] { }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier)
+      (type_parameters
+        (type_parameter
+          (identifier))))
+    (class_body
+      (friend_declaration
+        (type_name
+          (identifier))
+        (identifier)
+        (identifier))
+      (friend_declaration
+        (type_name
+          (identifier)))
+      (method_declaration
+        (void_type)
+        (method_name
+          (identifier))
+        (parameter_list)
+        (when_clause
+          (when_condition
+            (identifier)
+            (type_name
+              (identifier))))
+        (block)))))
+
+================================================================================
+Both constructor forms plus destructor and operators
+================================================================================
+
+type resource Vec2
+{
+    Vec2(int32 a) : base(n: a) { }
+    ctor make() { }
+    ctor Result<This, Error> tryMake() { }
+    ~Vec2() { }
+    Vec2 operator+(Vec2 rhs) { return rhs; }
+    ref int32 operator[](int32 i) { return this.x; }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (constructor_declaration
+        (identifier)
+        (parameter_list
+          (parameter
+            (primitive_type)
+            (identifier)))
+        (constructor_initializer
+          (argument_list
+            (argument
+              (identifier)
+              (identifier))))
+        (block))
+      (constructor_declaration
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block))
+      (constructor_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier))
+            (type_name
+              (identifier))))
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block))
+      (destructor_declaration
+        (identifier)
+        (block))
+      (operator_declaration
+        (type_name
+          (identifier))
+        (overloadable_operator)
+        (parameter_list
+          (parameter
+            (type_name
+              (identifier))
+            (identifier)))
+        (block
+          (return_statement
+            (identifier))))
+      (operator_declaration
+        (primitive_type)
+        (index_operator)
+        (parameter_list
+          (parameter
+            (primitive_type)
+            (identifier)))
+        (block
+          (return_statement
+            (field_expression
+              (this_expression)
+              (identifier))))))))

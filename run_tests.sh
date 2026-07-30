@@ -146,6 +146,14 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-edi
     if sh tools/check-editors.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# M7: the THIRD grammar. Where check-syntax-drift/check-syntax are the grep/engine pair over the TextMate
+# grammar, this folds both halves into one file for tree-sitter-kama/ — keyword drift and fixture agreement
+# need no CLI and always run, while generate-is-a-no-op, the corpus tests and the whole-corpus parse need
+# the pinned tree-sitter CLI and SKIP (as a pass) without it, exactly like check-syntax.sh.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-treesitter.sh ]; then
+    if sh tools/check-treesitter.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # MCU step 3: `--target embedded` freestanding-build guard (emitted entry shape + libc-free object). Like
 # the drift guard, run once on the plain native pass (the SAN/WASM re-runs build the fixture hosted anyway).
 if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-embedded.sh ]; then

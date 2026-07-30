@@ -14,6 +14,11 @@ bench/src/js/**      linguist-vendored
 bench/src/python/**  linguist-vendored
 legacy-llvm/**       linguist-vendored
 
+# The tree-sitter parser is GENERATED from tree-sitter-kama/grammar.js — tens of
+# thousands of lines of machine-written C that would otherwise swamp the language bar
+# and show up in every diff review. grammar.js itself stays counted; it's the source.
+tree-sitter-kama/src/**  linguist-generated=true
+
 # Until Linguist ships a Kama entry this is a harmless no-op; once it lands, `.kama`
 # files classify as Kama on github.com. (Not `linguist-language=C` — that would
 # mislabel .kama as C in the stats.)

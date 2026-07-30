@@ -1,0 +1,515 @@
+================================================================================
+Binary operators are left-associative at every level
+================================================================================
+
+fn void main()
+{
+    int32 a = b - c - d;
+    int32 e = f * g / h;
+    int32 i = j << k >> l;
+    bool m = n < o == p;
+    int32 q = r & s ^ t | u;
+    bool v = w && x || y;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (identifier))
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (identifier))
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (identifier))
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (identifier))
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (binary_expression
+            (binary_expression
+              (binary_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (identifier))
+            (identifier)))))))
+
+================================================================================
+Assignment and the ternary are right-associative
+================================================================================
+
+fn void main()
+{
+    a = b = c;
+    int32 d = e ? f : g ? h : i;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (assignment_expression
+          (identifier)
+          (assignment_expression
+            (identifier)
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (ternary_expression
+            (identifier)
+            (identifier)
+            (ternary_expression
+              (identifier)
+              (identifier)
+              (identifier))))))))
+
+================================================================================
+Unary binds tighter than multiplicative, member tighter than unary
+================================================================================
+
+fn void main()
+{
+    int32 a = -b * c;
+    bool d = !e.f;
+    int32 g = ~h;
+    i++;
+    --j;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (binary_expression
+            (unary_expression
+              (identifier))
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (unary_expression
+            (field_expression
+              (identifier)
+              (identifier)))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (unary_expression
+            (identifier))))
+      (expression_statement
+        (update_expression
+          (identifier)))
+      (expression_statement
+        (update_expression
+          (identifier))))))
+
+================================================================================
+give and copy are the loosest prefixes
+================================================================================
+
+fn void main()
+{
+    Buffer a = give b;
+    Buffer c = copy d;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)
+          (handoff_expression
+            (identifier))))
+      (local_variable_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)
+          (handoff_expression
+            (identifier)))))))
+
+================================================================================
+sizeof and alignof take a type, cast and bitcast take a type argument
+================================================================================
+
+fn void main()
+{
+    int32 a = sizeof(int32);
+    int32 b = alignof(Point);
+    int32 c = cast<int32>(d);
+    float32 e = bitcast<float32>(f);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (sizeof_expression
+            (primitive_type))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (sizeof_expression
+            (type_name
+              (identifier)))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (cast_expression
+            (primitive_type)
+            (identifier))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (bitcast_expression
+            (primitive_type)
+            (identifier)))))))
+
+================================================================================
+All six new forms
+================================================================================
+
+fn void main()
+{
+    Owned<T> a = new T(x: 1);
+    Owned<T> b = new T.make(x: 1);
+    Owned<T> c = new(allocator: arena) T(x: 1);
+    Owned<T> d = new(allocator: arena) T.make(x: 1);
+    Optional<Owned<T>> e = try new T(x: 1);
+    Optional<Owned<T>> f = try new T.make(x: 1);
+    Owned<Node> g = new BTreeNode::<K, V>.make(x: 1);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier))))
+        (variable_declarator
+          (identifier)
+          (object_creation_expression
+            (type_name
+              (identifier))
+            (argument_list
+              (argument
+                (identifier)
+                (integer_literal))))))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier))))
+        (variable_declarator
+          (identifier)
+          (object_creation_expression
+            (type_name
+              (identifier))
+            (identifier)
+            (argument_list
+              (argument
+                (identifier)
+                (integer_literal))))))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier))))
+        (variable_declarator
+          (identifier)
+          (object_creation_expression
+            (argument_list
+              (argument
+                (identifier)
+                (identifier)))
+            (type_name
+              (identifier))
+            (argument_list
+              (argument
+                (identifier)
+                (integer_literal))))))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier))))
+        (variable_declarator
+          (identifier)
+          (object_creation_expression
+            (argument_list
+              (argument
+                (identifier)
+                (identifier)))
+            (type_name
+              (identifier))
+            (identifier)
+            (argument_list
+              (argument
+                (identifier)
+                (integer_literal))))))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier)
+              (type_arguments
+                (type_name
+                  (identifier))))))
+        (variable_declarator
+          (identifier)
+          (object_creation_expression
+            (type_name
+              (identifier))
+            (argument_list
+              (argument
+                (identifier)
+                (integer_literal))))))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier)
+              (type_arguments
+                (type_name
+                  (identifier))))))
+        (variable_declarator
+          (identifier)
+          (object_creation_expression
+            (type_name
+              (identifier))
+            (identifier)
+            (argument_list
+              (argument
+                (identifier)
+                (integer_literal))))))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier))))
+        (variable_declarator
+          (identifier)
+          (object_creation_expression
+            (turbofish_name
+              (identifier)
+              (type_arguments
+                (type_name
+                  (identifier))
+                (type_name
+                  (identifier))))
+            (identifier)
+            (argument_list
+              (argument
+                (identifier)
+                (integer_literal)))))))))
+
+================================================================================
+match is both a statement and an expression
+================================================================================
+
+fn void main()
+{
+    match (s) {
+        case Empty: 0;
+        case Circle(r): { := r; }
+    };
+    int32 n = match (s) {
+        case Empty: 0;
+    };
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (match_expression
+          (identifier)
+          (match_arm
+            (match_pattern
+              (identifier))
+            (integer_literal))
+          (match_arm
+            (match_pattern
+              (identifier)
+              (identifier))
+            (block
+              (arm_value_statement
+                (identifier))))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (match_expression
+            (identifier)
+            (match_arm
+              (match_pattern
+                (identifier))
+              (integer_literal))))))))
+
+================================================================================
+Concurrency and unsafe statements
+================================================================================
+
+fn void main()
+{
+    unsafe { asm("wfi"); }
+    scope { spawn worker(p: give x); }
+    Isolate h = spawn worker(p: give y);
+    parallel_for (ref int32 e in coll) { e = 1; }
+    foreach (int32 f in coll) { }
+    foreach (ref int32 g in coll) { }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (unsafe_statement
+        (block
+          (asm_statement
+            (string_literal
+              (string_content)))))
+      (scope_statement
+        (block
+          (spawn_statement
+            (call_expression
+              (identifier)
+              (argument_list
+                (argument
+                  (identifier)
+                  (handoff_expression
+                    (identifier))))))))
+      (local_variable_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)
+          (spawn_expression
+            (call_expression
+              (identifier)
+              (argument_list
+                (argument
+                  (identifier)
+                  (handoff_expression
+                    (identifier))))))))
+      (parallel_for_statement
+        (primitive_type)
+        (identifier)
+        (identifier)
+        (block
+          (expression_statement
+            (assignment_expression
+              (identifier)
+              (integer_literal)))))
+      (foreach_statement
+        (primitive_type)
+        (identifier)
+        (identifier)
+        (block))
+      (foreach_statement
+        (primitive_type)
+        (identifier)
+        (identifier)
+        (block)))))

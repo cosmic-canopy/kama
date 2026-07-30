@@ -1,0 +1,26 @@
+# The .kama files the COMPILER rejects with a parse or lexical error — and therefore the exact set the
+# tree-sitter grammar must also reject. Repo-relative, one per line, sorted. Checked by
+# ../../tools/check-treesitter.sh.
+#
+# ⚠️ This is NOT "everything under tests/xfail/". Of the 217 other xfail fixtures, every one is a SEMANTIC
+# failure that parses perfectly well — a grammar that errored on those would be wrong. The partition is the
+# compiler's own parse-vs-semantic split, and it is DERIVED, never hand-curated:
+#
+#   find tests lib examples prelude -type f -name '*.kama' | sort | while read -r f; do
+#       ./kama check "$f" 2>&1 | grep -qE 'Parse error:|Lexical error:' && echo "$f"
+#   done
+#
+# The guard does not re-run that (884 files x ~48 ms is ~43 s). It parses the corpus with tree-sitter in
+# one pass, diffs against this list, and only asks the compiler about files where the two DISAGREE — so a
+# stale manifest and a wrong grammar are told apart, by name, at no steady-state cost.
+tests/syntax/bad.kama
+tests/xfail/expose_on_method.kama
+tests/xfail/float_bare_dot.kama
+tests/xfail/interp_hole_operator.kama
+tests/xfail/lex_char_bad_utf8.kama
+tests/xfail/lex_comment_unterminated.kama
+tests/xfail/lex_string_badchar.kama
+tests/xfail/lex_string_unterminated.kama
+tests/xfail/lex_verbatim_unterminated.kama
+tests/xfail/module_static_volatile.kama
+tests/xfail/recover_multi_error.kama

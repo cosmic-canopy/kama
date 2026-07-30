@@ -1,0 +1,175 @@
+================================================================================
+Nested generics close with >> and need no external scanner
+================================================================================
+
+fn void main()
+{
+    Ptr<Ptr<int32>> p;
+    Map<K, DynamicArray<V>> m;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier)
+              (type_arguments
+                (primitive_type)))))
+        (variable_declarator
+          (identifier)))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier))
+            (type_name
+              (identifier)
+              (type_arguments
+                (type_name
+                  (identifier))))))
+        (variable_declarator
+          (identifier))))))
+
+================================================================================
+A real right shift is still a shift
+================================================================================
+
+fn void main()
+{
+    int32 x = a >> b;
+    x >>= 2;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (binary_expression
+            (identifier)
+            (identifier))))
+      (expression_statement
+        (assignment_expression
+          (identifier)
+          (integer_literal))))))
+
+================================================================================
+Generic type arguments inside a cast
+================================================================================
+
+fn void main()
+{
+    int32 y = cast<DynamicArray<int32>>(q);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (cast_expression
+            (type_name
+              (identifier)
+              (type_arguments
+                (primitive_type)))
+            (identifier)))))))
+
+================================================================================
+A const-arithmetic generic size is parenthesised
+================================================================================
+
+fn void main()
+{
+    InlineArray<float64, (N+1)> arr;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (primitive_type)
+            (binary_expression
+              (identifier)
+              (integer_literal))))
+        (variable_declarator
+          (identifier))))))
+
+================================================================================
+Turbofish in all three positions
+================================================================================
+
+fn void main()
+{
+    f::<int32>();
+    Map::<K,V>.empty();
+    r.deserialize::<T>();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (turbofish_name
+            (identifier)
+            (type_arguments
+              (primitive_type)))
+          (argument_list)))
+      (expression_statement
+        (call_expression
+          (turbofish_type_member
+            (turbofish_name
+              (identifier)
+              (type_arguments
+                (type_name
+                  (identifier))
+                (type_name
+                  (identifier))))
+            (identifier))
+          (argument_list)))
+      (expression_statement
+        (call_expression
+          (turbofish_member
+            (identifier)
+            (identifier)
+            (type_arguments
+              (type_name
+                (identifier))))
+          (argument_list))))))

@@ -1,0 +1,289 @@
+================================================================================
+Every integer literal form
+================================================================================
+
+fn void main()
+{
+    int32 a = 42;
+    int32 b = 42i32;
+    int32 c = 42ui32;
+    int32 d = 0x2A;
+    int32 e = 0o52;
+    int32 f = 0b101010_2;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal))))))
+
+================================================================================
+Float forms including the dotless exponent
+================================================================================
+
+fn void main()
+{
+    float64 a = 1.5;
+    float32 b = 1.5f32;
+    float64 c = 1.5f64;
+    float64 d = 1e1;
+    float64 e = 0.0001e10;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (float_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (float_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (float_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (float_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (float_literal))))))
+
+================================================================================
+All four char literal spellings
+================================================================================
+
+fn void main()
+{
+    char a = 'x';
+    char b = '\n';
+    char c = '\u{1F600}';
+    char d = 'é';
+    char e = '😀';
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (char_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (char_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (char_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (char_literal)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (char_literal))))))
+
+================================================================================
+String interpolation with accessors and a format spec
+================================================================================
+
+fn void main()
+{
+    string a = "plain";
+    string b = "hello ${name}";
+    string c = "${rec.field} and ${arr[0]} and ${arr[i]}";
+    string d = "${value:.2}";
+    string e = "escaped \${not a hole} and a lone $ dollar";
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (string_content))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (string_content)
+            (interpolation
+              (interpolation_expression
+                (identifier))))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (interpolation
+              (interpolation_expression
+                (identifier)
+                (identifier)))
+            (string_content)
+            (interpolation
+              (interpolation_expression
+                (identifier)
+                (integer_literal)))
+            (string_content)
+            (interpolation
+              (interpolation_expression
+                (identifier)
+                (identifier))))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (interpolation
+              (interpolation_expression
+                (identifier))
+              (format_spec)))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (string_literal
+            (string_content)
+            (escape_sequence)
+            (string_content)
+            (string_content)))))))
+
+================================================================================
+A verbatim string escapes a quote by doubling it
+================================================================================
+
+fn void main()
+{
+    string a = @"c:\path\no\escapes";
+    string b = @"say ""hi""";
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (verbatim_string_literal
+            (verbatim_content))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (verbatim_string_literal
+            (verbatim_content)
+            (quote_escape)
+            (verbatim_content)
+            (quote_escape)))))))
+
+================================================================================
+A tagged string needs the quote to be adjacent
+================================================================================
+
+fn void main()
+{
+    string a = html"<b>bold</b>";
+    string b = sql"select 1";
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (tagged_string_literal
+            (string_tag
+              (identifier))
+            (string_content))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (tagged_string_literal
+            (string_tag
+              (identifier))
+            (string_content)))))))

@@ -1,0 +1,11 @@
+{
+  "name": "tree-sitter-kama",
+  "version": "0.1.0",
+  "description": "tree-sitter grammar for the kama programming language",
+  "license": "MIT",
+  "private": true,
+  "comment-devDependencies": "PINNED EXACT, no caret. `tree-sitter generate` output is not byte-stable across CLI versions, and tools/check-treesitter.sh diffs the committed src/ against a fresh generate. A caret would turn that oracle into noise. The guard SKIPs loudly if the installed CLI is not this version.",
+  "devDependencies": {
+    "tree-sitter-cli": "0.26.11"
+  }
+}
