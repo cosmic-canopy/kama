@@ -7,8 +7,8 @@ guarded by a real tokenizer, `textDocument/semanticTokens/full` colours by what 
 qualifier, an exported type or a generic argument rewrites every spelling of it, including inside a generic
 body and across units), and **the campaign's headline claim is now cashed**: [editors.md](../editors.md)
 wires up eight editors against one server, and VS Code has a build-configuration status bar and picker.
-**NEXT = Stage D** (campaign exit), then M7's tree-sitter grammar. **All of it is pre-launch**
-(user, 2026-07-29).
+**NEXT = Stage D** (campaign exit), then M7's tree-sitter grammar — cold-start brief for both:
+[lsp-m6-d-kickoff.md](lsp-m6-d-kickoff.md). **All of it is pre-launch** (user, 2026-07-29).
 
 ⚠️ **Stage C's brief was wrong in two load-bearing places, and both were found by checking a claim rather
 than building on it.** Recorded here because both generalize past this campaign:

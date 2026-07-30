@@ -624,9 +624,13 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   picker** that writes `kama.local.json`, so switching target or build type needs no restart and no
   editor-private setting. **Two of the Stage C brief's load-bearing claims were wrong**, both found by
   checking rather than trusting — see the Stage C sub-bullet below. **NEXT / ACTIVE: Stage D** (campaign
-  exit). Cold-start briefs: [design/lsp-m6-c-kickoff.md](design/lsp-m6-c-kickoff.md) for Stage C, with
-  [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md) as the parent. Status of record:
-  [design/lsp.md](design/lsp.md).
+  exit). Cold-start brief for Stage D **and** M7: [design/lsp-m6-d-kickoff.md](design/lsp-m6-d-kickoff.md).
+  Parent briefs: [design/lsp-m6-c-kickoff.md](design/lsp-m6-c-kickoff.md),
+  [design/lsp-m6-kickoff.md](design/lsp-m6-kickoff.md). Status of record:
+  [design/lsp.md](design/lsp.md). **Follow-on recorded here, not done:** upstream editor registration —
+  a `kama` entry in `nvim-lspconfig`, in Helix's built-in `languages.toml` and in `eglot-server-programs`
+  — which turns six pasted lines into zero for users, but is a PR to another project and gates on a
+  public release.
   - **M6 Stage C — the two brief corrections, because both generalize.**
     - **"Every other LSP client offers a client-side static watcher list" is FALSE**, and it was the
       premise the whole no-server-code design rested on. VS Code's `synchronize.fileEvents` is a
