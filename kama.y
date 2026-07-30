@@ -67,6 +67,17 @@ SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList
     _sid->line = (Loc).first_line;   _sid->column = (Loc).first_column;       \
     _sid->endLine = (Loc).last_line; _sid->endColumn = (Loc).last_column; } } while (0)
 
+/* A `::`-separated name list (a qualifier, an import path, an export manifest) is a list of plain STRINGS,
+ * so a segment has no node to carry its position. STAMP_SEG records the token's span beside the list, in
+ * CodeGenContext::listSegPos (see there for why it is keyed by the list object); TAKE_SEGS moves the whole
+ * vector onto the owning node at the CONSUMING reduction. M6 B3f. */
+/* NB the parentheses: SCANNER_CODEGENCONTEXT expands to a `*deref`, and `.` binds tighter than unary `*`. */
+#define STAMP_SEG(listExpr, Loc)  do { auto _sl = (listExpr);                              \
+    (SCANNER_CODEGENCONTEXT).stampSeg(_sl.get(), (Loc).first_line, (Loc).first_column,     \
+                                      (Loc).last_line, (Loc).last_column); } while (0)
+#define TAKE_SEGS(dst, listExpr)  do { auto _sl = (listExpr);                              \
+    (dst) = (SCANNER_CODEGENCONTEXT).takeSegs(_sl.get()); } while (0)
+
 %}
 
 %code requires {
@@ -316,7 +327,7 @@ struct kamayystype {
 ------------------------------------------------------------------------------*/
 
 compilation_unit
-  : namespace_opt import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $1, $2, $3, $4); }
+  : namespace_opt import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $1, $2, $3, $4); TAKE_SEGS(yyget_extra(scanner)->compilationUnit->exportListPos, $3); }
   ;
 
 /* The module's PUBLIC SURFACE, declared once at the top: `export { A, B, C };`. A name here must be a
@@ -327,8 +338,8 @@ export_manifest_opt
   | EXPORT LEFT_BRACE export_name_list RIGHT_BRACE SEMICOLON   { $$ = $3; }
   ;
 export_name_list
-  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
-  | export_name_list COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; }
+  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }
+  | export_name_list COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; STAMP_SEG($$, @3); }
   ;
 
 namespace_opt
@@ -350,15 +361,15 @@ import_directives
   ;
 import_directive
   : IMPORT import_path SEMICOLON
-      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<UsingDeclarationList>(), SharedString()); }
+      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<UsingDeclarationList>(), SharedString()); TAKE_SEGS($$->modulePathPos, $2); }
   | IMPORT import_path AS IDENTIFIER SEMICOLON
-      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<UsingDeclarationList>(), $4); }
+      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<UsingDeclarationList>(), $4); TAKE_SEGS($$->modulePathPos, $2); }
   | IMPORT import_path COLONCOLON LEFT_BRACE import_symbols RIGHT_BRACE SEMICOLON
-      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $5, SharedString()); }
+      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $5, SharedString()); TAKE_SEGS($$->modulePathPos, $2); }
   ;
 import_path
-  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
-  | import_path COLONCOLON IDENTIFIER   { $1->push_back($3); $$ = $1; }
+  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }
+  | import_path COLONCOLON IDENTIFIER   { $1->push_back($3); $$ = $1; STAMP_SEG($$, @3); }
   ;
 import_symbols
   : import_symbol   { $$ = std::make_shared<UsingDeclarationList>(); $$->push_back($1); }
@@ -474,11 +485,11 @@ boolean_literal
 
 qualified_identifier
   : basic_identifier
-  | qualifier basic_identifier   { $$ = $2; $$->setQualifier($1); }
+  | qualifier basic_identifier   { $$ = $2; $$->setQualifier($1); TAKE_SEGS($$->qualifierPos, $1); }
   ;
 qualifier
-  : IDENTIFIER COLONCOLON { $$ = std::make_shared<StringList>(); $$->push_back($1); }
-  | qualifier IDENTIFIER COLONCOLON { $1->push_back($2); }
+  : IDENTIFIER COLONCOLON { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }
+  | qualifier IDENTIFIER COLONCOLON { $1->push_back($2); STAMP_SEG($1, @2); }
   ;
 basic_identifier
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
@@ -513,7 +524,7 @@ qualified_identifier_no_generic
   : IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
-  | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); }
+  | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); }
   ;
 
 type_name

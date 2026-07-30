@@ -100,6 +100,16 @@ MREN='type value P {\n    public int32 x;\n    public fn int32 get() { return th
 MGURI="file:///genrename.kama"
 MGEN='type value Box<T> {\n    public T v;\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> bi; bi.v = 1; Box<bool> bs; bs.v = false; return bs.get() ? bi.get() : 0; }\n'
 
+# M6 B3f — the `::` QUALIFIER of a name. Before the grammar carried per-segment positions a qualifier was a
+# list of plain STRINGS, so `Color` in `Color::Green` was indexed nowhere: renaming the enum rewrote its
+# declaration, its type annotations and its `case` arms, and left every `Color::` spelling behind. Both
+# spellings are in this buffer on purpose, since a fixture with only the annotation passes while broken.
+# Layout (LSP 0-based lines, 0-based chars):
+#   L0 `enum Color { Red, Green, Blue }`                       -> `Color` decl at 5..10
+#   L1 `fn int32 main() { Color c = Color::Green; ...`         -> annotation at 18..23, QUALIFIER at 28..33
+QRURI="file:///qualrename.kama"
+QREN='enum Color { Red, Green, Blue }\nfn int32 main() { Color c = Color::Green; return match (c) { case Red: 1; case Green: 2; case Blue: 3; }; }\n'
+
 TOKGURI="file:///semtokgen.kama"
 TOKG='type value Box<T> {\n    T v;\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> b; b.v = 7; return b.get(); }\n'
 
@@ -376,6 +386,12 @@ frame '{"jsonrpc":"2.0","id":57,"method":"textDocument/prepareRename","params":{
 frame '{"jsonrpc":"2.0","id":58,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$MRURI"'"},"position":{"line":2,"character":20},"newName":"fetch"}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$MGURI"'","languageId":"kama","version":1,"text":"'"$MGEN"'"}}}'
 frame '{"jsonrpc":"2.0","id":59,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$MGURI"'"},"position":{"line":2,"character":17},"newName":"fetch"}}'
+# --- M6 B3f: rename the enum from its DECLARATION and require the `Color::` qualifier among the edits;
+#     then go-to-definition and hover FROM the qualifier, which had no position to click on at all.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$QRURI"'","languageId":"kama","version":1,"text":"'"$QREN"'"}}}'
+frame '{"jsonrpc":"2.0","id":60,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":0,"character":5},"newName":"Hue"}}'
+frame '{"jsonrpc":"2.0","id":61,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":1,"character":30}}}'
+frame '{"jsonrpc":"2.0","id":62,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":1,"character":30}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -475,8 +491,14 @@ expect '/tests/query/ws/app.kama","range":{"start":{"line":4,"character":3}' \
                                                         "references REACH app.kama, which widget.kama does not import"
 expect '"id":29,"result":{"changes":{"file://'"$ROOT"'/tests/query/ws/app.kama":[' \
                                                         "rename: the WorkspaceEdit rewrites the OTHER file too"
-expect '/tests/query/ws/widget.kama":[{"range":{"start":{"line":2,"character":11}' \
-                                                        "rename: ... and the declaring file, keyed separately"
+# M6 B3f: the declaring file's edits now START with the `export { Widget, … };` mention, which sorts before
+# the declaration. Until the grammar carried per-segment positions the export manifest was not a reference
+# at all, so this rename left the module exporting a name that no longer existed — it broke a file it had
+# just edited, the same class of silent under-apply as B3a.
+expect '/tests/query/ws/widget.kama":[{"range":{"start":{"line":1,"character":9},"end":{"line":1,"character":15}},"newText":"Gadget"}' \
+                                                        "rename: ... and the export manifest of the declaring file (B3f)"
+expect '{"range":{"start":{"line":2,"character":11},"end":{"line":2,"character":17}},"newText":"Gadget"}' \
+                                                        "rename: ... and the declaration itself, keyed separately"
 expect '"newText":"Gadget"'                             "rename: the cross-file edits carry the new name"
 expect '"id":30,"result":[{"name":"defaultSize","kind":12' \
                                                         "workspace/symbol: substring search finds a project symbol"
@@ -558,6 +580,16 @@ expect '{"range":{"start":{"line":4,"character":41},"end":{"line":4,"character":
 # call resolves through the INSTANCE. One symbol, so exactly two edits — no duplicate over one range.
 expect '"id":59,"result":{"changes":{"file:///genrename.kama":[{"range":{"start":{"line":2,"character":16},"end":{"line":2,"character":19}},"newText":"fetch"},{"range":{"start":{"line":4,"character":81},"end":{"line":4,"character":84}},"newText":"fetch"},{"range":{"start":{"line":4,"character":92},"end":{"line":4,"character":95}},"newText":"fetch"}]}}' \
        "renaming a generic method reaches BOTH instantiations' calls, as one symbol (M6 B3b)"
+
+echo "check-lsp: M6 B3f the :: qualifier of a name"
+# The whole edit set, asserted EXACTLY: the declaration, the type annotation, and — new in B3f — the
+# `Color::` qualifier. The `Green` after it is the enum MEMBER, a separate symbol, and must not be touched.
+expect '"id":60,"result":{"changes":{"file:///qualrename.kama":[{"range":{"start":{"line":0,"character":5},"end":{"line":0,"character":10}},"newText":"Hue"},{"range":{"start":{"line":1,"character":18},"end":{"line":1,"character":23}},"newText":"Hue"},{"range":{"start":{"line":1,"character":28},"end":{"line":1,"character":33}},"newText":"Hue"}]}}' \
+       "renaming an enum rewrites the `Color::` qualifier, and only the qualifier (M6 B3f)"
+expect '"id":61,"result":{"uri":"file:///qualrename.kama","range":{"start":{"line":0,"character":5},"end":{"line":0,"character":10}}}' \
+       "go-to-definition FROM a qualifier lands on the enum declaration"
+expect '"id":62,"result":{"contents":{"kind":"plaintext","value":"enum Color"}}' \
+       "hover on a qualifier names the enum"
 
 echo "check-lsp: M4 completion + signature help"
 # The list is complete as sent: `isIncomplete:false` tells the client to filter it itself as the user

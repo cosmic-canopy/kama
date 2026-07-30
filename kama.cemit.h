@@ -560,6 +560,8 @@ private:
     std::string bindingKey(const IdentifierNode* declSite) const;        // "local:<file>:<line>:<col>:<name>"
     static std::string fieldKey(const std::string& ownerKey, const std::string& name);       // "field:Owner::name"
     static std::string enumMemberKey(const std::string& enumKey, const std::string& name);   // "enum:Enum::name"
+    // Segment `i` of a `::`-separated name list, qualified by the segments to its left (M6 B3f).
+    std::string listSegmentKey(const StringList& segs, size_t i);
     // The binding key `name` currently resolves to: innermost enclosing scope first, then the parameters of
     // the function being emitted. Empty when `name` is neither (recordRef/recordDef ignore an empty key).
     std::string bindingKeyOf(const std::string& name) const;

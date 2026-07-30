@@ -9,9 +9,11 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <map>
 #include <iostream>
 #include "kama.forward.h"
 #include "kama.diagnostic.h"
+#include "kama.query.h"
 
 class CodeGenContext
 {
@@ -37,6 +39,34 @@ public:
     // diagnostics from a partial parse only when this is 0; the statement- and member-level arms lose
     // far less and do not set it.
     int droppedTopLevelDecl = 0;
+
+    // Per-SEGMENT source spans for the `::`-separated name lists the grammar keeps as plain strings —
+    // a qualifier (`Color::Green`), an import path (`std::collections`), an export manifest (LSP M6 B3f).
+    // Those lists are `%type <strings>` and read as strings by ~107 places in the emitter, so the
+    // positions travel BESIDE them rather than in them.
+    //
+    // Keyed by the LIST OBJECT, not a single pending vector: qualifiers NEST, so in `A::B<C::D>` the
+    // inner `C::` reduces while the outer `A::B<…>` reduction is still pending and would clobber it.
+    // Each list object is exactly one source occurrence (the recursive arms push onto `$1` and return
+    // it), so the pointer removes any dependence on reduction order.
+    std::map<const StringList*, std::vector<SrcRange>> listSegPos;
+
+    void stampSeg(const StringList* list, int line, int col, int endLine, int endCol)
+    {
+        if (list) listSegPos[list].push_back(SrcRange{ line, col, endLine, endCol });
+    }
+
+    // TAKE, not read: erasing at the consuming reduction bounds the map to the lists still in flight, and
+    // stops a list discarded by an error-recovery arm from leaving a stale entry behind for whatever the
+    // allocator hands out at that address next.
+    std::vector<SrcRange> takeSegs(const StringList* list)
+    {
+        auto it = listSegPos.find(list);
+        if (it == listSegPos.end()) return {};
+        std::vector<SrcRange> out = std::move(it->second);
+        listSegPos.erase(it);
+        return out;
+    }
 
     explicit CodeGenContext(SharedString moduleName, int maxErrorCount = 10)
         : _mMaxErrorCount(maxErrorCount)

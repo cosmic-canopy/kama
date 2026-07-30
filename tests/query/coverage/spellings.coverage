@@ -84,7 +84,7 @@
 55:14 p ref:local
 55:16 sum ref:method
 56:10 o decl:local
-56:14 Point -
+56:14 Point ref:value
 56:21 origin ref:method
 57:10 f decl:local
 57:14 p ref:local
@@ -93,7 +93,7 @@
 57:22 y ref:field
 59:4 Color ref:enum
 59:10 c decl:local
-59:14 Color -
+59:14 Color ref:enum
 59:21 Green ref:enum-member
 60:10 cv decl:local
 60:22 c ref:local
@@ -102,7 +102,7 @@
 60:60 Blue ref:enum-member
 62:4 Shape ref:enum
 62:10 sh decl:local
-62:15 Shape -
+62:15 Shape ref:enum
 62:22 Circle ref:enum-member
 62:29 r ref:field
 63:10 sv decl:local

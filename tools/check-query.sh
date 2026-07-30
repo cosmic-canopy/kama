@@ -502,12 +502,31 @@ FIXTURE="$ROOT/tests/query/generics/lib.kama"
 # uses and leave `import lib::{Box, …}` spelling the old name — the module then imports a symbol that no
 # longer exists, so the rename breaks a file it did edit. Same class as B3a, across units.
 expect --project --refs 13:11 -- "use.kama:7:13"
-# ⚠️ STILL OPEN, asserted as a fact so closing it cannot be silent: the matching `export { Box, … };` is
-# NOT a reference, so that half of the rename is still missing. CompilationUnit::exportList is a
-# SharedStringList — plain strings with no line or column — so there is no node to anchor a position to.
-# It is the same blocker as the `::` qualifier and the import PATH; see the B3 brief. When the grammar
-# carries positions for those lists, THIS ASSERTION MUST FLIP to an `expect`.
-reject --project --refs 13:11 -- "lib.kama:11:9"
+# M6 B3f: and the matching `export { Box, … };`, which was the other half of that same rename. This line
+# was a `reject` from B3g until the grammar carried per-segment positions for the `::`-separated name
+# lists — it was pinned as a FACT precisely so that closing the gap could not be silent.
+expect --project --refs 13:11 -- "lib.kama:11:9"
+
+# ---------------------------------------------------------------------------------------------------
+# M6 B3f — the QUALIFIER of a `::`-separated name.
+#
+# `Color` in `Color::Green` had no position at all: a qualifier is a list of plain STRINGS, so there was
+# no node to anchor an index entry to. Renaming the enum rewrote its declaration and every `case` arm and
+# left every `Color::` spelling behind — the same silent under-apply as B3a, one level up. The grammar
+# now carries a span per segment (CodeGenContext::listSegPos).
+FIXTURE="$ROOT/tests/query/coverage/spellings.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo 'check-query: M6 B3f :: qualifier positions'
+expect --def 59:14 -- "spellings.kama:14:5"     # `Color` in `Color::Green` -> the enum declaration
+expect --def 62:15 -- "spellings.kama:16:5"     # `Shape` in `Shape::Circle(r: 7)`
+expect --def 56:14 -- "spellings.kama:34:11"    # `Point` in `Point::origin()` — a static call's TYPE
+expect --type 59:14 -- "enum Color"
+# The qualifier is a USE of the type, so it must be in the type's reference set — that is what makes
+# renaming the enum rewrite it. The member `Green` keeps its own separate symbol.
+expect --refs 14:5 -- "spellings.kama:59:14"
+expect --refs 14:5 -- "spellings.kama:59:4"     # the type ANNOTATION, indexed since M0
+reject --refs 14:5 -- "spellings.kama:59:21"    # `Green` belongs to the enum MEMBER, not the enum
 
 # ---------------------------------------------------------------------------------------------------
 # M6 B3 — the reference index's COVERAGE ORACLE.

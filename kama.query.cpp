@@ -665,6 +665,23 @@ std::string CEmitter::enumMemberKey(const std::string& enumKey, const std::strin
     return "enum:" + enumKey + "::" + name;
 }
 
+// The DefSite key for ONE segment of a `::`-separated name list (M6 B3f) — segment `i` of `segs`,
+// qualified by everything to its left. Requires `_nsCtx` to be the segment's own unit.
+//
+// A segment is a TYPE (`Color` in `Color::Green`) or a MODULE/NAMESPACE (`std` in `std::collections`).
+// The type case resolves through the ordinary resolver and gets a real def-site, so go-to-definition and
+// rename work on it — that is the gap this closes. Anything the resolver does not land on a declaration
+// is left unindexed rather than given a fabricated key; `resolveUserName` hands an unresolved name back
+// VERBATIM, so a key with no def-site behind it says nothing and could collide with a real one.
+std::string CEmitter::listSegmentKey(const StringList& segs, size_t i)
+{
+    if (i >= segs.size() || !segs[i]) return "";
+    SharedStringList pre = std::make_shared<StringList>();
+    for (size_t j = 0; j < i; ++j) pre->push_back(segs[j]);
+    std::string k = resolveUserName(*segs[i], pre);   // no `site` => records nothing
+    return _defSites.count(k) ? k : std::string();
+}
+
 void CEmitter::registerBinding(const IdentifierNode* declSite, SymKind kind)
 {
     if (!_analysis || !_refUnit || !declSite || !declSite->value) return;
@@ -783,6 +800,12 @@ void CEmitter::buildPositions()
     // addTypeRef arrive empty; resolve them in their own unit's namespace context, exactly as the old
     // per-query replay did (resolveUserName reads only _nsCtx + the tables, both stable after analyze()),
     // so precomputing here is equivalent and lets the query facade stay const and replay-free.
+    //
+    // (4b) then indexes the `::`-separated NAME LISTS (M6 B3f). A qualifier, an import path and an export
+    // manifest keep their spellings as plain strings, so their segments have no identifier node and no
+    // entry from any step above — the grammar carries a parallel span per segment instead
+    // (CodeGenContext::listSegPos -> the `…Pos` node fields). It belongs here and not in a recorder
+    // because resolving a segment needs `_nsCtx` set to its own unit, which this loop already does.
     {
         NsCtx saved = _nsCtx;
         for (auto& kv : _positions) {
@@ -792,6 +815,47 @@ void CEmitter::buildPositions()
             for (auto& e : kv.second)
                 if (e.declKey.empty() && e.id && e.id->value)
                     e.declKey = resolveUserName(*e.id->value, e.id->qualifier);   // no `site` => not re-recorded
+
+            // (4b) Appending while iterating would invalidate, so collect first and merge after. The
+            // gather below is deliberately the cheap half: an identifier with no qualifier costs one
+            // compare, and most of them have none — only a unit that actually spells `::` pays for the
+            // dedup structure, which is why it is built lazily down below.
+            const CompilationUnit* u = kv.first;
+            std::vector<PosEntry> segs;
+
+            // A qualifier: `Color` in `Color::Green`, `Point` in `Point::origin()`, `ns::Type`.
+            for (const auto& e : kv.second) {
+                const IdentifierNode* id = e.id;
+                if (!id || !id->qualifier || id->qualifier->empty()) continue;
+                if (id->qualifierPos.size() != id->qualifier->size()) continue;   // synthesized: no spans
+                for (size_t i = 0; i < id->qualifier->size(); ++i) {
+                    const SrcRange& r = id->qualifierPos[i];
+                    if (r.line <= 0) continue;
+                    std::string k = listSegmentKey(*id->qualifier, i);
+                    if (!k.empty()) segs.push_back(PosEntry{ r, nullptr, false, k });
+                }
+            }
+            // An export manifest. The key is `qualify(name)` — the same key the export-validation loop
+            // builds, and deliberately NOT a scope search: SPEC requires a listed name to be a top-level
+            // declaration in this very file.
+            if (u->exportList && u->exportListPos.size() == u->exportList->size())
+                for (size_t i = 0; i < u->exportList->size(); ++i) {
+                    if (!(*u->exportList)[i] || u->exportListPos[i].line <= 0) continue;
+                    std::string k = qualify(*(*u->exportList)[i]);
+                    if (_defSites.count(k))
+                        segs.push_back(PosEntry{ u->exportListPos[i], nullptr, false, k });
+                }
+
+            // Dedup by POSITION, not by node: these entries have no node, and two IdentifierNodes can
+            // carry the same segment spans (the emitter copies identifier nodes, sharing the qualifier
+            // list they came from). Built only now, so a unit that spells no `::` never pays for it.
+            if (!segs.empty()) {
+                std::set<std::pair<int, int>> at;
+                for (const auto& e : kv.second) at.insert({ e.range.line, e.range.column });
+                for (auto& s : segs)
+                    if (at.insert({ s.range.line, s.range.column }).second)
+                        kv.second.push_back(std::move(s));
+            }
         }
         _nsCtx = saved;
     }

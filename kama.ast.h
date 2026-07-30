@@ -4,6 +4,7 @@
 #include <iostream>
 #include <cstdint>      // int8_t … uint64_t (not transitively available on all libcs, e.g. Windows UCRT)
 #include "kama.forward.h"
+#include "kama.query.h"  // SrcRange — the per-segment spans of the `::`-separated name lists (M6 B3f)
 
 enum SymbolType {
   UNDEFINED = 0,
@@ -57,6 +58,7 @@ public:
     SharedNamespaceDeclaration nameSpace;
     SharedImportDeclarationList importDeclarationList;
     SharedStringList exportList;              // the module's public surface (`export { … };`)
+    std::vector<SrcRange> exportListPos;      // one span per exportList entry (M6 B3f), or empty
     SharedStatementList codeDeclarationList;
     CompilationUnit(CodeGenContext& context, SharedString name,
                     SharedNamespaceDeclaration nameSpace,
@@ -105,6 +107,7 @@ public:
 class ImportDeclarationNode : public StatementNode {
 public:
     SharedStringList          modulePath;
+    std::vector<SrcRange>     modulePathPos;   // one span per modulePath segment (M6 B3f), or empty
     SharedUsingDeclarationList symbols;
     SharedString              moduleAlias;
     ImportDeclarationNode(CodeGenContext& context, SharedStringList modulePath,
@@ -242,6 +245,7 @@ public:
     int builtInVal;
     SharedString value;
     SharedStringList qualifier;
+    std::vector<SrcRange> qualifierPos;  // one span per qualifier segment (M6 B3f), or empty
     SharedIdentifier genericArg;   // element type for Coll<T> (a full type); == genericArgs[0]
     SharedIdentifierList genericArgs;  // all type args for Pair<A,B> etc.; genericArg mirrors [0]
     SharedIdentifierList bounds;       // when this node is a type-PARAMETER (`K` in `<K: I + J>`),
