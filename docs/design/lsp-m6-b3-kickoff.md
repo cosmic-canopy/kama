@@ -1,6 +1,8 @@
 # LSP M6 B3 — the member reference index (cold-start brief)
 
-**Status: Stage 0 + B3a + B3b SHIPPED 2026-07-30. B3c-B3f remain, and are enumerated below.**
+**Status: Stage 0 + B3a + B3b + B3d + B3e SHIPPED 2026-07-30** (`2a9ba07`, `95fd0f2`, `18ee951`), and
+both LSP harnesses are ASan/UBSan-clean on macOS AND in the container (the leak check only exists there).
+**Remaining: B3c, B3d's `::` form, B3f** — enumerated below, not waiting to be thought of.
 Everything here was verified by running it, not reasoned about.
 Parent brief: [lsp-m6-kickoff.md](lsp-m6-kickoff.md). Campaign status: [lsp.md](lsp.md).
 
