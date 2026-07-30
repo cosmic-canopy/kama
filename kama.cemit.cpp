@@ -4413,7 +4413,7 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
     if (auto* v = dynamic_cast<UInt16Node*>(n)) { out = v->value; return true; }
     if (auto* v = dynamic_cast<UInt32Node*>(n)) { out = v->value; return true; }
     if (auto* v = dynamic_cast<UInt64Node*>(n)) { out = (int64_t)v->value; return true; }
-    if (auto* id = dynamic_cast<IdentifierNode*>(n)) return constArgN(std::static_pointer_cast<IdentifierNode>(e), out);
+    if (dynamic_cast<IdentifierNode*>(n)) return constArgN(std::static_pointer_cast<IdentifierNode>(e), out);
 
     // MCU 6b-1: fold const arithmetic when every operand resolves, so a const-generic param can drive a
     // computed size (`Fixed<T, N+1>`, `2*N`). Recurses through the same shape `isConstInitExpr` permits.
