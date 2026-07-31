@@ -484,21 +484,24 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   build-configuration awareness — **one server, eight editors**, four of them verified against a running
   editor. Record of the campaign, its decisions and its acceptance: [design/lsp.md](design/lsp.md) (with
   the per-milestone briefs beside it); user-facing setup: [editors.md](editors.md). Forward work:
-  - **►► M7 — tree-sitter grammar + Zed extension. NEXT, and its own campaign.** It is the **only** thing
-    blocking Helix syntax colouring (Helix colours *only* from tree-sitter) and a Zed extension **at all**
-    (a Zed extension registers a *language*, which requires a grammar — there is no grammar-less LSP-only
-    Zed extension). Also unlocks full Neovim/Vim colouring beyond semantic tokens, and GitHub linguist
-    recognizing `.kama`. It is a **third** grammar to keep in sync with `kama.l`/`kama.y`, so it needs its
-    own drift guard from day one. Three things to settle before writing a rule, all cold-start-briefed in
-    [design/lsp-m6-d-kickoff.md](design/lsp-m6-d-kickoff.md):
-    1. **The oracle** — write the literal, run `kama check`, compare. The compiler decides, not eyeballing;
-       that method rejected six invented spellings during the TextMate audit.
-    2. **The drift guard's shape** — a *pair*, because a grep can only see that a rule EXISTS while a real
-       engine can see that a rule FIRES: tree-sitter's own corpus test plus agreement with `kama check`
-       over the existing `tests/syntax/`.
-    3. **Where the grammar lives and how it is built** — a directory in this repo or its own repository.
-       Helix and Zed both fetch a grammar by git URL, and the toolchain is containerized, so a node build
-       step needs a decision.
+  - **Tree-sitter grammar + Zed extension — shipped (M7); residuals below.** `tree-sitter-kama/` is a
+    grammar package in this repository, guarded by `tools/check-treesitter.sh`, whose strongest oracle
+    requires every `.kama` file the compiler accepts to parse with zero ERROR nodes and every file it
+    rejects with a parse/lexical error to produce one. Helix colours from it (verified by rendering a real
+    Helix through a pty), and `editor/zed/` is a Zed extension registering the language and wiring
+    `kama lsp`. Record of the decisions, and of the three places the brief was wrong:
+    [design/treesitter.md](design/treesitter.md); user docs: [editors.md](editors.md). Forward work:
+    - **Flip the grammar source to the public URL** when the repo goes public — a tag `rev` +
+      `https://github.com/cosmic-canopy/kama` in `editor/zed/extension.toml`, and the `git`+`subpath` form
+      in the Helix snippet. Both spellings are already written out in `docs/editors.md`; this is a
+      two-line change gated purely on visibility.
+    - **Close the Zed loop.** The Rust component is compile-verified against `zed_extension_api` and the
+      queries are checked, but `zed: install dev extension` is a GUI action and has not been run.
+    - **Registry/ecosystem registrations, all gated on the repo being public:** publish to the Zed
+      extension registry; nvim-treesitter `install_info` with `location = 'tree-sitter-kama'`; the GitHub
+      linguist PR (`provisioning/linguist/languages.yml.snippet` still points at the TextMate grammar);
+      and upstreaming the Helix `[[language]]`/`[[grammar]]` entries — the same class of work as the
+      `nvim-lspconfig`/`eglot-server-programs` registrations below.
   - **The ~10 ms fixed prelude-ANALYSIS floor per keystroke.** M5 removed the prelude *parse* from every
     keystroke; analyzing it again on every buffer change is what remains, and it is a floor no file can get
     under. The fix is a pre-baked or forkable `CEmitter` — a real piece of work, not a tweak.

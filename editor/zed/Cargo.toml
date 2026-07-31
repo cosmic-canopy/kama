@@ -1,0 +1,17 @@
+[package]
+name = "zed_kama"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[lib]
+# Zed loads the extension as a WebAssembly component. It runs the cargo build itself
+# (wasm32-wasip2); nothing in the kama build, the container, or CI touches Rust.
+crate-type = ["cdylib"]
+# The source is src/kama.rs rather than the default src/lib.rs, matching how the other editor
+# integrations are named after the language rather than after their build system.
+path = "src/kama.rs"
+
+[dependencies]
+zed_extension_api = "0.7"

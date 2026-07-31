@@ -88,3 +88,31 @@ jobs:
           test "$(node out.js; echo $?)" = "42"
       - name: Full wasm suite (every positive fixture built to wasm + run under node; net skipped)
         run: KAMA_WASM=1 ./run_tests.sh
+
+  grammar:
+    name: editor grammars (tree-sitter + TextMate)
+    runs-on: ubuntu-latest
+    # The build-test legs deliberately never `npm install`, which is why tools/check-syntax.sh has always
+    # SKIPped there and why the tree-sitter guard would too. This is the one leg where both have teeth: it
+    # installs the PINNED tree-sitter CLI from the lockfile (the pin is what makes the "generate is a
+    # no-op" oracle meaningful) and the vscode-textmate tokenizer, then runs the whole-corpus parse.
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
+      - run: make
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: |
+            tree-sitter-kama/package-lock.json
+            editor/vscode/package-lock.json
+      # NB: NOT --ignore-scripts. The tree-sitter CLI's binary is fetched by its install script, and with
+      # scripts disabled node_modules/.bin/tree-sitter still exists as a JS shim that dies on first use
+      # rather than being absent — so the guard's skip path would not even fire.
+      - run: npm --prefix tree-sitter-kama ci
+      - run: sh tools/check-treesitter.sh
+      - run: npm --prefix editor/vscode ci
+      - run: sh tools/check-syntax.sh
+      - run: sh tools/check-syntax-drift.sh
+      - run: sh tools/check-editors.sh

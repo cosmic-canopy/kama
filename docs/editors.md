@@ -37,12 +37,12 @@ and not every editor has all three:
 |---|---|---|
 | **VS Code** | all | TextMate grammar (shipped in the extension) **+ semantic tokens** |
 | **Sublime Text** | all | the same TextMate grammar — see below |
-| **Neovim** | all | semantic tokens only |
-| **Vim** (coc.nvim) | all | semantic tokens only |
+| **Neovim** | all | semantic tokens **+ tree-sitter** (optional, via nvim-treesitter) |
+| **Vim** (coc.nvim) | all | semantic tokens **+ tree-sitter** (optional, via nvim-treesitter) |
 | **Emacs** (eglot) | all | semantic tokens only |
 | **Kate** | all | semantic tokens only |
-| **Helix** | all | **none yet** — Helix colours only from tree-sitter |
-| **Zed** | — | **no extension possible yet** — a Zed extension needs a tree-sitter grammar |
+| **Helix** | all | tree-sitter grammar **+ semantic tokens** |
+| **Zed** | all | tree-sitter grammar (via the extension in `editor/zed/`) |
 
 Each section below says whether its snippet was **verified against a running editor** or is documented from
 the editor's own configuration reference. We would rather tell you which is which than imply we tested
@@ -53,8 +53,13 @@ which is strictly more accurate than a regex grammar, but it only covers identif
 numbers and comments come from the editor's own grammar, so in a semantic-tokens-only editor those stay
 uncoloured.
 
-**A tree-sitter grammar is the next milestone (M7)**; it is what unlocks Helix and Zed, and full colouring
-in Neovim. Until then the table above is the honest state.
+**Where the grammar lives.** The tree-sitter grammar is `tree-sitter-kama/` in this repository, beside the
+compiler it has to agree with rather than in a repository of its own — Helix, Zed and nvim-treesitter can
+all consume a grammar from a subdirectory, and keeping it here is what lets `tools/check-treesitter.sh` fail
+the build the moment `kama.l` gains a keyword the grammar lacks. `queries/` holds the canonical highlight
+queries in the Helix/nvim vocabulary; Zed's flatter vocabulary needs its own copies, which live in
+`editor/zed/languages/kama/`. The generated parser under `src/` is committed, because every consumer
+compiles `parser.c` rather than running the grammar generator.
 
 ## Getting the compiler on `PATH`
 
@@ -224,9 +229,38 @@ roots = ["kama.json"]
 language-servers = ["kama"]
 ```
 
-`hx --health kama` will show the language server as `✓` and *Highlight queries* as `✘`, and the log says
-`Skipping syntax config for 'kama' because the parser's shared library does not exist`. That is expected —
-see the table above; the buffer is uncoloured and every LSP feature still works.
+Helix colours **only** from tree-sitter, so add the grammar too — this is what the `[[grammar]]` block is
+for. Point it at your checkout (no git, no commit, no network):
+
+```toml
+[[grammar]]
+name = "kama"
+source = { path = "/absolute/path/to/kama/tree-sitter-kama" }
+```
+
+Once the repository is public you can fetch it instead, and because the grammar lives in a subdirectory the
+`subpath` key is the one that matters:
+
+```toml
+[[grammar]]
+name = "kama"
+source = { git = "https://github.com/cosmic-canopy/kama", rev = "<commit>", subpath = "tree-sitter-kama" }
+```
+
+Then build the parser and install the queries:
+
+```sh
+hx --grammar build
+mkdir -p ~/.config/helix/runtime/queries/kama
+cp /path/to/kama/tree-sitter-kama/queries/*.scm ~/.config/helix/runtime/queries/kama/
+```
+
+`hx --health kama` should now show **five** ✓ — the language server, the tree-sitter parser, and the
+highlight, textobject and indent queries. `hx --grammar build` reports failures for every *other* grammar
+it has not fetched; that is normal and unrelated.
+
+The exact block above is kept as a real file at
+[`editor/helix/languages.toml`](../editor/helix/languages.toml) so it cannot rot silently.
 
 ## Kate
 
@@ -253,6 +287,45 @@ others on this page, this snippet has not been exercised against a running Kate.
 
 ## Zed
 
-**Not yet possible.** A Zed extension registers a language, and Zed requires a tree-sitter grammar to do
-that — there is no grammar-less "LSP only" extension. It arrives with M7 alongside Helix colouring. Until
-then, use VS Code or one of the editors above.
+*Documented from Zed's extension reference — **not** verified against a running Zed.* The extension's Rust
+component is compile-verified against `zed_extension_api` (it builds clean for `wasm32-wasip2`), the grammar
+and its queries are checked by `tools/check-treesitter.sh`, and `tools/check-editors.sh` asserts that this
+page and `editor/zed/src/kama.rs` agree about how the server is launched. What has *not* been done is
+loading it into a running Zed, because `zed: install dev extension` is a GUI action. If you run it, please
+report back so this line can change.
+
+Zed is the only editor here that cannot be configured from a settings file. A Zed extension registers a
+*language*, which requires a tree-sitter grammar, and pointing that language at a language server requires a
+small WebAssembly component — `[language_servers.…]` in `extension.toml` is metadata only. Both live in
+[`editor/zed/`](../editor/zed/).
+
+**Prerequisite:** [rustup](https://rustup.rs). Zed runs the build itself and downloads the wasi-sdk it needs;
+you never invoke cargo. End users installing from Zed's extension registry get a prebuilt `.wasm` and need
+nothing at all.
+
+1. Open the command palette and run **`zed: install dev extension`**.
+2. Choose the `editor/zed/` directory.
+
+That gives you syntax colouring, the outline view, bracket matching and indentation from the grammar, plus
+diagnostics, hover, go-to-definition, find-references, rename, completion, signature help and semantic
+tokens from `kama lsp`.
+
+The server is launched by `editor/zed/src/kama.rs`, which resolves the binary through the worktree's `PATH`:
+
+```rust
+Ok(Command {
+    command: worktree.which("kama")?,
+    args: vec!["lsp".to_string()],
+    env: worktree.shell_env(),
+})
+```
+
+Resolving through `PATH` is deliberate rather than lazy: `~/.kama/bin/kama` is a *selector* that reads the
+project's pinned toolchain and re-execs, so hardcoding a versioned binary would defeat the per-project pin.
+To override it anyway, set `lsp.kama.binary.path` in your Zed settings.
+
+> ⚠️ **Zed fetches the grammar with git, and does not read your working tree.** It runs
+> `git fetch --depth 1 origin <rev>` against the `repository` in `extension.toml`, so a grammar change is
+> invisible to Zed until it is **committed** and `rev` is updated to a commit the remote will serve. Iterate
+> on the grammar with `tree-sitter test` and Helix — whose local `source = { path = … }` needs no commit —
+> and come back to Zed once it is settled.

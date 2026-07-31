@@ -37,17 +37,41 @@ done
 #     were not. Which is which is the kind of thing that silently becomes a lie, so it is asserted: the
 #     count of status lines must match the count of configured editors.
 statuses=$(grep -cE '^\*(Verified against|Documented from)' "$DOC" || true)
-[ "$statuses" -eq 6 ] || bad "docs/editors.md has $statuses verification-status lines; expected 6 (one per configured editor). A new editor must declare whether its snippet was actually run."
+[ "$statuses" -eq 7 ] || bad "docs/editors.md has $statuses verification-status lines; expected 7 (one per configured editor). A new editor must declare whether its snippet was actually run."
 
 # 2. Every editor that gets a CONFIG SNIPPET must name the server command. `kama lsp` is spelled several
 #    legitimate ways across config languages (lua/json/toml/elisp), so accept any of them — the point is
 #    that renaming the subcommand breaks this loudly rather than leaving six silently-wrong snippets.
 #    Counted, not just present: one hit could mean five snippets lost their command.
-cmds=$(grep -cE "'kama', 'lsp'|\"kama\", \"lsp\"|\"kama\" \"lsp\"|\"command\": \"kama\"|command = \"kama\"" "$DOC" || true)
-[ "$cmds" -ge 6 ] || bad "docs/editors.md names the \`kama lsp\` command only $cmds times; expected >= 6 (one per configured editor)"
+#    Zed's command is Rust, not a config language, so its spelling (`worktree.which("kama")`) is listed
+#    too — bumping the count without adding a spelling the Zed section actually contains would give a
+#    guard that passes for the wrong reason, which is the failure mode this file already has two of.
+cmds=$(grep -cE "'kama', 'lsp'|\"kama\", \"lsp\"|\"kama\" \"lsp\"|\"command\": \"kama\"|command = \"kama\"|worktree\.which\(\"kama\"\)" "$DOC" || true)
+[ "$cmds" -ge 7 ] || bad "docs/editors.md names the \`kama lsp\` command only $cmds times; expected >= 7 (one per configured editor)"
+
+#    ⚠️ The count ALONE cannot carry Zed. It has slack — the Emacs section names the command twice (once
+#    for eglot, once as an lsp-mode aside) — so breaking Zed's snippet still leaves seven matches and the
+#    threshold passes for the wrong reason. That is the third instance of this bug in this file, and it was
+#    caught by negative-testing the bump rather than by reading it. Assert Zed's spelling by name.
+grep -qF -- 'worktree.which("kama")' "$DOC" || bad "docs/editors.md no longer shows how the Zed extension launches the server (worktree.which(\"kama\"))"
+
+# 2b. CROSS-FILE, and the part a doc-only grep can never see: the page can be perfectly consistent while
+#     the code it documents has drifted. Assert the Zed extension really does launch `kama lsp`.
+ZED_SRC="$ROOT/editor/zed/src/kama.rs"
+ZED_TOML="$ROOT/editor/zed/extension.toml"
+[ -f "$ZED_SRC" ] || bad "editor/zed/src/kama.rs is missing — docs/editors.md documents a Zed extension that is not there"
+[ -f "$ZED_TOML" ] || bad "editor/zed/extension.toml is missing"
+if [ -f "$ZED_SRC" ]; then
+    grep -qF -- '"lsp"' "$ZED_SRC" || bad "editor/zed/src/kama.rs no longer passes \`lsp\` to the compiler — the Zed extension would launch the wrong subcommand"
+    grep -qF -- 'worktree.which("kama")' "$ZED_SRC" || bad "editor/zed/src/kama.rs no longer resolves \`kama\` through the worktree PATH (which is what honours the per-project toolchain pin)"
+fi
+if [ -f "$ZED_TOML" ]; then
+    grep -qF -- 'grammars.kama' "$ZED_TOML" || bad "editor/zed/extension.toml no longer declares the kama grammar"
+    grep -qF -- 'tree-sitter-kama' "$ZED_TOML" || bad "editor/zed/extension.toml no longer points at the tree-sitter-kama subdirectory"
+fi
 
 # 3. Each snippet has to teach the editor about `.kama` — none of them ship a kama file type.
-for pat in "extension = { kama = 'kama' }" "filetypes\": \[\"kama\"\]" "\\\\.kama" "source.kama" "file-types = \[\"kama\"\]"; do
+for pat in "extension = { kama = 'kama' }" "filetypes\": \[\"kama\"\]" "\\\\.kama" "source.kama" "file-types = \[\"kama\"\]" "subpath = \"tree-sitter-kama\""; do
     grep -qE -- "$pat" "$DOC" || bad "docs/editors.md no longer registers the .kama file type via: $pat"
 done
 
@@ -64,14 +88,18 @@ done
 grep -qF -- 'client/registerCapability' "$SRV" || bad "kama.lsp.cpp no longer sends client/registerCapability"
 grep -qF -- 'workspace/didChangeWatchedFiles' "$SRV" || bad "kama.lsp.cpp no longer registers workspace/didChangeWatchedFiles"
 
-# 6. Zed is blocked on M7's tree-sitter grammar. Say so, so that "we have not done Zed" cannot read as
-#    "Zed works" — the same reason Helix's missing colouring is stated rather than omitted.
-grep -qF -- 'Not yet possible' "$DOC" || bad "docs/editors.md no longer states plainly that Zed is blocked (M7)"
-grep -qiE 'tree-sitter' "$DOC" || bad "docs/editors.md no longer explains that colouring for Helix/Zed waits on tree-sitter"
+# 6. INVERTED at M7. This assertion used to REQUIRE the page to say Zed was impossible; now it requires the
+#    opposite, because the grammar shipped. Leaving the old direction in place would have quietly forced the
+#    documentation to keep lying.
+grep -qF -- 'Not yet possible' "$DOC" && bad "docs/editors.md still says Zed is 'Not yet possible', but M7 shipped the tree-sitter grammar and the extension" || true
+grep -qiE 'tree-sitter' "$DOC" || bad "docs/editors.md no longer explains where the tree-sitter grammar fits"
+#    Both editors need a real setup step that a config snippet alone does not convey.
+grep -qF -- 'install dev extension' "$DOC" || bad "docs/editors.md no longer tells Zed users how to load the extension (zed: install dev extension)"
+grep -qF -- 'hx --grammar build' "$DOC" || bad "docs/editors.md no longer tells Helix users to build the grammar, without which the buffer stays uncoloured"
 
 # 7. The build-configuration channel is one file, in every editor. If this line goes, so has the property
 #    that makes the whole design work.
 grep -qF -- 'kama.local.json' "$DOC" || bad "docs/editors.md no longer documents kama.local.json as the build-configuration channel"
 
 [ "$fail" = 0 ] || { echo "check-editors: see docs/editors.md and docs/design/lsp-m6-c-kickoff.md" >&2; exit 1; }
-echo "check-editors: PASS (8 editors documented, 3 watcher globs agree in server + VS Code client)"
+echo "check-editors: PASS (8 editors documented, 7 configured, 3 watcher globs agree in server + VS Code client, Zed extension agrees with its docs)"

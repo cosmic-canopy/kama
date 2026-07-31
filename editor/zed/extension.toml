@@ -1,0 +1,19 @@
+id = "kama"
+name = "Kama"
+description = "Kama language support: syntax highlighting, outline, and the kama language server."
+version = "0.1.0"
+schema_version = 1
+authors = ["the kama authors"]
+repository = "https://github.com/cosmic-canopy/kama"
+
+# The grammar lives in a SUBDIRECTORY of the main repo (Zed supports this via `path`), so it cannot drift
+# from kama.l/kama.y behind a separate release cycle — see tools/check-treesitter.sh.
+#
+# ⚠️ Zed does NOT read the working tree. It runs `git init` + `git fetch --depth 1 origin <rev>` against
+# `repository`, so the grammar must be COMMITTED and `rev` must name a commit the remote will serve. While
+# the repo is private this points at the local clone over file://; once it is public, swap in
+# https://github.com/cosmic-canopy/kama and a tag.
+[grammars.kama]
+repository = "file:///Users/matt/Documents/cstar"
+rev = "c67a216263251c1f0bff81f981ddbd08ce720e4d"
+path = "tree-sitter-kama"
