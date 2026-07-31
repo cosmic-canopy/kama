@@ -148,6 +148,64 @@
 <section class="page">
   <div class="section-head">
     <span class="numeral">三</span>
+    <h2>What it inherits</h2>
+    <span class="kicker">and what it leaves behind</span>
+  </div>
+
+  <p class="lede section-lede">
+    kama is not a reaction against the languages it came from — it is an attempt to keep the best of each
+    without the part everyone works around.
+  </p>
+
+  <div class="grid">
+    <article class="tile lineage"><span class="kanji">基</span>
+      <h3>C and C++</h3>
+      <p><strong>Kept:</strong> compiling straight down with nothing in between, abstractions that cost
+      nothing at runtime, and RAII — tying a resource's life to a scope is still the best idea systems
+      programming has produced.</p>
+      <p class="left-behind"><strong>Left:</strong> undefined behaviour as the default, the preprocessor,
+      exceptions, and five ways to initialise a variable.</p>
+    </article>
+
+    <article class="tile lineage"><span class="kanji">形</span>
+      <h3>C#</h3>
+      <p><strong>Kept:</strong> the shape of the syntax you already read, and real object orientation —
+      single inheritance, interfaces, namespaces, generics that read like generics rather than like
+      template metaprogramming.</p>
+      <p class="left-behind"><strong>Left:</strong> the garbage collector, and the runtime that has to
+      come with it.</p>
+    </article>
+
+    <article class="tile lineage"><span class="kanji">厳</span>
+      <h3>Rust</h3>
+      <p><strong>Kept:</strong> sum types with exhaustive matching, <code>Optional</code> and
+      <code>Result</code> in place of null and exceptions, moves and ownership as first-class ideas, and
+      traits — spelled <code>contract</code> here.</p>
+      <p class="left-behind"><strong>Left:</strong> lifetimes and the borrow checker, and the
+      <code>async</code> colouring that splits a codebase in two.</p>
+    </article>
+
+    <article class="tile lineage"><span class="kanji">包</span>
+      <h3>TypeScript, Node and Cargo</h3>
+      <p><strong>Kept:</strong> the idea that tooling is part of the language — a server that understands
+      your code as you type, shipped in the compiler — and that packages, versions and a lockfile belong
+      to the toolchain rather than to a third-party add-on.</p>
+      <p class="left-behind"><strong>Left:</strong> the dependency sprawl, and the runtime underneath it.</p>
+    </article>
+  </div>
+
+  <p class="note">
+    What is <em>not</em> inherited is the ownership model. Every type declares what it owns — a
+    <code>value</code> copies, a <code>resource</code> moves and drops, a <code>view</code> borrows, a
+    <code>contract</code> is the guarantee — and that one decision is what buys memory safety without a
+    garbage collector and without a borrow checker, while leaving ordinary OOP intact.
+    <a href="/docs/type-model/">Read the type model →</a>
+  </p>
+</section>
+
+<section class="page">
+  <div class="section-head">
+    <span class="numeral">四</span>
     <h2>A taste of the blade</h2>
     <span class="kicker">real, compiled code</span>
   </div>
@@ -163,7 +221,7 @@
 
 <section class="page">
   <div class="section-head">
-    <span class="numeral">四</span>
+    <span class="numeral">五</span>
     <h2>Where it runs</h2>
     <span class="kicker">one language, three worlds</span>
   </div>

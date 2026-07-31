@@ -212,6 +212,11 @@ body:not(.home) .topnav { border-bottom: 1px solid var(--line-2); }
   color: rgba(196, 30, 46, .12); line-height: 1; pointer-events: none;
 }
 .tile-link a { font-size: .9rem; }
+.section-lede { margin: -.4rem 0 1.4rem; }
+.lineage p + p { margin-top: .8rem; }
+.lineage strong { color: var(--amber); font-weight: 600; }
+.left-behind { color: var(--fg-dim); }
+.left-behind strong { color: var(--fg-dim); }
 .card { display: block; color: inherit; transition: border-color .15s ease; }
 .card:hover { border-color: var(--ember); }
 .card:hover h3 { color: var(--ember-hi); }
