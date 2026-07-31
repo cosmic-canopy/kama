@@ -1,0 +1,73 @@
+// `@generate(Equatable, Hashable)` — the derives that make a type comparable and keyable without
+// hand-writing an FNV loop (Rust's `#[derive(PartialEq, Hash)]`). Because comparison is contract-driven,
+// deriving `Equatable` is also what gives the type its `==`/`!=`. Structural equality stays OPT-IN: the
+// attribute is where you ask for it, and a type without it cannot be compared at all.
+import std::collections::{Map, Set};
+
+@generate(of, Equatable, Hashable)
+type value Rgb {
+    public uint8 r;
+    public uint8 g;
+    public uint8 b;
+}
+
+// The derive is not value-only, and the field walk RECURSES through each field's own `equals`/`hash`
+// rather than comparing bytes: `Rgb` dispatches to its derived pair and the `string` (which makes this a
+// `resource` — a value owns nothing) routes through the runtime intrinsics.
+@generate(Equatable, Hashable)
+type resource Swatch {
+    string name;
+    Rgb color;
+    public ctor make(string name, Rgb color) { Swatch s; s.name = give name; s.color = color; return give s; }
+}
+
+// A hand-written impl WINS over the derive (body only — the conformance is still registered), so a type
+// can opt into the bound and still control what identity means. Here it is the id alone.
+@generate(of, Equatable, Hashable)
+type value Session {
+    public int32 id;
+    public int32 nonce;      // deliberately outside identity
+    public fn bool equals(ref Session other) { return this.id == other.id; }
+    public fn uint64 hash() { return cast<uint64>(this.id); }
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // Derived `==`/`!=` — memberwise, in declaration order.
+    Rgb red  = Rgb.of(r: 255ui8, g: 0ui8, b: 0ui8);
+    Rgb red2 = Rgb.of(r: 255ui8, g: 0ui8, b: 0ui8);
+    Rgb blue = Rgb.of(r: 0ui8, g: 0ui8, b: 255ui8);
+    if (red == red2) { r = r + 1; }
+    if (red != blue) { r = r + 1; }
+
+    // Derived `hash` + `equals` make it a Map key with no further work.
+    Map<Rgb, int32> counts = Map.empty();
+    counts.put(key: red, value: 4);
+    counts.put(key: blue, value: 6);
+    counts.put(key: red2, value: 10);            // equal key -> overwrite, not a third entry
+    r = r + counts.length();                      // 2
+    int32 got = match (counts.get(key: red)) { case Some(value: v): v; case None: 0; };
+    r = r + got;                                  // 10
+
+    // ... and a Set dedups on the same derived pair.
+    Set<Rgb> palette = Set.empty();
+    palette.add(key: red);
+    palette.add(key: red2);                       // equal -> deduped
+    palette.add(key: blue);
+    r = r + palette.length();                     // 2
+
+    // Composition: the string field and the nested user field each dispatch to their own equals.
+    Swatch a = Swatch.make(name: "warm", color: red);
+    Swatch b = Swatch.make(name: "warm", color: red2);
+    Swatch c = Swatch.make(name: "cool", color: blue);
+    if (a == b) { r = r + 1; }
+    if (a != c) { r = r + 1; }
+
+    // The hand-written impl wins: same id, different nonce -> still equal.
+    Session s1 = Session.of(id: 9, nonce: 1);
+    Session s2 = Session.of(id: 9, nonce: 2);
+    if (s1 == s2) { r = r + 1; }
+
+    return r;   // 2 + 2 + 10 + 2 + 2 + 1 = 19
+}

@@ -108,6 +108,9 @@ struct MethodInfo {
     // Compiler-synthesized `@generate(of|zero)` bag ctor (M6). `node` is null: the proto/body loops skip the
     // ordinary path and emit via bagCtorSig/emitBagCtorBody, dispatching on the method key ("of"/"zero").
     bool                         isSynthBag = false;
+    // Compiler-synthesized `@generate(Equatable|Hashable)` — memberwise `equals` / field-walked `hash`.
+    // `node` is null: emitted via emitEqualsDefinition / emitHashDefinition, keyed on the method name.
+    bool                         isSynthCmp = false;
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
@@ -187,6 +190,11 @@ struct ClassInfo {
     // `@generate(Format)` — opt-in synthesized field-dump `Format` impl (`Type { f: v, … }`), infallible;
     // the display analog of genSerialize. Body emitted by emitFormatDefinition.
     bool                              genFormat = false;
+    // `@generate(Equatable|Hashable)` — opt-in memberwise `equals` / field-walked `hash`, plus the nominal
+    // conformance (so `==` lowers to it and a `<K: Hashable + Equatable>` bound is satisfied). Structural
+    // equality stays a deliberate NON-default: you ask for it. Bodies: emitEqualsDefinition/emitHashDefinition.
+    bool                              genEquatable = false;
+    bool                              genHashable = false;
     std::map<std::string, MethodInfo> methods;    // by kama method name
     bool                              hasCtor = false;
     bool                              preludeStatic = false;  // a non-generic prelude type (e.g. Chars) whose
@@ -1202,6 +1210,10 @@ private:
     // its per-field writer (scalar -> a Formatter writeX, composite -> its own `__format`).
     void emitFormatDefinition(ClassInfo& ci);
     void emitFmtFieldWrite(SharedIdentifier ty, const std::string& access, int line);
+    // `@generate(Equatable|Hashable)` — the derived memberwise `equals` / field-walked `hash`.
+    void emitEqualsDefinition(ClassInfo& ci);
+    void emitHashDefinition(ClassInfo& ci);
+    std::string eqFieldTest(SharedIdentifier ty, const std::string& a, const std::string& b, int line);
     void emitFmtLiteral(const std::string& s);   // write a literal chunk via a kama_string temp + Formatter__writeStr
     // `@generate(of|zero)` bag ctors (M6): the C signature (`V V__of(f1…)` / `V V__zero(void)`) shared by the
     // prototype and the definition, and the synthesized memberwise/zero-init body. `which` is "of" or "zero".

@@ -1,0 +1,21 @@
+// The working path for a payload-less enum: a retroactive `implements` supplies the same two contracts
+// the `@generate` derive supplies for a struct, and the enum becomes an ordinary `Map` key. Kept as the
+// counterpart to xfail/generate_on_plain_enum, which points here.
+import std::collections::{Map};
+
+enum Color { Red, Green, Blue }
+implements Hashable for Color {
+    public fn uint64 hash() { return match (this) { case Red: 0ui64; case Green: 1ui64; case Blue: 2ui64; }; }
+}
+implements Equatable for Color {
+    public fn bool equals(ref Color other) { return this.hash() == other.hash(); }
+}
+
+fn int32 main() {
+    Map<Color, int32> m = Map.empty();
+    m.put(key: Color::Red,  value: 5);
+    m.put(key: Color::Blue, value: 9);
+    int32 a = match (m.get(key: Color::Red))  { case Some(value: x): x; case None: 0; };
+    int32 b = match (m.get(key: Color::Blue)) { case Some(value: x): x; case None: 0; };
+    return a + b + m.length();   // 5 + 9 + 2 = 16
+}

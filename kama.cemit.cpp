@@ -3810,6 +3810,17 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
             continue;
         }
 
+        // A plain C-style enum is a bare integer with no ClassInfo, so there is nothing for `@generate` to
+        // synthesize into — and it used to be SILENTLY IGNORED, which is the worst answer: the attribute
+        // reads as if it worked and the missing conformance only surfaces somewhere far away. Say so, and
+        // point at the retroactive `implements`, which does work on a plain enum today.
+        if (ed->attributes)
+            for (auto& at : *ed->attributes)
+                if (at && at->name && *at->name == "generate")
+                    unsupported(("`@generate(...)` has nothing to synthesize on the payload-less enum `"
+                                 + *ed->identifier->value + "` (it is a bare integer, not a struct) — write "
+                                 "`implements <Contract> for " + *ed->identifier->value + " { … }`, which a "
+                                 "plain enum supports").c_str(), ed->line);
         // Plain C-style enum — the existing lightweight path (bare integer, zero regression).
         EnumInfo ei;
         ei.name  = name;
@@ -3915,7 +3926,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (!at || !at->name) continue;
                 if (*at->name == "generate") {
                     if (!at->args || at->args->empty())
-                        unsupported("`@generate(...)` needs at least one of Serialize, Deserialize", cd->line);
+                        unsupported("`@generate(...)` needs at least one of Serialize, Deserialize, Format, "
+                                    "Equatable, Hashable, of, zero", cd->line);
                     else for (auto& a : *at->args) {
                         // bare identifier args only (Serialize/Deserialize/of/zero); a `key: value` form is invalid here
                         std::string which = (a && a->name && a->name->value && !a->expression) ? *a->name->value : "";
@@ -3924,7 +3936,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         else if (which == "of")   ci.genOf = true;     // bag ctor — validated + registered after fields (below)
                         else if (which == "zero") ci.genZero = true;
                         else if (which == "Format") ci.genFormat = true;   // field-dump Format impl — registered below
-                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, Format, of, zero", cd->line);
+                        // Memberwise `equals` / field-walked `hash` + the nominal conformance — so a data bag
+                        // becomes comparable (and a `Map` key) without hand-rolling an FNV loop. Rust's
+                        // `#[derive(PartialEq, Hash)]`. Registered + validated after the fields are known.
+                        else if (which == "Equatable") ci.genEquatable = true;
+                        else if (which == "Hashable")  ci.genHashable = true;
+                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, Format, "
+                                         "Equatable, Hashable, of, zero", cd->line);
                     }
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name + "` (expected `@generate`)").c_str(), cd->line);
@@ -4426,6 +4444,34 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     }
                 }
             }
+            // `@generate(Equatable|Hashable)` — memberwise `equals` / field-walked `hash`, plus the nominal
+            // conformance. Since comparison is contract-driven, deriving `Equatable` is also what gives the
+            // type its `==`/`!=`; deriving `Hashable` alongside it makes the type a `Map`/`Set` key without
+            // hand-rolling an FNV loop. Structural equality remains OPT-IN — that is the whole stance; the
+            // attribute is where you ask for it. A hand-written `equals`/`hash` wins via the `!count` guard
+            // (body only — the conformance is still registered). Per-field conformance is checked at emit,
+            // like `@generate(Format)`, because retro-impls are not all collected yet at this point.
+            if (ci.genEquatable) {
+                if (!hasItf("Equatable")) ci.interfaces.push_back("Equatable");
+                if (!ci.methods.count("equals")) {
+                    MethodInfo mi; mi.cName = ci.name + "__equals"; mi.visibility = Visibility::Public;
+                    mi.isSynthCmp = true;
+                    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+                    mi.returnType = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("bool"), IDENTIFIER_BOOL_VAL);
+                    ParamSig o; o.name = "other"; o.byRef = true; o.className = ci.name; mi.params.push_back(o);
+                    ci.methods["equals"] = mi;   // `fn bool equals(ref This other)`
+                }
+            }
+            if (ci.genHashable) {
+                if (!hasItf("Hashable")) ci.interfaces.push_back("Hashable");
+                if (!ci.methods.count("hash")) {
+                    MethodInfo mi; mi.cName = ci.name + "__hash"; mi.visibility = Visibility::Public;
+                    mi.isSynthCmp = true;
+                    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+                    mi.returnType = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("uint64"), IDENTIFIER_UINT64_VAL);
+                    ci.methods["hash"] = mi;     // `fn uint64 hash()`
+                }
+            }
         } else if (ci.genOf || ci.genZero) {
             // A generic `value<T>` template or a variant: `of`/`zero` apply only to a plain (non-generic,
             // non-variant) transparent `value`. Per-instance synthesis for generics is out of scope for M6.
@@ -4436,6 +4482,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             // write a hand `implements Format` (per-instance synthesis for generics is a later milestone).
             unsupported("`@generate(Format)` applies only to a plain (non-generic, non-variant) type "
                         "— write `implements Format` by hand for a generic or variant", cd->line);
+        } else if (ci.genEquatable || ci.genHashable) {
+            // Same v1 scope as `@generate(Format)`: a generic template specializes per instance and a variant
+            // needs per-tag walks — both are follow-ons (ROADMAP), not a silent half-derive.
+            unsupported("`@generate(Equatable, Hashable)` applies only to a plain (non-generic, non-variant) "
+                        "type — write `implements Equatable`/`Hashable` by hand for a generic or variant", cd->line);
         }
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
@@ -11479,6 +11530,11 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
         if (mi.isSynthFormat) { *_out << stat << "void " << ci.name << "__format(" << ci.name << "* self, Formatter* f);\n"; continue; }   // `@generate(Format)`
+        if (mi.isSynthCmp) {   // `@generate(Equatable|Hashable)` — keyed by the method name
+            if (kv.first == "equals") *_out << stat << "bool " << ci.name << "__equals(" << ci.name << "* self, " << ci.name << "* other);\n";
+            else                      *_out << stat << "uint64_t " << ci.name << "__hash(" << ci.name << "* self);\n";
+            continue;
+        }
         rejectStoredInterface(mi.returnType, "returned from a method",
                               mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
@@ -11690,6 +11746,10 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         if (mi.isSynthDe)  { ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci); continue; }
         if (mi.isSynthBag) { emitBagCtorBody(ci, kv.first); continue; }   // M6: `@generate(of|zero)` bag ctor
         if (mi.isSynthFormat) { emitFormatDefinition(ci); continue; }     // `@generate(Format)` field dump
+        if (mi.isSynthCmp) {                                              // `@generate(Equatable|Hashable)`
+            if (kv.first == "equals") emitEqualsDefinition(ci); else emitHashDefinition(ci);
+            continue;
+        }
         // an operator has no `node`; emit its body from `opDecl` (free form: no self).
         if (mi.isOperator) {
             auto* d = mi.opDecl->operatorDeclarator.get();
@@ -11874,6 +11934,75 @@ void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access,
                      "`implements Format`; field type `" + (ty && ty->value ? *ty->value : ct)
                      + "` does not").c_str(), line);
     indent(1); *_out << ct << "__format(&" << access << ", f);\n";
+}
+
+// One field's equality test for the derived `equals`. A primitive compares with C `==`; `string` goes
+// through the runtime intrinsic; anything else must itself `implements Equatable` and recurses through its
+// own `equals` — so a derived comparison is never a bitwise `memcmp` (which would compare padding, and
+// would be wrong for any type whose equality is not its representation).
+std::string CEmitter::eqFieldTest(SharedIdentifier ty, const std::string& a, const std::string& b, int line)
+{
+    if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL)
+        return "kama_string__equals(&" + a + ", " + b + ")";
+    std::string ct = cType(ty);
+    if (!_classes.count(ct))                       // primitive / Ptr / enum-not-in-_classes
+        return "(" + a + " == " + b + ")";
+    if (!satisfiesBound(ct, "Equatable"))
+        unsupported(("`@generate(Equatable)` needs every field to be a primitive/string or a type that "
+                     "`implements Equatable`; field type `" + (ty && ty->value ? *ty->value : ct)
+                     + "` does not").c_str(), line);
+    return ct + "__equals(&" + a + ", &" + b + ")";
+}
+
+// `@generate(Equatable)` — the synthesized memberwise `equals`. Field order is declaration order, so the
+// `&&` short-circuits on the cheapest discriminator the author put first. `@skip` is honored (a skipped
+// field is excluded from identity, matching how it is excluded from the wire form).
+void CEmitter::emitEqualsDefinition(ClassInfo& ci)
+{
+    int line = ci.node ? ci.node->line : 0;
+    *_out << (_emitStaticClass ? "static inline " : "") << "bool " << ci.name
+          << "__equals(" << ci.name << "* self, " << ci.name << "* other)\n{\n";
+    std::string cond;
+    for (auto& fld : ci.fields) {
+        if (fld.serSkip) continue;
+        if (!cond.empty()) cond += " && ";
+        cond += eqFieldTest(fld.type, "self->" + fld.name, "other->" + fld.name, line);
+    }
+    // A fieldless (or fully-skipped) bag has exactly one value, so all its instances are equal.
+    indent(1); *_out << "return " << (cond.empty() ? "true" : cond) << ";\n";
+    *_out << "}\n\n";
+}
+
+// `@generate(Hashable)` — the field-walked hash. Each field contributes its OWN `hash()` (the same cheap
+// content hash the prelude gives every primitive), FNV-1a-combined in declaration order so field order
+// matters and `{1,2}` doesn't collide with `{2,1}`. The avalanche stays where it always was: the Map's
+// pluggable `Hasher::finish`. Fields are skipped exactly as in `equals`, which is what keeps the
+// hash/equals contract (equal values hash equal) true by construction.
+void CEmitter::emitHashDefinition(ClassInfo& ci)
+{
+    int line = ci.node ? ci.node->line : 0;
+    *_out << (_emitStaticClass ? "static inline " : "") << "uint64_t " << ci.name
+          << "__hash(" << ci.name << "* self)\n{\n";
+    indent(1); *_out << "uint64_t h = 2166136261ULL;\n";
+    for (auto& fld : ci.fields) {
+        if (fld.serSkip) continue;
+        std::string ct = cType(fld.type);
+        std::string acc = "self->" + fld.name;
+        std::string fh;
+        if (fld.type && fld.type->builtInVal == IDENTIFIER_STRING_VAL) fh = "kama_string__hash(&" + acc + ")";
+        else if (!_classes.count(ct))                       // primitive / Ptr — its own value IS the content hash
+            fh = "(uint64_t)(" + acc + ")";
+        else {
+            if (!satisfiesBound(ct, "Hashable"))
+                unsupported(("`@generate(Hashable)` needs every field to be a primitive/string or a type that "
+                             "`implements Hashable`; field type `" + (fld.type && fld.type->value ? *fld.type->value : ct)
+                             + "` does not").c_str(), line);
+            fh = ct + "__hash(&" + acc + ")";
+        }
+        indent(1); *_out << "h = (h ^ " << fh << ") * 16777619ULL;\n";
+    }
+    indent(1); *_out << "return h;\n";
+    *_out << "}\n\n";
 }
 
 // `@generate(Format)` — the synthesized infallible field dump: `Type { f1: v1, f2: v2 }` (empty => `Type {}`).

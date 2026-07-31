@@ -1,0 +1,6 @@
+// A payload-less enum is a bare C integer with no struct to walk, so `@generate` has nothing to
+// synthesize into. This used to be silently ignored — the attribute read as if it had worked. It now
+// names the working alternative: a plain enum takes a retroactive `implements` (see tests/enum_map_key).
+@generate(Equatable)
+enum Color { Red, Green, Blue }
+fn int32 main() { return 0; }

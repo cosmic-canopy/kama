@@ -1,0 +1,6 @@
+// `@generate(...)` takes a fixed set of names; an unrecognized one is a typo, not an extension point,
+// so it is rejected with the list rather than silently ignored (a silently-ignored derive would look
+// like it worked until the missing conformance failed somewhere far away).
+@generate(of, Equtable)
+type value P { public int32 x; }
+fn int32 main() { P p = P.of(x: 1); return p.x; }
