@@ -2,12 +2,12 @@
 {{scene}}
   <div class="hero-copy">
     <p class="eyebrow"><span class="tick"></span>鎌 · the sickle language</p>
-    <h1>Cut the runtime.<br><em>Keep the edge.</em></h1>
+    <h1>Cut the bloat.<br><em>Keep the edge.</em></h1>
     <p class="lede">
-      <strong>kama</strong> is a C-family language with deterministic RAII instead of a garbage
-      collector, named parameters at every call site, and no runtime at all. It compiles to
-      readable, portable C11 — so it runs natively everywhere C runs, in the browser via
-      WebAssembly, and on bare metal.
+      No garbage collector. No exceptions. No half-dozen ways to say the same thing. <strong>kama</strong>
+      is a C-family language that cuts what makes systems code slow to run and slow to trust, and keeps
+      the ergonomics — generics, sum types, RAII, real OOP. It compiles to readable, portable C11, so it
+      runs natively everywhere C runs, in the browser via WebAssembly, and on bare metal.
     </p>
     <div class="cta">
       <a class="btn btn-primary" href="#install">Install kama</a>
@@ -77,9 +77,16 @@
 
   <div class="grid">
     <article class="tile"><span class="kanji">無</span>
-      <h3>No GC. No runtime.</h3>
+      <h3>No GC, no pauses</h3>
       <p>Deterministic RAII: every resource is destroyed exactly where it leaves scope. Nothing
-      pauses, nothing collects, and there is no runtime to ship alongside your binary.</p>
+      collects, nothing pauses, and a compiled binary ships no runtime beside it — just your code.</p>
+    </article>
+
+    <article class="tile"><span class="kanji">簡</span>
+      <h3>One way to do a thing</h3>
+      <p>No positional calls, no <code>switch</code> fallthrough, one spelling for construction, one
+      for scope resolution. Fewer ways to write it means fewer ways to get it subtly wrong — and code
+      that reads the same no matter who wrote it.</p>
     </article>
 
     <article class="tile"><span class="kanji">盾</span>

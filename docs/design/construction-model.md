@@ -1,8 +1,35 @@
 # Construction Model — DESIGN OF RECORD
 
+> ### ⚠️ This doc is scheduled for deletion — read this before anything else
+>
+> A `docs/design/*` doc tracks a system **while it is being built** and is deleted once the work ships and
+> its durable record lives in the permanent docs (`docs/ROADMAP.md` states the policy). The construction
+> model has shipped. This file survives only because **two decisions are still open**, and both are the
+> repo owner's to make, not a reader's:
+>
+> 1. **The derive story (§8c).** An opt-in `@generate` surface for `Equatable` / `Hashable` / `Copyable` —
+>    today a `value` type needs a hand-written `operator==`, and auto structural equality is a deliberate
+>    non-default. Ship one consistent derive surface, or declare it a non-goal.
+> 2. **Field defaults / definite initialization.** Two sub-questions: (a) do pointer-shaped fields
+>    (`Ptr`/`Owned`/collection) auto-exempt, or must they spell `= null` (Zig's spell-or-declare-default is
+>    the most uniform)? (b) is a bare `T x;` *outside* a constructor still allowed, or must every value come
+>    from a ctor (Rust/Swift: no bare uninitialized values)? Cost is a one-time stdlib sweep of ~40
+>    collection/allocator ctors. It matters because it is the language's proper answer to "drop only if
+>    live" — it subsumes the abandoned definite-construction-for-drop-safety attempt and lets a raw-handle
+>    `resource` retire its `fd > 0` drop guard. Both are tracked in [ROADMAP.md](../ROADMAP.md) §2.
+>
+> **To close this file:** answer those two, ship or drop each, then migrate what is still true and durable
+> into [SPEC.md](../SPEC.md) — most of §8c already describes *shipped* behavior (the four-ctor collection
+> matrix, the `when [A: default]` gating) and belongs there — and delete this file.
+>
+> **Already superseded here:** construction now has exactly one spelling. `Type.make(...)` constructs;
+> `Type::make(...)` is a compile error, as is a static fn called with a dot, and a self-returning
+> `static fn` is rejected as a disguised constructor. Where this doc still implies `::` can construct, the
+> doc is wrong and [SPEC.md](../SPEC.md) § Modules is right.
+
 > **Status: FINAL design (converged 2026-07-17).** This is the agreed model for Kama's construction
 > campaign. It supersedes the earlier DRAFT explored in the 2026-07-16/17 sessions. Implementation is
-> sequenced as milestones M1–M8 (plan: `~/.claude/plans/let-s-start-the-construction-glistening-bentley.md`).
+> sequenced as milestones M1–M8.
 > As each feature ships, `SPEC.md` / `GOALS.md` §3d / `KEYWORDS.md` / `grammar.bnf` are updated to match.
 > The "Explored and dropped" section at the end records ideas we deliberately rejected — do not resurrect
 > them without revisiting that reasoning.

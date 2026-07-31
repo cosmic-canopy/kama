@@ -44,8 +44,9 @@ const sample = readFileSync(path.join(root, 'tests/site_sample.kama'), 'utf8')
 writeFileSync(path.join(out, 'index.html'), shell({
   url: '/',
   title: 'kama — a no-GC language that compiles to C',
-  description: 'kama is a C-family language with deterministic RAII instead of a garbage collector, ' +
-               'named parameters, and no runtime. It compiles to portable C11 — native, WebAssembly, or bare metal.',
+  description: 'kama is a C-family language with no garbage collector, no exceptions and one way to say ' +
+               'each thing — deterministic RAII, named parameters, real OOP. It compiles to portable C11: ' +
+               'native, WebAssembly, or bare metal.',
   bodyClass: 'home',
   content: fill(template('home.html'), {
     scene: template('scene.html'),

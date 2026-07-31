@@ -2,7 +2,7 @@
 
 > A C-family language (C#-like syntax, no garbage collector / RAII, explicit named
 > parameters) that transpiles to portable C — running natively everywhere and in the browser
-> via WebAssembly, with no runtime. MIT licensed.
+> via WebAssembly, with no runtime beside the compiled binary. MIT licensed.
 
 kama's grammar is the source of truth: the compiler is a Flex lexer + Bison grammar + an
 AST → C emitter. The docs below are generated from, or point at, that source so they don't

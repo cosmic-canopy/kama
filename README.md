@@ -3,8 +3,8 @@
 > **The memory-safe, no-GC systems language that keeps traditional OOP — and compiles to
 > readable, portable C.**
 
-**A C-family language with C#-like syntax, no garbage collector, and no runtime — it
-transpiles to portable C.** So it runs anywhere C runs: native on every platform, and in
+**A C-family language with C#-like syntax, no garbage collector, and no runtime beside the compiled
+binary — it transpiles to portable C.** So it runs anywhere C runs: native on every platform, and in
 the browser as WebAssembly.
 
 > **TL;DR** — kama gives you modern ergonomics (generics, sum types + exhaustive `match`,

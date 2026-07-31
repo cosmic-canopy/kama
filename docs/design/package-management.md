@@ -1,5 +1,27 @@
 # Kama toolchain & package management — design of record (kickoff)
 
+> ### ⚠️ This doc is scheduled for deletion — read this before anything else
+>
+> A `docs/design/*` doc tracks a system **while it is being built** and is deleted once the work ships and
+> its durable record lives in the permanent docs ([ROADMAP.md](../ROADMAP.md) states the policy). All the
+> self-contained compiler work here has shipped and is documented for users in
+> [packages.md](../packages.md). This file survives only for what is genuinely unbuilt:
+>
+> 1. **The trust model (rest of M3.2)** — the one real decision, and the owner's to make. `--verify` ships
+>    but is warn-only; mandatory verification needs a trust model first. Two credible shapes: Go's
+>    checksum-transparency log, or npm/PyPI-style signing + attestation. Pick one, then make verification
+>    mandatory.
+> 2. **M3.3 — hosted deployment.** Pure ops, no compiler change: stand up the registry host (static index
+>    + release tarballs) and wire the live default base URI. `kDefaultRegistry` is deliberately EMPTY today
+>    so an unconfigured registry dep errors rather than reaching a dead URL. Gated on the repo being public
+>    and the site being live — the site now exists, so this is unblocked once the repo is.
+> 3. **M4 — multi-modal.** Scripting-runtime versions in the store. Genuinely blocked: there is no second
+>    modality to version until the 2.0 scripting runtime exists, so this belongs beside the scripting work
+>    in [ROADMAP.md](../ROADMAP.md) §7 rather than here.
+>
+> **To close this file:** land 1 and 2, migrate their as-shipped record into [packages.md](../packages.md),
+> move 3 into ROADMAP §7, and delete this file.
+
 **Status: M2 (per-project packages / pillar 4) ✅ COMPLETE 2026-07-24 (M2.0–M2.3). NEXT = M1 (toolchain
 version management, pillars 1–3) — kickoff PREPARED (see the "M1 — implementation kickoff" section below).**
 Kickoff brief for the campaign after conditional compilation (`@compileFor`, ✅ shipped 2026-07-24). The

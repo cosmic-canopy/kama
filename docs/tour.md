@@ -6,8 +6,8 @@ want to install the toolchain first, start with [Getting started](../GETTING_STA
 
 kama looks like C#, manages memory like C++ without the footguns, and compiles to portable C11.
 Three ideas carry most of the design: **ownership is written into the type**, **every call names
-its arguments**, and **there is no runtime** — no garbage collector, no exceptions, no hidden
-allocation.
+its arguments**, and **a compiled program ships no runtime** — no garbage collector, no exceptions,
+no hidden allocation.
 
 ## Hello, exit code
 
