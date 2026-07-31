@@ -24,9 +24,9 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
         return give r;
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    public fn Rc<T> copy() {                         // Copyable -> retain
-        unsafe { this.c[0].strong = this.c[0].strong + 1; }
-        Rc<T> r; r.p = this.p; r.c = this.c; return give r;
+    public ctor copy(ref Rc<T> source) {                         // Copyable -> retain
+        unsafe { source.c[0].strong = source.c[0].strong + 1; }
+        Rc<T> r; r.p = source.p; r.c = source.c; return give r;
     }
     ~Rc() {
         unsafe {

@@ -36,9 +36,9 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
         return Rc.make(p: raw, c: ctrl);                                     // fresh ctor -> no marker
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    public fn Rc<T> copy() {
-        unsafe { this.c[0].strong = this.c[0].strong + 1; }
-        return Rc.make(p: this.p, c: this.c);                               // retain
+    public ctor copy(ref Rc<T> source) {
+        unsafe { source.c[0].strong = source.c[0].strong + 1; }
+        return Rc.make(p: source.p, c: source.c);                               // retain
     }
     public fn RcWeak<T> downgrade() {
         unsafe { this.c[0].weak = this.c[0].weak + 1; }

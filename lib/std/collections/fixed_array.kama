@@ -29,7 +29,7 @@ type value FixedArrayIterMut<T> implements IteratorMut<T> {
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
 type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
                                   Serialize when [T: Serialize] {
-    Ptr<T> data; int32 size; A alloc;
+    Ptr<T> data = null; int32 size = 0; A alloc;
 
     // Allocation is EAGER (a FixedArray has all `size` elements live from construction), so unlike the
     // growable containers the allocator can't be post-assigned after a bare ctor. The ctor allocates through
@@ -99,10 +99,10 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(
     }
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
-    public fn FixedArray<T, A> copy() {
-        FixedArray<T, A> result = FixedArray.withAllocator(allocator: this.alloc, size: this.size);  // same arena
+    public ctor copy(ref FixedArray<T, A> source) {
+        FixedArray<T, A> result = FixedArray.withAllocator(allocator: source.alloc, size: source.size);  // same arena
         int32 i = 0;
-        while (i < this.size) { result[i] = copy this[i]; i = i + 1; }
+        while (i < source.size) { result[i] = copy source[i]; i = i + 1; }
         return result;
     }
 

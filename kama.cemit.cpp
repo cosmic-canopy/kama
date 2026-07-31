@@ -4346,14 +4346,16 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                              + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd->line);
         }
         // `implements Copyable(bare: give|copy)` is the nominal opt-in. It obliges a resource to supply
-        // BOTH the `copy()` method (a public nullary `fn This copy()`) AND the `bare:` contract
-        // parameter (the bare-hand-off default). A value is copyable implicitly (bitwise) — it needs
-        // neither, and its bare-default is a copy.
+        // BOTH the `copy` CTOR (`ctor copy(ref This source)`) AND the `bare:` contract parameter (the
+        // bare-hand-off default). A value is copyable implicitly (bitwise) — it needs neither, and its
+        // bare-default is a copy. `copy` is a ctor because a copy IS a new object: it was the last
+        // self-returning member that wasn't one, and M8e had already ruled that shape out for `static fn`.
         if (ci.copyable && ci.kind != TypeKind::Value) {
             auto cm = ci.methods.find("copy");
-            if (cm == ci.methods.end() || cm->second.visibility != Visibility::Public || !cm->second.params.empty())
-                unsupported(("`" + ci.name + "` implements `Copyable` but has no public nullary `copy()` method "
-                             "(the contract is `fn This copy()`)").c_str(), cd->line);
+            if (cm == ci.methods.end() || cm->second.visibility != Visibility::Public
+                || !cm->second.isCtor || cm->second.params.size() != 1)
+                unsupported(("`" + ci.name + "` implements `Copyable` but has no public `copy` constructor "
+                             "(the contract is `ctor copy(ref This source)`)").c_str(), cd->line);
             if (ci.bareDefault == 0)
                 unsupported(("`" + ci.name + "` implements `Copyable` but doesn't declare its bare-hand-off default "
                              "— write `implements Copyable(bare: give)` or `Copyable(bare: copy)`").c_str(), cd->line);
@@ -5410,7 +5412,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     bool copyableActive = ci.copyable;
     if (!ci.copyableWhenParams.empty()) {
         copyableActive = whenConditionsHold(ci.copyableWhenParams, ci.copyableWhenBounds, params, concrete);
-        if (!copyableActive) { ci.copyable = false; ci.methods.erase("copy"); }
+        if (!copyableActive) { ci.copyable = false; ci.methods.erase("copy"); ci.ctors.erase("copy"); }
     }
     // Conditional METHODS (`fn … when T: Bound`): drop any whose bound fails for this instance, so it's
     // never emitted (the value `iterator()` needs a Copyable element — a `List<Owned>` simply lacks it).
@@ -9069,12 +9071,34 @@ bool CEmitter::isDefaultFillable(const std::string& c)
 // trusted during coexistence; that gap closes at M8 when self-returning `static fn` becomes an error).
 void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
 {
-    std::set<std::string> owning;       // Owned/Shared fields — never-null
-    std::set<std::string> mustAssign;   // M8b: owning ∪ non-default-fillable value fields (e.g. a stateful `A alloc`)
+    std::set<std::string> owning;       // Owned/Shared fields — never-null (drives the sharper message)
+    std::set<std::string> noDefault;    // fields whose TYPE has no `default` — also a sharper message
+    std::set<std::string> mustAssign;   // force-explicit-field-init: every field, minus the two escape hatches
+    // Force-explicit-field-init: a field must be ASSIGNED unless its type carries a default the compiler
+    // actually supplies. Precedent is Rust (all fields required), Swift (definite initialization), Zig,
+    // C# structs. The carve-out that goes away is the silent one — a primitive, a raw `Ptr`, or an enum
+    // used to ride on the emitted `= {0}`, so `int32 len;` and `Ptr<T> data;` were *implicitly* 0/null and
+    // nothing said whether the author meant that. Those must now be spelled.
+    //
+    // What stays exempt is not a carve-out but a real, checked guarantee:
+    //   - an INTRINSIC COLLECTION, whose zero representation IS its valid empty value;
+    //   - a user type with a `default` ctor, which the compiler CALLS at the fill site (M8d.1) — and which
+    //     a generic field could not spell anyway: there is no expression for "the default `A`", so
+    //     requiring `r.alloc = …` in `empty()` would be unsatisfiable, not merely verbose.
+    //
+    // Two escape hatches, both explicit and both at the DECLARATION rather than hidden in codegen:
+    //   - a field initializer (`int32 len = 0;` / `Ptr<T> data = null;`) states the default once, at the
+    //     field, and runs in every ctor — so a container spells its empty state instead of inheriting it;
+    //   - `@generate(zero)` blesses a whole data bag's zero state (a transparent all-public `value`, which
+    //     therefore owns nothing — so this can never skip an `Owned`/`Shared`).
     for (auto& f : owner.fields) {
         std::string fc = cType(f.type);                                       // resolves a field-`T`/`A` per instance
-        if (!heapOwnerTarget(fc).empty()) { owning.insert(f.name); mustAssign.insert(f.name); }   // Owned/Shared (not Weak)
-        else if (!isDefaultFillable(fc))  { mustAssign.insert(f.name); }      // a value with no `default` → must assign
+        bool isOwning = !heapOwnerTarget(fc).empty();                         // Owned/Shared (not Weak)
+        bool bare     = !_classes.count(fc);                                  // primitive / raw `Ptr` / enum
+        if (isOwning)                      owning.insert(f.name);
+        else if (!isDefaultFillable(fc))   noDefault.insert(f.name);          // e.g. a stateful `A alloc`
+        if (f.initializer || owner.genZero) continue;                         // declared default / blessed zero bag
+        if (isOwning || bare || !isDefaultFillable(fc)) mustAssign.insert(f.name);
     }
     if (mustAssign.empty() || !body || !body->statements) return;             // nothing to seal
 
@@ -9158,9 +9182,13 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
                 if (owning.count(bad))
                     unsupported(("'" + bad + "' must be set before the constructor returns "
                                  "(`Owned`/`Shared` are never-null)").c_str(), line ? line : st->line);
-                else
+                else if (noDefault.count(bad))
                     unsupported(("'" + bad + "' has no `default` — assign it in the constructor "
                                  "(or give its type a `default ctor`)").c_str(), line ? line : st->line);
+                else
+                    unsupported(("'" + bad + "' is never assigned — a constructor must initialize every "
+                                 "field; assign it here, or declare the field's default at the field "
+                                 "(`T " + bad + " = …;`)").c_str(), line ? line : st->line);
             }
         } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
             walk(iff->ifStatement, false);                    // branch bodies don't count as unconditional assigns
@@ -9169,6 +9197,12 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
             walk(wh->whileStatement, false);
         } else if (auto* blk = dynamic_cast<BlockNode*>(n)) {
             if (blk->statements) for (auto& s : *blk->statements) walk(s, topLevel);
+        } else if (auto* un = dynamic_cast<UnsafeNode*>(n)) {
+            // `unsafe { }` is not a BRANCH — it is unconditional, so a field assigned inside one at the
+            // top level of a ctor is assigned on every path. This matters now that every field must be
+            // assigned: a raw-handle type does its `r.buf = malloc(…)` precisely inside `unsafe`, and
+            // treating that as conditional would reject the very idiom the rule exists to make safe.
+            walk(un->body, topLevel);
         }
         // (for/foreach/match: not modeled — a returned bare-incomplete local through them stays conservative)
     };
@@ -10922,7 +10956,8 @@ bool CEmitter::paramByRef(FunctionParameterNode* p)
 
 // C parameter list. ref/out parameters become pointers. When selfType is set,
 // a leading `selfType* self` is prepended (for methods/constructors).
-std::string CEmitter::paramListC(SharedParameterList params, const char* selfType)
+std::string CEmitter::paramListC(SharedParameterList params, const char* selfType,
+                                 const char* ownerCType)
 {
     std::string s;
     bool first = true;
@@ -10949,8 +10984,13 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
             // a handle (tryUpgrade / factory-out) stays legal.
             std::string pct = cType(p->type);
             std::string libElem = heapOwnerTarget(pct);   // library Owned/Shared pointee ("" otherwise)
+            // A SELF-borrow is the exception: `ref This` on the smart pointer's own member borrows the
+            // handle it belongs to, which is exactly what `ctor copy(ref This source)` (and any
+            // `Equatable`/`Comparable` impl on a handle) needs. The rule is about borrowing SOMEONE
+            // ELSE's handle, which is what never makes sense.
+            bool selfBorrow = (selfType && pct == selfType) || (ownerCType && pct == ownerCType);
             if (paramByRef(p.get()) && p->modifier && p->modifier->value && *p->modifier->value == "ref"
-                && (isSmartPtrClass(pct) || !libElem.empty()))
+                && !selfBorrow && (isSmartPtrClass(pct) || !libElem.empty()))
                 unsupported(("a `ref` parameter may not name a smart pointer ('" + pct
                              + "') — borrow the object with `ref "
                              + (libElem.empty() ? _classes[pct].collElemClass : libElem)
@@ -11514,7 +11554,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
     if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
         *_out << stat << "void " << ci.name << "__ctor("
-             << paramListC(ci.ctorNode->declarator->params, ci.name.c_str()) << ");\n";
+             << paramListC(ci.ctorNode->declarator->params, ci.name.c_str(), ci.name.c_str()) << ");\n";
     if (ci.destructible)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
     if (ci.hasVtable)   // polymorphic drop dispatcher (defined with the vtable instance)
@@ -11543,7 +11583,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         // a place-returning `ref T operator[]` returns a `T*` (the place); everything else by value.
         std::string retC = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
         *_out << stat << retC << " " << mi.cName << "("
-             << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str()) << ");\n";   // static/free: no self
+             << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str(), ci.name.c_str()) << ");\n";   // static/free: no self
     }
     if (ci.isGraphNode)
         emitGraphNodeHelperProtos(ci);   // graph node-helper prototypes (Phase D)
@@ -11662,7 +11702,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     }
 
     *_out << (_emitStaticClass ? "static inline " : "") << retType << " " << cName
-          << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str()) << ")\n{\n";   // static: no self
+          << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str()) << ")\n{\n";   // static: no self
 
     if (isCtor) {
         // 1. Base constructor first (so derived overrides its effects + vptr).

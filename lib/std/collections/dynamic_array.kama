@@ -38,7 +38,9 @@ type value DynamicArrayIterMut<T> implements IteratorMut<T> {
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
 type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
                                   Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
-    Ptr<T> data; int32 len; int32 cap; int32 mods; A alloc;
+    // Field defaults ARE the empty state, declared once here instead of repeated in four ctors
+    // (force-explicit-field-init: a primitive or raw `Ptr` no longer rides silently on `= {0}`).
+    Ptr<T> data = null; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
 
     // The bare list draws from the default `GlobalAllocator` (a zero-size field — no state, no cost).
     // The `alloc` field is a plain value (not Owned/Shared), so the bare ctor need not set it; a
@@ -155,11 +157,11 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied). The copy
     // draws from the SAME allocator as the source (the handle is copied), so a bump-backed list's copy
     // lands in the same arena.
-    public fn DynamicArray<T, A> copy() {
+    public ctor copy(ref DynamicArray<T, A> source) {
         DynamicArray<T, A> result;
-        result.alloc = this.alloc;                    // copy the allocator handle (a value) — same arena
+        result.alloc = source.alloc;                    // copy the allocator handle (a value) — same arena
         int32 i = 0;
-        while (i < this.len) { result.add(item: copy this[i]); i = i + 1; }
+        while (i < source.len) { result.add(item: copy source[i]); i = i + 1; }
         return result;
     }
 

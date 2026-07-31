@@ -9,7 +9,8 @@ type virtual resource Shape {
     public fn int32 plus1() { return this.val() + 1; }   // public surface dispatches virtually
 }
 type final resource Box extends Shape {
-    int32 n;                                          // private (kind-decides); set via accessor, zero-fills at build
+    int32 n = 0;                                      // private (kind-decides); the field default IS the
+                                                      // stated empty state — `make()` need not repeat it
     public ctor make() { Box b; return give b; }      // bare local -> __vptr set by the vtable-typed store
     public fn void put(int32 v) { this.n = v; }
     protected override fn int32 val() { return this.n; }

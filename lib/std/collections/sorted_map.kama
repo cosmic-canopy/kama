@@ -471,7 +471,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // never touches a not-yet-set handle. Every INTERIOR node box is drawn from `A` (the placement
     // `new(allocator:)` sites in BTreeNode), so all but this one root box lives in the arena.
     Owned<BTreeNode<K,V,A>> root;
-    int32 len; int32 mods;
+    int32 len = 0; int32 mods = 0;
     A alloc;                                            // the allocator the tree's nodes + arrays draw from
 
     // The canonical zero-arg build (M8c `default`) — a NON-zero default: it builds a live B-tree root. A
@@ -551,10 +551,10 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // Deep-copy the whole map (present only when both key and value are Copyable): a fresh tree with an
     // independent clone of every entry, rebuilt from the sorted key/value copies (popped from the end, an
     // O(1) move each). `bare: give` — a plain hand-off still MOVES.
-    public fn SortedMap<K,V,A> copy() when [K: Copyable, V: Copyable] {
-        SortedMap<K,V,A> result = SortedMap.withAllocator(allocator: this.alloc);   // clone into the SAME allocator
-        DynamicArray<K> ks = this.keys();
-        DynamicArray<V> vs = this.values();
+    public ctor copy(ref SortedMap<K,V,A> source) when [K: Copyable, V: Copyable] {
+        SortedMap<K,V,A> result = SortedMap.withAllocator(allocator: source.alloc);   // clone into the SAME allocator
+        DynamicArray<K> ks = source.keys();
+        DynamicArray<V> vs = source.values();
         while (ks.length() > 0) {
             int32 last = ks.length() - 1;
             K k = ks.remove(index: last); V v = vs.remove(index: last);   // O(1) tail removal

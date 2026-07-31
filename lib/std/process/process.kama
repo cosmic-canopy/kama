@@ -179,8 +179,8 @@ type resource Command {
     // stream; the parent keeps its end (in the Process), the child-side ends close on return (RAII).
     public fn Result<Process, IoError> start() {
         // stdin: parent WRITES inKeep; child READS inGive.
-        File inKeep = File.make(fd: 0);
-        File inGive = File.make(fd: 0);
+        File inKeep = File.make(fd: -1);
+        File inGive = File.make(fd: -1);
         match (this.inCfg) {
             case Inherit: {}
             case Piped: {
@@ -196,8 +196,8 @@ type resource Command {
         };
 
         // stdout: parent READS outKeep; child WRITES outGive.
-        File outKeep = File.make(fd: 0);
-        File outGive = File.make(fd: 0);
+        File outKeep = File.make(fd: -1);
+        File outGive = File.make(fd: -1);
         match (this.outCfg) {
             case Inherit: {}
             case Piped: {
@@ -213,8 +213,8 @@ type resource Command {
         };
 
         // stderr: parent READS errKeep; child WRITES errGive.
-        File errKeep = File.make(fd: 0);
-        File errGive = File.make(fd: 0);
+        File errKeep = File.make(fd: -1);
+        File errGive = File.make(fd: -1);
         match (this.errCfg) {
             case Inherit: {}
             case Piped: {

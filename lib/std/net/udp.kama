@@ -45,7 +45,11 @@ type contract DatagramSocket for resource {
 // A UDP socket. Closes its handle on drop (RAII). Move-only. Blocking by default; `setNonBlocking(true)`
 // makes recv/recvFrom return `Err(WouldBlock)` instead of stalling (the game-loop drain model).
 type resource UdpSocket implements DatagramSocket {
-    isize fd;
+    // The empty niche is -1, not 0 (force-explicit-field-init makes the field default the place to
+    // SAY so). A bare/moved-from slot therefore reads -1 and the destructor skips it, while fd 0
+    // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable
+    // for no reason other than that zero doubled as "empty". Rust's `OwnedFd` niche.
+    isize fd = -1;
     private ctor make(isize fd) { UdpSocket r; r.fd = fd; return give r; }
 
     // Bind to a numeric host:port. host ""/"0.0.0.0" = all interfaces; port 0 = OS-assigned ephemeral
@@ -150,5 +154,5 @@ type resource UdpSocket implements DatagramSocket {
     // The raw socket handle — the intended bridge for handing this socket to a std::net::Poller.
     public fn isize rawHandle() { return this.fd; }
 
-    ~UdpSocket() { if (this.fd > 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // fd > 0: see net.kama ~TcpStream
+    ~UdpSocket() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // see net.kama ~TcpStream
 }

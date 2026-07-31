@@ -134,7 +134,8 @@ type value MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
 type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
         implements Copyable(bare: give) when [K: Copyable, V: Copyable], Iterable<K> when [K: Copyable],
                    Serialize when [K: Serialize, V: Serialize], Deserialize when [K: Deserialize, V: Deserialize] {
-    Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 len; int32 cap; int32 tombs; int32 mods; A alloc;
+    Ptr<K> keys = null; Ptr<V> vals = null; Ptr<uint8> state = null;
+    int32 len = 0; int32 cap = 0; int32 tombs = 0; int32 mods = 0; A alloc;
 
     // The bare map draws from the default `GlobalAllocator` (a zero-size field — no state, no cost). A
     // custom-allocator map is built by `withAllocator`, which sets `alloc` after construction (Kama has
@@ -211,14 +212,14 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
 
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
-    public fn Map<K,V,H,A> copy() when [K: Copyable, V: Copyable] {
+    public ctor copy(ref Map<K,V,H,A> source) when [K: Copyable, V: Copyable] {
         Map<K,V,H,A> result;
-        result.alloc = this.alloc;                  // copy the allocator handle (a value) — same arena
+        result.alloc = source.alloc;                  // copy the allocator handle (a value) — same arena
         int32 i = 0;
-        while (i < this.cap) {
-            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+        while (i < source.cap) {
+            uint8 s = 0ui8; unsafe { s = source.state[i]; }
             if (s == 1ui8) {
-                unsafe { result.put(key: this.cloneKey(k: this.keys[i]), value: this.cloneVal(v: this.vals[i])); }
+                unsafe { result.put(key: source.cloneKey(k: source.keys[i]), value: source.cloneVal(v: source.vals[i])); }
             }
             i = i + 1;
         }

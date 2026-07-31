@@ -1,0 +1,10 @@
+// Force-explicit-field-init: a constructor assigns EVERY field. `size` rides on nothing here — before
+// this rule it silently became 0 via the emitted `= {0}`, so the guarantee was "never garbage" rather
+// than "the compiler proved it was set". The two escape hatches are both explicit and both at the
+// DECLARATION: a field initializer (`int32 size = 0;`), or `@generate(zero)` on a data bag.
+type value Rect {
+    public int32 w;
+    public int32 size;                 // never assigned below
+    public ctor make(int32 w) { Rect r; r.w = w; return give r; }
+}
+fn int32 main() { Rect r = Rect.make(w: 3); return r.w; }

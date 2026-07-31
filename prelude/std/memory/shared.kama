@@ -71,9 +71,9 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
         return Shared.make(p: raw, c: ctrl, alloc: allocator);
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    public fn Shared<T, A> copy() {                                   // Copyable -> retain, carry the allocator
-        unsafe { kama_ctrl_retain_strong(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()); }
-        return Shared.make(p: this.p, c: this.c, alloc: this.alloc);
+    public ctor copy(ref Shared<T, A> source) {                                   // Copyable -> retain, carry the allocator
+        unsafe { kama_ctrl_retain_strong(c: cast<Ptr>(source.c), atomic: __kama_ctrl_atomic()); }
+        return Shared.make(p: source.p, c: source.c, alloc: source.alloc);
     }
     public fn Weak<T, A> downgrade() {
         unsafe { kama_ctrl_retain_weak(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()); }

@@ -10,7 +10,7 @@ type resource Res implements Copyable(bare: give) {
     DynamicArray<int32> items;                                      // owns a heap buffer
     public ctor make(int32 v) { Res r; r.items.add(item: v); return give r; }
     ~Res() { }                                              // resource (move-only); frees `items` too
-    public fn Res copy() { Res r = Res.make(v: this.items[0]); return give r; }  // opt into Copyable
+    public ctor copy(ref Res source) { Res r = Res.make(v: source.items[0]); return give r; }  // opt into Copyable
     public fn int32 head() { return this.items[0]; }
 }
 

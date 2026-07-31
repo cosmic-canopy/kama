@@ -40,7 +40,7 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
     // `foreach (K k in set.elements())` — ascending members (key copies).
     public fn DynamicArray<K> elements() when [K: Copyable] { return this.m.keys(); }
     public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable] { return this.m.range(from: from, to: to); }
-    public fn SortedSet<K, A> copy() when [K: Copyable] { SortedSet<K, A> result; result.m = copy this.m; return give result; }
+    public ctor copy(ref SortedSet<K, A> source) when [K: Copyable] { SortedSet<K, A> result; result.m = copy source.m; return give result; }
 
     // Serialize as a JSON array of the members in ascending order (Serialize needs a Copyable key — the key
     // view yields copies); deserialize just `add`s each key back.

@@ -3,7 +3,7 @@
 type resource H implements Copyable(bare: copy) {
     int32 id;
     public ctor make(int32 id) { H r; r.id = id; return give r; }
-    public fn H copy() { return H.make(id: this.id); }
+    public ctor copy(ref H source) { return H.make(id: source.id); }
     public fn int32 get() { return this.id; }
 }
 fn int32 useIt(H h) { return h.get(); }

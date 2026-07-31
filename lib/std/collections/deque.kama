@@ -43,7 +43,7 @@ type value DequeIterMut<T> implements IteratorMut<T> {
 // window wraps around the end of the buffer. `mods` is a modification counter iterators snapshot.
 type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
                             Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
-    Ptr<T> data; int32 head; int32 len; int32 cap; int32 mods; A alloc;
+    Ptr<T> data = null; int32 head = 0; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c) — see DynamicArray. `empty()` is the `default` zero-arg build; `empty`/
     // `withCapacity` are default-allocator conveniences (custom `A` uses the allocator-taking ctors).
@@ -150,12 +150,12 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
     }
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied in order).
-    public fn Deque<T, A> copy() {
+    public ctor copy(ref Deque<T, A> source) {
         Deque<T, A> result;
-        result.alloc = this.alloc;                    // copy the allocator handle (a value) — same arena
-        result.reserve(n: this.len);
+        result.alloc = source.alloc;                    // copy the allocator handle (a value) — same arena
+        result.reserve(n: source.len);
         int32 i = 0;
-        while (i < this.len) { result.pushBack(item: copy this[i]); i = i + 1; }
+        while (i < source.len) { result.pushBack(item: copy source[i]); i = i + 1; }
         return result;
     }
 

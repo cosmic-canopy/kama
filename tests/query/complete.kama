@@ -24,14 +24,14 @@ type value Cell implements Sized {
 }
 
 type virtual resource Base {
-    int32 shared;
-    int32 hidden;
+    int32 shared = 0;
+    int32 hidden = 0;
     public ctor make() { Base b; return give b; }
     protected virtual fn int32 baseOnly() { return this.shared; }
 }
 
 type final resource Derived extends Base {
-    int32 own;
+    int32 own = 0;
     public ctor make() { Derived d; return give d; }
     public fn int32 total() { return this.own + this.baseOnly(); }
 }

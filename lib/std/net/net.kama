@@ -33,7 +33,11 @@ extern fn int32 kama_EAGAIN();
 // contract (a `Reader` + `Writer` + `setNonBlocking`; shared with the WebSocket backend). Blocking by
 // default; `setNonBlocking(true)` makes read/write return `Err(WouldBlock)` instead of stalling.
 type resource TcpStream implements ReliableStream, Reader, Writer {
-    isize fd;
+    // The empty niche is -1, not 0 (force-explicit-field-init makes the field default the place to
+    // SAY so). A bare/moved-from slot therefore reads -1 and the destructor skips it, while fd 0
+    // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable
+    // for no reason other than that zero doubled as "empty". Rust's `OwnedFd` niche.
+    isize fd = -1;
     // Adopt an already-connected socket fd. This is the escape hatch used by TcpListener.accept();
     // prefer `connect` for client sockets.
     public ctor make(isize fd) { TcpStream r; r.fd = fd; return give r; }
@@ -126,12 +130,12 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
 
     // fd > 0: 0 is the moved-from sentinel (and stdin) — never a real socket; guarding it keeps a dropped
     // {0} from closing an unrelated fd (the raw-handle-zero trap; see std::fs::File / the drop-only-if-live work).
-    ~TcpStream() { if (this.fd > 0) { int32 rc = kama_close_socket(fd: this.fd); } }
+    ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
 }
 
 // A listening TCP socket. Closes on drop (RAII). Move-only.
 type resource TcpListener {
-    isize fd;
+    isize fd = -1;   // the -1 empty niche — see ~TcpStream
     private ctor make(isize fd) { TcpListener r; r.fd = fd; return give r; }
 
     // Bind + listen on a numeric host:port. host "" or "0.0.0.0" = all interfaces. SO_REUSEADDR is set.
@@ -173,5 +177,5 @@ type resource TcpListener {
     // The raw socket handle — the intended bridge for handing this listener to a std::net::Poller.
     public fn isize rawHandle() { return this.fd; }
 
-    ~TcpListener() { if (this.fd > 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // fd > 0: see ~TcpStream
+    ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // see ~TcpStream
 }

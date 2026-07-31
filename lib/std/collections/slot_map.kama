@@ -67,8 +67,8 @@ type value SlotMapValueIterMut<V> implements IteratorMut<V> {
 // — a removed slot (now even) or a reused slot (now a higher odd) both mismatch. `slotCount` is the high-water
 // slot count; `freeList` is sized to `cap`, so a push never overflows (occupied + free <= slotCount <= cap).
 type resource SlotMap<V, A: Allocator = GlobalAllocator> {
-    Ptr<V> values; Ptr<uint32> gens; Ptr<int32> freeList;
-    int32 slotCount; int32 freeLen; int32 len; int32 cap; int32 mods; A alloc;
+    Ptr<V> values = null; Ptr<uint32> gens = null; Ptr<int32> freeList = null;
+    int32 slotCount = 0; int32 freeLen = 0; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c). `empty()` is the `default` zero-arg build; `empty`/`withCapacity` are the
     // default-allocator conveniences (custom `A` uses the allocator-taking ctors). A bare `SlotMap<V, A> r;`

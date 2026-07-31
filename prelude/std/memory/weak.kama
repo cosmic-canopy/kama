@@ -26,9 +26,9 @@ type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable(bare: 
     Ptr<Ctrl> c;
     A alloc;
     public ctor make(Ptr<T> p, Ptr<Ctrl> c, A alloc) { Weak<T, A> r; r.p = p; r.c = c; r.alloc = alloc; return give r; }
-    public fn Weak<T, A> copy() {                                     // Copyable -> another weak handle
-        unsafe { kama_ctrl_retain_weak(c: cast<Ptr>(this.c), atomic: __kama_ctrl_atomic()); }
-        return Weak.make(p: this.p, c: this.c, alloc: this.alloc);
+    public ctor copy(ref Weak<T, A> source) {                                     // Copyable -> another weak handle
+        unsafe { kama_ctrl_retain_weak(c: cast<Ptr>(source.c), atomic: __kama_ctrl_atomic()); }
+        return Weak.make(p: source.p, c: source.c, alloc: source.alloc);
     }
     public fn Optional<Shared<T, A>> tryUpgrade() {
         unsafe {

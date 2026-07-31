@@ -18,7 +18,7 @@ export { PriorityQueue };
 // it with repeated `pop`.
 type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable] {
     DynamicArray<T, A> data;   // the heap-ordered backing store (data[0] = root)
-    bool maxOrder;             // false = min-heap (smallest first), true = max-heap (largest first)
+    bool maxOrder = false;     // min-heap by default; `maxHeap()`/`maxHeapWith*` flip it to true
 
     // Self-documenting factories (T inferred from the target type). `minHeap()` builds the min-heap default;
     // a bare `PriorityQueue<T, A> q;` default-fills `data` (`DynamicArray.empty()`) and zero-inits `maxOrder`;
@@ -141,10 +141,10 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
 
     // Deep-copy the whole queue (present only for a Copyable element): the backing array is cloned element by
     // element and the ordering flag carried over, so the heap invariant is preserved without re-heapifying.
-    public fn PriorityQueue<T, A> copy() when [T: Copyable] {
+    public ctor copy(ref PriorityQueue<T, A> source) when [T: Copyable] {
         PriorityQueue<T, A> result;
-        result.data = copy this.data;   // DynamicArray.copy carries the allocator handle over — same arena
-        result.maxOrder = this.maxOrder;
+        result.data = copy source.data;   // DynamicArray.copy carries the allocator handle over — same arena
+        result.maxOrder = source.maxOrder;
         return give result;
     }
 }

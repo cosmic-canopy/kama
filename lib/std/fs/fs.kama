@@ -34,9 +34,13 @@ type value Metadata {
 // An open file that closes its descriptor on drop (RAII). Move-only. Implements the streaming byte substrate
 // (`std::io::Reader`/`Writer`), so serde streams straight to/from disk (`JsonWriter::<File>` / `decodeFrom`).
 type resource File implements Reader, Writer {
-    int32 fd;
+    // The empty niche is -1, not 0 (force-explicit-field-init makes the field default the place to
+    // SAY so). A bare/moved-from slot therefore reads -1 and the destructor skips it, while fd 0
+    // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable
+    // for no reason other than that zero doubled as "empty". Rust's `OwnedFd` niche.
+    int32 fd = -1;
     // Adopt an already-open fd (e.g. a child pipe end from std::process, mirroring TcpStream.make). Prefer
-    // `open` for files. The File closes this fd on drop (RAII); pass 0 for an empty/moved-from sentinel.
+    // `open` for files. The File closes this fd on drop (RAII); pass -1 for an empty/moved-from slot.
     public ctor make(int32 fd) { File r; r.fd = fd; return give r; }
 
     // The raw descriptor (for a readiness Poller etc.), mirroring TcpStream.rawHandle(). Borrow-only — the
@@ -45,7 +49,7 @@ type resource File implements Reader, Writer {
 
     // Close the descriptor NOW (idempotent) instead of waiting for drop — e.g. to send EOF down a pipe
     // (std::process closeStdin). Zeroes the fd so the destructor's `fd > 0` guard won't double-close.
-    public fn void close() { if (this.fd > 0) { int32 rc = kama_close_fd(fd: this.fd); this.fd = 0; } }
+    public fn void close() { if (this.fd >= 0) { int32 rc = kama_close_fd(fd: this.fd); this.fd = -1; } }
 
     // Open a file for reading or writing (Write creates/truncates). The returned `File` closes on drop.
     public ctor Result<File, IoError> open(ref string path, OpenMode mode) {
@@ -127,7 +131,7 @@ type resource File implements Reader, Writer {
     // uninitialized/whole-reassigned local). `fd == 0` is stdin, so `fd > 0` treats the zero as the empty
     // sentinel (a real descriptor this API opens is always > 0). A future "force explicit field init" pass
     // (the language's proper answer to default assignment) would retire this guard entirely.
-    ~File() { if (this.fd > 0) { int32 rc = kama_close_fd(fd: this.fd); } }
+    ~File() { if (this.fd >= 0) { int32 rc = kama_close_fd(fd: this.fd); } }
 }
 
 // Read an entire file into an owning byte buffer (opens, reads to EOF, closes on drop).

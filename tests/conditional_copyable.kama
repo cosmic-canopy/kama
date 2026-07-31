@@ -5,7 +5,7 @@ type resource Cell<T> implements Copyable(bare: give) when [T: Copyable] {
     T value;
     public ctor make(T v) { Cell<T> r; r.value = give v; return give r; }
     public fn ref T get() { return this.value; }
-    public fn Cell<T> copy() { return Cell.make(v: copy this.value); }
+    public ctor copy(ref Cell<T> source) { return Cell.make(v: copy source.value); }
     ~Cell() { drop(value: this.value); }
 }
 type resource MoveOnly { int32 n; public ctor make(int32 n){ MoveOnly r; r.n=n; return give r; } ~MoveOnly(){} public fn int32 val(){return this.n;} }

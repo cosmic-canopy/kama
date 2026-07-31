@@ -17,7 +17,7 @@ extern fn void free(Ptr p);
 // into this Arena's mutable `offset`, so N containers can draw from ONE arena. The Arena must
 // OUTLIVE every container built from `handle()` — declare it first so it drops last.
 type resource Arena {
-    Ptr<uint8> buffer; int32 capacity; int32 offset;
+    Ptr<uint8> buffer = null; int32 capacity = 0; int32 offset = 0;
 
     public ctor make(int32 capacity) {
         Arena r;

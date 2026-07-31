@@ -1332,7 +1332,10 @@ private:
 
     // Declarations / top level
     bool paramByRef(FunctionParameterNode* p);
-    std::string paramListC(SharedParameterList params, const char* selfType);
+    // `ownerCType` names the enclosing type when emitting a class member, so a `ref This`
+    // SELF-borrow can be told apart from borrowing someone else's smart-pointer handle.
+    std::string paramListC(SharedParameterList params, const char* selfType,
+                           const char* ownerCType = nullptr);
     // `nameOverride`: emit under a supplied mangled name instead of the declared one
     // (used for generic instantiations, whose C name carries the concrete type args).
     void emitFunctionPrototype(FunctionDeclarationNode* fn, const std::string* nameOverride = nullptr);

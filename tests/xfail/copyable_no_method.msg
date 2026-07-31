@@ -1,1 +1,1 @@
-implements `Copyable` but has no public nullary `copy()`
+implements `Copyable` but has no public `copy` constructor
