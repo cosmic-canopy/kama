@@ -3,14 +3,15 @@
 # Kept in the repo as a REAL FILE rather than only as a snippet in docs/editors.md, so tools/check-editors.sh
 # can check the documentation against something executable instead of against prose.
 #
-# Helix colours ONLY from tree-sitter, so the [[grammar]] block is what turns colouring on. After editing
-# this file you must build the parser once:
+# Helix colours ONLY from tree-sitter, so the [[grammar]] block is what turns colouring on. After adding it:
 #
 #     hx --grammar build
 #     mkdir -p ~/.config/helix/runtime/queries/kama
 #     cp <repo>/tree-sitter-kama/queries/*.scm ~/.config/helix/runtime/queries/kama/
 #
-# `hx --health kama` should then show BOTH the language server and Highlight queries as ✓.
+# `hx --health kama` should then show five ✓ — the server, the parser, and the highlight, textobject and
+# indent queries. (`hx --grammar build` also reports failures for every OTHER grammar it has not fetched;
+# that is normal and unrelated.)
 
 [language-server.kama]
 command = "kama"
@@ -26,12 +27,16 @@ block-comment-tokens = { start = "/*", end = "*/" }
 indent = { tab-width = 4, unit = "    " }
 language-servers = ["kama"]
 
-# Building from a LOCAL path needs no git, no commit and no network — this is the fast iteration loop.
-# Once the repository is public, swap in the git form (the grammar lives in a subdirectory, hence `subpath`):
+# The grammar lives in a subdirectory of the compiler repo, hence `subpath`.
+# `rev` must be a commit that CONTAINS tree-sitter-kama/ — it is not a release tag today because no tag
+# does; the grammar landed after v0.1.76.
+[[grammar]]
+name = "kama"
+source = { git = "https://github.com/cosmic-canopy/kama", rev = "f143f315f1dc582740a643de41afe242e510e6be", subpath = "tree-sitter-kama" }
+
+# Working on the grammar itself? Swap the block above for a local path — it needs no git, no commit and no
+# network, which is the fast iteration loop (Zed, by contrast, can only see committed revisions):
 #
 #   [[grammar]]
 #   name = "kama"
-#   source = { git = "https://github.com/cosmic-canopy/kama", rev = "<commit>", subpath = "tree-sitter-kama" }
-[[grammar]]
-name = "kama"
-source = { path = "/Users/matt/Documents/cstar/tree-sitter-kama" }
+#   source = { path = "/absolute/path/to/kama/tree-sitter-kama" }

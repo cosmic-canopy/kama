@@ -48,7 +48,7 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
 // The enumeration cap — and note what it is actually for. It is NOT a resource limit: 500 trivial files
 // analyze in ~0.3s, faster than 43 real stdlib files, because cost tracks content and import depth rather
 // than file count. It bounds a GUESS. Absent a `sources` declaration, "the project" is inferred as every
-// .kama under a root, and when that inference is wrong — cstar itself holds 870, 813 of them independent
+// .kama under a root, and when that inference is wrong — kama itself holds 870, 813 of them independent
 // tests/ fixtures with their own `main` and colliding type names — they get analyzed as ONE program, the
 // symbol tables collide, and rename would confidently rewrite the wrong file. So raising this number is
 // not the fix for a large project; declaring `sources` in kama.json is (which removes the cap entirely).

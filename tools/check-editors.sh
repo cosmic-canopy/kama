@@ -68,6 +68,24 @@ fi
 if [ -f "$ZED_TOML" ]; then
     grep -qF -- 'grammars.kama' "$ZED_TOML" || bad "editor/zed/extension.toml no longer declares the kama grammar"
     grep -qF -- 'tree-sitter-kama' "$ZED_TOML" || bad "editor/zed/extension.toml no longer points at the tree-sitter-kama subdirectory"
+    # No local dev path may ship: Zed and Helix fetch by URL, and a `file://` or an absolute home directory
+    # works only on the machine it was written on.
+    grep -qE 'file://|/Users/|/home/' "$ZED_TOML" && bad "editor/zed/extension.toml points at a LOCAL path; it must fetch from the public repository" || true
+    grep -qE 'file://|/Users/|/home/' "$ROOT/editor/helix/languages.toml" && bad "editor/helix/languages.toml's [[grammar]] points at a LOCAL path; the shipped block must fetch by git (a local path belongs in the commented contributor note)" || true
+
+    # 2c. THE REV MUST CONTAIN THE GRAMMAR. This is the one way the Zed extension can be perfectly
+    #     well-formed and still be broken for every user: a rev that predates tree-sitter-kama/ (no tag
+    #     does yet — the grammar landed after v0.1.76) fetches a tree with no grammar in it, and the
+    #     failure surfaces in the user's editor, not here. Checked against the local object database, so
+    #     it needs no network and works while the repo is private.
+    rev=$(sed -n 's/^rev = "\([^"]*\)".*/\1/p' "$ZED_TOML" | head -1)
+    if [ -n "$rev" ] && command -v git >/dev/null 2>&1 && [ -d "$ROOT/.git" ]; then
+        if ! git -C "$ROOT" cat-file -e "$rev^{commit}" 2>/dev/null; then
+            bad "editor/zed/extension.toml pins rev=$rev, which is not a commit in this repository"
+        elif [ -z "$(git -C "$ROOT" ls-tree --name-only "$rev" -- tree-sitter-kama 2>/dev/null)" ]; then
+            bad "editor/zed/extension.toml pins rev=$rev, which does NOT contain tree-sitter-kama/ — Zed would fetch a tree with no grammar and the extension would fail to load"
+        fi
+    fi
 fi
 
 # 3. Each snippet has to teach the editor about `.kama` — none of them ship a kama file type.

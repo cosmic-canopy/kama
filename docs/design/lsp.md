@@ -153,7 +153,7 @@ kept because the reasoning behind each decision is what a later campaign borrows
   the open file** (npm/cargo *workspace* semantics, bounded by the editor's folder), so a monorepo's root
   manifest wins over a package's and renaming in one package sees the other packages' uses — nearest-wins
   would index only the one package and then silently rewrite it anyway, recreating the M3.3 bug one level
-  up. With no manifest the root falls back to the editor's `rootUri`, capped at 500 `.kama` files: cstar
+  up. With no manifest the root falls back to the editor's `rootUri`, capped at 500 `.kama` files: kama
   itself holds 870, 813 of them independent `tests/` fixtures with their own `main` and colliding type
   names, which as one program would be slow *and* wrong. A **second, lazily-built index** (`lspAnalyzeWorkspace`,
   every open buffer passed in as an overlay) serves only references/rename/`workspace/symbol`; diagnostics,

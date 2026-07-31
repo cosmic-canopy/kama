@@ -230,21 +230,21 @@ language-servers = ["kama"]
 ```
 
 Helix colours **only** from tree-sitter, so add the grammar too — this is what the `[[grammar]]` block is
-for. Point it at your checkout (no git, no commit, no network):
+for. The grammar lives in a subdirectory of the compiler repo, which is what `subpath` is for:
+
+```toml
+[[grammar]]
+name = "kama"
+source = { git = "https://github.com/cosmic-canopy/kama", rev = "f143f315f1dc582740a643de41afe242e510e6be", subpath = "tree-sitter-kama" }
+```
+
+If you are working on the grammar itself, point it at your checkout instead — a local path needs no git, no
+commit and no network, which makes it the fast iteration loop:
 
 ```toml
 [[grammar]]
 name = "kama"
 source = { path = "/absolute/path/to/kama/tree-sitter-kama" }
-```
-
-Once the repository is public you can fetch it instead, and because the grammar lives in a subdirectory the
-`subpath` key is the one that matters:
-
-```toml
-[[grammar]]
-name = "kama"
-source = { git = "https://github.com/cosmic-canopy/kama", rev = "<commit>", subpath = "tree-sitter-kama" }
 ```
 
 Then build the parser and install the queries:

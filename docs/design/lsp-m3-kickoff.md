@@ -432,7 +432,7 @@ The four-point shape above held. What the brief did not anticipate:
    is no declared boundary, so it takes the **nearest** instead: an unbounded upward walk could otherwise
    pick up a stray `kama.json` in `$HOME` and index the world.
 2. **A file cap is load-bearing, not a nicety.** With no manifest the root falls back to `workspaceRoot`,
-   and cstar itself has **870 `.kama` files, 813 of them independent `tests/` fixtures** each with its own
+   and kama itself has **870 `.kama` files, 813 of them independent `tests/` fixtures** each with its own
    `main` and colliding type names. Analyzing those as one program is slow *and* wrong (whichever `Point`
    registers last wins the table, so a rename could rewrite an unrelated fixture). `kLspMaxProjectFiles`
    = 500; over it, `LspProject::tooLarge` and rename refuses naming the count.
@@ -444,7 +444,7 @@ The four-point shape above held. What the brief did not anticipate:
    have shipped.
 4. **⚠️ String-prefix path tests are unsafe here — `lspRealPath` exists for one reason.** Module
    resolution names the stdlib relative to the *compiler binary*: `<exeDir>/../../lib/std/…`, which in a
-   dev tree is literally `/…/cstar/build/Darwin-arm64/../../lib/std/…` — a string that **has the project
+   dev tree is literally `/…/kama/build/Darwin-arm64/../../lib/std/…` — a string that **has the project
    root as a prefix**. `underRoot()` would therefore have called a std symbol project-owned and rewritten
    it. The too-large guard masked this in the obvious test (the repo has 870 files); it only showed up
    when probing a small project outside the repo. Both sides now go through `realpath` first. The same
