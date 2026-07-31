@@ -53,9 +53,13 @@ export function kamaWords(root) {
       ...scopeAlternation(pats, 'keyword.other.modifier.kama'),
       ...scopeAlternation(pats, 'keyword.other.kama'),
       ...scopeAlternation(pats, 'keyword.operator.new.kama'),
-      ...alternationWith(pats, 'resource'),   // value | resource | view | contract
       ...alternationWith(pats, 'enum'),
     ]),
+    // `value`/`resource`/`view`/`contract` are CONTEXTUAL: a kind only directly after `type`, and
+    // ordinary identifiers everywhere else (`int32 value = 5;`, `Ok(value: x)`). Colouring them
+    // unconditionally turned every `value:` argument label into a keyword.
+    kinds: new Set(alternationWith(pats, 'resource')),
+    modifiers: new Set(scopeAlternation(pats, 'keyword.other.modifier.kama')),
     primitive: new Set(scopeAlternation(pats, 'storage.type.primitive.kama')),
     literal: new Set([...scopeAlternation(pats, 'constant.language.kama'),
                       ...scopeAlternation(pats, 'variable.language.kama')]),
@@ -77,17 +81,45 @@ const KAMA_RE = new RegExp([
   /\b[A-Za-z_][A-Za-z0-9_]*\b/,                     // word: keyword / type / call / plain
 ].map(r => r.source).join('|'), 'g');
 
+/**
+ * A `"…"` string with its `${…}` holes coloured separately — the editor grammar does this
+ * (meta.interpolation.kama), so the site should too, or interpolation reads as inert text. A verbatim
+ * `@"…"` never interpolates and is passed through whole. `\${` is an escaped literal, not a hole.
+ */
+function kamaString(text) {
+  if (text.startsWith('@')) return tag('t-str', text);
+  let out = '', last = 0;
+  for (const m of text.matchAll(/\$\{([^}]*)\}/g)) {
+    if (text[m.index - 1] === '\\') continue;             // escaped: `\${` is a literal
+    out += tag('t-str', text.slice(last, m.index));
+    last = m.index + m[0].length;
+    // Inside a hole: the value path, then an optional `:spec` (`${pi:.2}`, `${n:0x}`).
+    const body = m[1].replace(/^([^:]*)(:.*)?$/, (_, path, spec) =>
+      tag('t-var', path) + (spec ? tag('t-fs', spec) : ''));
+    out += tag('t-ip', '${') + body + tag('t-ip', '}');
+  }
+  return out + tag('t-str', text.slice(last));
+}
+
 function kama(src, words) {
   let out = '', last = 0;
+  let afterType = false;   // inside `type [modifiers] <kind>` — the only place a kind word is a keyword
   for (const m of src.matchAll(KAMA_RE)) {
     const t = m[0];
     out += esc(src.slice(last, m.index));
     last = m.index + t.length;
     const after = src.slice(last);
+    const isWord = /^[A-Za-z_]/.test(t);
+    const kindHere = afterType && words.kinds.has(t);
+    if (isWord && !t.startsWith('@')) {
+      if (t === 'type') afterType = true;
+      else if (!words.modifiers.has(t)) afterType = false;
+    }
     if (t.startsWith('//') || t.startsWith('/*')) out += tag('t-cm', t);
     else if (t.startsWith('@') && !/^@"/.test(t)) out += tag('t-at', t);
-    else if (/^["'@]/.test(t)) out += tag('t-str', t);
+    else if (/^["'@]/.test(t)) out += kamaString(t);
     else if (/^\d/.test(t)) out += tag('t-num', t);
+    else if (kindHere) out += tag('t-kw', t);
     else if (words.keyword.has(t)) out += tag('t-kw', t);
     else if (words.primitive.has(t)) out += tag('t-ty', t);
     else if (words.literal.has(t)) out += tag('t-lit', t);

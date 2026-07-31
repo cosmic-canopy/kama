@@ -1,28 +1,77 @@
 // The code sample on the kama-lang.org home page. It lives here, as a fixture with an asserted
 // exit code, so the front page's code is compiled and run by every leg of the test suite and
-// cannot rot. tools/site/build.mjs reads this file verbatim.
-enum ForgeError { TooFewFolds }
-implements Error for ForgeError { public fn string message() { return "too few folds"; } }
+// cannot rot. tools/site/build.mjs reads this file verbatim, minus this header.
 
-type resource Blade                          // a resource moves; its fields stay private
+// A `value` owns nothing but its bytes, so it copies freely.
+// The other kinds: `resource` owns and moves, `view` borrows, `contract` is a guarantee.
+type value Steel
 {
-    int32 folds;
-    public ctor make(int32 folds) { Blade b; b.folds = folds; return give b; }
-    public fn int32 sharpness() { return this.folds * 3; }
-    ~Blade() { }                             // runs at end of scope — no GC, no runtime
+    public int32 carbon;
+
+    // Construction is always a named constructor called on the type — no brace
+    // literals, and `new` is only for the heap. A declared value starts zeroed,
+    // so a field is never read as garbage.
+    public ctor make(int32 carbon)
+    {
+        Steel s;
+        s.carbon = carbon;
+        return s;
+    }
 }
 
-fn Result<Blade, ForgeError> temper(string name, int32 folds)
+enum ForgeError { TooFewFolds }
+
+implements Error for ForgeError
 {
-    if (folds < 8) { return Result::Err(error: ForgeError::TooFewFolds); }
-    println(s: "forging ${name} at ${folds} folds");
-    return Result::Ok(value: Blade.make(folds: folds));
+    public fn string message() { return "a blade needs at least 8 folds"; }
+}
+
+// A `resource` owns something, so it moves instead of copying and its destructor
+// runs at the end of the scope that owns it. No garbage collector, no pauses.
+type resource Blade
+{
+    Steel steel;    // fields are private by default — a resource never exposes what it owns
+    int32 folds;
+
+    // The infallible constructor: nothing here can go wrong.
+    public ctor make(Steel steel, int32 folds)
+    {
+        Blade b;
+        b.steel = steel;
+        b.folds = folds;
+        return give b;
+    }
+
+    // The fallible one returns a Result and fails *before* the blade exists,
+    // so a half-forged Blade is not a thing that can be observed.
+    public ctor Result<Blade, ForgeError> temper(Steel steel, int32 folds)
+    {
+        if (folds < 8)
+        {
+            return Result::Err(error: ForgeError::TooFewFolds);
+        }
+
+        println(s: "forging at ${folds} folds");
+        return Result::Ok(value: Blade.make(steel: steel, folds: folds));
+    }
+
+    public fn int32 sharpness()
+    {
+        return this.folds * this.steel.carbon;
+    }
+
+    ~Blade() { }   // runs here, deterministically, when the owner goes out of scope
 }
 
 fn int main()
 {
-    return match (temper(name: "kama", folds: 12)) {   // named arguments; exhaustive match
-        case Ok(value: blade): blade.sharpness();             // 36
+    Steel steel = Steel.make(carbon: 3);
+
+    // `match` is exhaustive: handle every case, or it does not compile.
+    // Each arm names the field it binds, exactly as a call names its arguments.
+    return match (Blade.temper(steel: steel, folds: 14))
+    {
+        case Ok(value: blade): blade.sharpness();
         case Err(error: e):    1;
     };
 }

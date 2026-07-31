@@ -328,6 +328,10 @@ pre.sample { margin: 0; padding: 1.6rem 1.8rem; }
 .t-arg { color: #cf9d6a; }
 .t-lit { color: #d19a66; }
 .t-at  { color: #b8b2a6; }
+/* string interpolation: the `${…}` seam is visible, the value inside reads as code, not as text */
+.t-ip  { color: #e8763a; }
+.t-var { color: #d8cfc4; }
+.t-fs  { color: #8a8578; }
 
 /* ------------------------------------------------------------------ docs index */
 .doc-index .page h1 { font-size: clamp(2rem, 4vw, 2.6rem); margin: .5rem 0 .8rem; }

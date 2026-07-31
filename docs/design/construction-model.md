@@ -18,6 +18,13 @@
 >    live" — it subsumes the abandoned definite-construction-for-drop-safety attempt and lets a raw-handle
 >    `resource` retire its `fd > 0` drop guard. Both are tracked in [ROADMAP.md](../ROADMAP.md) §2.
 >
+>    **Today there is NO check** — verified 2026-07-31: a `ctor` that assigns one of two fields compiles
+>    clean, because every declared local is emitted zero-initialized (`_F4__Steel s = {0};`). So the real
+>    guarantee is "never garbage", not "provably complete". `tests/site_sample.kama` — the homepage sample —
+>    says exactly that and no more; **when this question is answered and definite initialization lands, that
+>    comment should be upgraded to state the stronger guarantee.** It is the one user-visible promise waiting
+>    on this decision.
+>
 > **To close this file:** answer those two, ship or drop each, then migrate what is still true and durable
 > into [SPEC.md](../SPEC.md) — most of §8c already describes *shipped* behavior (the four-ctor collection
 > matrix, the `when [A: default]` gating) and belongs there — and delete this file.
