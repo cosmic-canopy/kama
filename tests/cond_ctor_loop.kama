@@ -1,9 +1,13 @@
 // M31 — value-producing constructs in a loop condition use a loop-and-a-half transform so they
 // re-evaluate each iteration (a compute-once bug would loop forever, since the ctor uses the counter).
 @generate(of)
-type value V {
+type value V implements Comparable {
     public int32 x;
-    public bool operator<(V rhs) { return this.x < rhs.x; }
+    public fn Ordering compareTo(ref V other) {
+        if (this.x < other.x) { return Ordering::Less; }
+        if (this.x > other.x) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
 }
 fn int32 main() {
     int32 acc = 0;

@@ -1,0 +1,30 @@
+// `Comparable for float` must be a TOTAL order. IEEE `<`/`>` are both false for a NaN operand, so the
+// old three-way fold fell through to `Ordering::Equal` and NaN compared EQUAL TO EVERY NUMBER — which
+// silently collapses distinct keys in the B-tree containers. NaN now sorts after every number and equals
+// itself (Rust's `f64::total_cmp`). Raw `a < b` on two floats is untouched: an all-primitive comparison
+// keeps the built-in C operator, so IEEE semantics (every NaN comparison false) are exactly preserved.
+import std::collections::{SortedSet};
+
+fn int32 main() {
+    int32 r = 0;
+    float64 nan = 0.0f64 / 0.0f64;
+
+    // Raw operators: still pure IEEE — every ordering comparison against NaN is false, and NaN != NaN.
+    if (!(nan < 1.0f64)) { r = r + 1; }
+    if (!(nan > 1.0f64)) { r = r + 1; }
+    if (nan != nan)      { r = r + 1; }
+
+    // Through `Comparable` (the container path): NaN is its own key, not a match for every number.
+    SortedSet<float64> s = SortedSet.empty();
+    s.add(key: 1.0f64);
+    s.add(key: 2.0f64);
+    s.add(key: nan);
+    s.add(key: nan);                       // equal to itself under the total order -> deduped
+    r = r + s.length();                    // 3, not 1
+
+    // The numeric keys survive alongside NaN — under the old fold, NaN aliased them all.
+    if (s.contains(key: 1.0f64)) { r = r + 1; }
+    if (s.contains(key: 2.0f64)) { r = r + 1; }
+
+    return r;   // 3 + 3 + 2 = 8
+}

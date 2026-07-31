@@ -1,4 +1,5 @@
-// M31b — `==` is EXPLICIT: a `value` without `operator==` cannot be compared (no auto structural `==`).
+// `==` is EXPLICIT and CONTRACT-driven: a `value` that does not `implements Equatable` cannot be
+// compared (there is no auto structural `==`). The diagnostic names the contract, not an operator.
 type value Vec2 {
     public int32 x;
     public ctor make(int32 x) { Vec2 r; r.x = x; return give r; }
@@ -6,6 +7,6 @@ type value Vec2 {
 fn int32 main() {
     Vec2 a = Vec2.make(x: 3);
     Vec2 b = Vec2.make(x: 3);
-    if (a == b) { return 1; }   // no operator== defined
+    if (a == b) { return 1; }   // Vec2 does not implement Equatable
     return 0;
 }

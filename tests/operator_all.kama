@@ -1,8 +1,10 @@
 // M31b — operator overloading, EVERY overloadable operator on one `value` type. `Num` wraps an int32
 // and defines the full set: arithmetic, bitwise, comparison, unary, and increment/decrement. Each
 // `a <op> b` lowers to a positional call `Num__op_xxx(&a, b)` (method form — `this` is the left operand).
+// The six COMPARISON operators are the exception: they are contract-driven, so `Num` implements
+// `Equatable`/`Comparable` and `==`/`!=`/`<`/`>`/`<=`/`>=` lower to `equals`/`compareTo`.
 @generate(of)
-type value Num {
+type value Num implements Equatable, Comparable {
     public int32 v;
 
     // arithmetic (method form: `this` + rhs)
@@ -19,13 +21,13 @@ type value Num {
     public Num operator<<(Num rhs) { return Num.of(v: this.v << rhs.v); }
     public Num operator>>(Num rhs) { return Num.of(v: this.v >> rhs.v); }
 
-    // comparison (return bool)
-    public bool operator==(Num rhs) { return this.v == rhs.v; }
-    public bool operator!=(Num rhs) { return this.v != rhs.v; }
-    public bool operator<(Num rhs) { return this.v < rhs.v; }
-    public bool operator>(Num rhs) { return this.v > rhs.v; }
-    public bool operator<=(Num rhs) { return this.v <= rhs.v; }
-    public bool operator>=(Num rhs) { return this.v >= rhs.v; }
+    // comparison — one contract method each; `!=` is `!equals`, and `<=`/`>=` negate the opposite Ordering
+    public fn bool equals(ref Num other) { return this.v == other.v; }
+    public fn Ordering compareTo(ref Num other) {
+        if (this.v < other.v) { return Ordering::Less; }
+        if (this.v > other.v) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
 
     // unary (0 params — operate on `this`)
     public Num operator-() { return Num.of(v: -this.v); }

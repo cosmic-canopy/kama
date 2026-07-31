@@ -11,7 +11,7 @@ namespace std::num;
 export { Q16_16 };
 
 @generate(of)
-type value Q16_16 {
+type value Q16_16 implements Equatable, Comparable {
     public int32 raw;   // real value * 65536
 
     public ctor fromInt(int32 n)       { return Q16_16.of(raw: n * 65536i32); }   // traps if |n| >= 32768 (out of range)
@@ -30,11 +30,15 @@ type value Q16_16 {
     public Q16_16 operator*(Q16_16 r) { return Q16_16.of(raw: cast<int32>((cast<int64>(this.raw) * cast<int64>(r.raw)) >> 16i64)); }
     public Q16_16 operator/(Q16_16 r) { return Q16_16.of(raw: cast<int32>((cast<int64>(this.raw) << 16i64) / cast<int64>(r.raw))); }
 
-    public bool operator==(Q16_16 r) { return this.raw == r.raw; }
-    public bool operator<(Q16_16 r)  { return this.raw < r.raw; }
-    public bool operator>(Q16_16 r)  { return this.raw > r.raw; }
-    public bool operator<=(Q16_16 r) { return this.raw <= r.raw; }
-    public bool operator>=(Q16_16 r) { return this.raw >= r.raw; }
+    // Comparison comes from the contracts, not from `operator==` & co. — `==`/`!=` call `equals`,
+    // `<`/`>`/`<=`/`>=` call `compareTo`. Conforming also makes a Q16_16 a `Map` key (with `Hashable`)
+    // and a `SortedSet`/`PriorityQueue` element, which the raw operators never did.
+    public fn bool equals(ref Q16_16 other) { return this.raw == other.raw; }
+    public fn Ordering compareTo(ref Q16_16 other) {
+        if (this.raw < other.raw) { return Ordering::Less; }
+        if (this.raw > other.raw) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
 
     // Saturating variants — never trap: compute in int64, clamp to the int32 range, narrow.
     public fn Q16_16 satAdd(Q16_16 r) { return Q16_16.of(raw: clampToI32(v: cast<int64>(this.raw) + cast<int64>(r.raw))); }

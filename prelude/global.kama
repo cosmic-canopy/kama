@@ -36,12 +36,22 @@ type contract Copyable for resource { fn This copy(); }
 // `string` gets a nominal `Equatable` recorded from its built-in `equals` (registerCollection pushes it
 // onto kama_string's interfaces) + `Hashable` from the pure-kama `implements` below. Both contracts live
 // in the prelude because they are language-level bounds.
+//
+// COMPARISON IS THESE CONTRACTS — there is no `operator==`. `a == b` / `a != b` lower to `equals`, and
+// `a < b` / `>` / `<=` / `>=` lower to `compareTo`; declaring those six as operator members is a compile
+// error. That is the whole point: a type cannot have an `==` that disagrees with its `<K: Equatable>`
+// bound, which is how C# ended up with `operator==`, `Equals`, `IEquatable<T>` and `EqualityComparer`
+// all able to give different answers. Every OTHER operator (`+`, `*`, `[]`, …) stays an ordinary
+// operator member — those are concrete-type ergonomics; these two are the operators a generic bound
+// must be able to NAME. Primitives are untouched: an all-primitive comparison keeps the built-in C
+// operator, so `float` keeps exact IEEE semantics and pays nothing.
 type contract Hashable for both { fn uint64 hash(); }
-type contract Equatable for both { fn bool equals(This other); }
+type contract Equatable for both { fn bool equals(ref This other); }
 // Total ordering opt-in (nominal, like Equatable) — the bound for sorted containers (`SortedMap`/`SortedSet`,
 // B-tree) and `PriorityQueue` (binary heap). `compareTo` returns `Ordering`, three-way in ONE call (no
 // separate `<`/`==`). The operand is borrowed (`ref This`) — a comparison never consumes it, and a large
-// key (`string`) isn't copied. Primitive retro-impls below make every int/float/string universally comparable.
+// key (`string`) isn't copied; `Equatable.equals` borrows for the same reason. Primitive retro-impls
+// below make every int/float/string universally comparable.
 type contract Comparable for both { fn Ordering compareTo(ref This other); }
 // The pluggable memory source — a copyable VALUE handle (C++ `std::pmr::polymorphic_allocator`, Rust
 // `&Bump`, Zig `std.mem.Allocator`). An `Owned<T, A>` box or a container carries `A alloc` BY VALUE and
@@ -88,7 +98,7 @@ implements Hashable for int32 {
     public fn uint64 hash() { return cast<uint64>(this); }
 }
 implements Equatable for int32 {
-    public fn bool equals(int32 other) { return this == other; }
+    public fn bool equals(ref int32 other) { return this == other; }
 }
 // Every remaining integer width is its own content hash — `cast<uint64>(this)` (signed widths sign-extend,
 // which is fine: equal values still hash equal) + scalar `equals` — so every integer type is a universal
@@ -98,37 +108,37 @@ implements Equatable for int32 {
 implements Hashable for int8 {
     public fn uint64 hash() { return cast<uint64>(this); }
 }
-implements Equatable for int8 { public fn bool equals(int8 other) { return this == other; } }
+implements Equatable for int8 { public fn bool equals(ref int8 other) { return this == other; } }
 implements Hashable for int16 {
     public fn uint64 hash() { return cast<uint64>(this); }
 }
-implements Equatable for int16 { public fn bool equals(int16 other) { return this == other; } }
+implements Equatable for int16 { public fn bool equals(ref int16 other) { return this == other; } }
 implements Hashable for int64 {
     public fn uint64 hash() { return cast<uint64>(this); }
 }
-implements Equatable for int64 { public fn bool equals(int64 other) { return this == other; } }
+implements Equatable for int64 { public fn bool equals(ref int64 other) { return this == other; } }
 implements Hashable for uint8 {
     public fn uint64 hash() { return cast<uint64>(this); }
 }
-implements Equatable for uint8 { public fn bool equals(uint8 other) { return this == other; } }
+implements Equatable for uint8 { public fn bool equals(ref uint8 other) { return this == other; } }
 implements Hashable for uint16 {
     public fn uint64 hash() { return cast<uint64>(this); }
 }
-implements Equatable for uint16 { public fn bool equals(uint16 other) { return this == other; } }
+implements Equatable for uint16 { public fn bool equals(ref uint16 other) { return this == other; } }
 implements Hashable for uint32 {
     public fn uint64 hash() { return cast<uint64>(this); }
 }
-implements Equatable for uint32 { public fn bool equals(uint32 other) { return this == other; } }
+implements Equatable for uint32 { public fn bool equals(ref uint32 other) { return this == other; } }
 implements Hashable for uint64 {
     public fn uint64 hash() { return this; }
 }
-implements Equatable for uint64 { public fn bool equals(uint64 other) { return this == other; } }
+implements Equatable for uint64 { public fn bool equals(ref uint64 other) { return this == other; } }
 // Floats get `Equatable` (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and
 // `DynamicArray<float*>.contains` work — but NOT `Hashable`: float hash keys are a footgun (NaN != NaN, ±0.0),
 // and there is no bit-reinterpret cast, so a value-cast hash would collide badly. Add on demand if ever
 // needed via a bit-cast helper.
-implements Equatable for float32 { public fn bool equals(float32 other) { return this == other; } }
-implements Equatable for float64 { public fn bool equals(float64 other) { return this == other; } }
+implements Equatable for float32 { public fn bool equals(ref float32 other) { return this == other; } }
+implements Equatable for float64 { public fn bool equals(ref float64 other) { return this == other; } }
 // `Comparable` retro-impls (pure-kama, NO compiler blessing) — every int/float is totally ordered via a
 // three-way `<`/`>` fold to `Ordering`, and `string` is compared lexicographically over its UTF-8 bytes
 // (unsigned `s[i]`, so byte order == codepoint order for ASCII and correct byte-wise order elsewhere).
@@ -140,8 +150,32 @@ implements Comparable for uint8   { public fn Ordering compareTo(ref uint8 other
 implements Comparable for uint16  { public fn Ordering compareTo(ref uint16 other)  { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
 implements Comparable for uint32  { public fn Ordering compareTo(ref uint32 other)  { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
 implements Comparable for uint64  { public fn Ordering compareTo(ref uint64 other)  { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
-implements Comparable for float32 { public fn Ordering compareTo(ref float32 other) { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
-implements Comparable for float64 { public fn Ordering compareTo(ref float64 other) { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
+// Floats need a TOTAL order here, which IEEE `<`/`>` alone cannot give: with a NaN operand both are false,
+// so a bare three-way fold returns `Equal` and NaN compares equal to EVERYTHING — silently corrupting the
+// `SortedMap`/`SortedSet` B-tree and the `PriorityQueue` heap (lookups become insertion-order dependent).
+// So NaN sorts AFTER every number and equals itself — Rust's `f64::total_cmp`. This diverges from `equals`
+// (IEEE `==`, where NaN != NaN) exactly as Rust's `total_cmp` diverges from `PartialEq`, and the two never
+// meet: a float is deliberately NOT `Hashable`, so the sorted containers (compareTo) and the hashed ones
+// (hash + equals) never see the same key type. Raw `a < b` on two floats is untouched — an all-primitive
+// comparison keeps the built-in C operator and never routes through `compareTo`.
+implements Comparable for float32 {
+    public fn Ordering compareTo(ref float32 other) {
+        if (this < other) { return Ordering::Less; }
+        if (this > other) { return Ordering::Greater; }
+        if (this != this) { if (other != other) { return Ordering::Equal; } return Ordering::Greater; }
+        if (other != other) { return Ordering::Less; }
+        return Ordering::Equal;
+    }
+}
+implements Comparable for float64 {
+    public fn Ordering compareTo(ref float64 other) {
+        if (this < other) { return Ordering::Less; }
+        if (this > other) { return Ordering::Greater; }
+        if (this != this) { if (other != other) { return Ordering::Equal; } return Ordering::Greater; }
+        if (other != other) { return Ordering::Less; }
+        return Ordering::Equal;
+    }
+}
 implements Comparable for string {
     public fn Ordering compareTo(ref string other) {
         int32 n = cast<int32>(this.length());

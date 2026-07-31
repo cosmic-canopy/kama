@@ -474,6 +474,15 @@ std::string CEmitter::binaryOperator(int token)
     }
 }
 
+// The six operators that a user type gets from a CONTRACT (`Equatable` -> `==`/`!=`, `Comparable` ->
+// `<`/`>`/`<=`/`>=`) rather than by declaring an `operator` member. Every other operator (`*`, `[]`, …)
+// stays an ordinary per-type operator method: those are concrete-type ergonomics, while these two are
+// the operators a GENERIC BOUND has to be able to name.
+bool CEmitter::isComparisonToken(int token)
+{
+    return token == EQEQ || token == NOTEQ || token == LT || token == GT || token == LEQ || token == GEQ;
+}
+
 // Render an expression back to readable KAMA text for a diagnostic message (the auto-stringified
 // `assert` condition). Pure and self-contained: it never calls emitExpression (so no emitter side
 // effects / no C leak like `this->x`), and returns "" for any form it doesn't handle so the caller
@@ -788,6 +797,44 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             return "kama_lshift(" + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";
         return "(" + emitExpression(lhs) + " " + binaryOperator(token) + " "
                    + emitExpression(rhs) + ")";   // primitives — unchanged
+    }
+
+    // Comparison is CONTRACT-driven, not operator-driven. `Equatable` and `Comparable` are the single
+    // opt-in for the six comparison operators, and `a == b` / `a < b` on a user type LOWER to that
+    // contract's `equals` / `compareTo` — declaring `operator==` & co. directly is rejected at
+    // registration (collectClasses). That is what keeps `a == b` and a `<K: Equatable>` bound from ever
+    // disagreeing, and it makes `Equatable` the sibling of `Comparable` it always should have been.
+    // Both operands must be the SAME user type — `equals(ref This)` / `compareTo(ref This)` say so.
+    // Primitives never reach here (the all-primitive path above keeps the raw C operator), so float
+    // `<` keeps exact IEEE semantics and never routes through `Comparable`'s total order.
+    if (isComparisonToken(token) && lUser && rUser && lc == rc) {
+        bool eq = (token == EQEQ || token == NOTEQ);
+        std::string need = eq ? "Equatable" : "Comparable";
+        std::string meth = eq ? "equals"    : "compareTo";
+        auto ci = _classes.find(lc);
+        MethodInfo* cm = nullptr;
+        if (satisfiesBound(lc, need) && ci != _classes.end()) {
+            auto m = ci->second.methods.find(meth);
+            if (m != ci->second.methods.end()) cm = &m->second;
+        }
+        if (!cm) {
+            unsupported(("`" + binaryOperator(token) + "` on `" + lc + "` needs `implements " + need
+                         + "` — declare `implements " + need + " for " + lc + " { … }`"
+                         + (eq ? " (or `@generate(Equatable)`)" : "")
+                         + "; `" + binaryOperator(token) + "` calls its `" + meth + "`").c_str(), line);
+            return "0";
+        }
+        canAccess(&ci->second, cm->visibility, cm->cName, line);
+        std::string call = cm->cName + "(" + addrOfOperand(lhs, lc, line) + ", "
+                                           + addrOfOperand(rhs, rc, line) + ")";
+        switch (token) {
+            case EQEQ:  return call;
+            case NOTEQ: return "(!" + call + ")";
+            case LT:    return "(" + call + " == Ordering_Less)";
+            case GT:    return "(" + call + " == Ordering_Greater)";
+            case LEQ:   return "(" + call + " != Ordering_Greater)";
+            default:    return "(" + call + " != Ordering_Less)";     // GEQ
+        }
     }
 
     ClassInfo* owner = nullptr;
@@ -4219,6 +4266,23 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // 1 = binary method (`this`+rhs), 2 = binary free form (both operands explicit).
                     auto* d = od->operatorDeclarator.get();
                     int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
+                    // The six comparison operators are CONTRACT-driven and may not be declared directly:
+                    // `Equatable`/`Comparable` are the one opt-in, and `==`/`<`/… lower to their
+                    // `equals`/`compareTo` (emitBinaryOperator). Two spellings of one concept is how C#
+                    // ended up with `operator==`, `Equals`, `IEquatable<T>` and `EqualityComparer` able to
+                    // disagree; kama has one. Every other operator stays an ordinary operator member.
+                    if (isComparisonToken(d->opToken)) {
+                        bool eq = (d->opToken == EQEQ || d->opToken == NOTEQ);
+                        std::string need = eq ? "Equatable" : "Comparable";
+                        std::string meth = eq ? "fn bool equals(ref This other)"
+                                              : "fn Ordering compareTo(ref This other)";
+                        unsupported((std::string("`operator") + binaryOperator(d->opToken) + "` is not declared "
+                                     "directly — comparison comes from a contract: `implements " + need + " for "
+                                     + ci.name + " { public " + meth + " { … } }`, and `"
+                                     + binaryOperator(d->opToken) + "` calls it"
+                                     + (eq ? " (a data bag can `@generate(Equatable)` instead)" : "")).c_str(), od->line);
+                        continue;
+                    }
                     std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name);   // type-suffixed
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)

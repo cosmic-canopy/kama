@@ -1588,6 +1588,7 @@ private:
     std::string cFunctionName(const std::string& kamaName);   // main -> kama_main
     std::string mangledFunctionName(FunctionDeclarationNode* fn, bool& isEntryPoint);
     std::string binaryOperator(int token);
+    static bool isComparisonToken(int token);   // `==`/`!=`/`<`/`>`/`<=`/`>=` — the contract-driven six
     std::string assignmentOperator(int token);
     // Render an expression back to READABLE KAMA source text (not C) for diagnostic messages — the
     // auto-stringified condition in `assert(cond: …)`. Pure (no emitter side effects, never calls

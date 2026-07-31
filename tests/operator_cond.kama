@@ -2,11 +2,11 @@
 // `a + b`) is wrapped in a C99 compound-literal array so `&` is legal with no statement slot — it works
 // in an `if`/`while` condition and is correctly re-evaluated each pass (no once-only hoisting bug).
 @generate(of)
-type value V {
+type value V implements Equatable {
     public int32 x;
     public V operator+(V rhs) { return V.of(x: this.x + rhs.x); }
     public V operator-() { return V.of(x: -this.x); }
-    public bool operator==(V rhs) { return this.x == rhs.x; }
+    public fn bool equals(ref V other) { return this.x == other.x; }
 }
 fn int32 main() {
     V a = V.of(x: 5); V b = V.of(x: 3); V c = V.of(x: 8);

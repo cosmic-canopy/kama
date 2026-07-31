@@ -1,0 +1,16 @@
+// The six comparison operators are CONTRACT-driven and may not be declared directly: `Equatable` and
+// `Comparable` are the one opt-in, and `==`/`!=`/`<`/`>`/`<=`/`>=` lower to their `equals`/`compareTo`.
+// Declaring `operator==` would be a second spelling of one concept (the C# outcome), so it is rejected
+// and the diagnostic hands back the contract form. Every OTHER operator (`+` here) stays a normal member.
+@generate(of)
+type value Money {
+    public int32 cents;
+    public Money operator+(Money r) { return Money.of(cents: this.cents + r.cents); }   // fine — not a comparison
+    public bool operator==(Money r) { return this.cents == r.cents; }                   // rejected
+}
+fn int32 main() {
+    Money a = Money.of(cents: 5);
+    Money b = Money.of(cents: 5);
+    if (a == b) { return 1; }
+    return 0;
+}

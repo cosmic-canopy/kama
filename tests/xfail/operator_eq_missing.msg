@@ -1,1 +1,1 @@
-no operator
+needs `implements Equatable`

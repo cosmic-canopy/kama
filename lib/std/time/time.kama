@@ -11,7 +11,7 @@ extern fn uint64 kama_now_mono_ns();
 // A span of time at nanosecond resolution. A `value` (stack, copied, no alloc). Signed — the delta of two
 // Instants, or a countdown, may be negative.
 @generate(of)
-type value Duration {
+type value Duration implements Equatable, Comparable {
     public int64 nanos;
 
     public ctor zero()               { return Duration.of(nanos: 0i64); }
@@ -30,16 +30,19 @@ type value Duration {
     public Duration operator+(Duration r) { return Duration.of(nanos: this.nanos + r.nanos); }
     public Duration operator-(Duration r) { return Duration.of(nanos: this.nanos - r.nanos); }
     public Duration operator-()           { return Duration.of(nanos: -this.nanos); }
-    public bool operator==(Duration r)    { return this.nanos == r.nanos; }
-    public bool operator<(Duration r)     { return this.nanos < r.nanos; }
-    public bool operator>(Duration r)     { return this.nanos > r.nanos; }
-    public bool operator<=(Duration r)    { return this.nanos <= r.nanos; }
-    public bool operator>=(Duration r)    { return this.nanos >= r.nanos; }
+    // `==`/`<`/`>`/`<=`/`>=` come from these two contracts; conforming also makes a Duration usable as a
+    // `SortedMap`/`SortedSet` key and a `PriorityQueue` element — a timeout wheel is now expressible.
+    public fn bool equals(ref Duration other) { return this.nanos == other.nanos; }
+    public fn Ordering compareTo(ref Duration other) {
+        if (this.nanos < other.nanos) { return Ordering::Less; }
+        if (this.nanos > other.nanos) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
 }
 
 // A monotonic timestamp — an opaque counter, meaningful only relative to another Instant. A `value`.
 @generate(of)
-type value Instant {
+type value Instant implements Equatable, Comparable {
     public uint64 rawNanos;
 
     // Time elapsed from an earlier Instant to this one (non-negative when `earlier` truly precedes this).
@@ -51,9 +54,14 @@ type value Instant {
 
     public Duration operator-(Instant earlier) { return this.since(earlier: earlier); }
     public Instant operator+(Duration d)       { return Instant.of(rawNanos: this.rawNanos + cast<uint64>(d.nanos)); }
-    public bool operator==(Instant r)          { return this.rawNanos == r.rawNanos; }
-    public bool operator<(Instant r)           { return this.rawNanos < r.rawNanos; }
-    public bool operator>(Instant r)           { return this.rawNanos > r.rawNanos; }
+    // As for Duration: comparison is the contract, and it also makes an Instant orderable in a container
+    // (a deadline queue). `<=`/`>=` now work too — the raw operators only ever covered `==`/`<`/`>`.
+    public fn bool equals(ref Instant other) { return this.rawNanos == other.rawNanos; }
+    public fn Ordering compareTo(ref Instant other) {
+        if (this.rawNanos < other.rawNanos) { return Ordering::Less; }
+        if (this.rawNanos > other.rawNanos) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
 }
 
 // The current monotonic instant. Never runs backward; only differences are meaningful (not a wall clock).

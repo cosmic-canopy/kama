@@ -1,10 +1,14 @@
 // M8 Phase E: a named-ctor FACTORY call (`V.make(...)`) in a do/while condition compiles cleanly — it is
 // a plain call expression needing no hoisting (unlike the retired nameless inline-ctor, which required a
 // hoisted temp the non-hoistable do/while condition rejected; see the deleted xfail/cond_ctor_dowhile).
-type value V {
+type value V implements Comparable {
     public int32 x;
     public ctor make(int32 x) { V r; r.x = x; return give r; }
-    public bool operator<(V rhs) { return this.x < rhs.x; }
+    public fn Ordering compareTo(ref V other) {
+        if (this.x < other.x) { return Ordering::Less; }
+        if (this.x > other.x) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
 }
 fn int32 main() {
     int32 i = 0;

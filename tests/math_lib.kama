@@ -5,7 +5,7 @@
 // Note: no overloading (a stated non-goal) — a type has ONE `operator*`. `Mat3 * Vec3` is the operator
 // (the hot transform path); matrix composition would be a named `static` method (not needed here).
 @generate(of)
-type value Vec3 {
+type value Vec3 implements Equatable {
     public int32 x;
     public int32 y;
     public int32 z;
@@ -14,7 +14,7 @@ type value Vec3 {
     public Vec3 operator-(Vec3 rhs) { return Vec3.of(x: this.x - rhs.x, y: this.y - rhs.y, z: this.z - rhs.z); }
     public Vec3 operator*(int32 s)  { return Vec3.of(x: this.x * s, y: this.y * s, z: this.z * s); }   // scale
     public Vec3 operator-()         { return Vec3.of(x: -this.x, y: -this.y, z: -this.z); }             // negate
-    public bool operator==(Vec3 rhs){ return this.x == rhs.x && this.y == rhs.y && this.z == rhs.z; }
+    public fn bool equals(ref Vec3 other){ return this.x == other.x && this.y == other.y && this.z == other.z; }
 
     public static fn int32 dot(Vec3 a, Vec3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
     // cross builds a fresh Vec3 from two others → a named ctor (construction-model: self-returning is a ctor).
