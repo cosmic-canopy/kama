@@ -197,7 +197,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
         Deque<T> result;
         r.beginArray();
         while (r.moreElems()) {
-            Result<T, Owned<Error>> __er = T::deserialize(r: r);   // bind — a match needs a named enum subject
+            Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject
             match (give __er) {                                     // consume: destructure-move the owning element out
                 case Err(e): { return Result::Err(error: give e); }
                 case Ok(v):  { result.pushBack(item: give v); }

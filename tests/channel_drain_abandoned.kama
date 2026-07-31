@@ -21,7 +21,7 @@ fn int32 main() {
     Ptr<int32> tally;
     unsafe { tally = cast<Ptr<int32>>(malloc(n: sizeof(int32))); tally[0] = 0; }
     {
-        Channel<Owned<Tracked>> ch = Channel::bounded(capacity: 4);
+        Channel<Owned<Tracked>> ch = Channel.bounded(capacity: 4);
         Sender<Owned<Tracked>>   tx = ch.sender();
         Receiver<Owned<Tracked>> rx = ch.receiver();
 

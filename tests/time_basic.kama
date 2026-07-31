@@ -5,20 +5,20 @@ import std::time::{Duration, Instant, monotonicNow};
 fn int main() {
     int32 r = 0;
 
-    Duration a = Duration::fromMillis(ms: 5i64);     // 5_000_000 ns
-    Duration b = Duration::fromMicros(us: 500i64);   //   500_000 ns
+    Duration a = Duration.fromMillis(ms: 5i64);     // 5_000_000 ns
+    Duration b = Duration.fromMicros(us: 500i64);   //   500_000 ns
 
     if (a.asNanos() == 5000000i64)          { r = r + 1; }
     if ((a + b).asMicros() == 5500i64)      { r = r + 2; }
     if ((a - b).asMicros() == 4500i64)      { r = r + 4; }
-    if (Duration::fromSecs(s: 2i64).asMillis() == 2000i64) { r = r + 8; }
+    if (Duration.fromSecs(s: 2i64).asMillis() == 2000i64) { r = r + 8; }
     if ((-b).isNegative())                  { r = r + 16; }
     if (b < a)                              { r = r + 32; }
 
     Instant t0 = monotonicNow();
     Instant t1 = monotonicNow();
     if (!(t1 < t0))                         { r = r + 64; }               // monotonic: never backward
-    if (t0.since(earlier: t0) == Duration::zero()) { r = r + 128; }       // self-delta is exactly zero
+    if (t0.since(earlier: t0) == Duration.zero()) { r = r + 128; }       // self-delta is exactly zero
 
     return r;   // 255
 }

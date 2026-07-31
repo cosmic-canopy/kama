@@ -10,7 +10,7 @@ export { Channel, Sender, Receiver, SendResult };
 //     import std::concurrent::{Channel, Sender, Receiver};
 //     fn void producer(Sender<int32> tx) { int32 i = 0; while (i < 10) { tx.send(give i); i = i + 1; } }
 //     fn int main() {
-//         Channel<int32> ch = Channel::bounded(capacity: 4);
+//         Channel<int32> ch = Channel.bounded(capacity: 4);
 //         Sender<int32>   tx = ch.sender();
 //         Receiver<int32> rx = ch.receiver();
 //         spawn producer(tx: give tx);                // reuse the M2 bundle move

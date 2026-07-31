@@ -50,7 +50,7 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     // for a non-graph `X` (whose `X::deserialize` returns `X`) is a type error — decode a plain value as
     // `decode::<X>` instead.
     public ctor Result<Shared<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
-        return T::deserialize(r: r);
+        return T.deserialize(r: r);
     }
     // HeapOwner: adopt a raw pointee into a box with the DEFAULT allocator (the bare-`new` path). The ctrl
     // block is drawn from libc `malloc`. Field-poke `p`/`c` then `give` the handle out — the move transfers

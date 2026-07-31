@@ -33,10 +33,10 @@ fn int32 portOf(ref UdpSocket s) {
 fn int main() {
     string host = "127.0.0.1";
     uint16 zero = cast<uint16>(0);
-    Result<UdpSocket, IoError> ra = UdpSocket::bind(host: host, port: zero);
+    Result<UdpSocket, IoError> ra = UdpSocket.bind(host: host, port: zero);
     return match (ra) {
         case Ok(a): {
-            Result<UdpSocket, IoError> rb = UdpSocket::bind(host: host, port: zero);
+            Result<UdpSocket, IoError> rb = UdpSocket.bind(host: host, port: zero);
             := match (rb) {
                 case Ok(b): {
                     int32 bport = portOf(s: b);

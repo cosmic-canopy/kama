@@ -248,12 +248,12 @@ type contract Deserializer for resource {
 }
 // A marker contract (like Movable): the `@generate(Deserialize)` codegen supplies the static factory
 // `deserialize(ref Deserializer) -> Result<This, DeError>` via a retro impl, and `tryParse<T: Deserialize>`
-// calls `T::deserialize(...)` statically. Kept method-less so its signature needn't name `This` in a
+// calls `T.deserialize(...)` statically. Kept method-less so its signature needn't name `This` in a
 // return position (which the generic-instance machinery can't resolve outside a type).
 type contract Deserialize for both { }
 // Primitive Serialize/Deserialize conformances (pure-kama retro-impls, like the Hashable/Equatable ones
 // above) — so EVERY type is a uniform serialization participant and a collection's generic element write
-// (`this[i].serialize(w)`) / read (`T::deserialize(r)`) composes for a scalar element with no compiler
+// (`this[i].serialize(w)`) / read (`T.deserialize(r)`) composes for a scalar element with no compiler
 // special-casing. `serialize` writes the width-appropriate scalar; the static `deserialize` factory reads
 // it back (the retro-impl static path — see the `_primConformances` branch in the `Type::method` resolver).
 // Each primitive `serialize` is fallible: write (sticky), then wrap — a sink/format failure surfaces as
@@ -290,7 +290,7 @@ implements Deserialize for string  { public ctor Result<string, std::memory::Own
 // Generic deserialize trampoline: the `@generate` codegen can't spell `DynamicArray<int32>::deserialize(r)` (a
 // static on a generic instance has no surface syntax), but a turbofish on THIS free fn does
 // (`__kamaDeserialize::<DynamicArray<int32>>(r)`), and inside it `T::deserialize` resolves per instantiation.
-fn Result<T, std::memory::Owned<Error>> __kamaDeserialize<T: Deserialize>(Deserializer r) { return T::deserialize(r: r); }
+fn Result<T, std::memory::Owned<Error>> __kamaDeserialize<T: Deserialize>(Deserializer r) { return T.deserialize(r: r); }
 // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
 // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
 // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is

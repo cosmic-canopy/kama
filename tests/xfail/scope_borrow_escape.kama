@@ -17,7 +17,7 @@ fn void accumulate(ref Acc a) { a.run(); }
 fn int main() {
     scope {
         {
-            Acc tmp = Acc::range(lo: 0, hi: 50);   // declared in an INNER block — drops before the barrier
+            Acc tmp = Acc.range(lo: 0, hi: 50);   // declared in an INNER block — drops before the barrier
             spawn accumulate(a: ref tmp);          // ERROR: borrow escapes `tmp`'s lifetime
         }
     }

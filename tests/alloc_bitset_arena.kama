@@ -7,7 +7,7 @@ fn int32 main() {
     int32 r = 0;
     Arena arena = Arena.make(capacity: 1 << 16);
 
-    BitSet<BumpAllocator> b = BitSet::withAllocator(allocator: arena.handle());
+    BitSet<BumpAllocator> b = BitSet.withAllocator(allocator: arena.handle());
     b.set(index: 3); b.set(index: 100); b.set(index: 250);            // grows the word buffer twice
     if (b.test(index: 3) && b.test(index: 250) && !b.test(index: 4)) { r = r + 15; }
     if (b.count() == 3) { r = r + 15; }

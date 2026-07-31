@@ -31,8 +31,8 @@ type value Acc {
 fn void accumulate(ref Acc a) { a.run(); }   // borrows the caller's bundle (`ref`), no move
 
 fn int main() {
-    Acc lower = Acc::range(lo: 0,  hi: 50);
-    Acc upper = Acc::range(lo: 50, hi: 100);
+    Acc lower = Acc.range(lo: 0,  hi: 50);
+    Acc upper = Acc.range(lo: 50, hi: 100);
     scope {
         spawn accumulate(a: ref lower);   // borrows `lower`  (root distinct from `upper`)
         spawn accumulate(a: ref upper);   // borrows `upper`  (disjoint cell -> no race)

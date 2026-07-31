@@ -6,7 +6,7 @@ import std::concurrent::{Atomic};
 import std::collections::{DynamicArray, View};
 
 fn int main() {
-    Atomic<int32> total = Atomic::make(value: 0i32);
+    Atomic<int32> total = Atomic.make(value: 0i32);
     DynamicArray<int32> a = DynamicArray.empty();
     int32 i = 0;
     while (i < 50) { a.add(item: 2i32); i = i + 1; }   // fifty 2s

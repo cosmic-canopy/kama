@@ -39,9 +39,9 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
     // from this same `alloc` via the placement `new(allocator: this.alloc)` sites below.
     public ctor make(bool leaf, A allocator) {
         BTreeNode<K,V,A> r;
-        DynamicArray<K, A> k = DynamicArray::withAllocator(allocator: allocator);
-        DynamicArray<V, A> v = DynamicArray::withAllocator(allocator: allocator);
-        DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> c = DynamicArray::withAllocator(allocator: allocator);
+        DynamicArray<K, A> k = DynamicArray.withAllocator(allocator: allocator);
+        DynamicArray<V, A> v = DynamicArray.withAllocator(allocator: allocator);
+        DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> c = DynamicArray.withAllocator(allocator: allocator);
         r.keys = give k; r.vals = give v; r.kids = give c; r.leaf = leaf; r.alloc = allocator;
         return give r;
     }
@@ -552,7 +552,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // independent clone of every entry, rebuilt from the sorted key/value copies (popped from the end, an
     // O(1) move each). `bare: give` — a plain hand-off still MOVES.
     public fn SortedMap<K,V,A> copy() when [K: Copyable, V: Copyable] {
-        SortedMap<K,V,A> result = SortedMap::withAllocator(allocator: this.alloc);   // clone into the SAME allocator
+        SortedMap<K,V,A> result = SortedMap.withAllocator(allocator: this.alloc);   // clone into the SAME allocator
         DynamicArray<K> ks = this.keys();
         DynamicArray<V> vs = this.values();
         while (ks.length() > 0) {
@@ -581,10 +581,10 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
         while (r.moreElems()) {
             r.beginObject();
             bool __f1 = r.moreFields(); string __n1 = r.fieldName();
-            Result<K, Owned<Error>> __ek = K::deserialize(r: r);   // read both at top level (a nested generic
+            Result<K, Owned<Error>> __ek = K.deserialize(r: r);   // read both at top level (a nested generic
             K k = match (give __ek) { case Ok(kv): { := give kv; } case Err(e): { return Result::Err(error: give e); } };
             bool __f2 = r.moreFields(); string __n2 = r.fieldName();
-            Result<V, Owned<Error>> __ev = V::deserialize(r: r);   // static call must not sit inside a match arm)
+            Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
             V v = match (give __ev) { case Ok(vv): { := give vv; } case Err(e): { return Result::Err(error: give e); } };
             bool __f3 = r.moreFields();
             result.put(key: give k, value: give v);

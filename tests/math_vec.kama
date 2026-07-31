@@ -8,8 +8,8 @@ fn int main() {
     float32 d  = a.dot(r: b);              // 11
     Vec3 s  = a + b;                       // (4,6,2)
     Vec3 sc = a * 2.0f32;                  // (6,8,0)
-    Vec3 ux = Vec3::unitX();
-    Vec3 uy = Vec3::unitY();
+    Vec3 ux = Vec3.unitX();
+    Vec3 uy = Vec3.unitY();
     Vec3 cr = ux.cross(r: uy);             // (0,0,1)
     Vec2 v2 = Vec2.of(x: 6.0f32, y: 8.0f32);
     float32 l2 = v2.length();              // 10  (6-8-10)

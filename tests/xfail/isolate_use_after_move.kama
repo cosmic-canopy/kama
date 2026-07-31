@@ -20,7 +20,7 @@ fn void worker(Payload p) {
 }
 
 fn int main() {
-    Payload p = Payload::make(value: 7i32);
+    Payload p = Payload.make(value: 7i32);
     scope {
         spawn worker(p: give p);   // `p` is moved into the child here
     }

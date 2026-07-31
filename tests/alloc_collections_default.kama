@@ -18,7 +18,7 @@ fn int32 main() {
     SlotMap<int32> sm = SlotMap.empty(); Handle h = sm.insert(value: 9);
     if (sm.contains(handle: h) && sm.length() == 1) { r = r + 5; }
 
-    PriorityQueue<int32> pq = PriorityQueue::minHeap(); pq.push(item: 2); pq.push(item: 1);
+    PriorityQueue<int32> pq = PriorityQueue.minHeap(); pq.push(item: 2); pq.push(item: 1);
     Optional<int32> p = pq.pop();
     int32 pv = match (p) { case Some(x): x; case None: 0 - 1; };
     if (pv == 1) { r = r + 5; }

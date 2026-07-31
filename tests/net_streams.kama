@@ -17,7 +17,7 @@ fn DynamicArray<uint8> payload() {
 // Client: connect, write the whole payload via the GENERIC writeAll (loops the Writer primitive), close (FIN).
 fn int32 clientSend(uint16 port) {
     string host = "127.0.0.1";
-    Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
     return match (rc) {
         case Ok(c): {
             DynamicArray<uint8> data = payload();
@@ -51,6 +51,6 @@ fn int32 run(ref TcpListener l, uint16 port) {
 fn int main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47665);
-    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
     return match (rl) { case Ok(l): run(l: l, port: port); case Err(e): 80; };
 }

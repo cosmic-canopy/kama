@@ -14,7 +14,7 @@ fn void producer(Sender<DynamicArray<int32>> tx) {
 }
 
 fn int main() {
-    Channel<DynamicArray<int32>> ch = Channel::bounded(capacity: 2);
+    Channel<DynamicArray<int32>> ch = Channel.bounded(capacity: 2);
     Sender<DynamicArray<int32>>   tx = ch.sender();
     Receiver<DynamicArray<int32>> rx = ch.receiver();
 

@@ -13,6 +13,6 @@ type resource Bad {
 }
 
 fn int main() {
-    Channel<Bad> ch = Channel::bounded(capacity: 2);   // ERROR: `Bad`'s field `s` shares a non-atomic refcount
+    Channel<Bad> ch = Channel.bounded(capacity: 2);   // ERROR: `Bad`'s field `s` shares a non-atomic refcount
     return 0;
 }

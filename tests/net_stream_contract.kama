@@ -26,7 +26,7 @@ fn int32 readVia(ReliableStream s, View<uint8> into) {
 
 fn int32 clientSend(uint16 port) {
     string host = "127.0.0.1";
-    Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
     return match (rc) {
         case Ok(c): {
             DynamicArray<uint8> data = DynamicArray.empty();
@@ -62,6 +62,6 @@ fn int32 run(ref TcpListener l, uint16 port) {
 fn int main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47663);
-    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
     return match (rl) { case Ok(l): run(l: l, port: port); case Err(e): 80; };
 }

@@ -27,6 +27,6 @@ fn int32 check(ref UdpSocket s) {
 
 fn int main() {
     string host = "127.0.0.1";
-    Result<UdpSocket, IoError> r = UdpSocket::bind(host: host, port: cast<uint16>(0));
+    Result<UdpSocket, IoError> r = UdpSocket.bind(host: host, port: cast<uint16>(0));
     return match (r) { case Ok(s): check(s: s); case Err(e): 70; };
 }

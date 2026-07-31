@@ -19,9 +19,9 @@ type value Quat {
     }
     // Euler compose (YXZ / yaw-pitch-roll), radians
     public ctor fromEuler(float32 pitch, float32 yaw, float32 roll) {
-        Quat qy = Quat::fromAxisAngle(axis: Vec3.of(x: 0.0f32, y: 1.0f32, z: 0.0f32), rad: yaw);
-        Quat qx = Quat::fromAxisAngle(axis: Vec3.of(x: 1.0f32, y: 0.0f32, z: 0.0f32), rad: pitch);
-        Quat qz = Quat::fromAxisAngle(axis: Vec3.of(x: 0.0f32, y: 0.0f32, z: 1.0f32), rad: roll);
+        Quat qy = Quat.fromAxisAngle(axis: Vec3.of(x: 0.0f32, y: 1.0f32, z: 0.0f32), rad: yaw);
+        Quat qx = Quat.fromAxisAngle(axis: Vec3.of(x: 1.0f32, y: 0.0f32, z: 0.0f32), rad: pitch);
+        Quat qz = Quat.fromAxisAngle(axis: Vec3.of(x: 0.0f32, y: 0.0f32, z: 1.0f32), rad: roll);
         return qy * qx * qz;
     }
 
@@ -59,7 +59,7 @@ type value Quat {
     public ctor slerp(Quat a, Quat b, float32 t) {
         float32 c = a.dot(r: b);
         float32 ac = c < 0.0f32 ? 0.0f32 - c : c;
-        if (ac > 0.9995f32) { return Quat::nlerp(a: a, b: b, t: t); }   // near-parallel: linear
+        if (ac > 0.9995f32) { return Quat.nlerp(a: a, b: b, t: t); }   // near-parallel: linear
         Quat bb = c < 0.0f32 ? b.scale(s: 0.0f32 - 1.0f32) : b;         // shortest arc
         float32 th = acosf(x: ac);
         float32 s = sinf(x: th);
@@ -75,7 +75,7 @@ type value Quat {
         Vec3 c0 = Vec3.of(x: 1.0f32-2.0f32*(yy+zz), y: 2.0f32*(xy+wz),        z: 2.0f32*(xz-wy));
         Vec3 c1 = Vec3.of(x: 2.0f32*(xy-wz),        y: 1.0f32-2.0f32*(xx+zz), z: 2.0f32*(yz+wx));
         Vec3 c2 = Vec3.of(x: 2.0f32*(xz+wy),        y: 2.0f32*(yz-wx),        z: 1.0f32-2.0f32*(xx+yy));
-        return Mat3::fromCols(c0: c0, c1: c1, c2: c2);
+        return Mat3.fromCols(c0: c0, c1: c1, c2: c2);
     }
     public fn Mat4 toMat4() {
         float32 xx=this.x*this.x; float32 yy=this.y*this.y; float32 zz=this.z*this.z;
@@ -85,6 +85,6 @@ type value Quat {
         Vec4 c1 = Vec4.of(x: 2.0f32*(xy-wz),        y: 1.0f32-2.0f32*(xx+zz), z: 2.0f32*(yz+wx),        w: 0.0f32);
         Vec4 c2 = Vec4.of(x: 2.0f32*(xz+wy),        y: 2.0f32*(yz-wx),        z: 1.0f32-2.0f32*(xx+yy), w: 0.0f32);
         Vec4 c3 = Vec4.of(x: 0.0f32,                y: 0.0f32,                z: 0.0f32,                w: 1.0f32);
-        return Mat4::fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
+        return Mat4.fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
 }

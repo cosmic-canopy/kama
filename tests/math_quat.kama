@@ -2,8 +2,8 @@
 import std::math::{Vec3, Mat3, Quat, halfPi};
 fn int main() {
     // 90° about Z rotates unitX -> ~unitY
-    Quat qz = Quat::fromAxisAngle(axis: Vec3::unitZ(), rad: halfPi());
-    Vec3 rp = qz.rotate(v: Vec3::unitX());                       // ~(0,1,0)
+    Quat qz = Quat.fromAxisAngle(axis: Vec3.unitZ(), rad: halfPi());
+    Vec3 rp = qz.rotate(v: Vec3.unitX());                       // ~(0,1,0)
     int32 a = cast<int32>(rp.y + 0.5f32);                        // 1
 
     // q * q.inverse() == identity (w -> 1)
@@ -11,19 +11,19 @@ fn int main() {
     int32 b = cast<int32>(qi.w + 0.5f32);                        // 1
 
     // identity rotate is a no-op
-    Vec3 ip = Quat::identity().rotate(v: Vec3.of(x: 4.0f32, y: 0.0f32, z: 0.0f32));  // (4,0,0)
+    Vec3 ip = Quat.identity().rotate(v: Vec3.of(x: 4.0f32, y: 0.0f32, z: 0.0f32));  // (4,0,0)
     int32 c = cast<int32>(ip.x);                                // 4
 
     // slerp endpoints are exact: slerp(a,b,0)==a, slerp(a,b,1)==b
-    Quat qa = Quat::identity();
-    Quat qb = Quat::fromAxisAngle(axis: Vec3::unitY(), rad: halfPi());
-    Quat s0 = Quat::slerp(a: qa, b: qb, t: 0.0f32);             // qa (w=1)
-    Quat s1 = Quat::slerp(a: qa, b: qb, t: 1.0f32);             // qb
+    Quat qa = Quat.identity();
+    Quat qb = Quat.fromAxisAngle(axis: Vec3.unitY(), rad: halfPi());
+    Quat s0 = Quat.slerp(a: qa, b: qb, t: 0.0f32);             // qa (w=1)
+    Quat s1 = Quat.slerp(a: qa, b: qb, t: 1.0f32);             // qb
     int32 d = cast<int32>(s0.w + 0.5f32) + cast<int32>(s1.w - qb.w + 0.5f32);  // 1 + 0 = 1
 
     // toMat3 of the 90°-Z quat rotates unitX -> ~unitY too
     Mat3 m = qz.toMat3();
-    Vec3 mp = m.transform(v: Vec3::unitX());                    // ~(0,1,0)
+    Vec3 mp = m.transform(v: Vec3.unitX());                    // ~(0,1,0)
     int32 e = cast<int32>(mp.y + 0.5f32);                       // 1
 
     return a + b + c + d + e;   // 1+1+4+1+1 = 8

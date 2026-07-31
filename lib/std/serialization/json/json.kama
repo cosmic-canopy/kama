@@ -449,7 +449,7 @@ type resource JsonReader implements Deserializer {
 // into a `Result` after checking `failed()`.
 fn Result<T, Owned<Error>> decode<T: Deserialize>(string src) {
     JsonReader r = JsonReader.make(src: give src);
-    return T::deserialize(r: r);   // fallibility now lives inside the ctor (sticky check + boxed DeError)
+    return T.deserialize(r: r);   // fallibility now lives inside the ctor (sticky check + boxed DeError)
 }
 
 // Deserialize from any `Reader` — the streaming twin of `decode`. Drains the reader fully into a string
@@ -462,5 +462,5 @@ fn Result<T, Owned<Error>> decodeFrom<T: Deserialize>(Reader from) {
         case Err(e): { return Result::Err(error: e); }   // IoError auto-boxes into Owned<Error>
     };
     JsonReader r = JsonReader.make(src: give src);
-    return T::deserialize(r: r);
+    return T.deserialize(r: r);
 }

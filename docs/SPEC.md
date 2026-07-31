@@ -1921,8 +1921,16 @@ there's no namespace-vs-object precedence rule — a `::` head is always a type/
 value. This is **enforced**, not merely conventional: a `::` whose head is a local, a parameter or a field
 is rejected with a message naming the `.` spelling, so field access has exactly one spelling
 (`tests/xfail/scope_op_on_value.kama`). The one deliberate crossover is **dot-on-type for constructors** —
-`Vec2.make(...)` constructs, `Vec2::dot(...)` calls a `static fn` — kept greppably distinct on purpose
-(`tests/dot_vs_static_greppable.kama`). `main` is the global entry point (unmangled).
+`Vec2.make(...)` constructs, `Vec2::dot(...)` calls a `static fn` — and the split is **enforced in both
+directions**, so it is a real greppability guarantee rather than a convention: a `static fn` called with a
+dot is rejected (`tests/xfail/dot_on_type_not_ctor.kama`) and a `ctor` called with `::` is rejected
+(`tests/xfail/scope_op_on_ctor.kama`), each naming the other spelling. A `ctor` is static (it takes no
+`self`), so it would otherwise answer to both and `grep '\.make('` would miss half the construction sites.
+The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserialize` — and for a
+`ctor` added to a primitive by retroactive conformance. Every spelling is pinned by
+`tests/ctor_spelling_edges.kama`. Relatedly, a **self-returning `static fn` is rejected as a disguised
+constructor** (`tests/xfail/self_returning_static_fn.kama`): if it returns the enclosing type or
+`Result<This, E>`, declare it a `ctor`. `main` is the global entry point (unmangled).
 
 **`global::` names the root scope explicitly** ✅ (the C# spelling). `global::X` is the same symbol as a bare
 `X` — the always-in-scope [floor](FLOOR.md) — and `global::a::b::X` names a namespace absolutely, through

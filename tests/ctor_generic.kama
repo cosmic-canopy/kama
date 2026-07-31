@@ -17,7 +17,7 @@ type value Pair<T> {
     public fn T sum() { return this.a + this.b; }
 }
 fn int32 main() {
-    Pair<int32> viaColon = Pair::make(a: 10, b: 20);       // :: bridge -> 30
+    Pair<int32> viaColon = Pair.make(a: 10, b: 20);       // :: bridge -> 30
     Pair<int32> viaDot   = Pair.make(a: 3, b: 4);          // E2 dot, inferred from LHS -> 7
     Pair<int32> viaTurbo = Pair::<int32>.make(a: 2, b: 3);  // E3 dot turbofish -> 5
     return viaColon.sum() + viaDot.sum() + viaTurbo.sum();  // 30 + 7 + 5 = 42

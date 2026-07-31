@@ -34,7 +34,7 @@ fn int32 main() {
     Map<int32, int32> m2 = Map.withCapacityAndAllocator(allocator: GlobalAllocator.make(), capacity: 4);
     m2.put(key: 2, value: 6);                              // 6
 
-    Map<int32, int32> viaBridge = Map::empty();            // `::` bridge on a ctor still works
+    Map<int32, int32> viaBridge = Map.empty();            // `::` bridge on a ctor still works
     viaBridge.put(key: 8, value: 8);                       // 8
 
     int32 mv  = match (m.get(key: 1))  { case Some(x): x; case None: 0; };   // 7

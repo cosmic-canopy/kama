@@ -9,6 +9,6 @@ type resource Thing {
 }
 
 fn int main() {
-    Atomic<Thing> bad = Atomic::make(value: Thing::make());
+    Atomic<Thing> bad = Atomic.make(value: Thing.make());
     return 0;
 }

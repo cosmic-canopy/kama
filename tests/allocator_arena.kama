@@ -10,12 +10,12 @@ fn int32 main() {
     Arena arena = Arena.make(capacity: 1 << 16);                              // 64 KiB caller-owned region
 
     // A DynamicArray drawing from the arena — force several grows (all in-arena).
-    DynamicArray<int32, BumpAllocator> xs = DynamicArray::withAllocator(allocator: arena.handle());
+    DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());
     int32 i = 0; while (i < 200) { xs.add(item: i * i); i = i + 1; }
     if (xs.length() == 200 && xs[199] == 199 * 199) { r = r + 20; }
 
     // A Map from the SAME arena (named override skips the defaulted H) — force rehash grows.
-    Map<int32, int32, A: BumpAllocator> m = Map::withAllocator(allocator: arena.handle());
+    Map<int32, int32, A: BumpAllocator> m = Map.withAllocator(allocator: arena.handle());
     i = 0; while (i < 100) { m.put(key: i, value: i + 1); i = i + 1; }
     Optional<int32> o = m.get(key: 50);
     int32 v = match (o) { case Some(x): x; case None: 0 - 1; };

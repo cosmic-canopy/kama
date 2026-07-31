@@ -88,11 +88,11 @@ type resource UdpSocket implements DatagramSocket {
     public fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {
         uint32 ip = 0ui32;
         uint16 port = 0ui16;
-        if (into.length() == 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(0), from: SocketAddr::fromHostIp(ip: ip, port: port))); }
+        if (into.length() == 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(0), from: SocketAddr.fromHostIp(ip: ip, port: port))); }
         while (true) {
             isize n = kama_recvfrom_inet(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()),
                                          outIp: addr(of: ip), outPort: addr(of: port));
-            if (n >= 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(n), from: SocketAddr::fromHostIp(ip: ip, port: port))); }
+            if (n >= 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(n), from: SocketAddr.fromHostIp(ip: ip, port: port))); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }
@@ -128,7 +128,7 @@ type resource UdpSocket implements DatagramSocket {
         uint32 ip = 0ui32;
         uint16 port = 0ui16;
         if (kama_getsockname(fd: this.fd, outIp: addr(of: ip), outPort: addr(of: port)) != 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: SocketAddr::fromHostIp(ip: ip, port: port));
+        return Result::Ok(value: SocketAddr.fromHostIp(ip: ip, port: port));
     }
 
     // Set the outgoing IP TTL (hop limit).

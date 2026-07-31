@@ -20,10 +20,10 @@ fn int32 checkClient(ref TcpStream c) {
 fn int main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47660);
-    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
     return match (rl) {
         case Ok(l): {
-            Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
+            Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
             := match (rc) { case Ok(c): checkClient(c: c); case Err(e): 70; };
         }
         case Err(e): 69;

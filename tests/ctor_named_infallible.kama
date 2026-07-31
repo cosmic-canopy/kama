@@ -6,11 +6,11 @@ type value Point {
     public int32 x;
     public int32 y;
     public ctor make(int32 x, int32 y) { return Point.of(x: x, y: y); }  // named factory
-    public ctor origin() { return Point::make(x: 0, y: 0); }          // chains to another named ctor
+    public ctor origin() { return Point.make(x: 0, y: 0); }          // chains to another named ctor
     public fn int32 sum() { return this.x + this.y; }
 }
 fn int32 main() {
-    Point p = Point::make(x: 3, y: 4);
-    Point o = Point::origin();
+    Point p = Point.make(x: 3, y: 4);
+    Point o = Point.origin();
     return p.sum() + o.sum() + 35;   // 7 + 0 + 35 = 42
 }

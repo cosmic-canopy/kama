@@ -100,7 +100,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
     public fn FixedArray<T, A> copy() {
-        FixedArray<T, A> result = FixedArray::withAllocator(allocator: this.alloc, size: this.size);  // same arena
+        FixedArray<T, A> result = FixedArray.withAllocator(allocator: this.alloc, size: this.size);  // same arena
         int32 i = 0;
         while (i < this.size) { result[i] = copy this[i]; i = i + 1; }
         return result;

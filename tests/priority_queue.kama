@@ -36,7 +36,7 @@ fn int32 main() {
     if (mn.length() == 0) { r = r + 5; }
 
     // (b) max-heap: same pushes, pops descend.
-    PriorityQueue<int32> mx = PriorityQueue::maxHeap();
+    PriorityQueue<int32> mx = PriorityQueue.maxHeap();
     mx.push(item: 5); mx.push(item: 3); mx.push(item: 8); mx.push(item: 1);
     int32 first  = match (mx.pop()) { case Some(x): x; case None: 0 - 1; };
     int32 second = match (mx.pop()) { case Some(x): x; case None: 0 - 1; };

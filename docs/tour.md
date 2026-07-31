@@ -107,8 +107,8 @@ functions, enum variants, namespaces — so `Vec2.make(...)` constructs and `Vec
 static utility. The split is deliberate: `.make(` greps for construction and never catches anything
 else. Calling a static function with a dot is a compile error that names the fix.
 
-When construction can fail, the constructor returns a `Result` and fails *before* the object
-exists, so a half-built value never escapes:
+When construction can fail, the constructor itself returns a `Result` — it is still a `ctor`, just one
+with a declared return type. It fails *before* the object exists, so a half-built value never escapes:
 
 ```kama
 enum BufferErr { BadSize }
@@ -117,18 +117,26 @@ implements Error for BufferErr { public fn string message() { return "bad size";
 type resource Buffer
 {
     int32 size;
-    private ctor make(int32 size) { Buffer r; r.size = size; return give r; }
 
-    public static fn Result<Owned<Buffer>, BufferErr> create(int32 size)
+    public ctor Result<Buffer, BufferErr> open(int32 size)
     {
         if (size <= 0) { return Result::Err(error: BufferErr::BadSize); }
-        Owned<Buffer> b = new Buffer.make(size: size);
+        Buffer b; b.size = size;
         return Result::Ok(value: give b);
     }
 
     public fn int32 capacity() { return this.size; }
     ~Buffer() { }
 }
+```
+
+The result is a value you have to unwrap, so there is no way to hold an unopened `Buffer`:
+
+```kama
+int32 cap = match (Buffer.open(size: 8)) {
+    case Ok(b):  b.capacity();
+    case Err(e): 0;
+};
 ```
 
 `new` is how you reach the heap, and it always produces a smart pointer — `Owned<T>` for a single

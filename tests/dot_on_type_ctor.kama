@@ -1,5 +1,5 @@
 // Construction-model M4: dot-on-type constructor calls — `Type.name(...)`. A named `ctor` is a static
-// factory, so `Point.make(...)` reaches the SAME C as the M2 bridge `Point::make(...)` (byte-identical).
+// factory, so `Point.make(...)` reaches the SAME C as the M2 bridge `Point.make(...)` (byte-identical).
 // Covers both fallibility modes through the dot spelling: an infallible ctor returns `T`, a fallible one
 // returns `Result<T,E>`. Distinct from `Type::staticFn()` (a static fn stays `::` — see
 // dot_vs_static_greppable) and `Enum::Variant` (stays `::`).

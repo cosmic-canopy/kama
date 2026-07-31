@@ -22,7 +22,7 @@ fn int32 run(ref TcpListener l, ref Poller p, uint16 port) {
 
     // client connects; keep it alive through the wait+accept (dropped at the arm end)
     string host = "127.0.0.1";
-    Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
     return match (rc) {
         case Ok(c): {
             int32 res = 62;
@@ -41,10 +41,10 @@ fn int32 run(ref TcpListener l, ref Poller p, uint16 port) {
 fn int main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47664);
-    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
     return match (rl) {
         case Ok(l): {
-            Result<Poller, IoError> rp = Poller::create();
+            Result<Poller, IoError> rp = Poller.create();
             := match (rp) { case Ok(p): run(l: l, p: p, port: port); case Err(e): 81; };
         }
         case Err(e): 82;

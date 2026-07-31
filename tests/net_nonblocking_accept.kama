@@ -34,7 +34,7 @@ fn int32 run(ref TcpListener l, uint16 port) {
 
     // client connects; keep it alive through the accept (dropped at the arm end, after acceptQueued)
     string host = "127.0.0.1";
-    Result<TcpStream, IoError> rc = TcpStream::connect(host: host, port: port);
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
     return match (rc) {
         case Ok(c):  acceptQueued(l: l);
         case Err(e): 62;
@@ -44,6 +44,6 @@ fn int32 run(ref TcpListener l, uint16 port) {
 fn int main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47661);
-    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
     return match (rl) { case Ok(l): run(l: l, port: port); case Err(e): 80; };
 }

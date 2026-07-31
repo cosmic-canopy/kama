@@ -20,7 +20,7 @@ fn bool isRefused(IoError e) { return match (e) { case ConnectionRefused: true; 
 // success, or except/error on failure), then reads checkConnected(). A bare timeout is NOT "connected" —
 // SO_ERROR is 0 while the handshake is still in flight.
 fn Result<Unit, IoError> resolve(ref TcpStream s) {
-    match (Poller::create()) {
+    match (Poller.create()) {
         case Ok(p): {
             p.add(fd: s.rawHandle(), interest: Interest::Write);
             int32 tries = 0;
@@ -40,7 +40,7 @@ fn Result<Unit, IoError> resolve(ref TcpStream s) {
 // Connect (non-blocking) to a listening port and resolve it. Returns 0 on success.
 fn int32 connectListening(uint16 port) {
     string host = "127.0.0.1";
-    Result<TcpStream, IoError> r = TcpStream::connectNonBlocking(host: host, port: port);
+    Result<TcpStream, IoError> r = TcpStream.connectNonBlocking(host: host, port: port);
     return match (r) {
         case Ok(s):  (okUnit(r: resolve(s: s)) ? 0 : 1);
         case Err(e): 2;
@@ -50,7 +50,7 @@ fn int32 connectListening(uint16 port) {
 // Connect (non-blocking) to a port with nothing listening; expect ConnectionRefused. Returns 0 when refused.
 fn int32 connectDead(uint16 port) {
     string host = "127.0.0.1";
-    Result<TcpStream, IoError> r = TcpStream::connectNonBlocking(host: host, port: port);
+    Result<TcpStream, IoError> r = TcpStream.connectNonBlocking(host: host, port: port);
     int32 rc = -1;
     match (r) {
         case Ok(s): {                                  // in flight — poll until resolved, then SO_ERROR
@@ -66,7 +66,7 @@ fn int main() {
     string host = "127.0.0.1";
     uint16 live = cast<uint16>(47662);
     uint16 dead = cast<uint16>(47669);                 // nothing bound here
-    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: live);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: live);
     return match (rl) {
         case Ok(l): {
             int32 a = connectListening(port: live);

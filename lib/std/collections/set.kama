@@ -20,7 +20,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // bare `Set()` builds an empty (cap-0) inner map that is dropped when replaced by the arena-backed one.
     public ctor withAllocator(A allocator) {
         Set<K,H,A> result;
-        Map<K, Unit, H, A> inner = Map::withAllocator(allocator: allocator);
+        Map<K, Unit, H, A> inner = Map.withAllocator(allocator: allocator);
         result.m = give inner;
         return give result;
     }
@@ -32,7 +32,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // `Set<K,H,A>` (was a `static fn`), building the inner map via `Map::withCapacity`.
     public ctor withCapacity(int32 capacity) when [A: default] {
         Set<K,H,A> s;
-        Map<K, Unit, H, A> inner = Map::withCapacity(capacity: capacity);
+        Map<K, Unit, H, A> inner = Map.withCapacity(capacity: capacity);
         s.m = give inner;
         return give s;
     }
@@ -40,7 +40,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // Caller-owned allocator AND pre-sized — builds the inner map via `Map::withCapacityAndAllocator`.
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
         Set<K,H,A> s;
-        Map<K, Unit, H, A> inner = Map::withCapacityAndAllocator(allocator: allocator, capacity: capacity);
+        Map<K, Unit, H, A> inner = Map.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
         s.m = give inner;
         return give s;
     }
@@ -72,7 +72,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
         Set<K,H> result;
         r.beginArray();
         while (r.moreElems()) {
-            Result<K, Owned<Error>> __er = K::deserialize(r: r);   // bind — a match needs a named enum subject
+            Result<K, Owned<Error>> __er = K.deserialize(r: r);   // bind — a match needs a named enum subject
             match (give __er) {                                     // consume: destructure-move the owning element out
                 case Err(e): { return Result::Err(error: give e); }
                 case Ok(v):  { result.add(key: give v); }

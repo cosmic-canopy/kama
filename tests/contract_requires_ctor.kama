@@ -10,6 +10,6 @@ type value Widget implements Factory {
 
 fn int32 main() {
     Widget a = Widget.create(seed: 41);   // dot-on-type ctor call        -> v = 42
-    Widget b = Widget::create(seed: 7);    // `::` coexistence bridge       -> v = 8
+    Widget b = Widget.create(seed: 7);    // `::` coexistence bridge       -> v = 8
     return a.v + b.v;                      // 42 + 8 = 50
 }

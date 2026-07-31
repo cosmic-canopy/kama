@@ -27,8 +27,8 @@ fn void worker(Payload p) {
 fn int main() {
     int32 a = 0;
     int32 b = 0;
-    Payload pa = Payload::make(slot: addr(of: a), value: 10i32);
-    Payload pb = Payload::make(slot: addr(of: b), value: 20i32);
+    Payload pa = Payload.make(slot: addr(of: a), value: 10i32);
+    Payload pb = Payload.make(slot: addr(of: b), value: 20i32);
     scope {
         spawn worker(p: give pa);   // disjoint slot `a`
         spawn worker(p: give pb);   // disjoint slot `b`

@@ -3747,11 +3747,16 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                     ci.genDeserialize = true;
                     ci.interfaces.push_back("Deserialize"); ci.retroInterfaces.push_back("Deserialize");
                     MethodInfo mi; mi.cName = name + "__deserialize"; mi.visibility = Visibility::Public;
-                    mi.isStatic = true; mi.isSynthDe = true;   // P4: fallible `Result<This, Owned<Error>>`
+                    // A ctor, exactly like the value/resource synthesis below: `deserialize` CONSTRUCTS, so
+                    // it is one across every type that has it. Registered as a static-only method here left
+                    // an enum's `deserialize` answering to `::` while every other type's answered to `.`, so
+                    // no single spelling worked from a generic `T` — the element type decided the syntax.
+                    mi.isStatic = true; mi.isSynthDe = true; mi.isCtor = true;   // P4: fallible `Result<This, Owned<Error>>`
                     mi.returnType = resultOwnedErrorTypeNode(ed->identifier);
                     scanTypeForCollections(mi.returnType);
                     ParamSig r; r.name = "r"; r.byRef = false; r.className = "Deserializer"; mi.params.push_back(r);
                     ci.methods["deserialize"] = mi;
+                    ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
                 }
                 _classes[name] = ci;
             }
@@ -10667,6 +10672,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // `json::decode<T: Deserialize>` calling `T::deserialize(...)`, or a collection's `T::deserialize`).
         // The concrete type may be a PRIMITIVE whose static conformance lives in `_primConformances`
         // (`int32::deserialize` -> `r.readI32()`), so consider both tables.
+        // A bound type-parameter head substitutes to its monomorphized concrete type.
         if (!_classes.count(typeName) && !_primConformances.count(typeName)) {
             auto sit = _typeSubst.find(*qual->back());
             if (sit != _typeSubst.end() && sit->second) {
@@ -10680,6 +10686,23 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (stci) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(stci, name, &owner);
+            // Construction has exactly ONE spelling: dot-on-type. A `ctor` registers as static (it takes no
+            // `self`), so without this it would ALSO answer to `::` — two ways to say the same thing, and the
+            // greppability the split exists for would be false: `grep '\.make('` would miss half the call
+            // sites. This is the mirror of the `Type.staticFn(...)` rejection in emitDotOnTypeCtorCall; both
+            // directions are now closed, so `.` is construction and `::` is scope resolution, always.
+            // No exemption for a type-parameter head: `T.deserialize(...)` in `fn f<T: Deserialize>()` is
+            // construction too, and dot-on-type resolves through the substitution just as `::` did. One
+            // rule, no exceptions — which is the only way `grep '\.make('` finds every construction site.
+            if (mi && mi->isCtor) {
+                // Diagnose with the SOURCE spelling the user wrote, not the mangled/monomorphized key
+                // `typeName` may have become above (`Point`, not `_F4__Point`; `Pair`, not `Pair_int32`).
+                const std::string& disp = *qual->back();
+                unsupported(("`" + disp + "::" + name + "` names a constructor — construct with "
+                             "dot-on-type: `" + disp + "." + name + "(...)`. `::` is scope resolution "
+                             "(static functions, enum variants, namespaces)").c_str(), call->line);
+                return "0";
+            }
             if (mi && mi->isStatic) {
                 canAccess(owner, mi->visibility, name, call->line);
                 recordNodeRef(call->identifier.get(), mi->node);   // M6 B3a: `Type::m()` references m
@@ -12783,7 +12806,19 @@ std::string CEmitter::exprClass(SharedExpression e)
             std::string dotTy;
             if (isTypeReceiver(ma, dotTy) && _classes.count(dotTy)) {
                 auto cit = _classes[dotTy].ctors.find(method);
-                if (cit != _classes[dotTy].ctors.end() && !cit->second.isFallible) return dotTy;
+                if (cit != _classes[dotTy].ctors.end()) {
+                    // Infallible: the ctor yields the enclosing type by value.
+                    if (!cit->second.isFallible) return dotTy;
+                    // Fallible (`ctor Result<T, E> open(...)`): yield the DECLARED return type, so the call
+                    // is a first-class `match` subject inline — `match (Widget.make(n: 7))`. The `::` bridge
+                    // resolved this all along (it reads `mi->returnType`); the dot path returning "" here is
+                    // what made an inline fallible ctor unusable as a subject. Now that construction has one
+                    // spelling, that gap would leave the pattern unwritable.
+                    if (cit->second.returnType) {
+                        std::string rc = cType(cit->second.returnType);
+                        if (isClass(rc)) return rc;
+                    }
+                }
             }
             return "";
         }
@@ -13493,7 +13528,11 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
                 auto s = _typeSubst.find(*id->value);
                 if (s != _typeSubst.end()) {
                     std::string ct = cType(s->second);
-                    if (_classes.count(ct)) { outType = ct; return true; }
+                    // A PRIMITIVE is a legitimate receiver here: retroactive conformance puts real `ctor`s on
+                    // int32/float64/… (`implements Deserialize for int32 { public ctor … deserialize(…) }`),
+                    // and they live in `_primConformances`, not `_classes`. The `::` resolver consulted both;
+                    // this one only ever needed `_classes` because no other path reached a primitive ctor.
+                    if (_classes.count(ct) || _primConformances.count(ct)) { outType = ct; return true; }
                 }
             }
         }
@@ -13531,7 +13570,10 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                 tn = _variantTargetType;
         }
     }
-    ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : nullptr;
+    // A user type resolves in `_classes`; a `ctor` added to a PRIMITIVE by retroactive conformance
+    // (`implements Deserialize for int32`) resolves through `retroTargetInfo` — the same two tables the
+    // `::` resolver consults, so both spellings see the same set of constructors.
+    ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : retroTargetInfo(tn);
     if (!stci) { unsupported(("unknown type in constructor call `" + disp + "`").c_str(), call->line); return "0"; }
     // M6 B3d: the RECEIVER of `Type.name(...)` is a reference to the type, exactly as the same spelling in
     // an annotation is — it was missing only because this path resolves without passing a site. Record

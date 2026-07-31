@@ -12,10 +12,10 @@ type resource Holder {
     Owned<Box> a;
     public ctor withOwned(Owned<Box> a) { Holder r; r.a = give a; return give r; }
     public ctor make(int32 v) { Owned<Box> b = new Box.make(v: v); return Holder.withOwned(a: give b); }  // return a construction
-    public ctor zeroed() { return Holder::make(v: 0); }                                     // ctor -> ctor delegation
+    public ctor zeroed() { return Holder.make(v: 0); }                                     // ctor -> ctor delegation
     public fn int32 get() { return this.a.get(); }
 }
 fn int32 main() {
-    Holder h = Holder::zeroed();
+    Holder h = Holder.zeroed();
     return h.get() + 42;           // 0 + 42 = 42
 }

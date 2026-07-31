@@ -215,7 +215,7 @@ fn int main() {
     string portStr = envOr(name: "HTTPD_PORT", dflt: "8080");
     uint16 port    = parsePort(s: portStr, dflt: cast<uint16>(8080));
 
-    Result<TcpListener, IoError> rl = TcpListener::bind(host: host, port: port);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
     return match (rl) {
         case Ok(listener): run(listener: listener, host: host, root: root, port: port);
         case Err(e):       fail(host: host, port: port);

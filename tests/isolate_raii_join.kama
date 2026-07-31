@@ -26,7 +26,7 @@ fn void worker(Payload p) {
 
 fn int main() {
     int32 shared = 0;
-    Payload p = Payload::make(slot: addr(of: shared), value: 7i32);
+    Payload p = Payload.make(slot: addr(of: shared), value: 7i32);
     {
         Isolate h = spawn worker(p: give p);
     }   // ~Isolate() joins here — no explicit h.join()

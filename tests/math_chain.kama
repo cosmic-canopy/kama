@@ -5,7 +5,7 @@ fn int main() {
     Vec3 p = Vec3.of(x: 3.0f32, y: 4.0f32, z: 0.0f32);
     Vec3 q = Vec3.of(x: 0.0f32, y: 0.0f32, z: 0.0f32);
     int32 b = cast<int32>((p - q).length());                            // operator result . method -> 5
-    Mat4 M = Mat4::translation(t: Vec3.of(x: 7.0f32, y: 0.0f32, z: 0.0f32));
+    Mat4 M = Mat4.translation(t: Vec3.of(x: 7.0f32, y: 0.0f32, z: 0.0f32));
     int32 c = cast<int32>(M.transpose().transpose().get(c: 3, r: 0));   // chained methods -> 7
     Vec3 n = Vec3.of(x: 0.0f32, y: 5.0f32, z: 0.0f32).normalized();        // inline . method -> (0,1,0)
     int32 d = cast<int32>(n.y * 100.0f32);                              // 100

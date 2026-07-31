@@ -10,7 +10,7 @@ fn void bumpRelaxed(ref Atomic<int32> c) {
 }
 
 fn int main() {
-    Atomic<int32> counter = Atomic::make(value: 0i32);
+    Atomic<int32> counter = Atomic.make(value: 0i32);
     scope {
         spawn bumpRelaxed(c: ref counter);
         spawn bumpRelaxed(c: ref counter);

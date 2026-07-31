@@ -19,6 +19,6 @@ type resource Holder {
     public fn int32 get() { return this.a.get(); }
 }
 fn int32 main() {
-    Holder h = Holder::make(v: 42);
+    Holder h = Holder.make(v: 42);
     return h.get();               // 42
 }

@@ -13,7 +13,7 @@ fn int32 main() {
 
     // (a) an arena-backed SortedMap<int32,int32,BumpAllocator>. Insert 40 keys in a scrambled order to
     // force several node splits and at least one root growth (the tree exceeds height 1).
-    SortedMap<int32, int32, BumpAllocator> sm = SortedMap::withAllocator(allocator: arena.handle());
+    SortedMap<int32, int32, BumpAllocator> sm = SortedMap.withAllocator(allocator: arena.handle());
     int32 i = 0;
     while (i < 40) { int32 k = (i * 17) % 40; sm.put(key: k, value: k * 2); i = i + 1; }
     if (sm.length() == 40) { r = r + 10; }
@@ -40,7 +40,7 @@ fn int32 main() {
     if (sm.length() < 39) { r = r + 10; }
 
     // (b) an arena-backed SortedSet<int32,BumpAllocator> sharing the SAME arena.
-    SortedSet<int32, BumpAllocator> ss = SortedSet::withAllocator(allocator: arena.handle());
+    SortedSet<int32, BumpAllocator> ss = SortedSet.withAllocator(allocator: arena.handle());
     i = 0;
     while (i < 30) { ss.add(key: (i * 7) % 30); i = i + 1; }
     if (ss.length() == 30 && ss.contains(key: 15)) { r = r + 10; }
