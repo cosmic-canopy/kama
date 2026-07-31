@@ -83,6 +83,8 @@ fn string mimeType(ref string path) {
     if (path.endsWith(suffix: ".ico"))  { return "image/x-icon"; }
     if (path.endsWith(suffix: ".wasm")) { return "application/wasm"; }
     if (path.endsWith(suffix: ".txt"))  { return "text/plain; charset=utf-8"; }
+    if (path.endsWith(suffix: ".xml"))  { return "application/xml"; }
+    if (path.endsWith(suffix: ".woff2")){ return "font/woff2"; }
     return "application/octet-stream";
 }
 
@@ -134,6 +136,18 @@ fn int32 respondText(ref TcpStream client, string status, string text) {
     return respond(client: client, status: give status, contentType: "text/plain; charset=utf-8", body: body);
 }
 
+// A miss on an extensionless path is retried as a directory index: "/docs/spec" -> "/docs/spec/index.html".
+// Every static host does this (Cloudflare Pages redirects to the trailing-slash form), so a hand-typed URL
+// behaves here the way it does in production. A genuine 404 just costs one extra failed open.
+fn int32 retryAsDirectory(ref TcpStream client, ref string root, ref string rel) {
+    string full = root + rel + "/index.html";
+    Result<DynamicArray<uint8>, IoError> rf = readFile(path: full);
+    return match (rf) {
+        case Ok(body): respond(client: client, status: "200 OK", contentType: "text/html; charset=utf-8", body: body);
+        case Err(e):   respondText(client: client, status: "404 Not Found", text: "404 Not Found\n");
+    };
+}
+
 // Handle one connection: read the request, resolve a file under `root`, send it (or an error).
 fn int32 handle(ref TcpStream client, ref string root) {
     FixedArray<uint8> buf = FixedArray.make(size: 8192);
@@ -156,7 +170,7 @@ fn int32 handle(ref TcpStream client, ref string root) {
     Result<DynamicArray<uint8>, IoError> rf = readFile(path: full);
     return match (rf) {
         case Ok(body): respond(client: client, status: "200 OK", contentType: mimeType(path: rel), body: body);
-        case Err(e):   respondText(client: client, status: "404 Not Found", text: "404 Not Found\n");
+        case Err(e):   retryAsDirectory(client: client, root: root, rel: rel);
     };
 }
 

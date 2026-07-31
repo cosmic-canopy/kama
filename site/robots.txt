@@ -1,3 +1,5 @@
 # kama-lang.org
 User-agent: *
 Allow: /
+
+Sitemap: https://kama-lang.org/sitemap.xml

@@ -22,7 +22,8 @@ bad() { echo "check-editors: FAIL — $1" >&2; fail=1; }
 
 [ -f "$DOC" ] || { echo "check-editors: FAIL — docs/editors.md is missing (LSP M6 C3)" >&2; exit 1; }
 
-# 1. Every editor the campaign committed to (docs/design/lsp.md target matrix) still has a section. A
+# 1. Every editor the supported set commits to (docs/editors.md, "The supported set is these eight") still
+#    has a section. A
 #    dropped editor must be a diff, not a silence.
 #    ⚠️ `-xF`, whole-line and FIXED-string, for two reasons found by breaking it on purpose: a substring
 #    match passed a heading renamed to `## Helixx` (the blind spot check-syntax-drift.sh records for its
@@ -119,5 +120,5 @@ grep -qF -- 'hx --grammar build' "$DOC" || bad "docs/editors.md no longer tells 
 #    that makes the whole design work.
 grep -qF -- 'kama.local.json' "$DOC" || bad "docs/editors.md no longer documents kama.local.json as the build-configuration channel"
 
-[ "$fail" = 0 ] || { echo "check-editors: see docs/editors.md and docs/design/lsp-m6-c-kickoff.md" >&2; exit 1; }
+[ "$fail" = 0 ] || { echo "check-editors: see docs/editors.md" >&2; exit 1; }
 echo "check-editors: PASS (8 editors documented, 7 configured, 3 watcher globs agree in server + VS Code client, Zed extension agrees with its docs)"

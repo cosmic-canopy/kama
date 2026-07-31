@@ -25,7 +25,11 @@ if [ -z "$ENGINE" ]; then
 fi
 
 # Assemble the deployable _site/ (the default) so the preview matches what ships. A custom dir is served as-is.
-if [ "$DIR" = "_site" ]; then tools/build-site >/dev/null; fi
+# The generator needs node; the emscripten/emsdk-based dev image ships it, so run it in the container too
+# rather than adding a host requirement to the container-only workflow.
+if [ "$DIR" = "_site" ]; then
+  "$ENGINE" run --rm -v "$ROOT:/work" -w /work "$IMAGE" sh tools/build-site >/dev/null
+fi
 if [ ! -d "$DIR" ]; then echo "serve: '$DIR' is not a directory" >&2; exit 1; fi
 
 # Build the compiler (only if missing) and the httpd binary, inside the container.

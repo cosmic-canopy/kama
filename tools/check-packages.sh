@@ -681,7 +681,7 @@ grep -q '"source": "registry"' "$rp/kama.lock" \
     || { echo "check-packages: FAIL — registries-override install did not lock a registry source:" >&2; sed 's/^/  /' "$rp/kama.lock" >&2; exit 1; }
 
 # ---- workspace-internal dependencies -----------------------------------------------------------------
-# The five-file monorepo from docs/design/workspace-deps-kickoff.md: a root that composes `projects`, two
+# The five-file monorepo from docs/packages.md § Workspaces: a root that composes `projects`, two
 # libraries, and an app. `libs/net` declares the sibling it imports, which is what makes it extractable.
 ws="$tmp/acme"
 mkdir -p "$ws/libs/config" "$ws/libs/net" "$ws/apps/server"

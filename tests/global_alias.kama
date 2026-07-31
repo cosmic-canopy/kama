@@ -1,4 +1,4 @@
-// `global::` names the ROOT scope explicitly (LSP M4.8; docs/design/logging.md Part E, C# precedent).
+// `global::` names the ROOT scope explicitly (docs/SPEC.md § Modules; C# precedent).
 // Two forms: `global::X` is the same symbol as bare `X` — the always-in-scope floor — and
 // `global::a::b::X` names a namespace absolutely, through neither this file's `using`s nor its aliases.
 // The point is that it still resolves where a LOCAL declaration shadows the spelling, which is what the

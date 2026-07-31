@@ -2,7 +2,7 @@
 // NOT scanned by the main run_tests loop (that reads tests/*.kama, tests/*.d, tests/xfail).
 //
 // Deliberately covers every span shape the AST used to get wrong (measured 2026-07-27, see
-// docs/design/lsp-m3-kickoff.md "The grammar prerequisite"): a name was precise ONLY when its production
+// the grammar prerequisite): a name was precise ONLY when its production
 // was the bare IDENTIFIER token. M3.4's STAMP_LOC pass fixed the rest, so each kind appears BOTH with and
 // without an initializer/value to keep that fixed, and `shadow` is declared twice in sibling scopes so
 // keys must be per-declaration, not per-name.

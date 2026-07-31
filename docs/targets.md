@@ -1,7 +1,8 @@
 # Targets & toolchain setup
 
-How to build kama for the platform you want, and what you need installed to do it. For the *design*
-behind any of this, see [design/build-configuration.md](design/build-configuration.md).
+How to build kama for the platform you want, and what you need installed to do it. The language-level
+rules — target triples, single-select groups and the `@compileFor` flags they derive — are in
+[SPEC.md](SPEC.md#conditional-compilation--compileforflag-).
 
 ## The short version
 

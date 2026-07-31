@@ -1,0 +1,14 @@
+{
+  "name": "kama-site",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Build script for kama-lang.org. The site is static HTML; this only renders docs/*.md into it.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "node tools/site/build.mjs"
+  },
+  "//": "PINNED EXACT (no caret): the built site must be byte-reproducible across machines and CI. marked has zero transitive dependencies — keep it that way.",
+  "devDependencies": {
+    "marked": "18.0.7"
+  }
+}

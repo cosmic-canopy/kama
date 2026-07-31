@@ -377,7 +377,7 @@ Precedence, high to low: **`--log`/`KAMA_LOG` (runtime) > `kama.local.json` > `k
 **Build-time fields** (`log`, `flags`, `select`) are read by the compiler and merge field-by-field, as
 above. **`select`** declares this project's build-configuration groups — extra targets (each with an
 optional cross toolchain), extra build types, and any single-select axis of your own. It is described
-in full in [design/build-configuration.md](design/build-configuration.md), with the practical
+in full in [SPEC.md](SPEC.md#conditional-compilation--compileforflag-), with the practical
 toolchain setup in [targets.md](targets.md); the short version is that a
 group takes exactly one value, that value's name becomes a `@compileFor` flag, and `--select
 GROUP=VALUE` picks it. A local manifest may add targets and change defaults, so a developer can point

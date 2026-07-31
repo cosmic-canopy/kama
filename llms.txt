@@ -10,9 +10,11 @@ drift. For authoritative syntax read the grammar; for semantics read the spec; f
 examples read the test fixtures.
 
 ## Language
+- [Tour](docs/tour.md): the guided introduction — the whole language in one read, every
+  snippet compiled. Start here if you are new.
 - [Specification](docs/SPEC.md): the full language reference — types, the
   `value`/`resource`/`contract` ownership model, generics, sum types + `match`, operators,
-  smart pointers, collections, FFI, build/debug. Start here for semantics.
+  smart pointers, collections, concurrency, FFI, build/debug. Start here for semantics.
 - [Type model](docs/TYPE_MODEL.md): the ownership vocabulary in depth — `value` copies,
   `resource` moves, `contract` is the guarantee; the `type` marker + access-control rules.
 - [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `kama.y` by
@@ -34,8 +36,8 @@ examples read the test fixtures.
   wasm targets; `kama build [--release] [--target <name-or-triple>]`.
 - [Targets & toolchains](docs/targets.md): which platforms `--target` reaches, how to get a cross
   toolchain (your own / clang+sysroot / zig), output kinds, and per-platform notes.
-- [Build configuration](docs/design/build-configuration.md): the design — target triples
-  (`<arch>-<os>-<abi>`), single-select groups (TARGET / BUILD_TYPE / OUTPUT), `@compileFor` flags.
+- [Packages & projects](docs/packages.md): the `kama.json` manifest, dependencies, the lockfile,
+  publishing, and the toolchain version manager.
 - [Editor setup](docs/editors.md): `kama lsp` is a JSON-RPC/stdio language server built into the
   compiler — one server, thin clients. Config for VS Code, Neovim, Vim, Emacs, Sublime, Helix, Kate,
   plus which editors get syntax colour from what.
@@ -43,7 +45,7 @@ examples read the test fixtures.
 - [Repo guide for AI assistants](CLAUDE.md): working conventions and build commands.
 
 ## Status
-The **language feature set is complete** (v0.1.75, on the road to 1.0). Implemented:
+The **language feature set is complete** (see `VERSION`; on the road to 1.0). Implemented:
 functions, primitives, control flow, named-parameter calls, `ref`/`out`; the **ownership type
 model** (every declaration is `type value` / `type resource` / `type contract`); **RAII**
 destruction (no GC); single inheritance + **virtual dispatch**; **contracts** (interfaces via
@@ -51,14 +53,22 @@ fat-pointer vtables); **enums and tagged unions** with value-producing, exhausti
 (there is no `switch`); **`Optional<T>`/`Result<T,E>`** as the no-exceptions, no-`null` error
 model; **generics** (monomorphized — user types + functions, contract bounds, `This`, explicit
 turbofish `f::<T>()`); **operator overloading** + full static methods; the full
-**smart-pointer family** (`Owned`/`Shared`/`Weak`) with auto-deref; **collections**
-(`Array`/`List`/`string`, bounds-checked + RAII); the **`give`/`copy`** by-value ownership
-model with compile-time use-after-move checking; **`const`-correctness**; **access control**
-(private-by-default, `public`/`protected`/`friend`); **namespaces** + multi-file builds;
-**C FFI** (`extern`, `Ptr`, raw memory confined to an explicit `unsafe { }` block); and
-**function pointers** (`fnptr`, `Type::method`, `BindableFunctionPtr`). Targets **native and
-WASM**, debug/release, with IDE breakpoint debugging.
+**smart-pointer family** (`Owned`/`Shared`/`Weak`) with auto-deref and custom allocators;
+**collections** (`FixedArray`/`DynamicArray`/`InlineArray`/`Map`/`Set`/`Deque`/`PriorityQueue`/
+sorted containers/`View<T>`/`string`, bounds-checked + RAII); the **`give`/`copy`** by-value
+ownership model with compile-time use-after-move checking; **`const`-correctness**; **access
+control** (private-by-default, `public`/`protected`/`friend`); **namespaces** + multi-file
+builds; **C FFI** (`extern`, `Ptr`, raw memory confined to an explicit `unsafe { }` block);
+**function pointers** (`fnptr`, `Type::method`, `BindableFunctionPtr`); **string interpolation**
++ format specifiers; **serialization** (`@generate`, by-value + object graph + polymorphic);
+**shared-nothing concurrency** (isolates, typed channels, structured `scope`, `Atomic<T>`,
+immutable `Shared`, `parallel_for` — no `async` colouring); **compile-time evaluation**
+(`comptime` constants and `comptime fn`); **conditional compilation** (`@compileFor`); and the
+**MCU surface** (`hardware` MMIO, `@interrupt`/`@section`/`@noheap`, inline `asm`, fallible
+allocation). Targets **native, WebAssembly and bare-metal**, debug/release, with source-level
+breakpoint debugging in an IDE and in browser DevTools. Tooling: a package + toolchain manager
+(`kama pkg`, `kama toolchain`, `kama publish`) and a language server (`kama lsp`) serving eight
+editors.
 
-The remaining work before the 1.0 tag is documentation/tooling polish, not language features —
-see [docs/ROADMAP.md](docs/ROADMAP.md). Post-1.0: reflection + serialization, file I/O,
-networking, then the WebGPU engine.
+The remaining work before the 1.0 tag is documentation and release polish, not language
+features — see [docs/ROADMAP.md](docs/ROADMAP.md).

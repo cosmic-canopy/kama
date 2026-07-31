@@ -90,7 +90,7 @@ jobs:
         run: KAMA_WASM=1 ./run_tests.sh
 
   grammar:
-    name: editor grammars (tree-sitter + TextMate)
+    name: editor grammars (tree-sitter + TextMate) + site
     runs-on: ubuntu-latest
     # The build-test legs deliberately never `npm install`, which is why tools/check-syntax.sh has always
     # SKIPped there and why the tree-sitter guard would too. This is the one leg where both have teeth: it
@@ -107,6 +107,7 @@ jobs:
           cache-dependency-path: |
             tree-sitter-kama/package-lock.json
             editor/vscode/package-lock.json
+            package-lock.json
       # NB: NOT --ignore-scripts. The tree-sitter CLI's binary is fetched by its install script, and with
       # scripts disabled node_modules/.bin/tree-sitter still exists as a JS shim that dies on first use
       # rather than being absent — so the guard's skip path would not even fire.
@@ -116,3 +117,7 @@ jobs:
       - run: sh tools/check-syntax.sh
       - run: sh tools/check-syntax-drift.sh
       - run: sh tools/check-editors.sh
+      # The site is rendered FROM docs/, and the generator hard-fails on a relative link that resolves
+      # nowhere, a #anchor with no matching heading, or raw HTML in a doc. Running it here means a docs
+      # edit that breaks a cross-reference fails the PR, not the deploy on main.
+      - run: sh tools/build-site

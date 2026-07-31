@@ -8,6 +8,10 @@ VS Code additionally has a packaged extension ([`editor/vscode/`](../editor/vsco
 highlighting, F5 debugging and a build-configuration picker. Everything else on this page is configuration
 you paste into your own dotfiles.
 
+**The supported set is these eight editors** — VS Code, Neovim, Vim (coc.nvim), Emacs (eglot), Sublime Text,
+Helix, Kate and Zed. That list is the commitment, and `tools/check-editors.sh` fails the build if any of them
+loses its section here: dropping an editor has to be a deliberate diff, never a silence.
+
 ## What you get
 
 Advertised by `kama lsp` today, in every editor:

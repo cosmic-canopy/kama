@@ -925,7 +925,7 @@ static bool g_strictFlags = false;
 // vestigial (`unknown`/`pc`); a 4-part spelling is accepted and its vendor dropped, so pasting a Rust
 // or clang triple works. Selecting a target inserts its NAME plus its derived component flags into the
 // active `@compileFor` set, which is why `@compileFor(OS_LINUX)` needs no language machinery:
-// membership is all `compileForActive` ever tested. Design: docs/design/build-configuration.md.
+// membership is all `compileForActive` ever tested. Docs: docs/targets.md, docs/SPEC.md.
 struct TargetSpec {
     std::string name;                            // catalog/user name ("WINDOWS", "RPI"); the triple if anonymous
     std::string arch, os, abi;
@@ -5356,7 +5356,7 @@ int main(int argc, char** argv)
             // a stdlib call (a `std::math` Vec4 op, a collection accessor) into the user's hot loop, so
             // numeric code stays out-of-line and never auto-vectorizes. One TU lets clang inline + vectorize
             // it, landing hot math at C parity (measured ~6×→1× on the `math` bench; LTO across separate TUs
-            // recovers only part of it — docs/design/simd.md § M0). Debug keeps per-module .c for faithful
+            // recovers only part of it). Debug keeps per-module .c for faithful
             // stepping; wasm keeps its own path.
             std::string cPath = genDir + "/" + baseName(stripExtension(outPath)) + ".c";
             if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;

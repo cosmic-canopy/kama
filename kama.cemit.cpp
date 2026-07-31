@@ -207,7 +207,7 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
     // `global::…` — resolve from the ROOT, ignoring the file's own scope, its `using`s and its aliases.
     // `global::assert` is the same symbol as bare `assert`, nameable even where a local declaration
     // shadows the spelling; `global::a::b::X` names a namespace absolutely. `global` is therefore reserved
-    // as a namespace root. (docs/design/logging.md Part E — deferred until an LSP existed to give it a
+    // as a namespace root. (docs/SPEC.md § Modules — deferred until an LSP existed to give it a
     // completion payoff; precedent is C#'s `global::`.)
     SharedStringList q = qualifier;
     bool rooted = q && !q->empty() && *(*q)[0] == "global";

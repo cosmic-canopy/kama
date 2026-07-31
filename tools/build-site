@@ -1,13 +1,14 @@
 #!/bin/sh
 # Assemble the deployable static site into _site/ (Cloudflare Pages direct-upload input).
-# Copies the page + brand assets + robots.txt + the canonical installers, so
-# kama-lang.org/install.sh and /install.ps1 serve the same files the installer and
-# `kama update` reference, and /llms.txt exposes the repo's LLM-discoverable index.
+#
+# The generator is tools/site/build.mjs: it copies site/ verbatim, renders the home page, and
+# renders one page per entry in tools/site/pages.mjs from the repo's own markdown — so the site
+# never holds a second copy of a doc. It also copies the canonical installers and llms.txt to the
+# root, so kama-lang.org/install.sh and /install.ps1 serve the same files the installer and
+# `kama update` reference.
+#
+# Needs node >= 20 and one pinned dependency (marked); `npm ci` fetches it on first run.
 set -eu
 cd "$(dirname "$0")/.."   # repo root
-rm -rf _site && mkdir -p _site/assets
-cp -R site/. _site/
-cp assets/logo.png _site/assets/ 2>/dev/null || true
-cp install.sh install.ps1 _site/
-cp llms.txt _site/
-echo "built _site/"
+[ -d node_modules/marked ] || npm ci --no-audit --no-fund
+exec node tools/site/build.mjs

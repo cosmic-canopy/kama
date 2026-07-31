@@ -5,7 +5,7 @@
 // editor. Scope for M1: lifecycle + full-document sync + publishDiagnostics. Hover / go-to-definition /
 // completion are M2+ — the query facade (kama.query.h) is already built and waiting.
 //
-// Design of record: docs/design/lsp-m1-kickoff.md. Everything is self-contained here (a hand-rolled JSON
+// User-facing docs: docs/editors.md. Everything is self-contained here (a hand-rolled JSON
 // reader/writer, the transport, the dispatch loop) so the only compiler surface it touches is the
 // existing analysis facade — keeping the LSP a leaf module the rest of the compiler never depends on.
 
@@ -511,7 +511,7 @@ struct Server {
     // changes. Real language servers (rust-analyzer, clangd, gopls) keep a warm index instead, but they
     // pay for it with incremental reparse; without that (M5) a warm index would still need a full rebuild
     // after every keystroke, so eager work would be pure waste. Rebuild cost is one whole-project parse
-    // per gesture — see docs/design/lsp-m3-kickoff.md for the measured number and the upgrade path.
+    // per gesture — measured, and fast enough that the index is rebuilt rather than cached.
     std::string    workspaceRoot;       // the editor's folder, from initialize (may be empty)
     SharedLspIndex wsIndex;             // cached project-wide index
     std::string    wsRootOfIndex;       // which project root wsIndex was built for

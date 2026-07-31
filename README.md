@@ -10,7 +10,7 @@ the browser as WebAssembly.
 > **TL;DR** — kama gives you modern ergonomics (generics, sum types + exhaustive `match`,
 > operator overloading, RAII, smart pointers) over a **deterministic, no-GC** memory model,
 > and compiles to readable C you can build and debug like any C program. **Status: the
-> language is feature-complete (v0.1.75), on the road to 1.0.**
+> language is feature-complete, on the road to 1.0** (see [VERSION](VERSION)).
 >
 > ```sh
 > tools/cdev make                       # build the compiler (containerized toolchain)
@@ -58,11 +58,12 @@ in **[GOALS.md](GOALS.md)**; the forward plan in **[docs/ROADMAP.md](docs/ROADMA
   use-after-free, no use-after-move, no `null`, no leaks, bounds checks — at a fraction of the
   cognitive cost, and hands back the **traditional OOP toolkit** (single inheritance + virtual
   dispatch, contracts for substitutability) that Rust declines to provide. The trade is
-  deliberate: kama does **not** statically enforce Rust's aliasing-exclusivity or data-race
-  freedom today. *(The planned concurrency model is shared-nothing — data-race freedom by
-  construction rather than by a borrow checker; see the [roadmap](docs/ROADMAP.md). The 1.0 core
-  is single-threaded.)* It's a different point on the safety/effort curve — aimed at the
-  OOP-shaped, borrow-checker-weary middle — not a superset of Rust.
+  deliberate: kama does **not** statically enforce Rust's aliasing-exclusivity. *(Concurrency is
+  shared-nothing and shipped — isolates, typed channels, structured `scope`, `Atomic<T>` and
+  `parallel_for`, on native and wasm — so data races are prevented by construction rather than by
+  a borrow checker, and there is no `async` colouring; see [Concurrency](docs/SPEC.md#concurrency-).)*
+  It's a different point on the safety/effort curve — aimed at the OOP-shaped,
+  borrow-checker-weary middle — not a superset of Rust.
 
 kama's white space is the combination no one else occupies: **traditional OOP + no-GC/RAII +
 transpiles to portable C.** Rust and Zig drop OOP; C# and Swift carry a GC/runtime; C++ keeps the
@@ -146,9 +147,13 @@ see **[editor setup](docs/editors.md)**.
 - `examples/` — worked programs (e.g. `httpd/`, a static-file server in Kama)
 - `Dockerfile`, `tools/cdev` — containerized toolchain
 - `./dev serve` — preview the site locally, served by the Kama-written `examples/httpd` (dogfooding; → http://localhost:8080)
-- `docs/` — `SPEC.md` (language reference), `grammar.bnf` (generated from `kama.y`),
-  `TYPE_MODEL.md`, `KEYWORDS.md`, `ROADMAP.md`, `editors.md` (editor setup),
-  `packages.md`, `targets.md`, `mcu.md`, `FLOOR.md`, and `design/` (per-campaign design notes)
+- `docs/` — `SPEC.md` (language reference), `tour.md` (the guided introduction),
+  `grammar.bnf` (generated from `kama.y`), `TYPE_MODEL.md`, `KEYWORDS.md`, `FLOOR.md`,
+  `ROADMAP.md` (what's next), `editors.md`, `packages.md`, `targets.md`, `mcu.md`,
+  `*_READINESS.md` (per-domain gap analyses), `benchmarks/`, and `design/` (in-flight design
+  notes — deleted once the work ships and its record lands in the docs above)
+- `site/`, `tools/site/` — kama-lang.org: static assets plus the generator that renders the
+  docs above into the published site (`./dev site`, `./dev serve`)
 - `llms.txt`, `GOALS.md` — LLM-discovery entry point and design philosophy
 
 MIT licensed — see [LICENSE](LICENSE).

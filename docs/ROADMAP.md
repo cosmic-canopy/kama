@@ -13,7 +13,7 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 > | What shipped | Where its record goes |
 > | --- | --- |
 > | Language surface (syntax, semantics, stdlib API) | [SPEC.md](SPEC.md) |
-> | A campaign (its design, decisions, and as-shipped record) | its `docs/design/*.md` |
+> | A campaign, while it is still in flight | its `docs/design/*.md` — **deleted when the work ships**, once the rows above carry its record |
 > | A capability against a target domain | [MCU_READINESS.md](MCU_READINESS.md) · [ENGINE_READINESS.md](ENGINE_READINESS.md) · [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md) |
 > | User-facing behavior + workflow | [packages.md](packages.md) · [editors.md](editors.md) · [mcu.md](mcu.md) · [targets.md](targets.md) |
 > | *Why* a thing happened, and when | the git log — do not re-tell it here |
@@ -24,18 +24,14 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 ## The shape
 
-- **1.0 — language complete.** The core language, the std I/O foundation (`std::io`/`fs`/`net`), and the
-  math layer (`std::math`) are in place (see [SPEC.md](SPEC.md)). The language surface is stable and the
-  pre-1.0 work list is closed; **the last gate is the docs/naming reconcile** (§1) — you build *with* the
-  language, not *on* it.
+- **1.0 — language complete.** The language surface is stable and the pre-1.0 work list is closed; **the
+  last gate is the docs/naming reconcile** (§1) — you build *with* the language, not *on* it.
 - **1.x — systems & runtime.** Capabilities built ON the finished language: deeper stdlib reach, more serde
   back ends, MCU toolchain packaging, engine/GPU library work. Mostly library + codegen, little new syntax.
 - **2.0 — dual-mode scripting** (flagship): the *same* language usable compiled OR scripted, via a shared IR
   feeding C, direct-wasm, and a bytecode VM — the `kama` binary self-contained (§7).
-- **Concurrency** — shared-nothing by construction (isolates + channels + `scope` + `Atomic<T>` +
-  immutable-`Shared` + `parallel_for`), native + wasm. **Shipped** (campaign complete); spec of record is
-  [docs/design/concurrency.md](design/concurrency.md) + [SPEC.md](SPEC.md). No language work remains — the
-  job-system / event-loop scheduler are libraries on the primitives (§8, web-framework readiness).
+- **Concurrency** — the language primitives are done ([SPEC.md](SPEC.md#concurrency-)); what is left is
+  libraries on top of them — the job system and the event-loop scheduler (§8, web-framework readiness).
 - **Engine track** (product north star): a portable lightweight **WebGPU** game engine, woven through 1.x — a
   product built *on* kama, not part of the language (§8).
 
@@ -44,11 +40,7 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability matrices in
 [ENGINE_READINESS.md](ENGINE_READINESS.md) / [MCU_READINESS.md](MCU_READINESS.md); the history in the git log.
 
-**The language surface is complete, and the pre-1.0 work list is closed.** Soft-float + fixed-point, the
-argv/env prelude floor, diagnostics & logging, and `std::process` (POSIX + Windows) have all shipped —
-records in [SPEC.md](SPEC.md) (`std::num::Q16_16`, "Command-line arguments + environment", `std::log`,
-`std::process`), [design/logging.md](design/logging.md), [design/std-process.md](design/std-process.md) and
-[MCU_READINESS.md](MCU_READINESS.md).
+**The language surface is complete, and the pre-1.0 work list is closed.**
 
 **The one remaining gate is the docs/naming reconcile → then tag 1.0.** 1.0 is the API-stability point;
 naming and case conventions are fixed at the tag (PascalCase types, lowerCamel methods, no `I`-prefix on
@@ -76,9 +68,8 @@ Everything else here is library or toolchain work that does **not** gate the tag
    flash pass — detail in §5 (embedded "Toolchain / build" row).
 
 **Post-1.0 — the decided big-arc sequence (with the user, 2026-07-26):**
-1. **LSP first — v1 SHIPPED (§10).** It did the double duty it was chosen for: the front end is now a
-   **reusable query API with real source spans** (the `%locations` work deferred until then), which every
-   later tool rides on. **M7 — the tree-sitter grammar — is what remains of the arc** (§10).
+1. **Editor tooling (§10).** The front end is a reusable query API with real source spans, which every
+   later tool rides on; the residuals are in §10.
 2. **Scripting / multimodal (§7) — the flagship 2.0.** The polymorphic-emitter → direct-wasm → bytecode-VM arc,
    driven by wanting a fast iteration/runtime tier for game engines + web. First concrete step: refactor the C
    emitter behind an abstract backend interface (C as the first impl), the shared lowering in the base.
@@ -97,10 +88,7 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
 ## 2. Deferred language bits (tracked)
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
-language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in. (Shipped
-language features — `hardware`, string interpolation + format specifiers + `@generate(Format)` + tagged
-strings, the construction model / named ctors / on-type turbofish, custom-allocator default-seal — have moved
-to [SPEC.md](SPEC.md) / [docs/design/construction-model.md](design/construction-model.md).)
+language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
 - **Contract refinement — two under-tested edges (clean workarounds).** `type contract Child … implements
   Parent` works for dispatch, but was exercised mainly with scalar-param parents. (a) A merged parent method
@@ -232,11 +220,8 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
 ## 5. 1.x — systems & runtime (post-1.0)
 
 Capabilities built on the finished language — the substrate the engine needs (asset I/O, scene serialization,
-networking). MCU/embedded language surface (statics, `hardware`, ISR/`@section`, freestanding target, fallible
-alloc, inline asm) and the const-eval ladder (const generics, `comptime` constants, `comptime fn`, `@compileFor`)
-have all **shipped** — see [MCU_READINESS.md](MCU_READINESS.md) / [SPEC.md](SPEC.md) /
-[design/comptime-fn.md](design/comptime-fn.md) / [design/conditional-compilation.md](design/conditional-compilation.md).
-Remaining forward work:
+networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
+[MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
 - **Reflection + declarative serialization** — see §4; back ends follow as modules. Rides on the shipped
   `std::fs`/`std::io` for asset + scene load.
@@ -278,17 +263,14 @@ Remaining forward work:
     scope-cleanup / drop order / move-state with `emitScopeCleanup`) then re-run Tier 1, or guarded inline caches.
     A separate, larger project — pursue only if a real hot path (engine ECS dispatch) proves Tier 1 insufficient.
 
-### Embedded / bare-metal MCU (Pi Pico · Arduino · ESP32) — language surface shipped; toolchain packaging remains
+### Embedded / bare-metal MCU (Pi Pico · Arduino · ESP32) — toolchain packaging
 
-"Pi/Arduino support" is **two targets**:
-- **Raspberry Pi (Linux — Pi 3/4/5, Zero):** a full ARM app processor running Linux — MMU, OS, heap, filesystem.
-  **Kama already targets this** (portable C11 → `zig cc`/clang cross-compile to `aarch64-linux`). Unlocking it is
-  ~a cross-compile triple + **GPIO/I²C/SPI bindings** — ordinary C FFI over `libgpiod` / `/dev/mem`, a *library*.
+The language surface is done ([MCU_READINESS.md](MCU_READINESS.md)); what remains is build and library work,
+across two different targets:
+- **Raspberry Pi (Linux — Pi 3/4/5, Zero):** a full ARM app processor running Linux, which kama already
+  cross-compiles to. What is left is **GPIO/I²C/SPI bindings** — ordinary C FFI over `libgpiod` / `/dev/mem`.
 - **Bare-metal MCU (Cortex-M: Pi Pico/RP2040 · Arduino Zero/Nano 33, ESP32; later AVR):** *freestanding* — no OS,
-  KB of RAM, often no heap, a startup file + linker script instead of hosted libc. The **language surface is
-  done** — the whole Tier-0/Tier-1 set (module statics, `hardware`, `@interrupt`/`@section`, `--target embedded`,
-  fallible `allocate`/`try new`/`@noheap`, inline `asm`) have all shipped — see [MCU_READINESS.md](MCU_READINESS.md).
-  What remains is **build/library**, not language:
+  KB of RAM, often no heap, a startup file + linker script instead of hosted libc:
 
   | Piece | What's needed |
   |---|---|
@@ -300,12 +282,9 @@ Remaining forward work:
   FFI already exist. **North star: blink an LED** (the embedded "first triangle"). **Start Cortex-M, not AVR**
   (`zig cc`/clang do `thumbv*-none-eabi` cleanly; pico-sdk is tidy; AVR pain comes later).
 
-### Compile-time evaluation & platform-specific compilation — shipped; residuals
+### Compile-time evaluation & platform-specific compilation — residuals
 
-The const-eval ladder (6b-1 const-generic arithmetic, 6b-2 named `comptime` constants, 6b-3 `comptime fn`
-compile-time evaluation) and decl-level conditional compilation (`@compileFor(FLAG)` + `kama.json` flag manifest)
-have all **shipped** — see [design/comptime-fn.md](design/comptime-fn.md) and
-[design/conditional-compilation.md](design/conditional-compilation.md). Forward residuals:
+The const-eval ladder and decl-level conditional compilation are done ([SPEC.md](SPEC.md)). What is left:
 
 - **Host-endianness flag → `htole`/`htobe` (small).** `std::num` `byteswap*` (pure value swaps) + `bitcast`
   ship, but *host-order* serialization helpers need a compile-time endianness fact pure kama arithmetic can't
@@ -322,14 +301,12 @@ have all **shipped** — see [design/comptime-fn.md](design/comptime-fn.md) and
   mechanism (per-platform `type` impls behind a platform-agnostic `contract`, exactly one survives) — NOT
   in-function branching / `#ifdef`. Extending it as new targets land is forward library/driver work.
 
-## 6. Concurrency — shared-nothing by construction (shipped)
+## 6. Concurrency — what is left above the primitives
 
-**Shipped** — campaign complete, **no language work remains**. Spec of record:
-[docs/design/concurrency.md](design/concurrency.md) + the Concurrency section of [SPEC.md](SPEC.md).
-
-The higher-level **job system / event-loop scheduler are libraries** on these
-primitives (Go/Erlang-style block-on-channel, deliberately **not** `async/await` function-coloring) — see the
-engine track (§8) and [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md).
+The language primitives are done ([SPEC.md](SPEC.md#concurrency-)). The higher-level **job system and
+event-loop scheduler are libraries** on them (Go/Erlang-style block-on-channel, deliberately **not**
+`async/await` function-colouring) — see the engine track (§8) and
+[WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md).
 
 - **Deferred (reopen only on a concrete case) — general shared-memory ("hybrid").** Co-equal shared-memory
   threading is *not* planned; it reintroduces the hazard the model removes. Capability is retained (via the
@@ -431,10 +408,8 @@ polish); the engine *spine* (buffer/pipeline/binding libraries, renderer) is the
 
 ## 9. Performance
 
-Current standing (full detail in [benchmarks/RESULTS.md](benchmarks/RESULTS.md)): kama is at **C/C++ parity** on
-native compute (fib/pi/collatz/fnptr/alloc + dynamic dispatch, all LLVM-AOT at `-O3`), and wins decisively on
-footprint (~2 MB RSS, ~66 KB binary) and the no-GC `alloc` workload. `kama→wasm` (optimized) **beats hand-written
-JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispatch`. Forward work:
+Where kama currently stands is measured in [benchmarks/RESULTS.md](benchmarks/RESULTS.md) — read it there
+rather than here, so there is one number to keep current. Forward work:
 
 - **Bench methodology (don't re-chase).** Measure wasm at the optimizing tier (`node --no-liftoff`). Short
   workloads skew under parallel load — run with nothing else competing. Keep all LLVM-AOT languages at the same
@@ -457,12 +432,8 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
 
 ## 10. Tooling / distribution (deferred)
 
-- **Build configuration + cross-compilation — shipped; residuals.** Targets are `<arch>-<os>-<abi>` triples
-  whose components derive the `@compileFor` flags, `TARGET`/`BUILD_TYPE`/`OUTPUT` are single-select groups a
-  project extends in `kama.json`, cross-compilation follows the selected target rather than the build host,
-  and static/object library output exists. Record of what shipped and why:
-  [design/build-configuration.md](design/build-configuration.md); user docs: [targets.md](targets.md).
-  Forward work:
+- **Build configuration + cross-compilation — residuals.** The target/build-type/output selection model is
+  done ([targets.md](targets.md), [SPEC.md](SPEC.md)). What is left:
   - **⚠️ No CPU-tuning knob.** kama passes **no** `-march`/`-mcpu`/`-mtune` anywhere, so every build targets
     the architecture's *generic baseline*. That is the right default (portable binaries — and it is why
     `zig cc` and clang measure identical, neither tunes), but there is no first-class way to say otherwise:
@@ -474,23 +445,12 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
   - **Per-value `BUILD_TYPE` settings** (own opt-level/LTO/strip), deliberately deferred so `kama.json` does
     not become a build-settings language; and **numeric build options surfaced as `comptime` constants**
     rather than as flag comparisons (`@compileFor` stays tagging, not logic).
-- **VS Code Marketplace publish** — the `.vsix` is built + attached to releases; Marketplace publishing is
-  deferred, and gates on a public release. The extension itself is complete: syntax highlighting, the
-  language client, a build-configuration status bar + picker, and zero-config source-level debugging (F5
-  under CodeLLDB, breakpoints mapped back to the `.kama` via the emitter's `#line` directives).
-- **Language server (LSP) — v1 SHIPPED (M0–M6, closed 2026-07-30).** `kama lsp` is a JSON-RPC/stdio
-  subcommand of the compiler serving diagnostics, hover, go-to-definition, outline, find-references,
-  project-wide rename, workspace symbols, completion, signature help, semantic tokens and
-  build-configuration awareness — **one server, eight editors**, four of them verified against a running
-  editor. Record of the campaign, its decisions and its acceptance: [design/lsp.md](design/lsp.md) (with
-  the per-milestone briefs beside it); user-facing setup: [editors.md](editors.md). Forward work:
-  - **Tree-sitter grammar + Zed extension — shipped (M7); residuals below.** `tree-sitter-kama/` is a
-    grammar package in this repository, guarded by `tools/check-treesitter.sh`, whose strongest oracle
-    requires every `.kama` file the compiler accepts to parse with zero ERROR nodes and every file it
-    rejects with a parse/lexical error to produce one. Helix colours from it (verified by rendering a real
-    Helix through a pty), and `editor/zed/` is a Zed extension registering the language and wiring
-    `kama lsp`. Record of the decisions, and of the three places the brief was wrong:
-    [design/treesitter.md](design/treesitter.md); user docs: [editors.md](editors.md). Forward work:
+- **VS Code Marketplace publish** — the `.vsix` is built and attached to releases; Marketplace publishing is
+  deferred, and gates on a public release.
+- **Language server (LSP) — residuals.** `kama lsp` and its eight editors are documented in
+  [editors.md](editors.md). Forward work:
+  - **Tree-sitter grammar + Zed extension — residuals.** `tree-sitter-kama/` is guarded by
+    `tools/check-treesitter.sh`; `editor/zed/` is the Zed extension. Forward work:
     - **Flip the grammar source to the public URL** when the repo goes public — a tag `rev` +
       `https://github.com/cosmic-canopy/kama` in `editor/zed/extension.toml`, and the `git`+`subpath` form
       in the Helix snippet. Both spellings are already written out in `docs/editors.md`; this is a
@@ -515,13 +475,9 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
     are PRs to *other* projects and gate on a public release.
   - **Three editor snippets are documented but unverified** — Vim (coc.nvim), Sublime Text and Kate. Each
     needs a human at a GUI; Sublime additionally needs its LSP package installed through Package Control.
-- **Workspace-internal dependencies — shipped; one follow-on.** A sub-project is extractable: path deps
-  resolve against the manifest that declared them, module resolution consults a dependency's own `sources`,
-  path deps are permitted between members of one declared `projects` tree, and a file's imports are checked
-  against **its own** package's manifest (a hard error, lenient only in the LSP/`query` path). Record:
-  [design/workspace-deps-kickoff.md](design/workspace-deps-kickoff.md); user docs:
-  [packages.md](packages.md). **Forward:** version reconciliation on publish — `kama publish` substituting a
-  registry version for a workspace path dep.
+- **Workspace-internal dependencies — one follow-on.** Workspaces work today ([packages.md](packages.md)).
+  What is left: version reconciliation on publish — `kama publish` substituting a registry version for a
+  workspace path dep.
 - **kama-aware debugger value formatting — polish on the working debugger.** Breakpoints/stepping are already
   kama-source-level, but inspected values render in their emitted-C form (a `string` shows as
   `kama_string {data,len,cap}`, `Optional<T>` as its tagged union, collections as C structs). Add LLDB type
@@ -532,8 +488,7 @@ JS on fib/pi/collatz/fnptr (up to ~4.5×)** and is near-parity on `alloc`/`dispa
 - **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries distribute
   without vendoring — the point at which the **orphan rule** (§3, retroactive conformance) becomes load-bearing.
   Design of record: [design/package-management.md](design/package-management.md); user docs:
-  [packages.md](packages.md). **All self-contained compiler work has shipped; what remains is
-  hosted-services/ops work:**
+  [packages.md](packages.md). What remains is hosted-services and ops work:
   - **Both gated on hosted services / the repo being public + the website staged:**
     - **M3.3 — hosted deployment (pure ops, no compiler change).** Stand up the real registry host (Cloudflare
       Pages static index + GitHub Releases/R2 tarballs), wire the built-in default base URI (`kDefaultRegistry`,

@@ -1976,7 +1976,7 @@ void CEmitter::addNamespaceSymbols(const std::string& path, const QueryCtx& qc,
     std::vector<PathSeg> segs = splitPath(path);
     if (segs.empty()) return;
     // `global::` — the floor, explicitly. This is the completion payoff the alias was deferred for
-    // (docs/design/logging.md Part E): the always-in-scope surface is otherwise undiscoverable, because
+    // (see docs/SPEC.md § Modules): the always-in-scope surface is otherwise undiscoverable, because
     // there is no module to `import` and therefore nothing to type that would list it.
     if (segs.size() == 1 && segs[0].name == "global") {
         QueryScope guard(this);

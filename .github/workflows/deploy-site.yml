@@ -2,13 +2,25 @@ name: deploy-site
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'assets/**', 'install.sh', 'install.ps1', 'tools/build-site']
+    # The site is assembled FROM the docs, so a docs edit is a site edit. VERSION lands in the
+    # footer, llms.txt and the installers are published verbatim, and tests/site_sample.kama is
+    # the home page's code block — all of them have to trigger a deploy.
+    paths: ['site/**', 'tools/site/**', 'tools/build-site', 'assets/**',
+            'docs/**', 'GETTING_STARTED.md', 'VERSION', 'llms.txt',
+            'install.sh', 'install.ps1', 'tests/site_sample.kama',
+            'package.json', 'package-lock.json', '.github/workflows/deploy-site.yml']
   workflow_dispatch:
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
       - run: sh tools/build-site
       - name: Deploy to Cloudflare Pages
         run: npx --yes wrangler@3 pages deploy _site --project-name=kama --branch=main

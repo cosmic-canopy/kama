@@ -761,9 +761,10 @@ deadlock the parent). `Process` gives `wait()` (blocking reap → `ExitStatus { 
 `tryWait() -> Optional<ExitStatus>` (non-blocking), `kill`/`terminate`/`signal`, and the piped streams as
 `std::fs::File`s (`stdout()`/`stderr()` read, `stdin()`+`closeStdin()` feed-then-EOF). Dropping a `Process`
 **never blocks**: it reaps a already-exited child (no zombie) or detaches it (the OS reparents to init) —
-explicit `wait()` is how you get the status. POSIX only today (fork/execvp/pipe/waitpid behind `kama_os.h`);
-Windows (`CreateProcess`) is a later milestone, and wasm has no process model. See
-[docs/design/std-process.md](design/std-process.md).
+explicit `wait()` is how you get the status. **POSIX and Windows both ship**: `process.kama` is byte-identical
+across platforms, with the whole difference behind `kama_os.h` (fork/execvp/pipe/waitpid vs `CreateProcess`),
+and `run()`'s two-pipe drain sits behind one `kama_capture2` seam (`poll` on POSIX, a reader thread per pipe on
+Windows) so both platforms take the same code path. wasm has no process model.
 
 **The streaming byte substrate.** `std::io` also defines two contracts that unify every byte source/sink:
 `type contract Writer` (the partial-write primitive `write(View<uint8>) -> Result<usize, IoError>` + `flush`)
@@ -1079,8 +1080,8 @@ are permissive (an undeclared flag is simply inactive), so bare single-file buil
 A **single-select group** takes exactly one value — `--select CONSOLE=PS5 --select CONSOLE=XBOX` is an
 error — and `inherits` pulls the base in with it, so `FAST` activates `RELEASE` and gets its
 optimization/stripping behavior without redeclaring it. `kama.local.json` overrides defaults per
-machine. Precedence: CLI > `kama.local.json` > `kama.json` > the built-in default. Full design:
-[docs/design/build-configuration.md](design/build-configuration.md).
+machine. Precedence: CLI > `kama.local.json` > `kama.json` > the built-in default. The practical
+toolchain setup is in [targets.md](targets.md).
 
 `kama.json` is the seed of the future package-management manifest (deps/versions). It is parsed by the
 compiler driver (C++), not by the language's own JSON library — the compiler is not self-hosted, so its
@@ -1516,7 +1517,7 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   own copy (lowered `static KAMA_ISOLATE_LOCAL T name`: `_Thread_local` on native and on wasm — emscripten
   pthreads share one linear memory — and a plain zero-cost `static` on a single-core `--target embedded`). So
   a `static` **cannot be seen by another isolate → cannot race**; cross-isolate mutable sharing stays on the
-  greppable `Atomic<T>` / shared-region seam (see *Concurrency*). This unifies the MCU need with the threading
+  greppable `Atomic<T>` / shared-region seam (see [Concurrency](#concurrency-)). This unifies the MCU need with the threading
   model: the same declaration is race-free the day it runs multicore (proven ThreadSanitizer-clean).
 - **v1 scope (deliberately minimal, MCU-correct).** The type must be a **value, `Ptr`, or `InlineArray`**
   (owns nothing, needs no teardown — v1 has no static-destructor seam); a destructible `resource`, `string`,
@@ -1922,6 +1923,149 @@ is rejected with a message naming the `.` spelling, so field access has exactly 
 (`tests/xfail/scope_op_on_value.kama`). The one deliberate crossover is **dot-on-type for constructors** —
 `Vec2.make(...)` constructs, `Vec2::dot(...)` calls a `static fn` — kept greppably distinct on purpose
 (`tests/dot_vs_static_greppable.kama`). `main` is the global entry point (unmangled).
+
+**`global::` names the root scope explicitly** ✅ (the C# spelling). `global::X` is the same symbol as a bare
+`X` — the always-in-scope [floor](FLOOR.md) — and `global::a::b::X` names a namespace absolutely, through
+neither the file's imports nor its aliases. It exists for the case where a local declaration shadows the
+spelling you want: a module that defines its own `toString` still reaches the floor's with
+`global::toString(x: 7i32)` (`tests/global_alias.kama`).
+
+## Concurrency ✅
+
+Kama earns data-race freedom the way it earns null-safety: by making the hazard **unrepresentable**
+rather than checked. Where Rust proves exclusivity *over* shared memory (borrow checker, lifetimes,
+`Send`/`Sync`, `Pin`, `async` colouring), kama **removes the shared mutable state**, so there is
+nothing to prove. There is no `async`, no `await`, and therefore no function colouring: an ordinary
+function is the only kind of function.
+
+The model has three levels, and they all reuse the ownership rules already in this document.
+
+### Isolates — `spawn` ✅
+
+An **isolate** is a unit of shared-nothing execution: a real OS thread natively, a Web Worker on
+wasm. It has its own stack, heap and module statics, and communicates only through channels and the
+`Atomic<T>` seam. Isolates are meant to be *coarse* — roughly one per core, or a handful of
+long-lived service isolates — which is what makes it honest for one to block.
+
+```kama
+import std::concurrent::{Isolate};
+
+Isolate h = spawn worker(p: give payload);   // starts now; the handle is an owned resource
+h.join();                                    // explicit join …
+```
+
+`~Isolate()` joins, so a handle that simply goes out of scope joins there — no orphaned task, no
+detach-by-forgetting. Arguments cross into the isolate under the ordinary ownership rules: a
+`resource` is moved with `give` (so the spawning isolate provably cannot touch it afterwards), and
+a `value` is copied.
+
+### Channels ✅
+
+A `Channel<T>` is a typed pipe. `Channel::bounded(capacity:)` sets the buffer depth; capacity `0`
+is a rendezvous channel. `sender()` and `receiver()` hand out owned endpoints you move to whoever
+needs them.
+
+```kama
+import std::concurrent::{Channel, Sender, Receiver, Isolate};
+
+Channel<int32> ch = Channel::bounded(capacity: 4);
+Sender<int32>   tx = ch.sender();
+Receiver<int32> rx = ch.receiver();
+
+Isolate h = spawn producer(tx: give tx);     // the sender is moved into the isolate
+
+Optional<int32> v = rx.recv();               // blocks; None once closed AND drained
+```
+
+`send(item:)` returns `SendResult<T> { Sent, Undelivered(T item) }` — a channel whose receivers are
+all gone hands the item **back** rather than dropping it on the floor, so nothing is silently lost
+and the sender decides what to do. `recv()` returns `Optional<T>`: `None` means the channel is
+closed and empty, which is why dropping the last `Sender` is how a producer signals end-of-stream.
+
+**Sendability is computed, not declared.** There is no `Send` marker to write or forget. A type is
+sendable iff it is a `value` whose fields are all sendable, a `resource` (transferred by move), or a
+`Shared`/`Weak` over a deeply-immutable type. A `view`, a raw `Ptr`, a bare `contract` value, or
+anything transitively containing one is rejected — with an error naming the offending field, the
+same way the escape check reports. Because it is structural, it cannot be wrong by omission.
+
+### Structured concurrency — `scope` ✅
+
+A `scope { }` block joins every child spawned inside it at its closing brace. It is RAII applied to
+tasks: deterministic lifetimes, no orphans, and — because a child is guaranteed to be joined before
+the scope exits — a child may safely borrow from the enclosing scope.
+
+```kama
+scope {
+    spawn writer(s: give sa);     // a bare `spawn` inside a scope is a deferred-join child
+    spawn writer(s: give sb);
+}                                 // BARRIER: both joined here, before anything below runs
+```
+
+### Data parallelism — `parallel_for` ✅
+
+`parallel_for (ref T e in coll) { … }` splits `coll` into K non-overlapping sub-`View`s, one per
+worker isolate, runs the body over each in place, and joins them all at its own closing brace. It is
+safe **by disjointness** — two workers never touch the same element — so it needs no lock and no
+borrow checker.
+
+```kama
+parallel_for (ref int32 e in xs) { e = e * 2; }   // closing brace is the barrier
+```
+
+`ref` is mandatory: disjoint *mutable* access is the entire point. The input is a `View<T>` or any
+contiguous container that exposes `.view()` (`DynamicArray`, `FixedArray` are auto-viewed); a
+non-contiguous container such as a `Map` has no `.view()` and is rejected.
+
+### The three sharing seams ✅
+
+Cross-isolate state is confined to three greppable seams, the same way raw memory is confined to
+`unsafe { }`:
+
+| Seam | Meaning | Native | wasm | Bare metal |
+| --- | --- | --- | --- | --- |
+| module `static` | **per-isolate** state — each isolate gets its own copy | `_Thread_local` | `_Thread_local` (emscripten pthreads share one linear memory, so TLS is what makes it per-isolate) | a plain C `static`, zero cost (one core = one isolate) |
+| `hardware` | `volatile` MMIO and the single-core ISR↔loop flag | `volatile T*` | n/a | the register/ISR seam — *not* cross-isolate |
+| `Atomic<T>` | the **only** cross-isolate mutable sharing | `_Atomic` / `<stdatomic.h>` | Atomics over a SharedArrayBuffer | atomics, if multicore |
+
+The load-bearing rule: **a module `static` is per-isolate by construction, so it cannot be observed
+by another isolate and therefore cannot race.** To share mutable state you must reach for
+`Atomic<T>`, which is visible in a grep.
+
+### `Atomic<T>` ✅
+
+```kama
+import std::concurrent::{Atomic, MemoryOrder};
+
+Atomic<int32> counter = Atomic.make(value: 0);
+counter.fetchAdd(delta: 1);
+int32 now = counter.load();
+```
+
+`load` / `store` / `swap` / `compareExchange` / `fetchAdd` / `fetchSub`, all sequentially consistent
+by default. Each has an `…Explicit` form taking a `MemoryOrder` for the expert case. Atomics are the
+whole shared-mutable surface; general shared mutable memory stays outside the safe language.
+
+### Immutable sharing — `type immutable` ✅
+
+The other way to share safely is to share something that cannot change. `type immutable value T` (or
+`type immutable resource T`) marks a type **deeply** immutable, which the compiler verifies: every
+field, base and variant payload must itself be a primitive, a `string`, an `enum`, or another deeply
+immutable type. A mutable member is a compile error naming that member.
+
+A `Shared<T>` over a deeply-immutable `T` is sendable, so any number of isolates can hold and read
+the same asset with no copy. Its control block switches to an atomic refcount only in that case, so
+an ordinary single-isolate `Shared` pays nothing. This is distinct from a `const` binding, which
+only promises *this* alias will not mutate and therefore cannot license cross-isolate sharing.
+
+### Why not green threads or `async`/`await`
+
+Both exist to serve "proceed until ready". Stackful green threads need a userspace stack-switching
+scheduler, which on wasm means Asyncify — precisely the colouring cost being rejected. `async`/`await`
+colours every function and drags in pinning. Kama takes neither into the *language*: isolates are
+real threads, and blocking is honest when they are few; massive parallelism comes from the
+never-blocking data-parallel layer. The "multiplex thousands of connections over a few threads"
+ergonomic is a **library** concern above the language — a native scheduler can back the very same
+blocking-shaped surface with fibers, with no language change and no effect on wasm.
 
 ## Serialization — `@`-attributes + `@generate` ✅ (intrinsic implementation complete — by-value + full object graph + polymorphic `Shared<Contract>`; see [ROADMAP.md](ROADMAP.md) §4)
 

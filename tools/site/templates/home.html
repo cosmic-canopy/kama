@@ -1,0 +1,204 @@
+<header class="hero">
+{{scene}}
+  <div class="hero-copy">
+    <p class="eyebrow"><span class="tick"></span>鎌 · the sickle language</p>
+    <h1>Cut the runtime.<br><em>Keep the edge.</em></h1>
+    <p class="lede">
+      <strong>kama</strong> is a C-family language with deterministic RAII instead of a garbage
+      collector, named parameters at every call site, and no runtime at all. It compiles to
+      readable, portable C11 — so it runs natively everywhere C runs, in the browser via
+      WebAssembly, and on bare metal.
+    </p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#install">Install kama</a>
+      <a class="btn" href="/docs/tour/">Take the tour</a>
+    </div>
+    <code class="hero-cmd">$ curl -fsSL https://kama-lang.org/install.sh | sh</code>
+  </div>
+</header>
+
+<section class="band">
+  <p class="claim">
+    Traditional OOP, no garbage collector, portable C output — the combination nothing else
+    occupies. <span>Rust and Zig drop OOP. C# and Swift carry a runtime. C++ keeps the footguns.</span>
+  </p>
+</section>
+
+<section class="page" id="install">
+  <div class="section-head">
+    <span class="numeral">一</span>
+    <h2>Install</h2>
+    <span class="kicker">one command</span>
+  </div>
+
+  <div class="os">
+    <input type="radio" name="os" id="os-mac" class="os-radio" checked>
+    <input type="radio" name="os" id="os-linux" class="os-radio">
+    <input type="radio" name="os" id="os-windows" class="os-radio">
+    <div class="os-tabs">
+      <label for="os-mac">macOS</label>
+      <label for="os-linux">Linux</label>
+      <label for="os-windows">Windows</label>
+    </div>
+    <div class="os-panels">
+      <div class="os-panel p-mac">
+        <span class="rule"></span>
+        <code>curl -fsSL https://kama-lang.org/install.sh | sh</code>
+        <button class="copy" type="button" hidden>copy</button>
+      </div>
+      <div class="os-panel p-linux">
+        <span class="rule"></span>
+        <code>curl -fsSL https://kama-lang.org/install.sh | sh</code>
+        <button class="copy" type="button" hidden>copy</button>
+      </div>
+      <div class="os-panel p-windows">
+        <span class="rule"></span>
+        <code>irm https://kama-lang.org/install.ps1 | iex</code>
+        <button class="copy" type="button" hidden>copy</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">
+    Installs into <code>~/.kama</code>, no admin. Auto-detects a C compiler and falls back to a
+    self-contained build that bundles <code>zig cc</code>, so <code>kama build</code> works with
+    nothing else installed. Update any time with <code>kama update</code>.
+    Prefer to build it yourself? <a href="/docs/getting-started/">Getting started</a> has the
+    manual and from-source paths.
+  </p>
+</section>
+
+<section class="page">
+  <div class="section-head">
+    <span class="numeral">二</span>
+    <h2>Why kama</h2>
+    <span class="kicker">what you get</span>
+  </div>
+
+  <div class="grid">
+    <article class="tile"><span class="kanji">無</span>
+      <h3>No GC. No runtime.</h3>
+      <p>Deterministic RAII: every resource is destroyed exactly where it leaves scope. Nothing
+      pauses, nothing collects, and there is no runtime to ship alongside your binary.</p>
+    </article>
+
+    <article class="tile"><span class="kanji">盾</span>
+      <h3>Safe without a borrow checker</h3>
+      <p>No null and no raw pointers in the safe surface. Ownership carries the safety — smart
+      pointers, bounds-checked collections, and compile-time use-after-move detection. Raw memory
+      lives inside an explicit <code>unsafe</code> block.</p>
+    </article>
+
+    <article class="tile"><span class="kanji">名</span>
+      <h3>Named parameters, always</h3>
+      <p><code>temper(name: "kama", folds: 12)</code>. There are no positional calls, so a call
+      site reads like the signature and argument order stops being a bug class.</p>
+    </article>
+
+    <article class="tile"><span class="kanji">型</span>
+      <h3>Ownership is the type</h3>
+      <p>Every declaration says what it is: a <code>value</code> copies, a <code>resource</code>
+      moves and drops, a <code>view</code> borrows, a <code>contract</code> is the guarantee.
+      One greppable marker, no guessing.</p>
+    </article>
+
+    <article class="tile"><span class="kanji">果</span>
+      <h3>No exceptions, no null</h3>
+      <p><code>Optional&lt;T&gt;</code> and <code>Result&lt;T, E&gt;</code> with exhaustive
+      <code>match</code>. Construction that can fail returns a <code>Result</code> instead of
+      leaving a half-built object behind.</p>
+    </article>
+
+    <article class="tile"><span class="kanji">並</span>
+      <h3>Shared-nothing concurrency</h3>
+      <p>Isolates, channels, structured <code>scope</code> blocks and <code>parallel_for</code> —
+      race freedom by construction, not by annotation. No <code>async</code> colouring: an
+      ordinary function is the only kind of function.</p>
+    </article>
+
+    <article class="tile"><span class="kanji">算</span>
+      <h3>Compile-time evaluation</h3>
+      <p><code>comptime</code> constants and <code>comptime fn</code> run in the compiler and bake
+      their results into the binary — lookup tables and checksums with nothing left to compute at
+      startup.</p>
+    </article>
+
+    <article class="tile"><span class="kanji">橋</span>
+      <h3>Compiles to readable C</h3>
+      <p>The output is portable ISO C11 you can read, debug and audit. It drops into an existing C
+      codebase one file at a time, and C libraries come back the other way through the FFI.</p>
+    </article>
+
+    <article class="tile"><span class="kanji">具</span>
+      <h3>Tooling on day one</h3>
+      <p>A package and toolchain manager, one language server serving eight editors, and real
+      source-level debugging — breakpoints in your <code>.kama</code> files, in your IDE and in
+      browser DevTools.</p>
+    </article>
+  </div>
+</section>
+
+<section class="page">
+  <div class="section-head">
+    <span class="numeral">三</span>
+    <h2>A taste of the blade</h2>
+    <span class="kicker">real, compiled code</span>
+  </div>
+
+  <pre class="code sample" data-lang="kama"><code>{{sample}}</code></pre>
+
+  <p class="note">
+    This is not a mock-up: it is <a href="https://github.com/cosmic-canopy/kama/blob/main/tests/site_sample.kama" rel="noopener"><code>tests/site_sample.kama</code></a>,
+    compiled and run by the test suite on every build. Read the
+    <a href="/docs/tour/">language tour</a> for the rest of it.
+  </p>
+</section>
+
+<section class="page">
+  <div class="section-head">
+    <span class="numeral">四</span>
+    <h2>Where it runs</h2>
+    <span class="kicker">one language, three worlds</span>
+  </div>
+
+  <div class="grid grid-3">
+    <article class="tile"><h3>Native</h3>
+      <p>Linux, macOS and Windows on x64 and arm64, plus real cross-compilation to any
+      <code>&lt;arch&gt;-&lt;os&gt;-&lt;abi&gt;</code> triple. Executables or static libraries.</p>
+      <p class="tile-link"><a href="/docs/targets/">Targets &amp; toolchains →</a></p>
+    </article>
+    <article class="tile"><h3>The browser</h3>
+      <p>WebAssembly is a first-class target, threads included. Debug it in DevTools with DWARF
+      source maps back to your kama source.</p>
+      <p class="tile-link"><a href="/docs/getting-started/">Build for wasm →</a></p>
+    </article>
+    <article class="tile"><h3>Bare metal</h3>
+      <p>Cortex-M firmware proven under QEMU: interrupt handlers, memory-mapped registers, inline
+      assembly, and a <code>@noheap</code> attribute the compiler enforces.</p>
+      <p class="tile-link"><a href="/docs/mcu/">Microcontrollers →</a></p>
+    </article>
+  </div>
+</section>
+
+<section class="page closer">
+  <h2>Start here</h2>
+  <div class="grid grid-3">
+    <a class="card" href="/docs/getting-started/">
+      <h3>Getting started</h3>
+      <p>Install, write, build and debug your first program in about ten minutes.</p>
+    </a>
+    <a class="card" href="/docs/tour/">
+      <h3>Language tour</h3>
+      <p>The whole language in one read, every snippet taken from a compiled fixture.</p>
+    </a>
+    <a class="card" href="/docs/spec/">
+      <h3>Specification</h3>
+      <p>The complete reference — every type, keyword and standard-library module.</p>
+    </a>
+  </div>
+  <p class="note">
+    kama is MIT licensed and at <strong>v{{version}}</strong>, on the road to 1.0. The language
+    feature set is complete; what remains is documentation and release polish. See the
+    <a href="/docs/benchmarks/">benchmarks</a> for where it stands against C, C++, Rust and Go.
+  </p>
+</section>

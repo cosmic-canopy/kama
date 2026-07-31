@@ -387,7 +387,7 @@ struct EnumInfo   {
 // True for a name the BUILD CONFIGURATION owns (DEBUG/RELEASE/HOSTED and the OS_/ARCH_/ABI_ namespaces
 // derived from the target triple) rather than a project's own `flags` entry. Shared by the emitter's
 // strict `@compileFor` validation and the driver's manifest check, so the rule has one definition.
-// Defined in kama.cemit.cpp. See docs/design/build-configuration.md.
+// Defined in kama.cemit.cpp. See docs/targets.md.
 bool kamaIsBuildConfigFlag(const std::string& name);
 
 class CEmitter {
