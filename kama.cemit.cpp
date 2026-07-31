@@ -9713,6 +9713,14 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         auto it = _matchSubjInst.find(m);
         if (it != _matchSubjInst.end() && _classes.count(it->second)) { subjCls = it->second; inlineVariantSubj = true; }
     }
+    // A NON-generic user enum built inline (`match (Shape::Circle(r: 3))`) has no instance to infer, so it
+    // never reached `_matchSubjInst` and fell through to "requires an enum subject" — while the generic
+    // prelude enums (`match (Optional::Some(value: x))`) worked. The subject's enum is recoverable straight
+    // from the qualified variant name, so both spellings behave the same now.
+    if (subjCls.empty()) {
+        std::string vt = variantExprEnumCType(m->subject);
+        if (!vt.empty() && _classes.count(vt)) { subjCls = vt; inlineVariantSubj = true; }
+    }
     auto cit = _classes.find(subjCls);
     if (cit == _classes.end() || !cit->second.isVariant) {
         std::string enumTy = exprEnumType(m->subject);
@@ -10023,6 +10031,15 @@ std::string CEmitter::exprEnumType(SharedExpression e)
     };
     if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
         if (!id->value) return "";
+        // A qualified member of a plain enum, written inline (`match (Level::High)`). The qualifier names
+        // the enum, so the subject's type is known without a binding — previously only a local/param/field
+        // resolved here, which made a payload-less enum unusable as an inline subject.
+        if (id->qualifier && !id->qualifier->empty()) {
+            auto tq = std::make_shared<StringList>();
+            for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) tq->push_back((*id->qualifier)[i]);
+            std::string r = asEnum(resolveUserName(*id->qualifier->back(), tq));
+            if (!r.empty()) return r;
+        }
         auto it = _localCTypes.find(*id->value);              // a local / param of enum type
         if (it != _localCTypes.end()) { std::string r = asEnum(it->second); if (!r.empty()) return r; }
         if (_currentClass) {                                  // a bare field reference inside a method

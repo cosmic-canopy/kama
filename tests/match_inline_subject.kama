@@ -1,0 +1,26 @@
+// A variant constructed INLINE is a valid `match` subject, for a user enum exactly as for the generic
+// prelude ones. Previously only `Optional`/`Result` worked (their concrete instance was inferred and
+// stashed at discovery); a user enum — even a payload-less one, which is just a constant — fell through
+// to "requires an enum subject", so it had to be bound to a local first. Returns 42.
+enum Shape { Circle(int32 r), Rect(int32 w, int32 h), Empty }
+enum Level { Low, High }
+
+fn int main()
+{
+    int32 a = match (Shape::Circle(r: 4)) {          // tagged union, built inline
+        case Circle(r: x):        x;                  // 4
+        case Rect(w: w, h: h):    0;
+        case Empty:               0;
+    };
+    int32 b = match (Shape::Rect(w: 3, h: 5)) {      // a multi-field variant, built inline
+        case Circle(r: x):        0;
+        case Rect(w: w, h: h):    w * h;              // 15
+        case Empty:               0;
+    };
+    int32 c = match (Level::High) { case Low: 0; case High: 20; };        // plain enum, no payload
+    int32 d = match (Optional::Some(value: 3)) {                          // the generic prelude form
+        case Some(value: v): v;                                           // 3
+        case None:           0;
+    };
+    return a + b + c + d;   // 4 + 15 + 20 + 3 = 42
+}
