@@ -17,7 +17,7 @@ fn int main() {
     Optional<Handle> opt = Optional::Some(value: give h);
 
     int32 hv = match (give opt) {
-        case Some(x): x.val();                       // x owns the moved-out handle; drops at arm end -> trace(5)
+        case Some(value: x): x.val();                       // x owns the moved-out handle; drops at arm end -> trace(5)
         case None:    0 - 1;
     };                                               // subject drop after the switch must NOT re-drop the payload
 

@@ -18,7 +18,7 @@ fn int main() {
     r = r + m.length();                              // 50
     i = 0; int32 ok = 0;
     while (i < 50) {
-        int32 v = match (m.get(key: keyN(n: i))) { case Some(x): x; case None: 0 - 1; };
+        int32 v = match (m.get(key: keyN(n: i))) { case Some(value: x): x; case None: 0 - 1; };
         if (v == i * 2) { ok = ok + 1; }
         i = i + 1;
     }

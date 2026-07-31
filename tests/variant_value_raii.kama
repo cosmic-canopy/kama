@@ -5,5 +5,5 @@ fn int main()
 {
     Wrap w = Wrap::Has(r: Res.make(v: 42));
     Wrap e = Wrap::Empty;
-    return match (w) { case Has(r): r.head(); case Empty: 0; };
+    return match (w) { case Has(r: r): r.head(); case Empty: 0; };
 }

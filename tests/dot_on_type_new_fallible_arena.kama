@@ -40,9 +40,9 @@ fn int32 main() {
     Result<Owned<Shape, BumpAllocator>, OpenErr> s  = new(allocator: arena.handle()) Circle.open(r: 6);
     Result<Owned<Shape, BumpAllocator>, OpenErr> sb = new(allocator: arena.handle()) Circle.open(r: -1); // Err, no alloc
 
-    int32 a = match (g)  { case Ok(x): x.get();  case Err(e): 0 - 1; };   // 10
-    int32 b = match (gb) { case Ok(x): 100;      case Err(e): 0 - 1; };   // -1
-    int32 c = match (s)  { case Ok(x): x.area(); case Err(e): 0 - 1; };   // 36
-    int32 d = match (sb) { case Ok(x): 100;      case Err(e): 0 - 1; };   // -1
+    int32 a = match (g)  { case Ok(value: x): x.get();  case Err(error: e): 0 - 1; };   // 10
+    int32 b = match (gb) { case Ok(value: x): 100;      case Err(error: e): 0 - 1; };   // -1
+    int32 c = match (s)  { case Ok(value: x): x.area(); case Err(error: e): 0 - 1; };   // 36
+    int32 d = match (sb) { case Ok(value: x): 100;      case Err(error: e): 0 - 1; };   // -1
     return a + b + c + d;   // 10 - 1 + 36 - 1 = 44
 }

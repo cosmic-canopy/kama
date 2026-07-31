@@ -11,7 +11,7 @@ fn int32 main() {
     int64 i = 0i64;
     while (i < 50i64) { big.put(key: i * 1000000000i64, value: i); i = i + 1i64; }
     int64 k = 7i64 * 1000000000i64;
-    int64 v = match (big.get(key: k)) { case Some(x): x; case None: 0i64 - 1i64; };
+    int64 v = match (big.get(key: k)) { case Some(value: x): x; case None: 0i64 - 1i64; };
     if (v == 7i64) { r = r + 10; }
     if (big.length() == 50) { r = r + 5; }
 

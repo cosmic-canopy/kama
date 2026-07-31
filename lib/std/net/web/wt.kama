@@ -66,8 +66,8 @@ type resource WtConnection implements DatagramSocket {
     public fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {
         Result<usize, IoError> r = this.recv(into: into);
         return match (r) {
-            case Ok(n):  Result::Ok(value: RecvFrom.of(count: n, from: SocketAddr.fromHostIp(ip: 0ui32, port: 0ui16)));
-            case Err(e): Result::Err(error: e);
+            case Ok(value: n):  Result::Ok(value: RecvFrom.of(count: n, from: SocketAddr.fromHostIp(ip: 0ui32, port: 0ui16)));
+            case Err(error: e): Result::Err(error: e);
         };
     }
 

@@ -108,9 +108,10 @@
 63:10 sv decl:local
 63:22 sh ref:local
 63:33 Circle ref:enum-member
-63:40 r decl:local
-63:44 r ref:local
-63:52 Empty ref:enum-member
+63:40 r ref:field
+63:43 r decl:local
+63:47 r ref:local
+63:55 Empty ref:enum-member
 65:4 Box ref:generic-type
 65:15 bi decl:local
 65:20 bi ref:local

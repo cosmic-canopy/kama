@@ -10,7 +10,7 @@ fn int main() {
     int32 ksum = 0; int32 vsum = 0;
     foreach (int32 k in m) {                          // every FULL slot's key, once
         ksum = ksum + k;
-        int32 got = match (m.get(key: k)) { case Some(x): x; case None: 0; };
+        int32 got = match (m.get(key: k)) { case Some(value: x): x; case None: 0; };
         vsum = vsum + got;
     }
     int32 r = 0;

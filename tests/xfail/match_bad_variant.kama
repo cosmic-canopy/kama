@@ -3,8 +3,8 @@ fn int main()
 {
     Shape s = Shape::Empty;
     int32 k = match (s) {
-        case Circle(r): 1;
-        case Triangle(a): 2;
+        case Circle(r: r): 1;
+        case Triangle(a: a): 2;   // named form, so this fails on the VARIANT, not on parsing
         case Empty: 0;
     };
     return k;

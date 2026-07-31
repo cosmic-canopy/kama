@@ -28,7 +28,7 @@ fn int main() {
     while (going) {
         Optional<Owned<Box>> v = rx.recv();
         match (v) {
-            case Some(b): { got = got + b.get(); }   // auto-deref through Owned; the box frees once at arm-end
+            case Some(value: b): { got = got + b.get(); }   // auto-deref through Owned; the box frees once at arm-end
             case None:    { going = false; }
         };
     }

@@ -20,7 +20,7 @@ fn int main() {
 
     // pop the back -> Box(4) -> [1,3]
     Optional<Box> last = xs.pop();
-    int32 lastv = match (last) { case Some(b): b.get(); case None: 0; };   // 4
+    int32 lastv = match (last) { case Some(value: b): b.get(); case None: 0; };   // 4
     r = r + lastv;
 
     // DISCARD a removed element (the returned Box drops) -> [3]
@@ -30,10 +30,10 @@ fn int main() {
 
     // pop to empty, then pop empty -> None
     Optional<Box> p1 = xs.pop();         // Box(3)
-    int32 p1v = match (p1) { case Some(b): b.get(); case None: 0; };       // 3
+    int32 p1v = match (p1) { case Some(value: b): b.get(); case None: 0; };       // 3
     r = r + p1v;
     Optional<Box> p2 = xs.pop();         // empty -> None
-    int32 p2v = match (p2) { case Some(b): b.get(); case None: 100; };     // 100
+    int32 p2v = match (p2) { case Some(value: b): b.get(); case None: 100; };     // 100
     r = r + p2v;
 
     return r;   // 2+4+1+3+3+100 = 113

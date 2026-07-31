@@ -8,19 +8,19 @@ fn int main() {
     string self = "_fs_raii.tmp";
     DynamicArray<uint8> data = DynamicArray.empty();
     data.add(item: cast<uint8>(65));
-    int32 w = match (writeFile(path: self, bytes: data)) { case Ok(x): 0; case Err(e): 40; };
+    int32 w = match (writeFile(path: self, bytes: data)) { case Ok(value: x): 0; case Err(error: e): 40; };
     if (w != 0) { return w; }
 
     int32 i = 0;
     while (i < 5000) {
         Result<File, IoError> ro = File.open(path: self, mode: OpenMode::Read);
         int32 rc = match (ro) {
-            case Ok(f):  0;                     // f drops here -> fd closed (RAII)
-            case Err(e): 41;                    // fires if fds leaked and hit the limit
+            case Ok(value: f):  0;                     // f drops here -> fd closed (RAII)
+            case Err(error: e): 41;                    // fires if fds leaked and hit the limit
         };
         if (rc != 0) { return rc; }
         i = i + 1;
     }
 
-    return match (remove(path: self)) { case Ok(u): 0; case Err(e): 42; };
+    return match (remove(path: self)) { case Ok(value: u): 0; case Err(error: e): 42; };
 }

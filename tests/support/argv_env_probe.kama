@@ -6,14 +6,14 @@
 fn int32 main() {
     // Random access over the user args (argv[0] excluded).
     if (args().count() != 3) { return 1; }
-    string a0 = match (args().get(at: 0)) { case Some(v): copy v; case None: ""; };
+    string a0 = match (args().get(at: 0)) { case Some(value: v): copy v; case None: ""; };
     if (a0 != "alpha") { return 2; }
-    string a1 = match (args().get(at: 1)) { case Some(v): copy v; case None: ""; };
+    string a1 = match (args().get(at: 1)) { case Some(value: v): copy v; case None: ""; };
     if (a1 != "beta") { return 3; }
-    string a2 = match (args().get(at: 2)) { case Some(v): copy v; case None: ""; };
+    string a2 = match (args().get(at: 2)) { case Some(value: v): copy v; case None: ""; };
     if (a2 != "gamma") { return 4; }
     // Out-of-range is None.
-    int32 tail = match (args().get(at: 3)) { case Some(v): 1; case None: 0; };
+    int32 tail = match (args().get(at: 3)) { case Some(value: v): 1; case None: 0; };
     if (tail != 0) { return 5; }
 
     // foreach yields the same args in order.
@@ -23,12 +23,12 @@ fn int32 main() {
 
     // env hit: value present and correct.
     int32 hit = match (env(name: "KAMA_PROBE_VAR")) {
-        case Some(v): { int32 x = 0; if (v == "probe-value") { x = 1; } := x; }
+        case Some(value: v): { int32 x = 0; if (v == "probe-value") { x = 1; } := x; }
         case None: 0;
     };
     if (hit != 1) { return 7; }
     // env miss: unset var is None.
-    int32 miss = match (env(name: "KAMA_PROBE_MISSING")) { case Some(v): 1; case None: 0; };
+    int32 miss = match (env(name: "KAMA_PROBE_MISSING")) { case Some(value: v): 1; case None: 0; };
     if (miss != 0) { return 8; }
 
     // envOr: fallback on miss, actual value on hit.
@@ -37,17 +37,17 @@ fn int32 main() {
 
     // programName() is present, non-empty, and a bare basename (no path separator) regardless of how the
     // probe binary was invoked (direct temp path vs `kama run` temp path).
-    string pname = match (programName()) { case Some(p): copy p; case None: ""; };
+    string pname = match (programName()) { case Some(value: p): copy p; case None: ""; };
     if (pname.length() == 0) { return 11; }
     if (pname.contains(substring: "/")) { return 12; }
 
     // programInvocation() is the raw argv[0]; the basename must be a suffix of it (holds for any temp path).
-    string pinv = match (programInvocation()) { case Some(p): copy p; case None: ""; };
+    string pinv = match (programInvocation()) { case Some(value: p): copy p; case None: ""; };
     if (pinv.length() == 0) { return 13; }
     if (!pinv.endsWith(suffix: pname)) { return 14; }
 
     // programPath() resolves to a non-empty absolute exe path on this hosted platform.
-    int32 hasPath = match (programPath()) { case Some(p): 1; case None: 0; };
+    int32 hasPath = match (programPath()) { case Some(value: p): 1; case None: 0; };
     if (hasPath != 1) { return 15; }
 
     return 0;

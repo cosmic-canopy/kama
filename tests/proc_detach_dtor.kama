@@ -15,8 +15,8 @@ fn int main() {
         c.stdout(s: Stdio::Piped);
         Result<Process, IoError> sr = c.start();
         match (give sr) {
-            case Ok(p): {}                 // p drops here: dtor WNOHANG-reaps + closes the pipe read end
-            case Err(e): { return 120; }
+            case Ok(value: p): {}                 // p drops here: dtor WNOHANG-reaps + closes the pipe read end
+            case Err(error: e): { return 120; }
         };
         i = i + 1;
     }

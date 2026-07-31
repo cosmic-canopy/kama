@@ -11,7 +11,7 @@ fn int main() {
     c.arg(a: "spew"); c.arg(a: "8000");
     Result<Output, IoError> r = c.run();
     return match (give r) {
-        case Ok(o): {
+        case Ok(value: o): {
             int32 n = cast<int32>(o.stdout().length());
             int32 e = cast<int32>(o.stderr().length());
             int32 code = 42;
@@ -19,6 +19,6 @@ fn int main() {
             else if (e != 160000) { code = 71; }
             := code;
         }
-        case Err(x): 72;
+        case Err(error: x): 72;
     };
 }

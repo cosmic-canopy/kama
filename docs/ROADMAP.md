@@ -102,13 +102,18 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
-- **Stdlib layering — 3 LOW-prio follow-ups ([design/stdlib-layering.md](design/stdlib-layering.md)).** The
-  prelude-vs-`lib`-vs-primitive split is principled (contracts/syntax/intrinsics in the prelude; backends
-  opt-in), so nothing is mis-placed. Recorded, none blocking: (a) split/MCU-promote `Atomic` so lock-free cells
-  need no pthread runtime (MCU track, §5); (b) an idiomatic `std::gpu` kama module over the raw `kama_gpu.h`
-  seam (engine track, §8); (c) confirm intrinsic `Array`/`List` vs library `DynamicArray` naming against GOALS
-  "one way" (collections revisit, §5). Decided NOT to add a convenience-import of common containers — explicit
-  per-symbol imports stay.
+- **Stdlib layering — 3 LOW-prio follow-ups.** The prelude-vs-`std::`-vs-primitive split is principled and
+  documented in [FLOOR.md](FLOOR.md) § "What is floor, and what is an `import`"; nothing is mis-placed. What
+  is left, none of it blocking:
+  - **`Atomic` needs no pthread but rides in `std::concurrent`**, which does — so lock-free-without-threads
+    is unreachable. Split it to a `std::concurrent::atomic` leaf, or promote it as an always-available seam.
+    Only matters once the multicore-MCU track starts (§5).
+  - **`std::gpu` has no kama module.** The `kama_gpu.h` seam exists but programs `extern` the WebGPU C API
+    raw; an idiomatic wrapper is library work on the engine track (§8).
+  - **`Array`/`List` vs `DynamicArray` naming.** The intrinsics and the library type coexist (27 vs 114
+    imports). GOALS favors one way — settle it as part of the 1.0 docs/naming reconcile (§1).
+
+  Decided NOT to add a convenience-import of the common containers — explicit per-symbol imports stay.
 - **Format/interpolation follow-ups (on the shipped `std::fmt` substrate).** Interpolation, format specifiers,
   `@generate(Format)`, and tagged strings all ship (SPEC). Still open, additive, no current need: combining a
   base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `@generate(Format)`

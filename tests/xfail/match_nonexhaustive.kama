@@ -3,8 +3,8 @@ fn int main()
 {
     Shape s = Shape::Empty;
     float64 area = match (s) {
-        case Circle(r): r;
-        case Rect(w, h): w * h;
+        case Circle(r: r): r;
+        case Rect(w: w, h: h): w * h;
     };
     return cast<int>(area);
 }

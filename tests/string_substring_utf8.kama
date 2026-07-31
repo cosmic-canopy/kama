@@ -6,7 +6,7 @@ fn int main() {
     if (s.length() == 6) { r = r + 1; }              // 6 bytes, not 3
     string e = s.substring(start: 1, end: 3);        // the 2-byte é
     if (e == "\u{E9}") { r = r + 2; }
-    int32 off = match (s.find(substring: "\u{20AC}")) { case Some(i): cast<int32>(i); case None: -1; };
+    int32 off = match (s.find(substring: "\u{20AC}")) { case Some(value: i): cast<int32>(i); case None: -1; };
     if (off == 3) { r = r + 4; }                     // byte offset 3, not codepoint 2
     return r;                                        // 7
 }

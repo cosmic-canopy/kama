@@ -17,7 +17,7 @@ fn int32 sumIter<I: Iterator<int32>>(I it) {
     while (going) {
         Optional<int32> o = it.next();               // static: IntRange__next(&it)
         match (o) {
-            case Some(v): { total = total + v; }
+            case Some(value: v): { total = total + v; }
             case None:    { going = false; }
         };
     }

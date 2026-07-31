@@ -19,11 +19,11 @@ fn int32 main() {
     Shared<Shape> b = a;                                   // retain: a and b share one Sq
     Weak<Shape> live = a;                                  // weak to the live Sq
     Optional<Shared<Shape>> lu = live.tryUpgrade();        // Some while a/b alive
-    int32 luv = match (lu) { case Some(u): u.area(); case None: 0; };   // 36
+    int32 luv = match (lu) { case Some(value: u): u.area(); case None: 0; };   // 36
     int32 sum = a.area() + b.area() + luv;                  // 36 + 36 + 36 = 108
 
     Weak<Shape> dead = orphan();                           // its Shared already died
     Optional<Shared<Shape>> du = dead.tryUpgrade();        // None (expired)
-    int32 duv = match (du) { case Some(d): 0; case None: 1; };   // 1
+    int32 duv = match (du) { case Some(value: d): 0; case None: 1; };   // 1
     return sum + duv;                                       // 109; each Sq freed exactly once
 }

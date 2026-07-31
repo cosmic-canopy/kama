@@ -12,7 +12,7 @@
 import std::net::{TcpListener, TcpStream, Poller, Interest, Ready};
 import std::io::{IoError};
 
-fn bool okUnit(Result<Unit, IoError> r) { return match (r) { case Ok(u): true; case Err(e): false; }; }
+fn bool okUnit(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
 fn bool isRefused(IoError e) { return match (e) { case ConnectionRefused: true; case _: false; }; }
 
 // Block until a non-blocking connect RESOLVES (the socket reports ready), then read its outcome. Polls in
@@ -21,18 +21,18 @@ fn bool isRefused(IoError e) { return match (e) { case ConnectionRefused: true; 
 // SO_ERROR is 0 while the handshake is still in flight.
 fn Result<Unit, IoError> resolve(ref TcpStream s) {
     match (Poller.create()) {
-        case Ok(p): {
+        case Ok(value: p): {
             p.add(fd: s.rawHandle(), interest: Interest::Write);
             int32 tries = 0;
             bool ready = false;
             while ((tries < 24) && !ready) {                       // up to ~12s (24 * 500ms)
                 Result<int32, IoError> w = p.wait(timeoutMs: 500);
-                int32 n = match (w) { case Ok(k): k; case Err(e): 0 - 1; };
+                int32 n = match (w) { case Ok(value: k): k; case Err(error: e): 0 - 1; };
                 if (n != 0) { ready = true; }                      // >0 resolved / <0 error — stop; 0 = keep waiting
                 tries += 1;
             }
         }
-        case Err(e): { }
+        case Err(error: e): { }
     };
     return s.checkConnected();
 }
@@ -42,8 +42,8 @@ fn int32 connectListening(uint16 port) {
     string host = "127.0.0.1";
     Result<TcpStream, IoError> r = TcpStream.connectNonBlocking(host: host, port: port);
     return match (r) {
-        case Ok(s):  (okUnit(r: resolve(s: s)) ? 0 : 1);
-        case Err(e): 2;
+        case Ok(value: s):  (okUnit(r: resolve(s: s)) ? 0 : 1);
+        case Err(error: e): 2;
     };
 }
 
@@ -53,11 +53,11 @@ fn int32 connectDead(uint16 port) {
     Result<TcpStream, IoError> r = TcpStream.connectNonBlocking(host: host, port: port);
     int32 rc = -1;
     match (r) {
-        case Ok(s): {                                  // in flight — poll until resolved, then SO_ERROR
+        case Ok(value: s): {                                  // in flight — poll until resolved, then SO_ERROR
             Result<Unit, IoError> cc = resolve(s: s);
-            match (cc) { case Ok(u): { rc = 3; } case Err(e): { rc = isRefused(e: e) ? 0 : 4; } };
+            match (cc) { case Ok(value: u): { rc = 3; } case Err(error: e): { rc = isRefused(e: e) ? 0 : 4; } };
         }
-        case Err(e): { rc = isRefused(e: e) ? 0 : 5; }   // synchronous refusal (Linux loopback)
+        case Err(error: e): { rc = isRefused(e: e) ? 0 : 5; }   // synchronous refusal (Linux loopback)
     };
     return rc;
 }
@@ -68,11 +68,11 @@ fn int main() {
     uint16 dead = cast<uint16>(47669);                 // nothing bound here
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: live);
     return match (rl) {
-        case Ok(l): {
+        case Ok(value: l): {
             int32 a = connectListening(port: live);
             int32 b = connectDead(port: dead);
             := ((a == 0) && (b == 0)) ? 55 : (90 + a * 4 + b);
         }
-        case Err(e): 80;
+        case Err(error: e): 80;
     };
 }

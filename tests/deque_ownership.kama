@@ -21,7 +21,7 @@ fn int32 main() {
     Deque<Owned<Cell>> owned = Deque.empty();
     owned.pushBack(item: new Cell.of(v: 7)); owned.pushBack(item: new Cell.of(v: 8));
     Optional<Owned<Cell>> po = owned.popFront();
-    int32 ov = match (po) { case Some(p): p.v; case None: 0 - 1; };   // Deref forwards `.v` on the moved-out Owned
+    int32 ov = match (po) { case Some(value: p): p.v; case None: 0 - 1; };   // Deref forwards `.v` on the moved-out Owned
     if (ov == 7 && owned.length() == 1) { r = r + 10; }
 
     // (3) SHARED elements: a bare `copy` retains (refcount) into the deque, move transfers the handle out;
@@ -31,14 +31,14 @@ fn int32 main() {
     shared.pushBack(item: copy sc);
     shared.pushBack(item: new Cell.of(v: 6));
     Optional<Shared<Cell>> ps = shared.popFront();
-    int32 sv = match (ps) { case Some(p): p.v; case None: 0 - 1; };
+    int32 sv = match (ps) { case Some(value: p): p.v; case None: 0 - 1; };
     if (sv == 5 && sc.v == 5) { r = r + 10; }
 
     // (4) WEAK elements: a deque of weak handles upgrades while the owning Shared is alive.
     Shared<Cell> keep = new Cell.of(v: 9);
     Deque<Weak<Cell>> weaks = Deque.empty();
     weaks.pushBack(item: keep.downgrade());
-    int32 wv = match (weaks[0].tryUpgrade()) { case Some(s): s.v; case None: 0 - 1; };
+    int32 wv = match (weaks[0].tryUpgrade()) { case Some(value: s): s.v; case None: 0 - 1; };
     if (wv == 9) { r = r + 10; }
 
     return r;   // 40

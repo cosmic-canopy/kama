@@ -5,10 +5,10 @@ fn int main() {
     Map<string, int32> m = Map.empty();
     m.put(key: "a", value: 1); m.put(key: "b", value: 2);
     Result<string, Owned<Error>> j_r = encode(v: m);
-    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
+    string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     Result<Map<string, int32>, Owned<Error>> res = decode::<Map<string, int32>>(src: give j);
     return match (res) {
-        case Ok(b): b.length() * 10 + (match (b.get(key: "b")) { case Some(x): x; case None: 0; });   // 22
-        case Err(e): 0 - 1;
+        case Ok(value: b): b.length() * 10 + (match (b.get(key: "b")) { case Some(value: x): x; case None: 0; });   // 22
+        case Err(error: e): 0 - 1;
     };
 }

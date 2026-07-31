@@ -36,11 +36,11 @@ fn int32 main() {
     Rc<Shape> a = new Circle.make(r: 5);
     RcWeak<Shape> w = a.downgrade();
     Optional<Rc<Shape>> o1 = w.tryUpgrade();
-    int32 alive = match (o1) { case Some(r): r.area(); case None: -1; };   // 25 (a alive)
+    int32 alive = match (o1) { case Some(value: r): r.area(); case None: -1; };   // 25 (a alive)
 
     RcWeak<Shape> dead = makeExpired();
     Optional<Rc<Shape>> o2 = dead.tryUpgrade();
-    int32 expired = match (o2) { case Some(r): r.area(); case None: 90; }; // 90 (expired)
+    int32 expired = match (o2) { case Some(value: r): r.area(); case None: 90; }; // 90 (expired)
 
     return alive + expired;   // 115
 }

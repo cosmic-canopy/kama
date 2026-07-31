@@ -1,0 +1,6 @@
+// A pattern names EVERY field of its variant, mirroring construction, where every field must be supplied.
+enum Shape { Rect(int32 w, int32 h) }
+fn int32 main() {
+    Shape s = Shape::Rect(w: 2, h: 3);
+    return match (s) { case Rect(w: a): a; };   // ERROR: `h` is not bound
+}

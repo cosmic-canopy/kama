@@ -9,7 +9,7 @@ fn int main() {
     Command c = Command.make(program: "this_binary_does_not_exist_xyzzy");
     Result<Output, IoError> r = c.run();
     return match (give r) {
-        case Ok(o): (o.status().code == 127 ? 42 : 130);   // POSIX: 127 convention
-        case Err(e): 42;                                    // Windows: CreateProcess failed in-parent
+        case Ok(value: o): (o.status().code == 127 ? 42 : 130);   // POSIX: 127 convention
+        case Err(error: e): 42;                                    // Windows: CreateProcess failed in-parent
     };
 }

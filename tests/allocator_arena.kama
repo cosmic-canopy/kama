@@ -18,7 +18,7 @@ fn int32 main() {
     Map<int32, int32, A: BumpAllocator> m = Map.withAllocator(allocator: arena.handle());
     i = 0; while (i < 100) { m.put(key: i, value: i + 1); i = i + 1; }
     Optional<int32> o = m.get(key: 50);
-    int32 v = match (o) { case Some(x): x; case None: 0 - 1; };
+    int32 v = match (o) { case Some(value: x): x; case None: 0 - 1; };
     if (m.length() == 100 && v == 51) { r = r + 20; }
 
     return r;   // 40

@@ -57,9 +57,9 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serialize v) {
         Serializer s = this;
         Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
-        match (give r) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+        match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         Result<Unit, IoError> fr = this.sink.flush();
-        match (fr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+        match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
         return Result::Ok(value: Unit::Unit);
     }
 
@@ -67,8 +67,8 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     fn void byte(uint8 b) {
         this.scratch[0] = b;
         match (this.sink.write(bytes: this.scratch.view())) {
-            case Err(_): { this.failWith(e: SerError::IoError); }
-            case Ok(_): {}
+            case Err(error: _): { this.failWith(e: SerError::IoError); }
+            case Ok(value: _): {}
         };
     }
     // Write the low `n` bytes of `v`, little-endian.
@@ -254,7 +254,7 @@ fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serialize v) {
     BinaryWriter<StringWriter> w = BinaryWriter::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
-    match (give r) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+    match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
     return Result::Ok(value: w.innerRef().takeBytes());
 }
 
@@ -270,7 +270,7 @@ fn Result<T, Owned<Error>> decode<T: Deserialize>(DynamicArray<uint8> src) {
 fn Result<T, Owned<Error>> decodeFrom<T: Deserialize>(Reader from) {
     StringWriter sw = StringWriter.make();
     Result<usize, IoError> pr = pump(from: from, to: sw);
-    match (pr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+    match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     BinaryReader r = BinaryReader.make(src: give sw.takeBytes());
     return T.deserialize(r: r);
 }

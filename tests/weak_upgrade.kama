@@ -65,11 +65,11 @@ fn int32 main() {
     Rc<Counter> a = new Counter.make(start: 7);
     RcWeak<Counter> w = a.downgrade();
     Optional<Rc<Counter>> o1 = w.tryUpgrade();
-    int32 alive = match (o1) { case Some(u): u.n; case None: -1; };   // 7 (a alive)
+    int32 alive = match (o1) { case Some(value: u): u.n; case None: -1; };   // 7 (a alive)
 
     RcWeak<Counter> dead = makeExpired();
     Optional<Rc<Counter>> o2 = dead.tryUpgrade();
-    int32 expired = match (o2) { case Some(u): u.n; case None: 90; }; // 90 (expired)
+    int32 expired = match (o2) { case Some(value: u): u.n; case None: 90; }; // 90 (expired)
 
     return alive + expired;   // 97
 }

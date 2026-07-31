@@ -15,7 +15,7 @@ fn int main()
     Weak<Counter> w = s.downgrade();              // weak ref (does not keep alive)
     Optional<Shared<Counter>> up = w.tryUpgrade();
     return match (up) {
-        case Some(s2): s2.get() + 2;              // alive -> 40 + 2 = 42
+        case Some(value: s2): s2.get() + 2;              // alive -> 40 + 2 = 42
         case None: 0;
     };
 }

@@ -4,17 +4,17 @@
 // requires an enum subject") and forced binding to a typed local first — that workaround still works too.
 fn int32 firstOr(int32 x) {
     return match (Optional::Some(value: x)) {   // subject inferred as Optional<int32> from the param `x`
-        case Some(v): v;
+        case Some(value: v): v;
         case None:    0 - 1;
     };
 }
 fn int main() {
     int32 y = 40;
     int32 got = match (Optional::Some(value: y)) {   // subject inferred from the local `y`
-        case Some(v): v + 2;                          // 42
+        case Some(value: v): v + 2;                          // 42
         case None:    0 - 1;
     };
     Optional<int32> o = Optional::Some(value: 0);     // the "bind to a local first" workaround still compiles
-    int32 w = match (o) { case Some(v): v; case None: 0 - 1; };
+    int32 w = match (o) { case Some(value: v): v; case None: 0 - 1; };
     return got + firstOr(x: w);   // 42 + 0 = 42
 }

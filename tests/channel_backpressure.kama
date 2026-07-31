@@ -24,7 +24,7 @@ fn int main() {
     while (going) {
         Optional<int32> v = rx.recv();
         match (v) {
-            case Some(x): { if (x == expected) { ok = ok + 1; } expected = expected + 1; }
+            case Some(value: x): { if (x == expected) { ok = ok + 1; } expected = expected + 1; }
             case None:    { going = false; }
         };
     }

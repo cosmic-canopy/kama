@@ -7,7 +7,7 @@ fn int main()
     Shared<Probe> s = new Probe.make(id: 8);
     Result<Shared<Probe>, ProbeErr> ok  = Result::Ok(value: copy s);
     Result<Shared<Probe>, ProbeErr> err = Result::Err(error: ProbeErr::Failed);
-    int32 a = match (ok)  { case Ok(p): p.val(); case Err(e): 3; };
-    int32 b = match (err) { case Ok(p): p.val(); case Err(e): 3; };
+    int32 a = match (ok)  { case Ok(value: p): p.val(); case Err(error: e): 3; };
+    int32 b = match (err) { case Ok(value: p): p.val(); case Err(error: e): 3; };
     return a + b;
 }

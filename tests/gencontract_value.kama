@@ -17,7 +17,7 @@ fn int32 drain(Iterator<int32> it) {                 // `it` is a fat pointer {o
     while (going) {
         Optional<int32> o = it.next();               // dynamic: it.vtbl->next(it.obj)
         match (o) {
-            case Some(v): { total = total + v; }
+            case Some(value: v): { total = total + v; }
             case None:    { going = false; }
         };
     }

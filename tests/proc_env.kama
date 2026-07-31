@@ -8,19 +8,19 @@ fn int main() {
     Command c1 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c1.arg(a: "printenv"); c1.arg(a: "KAMA_T"); c1.env(key: "KAMA_T", val: "abc");
     Result<Output, IoError> r1 = c1.run();
-    int32 a = match (give r1) { case Ok(o): (o.status().code == 0 ? 0 : 90); case Err(e): 91; };
+    int32 a = match (give r1) { case Ok(value: o): (o.status().code == 0 ? 0 : 90); case Err(error: e): 91; };
     if (a != 0) { return a; }
 
     Command c2 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c2.arg(a: "printenv"); c2.arg(a: "KAMA_T");
     Result<Output, IoError> r2 = c2.run();
-    int32 b = match (give r2) { case Ok(o): (o.status().code == 1 ? 0 : 92); case Err(e): 93; };
+    int32 b = match (give r2) { case Ok(value: o): (o.status().code == 1 ? 0 : 92); case Err(error: e): 93; };
     if (b != 0) { return b; }
 
     Command c3 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c3.arg(a: "printenv"); c3.arg(a: "KAMA_T"); c3.envClear(); c3.env(key: "KAMA_T", val: "z");
     Result<Output, IoError> r3 = c3.run();
-    int32 d = match (give r3) { case Ok(o): (o.status().code == 0 ? 0 : 94); case Err(e): 95; };
+    int32 d = match (give r3) { case Ok(value: o): (o.status().code == 0 ? 0 : 94); case Err(error: e): 95; };
     if (d != 0) { return d; }
 
     return 42;

@@ -5,7 +5,7 @@ fn int main()
 {
     E e = E::A(n: 5);
     int32 r = match (e) {
-        case A(n): { Shared<Probe> p = new Probe.make(id: n * 2); := p.val(); }
+        case A(n: n): { Shared<Probe> p = new Probe.make(id: n * 2); := p.val(); }
         case B: 0;
     };
     return r;

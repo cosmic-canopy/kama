@@ -134,8 +134,8 @@ The result is a value you have to unwrap, so there is no way to hold an unopened
 
 ```kama
 int32 cap = match (Buffer.open(size: 8)) {
-    case Ok(b):  b.capacity();
-    case Err(e): 0;
+    case Ok(value: b):  b.capacity();
+    case Err(error: e): 0;
 };
 ```
 
@@ -198,7 +198,7 @@ describe itself.
 fn int32 unwrapOr(Optional<int32> o, int32 dflt)
 {
     return match (o) {
-        case Some(v): v;
+        case Some(value: v): v;
         case None:    dflt;
     };
 }
@@ -216,9 +216,9 @@ fn int main()
 {
     Shape s = Shape::Rect(w: 3.0, h: 4.0);
     float64 area = match (s) {
-        case Circle(radius): 3.14 * radius * radius;
-        case Rect(w, h):     w * h;
-        case Empty:          0.0;
+        case Circle(radius: r):         3.14 * r * r;
+        case Rect(w: width, h: height): width * height;
+        case Empty:                     0.0;
     };
     return cast<int>(area);   // 12
 }
@@ -227,6 +227,18 @@ fn int main()
 Arms are `case <pattern>: <expression>;` — a semicolon, not a comma. `case _:` is the wildcard, and
 a missing case is a compile error, so adding a variant tells you every place that needs to care. A
 block arm ends with `:= value;` to say what it produces. There is no `switch` and no fallthrough.
+
+**A pattern names the fields it binds**, exactly as a call names its arguments: `h: height` binds the
+variant's `h` field to a new local called `height`. There is no positional form. That matters most
+when two fields share a type — with positions, writing `case Rect(height, width)` would compile
+cleanly and silently hand you the wrong values, which is the whole bug class named arguments exist to
+remove. Because the label decides, order does not: `case Rect(h: height, w: width)` means the same
+thing. Binding a field that does not exist, binding one twice, or leaving one unbound are all
+compile errors.
+
+A variant is *not* a type — you cannot declare a `Rect`, and an enum cannot nest type declarations.
+`Rect` is a name inside `Shape`'s scope, which is why it is reached with `::` like any other scope
+member, and why supplying its payload produces a `Shape`.
 
 ## Contracts and inheritance
 
@@ -331,7 +343,7 @@ fn void producer(Sender<int32> tx)
 
 fn int main()
 {
-    Channel<int32> ch = Channel::bounded(capacity: 4);
+    Channel<int32> ch = Channel.bounded(capacity: 4);
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();
 
@@ -341,7 +353,7 @@ fn int main()
     bool going = true;
     while (going) {
         match (rx.recv()) {
-            case Some(x): { sum = sum + x; }
+            case Some(value: x): { sum = sum + x; }
             case None:    { going = false; }
         };
     }

@@ -39,6 +39,6 @@ fn int32 main() {
         v = a.area();               // 49
     }   // a drops: strong 0 -> Circle __dtor frees buf; ctrl stays (weak=1)
     Optional<Rc<Shape>> o = w.tryUpgrade();
-    int32 up = match (o) { case Some(r): r.area(); case None: 0; };   // 0 (expired)
+    int32 up = match (o) { case Some(value: r): r.area(); case None: 0; };   // 0 (expired)
     return v + up;                  // 49
 }

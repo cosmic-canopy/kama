@@ -7,5 +7,5 @@ import std::io::{IoError};
 fn int main() {
     string url = "https://127.0.0.1:47681/nope";
     Result<WtConnection, IoError> r = WtConnection.connect(url: url);
-    return match (r) { case Ok(c): 55; case Err(e): 55; };
+    return match (r) { case Ok(value: c): 55; case Err(error: e): 55; };
 }

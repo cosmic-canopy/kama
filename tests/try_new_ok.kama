@@ -7,5 +7,5 @@ type resource Box {
 
 fn int32 main() {
     Optional<Owned<Box>> b = try new Box.make(v: 7);
-    return match (b) { case Some(x): x.get(); case None: 0 - 1; };
+    return match (b) { case Some(value: x): x.get(); case None: 0 - 1; };
 }

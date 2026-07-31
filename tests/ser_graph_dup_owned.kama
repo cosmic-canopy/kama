@@ -19,10 +19,10 @@ fn int main() {
     string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Twin\",\"a\":2,\"b\":2},\"2\":{\"__type\":\"Child\",\"v\":5}}}";
     Result<Shared<Twin>, Owned<Error>> res = decode::<Shared<Twin>>(src: give j);
     match (res) {
-        case Ok(sh): { return 1; }                          // must NOT succeed
-        case Err(e): {
+        case Ok(value: sh): { return 1; }                          // must NOT succeed
+        case Err(error: e): {
             match (e.as<DeError>()) {                        // recover the concrete deserialize error
-                case Some(ec): { match (ec) {
+                case Some(value: ec): { match (ec) {
                     case DuplicateId: { return 0; }          // expected
                     case UnresolvedReference: { return 2; }
                     case Malformed: { return 3; }

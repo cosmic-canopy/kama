@@ -13,7 +13,7 @@ fn int main() {
     c.arg(a: "a b\"c\\d");
     Result<Output, IoError> r = c.run();
     return match (give r) {
-        case Ok(o): {
+        case Ok(value: o): {
             int32 n = cast<int32>(o.stdout().length());
             int32 code = 42;
             if (n != 8) { code = 80; }
@@ -23,6 +23,6 @@ fn int main() {
             else if (o.stdout()[7] != cast<uint8>(10))  { code = 84; }   // '\n'
             := code;
         }
-        case Err(x): 85;
+        case Err(error: x): 85;
     };
 }

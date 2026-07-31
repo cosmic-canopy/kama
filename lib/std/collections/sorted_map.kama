@@ -225,7 +225,7 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
         }
         if (!this.leaf) {
             Optional<K> cf = this.kids[i].floor(key: key);
-            bool got = match (cf) { case Some(x): true; case None: false; };
+            bool got = match (cf) { case Some(value: x): true; case None: false; };
             if (got) { return cf; }
         }
         if (cand >= 0) { return Optional::Some(value: this.cloneKey(k: this.keys[cand])); }
@@ -242,7 +242,7 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
         }
         if (!this.leaf) {
             Optional<K> cc = this.kids[i].ceil(key: key);
-            bool got = match (cc) { case Some(x): true; case None: false; };
+            bool got = match (cc) { case Some(value: x): true; case None: false; };
             if (got) { return cc; }
         }
         if (i < n) { return Optional::Some(value: this.cloneKey(k: this.keys[i])); }
@@ -439,21 +439,21 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
         while (i < n) {
             if (!this.leaf) {
                 Result<Unit, Owned<Error>> __sc = this.kids[i].serializeInto(w: w);
-                match (give __sc) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+                match (give __sc) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             }
             w.beginObject();
             w.fieldName(name: "key");
             Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
-            match (give __sk) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            match (give __sk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             w.fieldName(name: "value");
             Result<Unit, Owned<Error>> __sv = this.serVal(v: this.vals[i], w: w);
-            match (give __sv) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             w.endObject();
             i = i + 1;
         }
         if (!this.leaf) {
             Result<Unit, Owned<Error>> __sl = this.kids[n].serializeInto(w: w);
-            match (give __sl) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            match (give __sl) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         }
         return Result::Ok(value: Unit::Unit);
     }
@@ -516,7 +516,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     public fn Optional<V> remove(ref K key) {
         Optional<V> r = this.root.removeKey(key: key);
         if (this.root.keyCount() == 0) { if (!this.root.isLeaf()) { this.root.promoteOnlyChild(); } }
-        bool removed = match (r) { case Some(v): true; case None: false; };
+        bool removed = match (r) { case Some(value: v): true; case None: false; };
         if (removed) { this.len = this.len - 1; this.mods = this.mods + 1; }
         return r;
     }
@@ -568,7 +568,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
         Result<Unit, Owned<Error>> __sr = this.root.serializeInto(w: w);
-        match (give __sr) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+        match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
@@ -582,10 +582,10 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
             r.beginObject();
             bool __f1 = r.moreFields(); string __n1 = r.fieldName();
             Result<K, Owned<Error>> __ek = K.deserialize(r: r);   // read both at top level (a nested generic
-            K k = match (give __ek) { case Ok(kv): { := give kv; } case Err(e): { return Result::Err(error: give e); } };
+            K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: give e); } };
             bool __f2 = r.moreFields(); string __n2 = r.fieldName();
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
-            V v = match (give __ev) { case Ok(vv): { := give vv; } case Err(e): { return Result::Err(error: give e); } };
+            V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: give e); } };
             bool __f3 = r.moreFields();
             result.put(key: give k, value: give v);
         }

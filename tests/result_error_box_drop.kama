@@ -12,7 +12,7 @@ type resource Probe {
 }
 enum LoadError { Missing, Wrapped(Shared<Probe> probe) }
 implements Error for LoadError {
-    public fn string message() { return match (this) { case Missing: "m"; case Wrapped(p): "w"; }; }
+    public fn string message() { return match (this) { case Missing: "m"; case Wrapped(probe: p): "w"; }; }
 }
 fn Result<int32, Owned<Error>> load(bool ok) {
     if (ok) { return Result::Ok(value: 5); }
@@ -20,7 +20,7 @@ fn Result<int32, Owned<Error>> load(bool ok) {
     return Result::Err(error: LoadError::Wrapped(probe: give sp));   // box owns the Shared now
 }
 fn int32 use(Result<int32, Owned<Error>> r) {
-    return match (r) { case Ok(v): v; case Err(e): { string m = e.message(); := cast<int32>(m.length()); } };
+    return match (r) { case Ok(value: v): v; case Err(error: e): { string m = e.message(); := cast<int32>(m.length()); } };
     // r (and its boxed error, and the Shared<Probe>, and the Probe) all drop here — leak-clean under SAN
 }
 fn int32 main() { return use(r: load(ok: true)) * 10 + use(r: load(ok: false)); }  // 5*10 + 1 = 51

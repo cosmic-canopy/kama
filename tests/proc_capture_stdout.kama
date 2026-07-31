@@ -9,7 +9,7 @@ fn int main() {
     c.arg(a: "echo"); c.arg(a: "hello");
     Result<Output, IoError> r = c.run();
     return match (give r) {
-        case Ok(o): {
+        case Ok(value: o): {
             int32 n = cast<int32>(o.stdout().length());
             int32 e = cast<int32>(o.stderr().length());
             int32 code = 42;
@@ -19,6 +19,6 @@ fn int main() {
             else if (o.stdout()[5] != cast<uint8>(10)) { code = 53; }    // '\n'
             := code;
         }
-        case Err(x): 54;
+        case Err(error: x): 54;
     };
 }

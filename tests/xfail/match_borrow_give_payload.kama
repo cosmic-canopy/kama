@@ -4,7 +4,7 @@
 import std::collections::{DynamicArray};
 fn Optional<DynamicArray<int32>> passthrough(Optional<DynamicArray<int32>> o) {
     match (o) {                                                    // BORROWING — `xs` aliases o's buffer
-        case Some(xs): { return Optional::Some(value: give xs); }  // give the aliased buffer out
+        case Some(value: xs): { return Optional::Some(value: give xs); }  // give the aliased buffer out
         case None:     { return Optional::None; }
     };
     return Optional::None;
@@ -13,6 +13,6 @@ fn int main() {
     DynamicArray<int32> a = DynamicArray.empty(); a.add(item: 1);
     Optional<DynamicArray<int32>> o = Optional::Some(value: give a);
     Optional<DynamicArray<int32>> p = passthrough(o: give o);
-    match (give p) { case Some(xs): { } case None: { } };
+    match (give p) { case Some(value: xs): { } case None: { } };
     return 0;
 }

@@ -3,7 +3,7 @@
 // RAII-dropped when the Result is. Both a plain-message variant and a payload variant are boxed.
 enum IoError { NotFound, Other(int32 code) }
 implements Error for IoError {
-    public fn string message() { return match (this) { case NotFound: "nf"; case Other(c): "oth"; }; }
+    public fn string message() { return match (this) { case NotFound: "nf"; case Other(code: c): "oth"; }; }
 }
 fn Result<int32, Owned<Error>> f(int32 which) {
     if (which == 0) { return Result::Ok(value: 9); }
@@ -11,6 +11,6 @@ fn Result<int32, Owned<Error>> f(int32 which) {
     return Result::Err(error: IoError::Other(code: 7));
 }
 fn int32 elen(Result<int32, Owned<Error>> r) {
-    return match (r) { case Ok(v): v; case Err(e): { string m = e.message(); := cast<int32>(m.length()); } };
+    return match (r) { case Ok(value: v): v; case Err(error: e): { string m = e.message(); := cast<int32>(m.length()); } };
 }
 fn int32 main() { return elen(r: f(which: 0)) + elen(r: f(which: 1)) + elen(r: f(which: 2)); }  // 9+2+3 = 14

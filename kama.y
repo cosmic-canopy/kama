@@ -292,7 +292,8 @@ struct kamayystype {
 %type <expressionstatement> expression_statement statement_expression assignment invocation_expression match_expression
 %type <matcharm> match_arm match_pattern
 %type <matcharmlist> match_arms
-%type <identifierlist> match_bindings
+%type <argumentlist> match_bindings
+%type <argument> match_binding
 %type <expressionstatement> object_creation_expression new_expression post_increment_expression post_decrement_expression
 %type <expressionstatement> pre_increment_expression pre_decrement_expression
    /* %type <unaryexpression> unary_expression */
@@ -1006,14 +1007,35 @@ match_pattern
       a->variantId = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); STAMP_LOC(a->variantId, @1);
       /* The bindings arrive as nodes (for the LSP index); mirror their names into the string list every
          existing reader uses, so nothing downstream changes. */
-      a->bindingIds = $3;
-      a->bindings = std::make_shared<StringList>();
-      for (auto& b : *$3) a->bindings->push_back(b->value);
+      a->bindings   = std::make_shared<StringList>();
+      a->labels     = std::make_shared<StringList>();
+      a->bindingIds = std::make_shared<IdentifierList>();
+      a->labelIds   = std::make_shared<IdentifierList>();
+      for (auto& arg : *$3) {
+          a->labels->push_back(arg->name->value);
+          a->labelIds->push_back(arg->name);
+          auto bid = std::static_pointer_cast<IdentifierNode>(arg->expression);
+          a->bindings->push_back(bid->value);
+          a->bindingIds->push_back(bid);
+      }
       $$ = a; }
   ;
+/* A payload pattern NAMES its fields, exactly as a call names its parameters:
+   `case Rect(w: width, h: height)`. There is no positional form. Binding by position is how a
+   two-field swap compiles clean and silently returns the wrong values — the bug class named arguments
+   exist to remove, and kama does not exempt arity-1 from a label at a call site either. The label is
+   the FIELD; the identifier after it is the local it binds. Reuses ArgumentNode because a pattern
+   binding is the same shape as an argument: a name, a colon, a thing. */
 match_bindings
-  : IDENTIFIER   { $$ = std::make_shared<IdentifierList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
-  | match_bindings COMMA IDENTIFIER   { auto b = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); STAMP_LOC(b, @3); $1->push_back(b); $$ = $1; }
+  : match_binding   { $$ = std::make_shared<ArgumentList>(); $$->push_back($1); }
+  | match_bindings COMMA match_binding   { $1->push_back($3); $$ = $1; }
+  ;
+match_binding
+  : IDENTIFIER COLON IDENTIFIER
+    { auto b = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); STAMP_LOC(b, @3);
+      $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT,
+               std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), b);
+      STAMP_LOC($$->name, @1); }
   ;
 foreach_statement
   : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement   { auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); STAMP_LOC(n->name, @4); $$ = n; }

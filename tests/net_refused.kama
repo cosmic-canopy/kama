@@ -8,5 +8,5 @@ fn int main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47655);              // nothing bound here
     Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
-    return match (rc) { case Ok(s): 10; case Err(e): ((isRefused(e: e) == 1) ? 0 : 20); };
+    return match (rc) { case Ok(value: s): 10; case Err(error: e): ((isRefused(e: e) == 1) ? 0 : 20); };
 }

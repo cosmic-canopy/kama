@@ -11,16 +11,16 @@ fn int main() {
     // finite -> Ok
     Measure ok = Measure.make(v: 1.5);
     Result<string, Owned<Error>> okr = encode(v: ok);
-    int32 okv = match (okr) { case Ok(s): 40; case Err(e): 0 - 1; };
+    int32 okv = match (okr) { case Ok(value: s): 40; case Err(error: e): 0 - 1; };
 
     // non-finite (Inf via overflow) -> Err(NotRepresentable), recovered as a concrete SerError
     float64 big = 1.0e308; float64 inf = big * 10.0;
     Measure bad = Measure.make(v: inf);
     Result<string, Owned<Error>> badr = encode(v: bad);
     int32 errv = match (badr) {
-        case Ok(s): 0 - 3;                                   // must NOT succeed
-        case Err(e): match (e.as<SerError>()) {              // recover the concrete serialize error
-            case Some(se): match (se) { case NotRepresentable: 100; case IoError: 0 - 4; };
+        case Ok(value: s): 0 - 3;                                   // must NOT succeed
+        case Err(error: e): match (e.as<SerError>()) {              // recover the concrete serialize error
+            case Some(value: se): match (se) { case NotRepresentable: 100; case IoError: 0 - 4; };
             case None: 0 - 5;
         };
     };

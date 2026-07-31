@@ -22,7 +22,7 @@ extern fn void kama_sleep_ms(int32 ms);
 // The i-th user arg (0-based; argv[0] excluded by the floor), or "" if absent.
 fn string argAt(int32 i) {
     Optional<string> o = args().get(at: i);
-    return match (give o) { case Some(v): { := give v; } case None: { := ""; } };
+    return match (give o) { case Some(value: v): { := give v; } case None: { := ""; } };
 }
 
 // Parse a non-negative decimal string (the numeric subcommand args are always well-formed digits here).
@@ -68,11 +68,11 @@ fn int main() {
         File outp  = File.make(fd: 1);
         Result<DynamicArray<uint8>, IoError> rd = input.readAll();
         return match (give rd) {
-            case Ok(got): {
+            case Ok(value: got): {
                 Result<usize, IoError> wr = outp.writeAll(bytes: got);
-                := match (wr) { case Ok(nb): 0; case Err(e): 1; };
+                := match (wr) { case Ok(value: nb): 0; case Err(error: e): 1; };
             }
-            case Err(e): { := 1; }
+            case Err(error: e): { := 1; }
         };
     }
     if (cmd == "sleep") {
@@ -81,7 +81,7 @@ fn int main() {
     }
     if (cmd == "printenv") {
         return match (env(name: argAt(i: 1))) {
-            case Some(_): { := 0; }
+            case Some(value: _): { := 0; }
             case None: { := 1; }
         };
     }
@@ -97,7 +97,7 @@ fn int main() {
     if (cmd == "hasfile") {
         string name = argAt(i: 1);
         Result<File, IoError> r = File.open(path: name, mode: OpenMode::Read);
-        return match (give r) { case Ok(f): { := 0; } case Err(e): { := 1; } };
+        return match (give r) { case Ok(value: f): { := 0; } case Err(error: e): { := 1; } };
     }
     return 3;   // unknown subcommand
 }

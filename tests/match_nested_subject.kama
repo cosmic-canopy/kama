@@ -6,14 +6,14 @@ enum Dir { Left, Right }
 
 fn int32 route(Dir d, int32 x) {
     return match (match (d) { case Left: Optional::Some(value: x); case Right: Optional::None; }) {
-        case Some(v): v;
+        case Some(value: v): v;
         case None:    0 - 1;
     };
 }
 
 fn int32 workaround(Dir d, int32 x) {   // the "bind to a local first" form still compiles
     Optional<int32> o = match (d) { case Left: Optional::Some(value: x); case Right: Optional::None; };
-    return match (o) { case Some(v): v; case None: 0 - 1; };
+    return match (o) { case Some(value: v): v; case None: 0 - 1; };
 }
 
 fn int main() {

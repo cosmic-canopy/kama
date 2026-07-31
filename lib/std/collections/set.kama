@@ -49,7 +49,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // A Set has no value to reclaim, so it reports presence as a `bool`; the `Unit` binds and drops.
     public fn bool remove(ref K key) {
         Optional<Unit> hit = this.m.remove(key: key);   // bind first — a method call isn't a valid match subject
-        return match (hit) { case Some(u): true; case None: false; };
+        return match (hit) { case Some(value: u): true; case None: false; };
     }
     public fn int32 length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
@@ -63,7 +63,7 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
         w.beginArray(count: cast<usize>(this.m.length()));
         foreach (K k in this.m) {
             Result<Unit, Owned<Error>> __sr = this.serElem(k: k, w: w);
-            match (give __sr) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         }
         w.endArray();
         return Result::Ok(value: Unit::Unit);
@@ -74,8 +74,8 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K.deserialize(r: r);   // bind — a match needs a named enum subject
             match (give __er) {                                     // consume: destructure-move the owning element out
-                case Err(e): { return Result::Err(error: give e); }
-                case Ok(v):  { result.add(key: give v); }
+                case Err(error: e): { return Result::Err(error: give e); }
+                case Ok(value: v):  { result.add(key: give v); }
             };
         }
         return Result::Ok(value: give result);

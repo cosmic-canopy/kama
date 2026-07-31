@@ -322,7 +322,7 @@ expect --complete 94:29  -- "field	value	int32"    # the foreach BINDING
 expect --complete 94:47  -- "field	value	int32"    # a local inside the foreach body
 expect --complete 98:33  -- "field	value	int32"    # unsafe
 expect --complete 102:32 -- "field	value	int32"    # scope
-expect --complete 105:62 -- "field	value	int32"    # a match arm's payload binding (type from the variant case)
+expect --complete 105:70 -- "field	value	int32"    # a match arm's payload binding (type from the variant case)
 
 # A type may declare a FIELD and a METHOD under one name (std::process::Command has both spellings of
 # `args`). Which one a path segment names depends on whether the source CALLED it — resolving `this.args.`

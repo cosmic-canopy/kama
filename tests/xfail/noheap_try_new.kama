@@ -2,6 +2,6 @@
 type resource Box { int32 v; public ctor make(int32 v) { Box b; b.v = v; return give b; } public fn int32 get() { return this.v; } }
 @noheap fn int32 hot() {
     Optional<Owned<Box>> b = try new Box.make(v: 1);
-    return match (b) { case Some(x): x.get(); case None: 0; };
+    return match (b) { case Some(value: x): x.get(); case None: 0; };
 }
 fn int32 main() { return hot(); }

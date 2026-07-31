@@ -22,15 +22,15 @@ fn int32 main() {
     while (i < 100) {
         Optional<int32> oa = strong.get(key: i);      // bind first — a method call isn't a valid match subject
         Optional<int32> ob = fast.get(key: i);
-        int32 a = match (oa) { case Some(x): x; case None: 0 - 1; };
-        int32 b = match (ob) { case Some(x): x; case None: 0 - 1; };
+        int32 a = match (oa) { case Some(value: x): x; case None: 0 - 1; };
+        int32 b = match (ob) { case Some(value: x): x; case None: 0 - 1; };
         if (a != b) { mism = mism + 1; }
         i = i + 1;
     }
     if (mism == 0) { r = r + 10; }
 
     Optional<int32> o7 = fast.get(key: 7);
-    int32 v7 = match (o7) { case Some(x): x; case None: 0 - 1; };
+    int32 v7 = match (o7) { case Some(value: x): x; case None: 0 - 1; };
     if (v7 == 999) { r = r + 5; }                     // overwrite took
     if (!fast.contains(key: 500)) { r = r + 5; }      // absent key
 
@@ -40,9 +40,9 @@ fn int32 main() {
     Optional<int32> s1 = byName.get(key: "one");
     Optional<int32> s2 = byName.get(key: "two");
     Optional<int32> s3 = byName.get(key: "three");
-    int32 v1 = match (s1) { case Some(x): x; case None: 0; };
-    int32 v2 = match (s2) { case Some(x): x; case None: 0; };
-    int32 v3 = match (s3) { case Some(x): x; case None: 0; };
+    int32 v1 = match (s1) { case Some(value: x): x; case None: 0; };
+    int32 v2 = match (s2) { case Some(value: x): x; case None: 0; };
+    int32 v3 = match (s3) { case Some(value: x): x; case None: 0; };
     if (v1 + v2 + v3 == 6 && byName.length() == 3) { r = r + 10; }
 
     // Set threads H through its backing Map<K,Unit,H>.

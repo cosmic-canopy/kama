@@ -28,9 +28,9 @@ fn int32 main() {
     Result<Shared<Gauge>, GaugeErr> sh  = new Gauge.open(v: 20);   // Ok  -> `Shared` box (ctrl block)
     Result<Owned<Gauge>, GaugeErr>  ret = acquire(v: 7);           // Ok  -> return-position `new`
 
-    int32 a = match (ok)  { case Ok(g): g.get(); case Err(e): 0 - 1; };    // 10
-    int32 b = match (bad) { case Ok(g): 100;     case Err(e): 0 - 1; };    // -1
-    int32 c = match (sh)  { case Ok(g): g.get(); case Err(e): 0 - 1; };    // 20
-    int32 d = match (ret) { case Ok(g): g.get(); case Err(e): 0 - 1; };    // 7
+    int32 a = match (ok)  { case Ok(value: g): g.get(); case Err(error: e): 0 - 1; };    // 10
+    int32 b = match (bad) { case Ok(value: g): 100;     case Err(error: e): 0 - 1; };    // -1
+    int32 c = match (sh)  { case Ok(value: g): g.get(); case Err(error: e): 0 - 1; };    // 20
+    int32 d = match (ret) { case Ok(value: g): g.get(); case Err(error: e): 0 - 1; };    // 7
     return a + b + c + d;   // 10 - 1 + 20 + 7 = 36
 }

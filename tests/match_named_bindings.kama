@@ -1,0 +1,36 @@
+// A payload pattern NAMES its fields, so binding is order-independent and a swap is impossible. The two
+// arms below bind the same variant in opposite orders and must agree — under the old positional form the
+// second one would silently have returned the other field. Returns 42.
+enum Shape { Rect(int32 w, int32 h), Circle(int32 radius), Empty }
+
+fn int32 areaInOrder(Shape s) {
+    return match (s) {
+        case Rect(w: width, h: height): width * height;
+        case Circle(radius: r):         r * r;
+        case Empty:                     0;
+    };
+}
+
+fn int32 areaOutOfOrder(Shape s) {
+    return match (s) {
+        case Rect(h: height, w: width): width * height;   // labels reordered — same meaning
+        case Circle(radius: r):         r * r;
+        case Empty:                     0;
+    };
+}
+
+fn int main()
+{
+    Shape r = Shape::Rect(w: 3, h: 5);
+    int32 a = areaInOrder(s: r);        // 15
+    int32 b = areaOutOfOrder(s: r);     // 15 — identical, because the label decides, not the position
+    Shape ci = Shape::Circle(radius: 3);
+    int32 c = match (ci) {
+        case Rect(w: w, h: h):  0;
+        case Circle(radius: q): q * q;   // 9
+        case Empty:             0;
+    };
+    Shape e = Shape::Empty;
+    int32 d = match (e) { case Rect(w: w, h: h): 1; case Circle(radius: q): 1; case Empty: 3; };
+    return a + b + c + d;               // 15 + 15 + 9 + 3 = 42
+}

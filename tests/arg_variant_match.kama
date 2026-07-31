@@ -3,15 +3,15 @@
 // (`f(n: match(…))`). The call path now threads the parameter's type as the target instance / match
 // result, exactly as the initializer / assignment / return / arm positions do. Previously each errored
 // ("scope-qualified call resolves to no known function") — the workaround was "bind to a local first".
-fn int32 pick(Optional<int32> o) { return match (o) { case Some(x): x; case None: 0 - 1; }; }
+fn int32 pick(Optional<int32> o) { return match (o) { case Some(value: x): x; case None: 0 - 1; }; }
 fn int32 twice(int32 n) { return n * 2; }
 
 fn int32 main() {
     Optional<int32> o = Optional::Some(value: 9);
     int32 a = pick(o: Optional::Some(value: 42));                        // inline variant ctor (payload) in arg
     int32 b = pick(o: Optional::None);                                   // no-payload variant in arg
-    int32 c = twice(n: match (o) { case Some(x): x; case None: 0; });    // value-producing match in arg (primitive)
-    Optional<int32> passed = pick(o: match (o) { case Some(x): Optional::Some(value: x); case None: Optional::None; }) > 0
+    int32 c = twice(n: match (o) { case Some(value: x): x; case None: 0; });    // value-producing match in arg (primitive)
+    Optional<int32> passed = pick(o: match (o) { case Some(value: x): Optional::Some(value: x); case None: Optional::None; }) > 0
                              ? Optional::Some(value: 1) : Optional::None; // match producing a variant, into a variant param
     int32 d = pick(o: passed);
     return a + b + c + d;   // 42 + (-1) + 18 + 1 = 60

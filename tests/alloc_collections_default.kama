@@ -20,7 +20,7 @@ fn int32 main() {
 
     PriorityQueue<int32> pq = PriorityQueue.minHeap(); pq.push(item: 2); pq.push(item: 1);
     Optional<int32> p = pq.pop();
-    int32 pv = match (p) { case Some(x): x; case None: 0 - 1; };
+    int32 pv = match (p) { case Some(value: x): x; case None: 0 - 1; };
     if (pv == 1) { r = r + 5; }
 
     return r;   // 25

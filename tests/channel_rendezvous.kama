@@ -23,7 +23,7 @@ fn int main() {
     while (going) {
         Optional<int32> v = rx.recv();
         match (v) {
-            case Some(x): { sum = sum + x; }
+            case Some(value: x): { sum = sum + x; }
             case None:    { going = false; }
         };
     }

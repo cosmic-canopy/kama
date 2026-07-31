@@ -45,9 +45,9 @@ type resource JsonWriter<W: Writer> implements Serializer {
     public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serialize v) {
         Serializer s = this;   // borrow self behind the Serializer interface
         Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
-        match (give r) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+        match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         Result<Unit, IoError> fr = this.sink.flush();
-        match (fr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+        match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
         return Result::Ok(value: Unit::Unit);
     }
 
@@ -55,8 +55,8 @@ type resource JsonWriter<W: Writer> implements Serializer {
     fn void byte(uint8 b) {
         this.scratch[0] = b;
         match (this.sink.write(bytes: this.scratch.view())) {
-            case Err(_): { this.failWith(e: SerError::IoError); }
-            case Ok(_): {}
+            case Err(error: _): { this.failWith(e: SerError::IoError); }
+            case Ok(value: _): {}
         };
     }
     fn void ascii(string s) {
@@ -182,7 +182,7 @@ fn Result<string, std::memory::Owned<Error>> encode(Serialize v) {
     JsonWriter<StringWriter> w = JsonWriter::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;              // borrow the writer behind the Serializer interface
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
-    match (give r) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+    match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
     return Result::Ok(value: w.innerRef().finish());   // materialize the concrete StringWriter's bytes
 }
 
@@ -458,8 +458,8 @@ fn Result<T, Owned<Error>> decode<T: Deserialize>(string src) {
 fn Result<T, Owned<Error>> decodeFrom<T: Deserialize>(Reader from) {
     Result<string, IoError> rr = readAll(r: from);
     string src = match (give rr) {
-        case Ok(s):  { := give s; }
-        case Err(e): { return Result::Err(error: e); }   // IoError auto-boxes into Owned<Error>
+        case Ok(value: s):  { := give s; }
+        case Err(error: e): { return Result::Err(error: e); }   // IoError auto-boxes into Owned<Error>
     };
     JsonReader r = JsonReader.make(src: give src);
     return T.deserialize(r: r);

@@ -17,7 +17,7 @@ fn int32 drain(Iterator<int32> it) {                 // `it` is a fat pointer {o
     bool going = true;
     while (going) {
         match (it.next()) {                          // §1.2: contract call DIRECTLY as the subject
-            case Some(v): { total = total + v; }
+            case Some(value: v): { total = total + v; }
             case None:    { going = false; }
         };
     }

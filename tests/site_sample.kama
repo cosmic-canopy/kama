@@ -22,7 +22,7 @@ fn Result<Blade, ForgeError> temper(string name, int32 folds)
 fn int main()
 {
     return match (temper(name: "kama", folds: 12)) {   // named arguments; exhaustive match
-        case Ok(blade): blade.sharpness();             // 36
-        case Err(e):    1;
+        case Ok(value: blade): blade.sharpness();             // 36
+        case Err(error: e):    1;
     };
 }

@@ -20,7 +20,7 @@ type resource Buffer {
 fn int32 main() {
     Result<Owned<Buffer>, BufferErr> ok  = Buffer::create(size: 8);
     Result<Owned<Buffer>, BufferErr> bad = Buffer::create(size: 0);
-    int32 a = match (ok)  { case Ok(b): b.capacity(); case Err(e): 0 - 1; };   // Ok  -> 8
-    int32 c = match (bad) { case Ok(b): b.capacity(); case Err(e): 0 - 1; };   // Err -> -1
+    int32 a = match (ok)  { case Ok(value: b): b.capacity(); case Err(error: e): 0 - 1; };   // Ok  -> 8
+    int32 c = match (bad) { case Ok(value: b): b.capacity(); case Err(error: e): 0 - 1; };   // Err -> -1
     return a + c + 34;   // 41
 }

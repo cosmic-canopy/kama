@@ -20,7 +20,7 @@ fn int main()
 
     Optional<Shared<Counter>> up = w.tryUpgrade();   // expired -> None
     return match (up) {
-        case Some(s2): 100;   // not taken
+        case Some(value: s2): 100;   // not taken
         case None: 5;
     };
 }

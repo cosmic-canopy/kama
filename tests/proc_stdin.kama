@@ -12,20 +12,20 @@ fn int main() {
     c.stdin(s: Stdio::Piped);
     c.stdout(s: Stdio::Piped);
     Result<Process, IoError> sr = c.start();
-    Process p = match (give sr) { case Ok(pr): { := give pr; } case Err(e): { return 140; } };
+    Process p = match (give sr) { case Ok(value: pr): { := give pr; } case Err(error: e): { return 140; } };
 
     DynamicArray<uint8> input = DynamicArray.empty();
     input.add(item: cast<uint8>(104));   // 'h'
     input.add(item: cast<uint8>(105));   // 'i'
     input.add(item: cast<uint8>(10));    // '\n'
     Result<usize, IoError> wr = p.stdin().writeAll(bytes: input);
-    int32 w = match (wr) { case Ok(n): 0; case Err(e): 141; };
+    int32 w = match (wr) { case Ok(value: n): 0; case Err(error: e): 141; };
     if (w != 0) { return w; }
     p.closeStdin();                       // EOF so `cat` finishes
 
     Result<DynamicArray<uint8>, IoError> rd = p.stdout().readAll();
     return match (give rd) {
-        case Ok(got): {
+        case Ok(value: got): {
             int32 n = cast<int32>(got.length());
             int32 code = 42;
             if (n != 3) { code = 142; }
@@ -33,6 +33,6 @@ fn int main() {
             else if (got[2] != cast<uint8>(10)) { code = 144; }
             := code;
         }
-        case Err(e): 145;
+        case Err(error: e): 145;
     };
 }

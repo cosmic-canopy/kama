@@ -23,7 +23,7 @@ type resource Holder {
 fn int32 main() {
     Result<Holder, HolderErr> ok  = Holder.make(v: 42);
     Result<Holder, HolderErr> bad = Holder.make(v: -5);
-    int32 a = match (ok)  { case Ok(h): h.get(); case Err(e): 0 - 1; };   // 42
-    int32 b = match (bad) { case Ok(h): 100;     case Err(e): 0 - 1; };   // -1
+    int32 a = match (ok)  { case Ok(value: h): h.get(); case Err(error: e): 0 - 1; };   // 42
+    int32 b = match (bad) { case Ok(value: h): 100;     case Err(error: e): 0 - 1; };   // -1
     return a + b + 1;   // 42 - 1 + 1 = 42
 }

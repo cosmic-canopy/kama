@@ -16,8 +16,44 @@ been a spelling with no discovery payoff.
 
 Everything here lives in [`prelude/global.kama`](../prelude/global.kama) over
 [`kama_runtime.h`](../kama_runtime.h). The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is
-a semantics index. See also [SPEC.md](SPEC.md) for the language, [stdlib-layering](design/stdlib-layering.md)
-for what is floor vs `import std::…`.
+a semantics index. See also [SPEC.md](SPEC.md) for the language.
+
+## What is floor, and what is an `import`
+
+One rule decides:
+
+> **Contracts, syntax and intrinsics live in the prelude — always on, and present under `--no-std`.
+> Backends and concrete implementations are opt-in `std::*` modules, so you pay for what you use.**
+
+Every feature that *looks* like a prelude candidate already has its load-bearing half here; only the
+optional backend is an import:
+
+| Feature | Always-on half (prelude / `kama_runtime.h`) | Opt-in half |
+| --- | --- | --- |
+| Formatting | the `Format` contract + `Formatter` (string interpolation lowers into these) + the number→string runtime | `std::fmt` — helpers and the `html`/`sql`/`stripIndent` tags |
+| Serialization | the `Serialize`/`Deserialize`/`Serializer`/`Deserializer` contracts + `@generate` synthesis | `std::serialization::{binary,json}` — the byte backends |
+| Memory | `Owned`/`Shared`/`Weak` + `HeapOwner`/`Deref`/`Copyable`, which drive `new`/`give`/`copy` | *(none — entirely floor)* |
+| Concurrency | the `spawn`/`scope`/`parallel_for` syntax, the sendability gate, the `Atomic` borrow exemption | `std::concurrent` — `Isolate`/`Channel`/`Atomic` over the C seams |
+
+So string interpolation works under `--no-std` while `std::fmt` stays optional, and the same shape holds for
+serialization. The reason the split is drawn at cost: a module's link and runtime cost is triggered only when
+its seam header is actually externed — `kama_isolate.h`/`kama_channel.h` pull in `-lpthread` natively and
+`-pthread -sPROXY_TO_PTHREAD` on wasm, `<math.h>` pulls `-lm`, `kama_gpu.h` pulls the GPU stack, Windows
+sockets pull `-lws2_32`. Folding any of those into the always-on floor would tax every program, including
+`--no-std` and bare-metal builds.
+
+Two tiers of "built-in" follow from that:
+
+- **Prelude** — embedded in the compiler binary, always in scope, present under `--no-std`:
+  `prelude/global.kama` (`Optional`/`Result`/`Unit`/`string` and the core contracts) plus the
+  `Owned`/`Shared`/`Weak` triad. `import std::memory` is a no-op, satisfied by the prelude.
+- **On-disk `std::*`** — an explicit `import`, absent under `--no-std`: everything else.
+
+Among those, the compiler knows about some more than others. It lowers syntax directly into the prelude
+globals and the memory triad; it knows `std::concurrent` and `std::serialization` by name (the channel and
+atomic templates, the sendability gate, the `@generate` targets) though both are ordinary kama; and it knows
+nothing at all about `collections`, `fmt`, `io`, `net`, `fs`, `time`, `math`, `num` and `app`, which are
+plain libraries.
 
 ## Diagnostics — fatal checks (halt the program)
 

@@ -34,16 +34,16 @@ fn int main() {
     Shared<Leaf> l2 = leaf;                       // second owner of the SAME leaf
     Pair p = Pair.make(a: give leaf, b: give l2);
     Result<DynamicArray<uint8>, Owned<Error>> e1 = encode(v: p);
-    DynamicArray<uint8> b1 = match (give e1) { case Ok(b): give b; case Err(__e): { return 250; } };
+    DynamicArray<uint8> b1 = match (give e1) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
 
     Result<Shared<Pair>, Owned<Error>> res = decode::<Shared<Pair>>(src: clone(src: ref b1));
     match (res) {
-        case Ok(sh): {
+        case Ok(value: sh): {
             Result<DynamicArray<uint8>, Owned<Error>> e2 = encode(v: sh);
-            DynamicArray<uint8> b2 = match (give e2) { case Ok(b): give b; case Err(__e): { return 1; } };
+            DynamicArray<uint8> b2 = match (give e2) { case Ok(value: b): give b; case Err(error: __e): { return 1; } };
             return bytesEqual(a: ref b1, b: ref b2) ? 55 : 40;
         }
-        case Err(e): { return 2; }
+        case Err(error: e): { return 2; }
     };
     return 3;
 }

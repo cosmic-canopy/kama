@@ -28,10 +28,10 @@ fn int main() {
     if (hello.startsWith(prefix: "he"))      { r = r + 1; }
     if (hello.endsWith(suffix: "lo"))        { r = r + 1; }
     if (!hello.contains(substring: "xyz"))   { r = r + 1; }
-    int32 fh  = match (hello.find(substring: "h"))  { case Some(i): cast<int32>(i); case None: 0 - 1; };
-    int32 fll = match (hello.find(substring: "ll")) { case Some(i): cast<int32>(i); case None: 0 - 1; };
-    int32 fo  = match (hello.find(substring: "o"))  { case Some(i): cast<int32>(i); case None: 0 - 1; };
-    int32 fz  = match (hello.find(substring: "z"))  { case Some(i): cast<int32>(i); case None: 0 - 1; };
+    int32 fh  = match (hello.find(substring: "h"))  { case Some(value: i): cast<int32>(i); case None: 0 - 1; };
+    int32 fll = match (hello.find(substring: "ll")) { case Some(value: i): cast<int32>(i); case None: 0 - 1; };
+    int32 fo  = match (hello.find(substring: "o"))  { case Some(value: i): cast<int32>(i); case None: 0 - 1; };
+    int32 fz  = match (hello.find(substring: "z"))  { case Some(value: i): cast<int32>(i); case None: 0 - 1; };
     if (fh == 0)     { r = r + 1; }   // find at start
     if (fll == 2)    { r = r + 1; }   // find in middle
     if (fo == 4)     { r = r + 1; }   // find at end

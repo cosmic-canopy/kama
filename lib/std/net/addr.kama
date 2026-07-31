@@ -31,7 +31,7 @@ type value SocketAddr implements Format {
     // Just the "a.b.c.d" host text (no port) — feeds the C `sockaddr_in` fill for sendTo.
     public fn string ipString() {
         return match (this.ip) {
-            case V4(a, b, c, d): u8Str(v: a) + "." + u8Str(v: b) + "." + u8Str(v: c) + "." + u8Str(v: d);
+            case V4(a: a, b: b, c: c, d: d): u8Str(v: a) + "." + u8Str(v: b) + "." + u8Str(v: c) + "." + u8Str(v: d);
         };
     }
 

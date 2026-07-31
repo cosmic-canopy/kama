@@ -26,7 +26,7 @@ fn int main() {
 
     Optional<Shared<Shape, BumpAllocator>> up = w.tryUpgrade();    // expired → None
     return match (up) {
-        case Some(s2): 100;                                        // not taken
+        case Some(value: s2): 100;                                        // not taken
         case None: 5;
     };
     // w drops here (weak 1→0, strong==0 → frees ctrl via w's allocator = no-op); arena drops last

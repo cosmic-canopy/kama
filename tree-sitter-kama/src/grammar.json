@@ -3735,7 +3735,7 @@
                   "members": [
                     {
                       "type": "SYMBOL",
-                      "name": "identifier"
+                      "name": "match_binding"
                     },
                     {
                       "type": "REPEAT",
@@ -3748,7 +3748,7 @@
                           },
                           {
                             "type": "SYMBOL",
-                            "name": "identifier"
+                            "name": "match_binding"
                           }
                         ]
                       }
@@ -3765,6 +3765,31 @@
               "type": "BLANK"
             }
           ]
+        }
+      ]
+    },
+    "match_binding": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "field",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
         }
       ]
     },

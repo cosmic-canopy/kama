@@ -24,20 +24,20 @@ fn int main() {
 
     // (a) sugar path — byte-identical to pre-streams output.
     Result<string, Owned<Error>> ja = encode(v: r);
-    string j = match (give ja) { case Ok(s): give s; case Err(e): { return 10; } };
+    string j = match (give ja) { case Ok(value: s): give s; case Err(error: e): { return 10; } };
     if (!(j == "{\"id\":7,\"name\":\"hi\",\"ok\":true}")) { return 11; }
 
     // (b) streaming path: build a JsonWriter over two different owned sinks and drive encodeValue on each
     //     (proves the generic writer instantiates over distinct W monomorphs + the flush path drains).
     JsonWriter<StringWriter> w1 = JsonWriter::<StringWriter>.make(sink: StringWriter.make());
     Result<Unit, Owned<Error>> e1 = w1.encodeValue(v: r);
-    match (give e1) { case Ok(_): {} case Err(e): { return 12; } };
+    match (give e1) { case Ok(value: _): {} case Err(error: e): { return 12; } };
     JsonWriter<BufWriter<StringWriter>> w2 = JsonWriter::<BufWriter<StringWriter>>.make(sink: BufWriter::<StringWriter>.make(inner: StringWriter.make()));
     Result<Unit, Owned<Error>> e2 = w2.encodeValue(v: r);
-    match (give e2) { case Ok(_): {} case Err(e): { return 13; } };
+    match (give e2) { case Ok(value: _): {} case Err(error: e): { return 13; } };
 
     // (c) reader path — decode straight out of a SliceReader over the encoded bytes.
     Result<Rec, Owned<Error>> d = decodeFrom::<Rec>(from: SliceReader.make(src: give j));
-    Rec q = match (give d) { case Ok(x): give x; case Err(e): { return 14; } };
+    Rec q = match (give d) { case Ok(value: x): give x; case Err(error: e): { return 14; } };
     return q.verify();
 }

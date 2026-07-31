@@ -11,14 +11,14 @@ fn int main() {
     c1.arg(a: "hasfile"); c1.arg(a: envOr(name: "KAMA_PROCUTIL_BASE", dflt: "procutil"));
     c1.cwd(dir: envOr(name: "KAMA_PROCUTIL_DIR", dflt: "."));
     Result<Output, IoError> r1 = c1.run();
-    int32 a = match (give r1) { case Ok(o): (o.status().code == 0 ? 0 : 96); case Err(e): 97; };
+    int32 a = match (give r1) { case Ok(value: o): (o.status().code == 0 ? 0 : 96); case Err(error: e): 97; };
     if (a != 0) { return a; }
 
     Command c2 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c2.arg(a: "hasfile"); c2.arg(a: envOr(name: "KAMA_PROCUTIL_BASE", dflt: "procutil"));
     // no cwd override -> inherits the harness cwd (repo root), where the basename does not exist
     Result<Output, IoError> r2 = c2.run();
-    int32 b = match (give r2) { case Ok(o): (o.status().code == 1 ? 0 : 98); case Err(e): 99; };
+    int32 b = match (give r2) { case Ok(value: o): (o.status().code == 1 ? 0 : 98); case Err(error: e): 99; };
     if (b != 0) { return b; }
 
     return 42;

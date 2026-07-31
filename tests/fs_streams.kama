@@ -21,19 +21,19 @@ type resource Rec {
 // drops at the end of this scope the fd closes (flushing our unbuffered layer's no-op). Returns 0 on success.
 fn int32 writeRec(ref string path, ref Rec rec) {
     Result<File, IoError> fo = File.open(path: path, mode: OpenMode::Write);
-    File f = match (give fo) { case Ok(x): give x; case Err(e): { return 20; } };
+    File f = match (give fo) { case Ok(value: x): give x; case Err(error: e): { return 20; } };
     JsonWriter<File> w = JsonWriter::<File>.make(sink: give f);
     Result<Unit, Owned<Error>> e = w.encodeValue(v: rec);
-    return match (give e) { case Ok(_): 0; case Err(er): 21; };
+    return match (give e) { case Ok(value: _): 0; case Err(error: er): 21; };
 }
 
 // Reopen the file for reading and decode a Rec straight out of it (File as a bare Reader). The File drops
 // (closes) at scope end. Returns 0 iff the decoded record round-trips.
 fn int32 readRec(ref string path) {
     Result<File, IoError> fo = File.open(path: path, mode: OpenMode::Read);
-    File f = match (give fo) { case Ok(x): give x; case Err(e): { return 30; } };
+    File f = match (give fo) { case Ok(value: x): give x; case Err(error: e): { return 30; } };
     Result<Rec, Owned<Error>> d = decodeFrom::<Rec>(from: f);
-    Rec q = match (give d) { case Ok(x): give x; case Err(e): { return 31; } };
+    Rec q = match (give d) { case Ok(value: x): give x; case Err(error: e): { return 31; } };
     if (!q.matches()) { return 32; }
     return 0;
 }
@@ -48,7 +48,7 @@ fn int main() {
     int32 rc = readRec(path: p);
     if (rc != 0) { return rc; }
 
-    int32 rmCode = match (remove(path: p)) { case Ok(u): 0; case Err(e): 70; };
+    int32 rmCode = match (remove(path: p)) { case Ok(value: u): 0; case Err(error: e): 70; };
     if (rmCode != 0) { return rmCode; }
 
     return 42;

@@ -1,7 +1,7 @@
 fn int unwrap(Optional<int32> o, int32 dflt)
 {
     return match (o) {
-        case Some(v): v;
+        case Some(value: v): v;
         case None: dflt;
     };
 }

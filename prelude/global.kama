@@ -497,7 +497,7 @@ type value GlobalAllocator implements Allocator {
 // from a type-param-typed `this.alloc` is not supported). The dead `:= cast<Ptr>(0)` after `panic`
 // satisfies the value-arm checker (`panic` traps first, so it never runs).
 fn Ptr unwrapPtr(Optional<Ptr> o) {
-    return match (o) { case Some(p): p; case None: { panic(msg: "out of memory"); := cast<Ptr>(0); } };
+    return match (o) { case Some(value: p): p; case None: { panic(msg: "out of memory"); := cast<Ptr>(0); } };
 }
 
 // ── std::fmt core: human-facing text rendering (language-level) ──────────────────────────────────────────

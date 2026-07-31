@@ -12,7 +12,7 @@ implements Error for IoError {
     public fn string message() {
         return match (this) {
             case NotFound: "nf";       // 2
-            case Other(c): "other";    // 5
+            case Other(code: c): "other";    // 5
         };
     }
 }

@@ -21,8 +21,8 @@ fn int main() {
     Point p12 = Point.make(x: 1, y: 2);
     Point p34 = Point.make(x: 3, y: 4);
     Point p99 = Point.make(x: 9, y: 9);
-    int32 a = match (m.get(key: p12)) { case Some(v): v; case None: 0; };   // 99
-    int32 b = match (m.get(key: p34)) { case Some(v): v; case None: 0; };   // 20
+    int32 a = match (m.get(key: p12)) { case Some(value: v): v; case None: 0; };   // 99
+    int32 b = match (m.get(key: p34)) { case Some(value: v): v; case None: 0; };   // 20
     r = r + a + b;
     if (!m.contains(key: p99)) { r = r + 1; }        // absent -> +1
     return r;   // 2+99+20+1 = 122

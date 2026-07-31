@@ -126,7 +126,7 @@ fn int32 respond(ref TcpStream client, string status, string contentType, ref Dy
     appendStr(dst: resp, s: "\r\nConnection: close\r\n\r\n");
     appendBytes(dst: resp, body: body);
     Result<Unit, IoError> w = writeAll(w: client, bytes: resp.view());
-    return match (w) { case Ok(x): 0; case Err(e): 0; };
+    return match (w) { case Ok(value: x): 0; case Err(error: e): 0; };
 }
 
 // A tiny text/plain error page (404 / 400 / 405).
@@ -143,8 +143,8 @@ fn int32 retryAsDirectory(ref TcpStream client, ref string root, ref string rel)
     string full = root + rel + "/index.html";
     Result<DynamicArray<uint8>, IoError> rf = readFile(path: full);
     return match (rf) {
-        case Ok(body): respond(client: client, status: "200 OK", contentType: "text/html; charset=utf-8", body: body);
-        case Err(e):   respondText(client: client, status: "404 Not Found", text: "404 Not Found\n");
+        case Ok(value: body): respond(client: client, status: "200 OK", contentType: "text/html; charset=utf-8", body: body);
+        case Err(error: e):   respondText(client: client, status: "404 Not Found", text: "404 Not Found\n");
     };
 }
 
@@ -152,7 +152,7 @@ fn int32 retryAsDirectory(ref TcpStream client, ref string root, ref string rel)
 fn int32 handle(ref TcpStream client, ref string root) {
     FixedArray<uint8> buf = FixedArray.make(size: 8192);
     Result<usize, IoError> rr = client.read(into: buf.view());
-    int32 got = match (rr) { case Ok(c): cast<int32>(c); case Err(e): 0 - 1; };
+    int32 got = match (rr) { case Ok(value: c): cast<int32>(c); case Err(error: e): 0 - 1; };
     if (got <= 0) { return 0; }                                   // empty / failed read: drop the connection
 
     string req = kama_string_from_raw(src: addr(of: buf[0]), start: 0, len: got);
@@ -169,8 +169,8 @@ fn int32 handle(ref TcpStream client, ref string root) {
     string full = root + rel;
     Result<DynamicArray<uint8>, IoError> rf = readFile(path: full);
     return match (rf) {
-        case Ok(body): respond(client: client, status: "200 OK", contentType: mimeType(path: rel), body: body);
-        case Err(e):   retryAsDirectory(client: client, root: root, rel: rel);
+        case Ok(value: body): respond(client: client, status: "200 OK", contentType: mimeType(path: rel), body: body);
+        case Err(error: e):   retryAsDirectory(client: client, root: root, rel: rel);
     };
 }
 
@@ -179,8 +179,8 @@ fn int32 serve(ref TcpListener listener, ref string root) {
     while (true) {
         Result<TcpStream, IoError> ra = listener.accept();
         int32 rc = match (ra) {
-            case Ok(client): handle(client: client, root: root);  // client (socket) closes at arm end
-            case Err(e):     0;
+            case Ok(value: client): handle(client: client, root: root);  // client (socket) closes at arm end
+            case Err(error: e):     0;
         };
     }
     return 0;                                                     // unreachable; satisfies the return type
@@ -217,7 +217,7 @@ fn int main() {
 
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
     return match (rl) {
-        case Ok(listener): run(listener: listener, host: host, root: root, port: port);
-        case Err(e):       fail(host: host, port: port);
+        case Ok(value: listener): run(listener: listener, host: host, root: root, port: port);
+        case Err(error: e):       fail(host: host, port: port);
     };
 }

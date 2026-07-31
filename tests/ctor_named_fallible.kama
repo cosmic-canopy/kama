@@ -15,7 +15,7 @@ type value Percent {
 fn int32 main() {
     Result<Percent, PercentErr> ok  = Percent.of(v: 42);
     Result<Percent, PercentErr> bad = Percent.of(v: 250);
-    int32 a = match (ok)  { case Ok(p): p.v; case Err(e): 0 - 1; };   // 42
-    int32 b = match (bad) { case Ok(p): p.v; case Err(e): 0 - 1; };   // -1
+    int32 a = match (ok)  { case Ok(value: p): p.v; case Err(error: e): 0 - 1; };   // 42
+    int32 b = match (bad) { case Ok(value: p): p.v; case Err(error: e): 0 - 1; };   // -1
     return a + b + 1;   // 42
 }

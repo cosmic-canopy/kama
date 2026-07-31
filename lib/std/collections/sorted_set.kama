@@ -26,7 +26,7 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
     // `SortedMap.remove` returns the removed value (`Optional<Unit>` here); a set reports presence as a bool.
     public fn bool remove(ref K key) {
         Optional<Unit> hit = this.m.remove(key: key);
-        return match (hit) { case Some(u): true; case None: false; };
+        return match (hit) { case Some(value: u): true; case None: false; };
     }
     public fn int32 length() { return this.m.length(); }
     public fn bool isEmpty() { return this.m.isEmpty(); }
@@ -51,7 +51,7 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
         int32 i = 0;
         while (i < es.length()) {
             Result<Unit, Owned<Error>> __sr = this.serElem(k: es[i], w: w);
-            match (give __sr) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             i = i + 1;
         }
         w.endArray();
@@ -63,8 +63,8 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K.deserialize(r: r);   // bind — a match needs a named enum subject
             match (give __er) {                                     // consume: destructure-move the owning element out
-                case Err(e): { return Result::Err(error: give e); }
-                case Ok(v):  { result.add(key: give v); }
+                case Err(error: e): { return Result::Err(error: give e); }
+                case Ok(value: v):  { result.add(key: give v); }
             };
         }
         return Result::Ok(value: give result);

@@ -14,8 +14,8 @@ fn int32 acceptQueued(ref TcpListener l) {
     while (!done && tries < 2000000) {
         Result<TcpStream, IoError> ra = l.accept();
         match (ra) {
-            case Ok(s):  { result = 55; done = true; }
-            case Err(e): { if (!isWouldBlock(e: e)) { result = 64; done = true; } }
+            case Ok(value: s):  { result = 55; done = true; }
+            case Err(error: e): { if (!isWouldBlock(e: e)) { result = 64; done = true; } }
         };
         tries = tries + 1;
     }
@@ -24,20 +24,20 @@ fn int32 acceptQueued(ref TcpListener l) {
 
 fn int32 run(ref TcpListener l, uint16 port) {
     Result<Unit, IoError> rs = l.setNonBlocking(on: true);
-    bool setok = match (rs) { case Ok(u): true; case Err(e): false; };
+    bool setok = match (rs) { case Ok(value: u): true; case Err(error: e): false; };
     if (!setok) { return 60; }
 
     // accept with nothing pending -> WouldBlock
     Result<TcpStream, IoError> r1 = l.accept();
-    bool wb = match (r1) { case Ok(s): false; case Err(e): isWouldBlock(e: e); };
+    bool wb = match (r1) { case Ok(value: s): false; case Err(error: e): isWouldBlock(e: e); };
     if (!wb) { return 61; }
 
     // client connects; keep it alive through the accept (dropped at the arm end, after acceptQueued)
     string host = "127.0.0.1";
     Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
     return match (rc) {
-        case Ok(c):  acceptQueued(l: l);
-        case Err(e): 62;
+        case Ok(value: c):  acceptQueued(l: l);
+        case Err(error: e): 62;
     };
 }
 
@@ -45,5 +45,5 @@ fn int main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47661);
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
-    return match (rl) { case Ok(l): run(l: l, port: port); case Err(e): 80; };
+    return match (rl) { case Ok(value: l): run(l: l, port: port); case Err(error: e): 80; };
 }

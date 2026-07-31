@@ -22,12 +22,12 @@ fn int32 main() {
     mn.push(item: 5); mn.push(item: 3); mn.push(item: 8);
     mn.push(item: 1); mn.push(item: 9); mn.push(item: 2);
     if (mn.length() == 6) { r = r + 5; }
-    int32 pk = match (mn.peek()) { case Some(x): x; case None: 0 - 1; };
+    int32 pk = match (mn.peek()) { case Some(value: x): x; case None: 0 - 1; };
     if (pk == 1) { r = r + 5; }                          // smallest is the root
 
     int32 prev = 0 - 1; bool sorted = true; int32 count = 0;
     while (!mn.isEmpty()) {
-        int32 v = match (mn.pop()) { case Some(x): x; case None: 0 - 1; };
+        int32 v = match (mn.pop()) { case Some(value: x): x; case None: 0 - 1; };
         if (v < prev) { sorted = false; }               // each pop >= the last -> globally ascending
         prev = v; count = count + 1;
     }
@@ -38,8 +38,8 @@ fn int32 main() {
     // (b) max-heap: same pushes, pops descend.
     PriorityQueue<int32> mx = PriorityQueue.maxHeap();
     mx.push(item: 5); mx.push(item: 3); mx.push(item: 8); mx.push(item: 1);
-    int32 first  = match (mx.pop()) { case Some(x): x; case None: 0 - 1; };
-    int32 second = match (mx.pop()) { case Some(x): x; case None: 0 - 1; };
+    int32 first  = match (mx.pop()) { case Some(value: x): x; case None: 0 - 1; };
+    int32 second = match (mx.pop()) { case Some(value: x): x; case None: 0 - 1; };
     if (first == 8)  { r = r + 5; }                     // largest first
     if (second == 5) { r = r + 5; }
 
@@ -48,7 +48,7 @@ fn int32 main() {
     pq.push(item: Task.make(prio: 30));
     pq.push(item: Task.make(prio: 10));
     pq.push(item: Task.make(prio: 20));
-    int32 firstPrio = match (pq.pop()) { case Some(t): t.priority(); case None: 0 - 1; };
+    int32 firstPrio = match (pq.pop()) { case Some(value: t): t.priority(); case None: 0 - 1; };
     if (firstPrio == 10) { r = r + 5; }                 // lowest priority out first (min-heap)
     int32 borrowed = pq.peekRef().priority();           // borrow the new root in place, no removal
     if (borrowed == 20) { r = r + 5; }                  // remaining Tasks (20, 30) drop at scope exit

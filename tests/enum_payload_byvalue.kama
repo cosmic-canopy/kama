@@ -4,8 +4,8 @@ enum Event { Resize(Vec2 size), Click(int32 x, int32 y), Quit }
 fn int area(Event e)
 {
     return match (e) {
-        case Resize(size): cast<int>(size.x) * cast<int>(size.y);
-        case Click(x, y): x + y;
+        case Resize(size: size): cast<int>(size.x) * cast<int>(size.y);
+        case Click(x: x, y: y): x + y;
         case Quit: 0;
     };
 }

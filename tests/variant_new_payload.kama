@@ -7,7 +7,7 @@ fn int main()
 {
     Optional<Shared<Probe>> o = Optional::Some(value: mk(id: 42));
     Optional<Shared<Probe>> e = Optional::None;
-    int32 a = match (o) { case Some(p): p.val(); case None: 0; };
-    int32 b = match (e) { case Some(p): p.val(); case None: 7; };
+    int32 a = match (o) { case Some(value: p): p.val(); case None: 0; };
+    int32 b = match (e) { case Some(value: p): p.val(); case None: 7; };
     return a + b;
 }

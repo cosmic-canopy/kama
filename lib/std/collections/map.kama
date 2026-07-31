@@ -395,12 +395,12 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
                 w.fieldName(name: "key");
                 unsafe {
                     Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
-                    match (give __sk) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+                    match (give __sk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
                 }
                 w.fieldName(name: "value");
                 unsafe {
                     Result<Unit, Owned<Error>> __sv = this.serVal(v: this.vals[i], w: w);
-                    match (give __sv) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+                    match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
                 }
                 w.endObject();
             }
@@ -418,10 +418,10 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
             r.beginObject();
             bool __f1 = r.moreFields(); string __n1 = r.fieldName();
             Result<K, Owned<Error>> __ek = K.deserialize(r: r);   // read both at top level (a nested generic
-            K k = match (give __ek) { case Ok(kv): { := give kv; } case Err(e): { return Result::Err(error: give e); } };
+            K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: give e); } };
             bool __f2 = r.moreFields(); string __n2 = r.fieldName();
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
-            V v = match (give __ev) { case Ok(vv): { := give vv; } case Err(e): { return Result::Err(error: give e); } };
+            V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: give e); } };
             bool __f3 = r.moreFields();   // consumes the closing `}`
             result.put(key: give k, value: give v);
         }

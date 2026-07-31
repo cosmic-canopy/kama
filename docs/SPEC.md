@@ -113,7 +113,7 @@ string path = "/usr/local/bin";
 foreach (string part in path.split(separator: "/")) { … }   // "", "usr", "local", "bin"
 string greet = "Hello, " + name + "!";
 if (greet.toLower().contains(substring: "hello")) { … }
-match (greet.find(substring: ",")) { case Some(i): …; case None: …; }
+match (greet.find(substring: ",")) { case Some(value: i): …; case None: …; }
 ```
 
 ### Formatting & string interpolation ✅
@@ -306,7 +306,7 @@ import std::collections::{Map, Set};
 Map<string, int32> counts = Map.empty();
 counts.put(key: "a", value: 1);
 counts.put(key: "a", value: 2);                        // overwrite (drops the old value)
-int32 v = match (counts.get(key: "a")) { case Some(x): x; case None: 0; };   // 2
+int32 v = match (counts.get(key: "a")) { case Some(value: x): x; case None: 0; };   // 2
 counts.remove(key: "a");   bool has = counts.contains(key: "b");   int32 n = counts.length();
 
 Set<string> seen = Set.empty();
@@ -338,7 +338,7 @@ automatically, so `m.get(key: 5)` / `m.get(key: Point.make(x: 1, y: 2))` work wi
 
 `std::collections` also carries **`Deque<T>`** (a growable ring buffer — O(1) push/pop at both ends) and
 **`PriorityQueue<T: Comparable>`** (a binary heap). The queue is a **min-heap by default** (bare ctor or
-`PriorityQueue::minHeap()` — smallest out first, the fit for A* / event scheduling); `PriorityQueue::maxHeap()`
+`PriorityQueue.minHeap()` — smallest out first, the fit for A* / event scheduling); `PriorityQueue.maxHeap()`
 inverts it. `push(item:)` and `pop() -> Optional<T>` are O(log n), `peek() -> Optional<T>` (copy, `Copyable`
 element) / `peekRef() -> ref T` (borrow, panics when empty) read the root O(1). It orders via the element's
 `Comparable.compareTo`, is move-only (deep-copies only for a `Copyable` element), and — since heap order isn't
@@ -402,7 +402,7 @@ onto libc `malloc`/`free`) costs nothing. A **stateful** allocator is a small ha
 **caller-owned `Arena`** (one heap buffer, bump-allocated, `reset()` bulk-frees in O(1)); the arena must
 **outlive** the container — a documented contract, not a borrow-checked one (a raw `Ptr` isn't escape-checked
 and there is no lifetime tracking). Since Kama has no constructor overloading, a stateful allocator arrives via
-a **named static factory** (`DynamicArray::withAllocator(allocator:)`), which assigns `alloc` after the bare
+a **named static factory** (`DynamicArray.withAllocator(allocator:)`), which assigns `alloc` after the bare
 construction. `Allocator`/`GlobalAllocator` are prelude (global, no import); `Arena` and `BumpAllocator` ship in
 `std::collections`:
 
@@ -410,8 +410,8 @@ construction. `Allocator`/`GlobalAllocator` are prelude (global, no import); `Ar
 import std::collections::{DynamicArray, Map, Arena, BumpAllocator};
 
 Arena arena = Arena.make(capacity: 1 << 16);                             // caller-owned; drops last
-DynamicArray<int32, BumpAllocator> xs = DynamicArray::withAllocator(allocator: arena.handle());
-Map<int32, int32, A: BumpAllocator> m = Map::withAllocator(allocator: arena.handle());  // named arg skips H
+DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());
+Map<int32, int32, A: BumpAllocator> m = Map.withAllocator(allocator: arena.handle());  // named arg skips H
 // ... fill/use; xs and m draw from the one arena; their deallocate is a no-op; the Arena frees the buffer.
 ```
 
@@ -433,7 +433,7 @@ follow-on.
 
 ```kama
 Optional<Owned<Box>> b = try new Box.make(v: 7);
-match (b) { case Some(x): use(x); case None: /* OOM — recover, don't trap */ }
+match (b) { case Some(value: x): use(x); case None: /* OOM — recover, don't trap */ }
 ```
 
 #### No-heap subset ✅ (MCU step 5)
@@ -622,7 +622,7 @@ dead) — **upgrade** it with the checked `tryUpgrade()`, which returns an `Opti
 ```kama
 Weak<Tex> w = s.downgrade();                  // make a weak ref from a Shared (does not keep Tex alive)
 int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
-    case Some(up): up.id;                     // alive: use the upgraded Shared
+    case Some(value: up): up.id;                     // alive: use the upgraded Shared
     case None: -1;                            // dead: the cycle-safe path
 };
 ```
@@ -736,9 +736,9 @@ the `kama_lshift` runtime shim — so a kama program can't hit arithmetic UB whe
 ```kama
 import std::math::{Vec3, Mat4};
 fn int main() {
-    Mat4 vp = Mat4::perspective(fovyRad: 1.0472f32, aspect: 1.777f32, near: 0.1f32, far: 100.0f32)
-            * Mat4::lookAt(eye: Vec3(x: 0.0f32, y: 2.0f32, z: 5.0f32),
-                           center: Vec3::zero(), up: Vec3::unitY());   // method chaining
+    Mat4 vp = Mat4.perspective(fovyRad: 1.0472f32, aspect: 1.777f32, near: 0.1f32, far: 100.0f32)
+            * Mat4.lookAt(eye: Vec3(x: 0.0f32, y: 2.0f32, z: 5.0f32),
+                           center: Vec3.zero(), up: Vec3.unitY());   // method chaining
     Vec3 p = vp.transformPoint(p: Vec3(x: 1.0f32, y: 0.0f32, z: 0.0f32));
     return cast<int>(p.length());
 }
@@ -785,7 +785,7 @@ import std::fs::{readFile, writeFile};
 fn int main() {
     match writeFile(path: "out.txt", data: "hi") {
         case Ok: {}
-        case Err(e): { return 1; }
+        case Err(error: e): { return 1; }
     }
     return 0;
 }
@@ -837,7 +837,7 @@ cannot reimplement them — a core, non-reimplementable capability belongs in th
 // arguments (argv[0] is excluded — see programPath())
 foreach (string a in args()) { /* each user arg, in order */ }
 int32 n     = args().count();              // number of user args
-string first = match (args().get(at: 0)) { case Some(v): copy v; case None: ""; };
+string first = match (args().get(at: 0)) { case Some(value: v): copy v; case None: ""; };
 
 // program identity — three separate accessors, not part of args()
 Optional<string> inv  = programInvocation();  // argv[0] verbatim, e.g. "./myapp" (exact launch string)
@@ -1759,7 +1759,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   Wrap<bool, U: int32> d = /* … */;                 // named override — same instance as `Wrap<bool>`
   ```
   Default **function/constructor** parameters are a deliberate non-goal (one way to do a thing) — a
-  self-documenting named static factory (`Map::withAllocator(allocator: …)`) covers that need instead.
+  self-documenting named static factory (`Map.withAllocator(allocator: …)`) covers that need instead.
 
 ## Access control ✅
 
@@ -1793,17 +1793,31 @@ enum Shape { Circle(float64 r), Rect(float64 w, float64 h) }   // tagged union (
 ```
 
 A plain enum lowers to a C `enum`; a tagged union lowers to a tag + payload union. Enum variants are
-scope-resolved with `::` and constructed with named args (`Shape::Rect(w: 3.0, h: 4.0)`).
+scope-resolved with `::` and constructed with named args (`Shape::Rect(w: 3.0, h: 4.0)`). A variant is
+**not a type** — `Rect r` does not name anything, and an enum cannot nest type declarations — so `Rect` is a
+member of `Shape`'s scope, reached with `::` like any other scope member; supplying its payload yields a
+`Shape`. That is why construction's dot-on-type rule does not apply here: there is no type to dot.
 
 **`match`** is the **one** construct for branching on an enum — payload-less enums, tagged unions, and the
 `Optional`/`Result` prelude types alike. It is **value-producing** (usable in statement or expression
 position), enforces **compile-time exhaustiveness**, and accepts a `_` wildcard for the catch-all case.
-Payload bindings are named in the arm:
+
+**A pattern NAMES the fields it binds** — `field: local` — exactly as a call names its arguments; there is
+no positional form, and kama no more exempts a one-field variant here than it exempts a one-argument call
+from a label. The label is the variant's field; the identifier after it is the local it introduces, and it
+may be called anything. Because the label decides, **order does not**: `case Rect(h: y, w: x)` and
+`case Rect(w: x, h: y)` are the same pattern. Positional binding is how `case Rect(height, width)` compiled
+clean and silently returned the wrong values — the bug class named arguments exist to remove. Three
+mistakes are compile errors, each naming the fields the variant actually has: binding an **unknown** field
+(`tests/xfail/match_label_unknown.kama`), binding one **twice** (`…/match_label_duplicate.kama`), and
+leaving one **unbound** (`…/match_label_missing.kama`) — a pattern names every field of its variant, just as
+construction supplies every one. The label is also a *reference* to the field, so hover, go-to-definition
+and rename reach it. Pinned by `tests/match_named_bindings.kama`.
 
 ```kama
 int32 area = match (sh) {                     // expression position — yields a value
-    case Circle(r): cast<int32>(r * r * 3);
-    case Rect(w, h): cast<int32>(w * h);
+    case Circle(radius: r):         cast<int32>(r * r * 3);
+    case Rect(w: width, h: height): cast<int32>(width * height);
 };
 
 match (color) {                               // statement position — a plain enum works too
@@ -1820,7 +1834,7 @@ typed position *is* an assignment from the outside, `x = match … { … := v; }
 
 ```kama
 string label = match (reading) {
-    case Some(c): {
+    case Some(value: c): {
         string name = "mild";
         if (c < 0)  { name = "freezing"; }
         if (c > 30) { name = "hot"; }
@@ -1831,7 +1845,7 @@ string label = match (reading) {
 ```
 
 The `match` subject can be a variable, a method call, a static-method call, a free-function call
-(`match (File::open(path: p, mode: OpenMode::Read)) { … }`), or a value-producing variant constructor
+(`match (File.open(path: p, mode: OpenMode::Read)) { … }`), or a value-producing variant constructor
 (`match (Optional::Some(x)) { … }` — the concrete instance is inferred from the payload). Arbitrary-integer
 branching (not on an enum) is done with `if` / `else if` — there is no `switch`.
 
@@ -1853,7 +1867,7 @@ case (exhaustiveness):
 fn Optional<int32> find(DynamicArray<int32> xs, int32 target) { … }
 
 int32 idx = match (find(xs: list, target: 7)) {
-    case Some(i): i;
+    case Some(value: i): i;
     case None: -1;
 };
 ```
@@ -1969,14 +1983,14 @@ a `value` is copied.
 
 ### Channels ✅
 
-A `Channel<T>` is a typed pipe. `Channel::bounded(capacity:)` sets the buffer depth; capacity `0`
+A `Channel<T>` is a typed pipe. `Channel.bounded(capacity:)` sets the buffer depth; capacity `0`
 is a rendezvous channel. `sender()` and `receiver()` hand out owned endpoints you move to whoever
 needs them.
 
 ```kama
 import std::concurrent::{Channel, Sender, Receiver, Isolate};
 
-Channel<int32> ch = Channel::bounded(capacity: 4);
+Channel<int32> ch = Channel.bounded(capacity: 4);
 Sender<int32>   tx = ch.sender();
 Receiver<int32> rx = ch.receiver();
 

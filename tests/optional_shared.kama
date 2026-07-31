@@ -5,7 +5,7 @@ fn int main()
     Shared<Probe> s = new Probe.make(id: 9);
     Optional<Shared<Probe>> a = Optional::Some(value: copy s);
     Optional<Shared<Probe>> b = Optional::None;
-    int32 v = match (a) { case Some(p): p.val(); case None: 0; };
-    int32 w = match (b) { case Some(p): p.val(); case None: 100; };
+    int32 v = match (a) { case Some(value: p): p.val(); case None: 0; };
+    int32 w = match (b) { case Some(value: p): p.val(); case None: 100; };
     return v + w;
 }

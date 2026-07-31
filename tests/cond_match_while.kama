@@ -4,7 +4,7 @@ enum Step { More(int32 left), Done }
 fn int32 main() {
     Step s = Step::More(left: 5);
     int32 count = 0;
-    while (match (s) { case More(left): true; case Done: false; }) {
+    while (match (s) { case More(left: left): true; case Done: false; }) {
         count = count + 1;
         if (count < 5) { s = Step::More(left: 5 - count); } else { s = Step::Done; }
     }

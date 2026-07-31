@@ -25,7 +25,7 @@ fn int main() {
     while (going) {
         Optional<DynamicArray<int32>> v = rx.recv();
         match (v) {
-            case Some(a): { total = total + a[0] + a[1] + a[2]; }   // `a` owns the array; frees once at arm-end
+            case Some(value: a): { total = total + a[0] + a[1] + a[2]; }   // `a` owns the array; frees once at arm-end
             case None:    { going = false; }
         };
     }

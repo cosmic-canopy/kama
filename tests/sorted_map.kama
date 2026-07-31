@@ -16,7 +16,7 @@ fn int32 main() {
     // read every key back
     bool allGet = true; i = 0;
     while (i < 200) {
-        int32 g = match (m.get(key: i)) { case Some(v): v; case None: 0 - 1; };
+        int32 g = match (m.get(key: i)) { case Some(value: v): v; case None: 0 - 1; };
         if (g != i * 10) { allGet = false; }
         i = i + 1;
     }
@@ -24,7 +24,7 @@ fn int32 main() {
 
     // overwrite keeps length; getRef borrows in place
     m.put(key: 100, value: 9999);
-    int32 ov = match (m.get(key: 100)) { case Some(v): v; case None: 0 - 1; };
+    int32 ov = match (m.get(key: 100)) { case Some(value: v): v; case None: 0 - 1; };
     if (ov == 9999 && m.length() == 200) { r = r + 5; }
     int32 br = m.getRef(key: 55);
     if (br == 550) { r = r + 5; }
@@ -35,7 +35,7 @@ fn int32 main() {
         int32 k = (i * 37) % 200;
         if (k % 2 == 0) {
             Optional<int32> got = m.remove(key: k);
-            bool ok = match (got) { case Some(v): true; case None: false; };
+            bool ok = match (got) { case Some(value: v): true; case None: false; };
             if (!ok) { r = r + 1000; }              // poison a wrong/absent removal
         }
         i = i + 1;
@@ -52,12 +52,12 @@ fn int32 main() {
     if (presence) { r = r + 5; }
 
     // ordered queries over the surviving odd keys {1,3,..,199}
-    int32 fst = match (m.first()) { case Some(x): x; case None: 0 - 1; };
-    int32 lst = match (m.last()) { case Some(x): x; case None: 0 - 1; };
+    int32 fst = match (m.first()) { case Some(value: x): x; case None: 0 - 1; };
+    int32 lst = match (m.last()) { case Some(value: x): x; case None: 0 - 1; };
     if (fst == 1 && lst == 199) { r = r + 5; }
     int32 q = 50;
-    int32 fl = match (m.floor(key: q)) { case Some(x): x; case None: 0 - 1; };   // greatest odd <= 50 = 49
-    int32 ce = match (m.ceil(key: q)) { case Some(x): x; case None: 0 - 1; };    // least odd >= 50 = 51
+    int32 fl = match (m.floor(key: q)) { case Some(value: x): x; case None: 0 - 1; };   // greatest odd <= 50 = 49
+    int32 ce = match (m.ceil(key: q)) { case Some(value: x): x; case None: 0 - 1; };    // least odd >= 50 = 51
     if (fl == 49 && ce == 51) { r = r + 5; }
 
     // sorted iteration
@@ -80,7 +80,7 @@ fn int32 main() {
     m.clear();
     if (m.length() == 0 && m.isEmpty()) { r = r + 5; }
     m.put(key: 7, value: 77);
-    int32 re = match (m.get(key: 7)) { case Some(v): v; case None: 0 - 1; };
+    int32 re = match (m.get(key: 7)) { case Some(value: v): v; case None: 0 - 1; };
     if (re == 77 && cp.length() == 100) { r = r + 5; }
 
     return r;   // 13 asserts * 5 = 65 (poison adds 1000s if delete is wrong)

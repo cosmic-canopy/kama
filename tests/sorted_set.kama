@@ -19,12 +19,12 @@ fn int32 main() {
     if (!s.remove(key: 25)) { r = r + 5; }                // already gone -> false
 
     // ordered queries
-    int32 fst = match (s.first()) { case Some(x): x; case None: 0 - 1; };
-    int32 lst = match (s.last()) { case Some(x): x; case None: 0 - 1; };
+    int32 fst = match (s.first()) { case Some(value: x): x; case None: 0 - 1; };
+    int32 lst = match (s.last()) { case Some(value: x): x; case None: 0 - 1; };
     if (fst == 0 && lst == 49) { r = r + 5; }
     int32 q = 25;
-    int32 fl = match (s.floor(key: q)) { case Some(x): x; case None: 0 - 1; };   // 25 gone -> 24
-    int32 ce = match (s.ceil(key: q)) { case Some(x): x; case None: 0 - 1; };    // -> 26
+    int32 fl = match (s.floor(key: q)) { case Some(value: x): x; case None: 0 - 1; };   // 25 gone -> 24
+    int32 ce = match (s.ceil(key: q)) { case Some(value: x): x; case None: 0 - 1; };    // -> 26
     if (fl == 24 && ce == 26) { r = r + 5; }
 
     // ascending iteration

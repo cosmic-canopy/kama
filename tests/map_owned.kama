@@ -18,9 +18,9 @@ fn int main() {
 
     int32 r = 0;
     r = r + m.length();                                       // 2
-    int32 n = match (m.get(key: "fruits")) { case Some(xs): xs.length(); case None: 0; };  // deep-copied out
+    int32 n = match (m.get(key: "fruits")) { case Some(value: xs): xs.length(); case None: 0; };  // deep-copied out
     r = r + n;                                                // +2 -> 4
-    bool rmv = match (m.remove(key: "veggies")) { case Some(xs): true; case None: false; };  // reclaimed DynamicArray + key drop
+    bool rmv = match (m.remove(key: "veggies")) { case Some(value: xs): true; case None: false; };  // reclaimed DynamicArray + key drop
     if (rmv) { r = r + 1; }                                  // -> 5
     r = r + m.length();                                      // +1 -> 6
     return r;   // 6 (m's remaining entry dropped at scope exit)

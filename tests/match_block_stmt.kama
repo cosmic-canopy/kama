@@ -4,7 +4,7 @@ fn int main()
     Msg a = Msg::Move(dx: 3, dy: 4);
     int32 total = 100;
     match (a) {
-        case Move(dx, dy): { total = total + dx; total = total + dy; total = total * 2; }
+        case Move(dx: dx, dy: dy): { total = total + dx; total = total + dy; total = total * 2; }
         case Stop: { total = 0; }
         case Reset: { total = 1; }
     };

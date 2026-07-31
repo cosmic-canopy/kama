@@ -10,22 +10,22 @@ fn int main() {
 
     Result<string, Owned<Error>> j_r = encode(v: m);
 
-    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
+    string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     Result<SortedMap<string, int32>, Owned<Error>> res = decode::<SortedMap<string, int32>>(src: give j);
     int32 r = 0;
     match (res) {
-        case Ok(m2): {
+        case Ok(value: m2): {
             if (m2.length() == 4) { r = r + 10; }
             string b = "banana";
-            int32 g = match (m2.get(key: b)) { case Some(v): v; case None: 0 - 1; };
+            int32 g = match (m2.get(key: b)) { case Some(value: v): v; case None: 0 - 1; };
             if (g == 2) { r = r + 10; }
             string apple = "apple"; string date = "date";
             Optional<string> f = m2.first(); Optional<string> l = m2.last();
-            bool ends = match (f) { case Some(x): x.equals(other: apple); case None: false; }
-                     && match (l) { case Some(x): x.equals(other: date); case None: false; };
+            bool ends = match (f) { case Some(value: x): x.equals(other: apple); case None: false; }
+                     && match (l) { case Some(value: x): x.equals(other: date); case None: false; };
             if (ends) { r = r + 10; }                     // deserialized tree is correctly ordered
         }
-        case Err(e): { r = 0 - 1; }
+        case Err(error: e): { r = 0 - 1; }
     };
     return r;   // 30
 }

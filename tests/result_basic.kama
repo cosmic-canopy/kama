@@ -4,8 +4,8 @@ fn int divide(int32 a, int32 b)
 {
     Result<int32, DivErr> r = b == 0 ? Result::Err(error: DivErr::DivByZero) : Result::Ok(value: a / b);
     return match (r) {
-        case Ok(v): v;
-        case Err(e): 0 - 1;
+        case Ok(value: v): v;
+        case Err(error: e): 0 - 1;
     };
 }
 fn int main()

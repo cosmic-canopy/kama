@@ -26,7 +26,7 @@ fn int32 main() {
     i = 0;
     while (i < 100) {
         Optional<int32> ov = m.get(key: i);
-        int32 got = match (ov) { case Some(x): x; case None: 0 - 1; };
+        int32 got = match (ov) { case Some(value: x): x; case None: 0 - 1; };
         if (got < 0) { miss = miss + 1; } else { drift = drift + (got - i * 2); }
         i = i + 1;
     }
@@ -40,7 +40,7 @@ fn int32 main() {
     // Non-decl typed position (function return) inferred correctly.
     Map<string, int32> b = build();
     Optional<int32> ohp = b.get(key: "hp");
-    int32 hp = match (ohp) { case Some(x): x; case None: 0; };
+    int32 hp = match (ohp) { case Some(value: x): x; case None: 0; };
     if (b.length() == 2 && hp == 100) { r = r + 15; }
 
     return r;   // 10+10+10+15 = 45

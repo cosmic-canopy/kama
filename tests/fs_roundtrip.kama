@@ -30,28 +30,28 @@ fn int main() {
     }
 
     Result<usize, IoError> wr = writeFile(path: p, bytes: data);
-    usize written = match (wr) { case Ok(w): w; case Err(e): cast<usize>(0); };
+    usize written = match (wr) { case Ok(value: w): w; case Err(error: e): cast<usize>(0); };
     if (written != cast<usize>(n)) { return 50; }
 
     int32 stCode = match (stat(path: p)) {
-        case Ok(m): (m.isDir ? 51 : ((m.size == cast<usize>(n)) ? 0 : 52));
-        case Err(e): 53;
+        case Ok(value: m): (m.isDir ? 51 : ((m.size == cast<usize>(n)) ? 0 : 52));
+        case Err(error: e): 53;
     };
     if (stCode != 0) { return stCode; }
 
     int32 back = match (readFile(path: p)) {
-        case Ok(got): verifyBuf(got: got, n: n, want: sum);
-        case Err(e): 62;
+        case Ok(value: got): verifyBuf(got: got, n: n, want: sum);
+        case Err(error: e): 62;
     };
     if (back != 0) { return back; }
 
-    int32 rmCode = match (remove(path: p)) { case Ok(u): 0; case Err(e): 70; };
+    int32 rmCode = match (remove(path: p)) { case Ok(value: u): 0; case Err(error: e): 70; };
     if (rmCode != 0) { return rmCode; }
 
     // Deleting again must now fail with NotFound (proves the unlink happened).
     int32 gone = match (remove(path: p)) {
-        case Ok(u): 71;
-        case Err(e): match (e) { case NotFound: 0; case _: 72; };
+        case Ok(value: u): 71;
+        case Err(error: e): match (e) { case NotFound: 0; case _: 72; };
     };
     if (gone != 0) { return gone; }
 

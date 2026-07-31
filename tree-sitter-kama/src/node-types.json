@@ -4631,6 +4631,32 @@
     }
   },
   {
+    "type": "match_binding",
+    "named": true,
+    "fields": {
+      "field": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "match_expression",
     "named": true,
     "fields": {
@@ -4788,7 +4814,7 @@
       "required": false,
       "types": [
         {
-          "type": "identifier",
+          "type": "match_binding",
           "named": true
         }
       ]

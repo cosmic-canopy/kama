@@ -11,11 +11,11 @@ fn int32 main() {
     int32 i = 0; while (i < 50) { sm.insert(value: i); i = i + 1; }   // grows the three buffers
 
     Optional<int32> g = sm.get(handle: h0);
-    int32 gv = match (g) { case Some(x): x; case None: 0 - 1; };
+    int32 gv = match (g) { case Some(value: x): x; case None: 0 - 1; };
     if (gv == 10 && sm.length() == 51) { r = r + 20; }
 
     Optional<int32> rem = sm.remove(handle: h0);
-    int32 rv = match (rem) { case Some(x): x; case None: 0 - 1; };
+    int32 rv = match (rem) { case Some(value: x): x; case None: 0 - 1; };
     if (rv == 10 && !sm.contains(handle: h0) && sm.length() == 50) { r = r + 10; }
 
     return r;   // 30

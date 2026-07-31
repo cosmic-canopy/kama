@@ -2,11 +2,11 @@
 fn int main() {
     string s = "hello";
     int32 r = 0;
-    int32 hit = match (s.find(substring: "llo")) { case Some(i): cast<int32>(i); case None: -1; };
+    int32 hit = match (s.find(substring: "llo")) { case Some(value: i): cast<int32>(i); case None: -1; };
     if (hit == 2) { r = r + 1; }
-    int32 miss = match (s.find(substring: "zzz")) { case Some(i): cast<int32>(i); case None: -1; };
+    int32 miss = match (s.find(substring: "zzz")) { case Some(value: i): cast<int32>(i); case None: -1; };
     if (miss == -1) { r = r + 2; }
-    int32 emp = match (s.find(substring: "")) { case Some(i): cast<int32>(i); case None: -1; };
+    int32 emp = match (s.find(substring: "")) { case Some(value: i): cast<int32>(i); case None: -1; };
     if (emp == 0) { r = r + 4; }
     return r;                                      // 7
 }

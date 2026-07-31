@@ -28,7 +28,7 @@ fn int32 expectSum(int32 n) {
 }
 
 fn int32 portOf(ref UdpSocket s) {
-    return match (s.localAddr()) { case Ok(a): cast<int32>(a.port); case Err(e): -1; };
+    return match (s.localAddr()) { case Ok(value: a): cast<int32>(a.port); case Err(error: e): -1; };
 }
 
 // Send a->b, receive at b, check length + checksum + sender port == a's bound port.
@@ -41,7 +41,7 @@ fn int32 exchange(ref UdpSocket a, ref UdpSocket b, int32 n) {
                                                  c: cast<uint8>(0), d: cast<uint8>(1)), port: cast<uint16>(bp));
 
     DynamicArray<uint8> msg = pattern(n: n);
-    int32 sent = match (a.sendTo(bytes: msg.view(), to: bAddr)) { case Ok(w): cast<int32>(w); case Err(e): -1; };
+    int32 sent = match (a.sendTo(bytes: msg.view(), to: bAddr)) { case Ok(value: w): cast<int32>(w); case Err(error: e): -1; };
     if (sent != n) { return 83; }
 
     FixedArray<uint8> buf = FixedArray.make(size: 2048);
@@ -49,8 +49,8 @@ fn int32 exchange(ref UdpSocket a, ref UdpSocket b, int32 n) {
     int32 fromPort = -1;
     Result<RecvFrom, IoError> rr = b.recvFrom(into: buf.view());
     match (rr) {
-        case Ok(rf): { got = cast<int32>(rf.count); fromPort = cast<int32>(rf.from.port); }
-        case Err(e): { got = -2; }
+        case Ok(value: rf): { got = cast<int32>(rf.count); fromPort = cast<int32>(rf.from.port); }
+        case Err(error: e): { got = -2; }
     };
     if (got == -2) { return 84; }
     if (got != n) { return 85; }
@@ -65,13 +65,13 @@ fn int main() {
     int32 n = 1200;
     Result<UdpSocket, IoError> ra = UdpSocket.bind(host: host, port: zero);
     return match (ra) {
-        case Ok(a): {
+        case Ok(value: a): {
             Result<UdpSocket, IoError> rb = UdpSocket.bind(host: host, port: zero);
             := match (rb) {
-                case Ok(b): exchange(a: a, b: b, n: n);
-                case Err(e): 80;
+                case Ok(value: b): exchange(a: a, b: b, n: n);
+                case Err(error: e): 80;
             };
         }
-        case Err(e): 79;
+        case Err(error: e): 79;
     };
 }

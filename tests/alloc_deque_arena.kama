@@ -15,7 +15,7 @@ fn int32 main() {
     if (d[0] == 0 - 7 && d.length() == 101) { r = r + 10; }
 
     Optional<int32> f = d.popFront();
-    int32 fv = match (f) { case Some(x): x; case None: 0 - 1; };
+    int32 fv = match (f) { case Some(value: x): x; case None: 0 - 1; };
     if (fv == 0 - 7) { r = r + 10; }
 
     return r;   // 40

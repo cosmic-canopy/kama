@@ -10,8 +10,8 @@ type resource Rec {
     @field DynamicArray<int32> tags;
     public ctor make(int32 id, Optional<int32> parent, Optional<int32> next, DynamicArray<int32> tags) { Rec r; r.id = id; r.parent = parent; r.next = next; r.tags = give tags; return give r; }
     public fn int32 score() {
-        int32 pv = match (this.parent) { case Some(p): p; case None: 0; };
-        int32 nv = match (this.next) { case Some(n): n * 100; case None: 7; };
+        int32 pv = match (this.parent) { case Some(value: p): p; case None: 0; };
+        int32 nv = match (this.next) { case Some(value: n): n * 100; case None: 7; };
         int32 s = this.id + pv + nv;
         foreach (int32 t in this.tags) { s = s + t; }
         return s;
@@ -23,7 +23,7 @@ fn int main() {
     Optional<int32> nx = Optional::None;
     Rec r = Rec.make(id: 10, parent: par, next: nx, tags: give tg);
     Result<string, Owned<Error>> j_r = encode(v: r);
-    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };        // {"id":10,"parent":3,"next":null,"tags":[5,6]}
+    string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };        // {"id":10,"parent":3,"next":null,"tags":[5,6]}
     Result<Rec, Owned<Error>> res = decode::<Rec>(src: give j);
-    return match (res) { case Ok(q): q.score(); case Err(e): 0 - 1; };   // 10+3+7+5+6 = 31
+    return match (res) { case Ok(value: q): q.score(); case Err(error: e): 0 - 1; };   // 10+3+7+5+6 = 31
 }

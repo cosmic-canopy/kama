@@ -36,8 +36,8 @@ fn Result<Unit, IoError> writeAll(Writer w, View<uint8> bytes) {
     while (off < total) {
         Result<usize, IoError> r = w.write(bytes: bytes.slice(from: off, count: total - off));
         match (r) {
-            case Err(e): { return Result::Err(error: e); }
-            case Ok(n): {
+            case Err(error: e): { return Result::Err(error: e); }
+            case Ok(value: n): {
                 if (n == cast<usize>(0)) { return Result::Err(error: IoError::WouldBlock); }
                 off = off + cast<int32>(n);
             }
@@ -55,12 +55,12 @@ fn Result<usize, IoError> pump(Reader from, Writer to) {
     while (true) {
         Result<usize, IoError> rr = from.read(into: scratch.view());
         match (rr) {
-            case Err(e): { return Result::Err(error: e); }
-            case Ok(n): {
+            case Err(error: e): { return Result::Err(error: e); }
+            case Ok(value: n): {
                 if (n == cast<usize>(0)) { return Result::Ok(value: total); }   // EOF
                 int32 k = cast<int32>(n);
                 Result<Unit, IoError> wr = writeAll(w: to, bytes: scratch.slice(from: 0, count: k));
-                match (wr) { case Err(e2): { return Result::Err(error: e2); } case Ok(_): {} };
+                match (wr) { case Err(error: e2): { return Result::Err(error: e2); } case Ok(value: _): {} };
                 total = total + n;
             }
         };
@@ -74,7 +74,7 @@ fn Result<usize, IoError> pump(Reader from, Writer to) {
 fn Result<string, IoError> readAll(Reader r) {
     StringWriter sw = StringWriter.make();
     Result<usize, IoError> pr = pump(from: r, to: sw);
-    match (pr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+    match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     return Result::Ok(value: sw.finish());
 }
 
@@ -174,7 +174,7 @@ type resource BufWriter<W: Writer> implements Writer {
         while (i < n) { this.buf.add(item: bytes[i]); i = i + 1; }
         if (this.buf.length() >= this.cap) {
             Result<Unit, IoError> fr = this.flush();
-            match (fr) { case Err(e): { return Result::Err(error: e); } case Ok(_): {} };
+            match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
         }
         return Result::Ok(value: cast<usize>(n));
     }
@@ -185,8 +185,8 @@ type resource BufWriter<W: Writer> implements Writer {
         while (off < total) {
             Result<usize, IoError> wr = this.inner.write(bytes: this.buf.slice(from: off, count: total - off));
             match (wr) {
-                case Err(e): { return Result::Err(error: e); }
-                case Ok(m): {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: m): {
                     if (m == cast<usize>(0)) { return Result::Err(error: IoError::WouldBlock); }
                     off = off + cast<int32>(m);
                 }
@@ -219,8 +219,8 @@ type resource BufReader<R: Reader> implements Reader {
         if (this.pos >= this.fill) {
             Result<usize, IoError> rr = this.inner.read(into: this.buf.view());
             match (rr) {
-                case Err(e): { return Result::Err(error: e); }
-                case Ok(n): { this.fill = cast<int32>(n); this.pos = 0; }
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: n): { this.fill = cast<int32>(n); this.pos = 0; }
             };
             if (this.fill == 0) { return Result::Ok(value: cast<usize>(0)); }   // EOF
         }

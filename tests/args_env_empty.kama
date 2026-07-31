@@ -17,20 +17,20 @@ fn int32 main() {
     foreach (string a in args()) { seen = seen + 1; }
     if (seen != 0) { return 2; }
 
-    int32 miss = match (env(name: "KAMA_DEFINITELY_UNSET_XYZ_123")) { case Some(v): 1; case None: 0; };
+    int32 miss = match (env(name: "KAMA_DEFINITELY_UNSET_XYZ_123")) { case Some(value: v): 1; case None: 0; };
     if (miss != 0) { return 3; }
 
     if (envOr(name: "KAMA_DEFINITELY_UNSET_XYZ_123", dflt: "fallback") != "fallback") { return 4; }
 
-    int32 hasInv = match (programInvocation()) { case Some(p): 1; case None: 0; };
+    int32 hasInv = match (programInvocation()) { case Some(value: p): 1; case None: 0; };
     if (hasInv != 1) { return 5; }
 
-    int32 hasName = match (programName()) { case Some(p): 1; case None: 0; };
+    int32 hasName = match (programName()) { case Some(value: p): 1; case None: 0; };
     if (hasName != 1) { return 6; }
 
     // Exercise programPath() on every leg (so its wasm branch links + runs) but don't gate on availability
     // — it's None on wasm, Some on native. The guard below is never true; it just keeps the call live.
-    int32 pathProbe = match (programPath()) { case Some(p): 1; case None: 0; };
+    int32 pathProbe = match (programPath()) { case Some(value: p): 1; case None: 0; };
     if (pathProbe < 0) { return 7; }
 
     return 0;

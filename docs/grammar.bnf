@@ -72,6 +72,17 @@ code_opt
 code_declarations
   : code_declaration
   | code_declarations code_declaration
+  /* Error recovery, LAST RESORT (LSP M5.3). Only reached when the statement- and member-level arms
+   * above could not resync — an unbalanced brace, typically. Unlike those, this one loses a whole
+   * `type` or `fn`, which makes every reference to it read as undeclared: that is the one recovery
+   * outcome that carpets a file with false semantic errors. Hence the counter — the LSP publishes
+   * semantic diagnostics from a partial parse EXCEPT when this arm fired (see lspAnalyze).
+   *
+   * Note this cannot recover garbage as the very first token of the file: with `parse.lac full` the
+   * header nonterminals have not reduced yet at the initial state, so nothing on the stack carries an
+   * `error` action. A file whose first character is garbage has nothing worth recovering anyway. */
+  | error
+  | code_declarations error
   ;
 code_declaration
   : function_declaration
@@ -185,6 +196,8 @@ type_or_value_arg
 
 qualified_identifier_no_generic
   : IDENTIFIER
+    /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
+       reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER
   ;
 
@@ -442,6 +455,28 @@ statement_list_opt
 statement_list
   : statement
   | statement_list statement
+  /* Error recovery, innermost grain (LSP M5.3). This is the load-bearing arm: Bison pops to the
+   * NEAREST state with an `error` action, so a broken statement discards one statement and leaves the
+   * enclosing function — its signature, its other locals, its remaining statements — intact. That is
+   * what makes the partial AST worth having: `P p; p.<cursor>` keeps `p` in the index, which
+   * declaration-level recovery alone would throw away along with the whole function.
+   *
+   * Both a leading and a trailing arm are needed. With only the trailing one, a block whose FIRST
+   * statement is broken has no statement_list on the stack, so no state carries an `error` action and
+   * the parse aborts — and "the first thing I typed isn't finished yet" is the commonest editing state
+   * there is.
+   *
+   * The arms contribute NO node, deliberately. Downstream passes dereference every element
+   * unconditionally, so a half-built node with a null body is a shape the emitter has never been asked
+   * to survive, whereas a SHORTER well-formed list is one it already handles on every build — that is
+   * exactly what pruneInactiveDecls produces for `@compileFor`.
+   *
+   * No %destructor is needed and none should be added: YYSTYPE is a plain struct rather than a %union,
+   * so the value stack is a real array of default-constructed YYSTYPEs and a discarded subtree simply
+   * stays alive until yyparse returns. `yyerrok` is deliberately absent too — Bison's 3-token
+   * suppression window is what stops one broken statement from reporting an error per discarded token. */
+  | error
+  | statement_list error
   ;
 embedded_statement
   : block
@@ -576,9 +611,19 @@ match_pattern
   | IDENTIFIER LPAREN match_bindings RPAREN
 
   ;
+/* A payload pattern NAMES its fields, exactly as a call names its parameters:
+   `case Rect(w: width, h: height)`. There is no positional form. Binding by position is how a
+   two-field swap compiles clean and silently returns the wrong values — the bug class named arguments
+   exist to remove, and kama does not exempt arity-1 from a label at a call site either. The label is
+   the FIELD; the identifier after it is the local it binds. Reuses ArgumentNode because a pattern
+   binding is the same shape as an argument: a name, a colon, a thing. */
 match_bindings
-  : IDENTIFIER
-  | match_bindings COMMA IDENTIFIER
+  : match_binding
+  | match_bindings COMMA match_binding
+  ;
+match_binding
+  : IDENTIFIER COLON IDENTIFIER
+
   ;
 foreach_statement
   : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement
@@ -740,6 +785,7 @@ attr_arg_list
   ;
 attr_arg
   : IDENTIFIER
+  | EXCLAMATION IDENTIFIER            /* negated flag, e.g. @compileFor(!RELEASE) */
   | IDENTIFIER COLON expression
   | STRING_LITERAL                    /* bare string, e.g. @section(".isr_vector") */
   ;
@@ -781,6 +827,7 @@ unary_expression
   | EXCLAMATION unary_expression
   | TILDE unary_expression
   | cast_expression
+  | bitcast_expression
   | sizeof_expression
   | PLUS unary_expression
   | MINUS unary_expression
@@ -811,6 +858,11 @@ cast_expression
        operand is a full `expression` (like a parenthesized primary) so `cast<T>(a + b)` needs no inner
        parens — the surrounding `( … )` already delimits it. */
   : CAST LT  type GT  LPAREN expression RPAREN
+  ;
+bitcast_expression
+    /* `bitcast<T>(expr)` — a same-width bit reinterpret, parsed exactly like `cast<T>(...)` (the mid-rules
+       track genericDepth across the `<…>`); the equal-width + numeric-scalar checks are enforced at emit. */
+  : BITCAST LT  type GT  LPAREN expression RPAREN
   ;
 sizeof_expression
   /* `sizeof(T)` / `alignof(T)` — the compile-time byte size / alignment of a type as a `usize`
@@ -943,6 +995,11 @@ class_member_declarations_opt
 class_member_declarations
   : class_member_declaration
   | class_member_declarations class_member_declaration
+  /* Error recovery, member grain (LSP M5.3) — one bad member must not hide its siblings, and the TYPE
+   * stays declared either way, which is what keeps a half-typed member from cascading "undeclared type"
+   * over every use of it. Same shape and same reasoning as the statement_list arms above. */
+  | error
+  | class_member_declarations error
   ;
 class_member_declaration
   : constant_declaration
@@ -1065,6 +1122,8 @@ constructor_body
   | SEMICOLON
   ;
 destructor_declaration
+    /* `$$` is the BASE handle here (%type <classmember>), so the name is unreachable through it — hence a
+       named local. Worst span on the checklist: @$ runs from the modifiers through the entire body. */
   : modifiers_opt TILDE IDENTIFIER LPAREN RPAREN block
   ;
 

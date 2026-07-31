@@ -34,8 +34,8 @@ fn int main()
 
     // 4. a fallible ctor is a first-class `match` subject INLINE — no typed binding first. This is the
     //    spelling that used to require the `::` bridge, so banning `::` for ctors depends on it working.
-    int32 c = match (Cell.checked(v: 7))   { case Ok(x): x.v; case Err(e): 0 - 1; };   // 7
-    int32 d = match (Cell.checked(v: 999)) { case Ok(x): x.v; case Err(e): 5; };       // 5 (the Err arm)
+    int32 c = match (Cell.checked(v: 7))   { case Ok(value: x): x.v; case Err(error: e): 0 - 1; };   // 7
+    int32 d = match (Cell.checked(v: 999)) { case Ok(value: x): x.v; case Err(error: e): 5; };       // 5 (the Err arm)
 
     int32 e = viaTypeParam::<Cell>(n: 9);         // 5. ctor through a type parameter -> 9
 

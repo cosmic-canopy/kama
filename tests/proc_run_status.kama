@@ -8,8 +8,8 @@ fn int main() {
     t.arg(a: "exit"); t.arg(a: "0");
     Result<Output, IoError> tr = t.run();
     int32 a = match (give tr) {
-        case Ok(o): (o.status().success() ? 0 : 91);
-        case Err(e): 92;
+        case Ok(value: o): (o.status().success() ? 0 : 91);
+        case Err(error: e): 92;
     };
     if (a != 0) { return a; }
 
@@ -17,8 +17,8 @@ fn int main() {
     f.arg(a: "exit"); f.arg(a: "1");
     Result<Output, IoError> fr = f.run();
     int32 b = match (give fr) {
-        case Ok(o): ((o.status().code == 1) ? 0 : 93);
-        case Err(e): 94;
+        case Ok(value: o): ((o.status().code == 1) ? 0 : 93);
+        case Err(error: e): 94;
     };
     if (b != 0) { return b; }
     return 42;

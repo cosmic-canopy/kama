@@ -11,7 +11,7 @@ fn int32 main() {
     while (i < 20) { sm.put(key: (i * 13) % 20, value: (i * 13) % 20); i = i + 1; }
     if (sm.length() == 20) { r = r + 10; }
     Optional<int32> g = sm.get(key: 7);
-    int32 gv = match (g) { case Some(x): x; case None: 0 - 1; };
+    int32 gv = match (g) { case Some(value: x): x; case None: 0 - 1; };
     if (gv == 7) { r = r + 10; }
 
     // copy threads the (default) allocator and clones the whole tree independently

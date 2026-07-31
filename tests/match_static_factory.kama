@@ -15,7 +15,7 @@ type resource Widget {
 }
 
 fn int main() {
-    int32 a = match (Widget.make(n: 7))     { case Ok(w): w.value(); case Err(e): 0 - 1; };  // 7
-    int32 b = match (Widget.make(n: 0 - 5)) { case Ok(w): 100;       case Err(e): 0 - 1; };   // -1
+    int32 a = match (Widget.make(n: 7))     { case Ok(value: w): w.value(); case Err(error: e): 0 - 1; };  // 7
+    int32 b = match (Widget.make(n: 0 - 5)) { case Ok(value: w): 100;       case Err(error: e): 0 - 1; };   // -1
     return a + b;                                                                              // 6
 }

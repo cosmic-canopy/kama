@@ -12,7 +12,7 @@ fn int32 main() {
 
     Map<int32, int32> mm = Map.empty(); mm.put(key: 1, value: 2);
     Optional<int32> o = mm.get(key: 1);
-    int32 v = match (o) { case Some(x): x; case None: 0 - 1; };
+    int32 v = match (o) { case Some(value: x): x; case None: 0 - 1; };
     if (v == 2) { r = r + 25; }
 
     return r;   // 50

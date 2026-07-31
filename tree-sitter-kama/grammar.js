@@ -725,11 +725,16 @@ module.exports = grammar({
       ),
 
     // No guards, no literal patterns, no alternatives, no nesting. `_` is just an identifier.
+    // A payload pattern NAMES its fields — `case Rect(w: width, h: height)` — exactly as a call names
+    // its parameters. There is no positional form.
     match_pattern: ($) =>
       seq(
         field('name', $.identifier),
-        optional(seq('(', commaSep1($.identifier), ')')),
+        optional(seq('(', commaSep1($.match_binding), ')')),
       ),
+
+    match_binding: ($) =>
+      seq(field('field', $.identifier), ':', field('name', $.identifier)),
 
     // ── Expressions ─────────────────────────────────────────────────────────────────────────────────
     _expression: ($) =>

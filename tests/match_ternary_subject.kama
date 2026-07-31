@@ -3,7 +3,7 @@
 // through the ternary so the outer match resolves its subject without binding to a typed local first.
 fn int32 pick(int32 x, bool some) {
     return match (some ? Optional::Some(value: x) : Optional::None) {
-        case Some(v): v;
+        case Some(value: v): v;
         case None:    0;
     };
 }

@@ -7,15 +7,15 @@ fn int main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "sleep"); c.arg(a: "1000");
     Result<Process, IoError> sr = c.start();
-    Process p = match (give sr) { case Ok(pr): { := give pr; } case Err(e): { return 110; } };
+    Process p = match (give sr) { case Ok(value: pr): { := give pr; } case Err(error: e): { return 110; } };
 
     Result<Optional<ExitStatus>, IoError> tw = p.tryWait();
     int32 phase1 = match (tw) {
-        case Ok(opt): match (opt) { case None: 0; case Some(s): 111; };   // expect still-running
-        case Err(e): 112;
+        case Ok(value: opt): match (opt) { case None: 0; case Some(value: s): 111; };   // expect still-running
+        case Err(error: e): 112;
     };
     if (phase1 != 0) { return phase1; }
 
     Result<ExitStatus, IoError> wr = p.wait();
-    return match (wr) { case Ok(s): (s.success() ? 42 : 113); case Err(e): 114; };
+    return match (wr) { case Ok(value: s): (s.success() ? 42 : 113); case Err(error: e): 114; };
 }

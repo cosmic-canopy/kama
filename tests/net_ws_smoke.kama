@@ -6,5 +6,5 @@ import std::io::{IoError};
 fn int main() {
     string url = "ws://127.0.0.1:47670";
     Result<WsConnection, IoError> r = WsConnection.connect(url: url);
-    return match (r) { case Ok(c): 55; case Err(e): 40; };
+    return match (r) { case Ok(value: c): 55; case Err(error: e): 40; };
 }

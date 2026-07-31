@@ -102,7 +102,7 @@ fn int32 statements(int32 n) {
         total = total + inScope.value;
     }
     Optional<Cell> maybe = Optional::Some(value: inBlock);
-    int32 fromMatch = match (maybe) { case Some(bound): bound.value; case None: 0; };
+    int32 fromMatch = match (maybe) { case Some(value: bound): bound.value; case None: 0; };
     return total + fromMatch;
 }
 

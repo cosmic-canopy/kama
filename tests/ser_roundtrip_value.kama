@@ -11,7 +11,7 @@ type value Vec {
 fn int main() {
     Vec v = Vec.make(x: 10, y: 20, z: 12);
     Result<string, Owned<Error>> j_r = encode(v: v);
-    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
+    string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     Result<Vec, Owned<Error>> res = decode::<Vec>(src: give j);
-    return match (res) { case Ok(q): q.dot(); case Err(e): 0 - 1; };   // 42
+    return match (res) { case Ok(value: q): q.dot(); case Err(error: e): 0 - 1; };   // 42
 }

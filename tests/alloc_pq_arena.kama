@@ -10,13 +10,13 @@ fn int32 main() {
     PriorityQueue<int32, BumpAllocator> pq = PriorityQueue.withAllocator(allocator: arena.handle(), maxOrder: false);
     pq.push(item: 5); pq.push(item: 1); pq.push(item: 3); pq.push(item: 9); pq.push(item: 2);
     Optional<int32> p0 = pq.pop();
-    int32 v0 = match (p0) { case Some(x): x; case None: 0 - 1; };
+    int32 v0 = match (p0) { case Some(value: x): x; case None: 0 - 1; };
     if (v0 == 1 && pq.length() == 4) { r = r + 15; }                  // min-heap: smallest out first
 
     PriorityQueue<int32, BumpAllocator> mx = PriorityQueue.withAllocator(allocator: arena.handle(), maxOrder: true);
     mx.push(item: 5); mx.push(item: 1); mx.push(item: 9);
     Optional<int32> m0 = mx.pop();
-    int32 mv = match (m0) { case Some(x): x; case None: 0 - 1; };
+    int32 mv = match (m0) { case Some(value: x): x; case None: 0 - 1; };
     if (mv == 9) { r = r + 15; }                                      // max-heap: largest out first
 
     return r;   // 30

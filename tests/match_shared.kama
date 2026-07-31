@@ -13,11 +13,11 @@ fn int main()
     Box a = Box::Full(p: copy s);
     Box e = Box::Empty;
     int32 v = match (a) {
-        case Full(p): p.val();
+        case Full(p: p): p.val();
         case Empty: 0;
     };
     int32 w = match (e) {
-        case Full(p): p.val();
+        case Full(p: p): p.val();
         case Empty: 7;
     };
     return v + w;

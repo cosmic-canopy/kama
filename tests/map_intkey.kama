@@ -12,9 +12,9 @@ fn int main() {
     int32 r = 0;
     r = r + sq.length();                          // 100
     int32 a = 7; int32 k50 = 50; int32 miss = 500;
-    int32 v = match (sq.get(key: a))   { case Some(x): x; case None: 0 - 1; };   // 999
+    int32 v = match (sq.get(key: a))   { case Some(value: x): x; case None: 0 - 1; };   // 999
     if (v == 999)  { r = r + 5; }
-    int32 w = match (sq.get(key: k50)) { case Some(x): x; case None: 0 - 1; };   // 2500
+    int32 w = match (sq.get(key: k50)) { case Some(value: x): x; case None: 0 - 1; };   // 2500
     if (w == 2500) { r = r + 5; }
     if (!sq.contains(key: miss)) { r = r + 5; }   // absent
 

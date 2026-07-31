@@ -7,5 +7,5 @@ fn int main()
 {
     Optional<Shared<Probe>> h = Optional::Some(value: mk(id: 3));
     h = Optional::Some(value: mk(id: 8));   // old Probe(3) dropped before the new lands
-    return match (h) { case Some(p): p.val(); case None: 0; };
+    return match (h) { case Some(value: p): p.val(); case None: 0; };
 }

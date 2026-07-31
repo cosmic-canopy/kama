@@ -1060,7 +1060,11 @@ public:
 class MatchArmNode : public StatementNode {
 public:
     SharedString     variantName;   // the variant matched; "_" = wildcard
-    SharedStringList bindings;      // payload binding names in field order; null/empty if none
+    SharedStringList bindings;      // the LOCALS a payload pattern introduces; null/empty if none
+    SharedStringList labels;        // parallel to `bindings`: the FIELD each local binds, from `field: local`.
+                                    // Patterns are named, never positional — see the grammar's match_bindings.
+    SharedIdentifierList labelIds;  // the labels again as nodes, so a pattern label carries a span and can
+                                    // resolve to the field it names (hover / go-to-definition / references).
     // LSP (M3.4): the same two names again, as nodes carrying a source span, so find-references and
     // rename can reach a `case Ok:` arm and its payload bindings. Kept ALONGSIDE the strings above —
     // every existing reader spells `*variantName` / `*bindings[i]` and is untouched.

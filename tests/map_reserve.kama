@@ -18,7 +18,7 @@ fn int32 main() {
     i = 0;
     while (i < 100) {
         Optional<int32> ov = m.get(key: i);
-        int32 got = match (ov) { case Some(x): x; case None: 0 - 1; };
+        int32 got = match (ov) { case Some(value: x): x; case None: 0 - 1; };
         if (got < 0) { miss = miss + 1; } else { drift = drift + (got - i * 2); }
         i = i + 1;
     }

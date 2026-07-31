@@ -404,7 +404,7 @@ fn void main()
 {
     match (s) {
         case Empty: 0;
-        case Circle(r): { := r; }
+        case Circle(radius: r): { := r; }
     };
     int32 n = match (s) {
         case Empty: 0;
@@ -429,7 +429,9 @@ fn void main()
           (match_arm
             (match_pattern
               (identifier)
-              (identifier))
+              (match_binding
+                (identifier)
+                (identifier)))
             (block
               (arm_value_statement
                 (identifier))))))

@@ -19,22 +19,22 @@ fn int32 main() {
     Handle b = sm.insert(value: 20);
     Handle c = sm.insert(value: 30);
     if (sm.length() == 3) { r = r + 5; }
-    int32 va = match (sm.get(handle: a)) { case Some(x): x; case None: 0 - 1; };
+    int32 va = match (sm.get(handle: a)) { case Some(value: x): x; case None: 0 - 1; };
     if (va == 10) { r = r + 5; }
     if (sm.contains(handle: b)) { r = r + 5; }
 
-    int32 rb = match (sm.remove(handle: b)) { case Some(x): x; case None: 0 - 1; };
+    int32 rb = match (sm.remove(handle: b)) { case Some(value: x): x; case None: 0 - 1; };
     if (rb == 20) { r = r + 5; }                       // remove moves the value out
     if (sm.length() == 2) { r = r + 5; }
-    bool gone = match (sm.get(handle: b)) { case Some(x): false; case None: true; };
+    bool gone = match (sm.get(handle: b)) { case Some(value: x): false; case None: true; };
     if (gone) { r = r + 5; }                           // removed handle -> None
     if (!sm.contains(handle: b)) { r = r + 5; }
 
     Handle d = sm.insert(value: 40);
     if (d.index == b.index) { r = r + 5; }             // the vacated slot is reused
-    bool stillGone = match (sm.get(handle: b)) { case Some(x): false; case None: true; };
+    bool stillGone = match (sm.get(handle: b)) { case Some(value: x): false; case None: true; };
     if (stillGone) { r = r + 5; }                      // old handle to the reused slot rejected (generation bumped)
-    int32 vd = match (sm.get(handle: d)) { case Some(x): x; case None: 0 - 1; };
+    int32 vd = match (sm.get(handle: d)) { case Some(value: x): x; case None: 0 - 1; };
     if (vd == 40) { r = r + 5; }                       // live now: a=10, c=30, d=40
 
     // (b) iterate live values (copy iterator over occupied slots).
@@ -50,7 +50,7 @@ fn int32 main() {
     cm.getRef(handle: h1).bump();                      // 100 -> 101, through the borrow
     int32 g1 = cm.getRef(handle: h1).get();
     if (g1 == 101) { r = r + 5; }
-    int32 taken = match (cm.remove(handle: h2)) { case Some(ctr): ctr.get(); case None: 0 - 1; };
+    int32 taken = match (cm.remove(handle: h2)) { case Some(value: ctr): ctr.get(); case None: 0 - 1; };
     if (taken == 200) { r = r + 5; }                   // reclaimed Counter read, then dropped
     if (cm.length() == 1) { r = r + 5; }               // h1's Counter still owned; drops at scope exit
 

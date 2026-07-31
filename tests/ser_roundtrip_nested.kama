@@ -21,7 +21,7 @@ type resource Parent {
     public ctor make(int32 id, Child main, Optional<Child> maybe, DynamicArray<Child> kids) { Parent r; r.id = id; r.main = give main; r.maybe = give maybe; r.kids = give kids; return give r; }
     public fn int32 total() {
         int32 s = this.id + this.main.weight();
-        int32 m = match (this.maybe) { case Some(c): c.weight(); case None: 0; };
+        int32 m = match (this.maybe) { case Some(value: c): c.weight(); case None: 0; };
         s = s + m;
         for (int32 i = 0; i < this.kids.length(); i = i + 1) { s = s + this.kids[i].weight(); }
         return s;
@@ -39,7 +39,7 @@ fn int main() {
     Optional<Child> mb = Optional::Some(value: give mc);
     Parent p = Parent.make(id: 10, main: give mainC, maybe: give mb, kids: give ks);
     Result<string, Owned<Error>> j_r = encode(v: p);
-    string j = match (give j_r) { case Ok(__ok): give __ok; case Err(__e): { return 250; } };
+    string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     Result<Parent, Owned<Error>> res = decode::<Parent>(src: give j);
-    return match (res) { case Ok(q): q.total(); case Err(e): 0 - 1; };   // 10 + 8 + 5 + (2+4) = 29
+    return match (res) { case Ok(value: q): q.total(); case Err(error: e): 0 - 1; };   // 10 + 8 + 5 + (2+4) = 29
 }

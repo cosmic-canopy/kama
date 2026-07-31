@@ -6,21 +6,21 @@ fn int main() {
     Map<int32, int32> m = Map.empty();
     if (m.length() == 0)              { r = r + 3; }               // empty
     if (!m.contains(key: 1))          { r = r + 3; }               // absent in empty
-    bool rm1 = match (m.remove(key: 1)) { case Some(x): true; case None: false; };
+    bool rm1 = match (m.remove(key: 1)) { case Some(value: x): true; case None: false; };
     if (!rm1)                         { r = r + 3; }               // remove absent -> None
-    int32 g0 = match (m.get(key: 1)) { case Some(x): x; case None: 0 - 1; };
+    int32 g0 = match (m.get(key: 1)) { case Some(value: x): x; case None: 0 - 1; };
     if (g0 == 0 - 1)                  { r = r + 3; }               // empty get -> None
 
     m.put(key: 7, value: 70);                                      // single entry
     if (m.length() == 1)             { r = r + 3; }
-    int32 g7 = match (m.get(key: 7)) { case Some(x): x; case None: 0; };
+    int32 g7 = match (m.get(key: 7)) { case Some(value: x): x; case None: 0; };
     if (g7 == 70)                    { r = r + 3; }
     m.put(key: 7, value: 700);                                     // overwrite -> length unchanged
     if (m.length() == 1)             { r = r + 3; }
-    int32 g7b = match (m.get(key: 7)) { case Some(x): x; case None: 0; };
+    int32 g7b = match (m.get(key: 7)) { case Some(value: x): x; case None: 0; };
     if (g7b == 700)                  { r = r + 3; }
     if (m.contains(key: 7))          { r = r + 3; }
-    bool rm7 = match (m.remove(key: 7)) { case Some(x): true; case None: false; };
+    bool rm7 = match (m.remove(key: 7)) { case Some(value: x): true; case None: false; };
     if (rm7)                         { r = r + 3; }                // remove present -> Some
     if (m.length() == 0)             { r = r + 3; }               // back to empty
     if (!m.contains(key: 7))         { r = r + 9; }

@@ -4,14 +4,14 @@
 // consuming `match (give r)` (destructure-move).
 fn Result<int32, Owned<Error>> rewrap(Result<int32, Owned<Error>> r) {
     match (r) {                                          // BORROWING — `e` only aliases r's box
-        case Ok(v):  { return Result::Ok(value: v); }
-        case Err(e): { return Result::Err(error: give e); } // give the aliased fat handle out -> double free
+        case Ok(value: v):  { return Result::Ok(value: v); }
+        case Err(error: e): { return Result::Err(error: give e); } // give the aliased fat handle out -> double free
     };
     return Result::Ok(value: 0);
 }
 fn int main() {
     Result<int32, Owned<Error>> r = Result::Err(error: DeError::Malformed);
     Result<int32, Owned<Error>> res = rewrap(r: give r);
-    match (res) { case Ok(v): { } case Err(e): { } };
+    match (res) { case Ok(value: v): { } case Err(error: e): { } };
     return 0;
 }

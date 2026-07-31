@@ -261,8 +261,8 @@ type resource Command {
         this.errCfg = Stdio::Piped;
         Result<Process, IoError> sp = this.start();
         Process p = match (give sp) {
-            case Ok(pr): { := give pr; }
-            case Err(e): { return Result::Err(error: e); }
+            case Ok(value: pr): { := give pr; }
+            case Err(error: e): { return Result::Err(error: e); }
         };
         Ptr outRaw = null; usize outLen = 0;
         Ptr errRaw = null; usize errLen = 0;
@@ -277,8 +277,8 @@ type resource Command {
 
         Result<ExitStatus, IoError> stR = p.wait();
         ExitStatus status = match (stR) {
-            case Ok(s): s;
-            case Err(e): { return Result::Err(error: e); }
+            case Ok(value: s): s;
+            case Err(error: e): { return Result::Err(error: e); }
         };
         return Result::Ok(value: Output.make(status: status, stdout: give outBuf, stderr: give errBuf));
     }

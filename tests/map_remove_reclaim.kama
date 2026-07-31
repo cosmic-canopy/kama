@@ -17,7 +17,7 @@ fn int main() {
     int32 r = 0;
     // RECLAIM: take ownership of the removed value out of the map (bind the local, then match it).
     Optional<Counter> taken = m.remove(key: 2);
-    int32 got = match (taken) { case Some(c): c.get(); case None: 0; };   // 20 (c drops in the arm)
+    int32 got = match (taken) { case Some(value: c): c.get(); case None: 0; };   // 20 (c drops in the arm)
     r = r + got;
 
     // DISCARD: delete without reclaiming — the returned Optional<Counter> drops the value.

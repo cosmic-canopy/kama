@@ -25,7 +25,7 @@ fn int main() {
     DynamicArray<Pt> pts = DynamicArray.empty(); pts.add(item: Pt.make(x: 1, y: 2)); pts.add(item: Pt.make(x: 3, y: 4));
     Scene s = Scene.make(name: "lvl1", ids: give ids, pts: give pts);
     Result<DynamicArray<uint8>, Owned<Error>> e_r = encode(v: s);
-    DynamicArray<uint8> bytes = match (give e_r) { case Ok(b): give b; case Err(__e): { return 250; } };
+    DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
     Result<Scene, Owned<Error>> res = decode::<Scene>(src: give bytes);
-    return match (res) { case Ok(b): b.score(); case Err(e): 0 - 1; };
+    return match (res) { case Ok(value: b): b.score(); case Err(error: e): 0 - 1; };
 }

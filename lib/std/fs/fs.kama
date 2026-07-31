@@ -134,8 +134,8 @@ type resource File implements Reader, Writer {
 fn Result<DynamicArray<uint8>, IoError> readFile(ref string path) {
     Result<File, IoError> r = File.open(path: path, mode: OpenMode::Read);
     return match (r) {
-        case Ok(f):  f.readAll();                       // f closes at arm end (RAII)
-        case Err(e): Result::Err(error: e);
+        case Ok(value: f):  f.readAll();                       // f closes at arm end (RAII)
+        case Err(error: e): Result::Err(error: e);
     };
 }
 
@@ -143,8 +143,8 @@ fn Result<DynamicArray<uint8>, IoError> readFile(ref string path) {
 fn Result<usize, IoError> writeFile(ref string path, ref DynamicArray<uint8> bytes) {
     Result<File, IoError> r = File.open(path: path, mode: OpenMode::Write);
     return match (r) {
-        case Ok(f):  f.writeAll(bytes: bytes);
-        case Err(e): Result::Err(error: e);
+        case Ok(value: f):  f.writeAll(bytes: bytes);
+        case Err(error: e): Result::Err(error: e);
     };
 }
 

@@ -17,7 +17,7 @@ fn int main() {
     while (going) {
         Optional<int32> v = rx.recv();   // main may block here until the producer drops its sender
         match (v) {
-            case Some(x): { got = got + 1; }
+            case Some(value: x): { got = got + 1; }
             case None:    { going = false; }
         };
     }

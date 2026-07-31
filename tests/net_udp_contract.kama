@@ -8,16 +8,16 @@ import std::collections::{DynamicArray, FixedArray, View};
 // These take the CONTRACT by value (a fat-pointer borrow of the concrete) — dispatch is dynamic.
 fn int32 sendVia(DatagramSocket d, View<uint8> msg, ref SocketAddr to) {
     Result<usize, IoError> r = d.sendTo(bytes: msg, to: to);
-    return match (r) { case Ok(w): cast<int32>(w); case Err(e): -1; };
+    return match (r) { case Ok(value: w): cast<int32>(w); case Err(error: e): -1; };
 }
 fn int32 recvVia(DatagramSocket d, View<uint8> into) {
     Result<RecvFrom, IoError> r = d.recvFrom(into: into);
-    return match (r) { case Ok(rf): cast<int32>(rf.count); case Err(e): -1; };
+    return match (r) { case Ok(value: rf): cast<int32>(rf.count); case Err(error: e): -1; };
 }
 
 fn int32 portOf(ref UdpSocket s) {
     Result<SocketAddr, IoError> r = s.localAddr();
-    return match (r) { case Ok(a): cast<int32>(a.port); case Err(e): -1; };
+    return match (r) { case Ok(value: a): cast<int32>(a.port); case Err(error: e): -1; };
 }
 
 fn int32 run(ref UdpSocket a, ref UdpSocket b) {
@@ -43,13 +43,13 @@ fn int main() {
     uint16 zero = cast<uint16>(0);
     Result<UdpSocket, IoError> ra = UdpSocket.bind(host: host, port: zero);
     return match (ra) {
-        case Ok(a): {
+        case Ok(value: a): {
             Result<UdpSocket, IoError> rb = UdpSocket.bind(host: host, port: zero);
             := match (rb) {
-                case Ok(b): run(a: a, b: b);
-                case Err(e): 70;
+                case Ok(value: b): run(a: a, b: b);
+                case Err(error: e): 70;
             };
         }
-        case Err(e): 69;
+        case Err(error: e): 69;
     };
 }

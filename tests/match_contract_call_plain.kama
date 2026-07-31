@@ -14,7 +14,7 @@ type value Cell implements Classify {
 }
 
 fn int32 viaContract(Classify p) {                       // dynamic dispatch through the fat pointer
-    return match (p.classify()) { case Some(v): v; case None: 0; };
+    return match (p.classify()) { case Some(value: v): v; case None: 0; };
 }
 
 fn int32 main() {
@@ -22,6 +22,6 @@ fn int32 main() {
     Cell miss = Cell.make(v: 9,  present: false);
     int32 a = viaContract(p: hit);                       // 42 through the contract
     int32 b = viaContract(p: miss);                      // 0  through the contract
-    int32 c = match (hit.classify()) { case Some(v): v; case None: 0; };   // concrete-receiver control -> 42
+    int32 c = match (hit.classify()) { case Some(value: v): v; case None: 0; };   // concrete-receiver control -> 42
     return a + b + c - 42;                               // 42 + 0 + 42 - 42 = 42
 }

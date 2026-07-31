@@ -255,7 +255,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         int32 i = 0;
         while (i < this.len) {
             Result<Unit, Owned<Error>> __sr = this.serElem(e: this[i], w: w);
-            match (give __sr) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             i = i + 1;
         }
         w.endArray();
@@ -269,8 +269,8 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject
             match (give __er) {                                     // consume it so an owning payload can be moved out
-                case Err(e): { return Result::Err(error: give e); }
-                case Ok(v):  { result.add(item: give v); }
+                case Err(error: e): { return Result::Err(error: give e); }
+                case Ok(value: v):  { result.add(item: give v); }
             };
         }
         return Result::Ok(value: give result);

@@ -7,18 +7,18 @@ import std::collections::{DynamicArray, FixedArray};
 fn int32 run(ref UdpSocket a, ref UdpSocket b, int32 bport) {
     string host = "127.0.0.1";
     Result<Unit, IoError> rc = a.connect(host: host, port: cast<uint16>(bport));
-    int32 c = match (rc) { case Ok(u): 0; case Err(e): -1; };
+    int32 c = match (rc) { case Ok(value: u): 0; case Err(error: e): -1; };
     if (c != 0) { return 61; }
 
     DynamicArray<uint8> msg = DynamicArray.empty();
     msg.add(item: cast<uint8>(7)); msg.add(item: cast<uint8>(9)); msg.add(item: cast<uint8>(11));
     Result<usize, IoError> rs = a.send(bytes: msg.view());
-    int32 sent = match (rs) { case Ok(w): cast<int32>(w); case Err(e): -1; };
+    int32 sent = match (rs) { case Ok(value: w): cast<int32>(w); case Err(error: e): -1; };
     if (sent != 3) { return 62; }
 
     FixedArray<uint8> buf = FixedArray.make(size: 64);
     Result<RecvFrom, IoError> rr = b.recvFrom(into: buf.view());
-    int32 got = match (rr) { case Ok(rf): cast<int32>(rf.count); case Err(e): -1; };
+    int32 got = match (rr) { case Ok(value: rf): cast<int32>(rf.count); case Err(error: e): -1; };
     if (got != 3) { return 63; }
     if (cast<int32>(buf[0]) != 7)  { return 64; }
     if (cast<int32>(buf[2]) != 11) { return 65; }
@@ -27,7 +27,7 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b, int32 bport) {
 
 fn int32 portOf(ref UdpSocket s) {
     Result<SocketAddr, IoError> r = s.localAddr();
-    return match (r) { case Ok(a): cast<int32>(a.port); case Err(e): -1; };
+    return match (r) { case Ok(value: a): cast<int32>(a.port); case Err(error: e): -1; };
 }
 
 fn int main() {
@@ -35,16 +35,16 @@ fn int main() {
     uint16 zero = cast<uint16>(0);
     Result<UdpSocket, IoError> ra = UdpSocket.bind(host: host, port: zero);
     return match (ra) {
-        case Ok(a): {
+        case Ok(value: a): {
             Result<UdpSocket, IoError> rb = UdpSocket.bind(host: host, port: zero);
             := match (rb) {
-                case Ok(b): {
+                case Ok(value: b): {
                     int32 bport = portOf(s: b);
                     := (bport <= 0) ? 60 : run(a: a, b: b, bport: bport);
                 }
-                case Err(e): 59;
+                case Err(error: e): 59;
             };
         }
-        case Err(e): 58;
+        case Err(error: e): 58;
     };
 }

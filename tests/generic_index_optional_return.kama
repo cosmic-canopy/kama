@@ -29,8 +29,8 @@ fn int32 main() {
     int32 r = 0;
     Store<int32> s = Store.make(); s.add(x: 5); s.add(x: 9);
     Optional<int32> a = s.cloned(i: 1);
-    int32 av = match (a) { case Some(x): x; case None: 0; };  // 9
+    int32 av = match (a) { case Some(value: x): x; case None: 0; };  // 9
     Optional<int32> b = s.direct(i: 0);
-    int32 bv = match (b) { case Some(x): x; case None: 0; };  // 5
+    int32 bv = match (b) { case Some(value: x): x; case None: 0; };  // 5
     return av + bv;   // 14
 }

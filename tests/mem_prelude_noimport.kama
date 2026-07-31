@@ -18,7 +18,7 @@ fn int main()
     Weak<Counter> w = s.downgrade();              // weak ref (does not keep alive)
     Optional<Shared<Counter>> up = w.tryUpgrade();
     int32 fromWeak = match (up) {
-        case Some(s2): s2.get();                  // alive -> 20
+        case Some(value: s2): s2.get();                  // alive -> 20
         case None: 0;
     };
 

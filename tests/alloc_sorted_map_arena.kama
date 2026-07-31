@@ -20,8 +20,8 @@ fn int32 main() {
 
     // ordered lookups + sorted iteration over the arena-backed tree
     Optional<int32> f = sm.first(); Optional<int32> l = sm.last();
-    bool ends = match (f) { case Some(x): x == 0; case None: false; }
-             && match (l) { case Some(x): x == 39; case None: false; };
+    bool ends = match (f) { case Some(value: x): x == 0; case None: false; }
+             && match (l) { case Some(value: x): x == 39; case None: false; };
     if (ends) { r = r + 10; }
     DynamicArray<int32> ks = sm.keys();
     int32 prev = 0 - 1; bool sorted = true; int32 cnt = 0;
@@ -33,7 +33,7 @@ fn int32 main() {
     int32 got = sm.getRef(key: 20);
     if (got == 40) { r = r + 10; }
     Optional<int32> rem = sm.remove(key: 33);
-    int32 rv = match (rem) { case Some(v): v; case None: 0 - 1; };
+    int32 rv = match (rem) { case Some(value: v): v; case None: 0 - 1; };
     if (rv == 66 && sm.length() == 39) { r = r + 10; }
     i = 0;
     while (i < 40) { if (i % 3 == 0) { sm.remove(key: i); } i = i + 1; }   // scramble deletes → merges

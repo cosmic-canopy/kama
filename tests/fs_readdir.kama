@@ -17,5 +17,5 @@ fn int32 checkNames(ref DynamicArray<string> names) {
 
 fn int main() {
     string dot = ".";
-    return match (readDir(path: dot)) { case Ok(names): checkNames(names: names); case Err(e): 30; };
+    return match (readDir(path: dot)) { case Ok(value: names): checkNames(names: names); case Err(error: e): 30; };
 }

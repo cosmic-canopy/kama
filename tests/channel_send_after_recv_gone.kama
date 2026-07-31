@@ -27,7 +27,7 @@ fn int main() {
     int32 got = 0;
     match (res) {
         case Sent:              { got = -1; }             // must NOT happen — the receiver is gone
-        case Undelivered(item): { got = item.get(); }     // value handed back intact → 42; box frees at arm-end
+        case Undelivered(item: item): { got = item.get(); }     // value handed back intact → 42; box frees at arm-end
     };
     return got;   // 42
 }

@@ -24,8 +24,8 @@ fn int32 main() {
     if (sm.length() == 12) { r = r + 5; }
     string alpha = "alpha"; string lima = "lima";
     Optional<string> f = sm.first(); Optional<string> l = sm.last();
-    bool ends = match (f) { case Some(x): x.equals(other: alpha); case None: false; }
-             && match (l) { case Some(x): x.equals(other: lima); case None: false; };
+    bool ends = match (f) { case Some(value: x): x.equals(other: alpha); case None: false; }
+             && match (l) { case Some(value: x): x.equals(other: lima); case None: false; };
     if (ends) { r = r + 5; }
     // lexicographic sorted iteration
     DynamicArray<string> ks = sm.keys();
@@ -51,7 +51,7 @@ fn int32 main() {
     int32 b = cm.getRef(key: 20).get();
     if (b == 22) { r = r + 5; }
     Optional<Counter> got = cm.remove(key: 33);                  // reclaim the moved-out value
-    int32 rv = match (got) { case Some(c): c.get(); case None: 0 - 1; };
+    int32 rv = match (got) { case Some(value: c): c.get(); case None: 0 - 1; };
     if (rv == 33) { r = r + 5; }
     if (cm.length() == 39) { r = r + 5; }
     // delete a scrambled third -> merges/borrows relocating move-only values

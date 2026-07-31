@@ -9,7 +9,7 @@ type resource Box {
 }
 fn int32 listCase(Optional<int32> o) {
     DynamicArray<int32> r = match (o) {
-        case Some(v): { DynamicArray<int32> a = DynamicArray.empty(); a.add(item: v); := give a; }   // build + give a local out
+        case Some(value: v): { DynamicArray<int32> a = DynamicArray.empty(); a.add(item: v); := give a; }   // build + give a local out
         case None: { := DynamicArray.empty(); }                                             // bare generic ctor
     };
     r.add(item: 1);
@@ -18,7 +18,7 @@ fn int32 listCase(Optional<int32> o) {
 }
 fn Box boxCase(Optional<int32> o) {
     return match (o) {                                                        // simple `case X: <expr>;` form
-        case Some(v): Box.make(x: v);                                              // fresh inline ctor, no marker
+        case Some(value: v): Box.make(x: v);                                              // fresh inline ctor, no marker
         case None: Box.make(x: 0);
     };
 }

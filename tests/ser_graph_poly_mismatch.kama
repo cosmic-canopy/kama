@@ -30,10 +30,10 @@ fn int main() {
     string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Scene\",\"a\":2,\"t\":2},\"2\":{\"__type\":\"Tag\",\"n\":9}}}";
     Result<Shared<Scene>, Owned<Error>> res = decode::<Shared<Scene>>(src: give j);
     match (res) {
-        case Ok(sh): { return 1; }                          // must NOT succeed
-        case Err(e): {
+        case Ok(value: sh): { return 1; }                          // must NOT succeed
+        case Err(error: e): {
             match (e.as<DeError>()) {                        // recover the concrete deserialize error
-                case Some(ec): { match (ec) {
+                case Some(value: ec): { match (ec) {
                     case TypeMismatch: { return 0; }         // expected
                     case Malformed: { return 2; }
                     case UnexpectedEnd: { return 3; }

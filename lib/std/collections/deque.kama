@@ -187,7 +187,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
         int32 i = 0;
         while (i < this.len) {
             Result<Unit, Owned<Error>> __sr = this.serElem(e: this[i], w: w);
-            match (give __sr) { case Err(e): { return Result::Err(error: give e); } case Ok(_): {} };
+            match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
             i = i + 1;
         }
         w.endArray();
@@ -199,8 +199,8 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject
             match (give __er) {                                     // consume: destructure-move the owning element out
-                case Err(e): { return Result::Err(error: give e); }
-                case Ok(v):  { result.pushBack(item: give v); }
+                case Err(error: e): { return Result::Err(error: give e); }
+                case Ok(value: v):  { result.pushBack(item: give v); }
             };
         }
         return Result::Ok(value: give result);

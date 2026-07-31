@@ -4,7 +4,7 @@ import std::net::{TcpListener, TcpStream};
 import std::io::{IoError};
 import std::collections::{FixedArray};
 
-fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(u): true; case Err(e): false; }; }
+fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
 fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }
 
 fn int32 checkClient(ref TcpStream c) {
@@ -12,7 +12,7 @@ fn int32 checkClient(ref TcpStream c) {
     if (!isOk(r: c.setNonBlocking(on: true))) { return 72; }
     FixedArray<uint8> buf = FixedArray.make(size: 64);
     Result<usize, IoError> rr = c.read(into: buf.view());
-    bool wb = match (rr) { case Ok(n): false; case Err(e): isWouldBlock(e: e); };
+    bool wb = match (rr) { case Ok(value: n): false; case Err(error: e): isWouldBlock(e: e); };
     if (!wb) { return 73; }
     return 55;
 }
@@ -22,10 +22,10 @@ fn int main() {
     uint16 port = cast<uint16>(47660);
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
     return match (rl) {
-        case Ok(l): {
+        case Ok(value: l): {
             Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
-            := match (rc) { case Ok(c): checkClient(c: c); case Err(e): 70; };
+            := match (rc) { case Ok(value: c): checkClient(c: c); case Err(error: e): 70; };
         }
-        case Err(e): 69;
+        case Err(error: e): 69;
     };
 }

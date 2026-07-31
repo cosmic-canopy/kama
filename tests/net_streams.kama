@@ -19,25 +19,25 @@ fn int32 clientSend(uint16 port) {
     string host = "127.0.0.1";
     Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
     return match (rc) {
-        case Ok(c): {
+        case Ok(value: c): {
             DynamicArray<uint8> data = payload();
-            := match (writeAll(w: c, bytes: data.view())) { case Ok(u): data.length(); case Err(e): -1; };
+            := match (writeAll(w: c, bytes: data.view())) { case Ok(value: u): data.length(); case Err(error: e): -1; };
         }
-        case Err(e): -1;
+        case Err(error: e): -1;
     };
 }
 
 // Server: drain the socket fully via the GENERIC readAll (Reader -> string, reads until peer FIN = EOF).
 fn int32 serverRecv(ref TcpStream srv) {
     return match (readAll(r: srv)) {
-        case Ok(s): {
+        case Ok(value: s): {
             DynamicArray<uint8> want = payload();
             bool ok = cast<int32>(s.length()) == want.length();
             int32 i = 0;
             while (ok && i < want.length()) { if (s[i] != want[i]) { ok = false; } i = i + 1; }
             := ok ? 55 : 40;
         }
-        case Err(e): 43;
+        case Err(error: e): 43;
     };
 }
 
@@ -45,12 +45,12 @@ fn int32 run(ref TcpListener l, uint16 port) {
     int32 sent = clientSend(port: port);               // completes first (buffered send + FIN), then accept
     if (sent != 13) { return 41; }
     Result<TcpStream, IoError> ra = l.accept();
-    return match (ra) { case Ok(srv): serverRecv(srv: srv); case Err(e): 42; };
+    return match (ra) { case Ok(value: srv): serverRecv(srv: srv); case Err(error: e): 42; };
 }
 
 fn int main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47665);
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
-    return match (rl) { case Ok(l): run(l: l, port: port); case Err(e): 80; };
+    return match (rl) { case Ok(value: l): run(l: l, port: port); case Err(error: e): 80; };
 }

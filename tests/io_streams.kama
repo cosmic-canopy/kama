@@ -11,7 +11,7 @@ fn string makePayload(int32 n) {
     int32 i = 1;
     while (i <= n) { data.add(item: cast<uint8>(i)); i = i + 1; }
     Result<Unit, IoError> wr = writeAll(w: w, bytes: data.view());
-    match (wr) { case Err(e): { panic(msg: "writeAll failed"); } case Ok(_): {} };
+    match (wr) { case Err(error: e): { panic(msg: "writeAll failed"); } case Ok(value: _): {} };
     return w.finish();
 }
 
@@ -21,7 +21,7 @@ fn int32 drainSum(Reader r) {
     int32 sum = 0;
     while (true) {
         Result<usize, IoError> rr = r.read(into: buf.view());
-        int32 n = match (rr) { case Ok(k): cast<int32>(k); case Err(e): -1; };
+        int32 n = match (rr) { case Ok(value: k): cast<int32>(k); case Err(error: e): -1; };
         if (n < 0) { return -1; }
         if (n == 0) { return sum; }        // EOF
         int32 j = 0;
@@ -50,10 +50,10 @@ fn int main() {
     BufWriter<StringWriter> bw = BufWriter::<StringWriter>.make(inner: StringWriter.make());
     SliceReader src3 = SliceReader.make(src: give payload3);
     Result<usize, IoError> cr = pump(from: src3, to: bw);
-    int32 moved = match (cr) { case Ok(k): cast<int32>(k); case Err(e): -1; };
+    int32 moved = match (cr) { case Ok(value: k): cast<int32>(k); case Err(error: e): -1; };
     if (moved != 10) { return 4; }
     Result<Unit, IoError> fr = bw.flush();
-    match (fr) { case Err(e): { return 5; } case Ok(_): {} };
+    match (fr) { case Err(error: e): { return 5; } case Ok(value: _): {} };
 
     return 55;
 }

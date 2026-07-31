@@ -19,7 +19,7 @@ fn int32 main() {
     Point p = Point.make(x: 10, y: 20);                    // infallible dot-on-type
     Result<Point, PointErr> ok  = Point.checked(x: 5, y: 7);  // fallible dot-on-type
     Result<Point, PointErr> bad = Point.checked(x: -1, y: 0);
-    int32 a = match (ok)  { case Ok(q): q.sum(); case Err(e): 0 - 1; };   // 12
-    int32 b = match (bad) { case Ok(q): 999;     case Err(e): 0 - 1; };   // -1
+    int32 a = match (ok)  { case Ok(value: q): q.sum(); case Err(error: e): 0 - 1; };   // 12
+    int32 b = match (bad) { case Ok(value: q): 999;     case Err(error: e): 0 - 1; };   // -1
     return p.sum() + a + b + 1;   // 30 + 12 - 1 + 1 = 42
 }

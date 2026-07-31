@@ -9826,16 +9826,46 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         std::vector<std::string> borrowedHere;    // owning bindings marked non-giveable for this arm
         bool defusedSubject = false;              // this consumed arm moved an owning payload out of the subject
         if (a->bindings && !a->bindings->empty()) {
-            if (!vc || a->bindings->size() != vc->payload.size())
-                unsupported(("`match` arm for '" + (a->variantName ? *a->variantName : std::string("_"))
-                             + "' binds " + std::to_string(a->bindings->size()) + " field(s) but the variant has "
-                             + std::to_string(vc ? vc->payload.size() : 0)).c_str(), a->line);
-            for (size_t i = 0; vc && i < a->bindings->size() && i < vc->payload.size(); ++i) {
+            // A pattern binds by FIELD NAME (`case Rect(w: width, h: height)`), never by position. Resolve
+            // each label against the variant's payload and report precisely: an unknown label names the
+            // fields that do exist, a repeat is caught, and a variant left partially bound is caught — a
+            // silent mis-bind is exactly what the named form exists to make impossible.
+            std::string arm = a->variantName ? *a->variantName : std::string("_");
+            std::vector<size_t> slotOf(a->bindings->size(), SIZE_MAX);
+            std::set<size_t> bound;
+            for (size_t i = 0; vc && a->labels && i < a->labels->size(); ++i) {
+                const std::string& lbl = *(*a->labels)[i];
+                size_t f = SIZE_MAX;
+                for (size_t k = 0; k < vc->payload.size(); ++k) if (vc->payload[k].name == lbl) { f = k; break; }
+                if (f == SIZE_MAX) {
+                    std::string have;
+                    for (size_t k = 0; k < vc->payload.size(); ++k) have += (k ? ", " : "") + vc->payload[k].name;
+                    unsupported(("`match` arm for '" + arm + "' binds unknown field `" + lbl + "` — `" + arm
+                                 + "` has " + (have.empty() ? std::string("no fields") : have)).c_str(), a->line);
+                } else if (!bound.insert(f).second) {
+                    unsupported(("`match` arm for '" + arm + "' binds field `" + lbl + "` twice").c_str(), a->line);
+                }
+                slotOf[i] = f;
+            }
+            if (vc && bound.size() != vc->payload.size()) {
+                std::string missing;
+                for (size_t k = 0; k < vc->payload.size(); ++k)
+                    if (!bound.count(k)) missing += (missing.empty() ? "" : ", ") + vc->payload[k].name;
+                if (!missing.empty())
+                    unsupported(("`match` arm for '" + arm + "' does not bind " + missing
+                                 + " — a pattern names every field of its variant").c_str(), a->line);
+            }
+            for (size_t i = 0; vc && i < a->bindings->size(); ++i) {
+                if (slotOf[i] == SIZE_MAX) continue;   // already diagnosed above
                 std::string bn = *(*a->bindings)[i];
                 // LSP index: the binding's own node (parallel list, same order) carries the span.
                 if (a->bindingIds && i < a->bindingIds->size())
                     registerBinding((*a->bindingIds)[i].get(), SymKind::Local);
-                const FieldInfo& pf = vc->payload[i];
+                const FieldInfo& pf = vc->payload[slotOf[i]];
+                // The LABEL names the variant's field, so it is a reference to that field's declaration —
+                // hover, go-to-definition and rename all reach it, the same as any other named use.
+                if (a->labelIds && i < a->labelIds->size() && pf.nameId)
+                    recordNodeRef((*a->labelIds)[i].get(), pf.nameId.get());
                 std::string bcty = cType(pf.type);
                 std::string slot = std::string(sp) + "->u." + *a->variantName + "." + pf.name;
                 indent(depth + 2);
