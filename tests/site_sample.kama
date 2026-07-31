@@ -9,8 +9,8 @@ type value Steel
     public int32 carbon;
 
     // Construction is always a named constructor called on the type — no brace
-    // literals, and `new` is only for the heap. A declared value starts zeroed,
-    // so a field is never read as garbage.
+    // literals, and `new` is only for the heap. The compiler checks that a
+    // constructor sets every field, so a half-built value cannot escape one.
     public ctor make(int32 carbon)
     {
         Steel s;

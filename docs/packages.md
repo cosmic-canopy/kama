@@ -246,7 +246,33 @@ store — so a registry dep behaves exactly like a url dep once resolved, and th
 version + integrity. `kama pkg add geo --version ^1.2.0 --registry <base>` writes one for you.
 
 A registry base is transport-agnostic — `file://` (self-host / air-gap / offline testing) or `https://`.
-The registry is a plain static file tree, so any file host serves it.
+
+### The registry is a static file tree
+
+There is no registry *service* to run: a base URI plus two well-known paths, so any file host serves one
+(the Go `GOPROXY` / cargo sparse-index shape). A dynamic service is optional and speaks the same protocol.
+
+- **Index** — `<base>/<name>/index.json`, the published versions of one package:
+
+  ```json
+  { "name": "geo", "versions": [
+      { "version": "1.2.0",
+        "integrity": "sha256-<tarball-hash>",
+        "tarball": "geo/1.2.0.tar.gz",
+        "dependencies": { "mathx": { "version": "^1.0.0" } } }
+  ] }
+  ```
+
+- **Artifact** — whatever `tarball` points at: a gzipped tar of the package sources, the same format a
+  `url` dependency takes.
+
+`tarball` is resolved **relative to `<base>`** (or absolute), so metadata and artifacts can live on
+different hosts — an index on static pages, tarballs on a release host. Each version records its own
+`dependencies`, so a consumer resolves the whole transitive graph from metadata without downloading
+candidate tarballs.
+
+A published `<name>@<version>` is **write-once**: its integrity is pinned forever and `kama publish`
+refuses to overwrite it. That is the lockfile-drift and dependency-confusion guarantee at the source.
 
 ### Publishing
 
@@ -292,16 +318,41 @@ Because the lock pins **content identity (the integrity), not the URL**, a scope
 mirror by editing `registries`: a mirror serving the same bytes re-resolves identically. A mirror serving
 **different** bytes under the same `name@version` is rejected (the dependency-confusion guard).
 
-### Signing (optional)
+### Integrity — what is actually guaranteed today
+
+**Content integrity is enforced and hard-failing.** Every fetch is checked, and a mismatch stops the
+install with nothing entering the store:
+
+- a **git** dep pins the resolved `commit` and the canonical **tree hash** of its unpacked sources;
+- a **url** or **registry** dep verifies the tarball's sha256 against the index's `integrity` — or records
+  it trust-on-first-use when none is given, after which the lock pins it;
+- the content-addressed store is **keyed by the tree hash**, so identical content from any source collapses
+  to one entry and a re-install is byte-identical;
+- re-resolving a locked `name@version` to *different* bytes is a hard error (the dependency-confusion
+  guard), which is what makes re-pointing a scope to a mirror safe.
+
+This is the same layer Go's `go.sum`, cargo's index hashes and npm's lockfile integrity provide, and it is
+the guarantee you should rely on.
+
+### Signing (optional, and not yet an identity check)
 
 `kama publish --key <ssh-key>` signs the tarball with an SSH key (via `ssh-keygen -Y`, the same SSHSIG
-mechanism `git commit -S` uses) and records the signature + signer public key in the index. On the
-consuming side:
+mechanism `git commit -S` uses) and records the signature + signer public key in the index:
 
 ```sh
 kama pkg install            # warn-only: a bad signature warns, the install proceeds
-kama pkg install --verify   # enforced: a signature must be present and verify, else it fails
+kama pkg install --verify   # a signature must be present and cryptographically valid, else it fails
 ```
+
+**Be precise about what this proves.** Verification runs `ssh-keygen -Y check-novalidate`, so it confirms
+only that *the signature is valid for these bytes under the key embedded in the signature itself*. There is
+no allowed-signers set, so **nothing binds that key to a publisher** — a tampered package re-signed with an
+attacker's key verifies. Two further limits: verification runs on a **cold fetch** only (a warm store hit is
+not re-checked), and git dependencies carry no signature at all.
+
+So today, signing is a mechanism in place ahead of its policy. **The integrity guarantees above are the ones
+that carry weight.** A trust model — an allowed-signers set, then CI/OIDC provenance recorded in a
+transparency log — is tracked in [ROADMAP.md](ROADMAP.md) §10, and verification becomes mandatory with it.
 
 Verification needs `ssh-keygen` on `PATH`; where it's absent, signing and verification skip gracefully.
 

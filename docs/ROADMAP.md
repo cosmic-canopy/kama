@@ -40,11 +40,30 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability matrices in
 [ENGINE_READINESS.md](ENGINE_READINESS.md) / [MCU_READINESS.md](MCU_READINESS.md); the history in the git log.
 
-**The language surface is complete, and the pre-1.0 work list is closed.**
+**The language surface is feature-complete.** What is left before the tag is one breaking change (below)
+and the docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
+(PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that
+would *break* source has to land first or wait for 2.0.
 
-**The one remaining gate is the docs/naming reconcile → then tag 1.0.** 1.0 is the API-stability point;
-naming and case conventions are fixed at the tag (PascalCase types, lowerCamel methods, no `I`-prefix on
-contracts, lowercase `string`).
+**Uninitialized storage — `slot` + a real `out`.** A constructor now proves every field is assigned
+(SPEC § *Construction*), but a bare `T x;` outside a ctor is still an unstated hole: it zero-inits, it is
+live, and its destructor runs. That residual is why a raw-handle `resource` needs a drop guard at all.
+
+The answer is a **`slot` declaration**, not a `Slot<T>` wrapper type (§3's spike, now superseded): `slot T x;`
+declares a hole that is illegal to read, call on, pass by value, or drop until it is definitely assigned —
+and **an unassigned slot has no drop emitted**, which is "drop only if live" proven statically rather than
+defended against at runtime. `slot` applies **everywhere, including inside constructors** (`slot Buf b;
+b.n = …; return give b;`) so there is one greppable spelling for "this is not initialized yet"; the ctor
+completeness check becomes that same analysis specialized to fields.
+
+It needs **`out` to stop being a synonym for `ref`**, which it is today in the compiler despite SPEC
+documenting them as distinct. Given `slot K k; f(dst: out k)`, only a real `out` — *the callee must assign
+this* — lets the analysis mark `k` live. So the two are one change: `slot` is the declaration side, `out` the
+parameter side. Pieces: the `slot` keyword; extend `checkDefiniteAssignment` (which already tracks an
+`unassigned` set and already has an `inUnsafe` flag) from owning locals to all bare locals; `out` semantics
+plus a required call-site marker and callee definite-assignment; drop-elision for unassigned slots; and
+`addr(of:)` on a slot inside `unsafe` as the vouching act for the raw move-out dance. Sweep is mechanical
+(~140 lib ctors + fixtures). Retires the `fd >= 0` guards in `std::fs`/`std::net` outright.
 
 Everything else here is library or toolchain work that does **not** gate the tag:
 
@@ -124,32 +143,12 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   a distinct `SafeHtml`). Regex is a separate campaign. `string + <number>` stays a compile error by design.
 - **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (SPEC + §8
   hot-reload); the **full `expose`** — richer wasm module exports + the scripting host interface — stays 2.0 (§7).
-- **Opt-in `Equatable` derive (auto `==` for `value` types) — post-1.0 minor nicety.** Deferred into the
-  construction-model campaign's broader derive story (`Equatable`/`Hashable`/`Copyable` as one consistent
-  `@generate` surface). Kama today requires a hand-written `operator==` (auto structural `==` is a deliberate
-  non-default); the derive would synthesize a memberwise `==` on request. See
-  [design/construction-model.md](design/construction-model.md) §8c.
-- **Force explicit field init (construction-model tightening — design campaign).** Make every ctor assign
-  *every* field explicitly, with the compiler eliding redundant zero-stores — **except** types that opt into
-  zero (`@generate(zero)` bags). Precedent: Rust (all fields required), Swift (definite initialization), Zig,
-  C# structs. This *tightens* the existing keystone (`checkNamedCtorComplete` already forces owning +
-  non-default-fillable fields) by removing the carve-outs. Two design questions to settle first: (1) are
-  pointer-shaped fields (`Ptr`/`Owned`/collection) auto-exempt, or must they spell `= null` (Zig's
-  spell-or-declare-default is most uniform)? (2) is a bare `T x;` *outside* a ctor still allowed, or must every
-  value come from a ctor (Rust/Swift: no bare uninitialized values)? Cost is a one-time stdlib sweep (~40
-  collection/allocator ctors gain explicit `len = 0` / `data = null`). **Why it matters:** it is the language's
-  proper answer to "drop only if live" — it subsumes the abandoned definite-construction-for-drop-safety
-  attempt and lets a raw-handle `resource` retire its `fd > 0` drop guard. Relates to
-  [design/construction-model.md](design/construction-model.md).
-- **Raw-handle drop guard + the "can you own stdin?" question (fix after force-explicit-field-init).** Today
-  `std::fs::File`'s dtor guards `if (fd > 0)` so a `{0}` `File` drops cleanly — but the drop-only-if-live
-  compiler work already stops the compiler dropping a `{0}` on the field-first-write and `match(give)` paths,
-  so the guard now only defends the residual bare-local shapes. Two threads: (a) the guard is *empirically
-  deletable* (the full ASan suite passes with it removed) — once force-explicit-field-init closes the residual
-  it should go; (b) `fd > 0` (not `>= 0`) means a `File` **cannot own fd 0/1/2** (stdin/stdout/stderr) — decide
-  whether owning a std stream in a `File` is legitimate (likely a distinct type / `Optional<File>`), or adopt a
-  `-1` empty niche (Rust `OwnedFd`) so `fd >= 0` is ownable. Same trap awaits every future raw-handle resource
-  (sockets, GPU handles).
+- **Derive follow-ons.** `@generate(Equatable, Hashable)` ships for plain types (SPEC § *Derives*). Still
+  open, additive: the same derives on a **generic** or **variant** type (the same v1 boundary
+  `@generate(Format)` draws — both error rather than half-deriving), and on a payload-less **enum**, which
+  has no struct to walk and today takes a retroactive `implements` instead. A `Copyable` derive is a
+  **non-goal**: a value/view copies by kind, and a resource's `copy` ctor is an ownership decision no field
+  walk can make (a memberwise copy of a raw handle double-frees).
 - **Unresolved type names outside local declarations are still silent (bug, small; half-fixed 2026-07-27).**
   `resolveUserName` hands an unresolved name straight back ("caller handles"), and for a long time no caller
   did — a misspelled or unimported type passed analysis and only failed later in the C compiler, as an
@@ -194,14 +193,9 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   pruning suffices, or explicit per-module opt-in / dead-function elimination is warranted before a large stdlib
   grows. (`std::math`/`std::io` already ship as directory modules under this mechanism — the open question is
   whether pruning scales, not whether the packaging shape works.)
-- **Design spike — a safe wrapper for the raw-`Ptr` in/out dance (`Slot<T>` / `MaybeUninit`).** Container
-  authors move owned values across the safe↔unsafe boundary by hand: `give` bridges a tracked value *INTO* a
-  raw slot (source consumed), but there is **no symmetric way OUT** — reading back is a manual "zero-init a
-  local, bitwise copy, take responsibility" dance (`Deque.takeAt`; `tests/give_ptr_local.kama`). This asymmetry
-  is the sharp, easy-to-misuse part of the raw layer — a candidate for a small safe abstraction: a typed
-  `Slot<T>` (kama's `MaybeUninit`) with `write(give x)` / `take() -> T` intrinsics. Spike: is the wrapper worth
-  the surface, or does the handful of container sites not justify it? Non-blocking; ergonomics for stdlib
-  authors, not users.
+- **Design spike — a safe wrapper for the raw-`Ptr` in/out dance (`Slot<T>` / `MaybeUninit`).**
+  *Answered — see "Uninitialized storage" in §1. The shape is a `slot` DECLARATION, not a wrapper type:
+  no new type, no `.assume_init()`, and an unassigned slot simply has no drop emitted.*
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
@@ -353,6 +347,11 @@ never a replacement for C.
 
 Every backend shares the same front end, so the safety analysis is proven **once**, before lowering.
 
+**Toolchain packaging rides along.** The version store is already modality-aware (`versions/<kind>-<v>/`,
+`kind=compiler`), so once a scripting runtime exists it becomes the second `kind` — `kama toolchain` gains
+runtime versions alongside compiler versions, resolved by the same project pin. Nothing to build until the
+runtime does; it is only listed here so the store's spare axis isn't forgotten.
+
 **Sequencing — polymorphic emitter first, a shared IR only when the VM forces it.** The emitter
 (`kama.cemit.*`) *bakes in* the semantic lowering (monomorphization, RAII drop insertion, vtable layout,
 match/operator desugaring). A "shared IR" is just that lowering **factored out** into a data structure the
@@ -492,8 +491,8 @@ rather than here, so there is one number to keep current. Forward work:
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.
 - **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries distribute
   without vendoring — the point at which the **orphan rule** (§3, retroactive conformance) becomes load-bearing.
-  Design of record: [design/package-management.md](design/package-management.md); user docs:
-  [packages.md](packages.md). What remains is hosted-services and ops work:
+  User docs (including the registry protocol a host must serve): [packages.md](packages.md). What remains is
+  hosted-services and ops work:
   - **Both gated on hosted services / the repo being public + the website staged:**
     - **M3.3 — hosted deployment (pure ops, no compiler change).** Stand up the real registry host (Cloudflare
       Pages static index + GitHub Releases/R2 tarballs), wire the built-in default base URI (`kDefaultRegistry`,
@@ -501,12 +500,21 @@ rather than here, so there is one number to keep current. Forward work:
       live URL, add publish auth (a token model — the one M3.1/M3.2a open question left for the remote), and
       extend a PUBLISHING.md release process. A dynamic Workers/KV/R2-or-Node service is an *optional* drop-in
       speaking the same M3.1 protocol.
-    - **Rest of M3.2 — mandatory verification + the trust model.** Promote signature verification from
-      warn-only/`--verify`-opt-in to enforced, and pick the trust model: Go-style checksum-transparency log vs
-      npm/PyPI sigstore/OIDC provenance (TOFU / a configured allowed-signers set is the near-term step; the
-      transparency/provenance choice is the larger cut).
-  - **M4 (multi-modal — scripting-runtime versions in the store) deferred** until the kama scripting runtime (§7)
-    exists — no second modality to version until then.
+    - **Mandatory verification + the trust model.** Signing ships but proves less than it looks like:
+      `ssh-keygen -Y check-novalidate` validates the signature against *the key inside the signature*, so
+      **nothing binds that key to a publisher** — and verification runs only on a cold url fetch (a warm
+      store hit and every git dep are unchecked). [packages.md](packages.md) now says so plainly; content
+      integrity (tree-hash store keys, pinned `integrity`, the confusion guard) is the guarantee that
+      actually carries weight today.
+
+      **Decided direction:** follow where the ecosystem landed rather than per-developer signing keys.
+      Go ships no package signatures at all and leans on the `sum.golang.org` transparency log; PyPI
+      *removed* PGP in 2023 (almost nobody verified) and replaced it with OIDC Trusted Publishing +
+      attestations; npm did the same via sigstore provenance; crates.io ships checksums only. So:
+      **(a)** near-term, an allowed-signers set — real `ssh-keygen -Y verify` against a configured trust
+      set, plus closing the warm-store and git-dep gaps; **(b)** then CI/OIDC provenance recorded in a
+      transparency log, at which point verification becomes mandatory. Both gate on a live registry, since
+      mandatory verification is meaningless before one exists.
 - **Longer-term — a "node.js-class" application framework in kama.** A fast, low-overhead server/app framework
   (HTTP already dogfooded via `examples/httpd`), aiming to beat the Node/Deno overhead profile on the no-GC/AOT
   (or VM-scripted) runtime — the flagship *application* of the language + package manager + scripting tiers

@@ -375,7 +375,7 @@ defaults (default type parameters), `DynamicArray<T>` / `Map<K,V>` / bare `BitSe
 allocator is opt-in. Every container that manages its own heap buffer carries it: `DynamicArray`, `Map`,
 `Set`, `Deque<T, A>`, `FixedArray<T, A>`, `BitSet<A>` (its first type parameter, so a plain `BitSet` is now
 the all-defaulted instance), `SlotMap<V, A>`, and `PriorityQueue<T, A>` (which owns no buffer itself — it
-threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named static factory:
+threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named **`ctor`**:
 `withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` for the eager
 `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. The ordered containers thread it
 too: `SortedMap<K, V, A>` / `SortedSet<K, A>` push `A` through the B-tree — the node *contents* (inner arrays) and
@@ -402,8 +402,7 @@ onto libc `malloc`/`free`) costs nothing. A **stateful** allocator is a small ha
 **caller-owned `Arena`** (one heap buffer, bump-allocated, `reset()` bulk-frees in O(1)); the arena must
 **outlive** the container — a documented contract, not a borrow-checked one (a raw `Ptr` isn't escape-checked
 and there is no lifetime tracking). Since Kama has no constructor overloading, a stateful allocator arrives via
-a **named static factory** (`DynamicArray.withAllocator(allocator:)`), which assigns `alloc` after the bare
-construction. `Allocator`/`GlobalAllocator` are prelude (global, no import); `Arena` and `BumpAllocator` ship in
+a **named `ctor`** (`DynamicArray.withAllocator(allocator:)`), which assigns `alloc` on the value it builds. `Allocator`/`GlobalAllocator` are prelude (global, no import); `Arena` and `BumpAllocator` ship in
 `std::collections`:
 
 ```kama
@@ -425,7 +424,7 @@ game-engine frame-allocator / real-time pattern, not only MCU).
 
 #### `try new` — non-panic construction ✅ (MCU step 5)
 
-`try new T.make(...)` (and the bare `try new T(...)` for positional-ctor types) yields
+`try new T.make(...)` yields
 `Optional<Owned<T>>` — `None` when the allocation fails, instead of panicking. It is the single fallible
 construction entry (`new` stays the infallible sugar that unwraps-or-panics); there is no parallel
 `tryAllocate`. Scoped to a typed local-variable initializer; a placement `try new(allocator: …)` is a
@@ -530,26 +529,28 @@ Shared<Counter> u = copy s;  // explicit retain (same as bare); `give s` moves t
 ```
 
 *(`copy` of a collection is a deep copy — a fresh buffer, element-wise: a bitwise-copyable element is copied
-memberwise, a `Copyable`-resource element is deep-copied via its own `copy()`. A resource element that is not
+memberwise, a `Copyable`-resource element is deep-copied via its own `copy` ctor. A resource element that is not
 `Copyable` is rejected. `give` of a collection **moves** the buffer.)*
 
 **Move-only `resource` values + the `Copyable` contract.** A **`type resource`** value (it owns something, or
 has identity) is **move-only**: a bare named hand-off *moves* (the source is consumed, its destructor
 suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would double-free).
 `give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts into copy**
-**nominally** — `implements Copyable(bare: …)` (the prelude contract `Copyable { fn This copy(); }`) plus a
-**public nullary `copy()`** method (a lone `copy()` method without the `implements` does *not* make a type
-copyable). Opting in **requires declaring the bare-hand-off default**: `Copyable(bare: give)` (a bare hand-off
-moves) or `Copyable(bare: copy)` (a bare hand-off deep-copies via `copy()`). A marker (**`give x`** / **`copy
-x`**) always overrides the default; there is no "ambiguous — must annotate" error. Because `copy`/`give` are
-markers only in expression position, they're **contextual keywords** — usable as method names, so the opt-in
-method is literally named `copy`.
+**nominally** — `implements Copyable(bare: …)` (the prelude contract `Copyable { ctor copy(ref This source); }`)
+plus a **public `copy` constructor** (a lone `copy` ctor without the `implements` does *not* make a type
+copyable). It is a **`ctor`** because a copy *is* a new object — the same reason a self-returning `static fn`
+is rejected as a disguised constructor; the source is *borrowed* (`ref This`), since copying never consumes
+it. Opting in **requires declaring the bare-hand-off default**: `Copyable(bare: give)` (a bare hand-off moves)
+or `Copyable(bare: copy)` (a bare hand-off deep-copies). A marker (**`give x`** / **`copy x`**) always
+overrides the default; there is no "ambiguous — must annotate" error. Because `copy`/`give` are markers only
+in expression position, they're **contextual keywords** — usable as member names, so the opt-in ctor is
+literally named `copy`.
 
 ```kama
 type resource Res implements Copyable(bare: copy) {   // a bare hand-off deep-copies
     DynamicArray<int32> items;
     ~Res() { }
-    public fn Res copy() { Res r = Res.make(v: this.items[0]); return give r; }   // the Copyable method
+    public ctor copy(ref Res source) { return Res.make(v: source.items[0]); }     // the Copyable ctor
 }
 Res b = copy a;   // deep copy — a stays valid, b has its own buffer
 Res c = give b;   // move — b consumed
@@ -591,8 +592,8 @@ rvalue (`new`/constructor/call result) never takes a marker.
 | `Weak<T>` (weak ref) | **retain** (weak++) | **move** (transfer the handle) | retain (explicit) |
 | collection (`FixedArray`/`DynamicArray`/`string`) | ⛔ marker required | **move** (buffer) | **deep copy** (fresh buffer) |
 | plain `resource` (move-only value) | **move** | move (emphasis) | ⛔ "opt into `Copyable`" |
-| `Copyable` resource (has `copy()`) | its declared `bare:` default | move | **deep copy** via `copy()` |
-| collection of `Copyable` elements | ⛔ marker required | move | **deep copy** (element-wise `copy()`) |
+| `Copyable` resource (has a `copy` ctor) | its declared `bare:` default | move | **deep copy** via `copy` |
+| collection of `Copyable` elements | ⛔ marker required | move | **deep copy** (element-wise `copy`) |
 
 A marker on a fresh rvalue is an error. Move tracking is compile-time: reading a moved value, moving out of a
 field/element, moving inside a loop a value declared outside it, and a conditional move that is still live at
@@ -737,9 +738,9 @@ the `kama_lshift` runtime shim — so a kama program can't hit arithmetic UB whe
 import std::math::{Vec3, Mat4};
 fn int main() {
     Mat4 vp = Mat4.perspective(fovyRad: 1.0472f32, aspect: 1.777f32, near: 0.1f32, far: 100.0f32)
-            * Mat4.lookAt(eye: Vec3(x: 0.0f32, y: 2.0f32, z: 5.0f32),
+            * Mat4.lookAt(eye: Vec3.of(x: 0.0f32, y: 2.0f32, z: 5.0f32),
                            center: Vec3.zero(), up: Vec3.unitY());   // method chaining
-    Vec3 p = vp.transformPoint(p: Vec3(x: 1.0f32, y: 0.0f32, z: 0.0f32));
+    Vec3 p = vp.transformPoint(p: Vec3.of(x: 1.0f32, y: 0.0f32, z: 0.0f32));
     return cast<int>(p.length());
 }
 ```
@@ -1326,6 +1327,114 @@ A `~Type()` destructor runs deterministically at scope exit, in reverse construc
 (block end, early `return`, `break`/`continue`). Destructible fields are destroyed in reverse declaration
 order. No GC; allocation/deallocation is predictable.
 
+## Construction ✅
+
+**A constructor is a named factory that returns a fully-initialized object, or an error.** There is exactly
+one kind, spelled `ctor` (no `fn`, no `static` — it is implicitly type-associated), and *everything* is one,
+including deserialization and copying.
+
+```kama
+type resource Buffer {
+    Ptr<uint8> data = null;                                  // a field default states the empty value
+    int32 size;
+    public ctor make(int32 size) { Buffer b; b.size = size; return give b; }
+    public ctor withCapacity(int32 n) { return Buffer.make(size: n); }   // reuse = an ordinary call
+}
+Buffer b = Buffer.make(size: 8);          // dot-on-type: construction
+Owned<Buffer> h = new Buffer.make(size: 8);   // `new` composes — heap, an owning handle
+```
+
+- **Dot-on-type is construction, and only that.** `Type.name(…)` constructs; `Type::staticFn()` and
+  `Enum::Variant(…)` keep `::`. So `.make(` greps for construction and catches nothing else. There is **no
+  nameless `Type(…)` call form** — it silently dropped its arguments, and it is now a hard error. A generic
+  ctor puts the turbofish on the **type**: `T::<Args>.make(…)`.
+- **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built,
+  and the diagnostic is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields
+  public), never for a `resource`.
+- **Reuse is a visible call.** A ctor delegates by calling another (`return Buffer.make(…)`). There is no
+  `init` hook, no designated/final ctor, and no mandatory funnel — shared logic lives in the ctor others
+  chain to, and it is greppable.
+- **A self-returning `static fn` is rejected** as a disguised constructor; so is a class-named ctor
+  (`public Buffer(…)`). Genuine static utilities returning *other* types (`Vec3::dot` → `float`) stay
+  `static fn`.
+- **A contract may require a `ctor`** — `type contract HeapOwner<T> for resource { ctor adopt(Ptr<T> raw); }`
+  — and generic code bounded by it may construct through the type parameter, monomorphized to the concrete
+  implementer. That is why there is **no privileged `Default` contract**: "default construction" is just a
+  contract requiring a zero-arg ctor.
+
+### Complete initialization — enforced ✅
+
+**A constructor must assign every field**, checked at compile time. The returned value is complete by
+delegation when the ctor's terminating move is `return Other.make(…)`, so chaining stays clean. This is
+kama's answer to "a returned object is always fully initialized" — it is proven, not conventional.
+
+Two escape hatches, both **explicit and at the declaration** rather than hidden in codegen:
+
+- a **field initializer** — `Ptr<T> data = null;`, `int32 len = 0;` — states that field's default once, and
+  it runs in every ctor (and for a bare local);
+- **`@generate(zero)`** blesses a whole data bag's zero state (a transparent all-public `value`).
+
+What is exempt is not a carve-out but a guarantee the compiler supplies: an **intrinsic collection**, whose
+zero representation *is* its valid empty value, and a type with a **`default` ctor**, which the compiler
+calls at the fill site. (A generic field could not spell the latter anyway — there is no expression for
+"the default `A`".)
+
+```kama
+type resource Ring {
+    Ptr<uint8> data = null; int32 len = 0;   // stated defaults — every ctor inherits them
+    int32 cap;                                // no default -> every ctor must assign it
+    public ctor withCapacity(int32 cap) { Ring r; r.cap = cap; return give r; }
+}
+```
+
+The idiom for a raw handle follows: give the field's empty value a **niche** rather than letting zero double
+as "unset". `std::fs::File` declares `int32 fd = -1`, so its destructor is `if (fd >= 0)` and descriptor 0
+(stdin) is an ordinary ownable handle — Rust's `OwnedFd`.
+
+> A bare `T x;` outside a constructor is still permitted; making it an explicit `slot` declaration, so that
+> an unassigned slot is provably never dropped, is tracked in [ROADMAP.md](ROADMAP.md) §3.
+
+### Collections — the four-ctor matrix ✅
+
+Every growable collection (`DynamicArray`, `Deque`, `Map`, `Set`, `SlotMap`, `BitSet`) offers `empty()` /
+`withCapacity(n)` using the default `GlobalAllocator`, and `withAllocator(a)` / `withCapacityAndAllocator(a, n)`
+for a caller-owned allocator. `PriorityQueue` carries capacity on its backing array; the B-tree
+`SortedMap`/`SortedSet` and the always-sized `FixedArray` keep their own shapes. The canonical zero-arg build
+is marked **`default`**, which is what makes such a field default-fillable elsewhere.
+
+The default-allocator conveniences are gated **`when [A: default]`** — a *structural* bound (the argument
+bound to `A` must itself have a `default` ctor; there is no nominal `Default` contract). So
+`DynamicArray<T, BumpAllocator>.empty()` **does not exist**: you get a clean "not available for this
+instantiation" error rather than a collection with a zero allocator. Use `withAllocator` for a custom `A`.
+
+### Derives — `@generate(...)` ✅
+
+One opt-in surface, on a plain (non-generic, non-variant) type. Every name is **opt-in by design**; a
+hand-written member always wins over the synthesized body, and the nominal conformance is registered either way.
+
+| Name | Synthesizes |
+| --- | --- |
+| `Serialize` / `Deserialize` | the reflective wire methods — see *Serialization* |
+| `Format` | a field-dump `format(ref Formatter)` — `Type { f: v, … }` |
+| `Equatable` | a memberwise `equals(ref This)`; also what gives the type `==` / `!=` |
+| `Hashable` | a field-walked `hash()`, FNV-combined in declaration order |
+| `of` | a memberwise ctor `T.of(f1:, …)` — **bag only** (a transparent `value`) |
+| `zero` | a zero-init ctor `T.zero()` — bag only |
+
+`Equatable`/`Hashable` walk each field through *its own* `equals`/`hash` — never a bitwise compare, which
+would read padding and be wrong for any type whose equality is not its representation — so every field must
+itself conform, and `@skip` is honored by both (which is what keeps "equal values hash equal" true). A
+payload-less `enum` has no struct to walk: use a retroactive `implements`, which it supports.
+
+### Deliberately not in the model
+
+Recorded so they are not re-proposed: a nameless `Type(…)` call shape or a `primary` keyword blessing one
+ctor as nameless-callable; a compiler-synthesized memberwise as the *general* designated ctor (`of` is a
+bag-only convenience — a memberwise seam breaks on complex types); a separate `init`/`onConstruction` hook
+(input-blind, auto-run — it does not stop logic scattering, and chaining already reaches every path); and a
+mandatory "designated"/"final" ctor every path funnels through (completeness comes from definite assignment,
+not from a funnel). Constructor **overloading** is a standing non-goal — named parameters cover it.
+
 ## Fallible construction (no exceptions) ✅
 
 kama has no exceptions, so a **fallible constructor returns `Result<T, E>`** (where `E: Error`) — an
@@ -1664,12 +1773,45 @@ own. Only two operators with the *same* symbol *and* operand type are a duplicat
 position including a raw `if`/`while` condition: a nested rvalue is wrapped in a C99 compound-literal array so
 the method form's by-pointer `this` is legal without a statement slot (and it re-evaluates correctly each loop
 pass). Compound assignment lowers to the operator — `pos += vel` ≡ `pos = pos + vel`. An **inline
-constructor** is a valid operand — `v + Vec3(x: 1, y: 0, z: 0)` needs no separate local. It works in an
+constructor** is a valid operand — `v + Vec3.of(x: 1, y: 0, z: 0)` needs no separate local. It works in an
 `if`/`while`/`for` condition too (the condition is wrapped / uses a loop-and-a-half so the temp materializes
 and re-evaluates each pass); a `do`/`while` condition is the one place it must still be bound to a local.
 
-`==` is **explicit** — a `value` without `operator==` cannot be compared (there is no auto-generated
-structural equality). The `true`/`false` conversion operators are out of scope.
+**Comparison is a contract, not an operator.** The six comparison operators are the one place where the
+operator is not declared on the type: `==`/`!=` lower to **`Equatable.equals`**, and `<`/`>`/`<=`/`>=`
+lower to **`Comparable.compareTo`**. Declaring `operator==` (or any of the other five) is a compile error
+that hands back the `implements` form. This is what keeps `a == b` and a `<K: Equatable>` bound from ever
+disagreeing — the split C# has, where `operator==`, `Equals`, `IEquatable<T>` and `EqualityComparer<T>` can
+all give different answers. Rust is the same shape as kama here (`a == b` *is* `PartialEq::eq`).
+
+The rule that falls out: **operators a generic bound has to name are contracts; operators that are pure
+concrete-type ergonomics (`+`, `*`, `[]`) stay operator members.** So `Equatable` is the sibling of
+`Comparable` it always should have been, and conforming to either also buys container eligibility — a
+`Comparable` type is a `SortedMap`/`SortedSet` key and a `PriorityQueue` element; add `Hashable` and it is
+a `Map`/`Set` key.
+
+```kama
+type value Cents implements Equatable, Comparable {
+    public int32 v;
+    public fn bool equals(ref Cents other) { return this.v == other.v; }          // `==` / `!=`
+    public fn Ordering compareTo(ref Cents other) {                               // `<` `>` `<=` `>=`
+        if (this.v < other.v) { return Ordering::Less; }
+        if (this.v > other.v) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
+}
+```
+
+Both contracts **borrow** their operand (`ref This`) — a comparison never consumes or copies it. `!=` is
+`!equals`; `<=`/`>=` are "not Greater"/"not Less", so there is nothing separate to define. Equality stays
+**explicit**: a `value` that implements neither contract cannot be compared, and there is no auto-generated
+structural equality — but `@generate(Equatable, Hashable)` will synthesize the memberwise walk on request
+(see *Derives*). The `true`/`false` conversion operators are out of scope.
+
+**Primitives are untouched.** An all-primitive comparison keeps the built-in C operator, so `float` `<`
+keeps exact IEEE semantics at zero cost and never routes through `Comparable`. (A float is deliberately
+**not** `Hashable` — NaN and ±0.0 make it a bad key — while its `Comparable` impl is a *total* order with
+NaN sorting last, which is what the sorted containers need. Same split as Rust's `total_cmp` vs `PartialEq`.)
 
 A user type may define a **place-returning index operator** — `public ref T operator[](usize i)` —
 whose body returns a place (`return this.cells[i]`). It lowers to `T* C__op_index(C* self, size_t i)`,
@@ -1759,7 +1901,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   Wrap<bool, U: int32> d = /* … */;                 // named override — same instance as `Wrap<bool>`
   ```
   Default **function/constructor** parameters are a deliberate non-goal (one way to do a thing) — a
-  self-documenting named static factory (`Map.withAllocator(allocator: …)`) covers that need instead.
+  self-documenting named `ctor` (`Map.withAllocator(allocator: …)`) covers that need instead.
 
 ## Access control ✅
 
@@ -2233,7 +2375,7 @@ Everything below **hard-errors** (never miscompiles) and has a clean workaround.
 - **An inline `new` (or owned value) borrowed by a `ref`/`out` or contract parameter** — an inline `new` is
   consumed **by value** (the callee/caller becomes the owner). To borrow it (`ref`/`out`) or reseat a
   contract handle, bind it to a local first — an rvalue has no stable lvalue to write back to. (An inline
-  *stack* ctor into a **by-value** contract param does work — `f(a: Square(3))` — since the callee only
+  *stack* ctor into a **by-value** contract param does work — `f(a: Square.make(n: 3))` — since the callee only
   borrows the caller-owned temp.)
 - **An inline construct in a `do/while` condition** — the temp is needed at the bottom condition, which
   `continue` must reach; a portable (statement-expression-free) ISO-C lowering can't express it. Bind to a
