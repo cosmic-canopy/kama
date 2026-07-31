@@ -3503,6 +3503,7 @@ std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
             ParamSig ps;
             ps.name  = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             ps.byRef = paramByRef(p.get());
+            ps.isOut = paramIsOut(p.get());
             ps.isConst = p->isConst;
             ps.isHardware = p->isHardware;
             ps.declSite = p->identifier.get();   // M6 A2: what a call-site label is a reference TO
@@ -8435,6 +8436,22 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         // the marker (give=move / copy=retain) only matters for a smart pointer passed
         // BY VALUE (ownership transfer) — it's meaningless on a borrow.
         SharedExpression argExpr = f->second->expression;
+        // `out` is a REQUIRED call-site marker, not decoration. `out` and `ref` lower to the same `T*`,
+        // so without the marker a reader (and the caller's definite-assignment analysis) cannot tell a
+        // borrow from a fill — which is exactly what made `out` a silent alias for `ref` before. The
+        // `ref` marker stays optional: a borrow reads AND writes an already-live value, so nothing is
+        // riding on it. Marking `out` where the parameter is not one is the mirror error.
+        {
+            const std::string* am = (f->second->modifier && f->second->modifier->value)
+                                  ? f->second->modifier->value.get() : nullptr;
+            bool markedOut = am && *am == "out";
+            if (p.isOut && !markedOut)
+                unsupported(("`" + p.name + "` is an `out` parameter — the call site must say so: `"
+                             + p.name + ": out <variable>`" + (am ? " (not `" + *am + "`)" : "")).c_str(), srcLine);
+            else if (!p.isOut && markedOut)
+                unsupported(("`" + p.name + "` is not an `out` parameter — drop the `out` marker"
+                             + std::string(p.byRef ? " (it is a `ref` borrow)" : "")).c_str(), srcLine);
+        }
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
         // inline constructor in argument position — `f(x: Counter(start: 5))`. A ctor lowers to
@@ -9292,14 +9309,24 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
 // branch-body assignment doesn't count (mirrors analyzeCtorStmt/checkNamedCtorComplete's discipline). Params
 // are trusted complete (only body-declared locals are tracked). `unsafe { }` is exempt (its raw init dance
 // owns the invariant). `Weak` and raw `Ptr` are never owning, so they are never tracked (box_basic stays legal).
-void CEmitter::checkDefiniteAssignment(SharedBlock body)
+void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList params)
 {
     if (!body || !body->statements) return;
 
     std::set<std::string> bareOwning;                        // local whose OWN type is Owned/Shared
     std::map<std::string, std::set<std::string>> resFields;  // resource local -> its owning field names
     std::set<std::string> unassigned;                        // live keys: "x" (bare) or "x.f" (resource field)
+    std::set<std::string> outParams;                         // `out` params — must be assigned by every return
     bool inUnsafe = false;
+
+    // An `out` parameter is the one param that is NOT trusted complete: it arrives as a hole the callee
+    // owes a value to. Track it exactly like a bare owning local (reads are flagged) and additionally
+    // verify at every return that it was filled.
+    if (params) for (auto& p : *params) {
+        if (!paramIsOut(p.get()) || !p->identifier || !p->identifier->value) continue;
+        const std::string& pn = *p->identifier->value;
+        bareOwning.insert(pn); unassigned.insert(pn); outParams.insert(pn);
+    }
 
     // `x.f` where x is a tracked resource local and f one of its owning fields -> key "x.f"; else "".
     auto fieldKey = [&](SharedExpression e) -> std::string {
@@ -9328,8 +9355,21 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body)
     };
     auto flag = [&](const std::string& key, int line) {
         if (inUnsafe) return;                                // the escape hatch owns its invariants
-        unsupported(("'" + key + "' is used before it is assigned "
-                     "(`Owned`/`Shared` are never-null)").c_str(), line);
+        if (outParams.count(key))
+            unsupported(("'" + key + "' is an `out` parameter — it is write-only, so it cannot be read "
+                         "before this function assigns it").c_str(), line);
+        else
+            unsupported(("'" + key + "' is used before it is assigned "
+                         "(`Owned`/`Shared` are never-null)").c_str(), line);
+    };
+    // Every `out` parameter must be filled on the path reaching this point (a return, or falling off the
+    // end). Reported per-parameter so a two-`out` function names the one actually missing.
+    auto verifyOutsAssigned = [&](int line) {
+        if (inUnsafe) return;
+        for (auto& o : outParams)
+            if (unassigned.count(o))
+                unsupported(("`out` parameter '" + o + "' is not assigned on every path before this "
+                             "function returns").c_str(), line);
     };
     auto markAssigned = [&](const std::string& nm){
         unassigned.erase(nm);
@@ -9347,8 +9387,29 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body)
         return (bareOwning.count(*id->value) || resFields.count(*id->value)) ? *id->value : "";
     };
 
+    // `f(p: out x)` — the marker says the CALLEE fills `x`, so this argument ASSIGNS it rather than
+    // reading it. emitReorderedCall separately proves the marker matches a real `out` parameter, and that
+    // callee's own verifyOutsAssigned proves it really is filled — so this is a genuine assignment, not a
+    // vouch. Returns the tracked name, or "".
+    auto outArgTarget = [&](ArgumentNode* a) -> std::string {
+        if (!a || !a->modifier || !a->modifier->value || *a->modifier->value != "out") return "";
+        auto* id = dynamic_cast<IdentifierNode*>(a->expression.get());
+        if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return "";
+        return (bareOwning.count(*id->value) || resFields.count(*id->value)) ? *id->value : "";
+    };
+
     std::function<void(SharedExpression)> scan;
     std::function<void(SharedStatement, bool)> walk;
+
+    // Walk a body that control may SKIP (a lone `if`, a loop, a match arm). Its reads must still be
+    // checked, but nothing it assigns is definite afterwards — including the marks made by `addr(of: x)`
+    // and by an `out` argument, which `scan` applies unconditionally wherever it finds them. Restoring
+    // the set is what keeps those two from leaking out of a branch that may never run.
+    auto walkSkippable = [&](SharedStatement s) {
+        std::set<std::string> before = unassigned;
+        walk(s, true);        // INSIDE the branch, sequencing is definite — `q = …; return;` must count…
+        unassigned = before;  // …but nothing it did survives the join.
+    };
 
     // Recursively flag reads of still-unassigned owning values inside an expression.
     scan = [&](SharedExpression e) {
@@ -9377,7 +9438,10 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body)
             std::string ax = addrOfLocal(inv);
             if (!ax.empty()) { markAssigned(ax); return; }   // addr(of: x) — manual control; x is now managed
             rec(inv->expression);
-            if (inv->args) for (auto& a : *inv->args) if (a) rec(a->expression);
+            if (inv->args) for (auto& a : *inv->args) if (a) {
+                std::string ot = outArgTarget(a.get());
+                if (!ot.empty()) markAssigned(ot); else rec(a->expression);
+            }
         } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
             rec(ea->expression);
             if (ea->expressionlist) for (auto& x : *ea->expressionlist) rec(x);
@@ -9392,7 +9456,7 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body)
             rec(mt->subject);
             if (mt->arms) for (auto& arm : *mt->arms) if (arm) {
                 if (arm->body) rec(arm->body);
-                if (arm->block) walk(arm->block, false);
+                if (arm->block) walkSkippable(arm->block);
             }
         }
     };
@@ -9435,23 +9499,49 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body)
             }
         } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
             scan(iff->booleanExpression);
-            walk(iff->ifStatement, false);                   // branch bodies don't count as unconditional assigns
-            walk(iff->elseStatement, false);
+            if (!topLevel || !iff->elseStatement) {
+                // A lone `if` (no else) can be skipped entirely, so nothing it assigns is definite; the
+                // same goes for anything already off the unconditional path. Stay conservative.
+                walkSkippable(iff->ifStatement);             // branch bodies don't count as unconditional assigns
+                walkSkippable(iff->elseStatement);
+            } else {
+                // if/else at the top level IS a join: a key is assigned after it iff every arm that
+                // REACHES the join assigns it. An arm ending in return/break/continue never reaches the
+                // join, so it contributes nothing (and its own return was already verified below).
+                // Without this, `if (c) { q = 1; } else { q = 2; }` — the ordinary way to fill an `out` —
+                // would be rejected, which would make the rule unusable.
+                std::set<std::string> before = unassigned;
+                walk(iff->ifStatement, true);
+                std::set<std::string> afterThen = unassigned;
+                bool thenDiv = bodyDiverges(iff->ifStatement);
+                unassigned = before;
+                walk(iff->elseStatement, true);
+                std::set<std::string> afterElse = unassigned;
+                bool elseDiv = bodyDiverges(iff->elseStatement);
+                if (thenDiv && elseDiv)  unassigned = before;      // join is unreachable — state is moot
+                else if (thenDiv)        unassigned = afterElse;
+                else if (elseDiv)        unassigned = afterThen;
+                else {                                            // union: still a hole if EITHER arm left one
+                    unassigned = afterThen;
+                    for (auto& k : afterElse) unassigned.insert(k);
+                }
+            }
         } else if (auto* wh = dynamic_cast<WhileNode*>(n)) {
-            scan(wh->booleanExpression); walk(wh->whileStatement, false);
+            scan(wh->booleanExpression); walkSkippable(wh->whileStatement);
         } else if (auto* dw = dynamic_cast<DoWhileNode*>(n)) {
-            walk(dw->doWhileStatement, false); scan(dw->booleanExpression);
+            walkSkippable(dw->doWhileStatement); scan(dw->booleanExpression);
         } else if (auto* fr = dynamic_cast<ForNode*>(n)) {
-            if (fr->initializerStatements) for (auto& s : *fr->initializerStatements) walk(s, false);
+            if (fr->initializerStatements) for (auto& s : *fr->initializerStatements) walkSkippable(s);
             scan(fr->booleanExpression);
-            if (fr->iteratorStatements) for (auto& s : *fr->iteratorStatements) walk(s, false);
-            walk(fr->body, false);
+            if (fr->iteratorStatements) for (auto& s : *fr->iteratorStatements) walkSkippable(s);
+            walkSkippable(fr->body);
         } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
-            scan(fe->expression); walk(fe->body, false);
+            scan(fe->expression); walkSkippable(fe->body);
         } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
-            scan(pf->expression); walk(pf->body, false);
+            scan(pf->expression); walkSkippable(pf->body);
         } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
             scan(ret->expression);
+            verifyOutsAssigned(ret->line);
         } else if (auto* un = dynamic_cast<UnsafeNode*>(n)) {
             bool save = inUnsafe; inUnsafe = true;
             walk(un->body, topLevel);
@@ -9465,6 +9555,11 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body)
     };
 
     for (auto& st : *body->statements) walk(st, true);
+    // Falling off the end is a return too (a `void` function need not spell one). Skip it when the body
+    // ends in a jump — that path was already verified at the ReturnNode.
+    if (!outParams.empty()
+        && !(!body->statements->empty() && stmtIsJump(body->statements->back())))
+        verifyOutsAssigned(body->line);
 }
 
 // access control --------------------------------------------------------
@@ -10954,6 +11049,14 @@ bool CEmitter::paramByRef(FunctionParameterNode* p)
            (*p->modifier->value == "ref" || *p->modifier->value == "out");
 }
 
+// `out T x` — the write-only half of the by-pointer pair. Same C lowering as `ref` (a `T*`); the
+// difference is the CONTRACT: the callee must assign it on every path and may not read what came in,
+// and the call site must spell `out` so the caller knows its variable is being filled, not borrowed.
+bool CEmitter::paramIsOut(FunctionParameterNode* p)
+{
+    return p && p->modifier && p->modifier->value && *p->modifier->value == "out";
+}
+
 // C parameter list. ref/out parameters become pointers. When selfType is set,
 // a leading `selfType* self` is prepended (for methods/constructors).
 std::string CEmitter::paramListC(SharedParameterList params, const char* selfType,
@@ -11178,7 +11281,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     bool prevNoHeap = _noHeapActive;
     if (fnHasNoHeap(fn)) _noHeapActive = true;   // `@noheap`: gate every allocation in this body
     if (fn->block) {
-        checkDefiniteAssignment(fn->block);   // owning LOCAL read-before-assign is a compile error (free fn)
+        checkDefiniteAssignment(fn->block, fn->parameters);   // owning LOCAL read-before-assign + `out` params (free fn)
         emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
     } else {
         *_out << "{\n}";
@@ -11753,7 +11856,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     }
     // Stage 1: never-null — every `Owned`/`Shared` field must be assigned by ctor-end and not read before.
     if (isCtor) checkCtorNeverNull(owner, body);
-    checkDefiniteAssignment(body);   // owning LOCAL read-before-assign is a compile error (any method/ctor)
+    checkDefiniteAssignment(body, params);   // owning LOCAL read-before-assign + `out` params (any method/ctor)
     SharedStatement last;
     if (body && body->statements) {
         for (auto& st : *body->statements) { emitStatement(st, 1); last = st; }

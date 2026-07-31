@@ -1,0 +1,6 @@
+// The whole point of `out` is the callee's promise to fill it. A lone `if` may be skipped, so this
+// function can return with `dst` never assigned.
+fn void fill(out int32 dst, bool cond) {
+    if (cond) { dst = 7; }     // only one path assigns
+}                              // ERROR: falls off the end with `dst` unassigned
+fn int main() { int32 x = 0; fill(dst: out x, cond: true); return x; }

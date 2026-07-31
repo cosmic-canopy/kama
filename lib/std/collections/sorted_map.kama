@@ -276,12 +276,12 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
     fn Owned<BTreeNode<K,V,A>, A> takeLastKid() { return this.kids.remove(index: this.kids.length() - 1); }
     // Remove + return THIS node's own last (resp. first) pair — the value by return, the key via out-pointer
     // (no tuples; a `resource` pair can't expose fields). Used by the sibling rotations.
-    fn V popLastOwnPair(ref K outKey) {
+    fn V popLastOwnPair(out K outKey) {
         int32 last = this.keys.length() - 1;
         K k = this.keys.remove(index: last); V v = this.vals.remove(index: last);
         outKey = give k; return give v;
     }
-    fn V popFirstOwnPair(ref K outKey) {
+    fn V popFirstOwnPair(out K outKey) {
         K k = this.keys.remove(index: 0); V v = this.vals.remove(index: 0);
         outKey = give k; return give v;
     }
@@ -295,7 +295,7 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
     }
     // Remove + return the MAX (resp. MIN) pair of THIS subtree, rebalancing thin children on the way down so
     // the invariant holds — a delete of the extreme key. Value by return, key via out-pointer.
-    fn V takeMaxPair(ref K outKey) {
+    fn V takeMaxPair(out K outKey) {
         if (this.leaf) {
             int32 last = this.keys.length() - 1;
             K k = this.keys.remove(index: last); V v = this.vals.remove(index: last);
@@ -304,16 +304,16 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
         int32 lastChild = this.keys.length();
         int32 t = lastChild;
         if (this.kids[lastChild].keyCount() < 6) { t = this.fill(i: lastChild); }   // < B == thin
-        return this.kids[t].takeMaxPair(outKey: outKey);
+        return this.kids[t].takeMaxPair(outKey: out outKey);
     }
-    fn V takeMinPair(ref K outKey) {
+    fn V takeMinPair(out K outKey) {
         if (this.leaf) {
             K k = this.keys.remove(index: 0); V v = this.vals.remove(index: 0);
             outKey = give k; return give v;
         }
         int32 t = 0;
         if (this.kids[0].keyCount() < 6) { t = this.fill(i: 0); }
-        return this.kids[t].takeMinPair(outKey: outKey);
+        return this.kids[t].takeMinPair(outKey: out outKey);
     }
     // Merge child i, separator keys[i]/vals[i], and child i+1 into child i (which then holds 2B-1 keys).
     fn void mergeChildren(int32 i) {
@@ -330,7 +330,7 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
             Owned<BTreeNode<K,V,A>, A> lastKid = this.kids[i - 1].takeLastKid();
             this.kids[i].insertKidAt(i: 0, c: give lastKid);
         }
-        K upK; V upV = this.kids[i - 1].popLastOwnPair(outKey: upK);         // sibling max up
+        K upK; V upV = this.kids[i - 1].popLastOwnPair(outKey: out upK);         // sibling max up
         this.insertKeyVal(i: i - 1, key: give upK, value: give upV);
     }
     fn void borrowFromNext(int32 i) {
@@ -340,7 +340,7 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
             Owned<BTreeNode<K,V,A>, A> firstKid = this.kids[i + 1].takeFirstKid();
             this.kids[i].pushKid(c: give firstKid);
         }
-        K upK; V upV = this.kids[i + 1].popFirstOwnPair(outKey: upK);         // sibling min up
+        K upK; V upV = this.kids[i + 1].popFirstOwnPair(outKey: out upK);         // sibling min up
         this.insertKeyVal(i: i, key: give upK, value: give upV);
     }
     // Ensure child i has >= B keys before a descend: borrow from a rich sibling, else merge. Returns the child
@@ -377,13 +377,13 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
             }
             if (this.kids[i].keyCount() >= 6) {                  // CASE 2a: predecessor from left child
                 V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i); drop(value: oldk);
-                K pk; V pv = this.kids[i].takeMaxPair(outKey: pk);
+                K pk; V pv = this.kids[i].takeMaxPair(outKey: out pk);
                 this.insertKeyVal(i: i, key: give pk, value: give pv);
                 return Optional::Some(value: give removed);
             }
             if (this.kids[i + 1].keyCount() >= 6) {              // CASE 2b: successor from right child
                 V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i); drop(value: oldk);
-                K sk; V sv = this.kids[i + 1].takeMinPair(outKey: sk);
+                K sk; V sv = this.kids[i + 1].takeMinPair(outKey: out sk);
                 this.insertKeyVal(i: i, key: give sk, value: give sv);
                 return Optional::Some(value: give removed);
             }

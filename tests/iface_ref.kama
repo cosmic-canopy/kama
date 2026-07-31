@@ -16,7 +16,7 @@ fn int main() {
     Square q = Square.make(s: 5);
     Shape s = c;
     int64 a = read(sh: ref s);     // 36
-    swapTo(sh: ref s, other: q);  // now s holds the square
+    swapTo(sh: out s, other: q);  // now s holds the square — `out` reseats, so the call site says `out`
     int64 b = read(sh: ref s);     // 25
     int64 total = a + b;           // 61
     return cast<int>(total);

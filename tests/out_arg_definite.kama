@@ -1,0 +1,12 @@
+import std::memory::{Owned};
+// The caller's half of the contract: passing a local as an `out` argument makes it definitely ASSIGNED,
+// because the callee is separately proven to fill it. Without the required marker there is nothing at the
+// call site to key that off — which is why `out` had to stop being an alias for `ref`.
+// (An `out` producing a handle is legal where a `ref` borrow of a smart pointer is not.)
+type value Box { int32 v; public ctor make(int32 v) { Box r; r.v = v; return give r; } public fn int32 get() { return this.v; } }
+fn void build(int32 n, out Owned<Box> dst) { Owned<Box> t = new Box.make(v: n); dst = give t; }
+fn int32 main() {
+    Owned<Box> b;                  // declared with no initializer — not assigned yet
+    build(n: 42, dst: out b);      // the `out` argument assigns it
+    return b.get();                // so this read is fine
+}

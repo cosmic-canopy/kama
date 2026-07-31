@@ -1,0 +1,17 @@
+// `out` is proven filled on EVERY path, not just unconditionally. Two shapes have to work or the rule is
+// unusable: an if/else where both arms assign (the join sees it assigned), and an early return out of a
+// branch that assigned first (the shape `SortedMap.takeMaxPair` uses).
+fn void classify(int32 n, out int32 kind) {
+    if (n < 0) { kind = 1; } else { kind = 2; }       // both arms assign -> definite at the join
+}
+fn void pick(bool leaf, out int32 v) {
+    if (leaf) { v = 10; return; }                    // assigns, then returns, inside a lone `if`
+    v = 20;
+}
+fn int main() {
+    int32 a = 0; classify(n: 0 - 3, kind: out a);    // 1
+    int32 b = 0; classify(n: 5,     kind: out b);    // 2
+    int32 c = 0; pick(leaf: true,   v: out c);       // 10
+    int32 d = 0; pick(leaf: false,  v: out d);       // 20
+    return a + b + c + d;                            // 33
+}

@@ -1,0 +1,9 @@
+// `out` and `ref` lower to the same `T*`, so the marker is what tells a reader (and the caller's
+// definite-assignment analysis) that the variable is being FILLED rather than borrowed. Omitting it is
+// how `out` silently degenerated into an alias for `ref`; it is now a hard error.
+fn void fill(out int32 dst) { dst = 7; }
+fn int main() {
+    int32 x = 0;
+    fill(dst: x);     // ERROR: must say `dst: out x`
+    return x;
+}

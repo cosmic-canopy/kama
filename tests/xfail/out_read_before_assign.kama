@@ -1,0 +1,7 @@
+// An `out` parameter is WRITE-only: its incoming value is a hole, so reading it before assigning is a
+// read of whatever the caller happened to leave there. (`ref` is the form that reads and writes.)
+fn void fill(out int32 dst) {
+    int32 seen = dst + 1;     // ERROR: `dst` is write-only until assigned
+    dst = seen;
+}
+fn int main() { int32 x = 0; fill(dst: out x); return x; }

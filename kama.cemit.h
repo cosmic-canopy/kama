@@ -23,6 +23,11 @@ struct ParamSig {
     std::string name;
     bool        byRef;        // ref/out => passed as a pointer (call site emits &arg)
     std::string className;    // class type (for ref upcast at call sites), "" if primitive
+    // `out T x` — a WRITE-ONLY borrow: the callee must assign it on every path before returning, and may
+    // not read the incoming value. Lowers identically to `ref` (a `T*`); the difference is entirely in the
+    // rules, which is why the call site must SAY `out` (see emitReorderedCall) — the marker is what lets
+    // the caller's definite-assignment analysis mark an otherwise-unassigned local live across the call.
+    bool        isOut = false;
     bool        isConst = false;   // `const` param — emits `const T*` for FFI pointers
     bool        isHardware = false; // `hardware Ptr<T>` param — emits `volatile T*` for MMIO
     // The parameter's declaration identifier — the SAME node registerBinding keys its DefSite on, which
@@ -1332,6 +1337,7 @@ private:
 
     // Declarations / top level
     bool paramByRef(FunctionParameterNode* p);
+    bool paramIsOut(FunctionParameterNode* p);   // `out` — the write-only half of the by-pointer pair
     // `ownerCType` names the enclosing type when emitting a class member, so a `ref This`
     // SELF-borrow can be told apart from borrowing someone else's smart-pointer handle.
     std::string paramListC(SharedParameterList params, const char* selfType,
@@ -1580,7 +1586,9 @@ private:
     // type with an explicit `default` ctor). Otherwise it must be explicitly assigned. `concreteCType` is the
     // field's type ALREADY resolved to its concrete C name (under the active _typeSubst / per instance).
     bool        isDefaultFillable(const std::string& concreteCType);
-    void        checkDefiniteAssignment(SharedBlock body);   // owning read-before-assign is a compile error
+    // Owning read-before-assign is a compile error. `params` (optional) brings the `out` parameters into
+    // the analysis: they start UNASSIGNED, so reading one is an error and every return must have filled it.
+    void        checkDefiniteAssignment(SharedBlock body, SharedParameterList params = SharedParameterList());
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
     // BindableFunctionPtr<Sig> — construct/promote/invoke a bindable callable.

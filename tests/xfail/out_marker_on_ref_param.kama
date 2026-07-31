@@ -1,0 +1,8 @@
+// The mirror of out_missing_marker: claiming `out` at a call site whose parameter is an ordinary `ref`
+// borrow would promise the caller a fill that the callee never owes.
+fn void bump(ref int32 v) { v = v + 1; }
+fn int main() {
+    int32 x = 1;
+    bump(v: out x);     // ERROR: `v` is a `ref` borrow, not an `out` parameter
+    return x;
+}
