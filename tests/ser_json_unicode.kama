@@ -1,0 +1,65 @@
+// JSON Unicode, all four directions. kama is UTF-8 everywhere (utf8everywhere.org): `string` is UTF-8
+// bytes and `char` is a Unicode scalar, and NO UTF-16 ever enters the value model. But JSON's wire format
+// inherited UTF-16 escapes from JavaScript (RFC 8259 §7), so a codepoint above the BMP arrives as a
+// SURROGATE PAIR. That conversion belongs at the wire edge and nowhere else, which is what this asserts.
+//
+// Each case was a real bug:
+//   1. an escaped astral char decoded to CESU-8 (each surrogate half UTF-8-encoded on its own, 6 bytes
+//      instead of 4) — so JSON from Python, whose `json.dumps` escapes all non-ASCII by DEFAULT
+//      (ensure_ascii=True), could not be read back correctly;
+//   2. `writeChar` emitted `\uXXXX` from the low 16 bits, silently corrupting any astral char
+//      (U+1F600 -> `\uF600`, a different character);
+//   3. `readChar` returned `s[0]`, the UTF-8 LEAD BYTE, so any non-ASCII char decoded to a mangled scalar.
+import std::serialization::json::{encode, decode};
+
+@generate(Serialize, Deserialize)
+type resource Msg {
+    @field string text;
+    public ctor make(string text) { slot Msg r; r.text = give text; return give r; }
+    public fn int32 len() { return this.text.length(); }
+    public fn bool same(ref string other) { return this.text == other; }
+}
+
+@generate(Serialize, Deserialize)
+type resource CharBox {
+    @field char c;
+    public ctor make(char c) { slot CharBox r; r.c = c; return give r; }
+    public fn int32 code() { return cast<int32>(this.c); }
+}
+
+fn int main() {
+    // "Aé€😀z" — 1 + 2 + 3 + 4 + 1 = 11 UTF-8 bytes, 5 codepoints.
+    string want = "A\u{E9}\u{20AC}\u{1F600}z";
+
+    // (a) kama's own round-trip: the writer emits raw UTF-8 (JSON is a UTF-8 format), the reader takes it back.
+    Msg m = Msg.make(text: copy want);
+    Result<string, Owned<Error>> j_r = encode(v: m);
+    string j = match (give j_r) { case Ok(value: s): give s; case Err(error: e): { return 250; } };
+    Result<Msg, Owned<Error>> back_r = decode::<Msg>(src: give j);
+    Msg back = match (give back_r) { case Ok(value: q): give q; case Err(error: e): { return 251; } };
+    if (!back.same(other: ref want)) { return 1; }
+    if (back.len() != 11) { return 2; }
+
+    // (b) FOREIGN JSON, byte-for-byte what `python3 -c "import json; json.dumps(...)"` emits: every
+    // non-ASCII char escaped, the astral one as a `\ud83d\ude00` surrogate PAIR.
+    string escaped = "{\"text\":\"A\\u00e9\\u20ac\\ud83d\\ude00z\"}";
+    Result<Msg, Owned<Error>> foreign_r = decode::<Msg>(src: give escaped);
+    Msg foreign = match (give foreign_r) { case Ok(value: q): give q; case Err(error: e): { return 252; } };
+    if (!foreign.same(other: ref want)) { return 3; }
+    if (foreign.len() != 11) { return 4; }        // 11, not 13 — one 4-byte sequence, not two 3-byte ones
+
+    // (c) an ASTRAL `char` field survives encode -> decode as the same scalar value.
+    CharBox cb = CharBox.make(c: '\u{1F600}');
+    Result<string, Owned<Error>> cj_r = encode(v: cb);
+    string cj = match (give cj_r) { case Ok(value: s): give s; case Err(error: e): { return 253; } };
+    Result<CharBox, Owned<Error>> cback_r = decode::<CharBox>(src: give cj);
+    CharBox cback = match (give cback_r) { case Ok(value: q): give q; case Err(error: e): { return 254; } };
+    if (cback.code() != 128512) { return 5; }     // U+1F600
+
+    // (d) an UNPAIRED surrogate is malformed input and must be REJECTED, not encoded as WTF-8.
+    string lone = "{\"text\":\"\\ud83dz\"}";
+    Result<Msg, Owned<Error>> lone_r = decode::<Msg>(src: give lone);
+    match (give lone_r) { case Ok(value: q): { return 6; } case Err(error: e): { } };
+
+    return 42;
+}

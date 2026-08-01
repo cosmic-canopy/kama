@@ -2319,6 +2319,14 @@ restrictions — and nothing leaks into the public API.
   streams over the same `Writer`/`Reader` substrate as JSON (so it flows to a file or socket for game-save /
   network payloads). It stores raw IEEE-754 bits (NaN/Inf round-trip) and is self-describing, so `skipValue`
   works and unknown fields skip cleanly (forward-compatible).
+  **JSON is UTF-8 in and out.** `string`/`char` are written as raw UTF-8 bytes — JSON is a UTF-8 format
+  (RFC 8259 §8.1), so escaping buys nothing — and only `"`, `\` and the control bytes are escaped. On
+  READ, `\uXXXX` is decoded to UTF-8, **including surrogate pairs**: JSON inherited UTF-16 escapes from
+  JavaScript, so a codepoint above the BMP arrives as a `😀` pair, which is the ordinary shape
+  of JSON produced elsewhere (Python's `json.dumps` escapes *all* non-ASCII by default). The pair is
+  combined at the wire edge and nothing above it ever sees a UTF-16 code unit — kama stays UTF-8
+  everywhere. An **unpaired** surrogate is malformed input and is rejected, not encoded as WTF-8.
+  (Fixture: `tests/ser_json_unicode`.)
 - **Intrinsic (compiler):** the per-type field walk and the whole graph machinery (id table, heap shells,
   two-pass wire, ownership transfer, ordering, cycles). Zero-cost — emitted **only** for `@generate` types.
 

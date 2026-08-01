@@ -75,6 +75,24 @@ type resource JsonWriter<W: Writer> implements Serializer {
         this.byte(b: this.hexDigit(v: (c >> 4ui8) & 15ui8));
         this.byte(b: this.hexDigit(v: c & 15ui8));
     }
+    // One codepoint -> its UTF-8 bytes. The writer's only encoder: a `string` is already UTF-8 and passes
+    // through verbatim (see `quoted`), so this exists for `char`, which arrives as a scalar value.
+    fn void utf8(uint32 cp) {
+        if (cp < 128ui32) { this.byte(b: cast<uint8>(cp)); }
+        else if (cp < 2048ui32) {
+            this.byte(b: cast<uint8>(192ui32 | (cp >> 6ui32)));
+            this.byte(b: cast<uint8>(128ui32 | (cp & 63ui32)));
+        } else if (cp < 65536ui32) {
+            this.byte(b: cast<uint8>(224ui32 | (cp >> 12ui32)));
+            this.byte(b: cast<uint8>(128ui32 | ((cp >> 6ui32) & 63ui32)));
+            this.byte(b: cast<uint8>(128ui32 | (cp & 63ui32)));
+        } else {
+            this.byte(b: cast<uint8>(240ui32 | (cp >> 18ui32)));
+            this.byte(b: cast<uint8>(128ui32 | ((cp >> 12ui32) & 63ui32)));
+            this.byte(b: cast<uint8>(128ui32 | ((cp >> 6ui32) & 63ui32)));
+            this.byte(b: cast<uint8>(128ui32 | (cp & 63ui32)));
+        }
+    }
     // A JSON string literal: quotes + escaping for ", \, the common control shorts, and \u00XX otherwise.
     // Bytes >= 0x20 (incl. UTF-8 continuation bytes) pass through verbatim — valid since the source is UTF-8.
     fn void quoted(ref string s) {
@@ -157,11 +175,12 @@ type resource JsonWriter<W: Writer> implements Serializer {
             else if (b < 32ui8)  { this.uEscape(c: b); }
             else                 { this.byte(b: b); }
         } else {
-            this.byte(b: 92ui8); this.byte(b: 117ui8);   // \u (BMP; astral chars deferred)
-            this.byte(b: this.hexDigit(v: cast<uint8>((cp >> 12ui32) & 15ui32)));
-            this.byte(b: this.hexDigit(v: cast<uint8>((cp >> 8ui32) & 15ui32)));
-            this.byte(b: this.hexDigit(v: cast<uint8>((cp >> 4ui32) & 15ui32)));
-            this.byte(b: this.hexDigit(v: cast<uint8>(cp & 15ui32)));
+            // Raw UTF-8, exactly as `quoted()` writes a string — JSON is a UTF-8 format (RFC 8259 §8.1),
+            // so escaping buys nothing and costs correctness. It used to emit `\uXXXX` from the low 16
+            // bits, which SILENTLY CORRUPTED any astral char: U+1F600 came out as ``, a different
+            // character entirely, because a codepoint above the BMP does not fit one UTF-16 escape.
+            // Emitting bytes keeps one spelling for `char` and `string` and needs no surrogate pairing.
+            this.utf8(cp: cp);
         }
         this.byte(b: 34ui8);
         this.needComma = true;
@@ -333,10 +352,13 @@ type resource JsonReader implements Deserializer {
         if (this.peek() == 110ui8) { this.pos = this.pos + 4; return true; }  // null
         return false;
     }
+    // The first CODEPOINT of the string, not its first byte. `s[0]` used to be returned directly, which is
+    // the UTF-8 LEAD BYTE — so any non-ASCII `char` decoded to a mangled scalar (`é` came back as 195).
+    // `.chars()` is the language's own UTF-8 decoder, so this needs no second implementation of it.
     public fn char readChar() {
         string s = this.readString();
-        if (cast<int32>(s.length()) == 0) { return cast<char>(0ui32); }
-        return cast<char>(cast<uint32>(s[0]));   // ASCII fast path (multibyte char deferred)
+        foreach (char c in s.chars()) { return c; }
+        return cast<char>(0ui32);                // empty string
     }
     public fn string readString() {
         this.skipWs();
@@ -369,22 +391,62 @@ type resource JsonReader implements Deserializer {
         this.err = true;
         return this.bytesToString(b: acc);
     }
-    // \uXXXX -> UTF-8 (BMP; surrogate pairs deferred). Called with pos at the 'u'; leaves pos at the last hex.
-    fn void readUnicodeEscape(ref DynamicArray<uint8> acc) {
-        if (this.pos + 4 >= this.len) { this.err = true; return; }
-        uint32 cp = 0ui32;
+    // Read the four hex digits of a `\uXXXX` escape. Called with pos at the 'u'; leaves pos at the last
+    // hex digit. Returns the raw 16-bit code UNIT (not yet a codepoint — it may be half of a pair).
+    // Failure rides the reader's existing sticky `err` flag rather than an out-param, like every other
+    // read here — the caller checks `this.err`, and a truncated escape yields 0.
+    fn uint32 readHex4() {
+        if (this.pos + 4 >= this.len) { this.err = true; return 0ui32; }
+        uint32 v = 0ui32;
         int32 k = 1;
         while (k <= 4) {
-            cp = (cp << 4ui32) | cast<uint32>(this.hexVal(c: this.src[this.pos + k]));
+            v = (v << 4ui32) | cast<uint32>(this.hexVal(c: this.src[this.pos + k]));
             k = k + 1;
         }
         this.pos = this.pos + 4;
+        return v;
+    }
+    // `\uXXXX` -> UTF-8. Called with pos at the 'u'; leaves pos at the last hex digit.
+    //
+    // JSON inherited UTF-16 escapes from JavaScript (RFC 8259 §7), so a codepoint above the BMP arrives as
+    // a SURROGATE PAIR — `😀` for U+1F600. Encoding each half on its own yields CESU-8 (two
+    // 3-byte sequences) rather than UTF-8 (one 4-byte sequence), which is a different byte string: a
+    // round-trip through such a document used to come back 2 bytes longer and unequal. This is not a
+    // corner case — Python's `json.dumps` escapes ALL non-ASCII by default (`ensure_ascii=True`), and
+    // JavaScript's `JSON.stringify` does when asked for ASCII output, so it is the ordinary shape of
+    // JSON produced elsewhere. kama stays UTF-8-everywhere: the pair is combined HERE, at the wire edge,
+    // and nothing above this line ever sees a UTF-16 code unit.
+    fn void readUnicodeEscape(ref DynamicArray<uint8> acc) {
+        uint32 cp = this.readHex4();
+        if (this.err) { return; }
+        // A HIGH surrogate (D800..DBFF) must be followed by `\u` + a LOW surrogate (DC00..DFFF).
+        if (cp >= 55296ui32 && cp <= 56319ui32) {
+            if (this.pos + 2 < this.len && this.src[this.pos + 1] == 92ui8 && this.src[this.pos + 2] == 117ui8) {
+                this.pos = this.pos + 2;                       // consume the `\u` of the low half
+                uint32 lo = this.readHex4();
+                if (this.err) { return; }
+                if (lo >= 56320ui32 && lo <= 57343ui32) {
+                    cp = 65536ui32 + ((cp - 55296ui32) << 10ui32) + (lo - 56320ui32);
+                } else {
+                    this.err = true; return;                   // a high surrogate followed by a non-low one
+                }
+            } else {
+                this.err = true; return;                       // an unpaired high surrogate
+            }
+        } else if (cp >= 56320ui32 && cp <= 57343ui32) {
+            this.err = true; return;                           // a low surrogate with no high half
+        }
         if (cp < 128ui32) { acc.add(item: cast<uint8>(cp)); }
         else if (cp < 2048ui32) {
             acc.add(item: cast<uint8>(192ui32 | (cp >> 6ui32)));
             acc.add(item: cast<uint8>(128ui32 | (cp & 63ui32)));
-        } else {
+        } else if (cp < 65536ui32) {
             acc.add(item: cast<uint8>(224ui32 | (cp >> 12ui32)));
+            acc.add(item: cast<uint8>(128ui32 | ((cp >> 6ui32) & 63ui32)));
+            acc.add(item: cast<uint8>(128ui32 | (cp & 63ui32)));
+        } else {
+            acc.add(item: cast<uint8>(240ui32 | (cp >> 18ui32)));           // astral: 4-byte UTF-8
+            acc.add(item: cast<uint8>(128ui32 | ((cp >> 12ui32) & 63ui32)));
             acc.add(item: cast<uint8>(128ui32 | ((cp >> 6ui32) & 63ui32)));
             acc.add(item: cast<uint8>(128ui32 | (cp & 63ui32)));
         }
