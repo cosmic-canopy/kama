@@ -1,7 +1,7 @@
 // M31a — `static` and `virtual` contradict: a static method has no `this`, so no vtable slot.
 type value Widget {
     int32 x;
-    public ctor make(int32 x) { Widget r; r.x = x; return give r; }
+    public ctor make(int32 x) { slot Widget r; r.x = x; return give r; }
     static virtual fn int32 f() { return 0; }
 }
 fn int32 main() { return 0; }

@@ -5,13 +5,13 @@ type value Pair<T>
 {
     public T a;
     public T b;
-    public ctor make(T x, T y) { Pair<T> r; r.a = x; r.b = y; return give r; }
+    public ctor make(T x, T y) { slot Pair<T> r; r.a = x; r.b = y; return give r; }
     public fn T sum() { return this.a + this.b; }
 }
 type value Holder
 {
     public Pair<int32> p;                             // a Pair_int32 field, by value
-    public ctor make(Pair<int32> pr) { Holder r; r.p = pr; return give r; }
+    public ctor make(Pair<int32> pr) { slot Holder r; r.p = pr; return give r; }
     public fn int32 total() { return this.p.sum(); }  // Pair_int32__sum on the field
 }
 fn int main()

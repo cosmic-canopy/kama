@@ -2147,9 +2147,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // resource ever needed a runtime drop guard. Warn while the corpus is swept; M3 flips this
                 // to a hard error and drops the implicit default-ctor call below with it.
                 if (lvd && !lvd->isSlot && !d->initializer)
-                    warning(("local `" + nm + "` has no initializer — prefix it with `slot` (declaring a "
-                             "hole that must be assigned before it is used) or give it a value; a bare "
-                             "uninitialized local will become an error").c_str(), n->line);
+                    unsupported(("local `" + nm + "` has no initializer — prefix it with `slot` (declaring "
+                                 "a hole that must be assigned before it is used) or give it a value").c_str(),
+                                n->line);
                 // Ban shadowing (enforces the flat-name-map assumption above; C#-aligned, "one way"). A
                 // local may not shadow a parameter, an enclosing-scope local, or an in-scope field. (A
                 // param sharing a FIELD name — the `this.x = x` idiom — is allowed and handled elsewhere.)
@@ -2259,8 +2259,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // factory building a value field-by-field) also zero-inits — so any DEFAULT-FILLABLE field
                 // left unassigned reaches its zero default (`ZERO COUNTS`) rather than stack garbage. The
                 // non-zero default fill (calling the field type's `default` ctor) lands with M8c.
+                // An initializer-less local is now always a `slot` — a HOLE — so it zero-inits and takes
+                // the field-default fill below. It no longer silently runs the type's `default` ctor: that
+                // was a second piece of implicit construction, and a hole that quietly constructs itself is
+                // a contradiction. Spell `T x = T.empty();` to get the default.
                 bool zeroInit = _classes[ty].isIntrinsicColl || _classes[ty].isExternStruct
-                    || (!hasDefaultCtor && !d->initializer);
+                    || !d->initializer;
                 *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // track empty resources for move analysis
@@ -2272,13 +2276,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // (Seeded AFTER recordDestructibleLocal, which sets NotMoved for an ownsByValue type.)
                 if (lvd && lvd->isSlot) { _slotLocals.insert(nm); _slotDeclared.insert(nm); _moveState[nm] = MoveState::Moved; }
                 if (!d->initializer) {
-                    // No initializer: the scope-exit dtor recorded above WILL run, so the object must be in a
-                    // valid state now. If the class has a zero-arg default ctor, call it (runs its field-init /
-                    // vtable setup, exactly like `= List()`); otherwise the `= {0}` above is the valid state.
-                    if (!zeroInit && hasDefaultCtor) {
-                        line(n->line); indent(depth);
-                        *_out << emitCtorCall(nm, _classes[ty], nullptr, n->line) << ";\n";
-                    } else if (zeroInit && !_classes[ty].isIntrinsicColl && !_classes[ty].isExternStruct) {
+                    // No initializer: this is a `slot`. Its drop is elided while it stays unassigned, but
+                    // the storage must still be well-defined, because filling it field-by-field reads and
+                    // releases what is already there. The `= {0}` above plus the field-default fill below
+                    // is that valid state.
+                    if (zeroInit && !_classes[ty].isIntrinsicColl && !_classes[ty].isExternStruct) {
                         // Construction-model M8d.1: a zero-inited bare aggregate FILLS each field whose type has
                         // an explicit `default` ctor by CALLING it — `= {0}` is valid only for a PROVABLY-ZERO
                         // default (a primitive, raw `Ptr`, or intrinsic collection). A field whose `default`
@@ -9455,6 +9457,17 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         auto it = resFields.find(nm);
         if (it != resFields.end()) for (auto& f : it->second) unassigned.erase(nm + "." + f);
     };
+    // Stop tracking a name altogether — stronger than markAssigned, which only clears the CURRENT
+    // unassigned set and is therefore undone when a skippable body (a loop, a lone `if`) restores it.
+    // Used where the evidence is not path-dependent: handing a CLASS slot to a method or a callee says the
+    // author is treating it as the live value it already is, and `foreach (…) { parts.add(…) }` — a
+    // collection filled in a loop — must not be re-flagged at the read after the loop.
+    auto untrack = [&](const std::string& nm){
+        unassigned.erase(nm); bareOwning.erase(nm);
+        slotDecls.erase(nm); slotClassDecls.erase(nm);
+        auto it = resFields.find(nm);
+        if (it != resFields.end()) { for (auto& f : it->second) unassigned.erase(nm + "." + f); resFields.erase(it); }
+    };
     // `addr(of: x)` on a tracked owning local — the raw slot-init dance (memmove into a zero-init local, then
     // `give`) takes it under manual control; return its name so the caller marks it assigned.
     auto addrOfLocal = [&](InvocationNode* inv) -> std::string {
@@ -9524,8 +9537,8 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             if (auto* rma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
                 if (auto* rid = dynamic_cast<IdentifierNode*>(rma->expression.get()))
                     if (rid->value && (!rid->qualifier || rid->qualifier->empty())
-                        && slotDecls.count(*rid->value)) {
-                        markAssigned(*rid->value);
+                        && slotClassDecls.count(*rid->value)) {   // valid-empty only — NOT an Owned/Shared hole
+                        untrack(*rid->value);
                         if (inv->args) for (auto& a : *inv->args) if (a) {
                             std::string ot = outArgTarget(a.get());
                             if (!ot.empty()) markAssigned(ot); else rec(a->expression);
@@ -9542,7 +9555,7 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
                 // by-value it copies a valid empty value.
                 if (auto* aid = dynamic_cast<IdentifierNode*>(a->expression.get()))
                     if (aid->value && (!aid->qualifier || aid->qualifier->empty())
-                        && slotClassDecls.count(*aid->value)) { markAssigned(*aid->value); continue; }
+                        && slotClassDecls.count(*aid->value)) { untrack(*aid->value); continue; }
                 rec(a->expression);
             }
         } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
@@ -9595,7 +9608,11 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
                 if (lv->isSlot || !owned.empty()) {
                     if (lv->isSlot) {
                         slotDecls.insert(nm);
-                        if (lv->type && lv->type->value && isClass(cType(lv->type)))
+                        // `owned.empty()` is load-bearing: an `Owned`/`Shared` slot is NOT valid-but-empty.
+                        // Its zero value is a NULL pointer, so calling through it derefs null — the very
+                        // thing this check exists to catch. Only a plain class, whose field-default fill
+                        // leaves a usable value, gets the relaxed treatment.
+                        if (owned.empty() && lv->type && lv->type->value && isClass(cType(lv->type)))
                             slotClassDecls.insert(nm);
                     }
                     bareOwning.insert(nm);

@@ -4,13 +4,13 @@
 // marked `default`, so a `Widget` field cannot be left unassigned.
 type value Widget {
     public int32 n;
-    public ctor of(int32 n) { Widget w; w.n = n; return w; }
+    public ctor of(int32 n) { slot Widget w; w.n = n; return w; }
 }
 type value Holder {
     Widget w;
     public int32 tag;
     public ctor make(int32 t) {
-        Holder h;
+        slot Holder h;
         h.tag = t;
         return h;             // `w` (a `Widget`, no `default`) is never assigned -> rejected
     }

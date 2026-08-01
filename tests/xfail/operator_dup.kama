@@ -2,7 +2,7 @@
 // two operators with the SAME symbol AND the same operand type are a genuine duplicate → clean error.
 type value Vec2 {
     public int32 x;
-    public ctor make(int32 x) { Vec2 r; r.x = x; return give r; }
+    public ctor make(int32 x) { slot Vec2 r; r.x = x; return give r; }
     public Vec2 operator+(Vec2 rhs)   { return Vec2.make(x: this.x + rhs.x); }   // op_add (same-type)
     public Vec2 operator+(Vec2 other) { return Vec2.make(x: this.x - other.x); } // op_add AGAIN — duplicate
 }

@@ -6,7 +6,7 @@ import std::collections::{PriorityQueue};
 // A move-only (resource) element that is Comparable — proves the heap relocates owned elements correctly.
 type resource Task implements Comparable {
     int32 prio;
-    public ctor make(int32 prio) { Task r; r.prio = prio; return give r; }
+    public ctor make(int32 prio) { slot Task r; r.prio = prio; return give r; }
     public fn int32 priority() { return this.prio; }
     public fn Ordering compareTo(ref Task other) {
         int32 mine = this.prio; int32 theirs = other.priority();   // named receivers (a primitive rvalue can't be one)

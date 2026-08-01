@@ -3,7 +3,7 @@
 // Covers a foreach accumulator and a string FIELD reassigned inside a method. Exit 7 = all three checks.
 type resource Buf {
     string s;
-    public ctor make() { Buf b; b.s = ""; return b; }
+    public ctor make() { slot Buf b; b.s = ""; return b; }
     public fn void add(int32 n) { this.s = this.s + "[${n}]"; }   // string-field reassignment slot
     public fn bool matches(ref string want) { return this.s == want; }
 }

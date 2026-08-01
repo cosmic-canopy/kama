@@ -4,7 +4,7 @@ type value Box
     int h = 7;
     public ctor make()
     {
-        Box r;
+        slot Box r;
         return give r;
     }
     public fn int area()

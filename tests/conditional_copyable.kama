@@ -3,12 +3,12 @@
 // Copyable — its copy() is never emitted — but the instance is fully usable (construct/get/drop).
 type resource Cell<T> implements Copyable(bare: give) when [T: Copyable] {
     T value;
-    public ctor make(T v) { Cell<T> r; r.value = give v; return give r; }
+    public ctor make(T v) { slot Cell<T> r; r.value = give v; return give r; }
     public fn ref T get() { return this.value; }
     public ctor copy(ref Cell<T> source) { return Cell.make(v: copy source.value); }
     ~Cell() { drop(value: this.value); }
 }
-type resource MoveOnly { int32 n; public ctor make(int32 n){ MoveOnly r; r.n=n; return give r; } ~MoveOnly(){} public fn int32 val(){return this.n;} }
+type resource MoveOnly { int32 n; public ctor make(int32 n){ slot MoveOnly r; r.n=n; return give r; } ~MoveOnly(){} public fn int32 val(){return this.n;} }
 fn int32 main() {
     Cell<int32> a = Cell.make(v: 5);
     Cell<int32> b = copy a;                      // deep copy — a stays valid

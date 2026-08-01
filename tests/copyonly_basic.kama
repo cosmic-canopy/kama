@@ -2,7 +2,7 @@
 // A bare hand-off retains via copy(); `give` moves. Exercises init, argument, return, and reassignment.
 type resource H implements Copyable(bare: copy) {
     int32 id;
-    public ctor make(int32 id) { H r; r.id = id; return give r; }
+    public ctor make(int32 id) { slot H r; r.id = id; return give r; }
     public ctor copy(ref H source) { return H.make(id: source.id); }
     public fn int32 get() { return this.id; }
 }

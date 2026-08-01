@@ -9,7 +9,7 @@ type resource Payload {
     int32 value;
 
     public ctor make(Ptr<int32> dst, int32 value) {
-        Payload r;
+        slot Payload r;
         r.dst = dst;
         r.value = value;
         return give r;

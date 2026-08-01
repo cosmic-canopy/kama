@@ -2,7 +2,7 @@
 // contract without providing a public nullary `copy()` is a compile error.
 type resource R implements Copyable(bare: give) {
     int32 n;
-    public ctor make(int32 n) { R r; r.n = n; return give r; }
+    public ctor make(int32 n) { slot R r; r.n = n; return give r; }
     ~R() { }
     public fn int32 get() { return this.n; }   // no `copy()` — invalid
 }

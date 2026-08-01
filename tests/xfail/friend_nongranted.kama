@@ -2,7 +2,7 @@
 type value Account {
     int64 balance;
     int32 pin;
-    public ctor make(int64 b, int32 p) { Account r; r.balance = b; r.pin = p; return give r; }
+    public ctor make(int64 b, int32 p) { slot Account r; r.balance = b; r.pin = p; return give r; }
     friend audit[balance];   // granted balance only
 }
 fn int32 audit(ref Account a) { return a.pin; }   // ERROR: pin is not in the grant

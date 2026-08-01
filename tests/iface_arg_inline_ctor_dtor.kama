@@ -7,7 +7,7 @@ extern fn void free(Ptr p);
 type contract Shape for both { fn int32 area(); }
 type resource Cell implements Shape {
     Ptr<int32> buf;
-    public ctor make(int32 v) { Cell r; unsafe { r.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); r.buf[0] = v; } return give r; }
+    public ctor make(int32 v) { slot Cell r; unsafe { r.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); r.buf[0] = v; } return give r; }
     public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
     ~Cell() { unsafe { free(p: cast<Ptr>(this.buf)); } }
 }

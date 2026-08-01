@@ -4,7 +4,7 @@
 // called with a dot); together they close both directions.
 type value Point {
     public int32 x;
-    public ctor make(int32 x) { Point p; p.x = x; return p; }
+    public ctor make(int32 x) { slot Point p; p.x = x; return p; }
 }
 fn int32 main() {
     Point p = Point::make(x: 42);   // ERROR: `::` is scope resolution — construct with `Point.make(...)`

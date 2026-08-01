@@ -1,4 +1,4 @@
 // M27b-alpha: a generic type used with NO type argument (`Box` instead of `Box<int32>`) is not a
 // usable type — the template is not a concrete class.
-type value Box<T> { public T value; public ctor make(T v) { Box<T> r; r.value = v; return give r; } }
+type value Box<T> { public T value; public ctor make(T v) { slot Box<T> r; r.value = v; return give r; } }
 fn int main() { Box b = Box.make(v: 3); return 0; }

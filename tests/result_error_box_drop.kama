@@ -6,7 +6,7 @@ extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 type resource Probe {
     Ptr p;
-    public ctor make() { Probe r; unsafe { r.p = malloc(n: 32); } return give r; }
+    public ctor make() { slot Probe r; unsafe { r.p = malloc(n: 32); } return give r; }
     ~Probe() { unsafe { free(p: this.p); } }
     public fn int32 live() { return 1; }
 }

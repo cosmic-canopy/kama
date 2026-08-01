@@ -3,7 +3,7 @@ type value Accum
     int total;
     public ctor make(int init)
     {
-        Accum r;
+        slot Accum r;
         r.total = init;
         return give r;
     }

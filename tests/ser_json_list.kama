@@ -2,14 +2,14 @@
 import std::serialization::json::{encode};
 import std::collections::{DynamicArray};
 @generate(Serialize)
-type value Pt { @field int32 x; @field int32 y; public ctor make(int32 x, int32 y) { Pt r; r.x = x; r.y = y; return give r; } }
+type value Pt { @field int32 x; @field int32 y; public ctor make(int32 x, int32 y) { slot Pt r; r.x = x; r.y = y; return give r; } }
 @generate(Serialize)
 type resource Scene {
     @field string name;
     @field DynamicArray<int32> ids;
     @field DynamicArray<Pt> pts;
     public ctor make(string name, DynamicArray<int32> ids, DynamicArray<Pt> pts) {
-        Scene r; r.name = give name; r.ids = give ids; r.pts = give pts; return give r;
+        slot Scene r; r.name = give name; r.ids = give ids; r.pts = give pts; return give r;
     }
 }
 fn int main() {

@@ -7,7 +7,7 @@ extern fn int kama_trace_get();
 
 type resource Handle {
     int32 h;
-    public ctor open(int32 v) { Handle r; r.h = v; return give r; }
+    public ctor open(int32 v) { slot Handle r; r.h = v; return give r; }
     public fn int32 val() { return this.h; }
     ~Handle() { kama_trace(code: 5); }               // one trace per REAL drop
 }

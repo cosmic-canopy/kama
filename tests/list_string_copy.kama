@@ -2,7 +2,7 @@
 // buffers, so both free cleanly. ASan-clean proves the independence (a shallow copy would double-free).
 import std::collections::{DynamicArray};
 fn int main() {
-    DynamicArray<string> a; a.add(item: "he" + "llo"); a.add(item: "hi");
+    slot DynamicArray<string> a; a.add(item: "he" + "llo"); a.add(item: "hi");
     DynamicArray<string> b = copy a;
     int32 t = 0;
     foreach (string s in b) { t = t + cast<int32>(s.length()); }   // 5 + 2 = 7

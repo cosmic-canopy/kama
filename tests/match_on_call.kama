@@ -1,5 +1,5 @@
 import std::memory::{Shared, Weak};
-type resource Counter { int32 n; public ctor make(int32 n){ Counter r; r.n=n; return give r; } ~Counter(){} public fn int32 get(){return this.n;} }
+type resource Counter { int32 n; public ctor make(int32 n){ slot Counter r; r.n=n; return give r; } ~Counter(){} public fn int32 get(){return this.n;} }
 fn Weak<Counter> orphan()
 {
     Shared<Counter> s = new Counter.make(n: 5);

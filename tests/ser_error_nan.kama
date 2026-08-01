@@ -5,7 +5,7 @@ import std::serialization::json::{encode};
 @generate(Serialize)
 type value Measure {
     @field float64 v;
-    public ctor make(float64 v) { Measure r; r.v = v; return give r; }
+    public ctor make(float64 v) { slot Measure r; r.v = v; return give r; }
 }
 fn int main() {
     // finite -> Ok

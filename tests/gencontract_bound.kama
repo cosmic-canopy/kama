@@ -4,7 +4,7 @@
 // on the concrete type is checked against that instance.
 type value IntRange implements Iterator<int32> {
     int32 cur; int32 end;
-    public ctor make(int32 start, int32 end) { IntRange r; r.cur = start; r.end = end; return give r; }
+    public ctor make(int32 start, int32 end) { slot IntRange r; r.cur = start; r.end = end; return give r; }
     public fn Optional<int32> next() {
         if (this.cur >= this.end) { return Optional::None; }
         int32 v = this.cur; this.cur = this.cur + 1; return Optional::Some(value: v);

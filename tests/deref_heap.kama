@@ -13,7 +13,7 @@ type value Point {
 
 type resource OwnPoint implements Deref<Point> {
     Ptr<Point> p;
-    public ctor make(Point v) { OwnPoint r;
+    public ctor make(Point v) { slot OwnPoint r;
         unsafe { r.p = cast<Ptr<Point>>(malloc(n: sizeof(Point))); r.p[0] = v; }
      return give r; }
     public fn ref Point deref() { unsafe { return this.p[0]; } }   // place into the heap object

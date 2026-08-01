@@ -3,4 +3,4 @@
 import std::collections::{DynamicArray};
 type contract Shape for both { fn int32 area(); }
 type value Sq implements Shape { int32 s; public Sq(int32 s){ this.s = s; } public fn int32 area(){ return this.s * this.s; } }
-fn int32 main() { DynamicArray<Shape> xs; return 0; }
+fn int32 main() { slot DynamicArray<Shape> xs; return 0; }

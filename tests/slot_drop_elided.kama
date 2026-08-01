@@ -1,10 +1,24 @@
-import std::fs::{File};
 // The payoff: an unassigned `slot` has NO destructor emitted, so "drop only if live" is proven statically
-// instead of defended against at runtime. `f` is never assigned, so nothing closes a descriptor for it; a
-// dropped `{0}` File would otherwise have run its dtor. The sibling `g` IS assigned and DOES drop.
-// (tools/check-slot.sh greps the emitted C to assert exactly that; this fixture proves it also runs.)
+// instead of defended against at runtime with a niche check. Two Trackers side by side — one left
+// unassigned, one assigned — so the property is differential and cannot pass by the dtor simply never
+// being emitted. Verified twice: at runtime by the drop counter here, and against the emitted C by
+// tools/check-slot.sh (an exit code alone cannot tell a missing drop from a drop that is a no-op).
+static int32 drops = 0;
+
+type resource Tracker {
+    int32 id = -1;
+    public ctor make(int32 id) { slot Tracker r; r.id = id; return give r; }
+    public fn int32 value() { return this.id; }
+    ~Tracker() { drops = drops + 1; }
+}
+
+fn int32 run() {
+    slot Tracker unfilled;                     // never assigned -> no Tracker__dtor emitted
+    Tracker filled = Tracker.make(id: 1);      // assigned       -> Tracker__dtor emitted
+    return filled.value();
+}
+
 fn int main() {
-    slot File f;                  // never assigned -> no File__dtor emitted
-    File g = File.make(fd: 1);    // assigned       -> File__dtor emitted
-    return 7;
+    int32 id = run();
+    return (drops == 1 && id == 1) ? 7 : 99;   // exactly ONE drop ran, not two
 }

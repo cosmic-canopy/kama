@@ -1,3 +1,3 @@
 // M26h — a `resource` field is always private (ownership encapsulated).
-type resource Bad { public DynamicArray<int32> items; public ctor make() { Bad r; r.items.add(item: 1); return give r; } }
+type resource Bad { public DynamicArray<int32> items; public ctor make() { slot Bad r; r.items.add(item: 1); return give r; } }
 fn int32 main() { Bad b = Bad.make(); return 0; }

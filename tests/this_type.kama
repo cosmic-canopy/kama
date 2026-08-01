@@ -5,7 +5,7 @@
 type contract Equatable for both { fn bool equals(This other); }
 type value Point implements Equatable {
     int32 x;
-    public ctor make(int32 x) { Point r; r.x = x; return give r; }
+    public ctor make(int32 x) { slot Point r; r.x = x; return give r; }
     public fn bool equals(This other) { return this.x == other.x; }   // This -> Point
     public fn This clone() { This c = Point.make(x: this.x); return c; }   // self-returning (This local + return)
 }

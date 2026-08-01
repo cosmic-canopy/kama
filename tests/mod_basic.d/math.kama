@@ -6,7 +6,7 @@ fn int32 add(int32 a, int32 b) { return a + b; }
 type value Counter
 {
     int32 value;
-    public ctor make(int32 start) { Counter r; r.value = start; return give r; }
+    public ctor make(int32 start) { slot Counter r; r.value = start; return give r; }
     public fn void bump() { this.value = this.value + 1; }
     public fn int32 get() { return this.value; }
 }

@@ -4,7 +4,7 @@ import std::collections::{DynamicArray, FixedArray};
 // rvalue that reads the old element (`a[i] = a[i].concat(…)`).
 type resource Box {
     DynamicArray<int32> v;
-    public ctor make(int32 x) { Box r; r.v.add(item: x); return give r; }
+    public ctor make(int32 x) { slot Box r; r.v.add(item: x); return give r; }
     public fn int32 val() { return this.v[0]; }
 }
 fn int32 main() {

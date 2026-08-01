@@ -1,3 +1,3 @@
 // M26h — `~dtor` ⟺ `resource`. A value owns nothing, so a destructor makes it a resource.
-type value Bad { int32 n; public ctor make(int32 n){ Bad r; r.n = n; return give r; } ~Bad() { } }
+type value Bad { int32 n; public ctor make(int32 n){ slot Bad r; r.n = n; return give r; } ~Bad() { } }
 fn int32 main() { Bad b = Bad.make(n: 1); return 0; }

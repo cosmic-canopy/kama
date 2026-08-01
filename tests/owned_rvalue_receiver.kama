@@ -9,7 +9,7 @@ import std::collections::{DynamicArray};
 
 type resource R {
     DynamicArray<int32> xs;
-    public ctor make() { R r; r.xs = DynamicArray.empty(); r.xs.add(item: 1); r.xs.add(item: 2); return give r; }
+    public ctor make() { slot R r; r.xs = DynamicArray.empty(); r.xs.add(item: 1); r.xs.add(item: 2); return give r; }
     public fn int32 n() { return this.xs.length(); }
 }
 fn DynamicArray<int32> make(int32 n) { DynamicArray<int32> xs = DynamicArray.empty(); xs.add(item: n); xs.add(item: n + 1); return give xs; }

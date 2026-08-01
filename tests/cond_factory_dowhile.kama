@@ -3,7 +3,7 @@
 // hoisted temp the non-hoistable do/while condition rejected; see the deleted xfail/cond_ctor_dowhile).
 type value V implements Comparable {
     public int32 x;
-    public ctor make(int32 x) { V r; r.x = x; return give r; }
+    public ctor make(int32 x) { slot V r; r.x = x; return give r; }
     public fn Ordering compareTo(ref V other) {
         if (this.x < other.x) { return Ordering::Less; }
         if (this.x > other.x) { return Ordering::Greater; }

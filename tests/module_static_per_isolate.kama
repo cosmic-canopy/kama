@@ -5,7 +5,7 @@
 // three threads would race on one `box` and the result would drift.
 import std::concurrent;
 
-type resource Bundle { int32 pad; public ctor make() { Bundle b; b.pad = 0; return give b; } }
+type resource Bundle { int32 pad; public ctor make() { slot Bundle b; b.pad = 0; return give b; } }
 
 static int32 box = 0;
 

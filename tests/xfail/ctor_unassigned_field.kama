@@ -5,6 +5,6 @@
 type value Rect {
     public int32 w;
     public int32 size;                 // never assigned below
-    public ctor make(int32 w) { Rect r; r.w = w; return give r; }
+    public ctor make(int32 w) { slot Rect r; r.w = w; return give r; }
 }
 fn int32 main() { Rect r = Rect.make(w: 3); return r.w; }

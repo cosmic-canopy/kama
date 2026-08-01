@@ -5,7 +5,7 @@ import std::collections::{Arena, BumpAllocator};
 
 type value Node {
     int32 v;
-    public ctor make(int32 v) { Node r; r.v = v; return give r; }
+    public ctor make(int32 v) { slot Node r; r.v = v; return give r; }
     public fn int32 get() { return this.v; }
 }
 

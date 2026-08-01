@@ -2,7 +2,7 @@
 // release the pointee then "copy" it back onto freed memory. (A move-only Owned self-assign is a
 // compile error — see xfail/self_move_owned — so only the copy-only case is exercised here.)
 import std::memory::{Shared};
-type value Probe { int32 id; public ctor make(int32 id){ Probe r; r.id = id; return give r; } public fn int32 get(){ return this.id; } }
+type value Probe { int32 id; public ctor make(int32 id){ slot Probe r; r.id = id; return give r; } public fn int32 get(){ return this.id; } }
 fn int main() {
     Shared<Probe> s = new Probe.make(id: 42);
     s = s;                                  // no double-decrement (guarded no-op)

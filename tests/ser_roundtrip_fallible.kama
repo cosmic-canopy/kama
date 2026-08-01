@@ -5,7 +5,7 @@ import std::serialization::json::{encode, decode};
 type value Point {
     @field int32 x;
     @field int32 y;
-    public ctor make(int32 x, int32 y) { Point r; r.x = x; r.y = y; return give r; }
+    public ctor make(int32 x, int32 y) { slot Point r; r.x = x; r.y = y; return give r; }
     public fn int32 sum() { return this.x + this.y; }
 }
 fn int main() {

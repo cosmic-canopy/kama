@@ -3,7 +3,7 @@
 // (the `Type::m()` path now derefs place returns, closing a pre-existing gap).
 type value Buf {
     InlineArray<int32, 4> d;
-    public ctor make() { Buf r; r.d = [0; 4]; return give r; }
+    public ctor make() { slot Buf r; r.d = [0; 4]; return give r; }
     public static fn ref int32 at(ref Buf b, usize i) { return b.d[i]; }
 }
 fn int32 main() {

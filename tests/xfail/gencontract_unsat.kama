@@ -5,7 +5,7 @@ type contract Comparable<T> for both { fn int32 compareTo(T other); }
 
 type value Widget {
     int32 id;
-    public ctor make(int32 id) { Widget r; r.id = id; return give r; }
+    public ctor make(int32 id) { slot Widget r; r.id = id; return give r; }
 }
 
 fn int32 pick<T: Comparable<int32>>(T a) { return 0; }

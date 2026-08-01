@@ -20,7 +20,7 @@ trap 'rm -rf "$tmp"' EXIT
 src="$tmp/has_new.kama"
 cat > "$src" <<'EOF'
 import std::memory::{Owned};
-type resource Box { int32 v; public ctor make(int32 v) { Box b; b.v = v; return give b; } public fn int32 get() { return this.v; } }
+type resource Box { int32 v; public ctor make(int32 v) { slot Box b; b.v = v; return give b; } public fn int32 get() { return this.v; } }
 fn int32 main() { Owned<Box> b = new Box.make(v: 3); return b.get(); }
 EOF
 

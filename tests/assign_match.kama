@@ -2,8 +2,8 @@ enum Shape { Circle(float64 r), Empty }
 fn int main()
 {
     Shape s = Shape::Circle(r: 3.0);
-    float64 area;
-    area = match (s) { case Circle(r: r): r * r; case Empty: 0.0; };   // 9
+    slot float64 area;
+    area = match (s) { case Circle(r: r): r * r; case Empty: 0.0; };   slot // 9
     Optional<int32> o;
     o = Optional::Some(value: 5);
     int32 ov = match (o) { case Some(value: x): x; case None: -1; };       // 5

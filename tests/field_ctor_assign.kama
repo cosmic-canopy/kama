@@ -14,7 +14,7 @@ type resource Registry {
     Map<int32, int32> m;
     DynamicArray<int32> log;
     Point origin;
-    public ctor make() { Registry r; r.m = Map.empty(); r.log = DynamicArray.empty(); r.origin = Point.of(x: 1, y: 2); return give r; }
+    public ctor make() { slot Registry r; r.m = Map.empty(); r.log = DynamicArray.empty(); r.origin = Point.of(x: 1, y: 2); return give r; }
     public fn void put(int32 k, int32 v) { this.m.put(key: k, value: v); this.log.add(item: k); }
     public fn void reset() { this.m = Map.empty(); }                 // re-init: drops the old map, builds a fresh one
     public fn void moveOrigin(int32 x, int32 y) { this.origin = Point.of(x: x, y: y); }

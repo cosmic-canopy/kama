@@ -3,7 +3,7 @@
 type contract Weighable for both { fn int32 weight(); }
 type value Feather {
     int32 g;
-    public ctor make(int32 g) { Feather r; r.g = g; return give r; }
+    public ctor make(int32 g) { slot Feather r; r.g = g; return give r; }
 }
 fn int32 heft<T: Weighable>(T x) { return x.weight(); }
 fn int32 main() {

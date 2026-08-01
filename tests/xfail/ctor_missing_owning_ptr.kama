@@ -2,9 +2,9 @@ import std::memory::{Owned};
 // Construction-model M3: a named ctor (static factory) that returns a bare, zero-inited local whose `Owned`
 // field was never set would leak a null owning pointer past construction — rejected by complete-init
 // enforcement (the factory-path generalization of the never-null seal).
-type value Box { int32 v; public ctor make(int32 v) { Box r; r.v = v; return give r; } }
+type value Box { int32 v; public ctor make(int32 v) { slot Box r; r.v = v; return give r; } }
 type resource Holder {
     Owned<Box> a;
-    public ctor make() { Holder h; return h; }   // ERROR: `a` never set before return
+    public ctor make() { slot Holder h; return h; }   // ERROR: `a` never set before return
 }
 fn int32 main() { return 0; }

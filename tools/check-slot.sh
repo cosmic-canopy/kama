@@ -26,25 +26,26 @@ OUT="$TMP/slot_drop_elided.c"
 "$KAMA" transpile "$FIXTURE" -o "$OUT" >/dev/null 2>&1 \
     || { echo "check-slot: transpile failed" >&2; exit 1; }
 
-# The body of kama_main, without the #line directives.
-BODY=$(awk '/kama_main\(void\)$/,/^}/' "$OUT" | grep -v '^#line')
+# The body of run(), where both locals live, without the #line directives.
+# Emitted names carry a per-file prefix (`_F4__run`), so match the suffix rather than the whole name.
+BODY=$(awk '/^int32_t .*run\(void\)$/,/^}/' "$OUT" | grep -v '^#line')
 fail=0
 
 # 1. The assigned local DOES drop — proves the dtor is emitted at all, so (2) is a real signal.
-if ! printf '%s\n' "$BODY" | grep -q 'std__fs__File__dtor(&g)'; then
-    echo "check-slot: FAIL — the ASSIGNED File 'g' has no dtor call; the differential check is void" >&2
+if ! printf '%s\n' "$BODY" | grep -q 'Tracker__dtor(&filled)'; then
+    echo "check-slot: FAIL — the ASSIGNED Tracker 'filled' has no dtor call; the differential check is void" >&2
     fail=1
 else
-    echo "  ok: assigned File 'g' drops (std__fs__File__dtor(&g))"
+    echo "  ok: assigned Tracker 'filled' drops (Tracker__dtor(&filled))"
 fi
 
 # 2. ...and the unassigned slot does NOT. This is the property the campaign exists to deliver.
-if printf '%s\n' "$BODY" | grep -q 'std__fs__File__dtor(&f)'; then
-    echo "check-slot: FAIL — unassigned 'slot File f' still emits a destructor; drop elision regressed" >&2
+if printf '%s\n' "$BODY" | grep -q 'Tracker__dtor(&unfilled)'; then
+    echo "check-slot: FAIL — unassigned 'slot Tracker unfilled' still emits a destructor; drop elision regressed" >&2
     printf '%s\n' "$BODY" >&2
     fail=1
 else
-    echo "  ok: unassigned 'slot File f' emits no destructor (drop elided)"
+    echo "  ok: unassigned 'slot Tracker unfilled' emits no destructor (drop elided)"
 fi
 
 if [ "$fail" -ne 0 ]; then echo "FAIL check-slot" >&2; exit 1; fi

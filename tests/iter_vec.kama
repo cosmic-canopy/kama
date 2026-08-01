@@ -5,7 +5,7 @@ extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 type value VecIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len;
-    public ctor make(Ptr<T> data, int32 len) { VecIter<T> r; r.data = data; r.pos = 0; r.len = len; return give r; }
+    public ctor make(Ptr<T> data, int32 len) { slot VecIter<T> r; r.data = data; r.pos = 0; r.len = len; return give r; }
     public fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
@@ -14,7 +14,7 @@ type value VecIter<T> implements Iterator<T> {
 }
 type resource Vec<T> implements Iterable<T> {
     Ptr<T> data; int32 len;
-    public ctor make(int32 n) { Vec<T> r; r.data = cast<Ptr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); r.len = n; return give r; }
+    public ctor make(int32 n) { slot Vec<T> r; r.data = cast<Ptr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); r.len = n; return give r; }
     public ref T operator[](int32 i) { unsafe { return this.data[i]; } }
     public fn VecIter<T> iterator() { return VecIter.make(data: this.data, len: this.len); }
     ~Vec() { free(p: cast<Ptr>(this.data)); }

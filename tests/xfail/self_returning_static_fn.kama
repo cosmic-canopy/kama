@@ -4,7 +4,7 @@
 type value Point {
     public int32 x;
     public static fn int32 describe(Point p) { return p.x; }        // OK: returns another type
-    public static fn Point origin() { Point r; r.x = 0; return r; }  // ERROR: self-returning -> use `ctor`
+    public static fn Point origin() { slot Point r; r.x = 0; return r; }  // ERROR: self-returning -> use `ctor`
 }
 fn int32 main() {
     Point p = Point::origin();

@@ -8,6 +8,6 @@ type value Inner { public int32 deep; }
 type value Outer { public Inner inner; }
 
 fn int32 main() {
-    Outer o;
+    slot Outer o;
     return o::inner::deep;   // ERROR: `o` is a value — write `o.inner.deep`
 }

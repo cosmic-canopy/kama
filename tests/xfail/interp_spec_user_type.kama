@@ -2,7 +2,7 @@
 // `Format` contract itself stays spec-less; specs are primitive Formatter fast-paths).
 type value Pt implements Format {
     public int32 x;
-    public ctor make(int32 x) { Pt p; p.x = x; return p; }
+    public ctor make(int32 x) { slot Pt p; p.x = x; return p; }
     public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this.x)); }
 }
 

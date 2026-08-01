@@ -6,7 +6,7 @@ enum HolderErr { Negative }
 implements Error for HolderErr { public fn string message() { return "negative"; } }
 type value Box {
     int32 v;
-    public ctor make(int32 v) { Box r; r.v = v; return give r; }
+    public ctor make(int32 v) { slot Box r; r.v = v; return give r; }
     public fn int32 get() { return this.v; }
 }
 type resource Holder {
@@ -14,7 +14,7 @@ type resource Holder {
     public ctor Result<Holder, HolderErr> make(int32 v) {
         if (v < 0) { return Result::Err(error: HolderErr::Negative); }   // fail before the object exists
         Owned<Box> b = new Box.make(v: v);
-        Holder h;
+        slot Holder h;
         h.a = give b;                                    // complete before Ok-wrapping
         return Result::Ok(value: h);
     }

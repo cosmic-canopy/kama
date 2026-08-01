@@ -2,7 +2,7 @@ import std::collections::{DynamicArray};
 enum Bag { Items(DynamicArray<int32> xs), Empty }
 fn int main()
 {
-    DynamicArray<int32> xs;
+    slot DynamicArray<int32> xs;
     xs.add(item: 40); xs.add(item: 2);
     Bag b = Bag::Items(xs: give xs);
     return match (b) { case Items(xs: ys): ys[0] + ys[1]; case Empty: 0; };

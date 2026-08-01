@@ -6,7 +6,7 @@ type resource Res
     int id;
     public ctor make(int id)
     {
-        Res r;
+        slot Res r;
         r.id = id;
         return give r;
     }

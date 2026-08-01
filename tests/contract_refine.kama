@@ -6,7 +6,7 @@ type contract Drawable for both { fn int32 area(); }
 type contract Animated for both implements Drawable { fn int32 step(); }
 type resource Sprite implements Animated {
     int32 s;
-    public ctor make(int32 s) { Sprite r; r.s = s; return give r; }
+    public ctor make(int32 s) { slot Sprite r; r.s = s; return give r; }
     public fn int32 area() { return this.s * this.s; }
     public fn int32 step() { return this.s + 1; }
 }

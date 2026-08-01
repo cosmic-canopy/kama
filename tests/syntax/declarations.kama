@@ -18,13 +18,13 @@
 // nothing but the #declarations rule can colour it, and that rule used to be unreachable.
 type immutable value Point {
     int32 x;
-    public ctor make(int32 x) { Point r; r.x = x; return give r; }
+    public ctor make(int32 x) { slot Point r; r.x = x; return give r; }
     public fn int32 get() { return this.x; }
 }
 
 type final resource Handle {
     int32 fd;
-    public ctor make(int32 fd) { Handle r; r.fd = fd; return give r; }
+    public ctor make(int32 fd) { slot Handle r; r.fd = fd; return give r; }
     public fn int32 raw() { return this.fd; }
 }
 

@@ -1,5 +1,5 @@
 // M8 Phase E — nameless `new Type(args)` is no longer allowed; construct through a named ctor.
-type value C { int32 n; public ctor make(int32 n) { C r; r.n = n; return give r; } public fn int32 g(){ return this.n; } }
+type value C { int32 n; public ctor make(int32 n) { slot C r; r.n = n; return give r; } public fn int32 g(){ return this.n; } }
 fn int32 main() {
     Owned<C> a = new C(n: 5);       // ERROR: use `new C.make(n: 5)`
     return a.g();

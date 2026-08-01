@@ -1,7 +1,7 @@
 // `try new` — the non-panic construction entry (M-step5). Success path yields Some(owned box).
 type resource Box {
     int32 v;
-    public ctor make(int32 v) { Box b; b.v = v; return give b; }
+    public ctor make(int32 v) { slot Box b; b.v = v; return give b; }
     public fn int32 get() { return this.v; }
 }
 

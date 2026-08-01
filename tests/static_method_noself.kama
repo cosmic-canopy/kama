@@ -1,7 +1,7 @@
 // M31a — a `static fn` need not take the class at all: `Config::answer()` is a pure type-level function.
 type value Config {
     int32 v;
-    public ctor make(int32 v) { Config r; r.v = v; return give r; }
+    public ctor make(int32 v) { slot Config r; r.v = v; return give r; }
     public static fn int32 answer() { return 42; }
 }
 fn int32 main() {

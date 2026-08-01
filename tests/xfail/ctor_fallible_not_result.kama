@@ -2,7 +2,7 @@
 // A ctor returns its own type (infallible) or Result (fallible) — nothing else.
 type value Percent {
     public int32 v;
-    public ctor make(int32 v) { Percent r; r.v = v; return give r; }
+    public ctor make(int32 v) { slot Percent r; r.v = v; return give r; }
     public ctor Optional<Percent> of(int32 v) {   // ERROR: fallible construction must be Result, not Optional
         if (v < 0) { return Optional::None; }
         return Optional::Some(value: Percent.make(v: v));

@@ -3,7 +3,7 @@
 // and freed at scope end. A non-const `ref` rvalue is rejected instead (see xfail). ROADMAP §2.
 type value Vec2 {
     int32 x; int32 y;
-    public ctor make(int32 x, int32 y) { Vec2 r; r.x = x; r.y = y; return give r; }
+    public ctor make(int32 x, int32 y) { slot Vec2 r; r.x = x; r.y = y; return give r; }
     public const fn int32 sum() { return this.x + this.y; }
 }
 fn Vec2 makeVec(int32 x, int32 y) { return Vec2.make(x: x, y: y); }

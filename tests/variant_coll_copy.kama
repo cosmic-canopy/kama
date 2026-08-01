@@ -5,7 +5,7 @@ import std::collections::{DynamicArray};
 enum Bag { Items(DynamicArray<int32> xs), Empty }
 fn int main()
 {
-    DynamicArray<int32> xs;
+    slot DynamicArray<int32> xs;
     xs.add(item: 1);
     Bag b = Bag::Items(xs: copy xs);
     return 0;

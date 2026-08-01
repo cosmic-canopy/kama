@@ -2,7 +2,7 @@
 // and destroyed at return, so a place into it would dangle — rejected by the escape check.
 type value Buf {
     InlineArray<int32, 4> d;
-    public ctor make() { Buf r; r.d = [0; 4]; return give r; }
+    public ctor make() { slot Buf r; r.d = [0; 4]; return give r; }
 }
 fn ref int32 bad(Buf b, usize i) { return b.d[i]; }
 fn int32 main() { Buf b = Buf.make(); return bad(b: b, i: 0); }

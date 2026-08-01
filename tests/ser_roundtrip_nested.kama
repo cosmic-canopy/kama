@@ -8,7 +8,7 @@ import std::collections::{DynamicArray};
 type resource Child {
     @field int32 v;
     @field string tag;
-    public ctor make(int32 v, string tag) { Child r; r.v = v; r.tag = give tag; return give r; }
+    public ctor make(int32 v, string tag) { slot Child r; r.v = v; r.tag = give tag; return give r; }
     public fn int32 weight() { return this.v + cast<int32>(this.tag.length()); }
 }
 
@@ -18,7 +18,7 @@ type resource Parent {
     @field Child main;                 // nested resource field (direct)
     @field Optional<Child> maybe;      // Optional<nested>
     @field DynamicArray<Child> kids;           // DynamicArray<nested>
-    public ctor make(int32 id, Child main, Optional<Child> maybe, DynamicArray<Child> kids) { Parent r; r.id = id; r.main = give main; r.maybe = give maybe; r.kids = give kids; return give r; }
+    public ctor make(int32 id, Child main, Optional<Child> maybe, DynamicArray<Child> kids) { slot Parent r; r.id = id; r.main = give main; r.maybe = give maybe; r.kids = give kids; return give r; }
     public fn int32 total() {
         int32 s = this.id + this.main.weight();
         int32 m = match (this.maybe) { case Some(value: c): c.weight(); case None: 0; };

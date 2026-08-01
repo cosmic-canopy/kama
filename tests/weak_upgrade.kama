@@ -3,12 +3,12 @@ extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 
 type value Ctrl { public int32 strong; public int32 weak; }
-type value Counter { public int32 n; public ctor make(int32 start) { Counter r; r.n = start; return give r; } }
+type value Counter { public int32 n; public ctor make(int32 start) { slot Counter r; r.n = start; return give r; } }
 
 type resource RcWeak<T> {
     Ptr<T> p;
     Ptr<Ctrl> c;
-    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { RcWeak<T> r; r.p = p; r.c = c; return give r; }   // shares an existing ctrl
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { slot RcWeak<T> r; r.p = p; r.c = c; return give r; }   // shares an existing ctrl
     public fn Optional<Rc<T>> tryUpgrade() {
         unsafe {
             if (this.c[0].strong > 0) {
@@ -29,9 +29,9 @@ type resource RcWeak<T> {
 type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     Ptr<T> p;
     Ptr<Ctrl> c;
-    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { Rc<T> r; r.p = p; r.c = c; return give r; }       // shares an existing ctrl
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { slot Rc<T> r; r.p = p; r.c = c; return give r; }       // shares an existing ctrl
     public ctor adopt(Ptr<T> raw) {
-        Ptr<Ctrl> ctrl;
+        slot Ptr<Ctrl> ctrl;
         unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
         return Rc.make(p: raw, c: ctrl);                                     // fresh ctor -> no marker
     }

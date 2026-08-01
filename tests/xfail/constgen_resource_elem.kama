@@ -1,6 +1,6 @@
 // A InlineArray element must own nothing (a `value`). A `resource` element would leak (InlineArray has no
 // per-element dtor) — rejected; wrap it in an owning FixedArray/DynamicArray instead.
-type resource Handle { public int32 fd; public ctor make(int32 fd) { Handle r; r.fd = fd; return give r; } }
+type resource Handle { public int32 fd; public ctor make(int32 fd) { slot Handle r; r.fd = fd; return give r; } }
 fn int32 main() {
     InlineArray<Handle, 2> h = [Handle.make(fd: 1), Handle.make(fd: 2)];
     return 0;

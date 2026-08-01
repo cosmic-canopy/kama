@@ -5,7 +5,7 @@ type resource User {
     @field(name: "user_name") string name;
     @field int32 id;
     @skip int32 loginCount;
-    public ctor make(string name, int32 id) { User r; r.name = give name; r.id = id; r.loginCount = 0; return give r; }
+    public ctor make(string name, int32 id) { slot User r; r.name = give name; r.id = id; r.loginCount = 0; return give r; }
     public fn int32 tag() { return this.id + cast<int32>(this.name.length()); }
 }
 fn int main() {

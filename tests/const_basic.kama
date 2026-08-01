@@ -5,7 +5,7 @@ import std::memory::{Owned};
 // (verified separately; the suite asserts the positive path here).
 type value Box {
     int32 v;
-    public ctor make(int32 v) { Box r; r.v = v; return give r; }
+    public ctor make(int32 v) { slot Box r; r.v = v; return give r; }
     public const fn int32 get() { return this.v; }   // read-only -> callable on a const receiver
 }
 fn int32 main() {

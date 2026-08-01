@@ -7,12 +7,12 @@ import std::concurrent;
 
 type immutable value Vec3 {
     public int32 a; public int32 b; public int32 c;
-    public ctor make(int32 a, int32 b, int32 c) { Vec3 r; r.a = a; r.b = b; r.c = c; return give r; }
+    public ctor make(int32 a, int32 b, int32 c) { slot Vec3 r; r.a = a; r.b = b; r.c = c; return give r; }
 }
 
 type immutable value Asset {
     public Vec3 lo; public Vec3 hi; public int32 tag;
-    public ctor make(Vec3 lo, Vec3 hi, int32 tag) { Asset r; r.lo = lo; r.hi = hi; r.tag = tag; return give r; }
+    public ctor make(Vec3 lo, Vec3 hi, int32 tag) { slot Asset r; r.lo = lo; r.hi = hi; r.tag = tag; return give r; }
 }
 
 fn void scan(Shared<Asset> s) {

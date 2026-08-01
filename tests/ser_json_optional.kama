@@ -6,7 +6,7 @@ type value Node {
     @field Optional<int32> parent;
     @field Optional<int32> next;
     public ctor make(int32 id, Optional<int32> parent, Optional<int32> next) {
-        Node r; r.id = id; r.parent = parent; r.next = next; return give r;
+        slot Node r; r.id = id; r.parent = parent; r.next = next; return give r;
     }
 }
 fn int main() {

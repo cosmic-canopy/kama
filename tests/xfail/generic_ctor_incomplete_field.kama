@@ -8,7 +8,7 @@ import std::collections::{Arena, BumpAllocator};
 type resource Widget<A: Allocator = GlobalAllocator> {
     A alloc;
     int32 x;
-    public ctor bad() { Widget<A> w; w.x = 5; return give w; }   // FORGETS `w.alloc`
+    public ctor bad() { slot Widget<A> w; w.x = 5; return give w; }   // FORGETS `w.alloc`
     public fn int32 get() { return this.x; }
 }
 

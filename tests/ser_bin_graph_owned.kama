@@ -6,12 +6,12 @@ import std::collections::{DynamicArray};
 import std::memory::{Shared, Owned};
 
 @generate(Serialize, Deserialize)
-type resource Child { @field int32 v; public ctor make(int32 v) { Child r; r.v = v; return give r; } }
+type resource Child { @field int32 v; public ctor make(int32 v) { slot Child r; r.v = v; return give r; } }
 
 @generate(Serialize, Deserialize)
 type resource Parent {
     @field Owned<Child> kid;
-    public ctor make(Owned<Child> kid) { Parent r; r.kid = give kid; return give r; }
+    public ctor make(Owned<Child> kid) { slot Parent r; r.kid = give kid; return give r; }
 }
 
 fn DynamicArray<uint8> clone(ref DynamicArray<uint8> src) {

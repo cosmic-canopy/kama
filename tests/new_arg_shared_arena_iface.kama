@@ -9,7 +9,7 @@ type contract Shape for both { fn int32 area(); }
 
 type value Circle implements Shape {
     int32 r;
-    public ctor make(int32 r) { Circle result; result.r = r; return give result; }
+    public ctor make(int32 r) { slot Circle result; result.r = r; return give result; }
     public fn int32 area() { return this.r * this.r; }
 }
 

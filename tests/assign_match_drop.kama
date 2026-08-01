@@ -1,5 +1,5 @@
 import std::memory::{Shared};
-type resource Probe { int32 id; public ctor make(int32 id){ Probe r; r.id=id; return give r; } ~Probe(){} public fn int32 val(){return this.id;} }
+type resource Probe { int32 id; public ctor make(int32 id){ slot Probe r; r.id=id; return give r; } ~Probe(){} public fn int32 val(){return this.id;} }
 // A `Shared` factory — `new` heap-places into a local owner, which moves out to the caller as a
 // fresh rvalue (so it needs no hand-off marker at the call site).
 fn Shared<Probe> mk(int32 id) { Shared<Probe> s = new Probe.make(id: id); return s; }

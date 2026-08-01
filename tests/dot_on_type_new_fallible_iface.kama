@@ -13,7 +13,7 @@ type contract Shape for both { fn int32 area(); }
 type value Circle implements Shape {
     int32 r;
     public ctor Result<Circle, ShapeErr> open(int32 r) {
-        if (r < 0) { return Result::Err(error: ShapeErr::Negative); }   // fail before the object exists (no allocation)
+        if (r < 0) { return Result::Err(error: ShapeErr::Negative); }   slot // fail before the object exists (no allocation)
         Circle c; c.r = r; return Result::Ok(value: c);
     }
     public fn int32 area() { return this.r * this.r; }

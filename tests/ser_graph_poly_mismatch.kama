@@ -11,18 +11,18 @@ type contract Shape for both { fn int32 area(); }
 @generate(Serialize, Deserialize)
 type resource Sq implements Shape {
     @field int32 side;
-    public ctor make(int32 side) { Sq r; r.side = side; return give r; }
+    public ctor make(int32 side) { slot Sq r; r.side = side; return give r; }
     public fn int32 area() { return this.side * this.side; }
 }
 
 @generate(Serialize, Deserialize)
-type resource Tag { @field int32 n; public ctor make(int32 n) { Tag r; r.n = n; return give r; } }   // a NON-Shape graph node
+type resource Tag { @field int32 n; public ctor make(int32 n) { slot Tag r; r.n = n; return give r; } }   // a NON-Shape graph node
 
 @generate(Serialize, Deserialize)
 type resource Scene {
     @field Shared<Shape> a;   // polymorphic edge
     @field Shared<Tag> t;     // concrete edge -> makes `Tag` a graph node
-    public ctor make(Shared<Shape> a, Shared<Tag> t) { Scene r; r.a = give a; r.t = give t; return give r; }
+    public ctor make(Shared<Shape> a, Shared<Tag> t) { slot Scene r; r.a = give a; r.t = give t; return give r; }
 }
 
 fn int main() {

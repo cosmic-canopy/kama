@@ -1,8 +1,8 @@
 import std::memory::{Owned};
 // A bare owning local becomes definitely assigned after an unconditional (top-level) assignment.
-type value Box { int32 v; public ctor make(int32 v) { Box r; r.v = v; return give r; } public fn int32 get() { return this.v; } }
+type value Box { int32 v; public ctor make(int32 v) { slot Box r; r.v = v; return give r; } public fn int32 get() { return this.v; } }
 fn int32 main() {
-    Owned<Box> b;
+    slot Owned<Box> b;
     Owned<Box> t = new Box.make(v: 42);
     b = give t;                    // top-level assign -> 'b' now definitely assigned
     return b.get();   // 42

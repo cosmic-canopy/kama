@@ -6,7 +6,7 @@ type view Span {
     Ptr<int32> p; int32 n;
     public ctor make() {
         int32 buf = 7;
-        Span r; r.n = 1;
+        slot Span r; r.n = 1;
         unsafe { r.p = addr(of: buf); }   // borrows a LOCAL -> would dangle
         return give r;
     }

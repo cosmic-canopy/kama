@@ -1,7 +1,7 @@
 import std::collections::{DynamicArray};
 fn int main()
 {
-    DynamicArray<string> xs;
+    slot DynamicArray<string> xs;
     xs.add(item: "ab"); xs.add(item: "cde"); xs.add(item: "f");
     int32 total = 0;
     foreach (ref string s in xs) { total = total + cast<int32>(s.length()); }

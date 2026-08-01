@@ -3,12 +3,12 @@
 // Inside `midGo`, `this` is a `Mid` whose `tick` is `final` -> direct Mid__tick.
 type virtual resource Base
 {
-    public ctor make() { Base r;  return give r; }
+    public ctor make() { slot Base r;  return give r; }
     protected virtual fn int32 tick() { return 1; }
 }
 type virtual resource Mid extends Base
 {
-    public ctor make() { Mid r;  return give r; }
+    public ctor make() { slot Mid r;  return give r; }
     protected final override fn int32 tick() { return 5; }
     public fn int32 midGo() { return this.tick(); }
 }

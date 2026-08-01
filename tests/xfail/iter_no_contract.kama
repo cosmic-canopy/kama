@@ -2,7 +2,7 @@
 // is rejected — the contract must be declared explicitly (structural match is not enough).
 type value Counter {
     int32 cur; int32 end;
-    public ctor make(int32 end) { Counter r; r.cur = 0; r.end = end; return give r; }
+    public ctor make(int32 end) { slot Counter r; r.cur = 0; r.end = end; return give r; }
     public fn Optional<int32> next() {
         if (this.cur >= this.end) { return Optional::None; }
         int32 v = this.cur; this.cur = this.cur + 1; return Optional::Some(value: v);

@@ -3,7 +3,7 @@
 type contract Shape for both { fn int64 area(); }
 type value Circle implements Shape {
     int64 r;
-    public ctor make(int64 r) { Circle c; c.r = r; return give c; }
+    public ctor make(int64 r) { slot Circle c; c.r = r; return give c; }
     fn int64 area() { return r * r; }   // ERROR: implements Shape.area but isn't public
 }
 fn int main() { return 0; }

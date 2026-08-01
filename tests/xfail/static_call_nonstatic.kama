@@ -1,7 +1,7 @@
 // M31a — `Type::method()` may only name a `static` method; an instance method needs a receiver.
 type value Vec2 {
     int32 x;
-    public ctor make(int32 x) { Vec2 r; r.x = x; return give r; }
+    public ctor make(int32 x) { slot Vec2 r; r.x = x; return give r; }
     public fn int32 len() { return this.x; }   // instance method
 }
 fn int32 main() {

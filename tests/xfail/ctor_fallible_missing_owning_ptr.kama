@@ -3,12 +3,12 @@ import std::memory::{Owned};
 // checker unwraps `Ok` and still requires every owning field set. (Infallible counterpart: ctor_missing_owning_ptr.)
 enum HolderErr { Negative }
 implements Error for HolderErr { public fn string message() { return "negative"; } }
-type value Box { int32 v; public ctor make(int32 v) { Box r; r.v = v; return give r; } }
+type value Box { int32 v; public ctor make(int32 v) { slot Box r; r.v = v; return give r; } }
 type resource Holder {
     Owned<Box> a;
     public ctor Result<Holder, HolderErr> make(int32 v) {
         if (v < 0) { return Result::Err(error: HolderErr::Negative); }
-        Holder h;
+        slot Holder h;
         return Result::Ok(value: h);   // ERROR: `a` never set
     }
 }

@@ -3,7 +3,7 @@
 // char hole from its kama type node (local, foreach binding, or struct field). Exit 7 = all three forms.
 type value Glyph implements Format {
     public char ch;
-    public ctor make(char c) { Glyph g; g.ch = c; return g; }
+    public ctor make(char c) { slot Glyph g; g.ch = c; return g; }
     public fn void format(ref Formatter f) { f.writeChar(c: this.ch); }
 }
 

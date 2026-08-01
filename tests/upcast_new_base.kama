@@ -4,14 +4,14 @@ import std::collections::{DynamicArray};
 // subobject; polymorphism via Template Method, destroyed through the base handle (virtual dtor).
 type virtual resource Shape {
     DynamicArray<int32> tag;
-    public ctor make() { Shape r; r.tag.add(item: 0); return give r; }
+    public ctor make() { slot Shape r; r.tag.add(item: 0); return give r; }
     ~Shape() { }
     public fn int32 area() { return this.compute(); }
     protected virtual fn int32 compute() { return 1; }
 }
 type final resource Square extends Shape {
     DynamicArray<int32> parts;                                 // derived owns heap -> slice would leak
-    public ctor make(int32 s) { Square r; r.parts.add(item: s); return give r; }
+    public ctor make(int32 s) { slot Square r; r.parts.add(item: s); return give r; }
     ~Square() { }
     protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }
 }

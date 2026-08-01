@@ -3,7 +3,7 @@ type value Counter
     int value;
     public ctor make(int start)
     {
-        Counter r;
+        slot Counter r;
         r.value = start;
         return give r;
     }

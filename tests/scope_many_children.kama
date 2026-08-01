@@ -9,7 +9,7 @@ type resource Slot {
     int32 value;
 
     public ctor make(Ptr<int32> cell, int32 value) {
-        Slot r;
+        slot Slot r;
         r.cell = cell;
         r.value = value;
         return give r;

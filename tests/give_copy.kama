@@ -2,7 +2,7 @@ import std::memory::{Owned, Shared};
 // give/copy markers on smart pointers. `give` MOVES a move-only Owned; a Shared is copy-only,
 // so a bare hand-off retains and `copy` is the explicit form of the same retain (no `give` on a
 // Shared — there is no move to make).
-type value Counter { int32 n; public ctor make(int32 n){ Counter r; r.n = n; return give r; } public fn int32 get(){ return this.n; } }
+type value Counter { int32 n; public ctor make(int32 n){ slot Counter r; r.n = n; return give r; } public fn int32 get(){ return this.n; } }
 fn int32 main() {
     Owned<Counter> a = new Counter.make(n: 20);
     Owned<Counter> b = give a;       // move: a consumed

@@ -648,7 +648,25 @@ each handle in RAII order and dispatches polymorphically through it. See **Gener
 fn int add(int a, int b) { return a + b; }
 fn int main() { return add(b: 20, a: 10); }   // named args; reordered to declared order
 ```
-`ref`/`out` parameters pass by pointer: `fn void set(out int dst) { dst = 42; }` … `set(dst: ref x);`.
+`ref` and `out` parameters both pass by pointer, but they are **different promises**:
+
+- **`ref T x`** — a read-write **borrow** of a value that is already live. The marker at the call site is
+  optional (`f(x: ref v)` and `f(x: v)` are both fine), because nothing is riding on it.
+- **`out T x`** — the callee **must assign it** on every path before returning, and may not read the
+  incoming value. **The call site must say `out`** (`divmod(a: 17, b: 5, q: out quotient, r: out rem)`).
+  The marker is mandatory because both forms lower to the same `T*`: without it neither a reader nor the
+  caller's definite-assignment analysis could tell a borrow from a fill. `out` is what lets a
+  [`slot`](#uninitialized-storage--slot-) be filled by a callee and counted as assigned afterwards.
+
+```kama
+fn void divmod(int32 a, int32 b, out int32 q, out int32 r) { q = a / b; r = a % b; }
+slot int32 quotient; slot int32 rem;
+divmod(a: 17, b: 5, q: out quotient, r: out rem);   // 3, 2
+```
+
+"Every path" is a real flow merge, not "assigned somewhere": an `if`/`else` in which **both** arms assign
+counts, a lone `if` does not, and an arm that ends in `return`/`break`/`continue` never reaches the join
+and so owes nothing to it.
 
 ## FFI — calling C ✅
 
@@ -1435,6 +1453,47 @@ bag-only convenience — a memberwise seam breaks on complex types); a separate 
 mandatory "designated"/"final" ctor every path funnels through (completeness comes from definite assignment,
 not from a funnel). Constructor **overloading** is a standing non-goal — named parameters cover it.
 
+## Uninitialized storage — `slot` ✅
+
+A constructor proves every field is assigned (above), but storage declared **outside** one needed the same
+treatment: a local with no initializer is a hole, and leaving it unstated meant it zero-initialized, counted
+as live, and ran its destructor. **`slot T x;` states it.**
+
+```kama
+slot File f;                     // a HOLE: no value in it yet
+f = File.open(path: p, mode: Read);   // now it is live
+```
+
+A `slot` is **illegal to read until it is definitely assigned**, and — the point — **an unassigned slot has
+no destructor emitted**. "Drop only if live" is therefore *proven*, not defended against at runtime.
+A local with no initializer and no `slot` is a compile error, and `slot` with an initializer is one too:
+each thing is said exactly one way. `slot` does **not** run the type's `default` constructor; spell
+`T x = T.empty();` if that is what you want.
+
+**What fills a hole.** Any of these makes a slot live, after which it drops normally:
+
+| | |
+|---|---|
+| whole assignment | `x = …` |
+| field write | `x.f = …` — how a factory builds a value field by field |
+| `out` argument | `f(dst: out x)` — the callee is separately proven to assign it |
+| method call | `x.reserve(n: 8)` — the builder shape (`slot FixedArray<T,A> r; r.allocBuffer(size: n);`) |
+| `addr(of: x)` | the vouch for the raw move-out dance, inside `unsafe` |
+
+**Assigned on only some paths?** Then it drops. A slot's storage is always valid — the declaration applies
+field defaults, calls each field's `default` ctor, and sets the vtable pointer — so the drop is correct when
+it was filled and a no-op on the zero value when it was not. Only a slot untouched on *every* path has its
+drop elided.
+
+Two consequences worth stating plainly. A **class-typed** slot is valid-but-empty from the declaration on,
+so reading a non-owning field of one or handing it to a callee is fine; an **`Owned`/`Shared`** slot is not
+— its zero value is a null pointer, so reading through it is rejected, as is reading a primitive slot,
+which has no field-default fill behind it.
+
+This is **not** `Optional<T>`: a slot has no runtime tag and no drop, and it disappears entirely at
+compile time. Use `Optional<T>` when emptiness is a value you carry, `slot` when it is a fact the compiler
+should prove away.
+
 ## Fallible construction (no exceptions) ✅
 
 kama has no exceptions, so a **fallible constructor returns `Result<T, E>`** (where `E: Error`) — an
@@ -1531,7 +1590,8 @@ Animated : Drawable { … }`) for capability layering, without inheritance.
 - `Shape sh` (by value) — "use it as a shape." A concrete `Circle` coerces in (IS-A); zero-copy dispatch.
   This is the common path.
 - `ref Shape sh` / `out Shape sh` — "I may **reseat** your handle." Requires the argument to be an actual
-  `Shape` variable (its address is passed, so the reseat sticks). Passing a **concrete type** by `ref`/`out`
+  `Shape` variable (its address is passed, so the reseat sticks); `out` additionally requires the callee to
+  assign it and the call site to say `out`. Passing a **concrete type** by `ref`/`out`
   is a compile error — bind it first (`Shape s = c; measure(sh: ref s)`). Mutable references are *invariant*:
   a `Circle` variable isn't a slot that could hold an arbitrary shape, so it can't back a `ref Shape`.
 

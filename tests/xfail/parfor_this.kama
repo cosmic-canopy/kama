@@ -15,7 +15,7 @@ type value Bumper {
 }
 
 fn int main() {
-    Bumper b;
+    slot Bumper b;
     b.bias = 5;
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 1i32);

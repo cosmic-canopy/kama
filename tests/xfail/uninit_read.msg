@@ -1,1 +1,1 @@
-uninitialized
+is used before it is assigned

@@ -1,6 +1,6 @@
 type value Account {
     int64 balance;
-    public ctor make(int64 b) { Account r; r.balance = b; return give r; }
+    public ctor make(int64 b) { slot Account r; r.balance = b; return give r; }
     friend readBalance[balance];     // a free function
     friend Bank[balance];            // a whole class
     friend Ledger::post[balance];    // a single method

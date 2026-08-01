@@ -5,14 +5,14 @@ import std::memory::{Owned};
 // legacy instance ctor to the factory path. (Reject counterpart: xfail/ctor_missing_owning_ptr.)
 type value Box {
     int32 v;
-    public ctor make(int32 v) { Box r; r.v = v; return give r; }
+    public ctor make(int32 v) { slot Box r; r.v = v; return give r; }
     public fn int32 get() { return this.v; }
 }
 type resource Holder {
     Owned<Box> a;
     public ctor make(int32 v) {
         Owned<Box> b = new Box.make(v: v);
-        Holder h;
+        slot Holder h;
         h.a = give b;              // the one owning field, set before return -> complete
         return h;
     }

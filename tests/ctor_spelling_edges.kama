@@ -12,7 +12,7 @@ implements Error for MakeErr { public fn string message() { return "too big"; } 
 type value Cell implements Spawnable {
     public int32 v;
 
-    public ctor make(int32 v) { Cell c; c.v = v; return c; }                       // construction -> `.`
+    public ctor make(int32 v) { slot Cell c; c.v = v; return c; }                       // construction -> `.`
     public ctor Result<Cell, MakeErr> checked(int32 v) {                           // FALLIBLE construction -> `.`
         if (v > 100) { return Result::Err(error: MakeErr::TooBig); }
         return Result::Ok(value: Cell.make(v: v));

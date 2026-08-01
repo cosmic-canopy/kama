@@ -8,7 +8,7 @@ type virtual resource Shape
 type final resource Circle extends Shape
 {
     int r;
-    public ctor make(int r) { Circle r0; r0.r = r; return give r0; }
+    public ctor make(int r) { slot Circle r0; r0.r = r; return give r0; }
     protected override fn int area() { return r * r; }
 }
 fn int main()

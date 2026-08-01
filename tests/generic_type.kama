@@ -4,7 +4,7 @@
 type value Box<T>
 {
     public T value;
-    public ctor make(T v) { Box<T> r; r.value = v; return give r; }
+    public ctor make(T v) { slot Box<T> r; r.value = v; return give r; }
     public fn T get() { return this.value; }
     public fn T twice() { return this.value + this.value; }
 }

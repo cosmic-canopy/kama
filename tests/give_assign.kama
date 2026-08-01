@@ -2,7 +2,7 @@ import std::memory::{Owned, Shared};
 // give/copy markers in ASSIGNMENT position (uniform with init/arg/return). A bare reassignment
 // uses the kind default: a move-only Owned MOVES (`give` is the explicit form); a copy-only Shared
 // RETAINS (releasing the target's old handle first).
-type value C { int32 n; public ctor make(int32 n){ C r; r.n = n; return give r; } public fn int32 g(){ return this.n; } }
+type value C { int32 n; public ctor make(int32 n){ slot C r; r.n = n; return give r; } public fn int32 g(){ return this.n; } }
 fn int32 main() {
     Owned<C> a = new C.make(n: 20);
     Owned<C> b = new C.make(n: 9);

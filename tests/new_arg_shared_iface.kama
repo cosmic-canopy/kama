@@ -2,6 +2,6 @@ import std::memory::{Shared};
 // B4 — inline `new Concrete` as a Shared<Contract> arg: the fat box carries a fresh ctrl (kama_ctrl_new,
 // strong=1); the callee's single drop balances it.
 type contract Shape for both { fn int32 area(); }
-type value Square implements Shape { int32 s; public ctor make(int32 s){ Square r; r.s = s; return give r; } public fn int32 area(){ return this.s*this.s; } }
+type value Square implements Shape { int32 s; public ctor make(int32 s){ slot Square r; r.s = s; return give r; } public fn int32 area(){ return this.s*this.s; } }
 fn int32 take(Shared<Shape> c) { return c.area(); }
 fn int32 main() { return take(c: new Square.make(s: 6)); }

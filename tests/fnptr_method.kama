@@ -3,7 +3,7 @@
 // the receiver (`ref Vec2 self`). The object is passed explicitly at the call.
 type value Vec2 {
     int32 x; int32 y;
-    public ctor make(int32 x, int32 y) { Vec2 r; r.x = x; r.y = y; return give r; }
+    public ctor make(int32 x, int32 y) { slot Vec2 r; r.x = x; r.y = y; return give r; }
     fn int32 dot(ref Vec2 o) { return this.x * o.x + this.y * o.y; }
 }
 fnptr int32 DotFn(ref Vec2 self, ref Vec2 o);   // receiver is an explicit first param

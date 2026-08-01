@@ -8,7 +8,7 @@ extern fn void free(Ptr p);
 type resource Vec<T> {
     Ptr<T> data;
     int32 len;
-    public ctor make(int32 n) { Vec<T> r;
+    public ctor make(int32 n) { slot Vec<T> r;
         r.data = cast<Ptr<T>>(malloc(n: cast<usize>(n) * sizeof(T)));
         r.len = n;
      return give r; }

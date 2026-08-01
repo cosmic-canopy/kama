@@ -1,6 +1,6 @@
 @generate(of) type value Rock { public int32 g; }
 @generate(of) type value Vec2 { public float64 x; public float64 y; }
-type value Box<T> { public T item; public ctor make(T v){ Box<T> r; r.item=v; return give r; } public fn T get(){return this.item;} }
+type value Box<T> { public T item; public ctor make(T v){ slot Box<T> r; r.item=v; return give r; } public fn T get(){return this.item;} }
 @generate(of) type value Holder { public Rock r; }
 fn int main()
 {

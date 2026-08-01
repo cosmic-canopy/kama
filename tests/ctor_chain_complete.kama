@@ -5,12 +5,12 @@ import std::memory::{Owned};
 // with no "final"/"designated" concept — reuse is an ordinary, greppable call.
 type value Box {
     int32 v;
-    public ctor make(int32 v) { Box r; r.v = v; return give r; }
+    public ctor make(int32 v) { slot Box r; r.v = v; return give r; }
     public fn int32 get() { return this.v; }
 }
 type resource Holder {
     Owned<Box> a;
-    public ctor withOwned(Owned<Box> a) { Holder r; r.a = give a; return give r; }
+    public ctor withOwned(Owned<Box> a) { slot Holder r; r.a = give a; return give r; }
     public ctor make(int32 v) { Owned<Box> b = new Box.make(v: v); return Holder.withOwned(a: give b); }  // return a construction
     public ctor zeroed() { return Holder.make(v: 0); }                                     // ctor -> ctor delegation
     public fn int32 get() { return this.a.get(); }

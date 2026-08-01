@@ -10,7 +10,7 @@ type value Ctrl { public int32 strong; public int32 weak; }
 
 type value Counter {
     public int32 n;
-    public ctor make(int32 start) { Counter r; r.n = start; return give r; }
+    public ctor make(int32 start) { slot Counter r; r.n = start; return give r; }
     public fn int32 bump() { this.n = this.n + 1; return this.n; }
 }
 
@@ -18,7 +18,7 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     Ptr<T> p;
     Ptr<Ctrl> c;
     public ctor adopt(Ptr<T> raw) {
-        Rc<T> r;
+        slot Rc<T> r;
         r.p = raw;
         unsafe { r.c = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); r.c[0].strong = 1; r.c[0].weak = 0; }
         return give r;
@@ -26,7 +26,7 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     public fn ref T deref() { unsafe { return this.p[0]; } }
     public ctor copy(ref Rc<T> source) {                         // Copyable -> retain
         unsafe { source.c[0].strong = source.c[0].strong + 1; }
-        Rc<T> r; r.p = source.p; r.c = source.c; return give r;
+        slot Rc<T> r; r.p = source.p; r.c = source.c; return give r;
     }
     ~Rc() {
         unsafe {

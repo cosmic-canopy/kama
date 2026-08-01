@@ -5,7 +5,7 @@ import std::memory::{Owned};
 fnptr int32 Compare(int32 a, int32 b);
 type value Scaler {
     int32 k;
-    public ctor make(int32 k) { Scaler r; r.k = k; return give r; }
+    public ctor make(int32 k) { slot Scaler r; r.k = k; return give r; }
     fn int32 apply(int32 a, int32 b) { return (a - b) * this.k; }
 }
 fn int32 sub(int32 a, int32 b) { return a - b; }

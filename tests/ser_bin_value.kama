@@ -11,7 +11,7 @@ type resource Rec {   // owns a `string` -> must be a resource (move-only)
     @field string name;
     @field int64 big;
     public ctor make(int32 x, float32 f, bool b, string name, int64 big) {
-        Rec r; r.x = x; r.f = f; r.b = b; r.name = give name; r.big = big; return give r;
+        slot Rec r; r.x = x; r.f = f; r.b = b; r.name = give name; r.big = big; return give r;
     }
     public fn int32 score() {
         int32 ok = 0;

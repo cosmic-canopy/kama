@@ -18,7 +18,7 @@ type value Rgb {
 type resource Swatch {
     string name;
     Rgb color;
-    public ctor make(string name, Rgb color) { Swatch s; s.name = give name; s.color = color; return give s; }
+    public ctor make(string name, Rgb color) { slot Swatch s; s.name = give name; s.color = color; return give s; }
 }
 
 // A hand-written impl WINS over the derive (body only — the conformance is still registered), so a type

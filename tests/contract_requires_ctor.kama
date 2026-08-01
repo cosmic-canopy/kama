@@ -5,7 +5,7 @@ type contract Factory for value { ctor create(int32 seed); }
 
 type value Widget implements Factory {
     public int32 v;
-    public ctor create(int32 seed) { Widget w; w.v = seed + 1; return w; }
+    public ctor create(int32 seed) { slot Widget w; w.v = seed + 1; return w; }
 }
 
 fn int32 main() {

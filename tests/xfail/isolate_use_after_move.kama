@@ -7,7 +7,7 @@ type resource Payload {
     int32 value;
 
     public ctor make(int32 value) {
-        Payload r;
+        slot Payload r;
         r.value = value;
         return give r;
     }

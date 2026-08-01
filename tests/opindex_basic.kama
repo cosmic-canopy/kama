@@ -2,7 +2,7 @@
 // the same place semantics as a built-in collection, but written in the language.
 type value Grid3 {
     InlineArray<int32, 9> cells;
-    public ctor make() { Grid3 r; r.cells = [0; 9]; return give r; }
+    public ctor make() { slot Grid3 r; r.cells = [0; 9]; return give r; }
     public ref int32 operator[](usize i) { return this.cells[i]; }
 }
 fn int32 main() {

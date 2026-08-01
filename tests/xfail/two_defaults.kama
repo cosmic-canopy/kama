@@ -1,7 +1,7 @@
 // `default` designates AT MOST ONE canonical zero-arg ctor per type (M8b Part 1).
 type value T {
     public int32 n;
-    public default ctor empty() { T t; t.n = 0; return t; }
-    public default ctor blank() { T t; t.n = 0; return t; }
+    public default ctor empty() { slot T t; t.n = 0; return t; }
+    public default ctor blank() { slot T t; t.n = 0; return t; }
 }
 fn int32 main() { return 0; }

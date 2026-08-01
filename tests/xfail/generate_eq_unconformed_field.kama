@@ -9,4 +9,4 @@ type value Holder {
     public int32 id;
     public Plain p;      // not Equatable
 }
-fn int32 main() { Holder h; return h.id; }
+fn int32 main() { slot Holder h; return h.id; }

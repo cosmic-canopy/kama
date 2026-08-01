@@ -7,7 +7,7 @@ type value Vitals {
     @field float64 ratio;
     @field bool alive;
     public ctor make(int32 hp, int32 mp, float64 ratio, bool alive) {
-        Vitals r; r.hp = hp; r.mp = mp; r.ratio = ratio; r.alive = alive; return give r;
+        slot Vitals r; r.hp = hp; r.mp = mp; r.ratio = ratio; r.alive = alive; return give r;
     }
 }
 fn int main() {

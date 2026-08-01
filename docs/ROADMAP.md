@@ -40,30 +40,19 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability matrices in
 [ENGINE_READINESS.md](ENGINE_READINESS.md) / [MCU_READINESS.md](MCU_READINESS.md); the history in the git log.
 
-**The language surface is feature-complete.** What is left before the tag is one breaking change (below)
-and the docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
+**The language surface is feature-complete**, and the last breaking change (`slot` + a real `out`) has
+landed — see SPEC § *Uninitialized storage* and § *Functions*. What is left before the tag is the
+docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
 (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that
 would *break* source has to land first or wait for 2.0.
 
-**Uninitialized storage — `slot` + a real `out`.** A constructor now proves every field is assigned
-(SPEC § *Construction*), but a bare `T x;` outside a ctor is still an unstated hole: it zero-inits, it is
-live, and its destructor runs. That residual is why a raw-handle `resource` needs a drop guard at all.
-
-The answer is a **`slot` declaration**, not a `Slot<T>` wrapper type (§3's spike, now superseded): `slot T x;`
-declares a hole that is illegal to read, call on, pass by value, or drop until it is definitely assigned —
-and **an unassigned slot has no drop emitted**, which is "drop only if live" proven statically rather than
-defended against at runtime. `slot` applies **everywhere, including inside constructors** (`slot Buf b;
-b.n = …; return give b;`) so there is one greppable spelling for "this is not initialized yet"; the ctor
-completeness check becomes that same analysis specialized to fields.
-
-It needs **`out` to stop being a synonym for `ref`**, which it is today in the compiler despite SPEC
-documenting them as distinct. Given `slot K k; f(dst: out k)`, only a real `out` — *the callee must assign
-this* — lets the analysis mark `k` live. So the two are one change: `slot` is the declaration side, `out` the
-parameter side. Pieces: the `slot` keyword; extend `checkDefiniteAssignment` (which already tracks an
-`unassigned` set and already has an `inUnsafe` flag) from owning locals to all bare locals; `out` semantics
-plus a required call-site marker and callee definite-assignment; drop-elision for unassigned slots; and
-`addr(of:)` on a slot inside `unsafe` as the vouching act for the raw move-out dance. Sweep is mechanical
-(~140 lib ctors + fixtures). Retires the `fd >= 0` guards in `std::fs`/`std::net` outright.
+**Residual from that work — the runtime liveness guards did NOT all retire.** The campaign expected `slot`
+to remove them outright; it removed the *static* reason only. `~File`'s `fd >= 0` and `~Process`'s
+`handle != 0 && !reaped` discharge a **runtime** question no analysis can answer: `File.close()` re-arms the
+fd to -1 and `Process.wait` zeroes its handle, so an explicitly-closed value still takes its ordinary drop.
+Those guards stay by design. The genuinely static cases (`~TcpStream`/`~TcpListener`/`~UdpSocket`, whose
+handles nothing re-arms) are still guarded and *could* now drop the check — a small, separate cleanup that
+wants a deliberate audit of every path reaching those destructors, not a blanket removal.
 
 Everything else here is library or toolchain work that does **not** gate the tag:
 
@@ -193,9 +182,9 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   pruning suffices, or explicit per-module opt-in / dead-function elimination is warranted before a large stdlib
   grows. (`std::math`/`std::io` already ship as directory modules under this mechanism — the open question is
   whether pruning scales, not whether the packaging shape works.)
-- **Design spike — a safe wrapper for the raw-`Ptr` in/out dance (`Slot<T>` / `MaybeUninit`).**
-  *Answered — see "Uninitialized storage" in §1. The shape is a `slot` DECLARATION, not a wrapper type:
-  no new type, no `.assume_init()`, and an unassigned slot simply has no drop emitted.*
+*(The `Slot<T>`/`MaybeUninit` spike that sat here is answered and shipped: the shape is a `slot`
+DECLARATION, not a wrapper type — no new type, no `.assume_init()`, and an unassigned slot simply has no
+drop emitted. See SPEC § *Uninitialized storage*.)*
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 

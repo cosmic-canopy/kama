@@ -12,7 +12,7 @@ type resource Node {
     @field int32 id;
     @field Optional<Shared<Node>> next;   // owns (forward edge)
     @field Optional<Weak<Node>> back;     // weak (back edge), wired after construction
-    public ctor make(int32 id) { Node r; r.id = id; r.next = Optional::None; r.back = Optional::None; return give r; }
+    public ctor make(int32 id) { slot Node r; r.id = id; r.next = Optional::None; r.back = Optional::None; return give r; }
     public fn void setNext(Shared<Node> n) { this.next = Optional::Some(value: give n); }
     public fn void setBack(Weak<Node> w) { this.back = Optional::Some(value: give w); }
 }
