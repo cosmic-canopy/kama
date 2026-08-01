@@ -38,7 +38,10 @@ extern fn int32 kama_kill(isize handle, int32 sig);
 extern fn void  kama_proc_detach(isize handle);
 // Concurrent stdout+stderr drain to EOF (POSIX: poll; Windows: two threads) — see kama_os.h. Fills two heap
 // buffers the caller copies out then frees with kama_free. Keeps run()'s kama one platform-neutral path.
-extern fn int32 kama_capture2(int32 outFd, int32 errFd, Ptr<Ptr> outBuf, Ptr<usize> outLen, Ptr<Ptr> errBuf, Ptr<usize> errLen);
+// `Ptr<Ptr<uint8>>`, not `Ptr<Ptr>`: the seam takes `uint8_t**`, and the looser spelling lowered to
+// `void**` — a real -Wincompatible-pointer-types on every `run()` build. An FFI declaration has to
+// name the C type exactly; nothing else checks it.
+extern fn int32 kama_capture2(int32 outFd, int32 errFd, Ptr<Ptr<uint8>> outBuf, Ptr<usize> outLen, Ptr<Ptr<uint8>> errBuf, Ptr<usize> errLen);
 extern fn void  kama_free(Ptr p);
 extern fn int32 kama_WNOHANG();
 extern fn int32 kama_SIGKILL();
@@ -264,8 +267,8 @@ type resource Command {
             case Ok(value: pr): { := give pr; }
             case Err(error: e): { return Result::Err(error: e); }
         };
-        Ptr outRaw = null; usize outLen = 0;
-        Ptr errRaw = null; usize errLen = 0;
+        Ptr<uint8> outRaw = null; usize outLen = 0;
+        Ptr<uint8> errRaw = null; usize errLen = 0;
         int32 rc = kama_capture2(outFd: p.stdout().rawFd(), errFd: p.stderr().rawFd(),
                                  outBuf: addr(of: outRaw), outLen: addr(of: outLen),
                                  errBuf: addr(of: errRaw), errLen: addr(of: errLen));

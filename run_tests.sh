@@ -339,6 +339,15 @@ test_one() {
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
+    # A clean build means NO WARNINGS, from kama or from the C compiler. An exit-code suite is blind to
+    # them, which is how a `static inline` that was declared in the shared header but defined only in one
+    # translation unit, a `void**` passed where `uint8_t**` was declared, and 72 spurious shift-count
+    # warnings all sat in the corpus unnoticed. Warnings are the C compiler telling us the emitter is
+    # generating something it does not believe; treat that as a failure while the tree is clean.
+    if grep -qi 'warning' "$TMP/$name.err"; then
+        { echo "FAIL $name (built, but with warnings)"; grep -i 'warning' "$TMP/$name.err" | head -5; } >"$out"
+        echo FAIL >"$res"; return
+    fi
     run_one "$exe" "$TMP/$name.san"
     echo $(( $(now_ms) - t0 )) >"$TMP/$name.ms"   # report-only build+run wall-clock (ms)
     if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then

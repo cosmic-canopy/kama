@@ -921,8 +921,19 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // A signed LEFT shift into the sign bit is UB in C; route it through `kama_lshift` (shifts in the
         // matching unsigned type — defined) so there's no UB even in debug (release's `-fwrapv` also
         // defines it, but debug has none). Right shift of a signed value is impl-defined, not UB.
-        if (token == LTLT)
-            return "kama_lshift(" + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";
+        if (token == LTLT) {
+            // Only a SIGNED left shift needs the macro — shifting into the sign bit is the UB it exists to
+            // avoid. On an unsigned operand `<<` is already fully defined, and routing it through
+            // `kama_lshift` anyway was actively harmful: `_Generic` type-checks EVERY branch, selected or
+            // not, so `b << 56` on a `uint64` made clang warn "shift count >= width of type" against the
+            // unselected `int8_t`/`int16_t`/`int32_t` arms. That is a false positive, but it fired 72 times
+            // across the corpus (all of `std::num`'s byteswaps) and buried the real warnings underneath.
+            int lt = holeBuiltinType(lhs);
+            bool knownUnsigned = lt == IDENTIFIER_UINT8_VAL  || lt == IDENTIFIER_UINT16_VAL
+                              || lt == IDENTIFIER_UINT32_VAL || lt == IDENTIFIER_UINT64_VAL;
+            if (!knownUnsigned)   // unknown type stays on the safe path
+                return "kama_lshift(" + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";
+        }
         return "(" + emitExpression(lhs) + " " + binaryOperator(token) + " "
                    + emitExpression(rhs) + ")";   // primitives — unchanged
     }
@@ -11721,13 +11732,11 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
     if (ci.destructible)
         *_out << "    .__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
     *_out << "};\n\n";
-    // Virtual drop: read the runtime vtable off the object's vptr and call its `__dtor`. A base
-    // handle (`Shared<Base>`) drops through this so a Derived's full chain runs even though the
-    // static type is Base. The vptr already names the most-derived vtable (set at construction).
-    *_out << "static inline void " << ci.name << "__vdrop(" << ci.name << "* self) {\n";
-    indent(1); *_out << "const " << ci.vtableRoot << "_vtable* __vt = self->" << vptrPrefix(&ci) << "__vptr;\n";
-    indent(1); *_out << "if (__vt && __vt->__dtor) __vt->__dtor(self);\n";
-    *_out << "}\n\n";
+    // `__vdrop` used to be defined here, in the OWNING MODULE's translation unit, while its `static inline`
+    // prototype went into the shared header — so any OTHER unit that dropped a base handle got a static
+    // declaration with no definition (`-Wundefined-internal`, and a call to a symbol that cannot exist,
+    // since `static` cannot resolve across units). It is now defined in the header next to its prototype;
+    // see emitClassPrototypes.
 }
 
 // ---- Interfaces -----------------------------------------------------
@@ -11905,8 +11914,21 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
     if (ci.destructible)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
-    if (ci.hasVtable)   // polymorphic drop dispatcher (defined with the vtable instance)
-        *_out << "static inline void " << ci.name << "__vdrop(" << ci.name << "* self);\n";
+    if (ci.hasVtable) {
+        // Virtual drop: read the runtime vtable off the object's vptr and call its `__dtor`. A base handle
+        // (`Shared<Base>`) drops through this so a Derived's full chain runs even though the static type is
+        // Base. The vptr already names the most-derived vtable (set at construction).
+        //
+        // DEFINED here, in the shared header, not merely declared. It is reachable from any unit that drops
+        // a base handle, and `static inline` without a definition in the calling unit is a dangling
+        // reference no linker can satisfy. The body needs only the vtable STRUCT TYPE and the object
+        // layout — both complete by this point in the header — and dispatches through the vptr rather
+        // than naming the module-local vtable instance, so nothing here is unit-specific.
+        *_out << "static inline void " << ci.name << "__vdrop(" << ci.name << "* self) {\n";
+        indent(1); *_out << "const " << ci.vtableRoot << "_vtable* __vt = self->" << vptrPrefix(&ci) << "__vptr;\n";
+        indent(1); *_out << "if (__vt && __vt->__dtor) __vt->__dtor(self);\n";
+        *_out << "}\n";
+    }
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype

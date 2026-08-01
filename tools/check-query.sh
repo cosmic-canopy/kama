@@ -329,8 +329,13 @@ expect --complete 105:70 -- "field	value	int32"    # a match arm's payload bindi
 # through the void-returning method would silently offer nothing.
 echo "check-query: M4.1 field-vs-method precedence on a real stdlib type"
 FIXTURE="$ROOT/lib/std/process/process.kama"
-expect --complete 166:45 -- "method	add	fn void add(item: string)"   # this.args.| is the DynamicArray FIELD
-expect --complete 62:43  -- "field	code	int32"                       # ... and a plain `this.` still works
+# The two probe positions are DERIVED from the source text, not hardcoded. Pinning a line number into a
+# live stdlib file makes every edit to that file — even adding a comment — fail this guard for a reason
+# that has nothing to do with what it tests. The columns are still literal: they point INSIDE the line
+# (just past `this.args.` / `this.`), which is the thing under test.
+qline() { grep -n -m1 -F "$1" "$FIXTURE" | cut -d: -f1; }
+expect --complete "$(qline 'this.args.add(item: give a)'):45" -- "method	add	fn void add(item: string)"   # this.args.| is the DynamicArray FIELD
+expect --complete "$(qline 'return this.signal == 0'):43"     -- "field	code	int32"                       # ... and a plain `this.` still works
 
 # ---------------------------------------------------------------------------------------------------
 # M4.2 — after `::`. A `::` head is always a TYPE or a NAMESPACE (SPEC forbids `::` on a value, and the
