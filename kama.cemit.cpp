@@ -11036,16 +11036,25 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // (it addresses a real value), so it needs no `unsafe`.
     if (name == "addr" && (!call->identifier->qualifier || call->identifier->qualifier->empty())
         && call->args && call->args->size() == 1) {
+        SharedExpression a = (*call->args)[0]->expression;
         // Taking a SLOT's address is the vouching act for the raw move-out dance (`slot T x;
         // Ptr<T> d = addr(of: x); unsafe { d[0] = …; } return give x;`): the code now initializes that
         // storage by hand, so the hole becomes a live value and its destructor comes back. Restricted to
         // slots so this can't silently resurrect a genuinely moved-from local.
-        if (auto* aid = dynamic_cast<IdentifierNode*>((*call->args)[0]->expression.get()))
+        if (auto* aid = dynamic_cast<IdentifierNode*>(a.get()))
             if (aid->value && (!aid->qualifier || aid->qualifier->empty()) && _slotLocals.count(*aid->value)) {
                 _slotLocals.erase(*aid->value);
                 _moveState[*aid->value] = MoveState::NotMoved;
             }
-        return "&(" + emitExpression((*call->args)[0]->expression) + ")";
+        // The operand must be a PLACE — a field, local, or element. A temporary has no address that
+        // outlives the expression, and `&(f())` is not even valid C. (This check lived in a second,
+        // unreachable `addr` handler below for its whole life — the guard above it was identical and
+        // returned first — so it had never once fired, and `emitPlace`'s user-`operator[]` /
+        // place-returning-method awareness was bypassed with it.)
+        if (!isNamedValue(a.get()))
+            unsupported("`addr(of: …)` needs a place — a field, local, or element (not a temporary)",
+                        call->line);
+        return "(&(" + emitPlace(a) + "))";
     }
 
     // `panic(msg:)`, `assert(cond:, msg:)`, `debugAssert(cond:, msg:)` — builtins that trap cleanly (abort
@@ -11094,16 +11103,6 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
         return "(void)0";   // nothing to drop (a value / non-destructible type)
     }
-    // `addr(of: place)` — the address of a PLACE (a field/local/element) as a `Ptr<T>`. Taking an
-    // address is safe (a `Ptr` is safe to hold); dereferencing it stays `unsafe`. Lets a library type
-    // keep a live back-pointer to another's field — e.g. an iterator to its container's mutation counter.
-    if (name == "addr" && bareCall && call->args && call->args->size() == 1) {
-        SharedExpression a = (*call->args)[0]->expression;
-        if (!isNamedValue(a.get()))
-            unsupported("`addr(of: …)` needs a place — a field, local, or element (not a temporary)", call->line);
-        return "(&(" + emitPlace(a) + "))";
-    }
-
     // M6.2: `__kama_ctrl_atomic()` — a per-instance COMPILE-TIME constant (0/1) that the prelude
     // `Shared`/`Weak` refcount ops pass to the kama_ctrl.h seam. 1 iff the Shared/Weak instance being
     // emitted is the deeply-immutable (atomic-refcount) flavor (`useAtomicRefcount`); the seam's branch on
