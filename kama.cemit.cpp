@@ -3013,9 +3013,28 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         std::string ix = "__i"  + std::to_string(id);
         std::string recvExpr = emitExpression(fe->expression);
 
+        // Is the subject a `comptime` constant? Those emit as C `static const`, so taking a plain `T*` to
+        // one discards the qualifier — a real warning on every `foreach` over a baked lookup table, and
+        // `-Werror` away from breaking the build. The loop only READS on the by-value path, so the honest
+        // fix is a const receiver pointer (and const-correct `__length`/`__get`), not a cast.
+        bool constRecv = false;
+        if (auto* rid = dynamic_cast<IdentifierNode*>(fe->expression.get()))
+            if (rid->value) constRecv = _constStatics.count(resolveUserNameImpl(*rid->value, rid->qualifier)) != 0
+                                     || _constStatics.count(qualify(*rid->value)) != 0;
+        // `foreach (ref T e in K)` would hand out a mutable `T*` into a constant. Reject it here rather
+        // than emitting code the C compiler has to catch: the `ref` binding exists to write back, and
+        // there is nothing writable to bind to.
+        if (constRecv && fe->isRef) {
+            unsupported("`foreach (ref …)` over a `comptime` constant — a constant has no writable element "
+                        "to borrow (drop the `ref` to iterate by value)", n->line);
+            *_out << "\n";
+            return;
+        }
+        std::string cq = constRecv ? "const " : "";
+
         // Outer wrapper holds the receiver pointer (evaluate the receiver once).
         *_out << "{\n";
-        indent(depth + 1); *_out << coll << "* " << fp << " = &(" << recvExpr << ");\n";
+        indent(depth + 1); *_out << cq << coll << "* " << fp << " = &(" << recvExpr << ");\n";
         indent(depth + 1);
         *_out << "for (size_t " << ix << " = 0; " << ix << " < " << coll << "__length(" << fp
              << "); ++" << ix << ") {\n";
@@ -3655,6 +3674,11 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                 for (auto& d : *mv->variables)
                     if (d && d->name && d->name->value) {
                         _moduleStatics[qualify(*d->name->value)] = mv->type;
+                        // A `comptime` static emits as C `static const`, so anything that takes its ADDRESS
+                        // must take a `const` one — see the const-correct foreach lowering. Recorded for
+                        // every comptime static, not just the foldable ones, since constness is a property
+                        // of the declaration and not of whether the folder happened to succeed.
+                        if (mv->isComptime) _constStatics.insert(qualify(*d->name->value));
                         // 6b-2: a `comptime NAME` with a foldable integer initializer is a named
                         // compile-time constant — record its value (qualified key) so const-generic sizes
                         // and later `comptime` initializers resolve it. Declaration-order fold: an

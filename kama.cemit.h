@@ -1506,6 +1506,7 @@ private:
     std::set<std::string> _constLocals;                       // const local names in scope
     std::map<std::string, int64_t> _constLocalVals;           // 6b-2: local `const` name -> folded int (comptime uses: sizes/fills)
     std::map<std::string, int64_t> _moduleConsts;             // 6b-2: module `comptime` qualified name -> folded int
+    std::set<std::string> _constStatics;                      // qualified names emitted as C `static const` (every `comptime` static)
     // 6b-2: a type-associated `comptime` constant (`Type::NAME`). Keyed "<qualifiedClass>::<name>".
     struct TypeConstInfo { bool hasValue; int64_t value; Visibility visibility; std::string owner; std::string cName; SharedIdentifier type; SharedExpression initializer; int line; };
     std::map<std::string, TypeConstInfo> _typeConsts;

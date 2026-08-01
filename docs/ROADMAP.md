@@ -299,10 +299,6 @@ The const-eval ladder and decl-level conditional compilation are done ([SPEC.md]
 - **`comptime fn` nice-to-haves (deferred).** `sizeof`/`alignof` and named-arg reorder *inside* a comptime fn
   body; a **local** `comptime T X = f();` initialized by a comptime-fn call (module + type-associated const
   forms ship); a per-fn `@steps(…)` budget override; dual-use fallback emission.
-- **Known rough edge (backlog).** `foreach` over a `static const` fixed array (a `comptime` array constant) emits
-  a C `const`-discard warning — the foreach lowering takes a non-`const` receiver pointer and the by-value + `ref`
-  paths share it. Benign (the loop only reads); index access is warning-free. Fix = a const-correct foreach
-  lowering (const receiver pointer + `const`-element `get` on the by-value path).
 - **Platform tag-type compilation.** The `@compileFor`-gated contract-impl seam is the sanctioned platform-variance
   mechanism (per-platform `type` impls behind a platform-agnostic `contract`, exactly one survives) — NOT
   in-function branching / `#ifdef`. Extending it as new targets land is forward library/driver work.

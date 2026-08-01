@@ -34,4 +34,19 @@ if grep -q 'crcTable' "$cfile"; then
     exit 1
 fi
 
-echo "check-comptime: PASS (CRC table baked at compile time; comptime fn not emitted)"
+# 3. WARNING-FREE — a `foreach` over a baked table must compile CLEANLY. The exit-code suite cannot see a
+#    warning, so it is asserted here: the lowering used to take a plain `T*` to a `static const` aggregate,
+#    which is a const-discard on every iteration of every lookup table (and one -Werror from a hard error).
+FE="$(dirname "$0")/../tests/comptime_foreach_const.kama"
+if [ -f "$FE" ]; then
+    if ! "$KAMA" build "$FE" -o "$tmp/fe" >"$tmp/fe.out" 2>"$tmp/fe.err"; then
+        echo "check-comptime: FAIL — tests/comptime_foreach_const.kama did not build" >&2
+        head -5 "$tmp/fe.err" >&2; exit 1
+    fi
+    if grep -qi 'warning' "$tmp/fe.err"; then
+        echo "check-comptime: FAIL — foreach over a comptime constant emitted a compiler warning:" >&2
+        grep -i 'warning' "$tmp/fe.err" | head -5 >&2; exit 1
+    fi
+fi
+
+echo "check-comptime: PASS (CRC table baked at compile time; comptime fn not emitted; foreach over a constant is warning-free)"

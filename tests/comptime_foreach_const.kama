@@ -1,0 +1,18 @@
+// `foreach` over a `comptime` array constant, read-only. A `comptime` static emits as C `static const`,
+// so the foreach lowering used to take a plain `T*` to it and emit a const-discard warning on every
+// iteration of a baked lookup table — benign, but noisy, and one `-Werror` away from breaking the build.
+// The by-value path only reads, so the receiver pointer is `const` and `__length`/`__get` take a
+// `const NAME*`. Asserted warning-free by tools/check-comptime.sh (an exit code cannot see a warning).
+comptime fn InlineArray<int32, 4> mk() {
+    InlineArray<int32, 4> t = [0; 4];
+    for (int32 i = 0; i < 4; i = i + 1) { t[i] = (i + 1) * 10; }
+    return t;
+}
+comptime InlineArray<int32, 4> TABLE = mk();
+
+fn int main() {
+    int32 sum = 0;
+    foreach (int32 v in TABLE) { sum = sum + v; }   // 10+20+30+40 = 100
+    int32 viaIndex = TABLE[0] + TABLE[3];           // 50 — the index path was always warning-free
+    return sum - viaIndex - 16;                     // 100 - 50 - 16 = 34
+}

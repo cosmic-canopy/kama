@@ -384,7 +384,7 @@ static inline void kama_bounds_fail(size_t i, size_t len) {
 // part of the type (monomorphized per (T,N)), and the whole thing is a first-class value.
 #define KAMA_FIXED_TYPE(T, N, NAME) typedef struct NAME { T v[N]; } NAME;
 #define KAMA_FIXED_FUNCS(T, N, NAME)                                           \
-static inline T      NAME##__get(NAME* self, size_t i) {                        \
+static inline T      NAME##__get(const NAME* self, size_t i) {                  \
     if (i >= (size_t)(N)) kama_bounds_fail(i, (size_t)(N));                    \
     return self->v[i];                                                          \
 }                                                                               \
@@ -396,7 +396,7 @@ static inline T*     NAME##__at(NAME* self, size_t i) {                         
     if (i >= (size_t)(N)) kama_bounds_fail(i, (size_t)(N));                    \
     return &self->v[i];                                                         \
 }                                                                               \
-static inline size_t NAME##__length(NAME* self) { (void)self; return (size_t)(N); } \
+static inline size_t NAME##__length(const NAME* self) { (void)self; return (size_t)(N); } \
 static inline NAME   NAME##__fill(T x) {                                        \
     NAME r; for (size_t i = 0; i < (size_t)(N); ++i) r.v[i] = x; return r;      \
 }
