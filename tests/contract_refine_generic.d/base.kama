@@ -1,0 +1,12 @@
+// Contract refinement across files, where the inherited slot's parameter is a GENERIC INSTANCE.
+// A refining contract merges its parent's methods, and those signatures were written — and resolve —
+// in the PARENT's file. Re-resolving them in the child's namespace named a bare, undeclared `View` in
+// the emitted vtable unless the child's file happened to import `View` too, which it has no reason to.
+// See linkContracts: an inherited signature is rebound to its parent-resolved absolute spelling at
+// merge time, so the slot mangles identically no matter which file emits it.
+namespace CrBase;
+import std::collections::{View};
+export { Parent };
+type contract Parent for resource {
+    fn int32 take(View<uint8> bytes);
+}

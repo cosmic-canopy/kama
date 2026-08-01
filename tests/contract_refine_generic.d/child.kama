@@ -1,0 +1,8 @@
+// The refining contract's file imports ONLY the parent — never `View`. The inherited `take` slot's param
+// must still mangle correctly: it was written and resolved in the parent's file.
+namespace CrChild;
+import CrBase::{Parent};
+export { Child };
+type contract Child for resource implements Parent {
+    fn int32 extra();
+}

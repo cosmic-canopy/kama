@@ -114,15 +114,14 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-- **Contract refinement — two under-tested edges (clean workarounds).** `type contract Child … implements
-  Parent` works for dispatch, but was exercised mainly with scalar-param parents. (a) A merged parent method
-  whose param is a **generic instance** (`View<uint8>`) re-resolves in the *child* contract's namespace at
-  vtable-emit, so the child's file must `import` that generic type or the emitted C vtable names an undefined
-  type. (b) A concrete type implementing the child gets **no parent-contract conformance thunk** — pass it
-  where the parent is expected only if it *also* spells `implements Parent`; and a child-contract-**value** →
-  parent-contract-param upcast is unsupported (dispatch *through* the child to inherited methods works). Both
-  have trivial workarounds (used in `lib/std/net/stream.kama`); fixing (a) = resolve the merged param under
-  the parent's namespace in `linkContracts`, (b) = auto-emit parent thunks for refining-contract implementers.
+- **Contract refinement — one under-tested edge (clean workaround).** `type contract Child … implements
+  Parent` works for dispatch, but was exercised mainly with scalar-param parents. Remaining: a concrete type
+  implementing the child gets **no parent-contract conformance thunk** — pass it where the parent is expected
+  only if it *also* spells `implements Parent` — and a child-contract-**value** → parent-contract-param upcast
+  is unsupported (dispatch *through* the child to inherited methods works). Trivial workaround, used in
+  `lib/std/net/stream.kama`; the fix is to auto-emit parent thunks for refining-contract implementers.
+  *(The generic-instance param edge is fixed — an inherited slot's signature is now rebound to its
+  parent-resolved absolute spelling in `linkContracts`; fixture `tests/contract_refine_generic.d`.)*
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).

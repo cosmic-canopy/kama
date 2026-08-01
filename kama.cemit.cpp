@@ -7509,8 +7509,34 @@ void CEmitter::linkContracts()
                 unsupported(("contract `" + name + "` refines unknown contract `" + parent + "`").c_str(), 0);
                 continue;
             }
-            for (auto& pm : pit->second.methods)
-                if (seen.insert(pm.name).second) merged.push_back(pm);   // inherited (dedup)
+            // An inherited slot's SIGNATURE was written in the PARENT's file and resolves there. Merging
+            // the method node as-is left its type names to be re-resolved later under the CHILD's
+            // namespace, where an import the parent had may not exist — so a parent method taking a
+            // `View<uint8>` emitted a vtable slot naming a bare, undeclared `View` unless the child's file
+            // happened to import it too. Rebind each type to its absolute, parent-resolved spelling at
+            // merge time, so the slot mangles identically no matter which file emits it.
+            InterfaceInfo& pi = pit->second;
+            NsCtx savedNs = _nsCtx;
+            _nsCtx = NsCtx{};
+            _nsCtx.scope = pi.scope; _nsCtx.usings = pi.usings; _nsCtx.symbolAliases = pi.symbolAliases;
+            for (auto& pm : pit->second.methods) {
+                if (!seen.insert(pm.name).second) continue;              // inherited (dedup)
+                InterfaceMethod im = pm;
+                im.returnType = absolutizeType(im.returnType);
+                if (im.params) {
+                    auto ps = std::make_shared<ParameterList>();
+                    for (auto& p : *im.params) {
+                        if (!p) { ps->push_back(p); continue; }
+                        auto np = std::make_shared<FunctionParameterNode>(*p);
+                        np->synthesized = true;                          // an emitter-built copy, not source
+                        np->type = absolutizeType(p->type);
+                        ps->push_back(np);
+                    }
+                    im.params = ps;
+                }
+                merged.push_back(im);
+            }
+            _nsCtx = savedNs;
         }
         for (auto& own : ii.methods) merged.push_back(own);    // then own, after the inherited slots
         ii.methods = std::move(merged);
