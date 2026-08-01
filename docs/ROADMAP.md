@@ -173,25 +173,40 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   for the language server (it resolves the whole program from the manifest) and for any file reached through
   an import, but it makes single-file `check` unusable as a lint over a directory module, which is how the
   stdlib is laid out. Fix = widen a bare `check`'s unit set to the target's own namespace directory.
-- **A `static fn` on a GENERIC type has no spelling that reaches it (small; circular diagnostics).**
-  Statics work on a non-generic type (`Plain::tag()`), but `::` (the static operator) and `.` (the ctor
-  operator) neither accept a type-argument list, so there is nowhere to put the `<int32>` that tells
-  `Box<T>::tag` which monomorph to call. All four candidates fail, and **two of them contradict each
-  other** — a user following the diagnostic goes in a circle:
+- **A `static fn` on a GENERIC type has no spelling that reaches it — ✅ DECIDED: add one** (user,
+  2026-08-01). Statics work on a non-generic type (`Plain::tag()`), and a ctor on a generic type has BOTH
+  an inferred and an explicit spelling (`Box.make(v:)` / `Box::<int32>.make(v:)`). Statics got neither: `::`
+  never learned a type-argument list, so there is nowhere to put the `<int32>` that says which monomorph.
+  All four candidates fail, and **two contradict each other** — `Box::<int32>.tag()` says "call it with
+  `Box::tag(...)`", which then reports no such function:
 
   | Spelling | Result |
   | --- | --- |
   | `Box::<int32>::tag()` | parse error: `unexpected ::, expecting ( or .` |
+  | `Box<int32>::tag()` | parse error: `unexpected INT32` (the `<` ambiguity — see below) |
   | `Box::tag()` | `scope-qualified call resolves to no known function` |
   | `Box::<int32>.tag()` | `dot-on-type calls a constructor; `tag` is a static — call it with `Box::tag(...)`` |
   | `Box.tag()` | `unknown type in constructor call `Box`` |
 
-  Narrow: instance methods, ctors (`Box.make(v:)`) and generic free functions are all fine, and a
-  self-returning static is required to be a `ctor` anyway under the one-construction-spelling rule — so
-  the only thing lost is a *non*-self-returning static on a generic type (`Box<T>::defaultCapacity()`).
-  Workaround: an instance method or a free function. Fix = a type-arg list on the `::` call form, plus
-  making the two diagnostics agree. Post-1.0, additive; not a blocker — but the circular message is worth
-  fixing on its own.
+  **Worse than the missing call: the DECLARATION compiles clean.** A `static fn` on a generic type that is
+  never called builds and ships, and only turns out to be unreachable when someone tries to use it — a
+  silent trap, against the "reject early with guidance" discipline.
+
+  **The fix is one grammar production.** The turbofish prefix is already factored out for exactly this kind
+  of reuse (`generic_turbofish_name : IDENTIFIER COLONCOLON LT type_arg_list GT`, [kama.y:1182]) and already
+  feeds three forms — free-fn call, receiver turbofish, and `generic_turbofish_name DOT IDENTIFIER (…)`
+  (the on-type ctor). Add the `COLONCOLON IDENTIFIER (…)` sibling, plus static-call resolution under
+  `_typeSubst`, so the two on-type forms are symmetric:
+
+  ```kama
+  Box::<int32>.make(v: 5)     // ctor   — dot
+  Box::<int32>::tag()         // static — colon-colon   (the addition)
+  ```
+
+  **The turbofish is MANDATORY here**, unlike for a ctor: a static has no receiver and its arguments need
+  not mention `T`, so there is nothing to infer from. And `Box<int32>::tag()` cannot be the spelling —
+  in expression position `Box < int32 >` is indistinguishable from two comparisons, which is why kama has
+  a turbofish at all (the grammar tracks `genericDepth` around it).
   *(**Corrected 2026-08-01.** This entry used to also claim a generic FREE FUNCTION could not instantiate a
   generic type from its own type param — `fn f<W: C>(…) { Foo<W> x = Foo.make(…); }`. That is no longer true
   and was verified in all three shapes: an intrinsic collection (`DynamicArray<T>` inside `fn f<T>`), a user
