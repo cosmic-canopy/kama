@@ -59,7 +59,13 @@ Everything else here is library or toolchain work that does **not** gate the tag
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
-2. **Standard-library follow-ups** (no new language surface — pure library/codegen):
+2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
+   [design/stdlib-parity.md](design/stdlib-parity.md) (cold-start ready; delete that file when it ships).
+   The bar is **Rust-`std` parity**: the only no-GC peer, and the only one whose stdlib also stops before
+   regex/TLS/HTTP/crypto — which is the right line now that kama has a package manager. No new language
+   surface; pure library/codegen. Split M2a (parse · sort · math completion · `char` classification) /
+   M2b (fs + path · io handles + `lines()` · sleep + wall clock · DNS) / M2c (`std::random` ·
+   `std::encoding`). The items below are that campaign's contents:
    - **`std::net`** — DNS/`getaddrinfo` (numeric hosts only today). *(UDP and ephemeral-port `getsockname`
      ship — `lib/std/net/udp.kama`; IPv6 and multicast are separate, tracked in §2.)*
    - **`std::fs` / `std::io`** — richer `Metadata` (mtime/perms), path helpers, `mkdir`/`rename`/`exists`,
