@@ -1,0 +1,10 @@
+import std::fs::{File};
+// The payoff: an unassigned `slot` has NO destructor emitted, so "drop only if live" is proven statically
+// instead of defended against at runtime. `f` is never assigned, so nothing closes a descriptor for it; a
+// dropped `{0}` File would otherwise have run its dtor. The sibling `g` IS assigned and DOES drop.
+// (tools/check-slot.sh greps the emitted C to assert exactly that; this fixture proves it also runs.)
+fn int main() {
+    slot File f;                  // never assigned -> no File__dtor emitted
+    File g = File.make(fd: 1);    // assigned       -> File__dtor emitted
+    return 7;
+}

@@ -25,7 +25,7 @@ type value Cfg {
 }
 
 fn int32 tally(int32 first, int32 second) {
-    int32 plain;                      // no initializer -> precise
+    slot int32 plain;                      // no initializer -> precise
     int32 seeded = first + second;    // initializer -> end span currently swallows the initializer
     plain = seeded + first;
     return plain;

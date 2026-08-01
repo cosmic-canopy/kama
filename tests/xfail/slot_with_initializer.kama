@@ -1,0 +1,6 @@
+// `slot` means "no value yet", so giving one a value is a contradiction — and would quietly disable the
+// drop of a live object. One way to say each thing.
+fn int main() {
+    slot int32 x = 3;      // ERROR: a slot cannot have an initializer
+    return x;
+}

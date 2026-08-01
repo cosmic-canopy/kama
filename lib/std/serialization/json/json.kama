@@ -24,7 +24,7 @@ type resource JsonWriter<W: Writer> implements Serializer {
     SerError code;         // the recorded write error
 
     public ctor make(W sink) {
-        JsonWriter<W> r;
+        slot JsonWriter<W> r;
         r.sink = give sink;
         r.scratch = FixedArray.make(size: 1);
         r.needComma = false;
@@ -203,7 +203,7 @@ type resource JsonReader implements Deserializer {
     DeError code;       // the specific error `failWith` recorded; `Malformed` by default
 
     public ctor make(string src) {
-        JsonReader r;
+        slot JsonReader r;
         r.len = cast<int32>(src.length());
         r.src = give src;
         r.pos = 0;

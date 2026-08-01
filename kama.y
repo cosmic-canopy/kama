@@ -202,7 +202,7 @@ struct kamayystype {
 %token <string> NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF TRY ASM
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
-%token <string> REF RETURN STATIC STRING
+%token <string> REF RETURN SLOT STATIC STRING
 %token <string> THIS TRUE TYPE
 %token <string> UINT8 UINT16 UINT32 UINT64
 %token <string> UNSAFE VIRTUAL VOID
@@ -810,6 +810,10 @@ declaration_statement
   ;
 local_variable_declaration
   : type variable_declarators   { $$ = std::make_shared<LocalVariableDeclaration>(SCANNER_CODEGENCONTEXT, $1, $2); }
+    /* `slot T x;` — a declared HOLE: storage with no value yet, illegal to read until definitely
+       assigned, and with no destructor emitted while it stays unassigned. A leading keyword, exactly like
+       `const`/`comptime` above, so it adds no conflict (the decision is made on the first token). */
+  | SLOT type variable_declarators   { auto d = std::make_shared<LocalVariableDeclaration>(SCANNER_CODEGENCONTEXT, $2, $3); d->isSlot = true; $$ = d; }
   ;
 variable_declarators
   : variable_declarator   { $$ = std::make_shared<VariableDeclaratorList>(); $$->push_back($1); }

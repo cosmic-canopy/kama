@@ -10,19 +10,19 @@ type value Point {
 
 type resource Widget {
     Point origin;
-    public ctor make(Point at) { Widget w; w.origin = at; return give w; }
+    public ctor make(Point at) { slot Widget w; w.origin = at; return give w; }
     public fn int32 originX() { return this.origin.x; }
 }
 
 fn Point midpoint(Point a, Point b) {
-    Point m;
+    slot Point m;
     m.x = (a.x + b.x) / 2;
     m.y = (a.y + b.y) / 2;
     return m;
 }
 
 fn int32 main() {
-    Point p;
+    slot Point p;
     p.x = 4; p.y = 6;
     Widget w = Widget.make(at: p);
     return w.originX();

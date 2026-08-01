@@ -1,0 +1,8 @@
+// Definite assignment is a real flow merge, not "any assignment anywhere": a lone `if` may be skipped, so
+// the value is not assigned on every path reaching the read. (Both arms assigning IS accepted — see
+// tests/slot_assign_then_read.kama.)
+fn int main() {
+    slot int32 x;
+    if (true) { x = 1; }   // only one path assigns
+    return x;              // ERROR: not definitely assigned
+}

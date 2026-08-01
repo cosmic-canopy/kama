@@ -5,18 +5,18 @@
 import std::concurrent;
 
 type resource Payload {
-    Ptr<int32> slot;
+    Ptr<int32> dst;
     int32 value;
 
-    public ctor make(Ptr<int32> slot, int32 value) {
+    public ctor make(Ptr<int32> dst, int32 value) {
         Payload r;
-        r.slot = slot;
+        r.dst = dst;
         r.value = value;
         return give r;
     }
 
     public fn void run() {
-        unsafe { this.slot[0] = this.value; }
+        unsafe { this.dst[0] = this.value; }
     }
 }
 
@@ -27,8 +27,8 @@ fn void worker(Payload p) {
 fn int main() {
     int32 a = 0;
     int32 b = 0;
-    Payload pa = Payload.make(slot: addr(of: a), value: 10i32);
-    Payload pb = Payload.make(slot: addr(of: b), value: 20i32);
+    Payload pa = Payload.make(dst: addr(of: a), value: 10i32);
+    Payload pb = Payload.make(dst: addr(of: b), value: 20i32);
     scope {
         spawn worker(p: give pa);   // disjoint slot `a`
         spawn worker(p: give pb);   // disjoint slot `b`

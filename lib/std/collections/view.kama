@@ -7,7 +7,7 @@ export { View };
 // view is live). Mirrors `FixedArrayIter`.
 type value ViewIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len;
-    public ctor make(Ptr<T> data, int32 len) { ViewIter<T> r; r.data = data; r.pos = 0; r.len = len; return give r; }
+    public ctor make(Ptr<T> data, int32 len) { slot ViewIter<T> r; r.data = data; r.pos = 0; r.len = len; return give r; }
     public fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
@@ -18,7 +18,7 @@ type value ViewIter<T> implements Iterator<T> {
 // A mutable iterator (the `foreach (ref T x in view)` protocol): hasNext() + a place-returning next().
 type value ViewIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len;
-    public ctor make(Ptr<T> data, int32 len) { ViewIterMut<T> r; r.data = data; r.pos = 0; r.len = len; return give r; }
+    public ctor make(Ptr<T> data, int32 len) { slot ViewIterMut<T> r; r.data = data; r.pos = 0; r.len = len; return give r; }
     public fn bool hasNext() { return this.pos < this.len; }
     public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
 }
@@ -33,7 +33,7 @@ type value ViewIterMut<T> implements IteratorMut<T> {
 type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable] {
     Ptr<T> data; int32 len;
 
-    public ctor make(Ptr<T> data, int32 len) { View<T> r; r.data = data; r.len = len; return give r; }
+    public ctor make(Ptr<T> data, int32 len) { slot View<T> r; r.data = data; r.len = len; return give r; }
 
     public fn int32 length() { return this.len; }
     public fn bool  isEmpty() { return this.len == 0; }

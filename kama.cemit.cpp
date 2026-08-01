@@ -99,6 +99,21 @@ void CEmitter::unsupported(const char* what, int srcLine)
     *_out << "/* TODO(kama): unsupported " << what << " */";
 }
 
+// A SOFT diagnostic: it reports and shows up in an editor, but does not fail the build. Distinct from
+// `unsupported`, which is a hard error. Used to land a breaking rule in two steps — warn while the corpus
+// is swept, then flip to `unsupported` — so every intermediate commit stays green.
+void CEmitter::warning(const char* what, int srcLine)
+{
+    std::fprintf(stderr, "kama: warning: %s at %s:%d\n", what, _sourcePath.c_str(), srcLine);
+    Diagnostic d;
+    d.line = srcLine;
+    d.severity = DiagSeverity::Warning;
+    d.code = "warning";
+    d.message = what;
+    d.file = _sourcePath;
+    _diagnostics.push_back(d);
+}
+
 // ---------------------------------------------------------------------------
 // Namespaces: scope prefixes + name resolution
 // ---------------------------------------------------------------------------
@@ -1413,9 +1428,16 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
         auto ms = _moveState.find(it->cVar);
         if (ms != _moveState.end()) {
             if (ms->second == MoveState::Moved) continue;   // moved out — skip its drop
-            if (ms->second == MoveState::MaybeMoved)        // moved on some paths, live here — undecidable drop
-                unsupported(("`" + it->cVar + "` is moved on some paths but not others and is still live at "
-                             "scope exit — move it on all paths or none, or use Optional<T>").c_str(), _curLine);
+            if (ms->second == MoveState::MaybeMoved) {      // moved on some paths, live here — undecidable drop
+                // For an ordinary value this is unanswerable, so it is an error. For a SLOT it is not: the
+                // declaration's field-default fill already left the storage in a valid, drop-safe state,
+                // so "filled on some paths" just means DROP IT — the drop is correct when it was filled and
+                // a no-op on the zero value when it was not. Only a slot untouched on EVERY path keeps its
+                // drop elided, which is the case that retires the runtime liveness guards.
+                if (!_slotDeclared.count(it->cVar))
+                    unsupported(("`" + it->cVar + "` is moved on some paths but not others and is still live at "
+                                 "scope exit — move it on all paths or none, or use Optional<T>").c_str(), _curLine);
+            }
         }
         // A move-only value that owns nothing (an empty `resource`/token) is tracked for move
         // analysis but has no destructor — skip the drop.
@@ -1802,7 +1824,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _out = &body;
         _refParams.clear(); _paramNames.clear();
         _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
-        _constLocals.clear(); _moveState.clear(); _scopes.clear(); _hoisted.clear();
+        _constLocals.clear(); _moveState.clear(); _slotLocals.clear(); _slotDeclared.clear(); _scopes.clear(); _hoisted.clear();
         _currentClass = nullptr;
         _currentReturnCType = "void";
         _tempCounter = 0;
@@ -2115,6 +2137,19 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             bool iface = isInterface(ty);
             auto emitDeclarator = [&](auto& d) {
                 std::string nm = (d->name && d->name->value) ? *d->name->value : "";
+                // `slot` means "no value yet", so spelling one WITH a value is a contradiction — and it
+                // would quietly disable the drop of a live object. One way to say each thing.
+                if (lvd && lvd->isSlot && d->initializer)
+                    unsupported(("`slot " + nm + "` declares a hole, so it cannot have an initializer — "
+                                 "drop the `slot` to declare an ordinary local").c_str(), n->line);
+                // A local with NO initializer and no `slot` is the unstated hole this campaign closes: it
+                // zero-inits, it is live, and its destructor runs — which is the only reason a raw-handle
+                // resource ever needed a runtime drop guard. Warn while the corpus is swept; M3 flips this
+                // to a hard error and drops the implicit default-ctor call below with it.
+                if (lvd && !lvd->isSlot && !d->initializer)
+                    warning(("local `" + nm + "` has no initializer — prefix it with `slot` (declaring a "
+                             "hole that must be assigned before it is used) or give it a value; a bare "
+                             "uninitialized local will become an error").c_str(), n->line);
                 // Ban shadowing (enforces the flat-name-map assumption above; C#-aligned, "one way"). A
                 // local may not shadow a parameter, an enclosing-scope local, or an in-scope field. (A
                 // param sharing a FIELD name — the `this.x = x` idiom — is allowed and handled elsewhere.)
@@ -2229,6 +2264,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 *_out << ty << " " << nm << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty);  // track empty resources for move analysis
+                // `slot T x;` — a HOLE, so it is not live and must NOT be dropped. Seed the state the
+                // move analysis already uses for "this local owns nothing right now": scope cleanup skips
+                // a Moved local, and an assignment's drop-the-old-value step is suppressed the same way.
+                // Every assignment handler already clears it back to NotMoved, and the if/else + match
+                // move merges already handle the flow — so drop-elision needs no machinery of its own.
+                // (Seeded AFTER recordDestructibleLocal, which sets NotMoved for an ownsByValue type.)
+                if (lvd && lvd->isSlot) { _slotLocals.insert(nm); _slotDeclared.insert(nm); _moveState[nm] = MoveState::Moved; }
                 if (!d->initializer) {
                     // No initializer: the scope-exit dtor recorded above WILL run, so the object must be in a
                     // valid state now. If the class has a zero-arg default ctor, call it (runs its field-init /
@@ -2956,6 +2998,24 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // an expression. a give/copy marker on the RHS overrides the default,
     // uniformly with init / argument / return.
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+        // Writing to a slot — whole (`x = …`) or to one of its fields (`x.f = …`, which is how a factory
+        // builds a value) — FILLS the hole: it is a live value from here on, so its destructor comes back
+        // and ordinary move tracking takes over. Done once here rather than in each of the assignment
+        // sub-paths below, and BEFORE any of them emit, because emitting the target reads its move state.
+        if (!_slotLocals.empty()) {
+            std::string sn;
+            SharedExpression lhs = as->unaryExpression;
+            if (auto* id = dynamic_cast<IdentifierNode*>(lhs.get())) {
+                if (id->value && (!id->qualifier || id->qualifier->empty())) sn = *id->value;
+            } else if (auto* ma = dynamic_cast<MemberAccessNode*>(lhs.get())) {
+                if (auto* bid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                    if (bid->value && (!bid->qualifier || bid->qualifier->empty())) sn = *bid->value;
+            }
+            if (!sn.empty() && _slotLocals.count(sn)) {
+                _slotLocals.erase(sn);                        // no longer a hole — normal rules apply
+                _moveState[sn] = MoveState::NotMoved;
+            }
+        }
         // Base-class upcast reseat: `b = [give] d` where `b: Shared<Base>` and `d: Shared<Derived>`
         // (both thin library handles — the LHS isn't an intrinsic smart ptr, so this precedes the
         // smart-ptr path below). Release the handle's old pointee, then widen the derived handle in.
@@ -7083,7 +7143,16 @@ void CEmitter::markMoved(const std::string& cVar)
 
 void CEmitter::checkNotMoved(const std::string& cVar, int line)
 {
+    // A still-unassigned `slot` is seeded Moved to suppress its drop, but it was never moved FROM — so
+    // "use after move" would be the wrong story. checkDefiniteAssignment is the authority for holes and
+    // reports them first (it runs before any emission), with a message that says what actually went
+    // wrong. Once the slot is assigned it leaves _slotLocals and ordinary move tracking resumes.
+    if (_slotLocals.count(cVar)) return;
     auto it = _moveState.find(cVar);
+    // MaybeMoved on a slot means "filled on some paths" (a branch merge against its seeded state), not
+    // "moved" — the storage is valid either way, so using it is fine. A real `give` still sets Moved, so
+    // use-after-move on a filled slot is still caught.
+    if (it != _moveState.end() && it->second == MoveState::MaybeMoved && _slotDeclared.count(cVar)) return;
     if (it != _moveState.end() && it->second != MoveState::NotMoved)
         unsupported(("use of `" + cVar + "` after it was moved (a `give` consumed it)").c_str(), line);
 }
@@ -9317,6 +9386,13 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
     std::map<std::string, std::set<std::string>> resFields;  // resource local -> its owning field names
     std::set<std::string> unassigned;                        // live keys: "x" (bare) or "x.f" (resource field)
     std::set<std::string> outParams;                         // `out` params — must be assigned by every return
+    std::set<std::string> slotDecls;                         // locals declared `slot T x;` (any type)
+    // Class-typed slots. Their storage is VALID-but-empty from the declaration on: the M8d.1 fill loop
+    // applies field defaults, calls each field's `default` ctor, and sets the vptr. So handing one to a
+    // callee (`collectKeys(dest: acc)` — a `ref` borrow the analysis can't see, since the `ref` marker is
+    // optional) or reading a non-owning field of it (`result.alloc`) is safe. A PRIMITIVE slot has no such
+    // fill and stays strictly read-before-assign.
+    std::set<std::string> slotClassDecls;
     bool inUnsafe = false;
 
     // An `out` parameter is the one param that is NOT trusted complete: it arrives as a hole the callee
@@ -9358,6 +9434,9 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         if (outParams.count(key))
             unsupported(("'" + key + "' is an `out` parameter — it is write-only, so it cannot be read "
                          "before this function assigns it").c_str(), line);
+        else if (slotDecls.count(key))
+            unsupported(("'" + key + "' is used before it is assigned — a `slot` declares storage with no "
+                         "value in it yet").c_str(), line);
         else
             unsupported(("'" + key + "' is used before it is assigned "
                          "(`Owned`/`Shared` are never-null)").c_str(), line);
@@ -9437,15 +9516,46 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
             std::string ax = addrOfLocal(inv);
             if (!ax.empty()) { markAssigned(ax); return; }   // addr(of: x) — manual control; x is now managed
+            // `slot FixedArray<T,A> r; r.allocBuffer(size: size); return give r;` — calling a method ON a
+            // slot FILLS it. The receiver is passed by pointer and the method's whole job here is to build
+            // the value, so this is a write, not a read; the builder shape is how much of the stdlib
+            // constructs. (The declaration's field-default fill already put the storage in a valid state,
+            // so the receiver is never garbage.) Marks the slot live without recursing into the receiver.
+            if (auto* rma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
+                if (auto* rid = dynamic_cast<IdentifierNode*>(rma->expression.get()))
+                    if (rid->value && (!rid->qualifier || rid->qualifier->empty())
+                        && slotDecls.count(*rid->value)) {
+                        markAssigned(*rid->value);
+                        if (inv->args) for (auto& a : *inv->args) if (a) {
+                            std::string ot = outArgTarget(a.get());
+                            if (!ot.empty()) markAssigned(ot); else rec(a->expression);
+                        }
+                        return;
+                    }
             rec(inv->expression);
             if (inv->args) for (auto& a : *inv->args) if (a) {
                 std::string ot = outArgTarget(a.get());
-                if (!ot.empty()) markAssigned(ot); else rec(a->expression);
+                if (!ot.empty()) { markAssigned(ot); continue; }
+                // Handing a class slot to a callee fills it — this is the `ref`-destination shape
+                // (`this.root.collectKeys(dest: acc)`), and the `ref` marker is optional at call sites so
+                // there is nothing syntactic to key off. Safe either way: by-ref the callee builds it, and
+                // by-value it copies a valid empty value.
+                if (auto* aid = dynamic_cast<IdentifierNode*>(a->expression.get()))
+                    if (aid->value && (!aid->qualifier || aid->qualifier->empty())
+                        && slotClassDecls.count(*aid->value)) { markAssigned(*aid->value); continue; }
+                rec(a->expression);
             }
         } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
             rec(ea->expression);
             if (ea->expressionlist) for (auto& x : *ea->expressionlist) rec(x);
-        } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) { rec(ma->expression);
+        } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+            // A non-owning field of a class slot (`result.alloc`) is fine — the fill loop initialized it.
+            // An OWNING field was already caught by the `fieldKey` check at the top of scan, which is what
+            // keeps `def_assign_field_read` rejected: an `Owned`/`Shared` field really is null here.
+            if (auto* bid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                if (bid->value && (!bid->qualifier || bid->qualifier->empty())
+                    && slotClassDecls.count(*bid->value)) return;
+            rec(ma->expression);
         } else if (auto* pe = dynamic_cast<PreIncrDecrNode*>(n)) { rec(pe->expression);
         } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) { rec(po->expression);
         } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) { rec(su->expression);
@@ -9479,10 +9589,19 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             if (lv->variables) for (auto& v : *lv->variables) if (v && v->name && v->name->value) {
                 const std::string& nm = *v->name->value;
                 if (v->initializer) scan(v->initializer);    // RHS read-scan happens before the local is "assigned"
-                if (!owned.empty()) {                        // a bare Owned/Shared local
+                // A `slot` of ANY type is tracked by its bare name — that is the whole point of the
+                // declaration, and it is what widens this check past `Owned`/`Shared` to raw-handle
+                // resources, collections and primitives alike.
+                if (lv->isSlot || !owned.empty()) {
+                    if (lv->isSlot) {
+                        slotDecls.insert(nm);
+                        if (lv->type && lv->type->value && isClass(cType(lv->type)))
+                            slotClassDecls.insert(nm);
+                    }
                     bareOwning.insert(nm);
                     if (!v->initializer) unassigned.insert(nm);
-                } else if (!fs.empty()) {                     // a resource local with owning fields
+                }
+                if (owned.empty() && !fs.empty()) {           // a resource local with owning fields
                     resFields[nm] = fs;
                     if (!v->initializer) for (auto& f : fs) unassigned.insert(nm + "." + f);
                 }
@@ -9540,7 +9659,37 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
             scan(pf->expression); walkSkippable(pf->body);
         } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
-            scan(ret->expression);
+            // `ctor make() { slot Foo r; … return give r; }` — handing a slot OUT of a constructor is
+            // governed by checkNamedCtorComplete, which proves every field is assigned (counting field
+            // defaults and default-fillable fields). A type whose fields are ALL default-fillable — the
+            // primordial `empty()` constructors — assigns nothing at all and is still complete, so slot
+            // liveness must not second-guess it here. Outside a ctor there is no such proof, and the
+            // ordinary read rule applies.
+            // `_inNamedCtorBody`, not an isCtor parameter: a named `ctor` is a static factory, so it is
+            // deliberately emitted with isCtor=false (that flag drives the `self->__vptr` store). This is
+            // the same flag the const-field-write allowance keys off (#M8d.2).
+            bool ctorHandoff = false;
+            if (_inNamedCtorBody && ret->expression) {
+                // Unwrap the same two shapes checkNamedCtorComplete's `classify` does: a `give`/`copy`
+                // hand-off, and a fallible ctor's `Result::Ok(value: …)` wrapper.
+                std::function<ExpressionNode*(ExpressionNode*)> unwrap = [&](ExpressionNode* e) {
+                    if (!e) return e;
+                    if (auto* h = dynamic_cast<HandoffNode*>(e)) return unwrap(h->value.get());
+                    if (auto* iv = dynamic_cast<InvocationNode*>(e))
+                        if (iv->identifier && iv->identifier->value && iv->identifier->qualifier
+                            && !iv->identifier->qualifier->empty()
+                            && *iv->identifier->qualifier->back() == "Result"
+                            && *iv->identifier->value == "Ok" && iv->args)
+                            for (auto& a : *iv->args)
+                                if (a && a->name && a->name->value && *a->name->value == "value")
+                                    return unwrap(a->expression.get());
+                    return e;
+                };
+                if (auto* rid = dynamic_cast<IdentifierNode*>(unwrap(ret->expression.get())))
+                    ctorHandoff = rid->value && (!rid->qualifier || rid->qualifier->empty())
+                               && slotDecls.count(*rid->value) > 0;
+            }
+            if (!ctorHandoff) scan(ret->expression);
             verifyOutsAssigned(ret->line);
         } else if (auto* un = dynamic_cast<UnsafeNode*>(n)) {
             bool save = inUnsafe; inUnsafe = true;
@@ -10771,6 +10920,19 @@ static inline std::string placeWrap(const std::string& c, bool isPlace)
 
 std::string CEmitter::emitInvocation(InvocationNode* call)
 {
+    // Calling a method ON a slot fills it (the receiver goes in by pointer and the method builds the
+    // value — the stdlib's builder shape, e.g. `slot FixedArray<T,A> r; r.allocBuffer(size: size);`).
+    // So the hole becomes a live value here and its destructor comes back. Mirrors the analysis rule in
+    // checkDefiniteAssignment, and must run BEFORE the receiver is emitted.
+    if (!_slotLocals.empty() && call->expression)
+        if (auto* rma = dynamic_cast<MemberAccessNode*>(call->expression.get()))
+            if (auto* rid = dynamic_cast<IdentifierNode*>(rma->expression.get()))
+                if (rid->value && (!rid->qualifier || rid->qualifier->empty())
+                    && _slotLocals.count(*rid->value)) {
+                    _slotLocals.erase(*rid->value);
+                    _moveState[*rid->value] = MoveState::NotMoved;
+                }
+
     // Expression-form callee (this.method(...), base.method(...), parenthesized).
     if (!call->identifier || !call->identifier->value) {
         if (call->expression) {
@@ -10856,8 +11018,18 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // for out-params and passing a descriptor by pointer. A controlled operation
     // (it addresses a real value), so it needs no `unsafe`.
     if (name == "addr" && (!call->identifier->qualifier || call->identifier->qualifier->empty())
-        && call->args && call->args->size() == 1)
+        && call->args && call->args->size() == 1) {
+        // Taking a SLOT's address is the vouching act for the raw move-out dance (`slot T x;
+        // Ptr<T> d = addr(of: x); unsafe { d[0] = …; } return give x;`): the code now initializes that
+        // storage by hand, so the hole becomes a live value and its destructor comes back. Restricted to
+        // slots so this can't silently resurrect a genuinely moved-from local.
+        if (auto* aid = dynamic_cast<IdentifierNode*>((*call->args)[0]->expression.get()))
+            if (aid->value && (!aid->qualifier || aid->qualifier->empty()) && _slotLocals.count(*aid->value)) {
+                _slotLocals.erase(*aid->value);
+                _moveState[*aid->value] = MoveState::NotMoved;
+            }
         return "&(" + emitExpression((*call->args)[0]->expression) + ")";
+    }
 
     // `panic(msg:)`, `assert(cond:, msg:)`, `debugAssert(cond:, msg:)` — builtins that trap cleanly (abort
     // with a message + `file:line`), the user-facing form of the runtime bounds trap. Let a user collection
@@ -11265,6 +11437,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _currentReturnCType = cType(fn->returnType);
     _tempCounter = 0;
     _scopes.clear();
+    _slotLocals.clear(); _slotDeclared.clear();
 
     line(fn->line);
     // a place-returning `fn ref T f(…)` emits `T* f(…)`; its `return e` addresses the place (the
@@ -11782,6 +11955,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentReturnCType = retType;
     _tempCounter = 0;
     _scopes.clear();
+    _slotLocals.clear(); _slotDeclared.clear();
     Scope root; root.isFunctionRoot = true;
     _scopes.push_back(root);
     if (params) {

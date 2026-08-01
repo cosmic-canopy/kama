@@ -41,7 +41,7 @@ type resource File implements Reader, Writer {
     int32 fd = -1;
     // Adopt an already-open fd (e.g. a child pipe end from std::process, mirroring TcpStream.make). Prefer
     // `open` for files. The File closes this fd on drop (RAII); pass -1 for an empty/moved-from slot.
-    public ctor make(int32 fd) { File r; r.fd = fd; return give r; }
+    public ctor make(int32 fd) { slot File r; r.fd = fd; return give r; }
 
     // The raw descriptor (for a readiness Poller etc.), mirroring TcpStream.rawHandle(). Borrow-only — the
     // File still owns the fd and closes it on drop.
@@ -125,12 +125,14 @@ type resource File implements Reader, Writer {
         return Result::Ok(value: cast<usize>(total));
     }
 
-    // "Drop only if live" (A/B) now stops the compiler from dropping a `{0}` on a field-first-write or a
-    // `match(give …)` payload extraction — the two paths that used to close(0) here. This guard remains for
-    // the residual it does NOT cover: a bare `File f;` that reaches a drop before its fd is assigned (an
-    // uninitialized/whole-reassigned local). `fd == 0` is stdin, so `fd > 0` treats the zero as the empty
-    // sentinel (a real descriptor this API opens is always > 0). A future "force explicit field init" pass
-    // (the language's proper answer to default assignment) would retire this guard entirely.
+    // The test is `>= 0`, not `> 0`, and that is the point: explicit field init let the empty niche be
+    // SAID (`int32 fd = -1`) instead of falling out of a zeroed struct, so **fd 0 — stdin — is an ownable
+    // descriptor** rather than being unownable just because zero doubled as "empty".
+    // "Drop only if live" (A/B) stops the compiler from dropping a `{0}` on a field-first-write or a
+    // `match(give …)` payload extraction, and `slot` now covers the last STATIC residual: an unassigned
+    // `slot File f;` has no destructor emitted at all. The guard nevertheless STAYS, for a reason no
+    // static analysis can discharge — `close()` above re-arms the sentinel at runtime, so an explicitly
+    // closed File still gets its ordinary drop and must not close(-1).
     ~File() { if (this.fd >= 0) { int32 rc = kama_close_fd(fd: this.fd); } }
 }
 

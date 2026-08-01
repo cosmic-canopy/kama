@@ -22,16 +22,16 @@ type resource Node {
     // borrow the value at (child `c`, index `i`) IN PLACE — a leaf returns its own slot directly (borrows
     // `this`), an internal node FORWARDS the borrow from its child (a place-call whose receiver `this.kids[c]`
     // roots at `this`). The forwarded `ref` is returned straight up the recursion.
-    public fn ref int32 slot(int32 c, int32 i) {
+    public fn ref int32 at(int32 c, int32 i) {
         if (this.leaf) { return this.vals[i]; }
-        return this.kids[c].slot(c: 0, i: i);
+        return this.kids[c].at(c: 0, i: i);
     }
 }
 
 type resource Tree {
     Owned<Node> root;
     public ctor make(Owned<Node> root) { Tree r; r.root = give root; return give r; }
-    public fn ref int32 slot(int32 c, int32 i) { return this.root.slot(c: c, i: i); }  // another forward layer
+    public fn ref int32 at(int32 c, int32 i) { return this.root.at(c: c, i: i); }  // another forward layer
 }
 
 fn int32 main() {
@@ -44,16 +44,16 @@ fn int32 main() {
     Tree t = Tree.make(root: give root);
 
     // (a) read a borrow chained through Tree -> root(Owned) -> child(Owned) -> vals[i]
-    int32 a = t.slot(c: 0, i: 1);
+    int32 a = t.at(c: 0, i: 1);
     if (a == 20) { r = r + 10; }
 
     // (b) mutate in place through the chained borrow (the ref is a real lvalue)
-    t.slot(c: 0, i: 2) = 300;
-    int32 b = t.slot(c: 0, i: 2);
+    t.at(c: 0, i: 2) = 300;
+    int32 b = t.at(c: 0, i: 2);
     if (b == 300) { r = r + 10; }
 
     // (c) the other slots are unchanged
-    if (t.slot(c: 0, i: 0) == 10) { r = r + 10; }
+    if (t.at(c: 0, i: 0) == 10) { r = r + 10; }
 
     return r;   // 30
 }

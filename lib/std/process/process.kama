@@ -72,7 +72,7 @@ type resource Output {
     // Internal — produced by Command.run() (a resource ctor is type-private, so this is exposed like
     // TcpStream.make; not meant to be called directly).
     public ctor make(ExitStatus status, DynamicArray<uint8> stdout, DynamicArray<uint8> stderr) {
-        Output r; r.st = status; r.outBytes = give stdout; r.errBytes = give stderr; return give r;
+        slot Output r; r.st = status; r.outBytes = give stdout; r.errBytes = give stderr; return give r;
     }
     public fn ExitStatus status() { return this.st; }
     public fn ref DynamicArray<uint8> stdout() { return this.outBytes; }
@@ -143,7 +143,7 @@ type resource Command {
     // Build a command for `program` (PATH-resolved by execvp unless it contains '/'). Args take ownership of
     // the passed string (pass a literal, or `copy someVar`).
     public ctor make(string program) {
-        Command c;
+        slot Command c;
         c.program = give program;
         c.args    = DynamicArray.empty();
         c.envKeys = DynamicArray.empty();
@@ -297,7 +297,7 @@ type resource Process {
 
     // Internal — produced by Command.start() (exposed like TcpStream.make; not meant to be called directly).
     public ctor make(isize handle, int32 pid, File inKeep, File outKeep, File errKeep) {
-        Process r;
+        slot Process r;
         r.handle = handle; r.pid = pid; r.reaped = false;
         r.inPipe = give inKeep; r.outPipe = give outKeep; r.errPipe = give errKeep;
         return give r;

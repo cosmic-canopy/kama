@@ -1,0 +1,12 @@
+// A slot is readable once it is definitely assigned — including when every arm of an if/else assigns it,
+// which is the flow merge the `out` return-verdict introduced.
+fn int32 pick(bool hi) {
+    slot int32 v;
+    if (hi) { v = 30; } else { v = 12; }   // both arms assign -> definite at the join
+    return v;
+}
+fn int main() {
+    slot int32 a;
+    a = 5;
+    return a + pick(hi: true) + pick(hi: false);   // 5 + 30 + 12
+}

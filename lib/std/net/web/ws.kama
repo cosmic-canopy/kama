@@ -25,7 +25,7 @@ enum WsState { Connecting, Open, Closing, Closed }
 // (EOF, matching TcpStream). Closes on drop (RAII).
 type resource WsConnection implements ReliableStream, Reader, Writer {
     int32 handle;
-    private ctor make(int32 handle) { WsConnection r; r.handle = handle; return give r; }
+    private ctor make(int32 handle) { slot WsConnection r; r.handle = handle; return give r; }
 
     // Open a ws:// or wss:// connection. Returns immediately; the handshake completes asynchronously —
     // poll state() until Open before sending.

@@ -5,18 +5,18 @@
 import std::concurrent::{Isolate};
 
 type resource Payload {
-    Ptr<int32> slot;
+    Ptr<int32> dst;
     int32 value;
 
-    public ctor make(Ptr<int32> slot, int32 value) {
+    public ctor make(Ptr<int32> dst, int32 value) {
         Payload r;
-        r.slot = slot;
+        r.dst = dst;
         r.value = value;
         return give r;
     }
 
     public fn void run() {
-        unsafe { this.slot[0] = this.value; }
+        unsafe { this.dst[0] = this.value; }
     }
 }
 
@@ -26,7 +26,7 @@ fn void worker(Payload p) {
 
 fn int main() {
     int32 shared = 0;
-    Payload p = Payload.make(slot: addr(of: shared), value: 7i32);
+    Payload p = Payload.make(dst: addr(of: shared), value: 7i32);
     {
         Isolate h = spawn worker(p: give p);
     }   // ~Isolate() joins here — no explicit h.join()

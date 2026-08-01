@@ -5,18 +5,18 @@
 import std::concurrent::{Isolate};
 
 type resource Payload {
-    Ptr<int32> slot;
+    Ptr<int32> dst;
     int32 value;
 
-    public ctor make(Ptr<int32> slot, int32 value) {
+    public ctor make(Ptr<int32> dst, int32 value) {
         Payload r;
-        r.slot = slot;
+        r.dst = dst;
         r.value = value;
         return give r;
     }
 
     public fn void run() {
-        unsafe { this.slot[0] = this.value; }
+        unsafe { this.dst[0] = this.value; }
     }
 }
 
@@ -27,7 +27,7 @@ fn void worker(Payload p) {
 fn int main() {
     int32 shared = 0;
     int32 mainWork = 0;
-    Payload p = Payload.make(slot: addr(of: shared), value: 42i32);
+    Payload p = Payload.make(dst: addr(of: shared), value: 42i32);
     Isolate h = spawn worker(p: give p);   // spawn — runs concurrently with the loop below
     int32 i = 0;
     while (i < 1000) { mainWork = mainWork + 1; i = i + 1; }   // main-thread work overlaps the isolate

@@ -5053,13 +5053,18 @@ int main(int argc, char** argv)
             fprintf(stderr, "%s:%d:%d: %s: %s\n",
                     d.file.c_str(), d.line, d.column, sev, d.message.c_str());
         }
-        if (!diags.empty()) {
-            fprintf(stderr, "kama: %s FAILED (%zu diagnostic%s)\n",
-                    input.c_str(), diags.size(), diags.size() == 1 ? "" : "s");
+        // Only an ERROR fails the check. A warning is advice — reporting it is the point, but failing on
+        // it would mean a deprecation notice breaks every `kama check` in the tree.
+        size_t errs = 0;
+        for (const auto& d : diags) if (d.severity == DiagSeverity::Error) ++errs;
+        if (errs) {
+            fprintf(stderr, "kama: %s FAILED (%zu error%s)\n",
+                    input.c_str(), errs, errs == 1 ? "" : "s");
             return 1;
         }
-        fprintf(stderr, "kama: %s OK (%zu unit%s analyzed)\n",
-                input.c_str(), units.size(), units.size() == 1 ? "" : "s");
+        fprintf(stderr, "kama: %s OK (%zu unit%s analyzed%s)\n",
+                input.c_str(), units.size(), units.size() == 1 ? "" : "s",
+                diags.empty() ? "" : ", with warnings");
         return 0;
     }
 

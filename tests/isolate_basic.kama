@@ -5,19 +5,19 @@
 import std::concurrent;
 
 type resource Payload {
-    Ptr<int32> slot;
+    Ptr<int32> dst;
     int32 value;
 
-    public ctor make(Ptr<int32> slot, int32 value) {
+    public ctor make(Ptr<int32> dst, int32 value) {
         Payload r;
-        r.slot = slot;
+        r.dst = dst;
         r.value = value;
         return give r;
     }
 
     // Write the value through the slot — runs on the isolate's own thread.
     public fn void run() {
-        unsafe { this.slot[0] = this.value; }
+        unsafe { this.dst[0] = this.value; }
     }
 }
 
@@ -27,7 +27,7 @@ fn void worker(Payload p) {   // owns the bundle by value (the caller `give`s it
 
 fn int main() {
     int32 result = 0;
-    Payload p = Payload.make(slot: addr(of: result), value: 42i32);
+    Payload p = Payload.make(dst: addr(of: result), value: 42i32);
     scope {
         spawn worker(p: give p);   // deferred-join child on a fresh OS thread with the moved bundle
     }                              // BARRIER: the child is joined here, before `result` is read

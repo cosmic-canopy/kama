@@ -8,7 +8,7 @@ export { DynamicArray };
 type value DynamicArrayIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
-        DynamicArrayIter<T> r; r.data = data; r.pos = 0; r.len = len; r.modsp = modsp; r.modsAt = modsAt; return give r;
+        slot DynamicArrayIter<T> r; r.data = data; r.pos = 0; r.len = len; r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn Optional<T> next() {
         unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "DynamicArray modified during iteration"); } }
@@ -23,7 +23,7 @@ type value DynamicArrayIter<T> implements Iterator<T> {
 type value DynamicArrayIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
-        DynamicArrayIterMut<T> r; r.data = data; r.pos = 0; r.len = len; r.modsp = modsp; r.modsAt = modsAt; return give r;
+        slot DynamicArrayIterMut<T> r; r.data = data; r.pos = 0; r.len = len; r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn bool hasNext() {
         unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "DynamicArray modified during iteration"); } }
@@ -53,16 +53,16 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // `when [A: default]` — these default-allocator conveniences EXIST only when `A` is default-constructible
     // (a custom `A: BumpAllocator` has no `default`, so `.empty()`/`.withCapacity()` don't exist for it → a
     // clean "no such ctor" error, not a zero-allocator collection). Use `withAllocator` for a custom `A`.
-    public default ctor empty() when [A: default] { DynamicArray<T, A> r; return give r; }
+    public default ctor empty() when [A: default] { slot DynamicArray<T, A> r; return give r; }
 
     // Empty, but pre-grown so at least `capacity` elements fit without a later reallocation.
-    public ctor withCapacity(int32 capacity) when [A: default] { DynamicArray<T, A> m; m.reserve(n: capacity); return give m; }
+    public ctor withCapacity(int32 capacity) when [A: default] { slot DynamicArray<T, A> m; m.reserve(n: capacity); return give m; }
 
     // Build an empty list whose buffer is drawn from `allocator` (e.g. an `Arena` bump handle), so all
     // of this list's allocations route into that region. The handle is a cheap copyable value stored
     // by value; it is set after the bare construction (no overloaded ctor).
     public ctor withAllocator(A allocator) {
-        DynamicArray<T, A> result;
+        slot DynamicArray<T, A> result;
         result.alloc = allocator;
         return give result;
     }
@@ -70,7 +70,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // Caller-owned allocator AND pre-grown for `capacity` — `alloc` set before `reserve` (grow routes
     // through `this.alloc`).
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
-        DynamicArray<T, A> result;
+        slot DynamicArray<T, A> result;
         result.alloc = allocator;
         result.reserve(n: capacity);
         return give result;
@@ -80,7 +80,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // the live prefix, and release the old block through the same allocator. Replaces the old in-place
     // `realloc` so every allocation flows through the allocator (matching Map/Deque's grow idiom).
     fn void growTo(int32 nc) {
-        Ptr<T> nd;
+        slot Ptr<T> nd;
         unsafe { nd = cast<Ptr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T)))); }
         Ptr<T> od = this.data;
         int32 i = 0;
@@ -158,7 +158,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // draws from the SAME allocator as the source (the handle is copied), so a bump-backed list's copy
     // lands in the same arena.
     public ctor copy(ref DynamicArray<T, A> source) {
-        DynamicArray<T, A> result;
+        slot DynamicArray<T, A> result;
         result.alloc = source.alloc;                    // copy the allocator handle (a value) — same arena
         int32 i = 0;
         while (i < source.len) { result.add(item: copy source[i]); i = i + 1; }
@@ -203,7 +203,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // caller either overwrites it by shifting or drops it by decrementing `len`). Bitwise-relocate through raw
     // `Ptr<T>` aliases into a zero-init'd local, then `give` — the same move-out idiom as `Deque.takeAt`.
     fn T takeAt(int32 idx) {
-        T x;                                           // zero-init owned local (the move-out target)
+        slot T x;                                           // zero-init owned local (the move-out target)
         Ptr<T> dst = addr(of: x);
         Ptr<T> d = this.data;
         unsafe { dst[0] = d[idx]; }                    // raw bitwise move out of the slot (untracked)
@@ -266,7 +266,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // Reconstruct from a JSON array — a fresh list, each element read fallibly and moved in. A bad element
     // read propagates its boxed error (dropping the partial list via RAII).
     public ctor Result<DynamicArray<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
-        DynamicArray<T> result;
+        slot DynamicArray<T> result;
         r.beginArray();
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject

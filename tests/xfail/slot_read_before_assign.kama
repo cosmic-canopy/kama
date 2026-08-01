@@ -1,0 +1,6 @@
+// A `slot` holds no value until it is assigned, so reading one is a compile error. A PRIMITIVE slot has no
+// field-default fill behind it, so this is a genuine uninitialized read.
+fn int main() {
+    slot int32 x;
+    return x;      // ERROR: never assigned
+}

@@ -397,6 +397,10 @@ class LocalVariableDeclaration : public StatementNode {
 public:
     SharedIdentifier type;
     SharedVariableDeclaratorList variables;
+    // `slot T x;` — storage that holds NO value yet. Illegal to read, call on, or pass by value until it
+    // is definitely assigned, and an unassigned slot has NO destructor emitted ("drop only if live",
+    // proven statically instead of defended against with a runtime niche check).
+    bool isSlot = false;
     LocalVariableDeclaration(CodeGenContext& context, SharedIdentifier type, SharedVariableDeclaratorList variables)
         : ASTNode(context),  StatementNode(context), type(type), variables(variables) { }
     virtual SymbolType symbolType() { return SymbolType::VARIABLE; }

@@ -68,7 +68,7 @@ type resource Atomic<T> {
 
     // Build a cell holding `value`. The only constructor — an `Atomic` is always created initialized.
     public ctor make(T value) {
-        Atomic<T> a;
+        slot Atomic<T> a;
         a.value = value;
         return give a;
     }
@@ -76,7 +76,7 @@ type resource Atomic<T> {
     // Atomically read the current value (seq-cst). `loadExplicit` takes a weaker ordering.
     public fn T load() { return this.loadExplicit(order: MemoryOrder::SeqCst); }
     public fn T loadExplicit(MemoryOrder order) {
-        T result;
+        slot T result;
         unsafe { kama_atomic_load(cell: cast<Ptr>(addr(of: this.value)), dst: cast<Ptr>(addr(of: result)),
                                   width: sizeof(T), mo: orderBits(o: order)); }
         return result;
@@ -92,7 +92,7 @@ type resource Atomic<T> {
     // Atomically store `value` and return the PRIOR value (atomic exchange, seq-cst).
     public fn T swap(T value) { return this.swapExplicit(value: value, order: MemoryOrder::SeqCst); }
     public fn T swapExplicit(T value, MemoryOrder order) {
-        T result;
+        slot T result;
         unsafe { kama_atomic_swap(cell: cast<Ptr>(addr(of: this.value)), val: cast<Ptr>(addr(of: value)),
                                   dst: cast<Ptr>(addr(of: result)), width: sizeof(T), mo: orderBits(o: order)); }
         return result;

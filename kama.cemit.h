@@ -774,6 +774,16 @@ private:
     // scope exit is *rejected* (conditional-drop) — zero runtime drop-flags by construction.
     enum class MoveState { NotMoved, MaybeMoved, Moved };
     std::map<std::string, MoveState> _moveState;   // move-only local/param cVar -> state
+    // Locals declared `slot T x;` — a HOLE. Seeded MoveState::Moved at the declaration so no destructor
+    // is emitted while they stay unassigned ("drop only if live", proven statically), which is what
+    // retires the runtime `fd >= 0` / `handle != null` guards a raw-handle resource used to need. Kept
+    // as its own set so `addr(of: x)` can distinguish vouching for a hole from resurrecting a moved value.
+    std::set<std::string> _slotLocals;
+    // Every local declared `slot` in this function, INCLUDING the ones since filled (unlike _slotLocals,
+    // which is emptied as each hole is filled). A slot filled only on some paths merges to MaybeMoved,
+    // which for an ordinary value is an undecidable-drop ERROR — but a slot's storage is always valid
+    // (the declaration's field-default fill saw to that), so the honest answer there is just to drop it.
+    std::set<std::string> _slotDeclared;
     // Owning payload bindings of a BORROWING `match (x)` arm — each aliases the box the subject still
     // owns, so `give`ing one out double-frees. Non-giveable: a give of a name in here is a hard error
     // (the consuming `match (give x)` is the way to move a payload out). Scoped per-arm.
@@ -1643,6 +1653,7 @@ private:
     std::string addrOfOperand(SharedExpression e, const std::string& cls, int line);
 
     void unsupported(const char* what, int srcLine);
+    void warning(const char* what, int srcLine);   // soft: reported, does NOT fail the build
 
     // MCU step 4: lower `@interrupt` / `@section(".x")` to a C `__attribute__((...))` prefix.
     // `fn` is null for a module static (which accepts `@section` only).

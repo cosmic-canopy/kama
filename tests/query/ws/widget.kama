@@ -12,7 +12,7 @@ export { Widget, defaultSize };
 type value Widget {
     public int32 size;
 
-    public ctor of(int32 size) { Widget r; r.size = size; return give r; }
+    public ctor of(int32 size) { slot Widget r; r.size = size; return give r; }
 }
 
 fn int32 defaultSize() { return 7; }

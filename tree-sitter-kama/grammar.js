@@ -564,8 +564,15 @@ module.exports = grammar({
       ),
 
     // C-style: `int32 i = 0, j;`. There is no `let`/`var`.
+    // `slot T x;` — a declared HOLE (no value yet, no destructor until assigned). A leading keyword,
+    // like `const`/`comptime` below.
     local_variable_declaration: ($) =>
-      seq(field('type', $._type), commaSep1($.variable_declarator), ';'),
+      seq(
+        optional('slot'),
+        field('type', $._type),
+        commaSep1($.variable_declarator),
+        ';',
+      ),
 
     local_constant_declaration: ($) =>
       seq(

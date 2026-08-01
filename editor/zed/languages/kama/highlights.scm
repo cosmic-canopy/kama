@@ -31,7 +31,7 @@
 [
   "namespace" "import" "export" "as" "type" "enum" "extends" "implements" "for"
   "friend" "operator" "ctor" "fn" "fnptr" "extern" "comptime" "when"
-  "in" "unsafe" "asm" "static" "const" "default"
+  "in" "unsafe" "asm" "static" "const" "default" "slot"
   "if" "else" "match" "case"
   "while" "do" "foreach" "parallel_for"
   "break" "continue" "return"

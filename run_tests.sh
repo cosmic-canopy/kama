@@ -160,6 +160,12 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-emb
     if sh tools/check-embedded.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# `slot` drop elision: an unassigned hole must emit NO destructor. Invisible to an exit-code fixture (a
+# missing drop and a no-op drop both exit 7), so it is asserted against the emitted C. Native pass only.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-slot.sh ]; then
+    if sh tools/check-slot.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # Build configuration: the toolchain flags a build hands to the C compiler must follow the SELECTED
 # TARGET, not the machine this compiler was built on (the cross-compilation blocker). Stubs the C
 # compiler with `echo`, so it needs no cross toolchain and is as host-agnostic as the drift guard.

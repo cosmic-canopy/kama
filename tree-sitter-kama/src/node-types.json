@@ -8364,6 +8364,10 @@
     "named": false
   },
   {
+    "type": "slot",
+    "named": false
+  },
+  {
     "type": "spawn",
     "named": false
   },

@@ -50,7 +50,7 @@ type resource UdpSocket implements DatagramSocket {
     // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable
     // for no reason other than that zero doubled as "empty". Rust's `OwnedFd` niche.
     isize fd = -1;
-    private ctor make(isize fd) { UdpSocket r; r.fd = fd; return give r; }
+    private ctor make(isize fd) { slot UdpSocket r; r.fd = fd; return give r; }
 
     // Bind to a numeric host:port. host ""/"0.0.0.0" = all interfaces; port 0 = OS-assigned ephemeral
     // (read the actual port back with localAddr()). SO_REUSEADDR is set. The socket closes on drop.

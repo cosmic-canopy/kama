@@ -38,7 +38,7 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
     // is never dereferenced here — allocation waits for the first `add`. Interior child boxes are drawn
     // from this same `alloc` via the placement `new(allocator: this.alloc)` sites below.
     public ctor make(bool leaf, A allocator) {
-        BTreeNode<K,V,A> r;
+        slot BTreeNode<K,V,A> r;
         DynamicArray<K, A> k = DynamicArray.withAllocator(allocator: allocator);
         DynamicArray<V, A> v = DynamicArray.withAllocator(allocator: allocator);
         DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> c = DynamicArray.withAllocator(allocator: allocator);
@@ -330,7 +330,7 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
             Owned<BTreeNode<K,V,A>, A> lastKid = this.kids[i - 1].takeLastKid();
             this.kids[i].insertKidAt(i: 0, c: give lastKid);
         }
-        K upK; V upV = this.kids[i - 1].popLastOwnPair(outKey: out upK);         // sibling max up
+        slot K upK; V upV = this.kids[i - 1].popLastOwnPair(outKey: out upK);         // sibling max up
         this.insertKeyVal(i: i - 1, key: give upK, value: give upV);
     }
     fn void borrowFromNext(int32 i) {
@@ -340,7 +340,7 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
             Owned<BTreeNode<K,V,A>, A> firstKid = this.kids[i + 1].takeFirstKid();
             this.kids[i].pushKid(c: give firstKid);
         }
-        K upK; V upV = this.kids[i + 1].popFirstOwnPair(outKey: out upK);         // sibling min up
+        slot K upK; V upV = this.kids[i + 1].popFirstOwnPair(outKey: out upK);         // sibling min up
         this.insertKeyVal(i: i, key: give upK, value: give upV);
     }
     // Ensure child i has >= B keys before a descend: borrow from a rich sibling, else merge. Returns the child
@@ -377,13 +377,13 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
             }
             if (this.kids[i].keyCount() >= 6) {                  // CASE 2a: predecessor from left child
                 V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i); drop(value: oldk);
-                K pk; V pv = this.kids[i].takeMaxPair(outKey: out pk);
+                slot K pk; V pv = this.kids[i].takeMaxPair(outKey: out pk);
                 this.insertKeyVal(i: i, key: give pk, value: give pv);
                 return Optional::Some(value: give removed);
             }
             if (this.kids[i + 1].keyCount() >= 6) {              // CASE 2b: successor from right child
                 V removed = this.takeValAt(i: i); K oldk = this.takeKeyAt(i: i); drop(value: oldk);
-                K sk; V sv = this.kids[i + 1].takeMinPair(outKey: out sk);
+                slot K sk; V sv = this.kids[i + 1].takeMinPair(outKey: out sk);
                 this.insertKeyVal(i: i, key: give sk, value: give sv);
                 return Optional::Some(value: give removed);
             }
@@ -479,7 +479,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // zero-inits `len`/`mods`, default-fills `alloc`, and leaves the owning `root` for us to assign — the
     // M8d.1 completeness gate REQUIRES `root` be set before return, which building it satisfies.
     public default ctor empty() when [A: default] {
-        SortedMap<K,V,A> result;
+        slot SortedMap<K,V,A> result;
         Owned<BTreeNode<K,V,A>> r = new BTreeNode::<K,V,A>.make(leaf: true, allocator: result.alloc);
         result.root = give r;
         return give result;
@@ -488,7 +488,7 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // Back the whole tree with a caller-owned allocator (e.g. an `Arena`). The bare local zero-inits `root`;
     // we set `alloc` from the real handle, then build the root from it — mirrors `PriorityQueue::withAllocator`.
     public ctor withAllocator(A allocator) {
-        SortedMap<K,V,A> result;
+        slot SortedMap<K,V,A> result;
         result.alloc = allocator;
         Owned<BTreeNode<K,V,A>> r = new BTreeNode::<K,V,A>.make(leaf: true, allocator: allocator);
         result.root = give r;
@@ -534,15 +534,15 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // with `foreach (K k in m.keys())`. Eager (materialized) so it reuses the array's tested iterator + stays
     // valid independent of the tree; O(n) space. `values()` is ordered by key, parallel to `keys()`.
     public fn DynamicArray<K> keys() when [K: Copyable] {
-        DynamicArray<K> acc; this.root.collectKeys(dest: acc); return give acc;
+        slot DynamicArray<K> acc; this.root.collectKeys(dest: acc); return give acc;
     }
     public fn DynamicArray<V> values() when [V: Copyable] {
-        DynamicArray<V> acc; this.root.collectVals(dest: acc); return give acc;
+        slot DynamicArray<V> acc; this.root.collectVals(dest: acc); return give acc;
     }
 
     // Ascending keys in the half-open window [from, to) — the ordered range query (empty if from >= to).
     public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable] {
-        DynamicArray<K> acc; this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
+        slot DynamicArray<K> acc; this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
     }
 
     // Drop every entry, resetting to an empty single-leaf tree (keeps the root box).

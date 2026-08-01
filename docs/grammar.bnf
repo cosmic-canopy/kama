@@ -417,6 +417,10 @@ declaration_statement
   ;
 local_variable_declaration
   : type variable_declarators
+    /* `slot T x;` — a declared HOLE: storage with no value yet, illegal to read until definitely
+       assigned, and with no destructor emitted while it stays unassigned. A leading keyword, exactly like
+       `const`/`comptime` above, so it adds no conflict (the decision is made on the first token). */
+  | SLOT type variable_declarators
   ;
 variable_declarators
   : variable_declarator

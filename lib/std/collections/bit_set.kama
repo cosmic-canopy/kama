@@ -12,7 +12,7 @@ extern fn Ptr memset(Ptr p, int32 value, usize n);
 type value BitSetIter implements Iterator<int32> {
     Ptr<uint64> words; int32 wordCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<uint64> words, int32 wordCount, Ptr<int32> modsp, int32 modsAt) {
-        BitSetIter r; r.words = words; r.wordCount = wordCount; r.pos = 0; r.modsp = modsp; r.modsAt = modsAt; return give r;
+        slot BitSetIter r; r.words = words; r.wordCount = wordCount; r.pos = 0; r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn Optional<int32> next() {
         unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "BitSet modified during iteration"); } }
@@ -41,12 +41,12 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     // The four-ctor matrix (M8c) — `withCapacity` is sized in BITS. `empty()` is the `default` zero-arg build.
     // A bare `BitSet<A> s;` zero-inits the primitive fields (words=null, wordCount=0, mods=0) and default-fills
     // `alloc` (the zero-size `GlobalAllocator`); the M8d.1 completeness gate proves it's fully initialized.
-    public default ctor empty() when [A: default] { BitSet<A> s; return give s; }
+    public default ctor empty() when [A: default] { slot BitSet<A> s; return give s; }
 
     // Preallocate room for at least `bits` bits (rounded up to a whole word). K,V-style target-type inference:
     // `BitSet s = BitSet.withCapacity(bits: 256);`.
     public ctor withCapacity(int32 bits) when [A: default] {
-        BitSet<A> s;
+        slot BitSet<A> s;
         if (bits > 0) { s.growTo(nc: (bits + 63) >> 6); }
         return give s;
     }
@@ -54,14 +54,14 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     // Draw the word buffer from a caller-owned allocator (e.g. an `Arena`). The bare `BitSet()` uses the
     // default zero-size `GlobalAllocator`; this sets the handle before any grow.
     public ctor withAllocator(A allocator) {
-        BitSet<A> result;
+        slot BitSet<A> result;
         result.alloc = allocator;
         return give result;
     }
 
     // Caller-owned allocator AND preallocated for `bits` bits — `alloc` set before `growTo`.
     public ctor withCapacityAndAllocator(A allocator, int32 bits) {
-        BitSet<A> result;
+        slot BitSet<A> result;
         result.alloc = allocator;
         if (bits > 0) { result.growTo(nc: (bits + 63) >> 6); }
         return give result;
@@ -168,7 +168,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     // Deep-copy into an independent buffer (bare `give` still MOVES). uint64 is always Copyable, so a BitSet
     // is unconditionally Copyable — a plain word-for-word buffer clone.
     public ctor copy(ref BitSet<A> source) {
-        BitSet<A> result;
+        slot BitSet<A> result;
         result.alloc = source.alloc;                    // copy the allocator handle (a value) — same arena
         if (source.wordCount > 0) {
             result.growTo(nc: source.wordCount);
@@ -198,7 +198,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     // buffer is `memset` to zero (the grown tail must start clear); the live words are copied over and the old
     // buffer released. A relocation, so it bumps `mods` (invalidates iterators).
     fn void growTo(int32 nc) {
-        Ptr<uint64> nw;
+        slot Ptr<uint64> nw;
         unsafe {
             nw = cast<Ptr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64))));
             memset(p: cast<Ptr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));

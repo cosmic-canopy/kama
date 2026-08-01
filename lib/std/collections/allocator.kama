@@ -20,7 +20,7 @@ type resource Arena {
     Ptr<uint8> buffer = null; int32 capacity = 0; int32 offset = 0;
 
     public ctor make(int32 capacity) {
-        Arena r;
+        slot Arena r;
         unsafe { r.buffer = cast<Ptr<uint8>>(malloc(n: cast<usize>(capacity))); }
         if (cast<usize>(r.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
         r.capacity = capacity; r.offset = 0;
@@ -51,7 +51,7 @@ type value BumpAllocator implements Allocator {
     Ptr<uint8> buffer; Ptr<int32> offset; int32 capacity;
 
     public ctor make(Ptr<uint8> buffer, Ptr<int32> offset, int32 capacity) {
-        BumpAllocator r; r.buffer = buffer; r.offset = offset; r.capacity = capacity; return give r;
+        slot BumpAllocator r; r.buffer = buffer; r.offset = offset; r.capacity = capacity; return give r;
     }
 
     public fn Optional<Ptr> allocate(usize bytes) {

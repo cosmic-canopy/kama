@@ -24,7 +24,7 @@ enum WtState { Connecting, Connected, Closed }
 // Non-blocking only. Closes the session on drop (RAII).
 type resource WtConnection implements DatagramSocket {
     int32 handle;
-    private ctor make(int32 handle) { WtConnection r; r.handle = handle; return give r; }
+    private ctor make(int32 handle) { slot WtConnection r; r.handle = handle; return give r; }
 
     // Open a session to an https:// URL (HTTP/3). Returns immediately; poll state() until Connected.
     public ctor Result<WtConnection, IoError> connect(ref string url) {

@@ -18,7 +18,7 @@ extern fn Ptr memset(Ptr p, int32 value, usize n);
 type value MapKeyIter<K> implements Iterator<K> {
     Ptr<K> keys; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<K> keys, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
-        MapKeyIter<K> r; r.keys = keys; r.state = state; r.cap = cap; r.pos = 0; r.modsp = modsp; r.modsAt = modsAt; return give r;
+        slot MapKeyIter<K> r; r.keys = keys; r.state = state; r.cap = cap; r.pos = 0; r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     // Deep-copy a key through a typed `ref K` borrow — a bare `copy this.keys[p]` on the raw buffer can't
     // (its element class is unknown, so the `copy` marker is dropped and it aliases). Same trick as `get`.
@@ -40,7 +40,7 @@ type value MapKeyIter<K> implements Iterator<K> {
 type value MapValueIter<V> implements Iterator<V> {
     Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
-        MapValueIter<V> r; r.vals = vals; r.state = state; r.cap = cap; r.pos = 0; r.modsp = modsp; r.modsAt = modsAt; return give r;
+        slot MapValueIter<V> r; r.vals = vals; r.state = state; r.cap = cap; r.pos = 0; r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     // Deep-copy a value through a typed `ref V` borrow — see `Map.cloneVal` for why a raw-buffer `copy` aliases.
     fn V cloneVal(ref V v) { return copy v; }
@@ -63,7 +63,7 @@ type value MapValueIter<V> implements Iterator<V> {
 type value MapValueIterMut<V> implements IteratorMut<V> {
     Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
-        MapValueIterMut<V> r; r.vals = vals; r.state = state; r.cap = cap; r.pos = 0; r.modsp = modsp; r.modsAt = modsAt; return give r;
+        slot MapValueIterMut<V> r; r.vals = vals; r.state = state; r.cap = cap; r.pos = 0; r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn bool hasNext() {
         unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); } }
@@ -85,7 +85,7 @@ type value MapValueIterMut<V> implements IteratorMut<V> {
 // `valuesMut()` / `getRef` instead. The ctor `give`s both fields in (a no-op move for a plain value K/V).
 type resource Entry<K, V> {
     K k; V v;   // private (a `resource` exposes behavior through methods); read via key()/value()
-    public ctor make(K key, V value) { Entry<K,V> r; r.k = give key; r.v = give value; return give r; }
+    public ctor make(K key, V value) { slot Entry<K,V> r; r.k = give key; r.v = give value; return give r; }
     public fn ref K key() { return this.k; }       // borrow the key  (never moved out — the pair owns it)
     public fn ref V value() { return this.v; }      // borrow the value
 }
@@ -97,7 +97,7 @@ type resource Entry<K, V> {
 type value MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
     Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<K> keys, Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
-        MapEntryIter<K,V> r; r.keys = keys; r.vals = vals; r.state = state; r.cap = cap; r.pos = 0;
+        slot MapEntryIter<K,V> r; r.keys = keys; r.vals = vals; r.state = state; r.cap = cap; r.pos = 0;
         r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     // Deep-copy key/value through typed `ref` borrows — a raw-buffer `copy this.keys[p]` drops the `copy`
@@ -145,15 +145,15 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // otherwise build a zero-allocator, incomplete map). Custom `A` uses the allocator-taking ctors below.
     // A bare `Map<K,V,H,A> r;` zero-inits the primitive/`Ptr` fields and default-fills `alloc`; the M8d.1
     // completeness gate proves it's fully initialized.
-    public default ctor empty() when [A: default] { Map<K,V,H,A> r; return give r; }
+    public default ctor empty() when [A: default] { slot Map<K,V,H,A> r; return give r; }
 
     // Empty, but pre-sized so `capacity` entries fit without a rehash. Returns the enclosing `Map<K,V,H,A>`.
-    public ctor withCapacity(int32 capacity) when [A: default] { Map<K,V,H,A> m; m.reserve(n: capacity); return give m; }
+    public ctor withCapacity(int32 capacity) when [A: default] { slot Map<K,V,H,A> m; m.reserve(n: capacity); return give m; }
 
     // Build an empty map whose three buffers are drawn from `allocator` (e.g. an `Arena` bump handle),
     // so all of this map's allocations route into that region. The handle is a cheap copyable value.
     public ctor withAllocator(A allocator) {
-        Map<K,V,H,A> result;
+        slot Map<K,V,H,A> result;
         result.alloc = allocator;
         return give result;
     }
@@ -161,7 +161,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // Caller-owned allocator AND pre-sized for `capacity` — `alloc` set before `reserve` (rehash allocates
     // through `this.alloc`).
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
-        Map<K,V,H,A> result;
+        slot Map<K,V,H,A> result;
         result.alloc = allocator;
         result.reserve(n: capacity);
         return give result;
@@ -213,7 +213,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
     public ctor copy(ref Map<K,V,H,A> source) when [K: Copyable, V: Copyable] {
-        Map<K,V,H,A> result;
+        slot Map<K,V,H,A> result;
         result.alloc = source.alloc;                  // copy the allocator handle (a value) — same arena
         int32 i = 0;
         while (i < source.cap) {
@@ -271,25 +271,25 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     public fn void put(K key, V value) {
         if ((this.len + this.tombs + 1) * 4 >= this.cap * 3) { this.grow(); }
         int32 i = cast<int32>(this.hashKey(k: key) & cast<uint64>(this.cap - 1));   // cap is a power of two -> mask == % cap
-        int32 slot = 0 - 1;                                                   // chosen slot (set = loop done)
+        int32 chosen = 0 - 1;                                                   // the chosen slot (set = loop done)
         int32 free = 0 - 1;                                                   // first tomb we may reuse
         bool overwrite = false;
-        while (slot < 0) {
+        while (chosen < 0) {
             uint8 s = 0ui8; unsafe { s = this.state[i]; }
-            if (s == 0ui8) { slot = free >= 0 ? free : i; }                  // EMPTY — key is new
+            if (s == 0ui8) { chosen = free >= 0 ? free : i; }                  // EMPTY — key is new
             else if (s == 2ui8) { if (free < 0) { free = i; } }              // TOMB — remember, keep probing
-            else { unsafe { if (this.eqKeys(a: this.keys[i], b: key)) { slot = i; overwrite = true; } } }
-            if (slot < 0) { i = i + 1; if (i >= this.cap) { i = 0; } }
+            else { unsafe { if (this.eqKeys(a: this.keys[i], b: key)) { chosen = i; overwrite = true; } } }
+            if (chosen < 0) { i = i + 1; if (i >= this.cap) { i = 0; } }
         }
         if (overwrite) {                                                     // replace the stored (equal) key + value
             unsafe {
-                drop(value: this.keys[slot]); drop(value: this.vals[slot]);
-                this.keys[slot] = give key; this.vals[slot] = give value;
+                drop(value: this.keys[chosen]); drop(value: this.vals[chosen]);
+                this.keys[chosen] = give key; this.vals[chosen] = give value;
             }
             this.mods = this.mods + 1;
         } else {
             if (free >= 0) { this.tombs = this.tombs - 1; }                   // reclaiming a tombstone
-            unsafe { this.keys[slot] = give key; this.vals[slot] = give value; this.state[slot] = 1ui8; }
+            unsafe { this.keys[chosen] = give key; this.vals[chosen] = give value; this.state[chosen] = 1ui8; }
             this.len = this.len + 1; this.mods = this.mods + 1;
         }
     }
@@ -302,7 +302,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
         int32 i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
         unsafe { drop(value: this.keys[i]); }         // key dropped (lookup `key` is a borrow, not stored)
-        V v = this.takeVal(slot: i);                  // value relocated OUT (the slot is now stale)
+        V v = this.takeVal(at: i);                  // value relocated OUT (the slot is now stale)
         unsafe { this.state[i] = 2ui8; }              // tombstone so the stale slot is never dropped again
         this.len = this.len - 1; this.tombs = this.tombs + 1; this.mods = this.mods + 1;
         return Optional::Some(value: give v);
@@ -312,11 +312,11 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // rejected (giving out of an element leaves a moved-from owner); instead relocate bitwise through raw
     // `Ptr<V>` aliases into a zero-init'd local, then `give`. The caller tombstones the stale slot so it's
     // never dropped again — the same move-out idiom as `Deque.takeAt`.
-    fn V takeVal(int32 slot) {
-        V x;                                          // zero-init owned local (the move-out target)
+    fn V takeVal(int32 at) {
+        slot V x;                                          // zero-init owned local (the move-out target)
         Ptr<V> dst = addr(of: x);
         Ptr<V> s = this.vals;
-        unsafe { dst[0] = s[slot]; }                  // raw bitwise move out of the slot (untracked)
+        unsafe { dst[0] = s[at]; }                  // raw bitwise move out of the slot (untracked)
         return give x;
     }
 
@@ -350,7 +350,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // freed raw (no per-slot dtor: ownership already left them). Mirrors `DynamicArray`'s realloc relocation.
     // `nc` must be a power of two ≥ the live count (callers: `grow` doubles, `reserve` rounds up).
     fn void growTo(int32 nc) {
-        Ptr<K> nk; Ptr<V> nv; Ptr<uint8> ns;
+        slot Ptr<K> nk; slot Ptr<V> nv; slot Ptr<uint8> ns;
         unsafe {
             nk = cast<Ptr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K))));
             nv = cast<Ptr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
@@ -413,7 +413,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // Reconstruct from the pair array: each entry is `{"key":k,"value":v}` (key before value on the wire),
     // read positionally — `moreFields()` consumes the object structure (commas + closing brace).
     public ctor Result<Map<K,V,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
-        Map<K,V,H> result;
+        slot Map<K,V,H> result;
         r.beginArray();
         while (r.moreElems()) {
             r.beginObject();

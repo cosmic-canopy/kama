@@ -26,13 +26,13 @@ type value Cell implements Sized {
 type virtual resource Base {
     int32 shared = 0;
     int32 hidden = 0;
-    public ctor make() { Base b; return give b; }
+    public ctor make() { slot Base b; return give b; }
     protected virtual fn int32 baseOnly() { return this.shared; }
 }
 
 type final resource Derived extends Base {
     int32 own = 0;
-    public ctor make() { Derived d; return give d; }
+    public ctor make() { slot Derived d; return give d; }
     public fn int32 total() { return this.own + this.baseOnly(); }
 }
 
@@ -43,7 +43,7 @@ type value Holder {
 
 type resource Node {
     int32 tag;
-    public ctor make(int32 tag) { Node n; n.tag = tag; return give n; }
+    public ctor make(int32 tag) { slot Node n; n.tag = tag; return give n; }
     public fn int32 read() { return this.tag; }
 }
 
@@ -55,50 +55,50 @@ fn int32 measure<T: Sized>(T item) {
 
 fn int32 blend(int32 lo, int32 hi) { return lo + hi; }
 
-fn Holder makeHolder() { Holder h; return h; }
+fn Holder makeHolder() { slot Holder h; return h; }
 
 // The collectBindings under-cover guard. Every block-bearing statement kind declares a local of a type WITH
 // members, and immediately reads one — so a probe at the column just after each `.` proves the walker
 // descended into that statement kind. A miss here is silent in every other test: it just means fewer
 // suggestions. (scanStmtForCollections has under-scanned `unsafe` and `scope` since it was written.)
 fn int32 statements(int32 n) {
-    Cell inBlock;
+    slot Cell inBlock;
     int32 total = inBlock.value;
     {
-        Cell inNested;
+        slot Cell inNested;
         total = total + inNested.value;
     }
     if (n > 0) {
-        Cell inThen;
+        slot Cell inThen;
         total = total + inThen.value;
     } else {
-        Cell inElse;
+        slot Cell inElse;
         total = total + inElse.value;
     }
     while (total < 0) {
-        Cell inWhile;
+        slot Cell inWhile;
         total = total + inWhile.value;
     }
     do {
-        Cell inDo;
+        slot Cell inDo;
         total = total + inDo.value;
     } while (total < 0);
     for (int32 i = 0; i < 2; i = i + 1) {
-        Cell inFor;
+        slot Cell inFor;
         total = total + inFor.value;
     }
-    DynamicArray<Cell> nums;
+    slot DynamicArray<Cell> nums;
     nums.add(item: inBlock);
     foreach (Cell each in nums) {
-        Cell inForeach;
+        slot Cell inForeach;
         total = total + each.value + inForeach.value;
     }
     unsafe {
-        Cell inUnsafe;
+        slot Cell inUnsafe;
         total = total + inUnsafe.value;
     }
     scope {
-        Cell inScope;
+        slot Cell inScope;
         total = total + inScope.value;
     }
     Optional<Cell> maybe = Optional::Some(value: inBlock);
@@ -107,14 +107,14 @@ fn int32 statements(int32 n) {
 }
 
 fn int32 receivers() {
-    Cell c;
+    slot Cell c;
     c.value = 1;
     int32 direct = c.value + c.doubled();
-    Holder h;
+    slot Holder h;
     int32 chained = h.cell.value;
     int32 viaCall = makeHolder().cell.value;
     int32 viaChain = makeHolder().get().value;
-    DynamicArray<Cell> cells;
+    slot DynamicArray<Cell> cells;
     cells.add(item: c);
     int32 viaIndex = cells[0].value;
     Owned<Node> owned = new Node.make(tag: 2);
@@ -131,7 +131,7 @@ fn int32 receivers() {
 }
 
 fn int32 main() {
-    Cell c;
+    slot Cell c;
     c.value = 5;
     int32 lvl = (Level::High == Level::Low) ? 1 : 0;
     return statements(n: 1) + receivers() + measure(item: c) + lvl;
@@ -143,7 +143,7 @@ type value Stat implements Sized {
     public int32 n;
     public comptime int32 LIMIT = 7;
     public static fn int32 zero() { return 0; }
-    public ctor of(int32 n) { Stat s; s.n = n; return give s; }
+    public ctor of(int32 n) { slot Stat s; s.n = n; return give s; }
     public fn int32 size() { return this.n; }
 }
 
@@ -159,7 +159,7 @@ fn int32 scopes() {
 extern fn int32 myOwnFfi(int32 x);
 
 fn int32 bareNames(int32 seed) {
-    Cell near;
+    slot Cell near;
     int32 far = near.value + seed;
     return far;
 }

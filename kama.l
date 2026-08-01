@@ -418,6 +418,7 @@ static struct name_value keywords [] = {
     {"return",      RETURN},
     {"scope",       SCOPE},
     {"sizeof",      SIZEOF},
+    {"slot",        SLOT},
     {"spawn",       SPAWN},
     {"static",      STATIC},
     {"string",      STRING},

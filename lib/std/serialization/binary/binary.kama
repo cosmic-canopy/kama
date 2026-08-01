@@ -40,7 +40,7 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     SerError code;
 
     public ctor make(W sink) {
-        BinaryWriter<W> r;
+        slot BinaryWriter<W> r;
         r.sink = give sink;
         r.scratch = FixedArray.make(size: 1);
         r.err = false;
@@ -140,7 +140,7 @@ type resource BinaryReader implements Deserializer {
     DeError code;
 
     public ctor make(DynamicArray<uint8> src) {
-        BinaryReader r;
+        slot BinaryReader r;
         r.len = cast<int32>(src.length());
         r.buf = give src;
         r.pos = 0;

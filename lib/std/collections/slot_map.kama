@@ -18,7 +18,7 @@ type value Handle {
 type value SlotMapValueIter<V> implements Iterator<V> {
     Ptr<V> values; Ptr<uint32> gens; int32 slotCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<V> values, Ptr<uint32> gens, int32 slotCount, Ptr<int32> modsp, int32 modsAt) {
-        SlotMapValueIter<V> r; r.values = values; r.gens = gens; r.slotCount = slotCount; r.pos = 0;
+        slot SlotMapValueIter<V> r; r.values = values; r.gens = gens; r.slotCount = slotCount; r.pos = 0;
         r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     fn V cloneVal(ref V v) { return copy v; }   // deep-copy through a typed ref (see Map.cloneVal)
@@ -39,7 +39,7 @@ type value SlotMapValueIter<V> implements Iterator<V> {
 type value SlotMapValueIterMut<V> implements IteratorMut<V> {
     Ptr<V> values; Ptr<uint32> gens; int32 slotCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<V> values, Ptr<uint32> gens, int32 slotCount, Ptr<int32> modsp, int32 modsAt) {
-        SlotMapValueIterMut<V> r; r.values = values; r.gens = gens; r.slotCount = slotCount; r.pos = 0;
+        slot SlotMapValueIterMut<V> r; r.values = values; r.gens = gens; r.slotCount = slotCount; r.pos = 0;
         r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn bool hasNext() {
@@ -73,20 +73,20 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     // The four-ctor matrix (M8c). `empty()` is the `default` zero-arg build; `empty`/`withCapacity` are the
     // default-allocator conveniences (custom `A` uses the allocator-taking ctors). A bare `SlotMap<V, A> r;`
     // zero-inits the primitive/`Ptr` fields and default-fills `alloc` — the M8d.1 gate proves completeness.
-    public default ctor empty() when [A: default] { SlotMap<V, A> r; return give r; }
-    public ctor withCapacity(int32 capacity) when [A: default] { SlotMap<V, A> m; m.reserve(n: capacity); return give m; }
+    public default ctor empty() when [A: default] { slot SlotMap<V, A> r; return give r; }
+    public ctor withCapacity(int32 capacity) when [A: default] { slot SlotMap<V, A> m; m.reserve(n: capacity); return give m; }
 
     // Draw the three parallel buffers from a caller-owned allocator (e.g. an `Arena`). The bare `SlotMap()`
     // uses the default zero-size `GlobalAllocator`; this sets the handle before any grow.
     public ctor withAllocator(A allocator) {
-        SlotMap<V, A> result;
+        slot SlotMap<V, A> result;
         result.alloc = allocator;
         return give result;
     }
 
     // Caller-owned allocator AND pre-grown for `capacity` slots — `alloc` set before `reserve`.
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
-        SlotMap<V, A> result;
+        slot SlotMap<V, A> result;
         result.alloc = allocator;
         result.reserve(n: capacity);
         return give result;
@@ -151,7 +151,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     public fn Optional<V> remove(Handle handle) {
         if (!this.valid(h: handle)) { return Optional::None; }
         int32 idx = handle.index;
-        V v = this.takeVal(slot: idx);                           // value relocated OUT (slot now stale)
+        V v = this.takeVal(at: idx);                           // value relocated OUT (slot now stale)
         unsafe { this.gens[idx] = this.gens[idx] + 1ui32; }      // odd -> even: vacate (stale handles mismatch)
         unsafe { this.freeList[this.freeLen] = idx; }            // remember the slot for reuse (always fits)
         this.freeLen = this.freeLen + 1;
@@ -162,9 +162,9 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     // Move the value at `slot` OUT of the buffer into a fresh owned local (the slot is left stale — the caller
     // vacates it). Bitwise-relocate through raw `Ptr<V>` aliases into a zero-init'd local, then `give` — the
     // move-out idiom `Map.takeVal` / `DynamicArray.takeAt` use.
-    fn V takeVal(int32 slot) {
-        V x; Ptr<V> dst = addr(of: x); Ptr<V> s = this.values;
-        unsafe { dst[0] = s[slot]; }
+    fn V takeVal(int32 at) {
+        slot V x; Ptr<V> dst = addr(of: x); Ptr<V> s = this.values;
+        unsafe { dst[0] = s[at]; }
         return give x;
     }
 
@@ -197,7 +197,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     // Grow the three buffers to the next capacity (doubling from 8) and relocate the live state.
     fn void grow() { this.growTo(nc: this.cap == 0 ? 8 : this.cap * 2); }
     fn void growTo(int32 nc) {
-        Ptr<V> nv; Ptr<uint32> ng; Ptr<int32> nf;
+        slot Ptr<V> nv; slot Ptr<uint32> ng; slot Ptr<int32> nf;
         unsafe {
             nv = cast<Ptr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
             ng = cast<Ptr<uint32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32))));

@@ -1,8 +1,8 @@
 // MCU step 1: a `Ptr` static (a peripheral handle) — zero-inits to null, then holds an assigned address.
-static Ptr<int32> slot;
+static Ptr<int32> target;
 
 fn int32 main() {
     int32 x = 42;
-    slot = addr(of: x);
-    unsafe { return slot[0]; }   // 42
+    target = addr(of: x);
+    unsafe { return target[0]; }   // 42
 }

@@ -45,7 +45,7 @@ type resource Sender<T> {
     Ptr handle;   // the shared queue; null once moved-from (drop then no-ops, INVARIANT #0)
 
     // Wrap the shared queue handle. Called by `Channel.sender()`; not meant to be used directly.
-    public ctor make(Ptr handle) { Sender<T> s; s.handle = handle; return give s; }
+    public ctor make(Ptr handle) { slot Sender<T> s; s.handle = handle; return give s; }
 
     // Move `item` into the channel. Blocks while the ring is full and the receiver is live. On success
     // the bytes are relocated into a queue slot (the receiver's `recv` produces the sole owning copy)
@@ -76,10 +76,10 @@ type resource Sender<T> {
                 bool more = true;
                 while (more) {
                     unsafe {
-                        T slot;
-                        int32 got = kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: slot)));
-                        if (got == 0) { more = false; }   // ring empty: `slot` is zero → its drop is a no-op
-                    }                                     // got != 0: `slot` owns a buffered item, dropped here
+                        slot T item;
+                        int32 got = kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: item)));
+                        if (got == 0) { more = false; }   // ring empty: `item` is zero → its drop is a no-op
+                    }                                     // got != 0: `item` owns a buffered element, dropped here
                 }
                 kama_channel_free(ch: this.handle);
             }
@@ -91,13 +91,13 @@ type resource Sender<T> {
 type resource Receiver<T> {
     Ptr handle;   // the shared queue; null once moved-from
 
-    public ctor make(Ptr handle) { Receiver<T> r; r.handle = handle; return give r; }
+    public ctor make(Ptr handle) { slot Receiver<T> r; r.handle = handle; return give r; }
 
     // Block for the next value. Returns `Some(v)` (v is the sole owning copy, relocated out of the
     // queue) or `None` once the channel is closed AND drained (all senders dropped, no buffered items).
     public fn Optional<T> recv() {
         unsafe {
-            T dst;
+            slot T dst;
             int32 r = kama_channel_recv(ch: this.handle, dst: cast<Ptr>(addr(of: dst)));
             if (r == 0) { return Optional::Some(value: give dst); }   // `give` suppresses dst's drop (moved into Some)
         }
@@ -112,10 +112,10 @@ type resource Receiver<T> {
                 bool more = true;
                 while (more) {
                     unsafe {
-                        T slot;
-                        int32 got = kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: slot)));
-                        if (got == 0) { more = false; }   // ring empty: `slot` is zero → its drop is a no-op
-                    }                                     // got != 0: `slot` owns a buffered item, dropped here
+                        slot T item;
+                        int32 got = kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: item)));
+                        if (got == 0) { more = false; }   // ring empty: `item` is zero → its drop is a no-op
+                    }                                     // got != 0: `item` owns a buffered element, dropped here
                 }
                 kama_channel_free(ch: this.handle);
             }
@@ -131,7 +131,7 @@ type resource Channel<T> {
     Ptr handle;
 
     public ctor bounded(usize capacity) {
-        Channel<T> c;
+        slot Channel<T> c;
         c.handle = kama_channel_new(elemSize: sizeof(T), cap: capacity);
         return give c;
     }

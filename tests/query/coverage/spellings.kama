@@ -19,13 +19,13 @@ type contract Area for both { fn int32 area(); }
 
 type virtual resource Base {
     int32 tag;
-    public ctor make() { Base b; b.tag = 1; return give b; }
+    public ctor make() { slot Base b; b.tag = 1; return give b; }
     protected virtual fn int32 kind() { return 1; }
     public fn int32 tagIs() { return this.tag; }        // implicit `this.` field read
 }
 
 type final resource Derived extends Base {
-    public ctor make() { Derived d; return give d; }
+    public ctor make() { slot Derived d; return give d; }
     protected override fn int32 kind() { return 2; }
     public fn int32 viaBase() { return base.kind(); }   // the non-virtual base call
     public fn int32 viaThis() { return this.kind(); }
@@ -34,7 +34,7 @@ type final resource Derived extends Base {
 type value Point implements Area {
     public int32 x;
     public int32 y;
-    public ctor at(int32 px, int32 py) { Point p; p.x = px; p.y = py; return p; }
+    public ctor at(int32 px, int32 py) { slot Point p; p.x = px; p.y = py; return p; }
     public fn int32 area() { return this.x * this.y; }
     public fn int32 sum() { return this.x + this.y; }
     public static fn int32 origin() { return 0; }
@@ -60,9 +60,9 @@ fn int32 main() {
     int32 cv = match (c) { case Red: 1; case Green: 2; case Blue: 3; };
 
     Shape sh = Shape::Circle(r: 7);         // tagged-union variant construction
-    int32 sv = match (sh) { case Circle(r: r): r; case Empty: 0; };   // payload BINDING
+    int32 sv = match (sh) { case Circle(r: r): r; case Empty: 0; };   slot // payload BINDING
 
-    Box<int32> bi;  bi.v = 1;               // generic instance one
+    Box<int32> bi;  bi.v = 1;               slot // generic instance one
     Box<bool>  bb;  bb.v = true;            // generic instance two
     int32 g = bi.get();
 

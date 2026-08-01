@@ -40,7 +40,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     isize fd = -1;
     // Adopt an already-connected socket fd. This is the escape hatch used by TcpListener.accept();
     // prefer `connect` for client sockets.
-    public ctor make(isize fd) { TcpStream r; r.fd = fd; return give r; }
+    public ctor make(isize fd) { slot TcpStream r; r.fd = fd; return give r; }
 
     // Connect to a numeric host:port (e.g. "127.0.0.1"). The stream closes on drop.
     public ctor Result<TcpStream, IoError> connect(ref string host, uint16 port) {
@@ -136,7 +136,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
 // A listening TCP socket. Closes on drop (RAII). Move-only.
 type resource TcpListener {
     isize fd = -1;   // the -1 empty niche — see ~TcpStream
-    private ctor make(isize fd) { TcpListener r; r.fd = fd; return give r; }
+    private ctor make(isize fd) { slot TcpListener r; r.fd = fd; return give r; }
 
     // Bind + listen on a numeric host:port. host "" or "0.0.0.0" = all interfaces. SO_REUSEADDR is set.
     public ctor Result<TcpListener, IoError> bind(ref string host, uint16 port) {

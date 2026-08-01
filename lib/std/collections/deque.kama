@@ -8,7 +8,7 @@ export { Deque };
 type value DequeIter<T> implements Iterator<T> {
     Ptr<T> data; int32 head; int32 cap; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<T> data, int32 head, int32 cap, int32 len, Ptr<int32> modsp, int32 modsAt) {
-        DequeIter<T> r; r.data = data; r.head = head; r.cap = cap; r.pos = 0; r.len = len;
+        slot DequeIter<T> r; r.data = data; r.head = head; r.cap = cap; r.pos = 0; r.len = len;
         r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn Optional<T> next() {
@@ -23,7 +23,7 @@ type value DequeIter<T> implements Iterator<T> {
 type value DequeIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 head; int32 cap; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<T> data, int32 head, int32 cap, int32 len, Ptr<int32> modsp, int32 modsAt) {
-        DequeIterMut<T> r; r.data = data; r.head = head; r.cap = cap; r.pos = 0; r.len = len;
+        slot DequeIterMut<T> r; r.data = data; r.head = head; r.cap = cap; r.pos = 0; r.len = len;
         r.modsp = modsp; r.modsAt = modsAt; return give r;
     }
     public fn bool hasNext() {
@@ -47,20 +47,20 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
 
     // The four-ctor matrix (M8c) — see DynamicArray. `empty()` is the `default` zero-arg build; `empty`/
     // `withCapacity` are default-allocator conveniences (custom `A` uses the allocator-taking ctors).
-    public default ctor empty() when [A: default] { Deque<T, A> r; return give r; }
-    public ctor withCapacity(int32 capacity) when [A: default] { Deque<T, A> m; m.reserve(n: capacity); return give m; }
+    public default ctor empty() when [A: default] { slot Deque<T, A> r; return give r; }
+    public ctor withCapacity(int32 capacity) when [A: default] { slot Deque<T, A> m; m.reserve(n: capacity); return give m; }
 
     // Draw the ring buffer from a caller-owned allocator (e.g. an `Arena`). The bare `Deque()` uses the
     // default zero-size `GlobalAllocator`; this sets the handle before any grow. See DynamicArray.withAllocator.
     public ctor withAllocator(A allocator) {
-        Deque<T, A> result;
+        slot Deque<T, A> result;
         result.alloc = allocator;
         return give result;
     }
 
     // Caller-owned allocator AND pre-grown for `capacity` — `alloc` set before `reserve`.
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
-        Deque<T, A> result;
+        slot Deque<T, A> result;
         result.alloc = allocator;
         result.reserve(n: capacity);
         return give result;
@@ -70,7 +70,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
     // Element relocation goes through LOCAL pointer aliases (`nd[i] = od[…]` is a raw bitwise move that
     // leaves no owner holding a moved-from slot), the same technique DynamicArray.remove uses.
     fn void growTo(int32 nc) {
-        Ptr<T> nd;
+        slot Ptr<T> nd;
         unsafe { nd = cast<Ptr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T)))); }
         Ptr<T> od = this.data;
         int32 i = 0;
@@ -105,7 +105,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
     // DynamicArray.remove uses for `d[i] = d[i+1]`. The caller decrements `len` so the stale slot is never
     // dropped again, and `give`s out the returned local (single ownership preserved).
     fn T takeAt(int32 idx) {
-        T x;                                              // zero-init owned local (the move-out target)
+        slot T x;                                              // zero-init owned local (the move-out target)
         Ptr<T> dst = addr(of: x);
         Ptr<T> d = this.data;
         unsafe { dst[0] = d[idx]; }                       // raw bitwise move out of the slot (untracked)
@@ -151,7 +151,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
 
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied in order).
     public ctor copy(ref Deque<T, A> source) {
-        Deque<T, A> result;
+        slot Deque<T, A> result;
         result.alloc = source.alloc;                    // copy the allocator handle (a value) — same arena
         result.reserve(n: source.len);
         int32 i = 0;
@@ -194,7 +194,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
         return Result::Ok(value: Unit::Unit);
     }
     public ctor Result<Deque<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
-        Deque<T> result;
+        slot Deque<T> result;
         r.beginArray();
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject

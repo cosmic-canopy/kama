@@ -84,7 +84,7 @@ type resource StringWriter implements Writer {
     DynamicArray<uint8> buf;
 
     public ctor make() {
-        StringWriter r;
+        slot StringWriter r;
         DynamicArray<uint8> b = DynamicArray.empty();
         r.buf = give b;
         return give r;
@@ -130,7 +130,7 @@ type resource SliceReader implements Reader {
     int32 len;
 
     public ctor make(string src) {
-        SliceReader r;
+        slot SliceReader r;
         r.len = cast<int32>(src.length());
         r.src = give src;
         r.pos = 0;
@@ -160,7 +160,7 @@ type resource BufWriter<W: Writer> implements Writer {
     int32 cap;
 
     public ctor make(W inner) {
-        BufWriter<W> r;
+        slot BufWriter<W> r;
         r.inner = give inner;
         DynamicArray<uint8> b = DynamicArray.empty();
         r.buf = give b;
@@ -206,7 +206,7 @@ type resource BufReader<R: Reader> implements Reader {
     int32 fill;   // count of valid bytes in buf
 
     public ctor make(R inner) {
-        BufReader<R> r;
+        slot BufReader<R> r;
         r.inner = give inner;
         FixedArray<uint8> b = FixedArray.make(size: 4096);
         r.buf = give b;

@@ -84,21 +84,21 @@ expect --type 17:22 -- "value Point"        # a Point type reference
 expect --type 11:14 -- "resource Widget"    # the Widget decl name
 expect --type 17:9  -- "function midpoint"  # a function decl name
 # M3: hover/def now reach BODY use-sites too (they are indexed positions like any other).
-expect --type 18:5  -- "value Point"        # 'Point m;' inside midpoint's body
-expect --def  25:5  -- "shapes.kama:6:11"   # 'Point p;' inside main's body -> Point decl
+expect --type 18:10 -- "value Point"        # 'Point m;' inside midpoint's body
+expect --def  25:10 -- "shapes.kama:6:11"   # 'Point p;' inside main's body -> Point decl
 
 echo "check-query: referencesAt (find-references, incl. body use-sites)"
 # Every Point spelling: the decl, the Widget field + ctor param, midpoint's return + 2 params, and the
-# two BODY declarations (18:5, 25:5) that only the M3 reference index can see.
+# two BODY declarations (18:10, 25:10) that only the M3 reference index can see.
 expect --refs 6:11 -- "shapes.kama:6:11"    # includeDecl -> the declaration itself
 expect --refs 6:11 -- "shapes.kama:12:4"    # 'Point origin' field type
 expect --refs 6:11 -- "shapes.kama:13:21"   # 'Point at' ctor param
 expect --refs 6:11 -- "shapes.kama:17:3"    # midpoint's return type
-expect --refs 6:11 -- "shapes.kama:18:4"    # BODY: 'Point m;' in midpoint
-expect --refs 6:11 -- "shapes.kama:25:4"    # BODY: 'Point p;' in main
+expect --refs 6:11 -- "shapes.kama:18:9"    # BODY: 'Point m;' in midpoint
+expect --refs 6:11 -- "shapes.kama:25:9"    # BODY: 'Point p;' in main
 # A cursor on a USE resolves to the same key, so it returns the same set as a cursor on the decl.
-expect --refs 18:5 -- "shapes.kama:6:11"
-expect --refs 18:5 -- "shapes.kama:25:4"
+expect --refs 18:10 -- "shapes.kama:6:11"
+expect --refs 18:10 -- "shapes.kama:25:9"
 # Prelude/std symbols are never renameable targets and have no user references to report.
 reject --refs 7:12 -- "shapes.kama"         # 'int32' (a builtin) -> "no references"
 
@@ -154,7 +154,7 @@ echo "check-query: M3.5 workspace indexing"
 # Without --project: only widget.kama's own uses are visible. (`--refs` prints absolute paths under
 # --project and the given path without it, so match on the basename+position, which both forms carry.)
 expect --refs 12:11 -- "widget.kama:12:11"          # the declaration itself
-expect --refs 12:11 -- "widget.kama:15:33"          # 'Widget r;' inside the ctor
+expect --refs 12:11 -- "widget.kama:15:38"          # 'Widget r;' inside the ctor
 reject --refs 12:11 -- "app.kama"                   # ... and app.kama is INVISIBLE (the M3.3 blind spot)
 # With --project: the same query reaches every file in the package.
 expect --project --refs 12:11 -- "app.kama:5:3"     # 'fn Widget make(...)' return type
