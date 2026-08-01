@@ -2247,8 +2247,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // Collections zero-init so an unconstructed one frees safely; extern
                 // structs zero-init so unset descriptor fields are well-defined.
                 line(n->line); indent(depth);
-                bool hasDefaultCtor = !_classes[ty].isAbstractClass
-                    && (_classes[ty].hasCtor && _classes[ty].ctorParams.empty());
                 // A bare (uninitialized) local must be brought to a valid state so its scope-exit dtor — and
                 // any `f = …` that first RELEASES the old field — don't free stack garbage. Collections /
                 // extern structs zero-init (no kama ctor); a destructible `resource` WITHOUT a zero-arg ctor
@@ -8997,7 +8995,7 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
     if (rootIsConst(root))
         unsupported(("cannot write to `const " + root + "` (const is deep — neither the "
                      "binding nor anything reached through it may be mutated)").c_str(), srcLine);
-    else if (!_inCtor && !_inNamedCtorBody && isConstFieldWrite(target))
+    else if (!_inNamedCtorBody && isConstFieldWrite(target))
         unsupported("cannot assign to a `const` field outside the constructor", srcLine);
 }
 
@@ -9106,25 +9104,6 @@ void CEmitter::analyzeCtorStmt(SharedStatement st, ClassInfo& owner, const std::
     // (for/foreach/match/early-return: not modeled in v1 — the ctor-end assignment check still holds)
 }
 
-// Enforce never-null on a constructor: every `Owned`/`Shared` field assigned by ctor-end, none read before.
-void CEmitter::checkCtorNeverNull(ClassInfo& owner, SharedBlock body)
-{
-    std::set<std::string> owning;
-    for (auto& f : owner.fields)
-        if (!heapOwnerTarget(cType(f.type)).empty()) owning.insert(f.name);   // Owned/Shared (not Weak)
-    if (owning.empty()) return;
-    std::set<std::string> assigned, locals;
-    for (auto& f : owner.fields) if (f.initializer) assigned.insert(f.name);   // a field-initializer pre-assigns
-    if (body && body->statements)
-        for (auto& st : *body->statements)
-            analyzeCtorStmt(st, owner, owning, assigned, locals, true);
-    for (auto& f : owner.fields)
-        if (owning.count(f.name) && !assigned.count(f.name))
-            unsupported(("'" + f.name + "' must be set before the constructor returns "
-                         "(`Owned`/`Shared` are never-null)").c_str(),
-                        owner.ctorNode ? owner.ctorNode->line : (owner.node ? owner.node->line : 0));
-}
-
 // Construction-model M8b: is a field of concrete type `c` DEFAULT-FILLABLE — i.e. may a ctor leave it
 // unassigned (the compiler supplies its default) rather than requiring an explicit assignment?
 //   - not a user aggregate (primitive, raw `Ptr<T>`, enum): YES — zero is a valid value (deref is `unsafe`).
@@ -9147,12 +9126,12 @@ bool CEmitter::isDefaultFillable(const std::string& c)
 }
 
 // Enforce complete-init on a NAMED ctor (`ctor make(…)`) — a static factory returning the enclosing type
-// (or `Result<This,E>`). Unlike a legacy instance ctor (which mutates `this`, sealed by checkCtorNeverNull),
-// a factory builds a value via a bare local + field assignments, or returns a fresh object by DELEGATION
+// (or `Result<This,E>`). This is the ONLY ctor shape the language has: a factory builds a value via a
+// `slot` local + field assignments, or returns a fresh object by DELEGATION
 // (`return Other.make(…)`). The one hole to close: returning a bare zero-inited local whose owning
 // (`Owned`/`Shared`) field was never set — that would leak a null owning pointer past construction.
 //
-// The rule (delegation-aware, mirroring checkCtorNeverNull's sound top-level-only discipline): the returned
+// The rule (delegation-aware, sound top-level-only discipline): the returned
 // value is COMPLETE unless it is a local that was declared bare (no constructing initializer) and is missing
 // an unconditional assignment to some owning field. Any construction / factory call / param is trusted
 // complete — it came through something that itself satisfies the guarantee (a legacy `static fn` factory is
@@ -11421,7 +11400,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _refParams.clear();
     _paramNames.clear();
     _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
     _moveState.clear();   // per-function move analysis
     _pendingParamDtors.clear();
     _currentClass = nullptr;
@@ -11889,7 +11868,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _currentClass = &ci;
     _refParams.clear();
     _paramNames.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
     _currentReturnCType = "void";
     _tempCounter = 0;
     _scopes.clear();
@@ -11955,7 +11934,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
 // Emit a method or constructor body with `self`/field/param context set up.
 void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retType,
                                     SharedParameterList params, SharedBlock body,
-                                    ClassInfo& owner, bool isCtor, bool isConstMethod, bool isStatic)
+                                    ClassInfo& owner, bool isConstMethod, bool isStatic)
 {
     _currentClass = &owner;
     _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
@@ -11964,9 +11943,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _paramNames.clear();
     _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
     _viewParams.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
     _moveState.clear();   // per-method move analysis
-    _inCtor = isCtor;   // const fields are writable only here
     if (isConstMethod) _constLocals.insert("this");   // `this` is immutable (deep)
     _currentReturnCType = retType;
     _tempCounter = 0;
@@ -11997,55 +11975,6 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     *_out << (_emitStaticClass ? "static inline " : "") << retType << " " << cName
           << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str()) << ")\n{\n";   // static: no self
 
-    if (isCtor) {
-        // 1. Base constructor first (so derived overrides its effects + vptr).
-        if (owner.base) {
-            SharedArgumentList baseArgs;
-            if (owner.ctorNode && owner.ctorNode->declarator && owner.ctorNode->declarator->initializer)
-                baseArgs = owner.ctorNode->declarator->initializer->args;
-            if (owner.base->hasCtor) {
-                indent(1);
-                *_out << emitReorderedCall(owner.baseName + "__ctor", "&self->__base",
-                                          owner.base->ctorParams, baseArgs, owner.node->line) << ";\n";
-            } else if (baseArgs && !baseArgs->empty()) {
-                unsupported("base has no constructor to receive arguments", owner.node->line);
-            }
-        }
-        // 2. Set the vptr to THIS class's vtable (after base, so most-derived wins).
-        if (owner.hasVtable) {
-            indent(1);
-            *_out << "self->" << vptrPrefix(&owner) << "__vptr = &" << owner.name << "__vtable;\n";
-        }
-        // 3. Field initializers.
-        for (auto& f : owner.fields) {
-            if (f.initializer) {
-                indent(1);
-                *_out << "self->" << f.name << " = " << emitExpression(f.initializer) << ";\n";
-            } else {
-                // A collection / smart-pointer field with no initializer must start as a
-                // valid EMPTY value (zero = NULL buffer / null handle), or its first use
-                // (`.add(...)`) and its RAII drop would touch garbage. This also covers a library
-                // owner (Owned/Shared/Weak) held as a field: the first `this.f = x` RELEASES the old
-                // value, which must be a null (no-op) handle — the library dtors guard a null pointer.
-                // (Plain class-value fields still need their own ctor — a separate, deferred gap.)
-                std::string fct = cType(f.type);
-                // Also ANY destructible field (a `Map`/`Set`, a user resource that owns a buffer, OR a
-                // destructible variant like `Optional<Shared<T>>`/`Optional<Weak<T>>`): zero it so the FIRST
-                // `this.f = give x` / `this.f = Optional::None` RELEASES a valid empty value (cap=0 / NULL
-                // handle / tag-0 with a null-guarded payload → its dtor is a no-op), not uninitialized garbage
-                // — a garbage free/refcount-decrement is UB that only aborts when the memory happens non-null
-                // (so it slips past -O0 but crashes at -O2 / a differently-laid-out target).
-                if (_classes.count(fct) && (_classes[fct].isIntrinsicColl
-                        || _classes[fct].copyable || !heapOwnerTarget(fct).empty()
-                        || _classes[fct].destructible)) {
-                    indent(1);
-                    *_out << "self->" << f.name << " = (" << fct << "){0};\n";
-                }
-            }
-        }
-    }
-    // Stage 1: never-null — every `Owned`/`Shared` field must be assigned by ctor-end and not read before.
-    if (isCtor) checkCtorNeverNull(owner, body);
     checkDefiniteAssignment(body, params);   // owning LOCAL read-before-assign + `out` params (any method/ctor)
     SharedStatement last;
     if (body && body->statements) {
@@ -12059,7 +11988,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _scopes.clear();
     _currentClass = nullptr;
     _refParams.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear(); _inCtor = false;
+    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
     _inStaticMethod = false;
 }
 
@@ -12067,11 +11996,6 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
 {
     if (ci.isIntrinsicColl || ci.isExternStruct) return;   // macro / header provides these
     ScopedStr _ts(_thisType, ci.name);                  // `This` -> this class in method bodies/sigs
-    if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator) {
-        line(ci.ctorNode->line);
-        emitMethodOrCtorBody(ci.name + "__ctor", "void",
-                             ci.ctorNode->declarator->params, ci.ctorNode->body, ci, true);
-    }
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no body to emit
@@ -12091,7 +12015,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
             // `return e` addresses the place (see the ReturnNode path, gated on `_returnIsPlace`).
             std::string ret = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
             _returnIsPlace = mi.isPlaceReturn;
-            emitMethodOrCtorBody(mi.cName, ret.c_str(), operatorParamList(d), mi.opDecl->body, ci, false, false, mi.arity == 2);
+            emitMethodOrCtorBody(mi.cName, ret.c_str(), operatorParamList(d), mi.opDecl->body, ci, false, mi.arity == 2);
             _returnIsPlace = false;
             continue;
         }
@@ -12101,7 +12025,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         std::string ret = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
         _returnIsPlace = mi.isPlaceReturn;
         // Construction-model M3: a named `ctor` is a static factory — seal it so no returned object leaks a
-        // null owning pointer (a legacy instance ctor is sealed by checkCtorNeverNull inside the body emit).
+        // null owning pointer. It is the only ctor shape there is, so this is the only such seal.
         if (mi.isCtor) checkNamedCtorComplete(ci, mi.node->body);
         // ...and a view ctor may only hand back a borrow of its params (not a ctor-local) — see the fn-shaped
         // sibling at the ReturnNode, skipped for a ctor body (which is validated here instead).
@@ -12110,7 +12034,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // `self->__vptr` store). But it DOES construct — its bare local of the return type is the object
         // being built, so const fields written on it (`r.id = id`) must be allowed. Flag it. #M8d.2
         _inNamedCtorBody = mi.isCtor;
-        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, false, mi.isConst, mi.isStatic);
+        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic);
         _inNamedCtorBody = false;
         _returnIsPlace = false;
     }
@@ -15364,7 +15288,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 line(md->line);
                 _returnIsPlace = md->isRef;
                 emitMethodOrCtorBody(tcip->name + "__" + *md->name->value, ret.c_str(),
-                                     md->params, md->body, *tcip, false, md->isConst,
+                                     md->params, md->body, *tcip, md->isConst,
                                      modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
                 _returnIsPlace = false;
             }
@@ -15532,7 +15456,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             line(md->line);
             _returnIsPlace = md->isRef;
             emitMethodOrCtorBody(tci.name + "__" + *md->name->value, ret.c_str(),
-                                 md->params, md->body, tci, false, md->isConst,
+                                 md->params, md->body, tci, md->isConst,
                                  modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
             _returnIsPlace = false;
         }

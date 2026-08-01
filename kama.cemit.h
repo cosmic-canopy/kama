@@ -954,7 +954,6 @@ private:
     std::string emitCondition(SharedExpression cond);
     int                _curLine = 0;                   // last source line seen (conditional-drop diagnostics)
     bool               _inUnsafe = false;             // inside an `unsafe { }` block
-    bool               _inCtor   = false;             // emitting a ctor (const fields writable here)
     bool               _inNamedCtorBody = false;       // emitting a named `ctor` factory body (const fields of the built local are writable)
     bool               _inStaticMethod = false;        // emitting a `static` method body (no `self`/`this`)
 
@@ -1379,9 +1378,11 @@ private:
     void emitVariantStruct(ClassInfo& ci);   // tag + union layout of a discriminated-union enum
     void emitClassPrototypes(ClassInfo& ci);
     void emitClassDefinitions(ClassInfo& ci);
+    // Emits a method / operator / named-`ctor` body. There is no `isCtor` flag: a named `ctor` is a static
+    // factory with no `self`, so it needs none of the instance-ctor prologue the flag used to select.
     void emitMethodOrCtorBody(const std::string& cName, const char* retType,
                               SharedParameterList params, SharedBlock body,
-                              ClassInfo& owner, bool isCtor, bool isConstMethod = false,
+                              ClassInfo& owner, bool isConstMethod = false,
                               bool isStatic = false);
     std::string emitMemberAccess(MemberAccessNode* ma);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
@@ -1588,7 +1589,6 @@ private:
                                 std::string& bad, int& badLine);
     void        analyzeCtorStmt(SharedStatement st, ClassInfo& owner, const std::set<std::string>& owning,
                                 std::set<std::string>& assigned, std::set<std::string>& locals, bool topLevel);
-    void        checkCtorNeverNull(ClassInfo& owner, SharedBlock body);
     void        checkNamedCtorComplete(ClassInfo& owner, SharedBlock body);
     void        checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode* mnode);   // a view ctor may only borrow its params
     // Construction-model M8b: a value field may be left unassigned in a ctor iff its type is DEFAULT-FILLABLE
