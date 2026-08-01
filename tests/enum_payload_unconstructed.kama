@@ -1,0 +1,25 @@
+// A variant payload type must register even when that variant is NEVER CONSTRUCTED. A tagged enum is a
+// union with storage for every arm, so the C struct names every payload type whether or not one is built —
+// but payload types used to reach registration only if some OTHER part of the program happened to name
+// them. `Boxed` is never constructed here, so before the fix the emitted C referenced an undeclared
+// `std__memory__Shared__F4__Probe_GlobalAllocator`. (`Shared<T>` specifically, because a smart-pointer
+// instance is monomorphized on demand rather than being a plain named struct.)
+type resource Probe {
+    int32 v;
+    public ctor make(int32 v) { slot Probe r; r.v = v; return give r; }
+    public fn int32 value() { return this.v; }
+}
+
+enum Holder {
+    Plain,
+    Boxed(Shared<Probe> p)
+}
+
+fn int main()
+{
+    Holder h = Holder::Plain;
+    return match (h) {
+        case Plain:        42;
+        case Boxed(p: q):  q.value();
+    };
+}

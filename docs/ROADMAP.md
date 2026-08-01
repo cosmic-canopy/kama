@@ -177,11 +177,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   for the language server (it resolves the whole program from the manifest) and for any file reached through
   an import, but it makes single-file `check` unusable as a lint over a directory module, which is how the
   stdlib is laid out. Fix = widen a bare `check`'s unit set to the target's own namespace directory.
-- **Enum-variant payload-type registration gap (bug, small).** A type used *only* as an enum variant's payload
-  — where that variant is never constructed — is not registered/emitted, so the enum's C `struct` references an
-  undeclared type (`unknown type name 'Shared_Probe'`). Reproduces with `enum E { A, B(Shared<Probe>) }`
-  constructed only via `A`. Fix: scan **every** variant's payload types at enum registration (like class fields
-  via `scanTypeForCollections`), not lazily at construction.
 - **Generic free-fn / static-method can't instantiate a generic type from its own type param (limitation,
   workaround).** A generic free function `fn f<W: C>(…) { Foo<W> x = Foo.make(…); … }` fails with "unknown type
   in constructor call `Foo`": the dot-on-type ctor resolver only rewrites the type name when it is itself a

@@ -5836,6 +5836,21 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
                     scanStmtForCollections(dd->body);
                 }
             }
+        } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+            // A tagged enum's variant PAYLOAD is a declared type just like a class field, and until this
+            // arm existed nothing scanned it: a payload type reached registration only if some OTHER part
+            // of the program happened to name it. So `enum E { A, B(Shared<Probe>) }` whose `B` is never
+            // constructed emitted a C union naming `std__memory__Shared__F4__Probe_GlobalAllocator`, a type
+            // that was never declared. The union has storage for every variant whether or not one is built,
+            // so the payload must register unconditionally.
+            //
+            // Generic enums are skipped for the same reason generic classes are: their payloads name raw
+            // type params (`Optional<T>` would register a bogus `Shared_T`). Each concrete instance
+            // re-scans its substituted payloads in registerGenericTypeInst.
+            if (ed->typeParams && !ed->typeParams->empty()) continue;
+            if (ed->body) for (auto& m : *ed->body)
+                if (m && m->payload)
+                    for (auto& p : *m->payload) if (p) scanTypeForCollections(p->type);
         }
     }
 }
