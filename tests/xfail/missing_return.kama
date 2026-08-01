@@ -1,3 +1,7 @@
-// A non-void function that falls off the end must be rejected (was: garbage exit code).
+// A non-void function that falls off the end must be rejected — BY KAMA, with a kama-level message.
+// It used to be caught only by clang (-Werror=return-type), so the error named generated C and
+// `kama check` — the path the language server runs — reported the file clean. That was the last
+// disagreement between `kama check` and `kama build`; see CEmitter::alwaysExits, and
+// tests/return_paths.kama for the shapes that must still be ACCEPTED.
 fn int32 compute(int32 a) { int32 y = a + 1; }
 fn int main() { return compute(a: 41); }

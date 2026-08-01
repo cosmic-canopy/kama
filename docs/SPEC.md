@@ -668,6 +668,16 @@ divmod(a: 17, b: 5, q: out quotient, r: out rem);   // 3, 2
 counts, a lone `if` does not, and an arm that ends in `return`/`break`/`continue` never reaches the join
 and so owes nothing to it.
 
+**A non-`void` function must return on every path.** Reaching the closing brace without a value is a
+compile error in kama itself — not a C-compiler diagnostic against generated code, which the language
+server could not see. A path satisfies it by RETURNING or by DIVERGING, so all of these are accepted:
+an `if`/`else` where both arms return; a `match` where every arm does (a `match` is exhaustive by
+construction); a tail call to `panic`; and a loop that cannot exit (`while (true)` / `for (;;)` with no
+`break`). `void` functions may fall off the end. The analysis is deliberately one-sided — it reports only
+what it can prove, so a construct it does not model costs a diagnostic, never a false rejection.
+(Fixtures: `tests/return_paths.kama` for what must be accepted, `tests/xfail/missing_return` for what
+must not.)
+
 ## FFI — calling C ✅
 
 `extern fn Ret name(params);` declares a C function's call signature (name + named params for lowering); the

@@ -1364,6 +1364,12 @@ private:
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                            const char* what, int line);  // unresolved type name -> missing-import / unknown-type diagnostic
     void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)
+    // Fall-off-the-end analysis: a non-void function must return on every path (or diverge).
+    void checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationNode* md, const char* what);
+    bool alwaysExits(const SharedStatement& s) const;   // provably returns or diverges (one-sided: no => "cannot prove")
+    bool exprDiverges(const ASTNode* n) const;          // a `panic(...)` call
+    bool hasLoopBreak(const SharedStatement& s) const;  // a `break` escaping THIS loop
+    bool isLiteralTrue(const SharedExpression& e) const;
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is Ptr<T>, the element C-type; else ""
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is Ptr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive

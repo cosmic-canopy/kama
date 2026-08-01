@@ -161,15 +161,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   its own sweep. Guarded today by `tests/xfail/unknown_type_{local,param,return,field,method_param,
   variant_payload}` + `unimported_type_param`, and by `tests/decl_type_check_guards.kama` for the three
   shapes the pass must NOT reject (a generic free fn's own params, `This`, a `sig` used before its file).
-- **No fall-off-the-end analysis (bug, small — the last `kama check`/`kama build` disagreement).** A
-  non-void function whose body can reach the closing brace without returning is rejected by **clang**
-  (`-Werror=return-type`), not by kama. So the diagnostic names *generated C*, and `kama check` — the path
-  the language server runs — accepts the file, which is the one thing a language server must never do.
-  `tests/xfail/missing_return` is the repro, and it is the single declared exception in the analysis-agreement
-  leg of `run_tests.sh` (delete the `analysis_skip` arm when this lands). Fix = an `alwaysReturns(BlockNode*)`
-  walk: last statement is a `return`; an `if`/`else` where both arms always return; a `match` whose every arm
-  does; or a diverging tail (`panic`, a `while (true)` with no `break`). The design risk is false positives on
-  valid code, so it wants fixtures for each of those shapes before it flips to an error.
 - **`kama check <file>` on a single member of a DIRECTORY module reports false errors.** Sibling units in the
   same namespace are not loaded for a bare single-file check, so `kama check lib/std/math/quat.kama` reports
   `Vec3`/`Mat4` as unknown — they live in `vec.kama`/`mat.kama` under the same `namespace std::math`. Harmless

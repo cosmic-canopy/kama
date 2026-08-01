@@ -1,1 +1,1 @@
-return-type
+can reach the end of its body without returning a value

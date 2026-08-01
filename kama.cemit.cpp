@@ -351,6 +351,112 @@ SharedIdentifier CEmitter::synthClone(const IdentifierNode& src)
     return n;
 }
 
+// Does this statement DEFINITELY leave the enclosing function — by returning, or by diverging?
+//
+// Deliberately one-sided: it answers "yes, provably" and otherwise "no". Every construct it does not model
+// contributes `false`, which is safe because a BLOCK is satisfied by ANY statement that returns (anything
+// after one is unreachable) — so an unmodeled statement can only fail to help, never wrongly satisfy. The
+// cost of the other bias would be rejecting valid code, which is far worse than the status quo of letting
+// the C compiler catch it.
+bool CEmitter::alwaysExits(const SharedStatement& s) const
+{
+    if (!s) return false;
+    ASTNode* n = s.get();
+    if (dynamic_cast<ReturnNode*>(n)) return true;
+    if (auto* b = dynamic_cast<BlockNode*>(n)) {
+        if (b->statements) for (auto& st : *b->statements) if (alwaysExits(st)) return true;
+        return false;
+    }
+    if (auto* u = dynamic_cast<UnsafeNode*>(n)) return alwaysExits(u->body);   // `unsafe { … }` always runs
+    if (auto* sc = dynamic_cast<ScopeNode*>(n)) return alwaysExits(sc->body);  // `scope { … }` always runs
+    // An `if` only guarantees an exit when BOTH arms do — a bare `if` may fall through by design.
+    if (auto* f = dynamic_cast<IfNode*>(n))
+        return f->elseStatement && alwaysExits(f->ifStatement) && alwaysExits(f->elseStatement);
+    // A `match` is exhaustive by construction (the emitter rejects a non-exhaustive one), so it exits when
+    // every arm does. An arm is either a single expression or a block.
+    if (auto* m = dynamic_cast<MatchNode*>(n)) {
+        if (!m->arms || m->arms->empty()) return false;
+        for (auto& a : *m->arms) {
+            if (!a) return false;
+            if (a->block) { if (!alwaysExits(a->block)) return false; }
+            else if (a->body) { if (!exprDiverges(a->body.get())) return false; }
+            else return false;
+        }
+        return true;
+    }
+    // A loop with no exit condition never falls out of the bottom — `while (true)` / `for (;;)` is how a
+    // scheduler or an embedded main is written. A `break` targeting it would escape, so only a
+    // break-free body counts.
+    if (auto* w = dynamic_cast<WhileNode*>(n))
+        return isLiteralTrue(w->booleanExpression) && !hasLoopBreak(w->whileStatement);
+    if (auto* fo = dynamic_cast<ForNode*>(n))
+        return !fo->booleanExpression && !hasLoopBreak(fo->body);
+    // A bare `panic(…)` never returns. An invocation IS an ExpressionStatementNode, so a call in statement
+    // position arrives here directly.
+    return exprDiverges(n);
+}
+
+// `panic(...)` — the one call the language knows never returns.
+bool CEmitter::exprDiverges(const ASTNode* n) const
+{
+    auto* inv = dynamic_cast<const InvocationNode*>(n);
+    // A BARE call keeps its name in `identifier`; `expression` is the RECEIVER and is null for one.
+    if (!inv || inv->expression || !inv->identifier || !inv->identifier->value) return false;
+    if (*inv->identifier->value != "panic") return false;
+    const SharedStringList& q = inv->identifier->qualifier;
+    return !q || q->empty() || (q->size() == 1 && *(*q)[0] == "global");   // `panic` or `global::panic`
+}
+
+// Is there a `break` that would escape THIS loop? Nested loops swallow their own, and a `break` inside a
+// `match` arm belongs to the match, not the loop — but counting those merely makes the answer "cannot
+// prove it diverges", which is the safe direction.
+bool CEmitter::hasLoopBreak(const SharedStatement& s) const
+{
+    if (!s) return false;
+    ASTNode* n = s.get();
+    if (dynamic_cast<BreakNode*>(n)) return true;
+    if (dynamic_cast<WhileNode*>(n) || dynamic_cast<ForNode*>(n) ||
+        dynamic_cast<DoWhileNode*>(n) || dynamic_cast<ForEachNode*>(n)) return false;   // its own break
+    if (auto* b = dynamic_cast<BlockNode*>(n)) {
+        if (b->statements) for (auto& st : *b->statements) if (hasLoopBreak(st)) return true;
+        return false;
+    }
+    if (auto* u = dynamic_cast<UnsafeNode*>(n)) return hasLoopBreak(u->body);
+    if (auto* sc = dynamic_cast<ScopeNode*>(n)) return hasLoopBreak(sc->body);
+    if (auto* f = dynamic_cast<IfNode*>(n)) return hasLoopBreak(f->ifStatement) || hasLoopBreak(f->elseStatement);
+    if (auto* m = dynamic_cast<MatchNode*>(n)) {
+        if (m->arms) for (auto& a : *m->arms) if (a && a->block && hasLoopBreak(a->block)) return true;
+        return false;
+    }
+    return false;
+}
+
+// A `while (true)` condition — a literal `true`, nothing cleverer.
+bool CEmitter::isLiteralTrue(const SharedExpression& e) const
+{
+    auto* b = dynamic_cast<const BooleanNode*>(e.get());
+    return b && b->value;
+}
+
+// A non-void function whose body can reach the closing brace without returning. Until this existed the
+// only thing catching it was CLANG (`-Werror=return-type`), so the diagnostic named generated C and
+// `kama check` — the path the language server runs — reported the file clean. A language server calling a
+// broken file clean is the one failure mode it must not have.
+void CEmitter::checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationNode* md, const char* what)
+{
+    SharedIdentifier rt = fn ? fn->returnType : md->returnType;
+    SharedBlock body    = fn ? fn->block      : md->body;
+    if (!rt || !body) return;                                   // a ctor / prototype / extern — nothing to check
+    if (rt->builtInVal == IDENTIFIER_VOID_VAL) return;          // void may fall off the end
+    if (md && md->isCtor) return;                               // a named ctor has its own completeness check
+    if (alwaysExits(body)) return;
+    const std::string& nm = fn ? (fn->name && fn->name->value ? *fn->name->value : "")
+                               : (md->name && md->name->value ? *md->name->value : "");
+    unsupported((std::string(what) + " `" + nm + "` can reach the end of its body without returning a value "
+                 "— every path out of a non-`void` function must `return` (or diverge: `panic`, or a loop "
+                 "with no exit)").c_str(), body->line);
+}
+
 // The same check as `checkTypeResolves`, applied to every type a DECLARATION spells: parameter types,
 // return types, field types and enum-variant payload types. Those positions used to be silent — only a
 // local's type was checked (the single call site in `emitStatement`) — so a misspelled or unimported type
@@ -410,6 +516,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 bindTypeParams(fn->typeParams);
                 check(fn->returnType, "a return type");
                 checkParams(fn->parameters, "a parameter");
+                checkReturns(fn, nullptr, "function");
             } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
                 bindTypeParams(cd->typeParams);
                 if (cd->members) for (auto& m : *cd->members) {
@@ -418,6 +525,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                     } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         check(md->returnType, "a return type");
                         checkParams(md->params, "a parameter");
+                        checkReturns(nullptr, md, "method");
                     } else if (auto* ct = dynamic_cast<ClassConstructorDeclarationNode*>(m.get())) {
                         if (ct->declarator) checkParams(ct->declarator->params, "a parameter");
                     } else if (auto* op = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {

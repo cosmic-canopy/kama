@@ -479,13 +479,7 @@ fi
 #     language server can do.
 # So: every positive fixture must pass `check`, and every negative fixture must fail it. `check` does no C
 # compilation, so this is cheap and target-independent — it runs on every leg.
-analysis_skip() {   # fixtures where `check` legitimately cannot match `build`
-    case "$1" in
-        # `fn int f() { }` is rejected by CLANG (-Werror=return-type), not by kama — kama has no
-        # fall-off-the-end analysis yet, so the error names generated C and the editor cannot see it.
-        # Tracked in docs/ROADMAP.md; delete this arm when kama rejects it natively.
-        missing_return) return 0 ;;
-    esac
+analysis_skip() {   # fixtures where `check` legitimately cannot match `build` — currently NONE
     return 1
 }
 # This leg is ONE assertion, not one per fixture. It re-checks every fixture the suite already built, so

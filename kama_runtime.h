@@ -10,6 +10,21 @@
 #include <stdbool.h>   // bool       (type only)
 #include <stddef.h>    // size_t, NULL (types only)
 
+// A fatal path NEVER RETURNS, and the C compiler has to be told so — otherwise a kama function whose last
+// statement is `panic(msg: …)` looks like it falls off the end, and clang's -Werror=return-type rejects it
+// even though kama's own fall-off-the-end analysis (CEmitter::alwaysExits) correctly accepted it. The two
+// analyses have to agree; this is what makes them.
+#ifndef KAMA_NORETURN
+#  if defined(__GNUC__) || defined(__clang__)
+#    define KAMA_NORETURN __attribute__((noreturn))
+#  elif defined(_MSC_VER)
+#    define KAMA_NORETURN __declspec(noreturn)
+#  else
+#    define KAMA_NORETURN _Noreturn
+#  endif
+#endif
+
+
 // KAMA_EXPORT — the kama→host boundary decoration for an `expose fn`. It gives the
 // (unmangled, bare-named) function stable C-ABI linkage a host can resolve: `dlsym`
 // on a `--shared` native `.so`/`.dylib`/`.dll`, or `Module._name` on a wasm build.
@@ -319,8 +334,8 @@ static inline void kama_u64_to_buf(char* buf, size_t* p, size_t v) {
 // through one OVERRIDABLE weak hook. The default spins in a `__builtin_trap` loop (a debugger breaks
 // here / the MCU resets); a firmware author provides a strong `kama_panic_handler` to blink an SOS,
 // reset, or log over a peripheral. Weak symbols are supported by clang/gcc = the embedded toolchains.
-__attribute__((weak)) void kama_panic_handler(void) { for (;;) __builtin_trap(); }
-static inline void kama_bounds_fail(size_t i, size_t len) {
+__attribute__((weak)) KAMA_NORETURN void kama_panic_handler(void) { for (;;) __builtin_trap(); }
+static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
     (void)i; (void)len;
     kama_panic_handler();
     for (;;) {}   // kama_panic_handler must not return; belt-and-suspenders if a user override does
@@ -351,7 +366,7 @@ static inline void kama_set_panic_handler(void (*h)(void)) { if (!kama_panic_hoo
 static inline void kama_run_panic_hook(void) {
     if (kama_panic_hook && !kama_in_panic_hook) { kama_in_panic_hook = 1; kama_panic_hook(); }
 }
-static inline void kama_bounds_fail(size_t i, size_t len) {
+static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
     extern void abort(void);
     char buf[96]; size_t p = 0;
     const char* a = "kama: index ";              while (*a) buf[p++] = *a++;
@@ -784,7 +799,7 @@ static inline kama_string kama_str_take(kama_string* s) {
 // User-triggerable trap for `panic(msg: …)` and a failed `assert(cond: …)`. Writes
 // "kama: panic: <msg>" to stderr and `abort()`s — the same clean-abort mechanism as the bounds
 // trap (no <stdio.h>, no undefined behavior). Never returns.
-static inline void kama_panic(kama_string msg) {
+static inline KAMA_NORETURN void kama_panic(kama_string msg) {
 #if defined(KAMA_TARGET_EMBEDDED)
     // Freestanding: no stderr, no `abort`. Route through the overridable weak hook (see kama_bounds_fail).
     (void)msg;
@@ -805,7 +820,7 @@ static inline void kama_panic(kama_string msg) {
 // clean-abort discipline as kama_panic (no <stdio.h>, no UB, never returns). On embedded there is no
 // stderr/abort, so route through the overridable weak kama_panic_handler (see kama_bounds_fail). Every
 // append is bounded by `cap`, so an over-long condition/message/path truncates rather than overruns.
-static inline void kama_fail_emit(const char* buf, size_t n) {
+static inline KAMA_NORETURN void kama_fail_emit(const char* buf, size_t n) {
 #if defined(KAMA_TARGET_EMBEDDED)
     (void)buf; (void)n;
     kama_panic_handler();
@@ -830,7 +845,7 @@ static inline void kama_fail_loc(char* buf, size_t* p, size_t cap, const char* f
     if (*p < cap) buf[(*p)++] = ')';
 }
 // `panic(msg:)` → "kama: panic: <msg> (file:line)".
-static inline void kama_panic_at(kama_string msg, const char* file, int line) {
+static inline KAMA_NORETURN void kama_panic_at(kama_string msg, const char* file, int line) {
     char buf[1024]; size_t p = 0; const size_t cap = sizeof buf;
     kama_fail_puts(buf, &p, cap, "kama: panic: ");
     for (size_t i = 0; i < msg.len && p < cap; ++i) buf[p++] = ((const char*)msg.data)[i];

@@ -1,0 +1,43 @@
+// The shapes that DO satisfy the fall-off-the-end check — the guard against it becoming over-strict.
+// Each returns without a `return` as the syntactic last statement, so a naive "last statement must be a
+// return" rule would reject every one of them. See CEmitter::alwaysExits.
+fn int32 viaIfElse(int32 x) {                      // both arms return
+    if (x > 0) { return 1; } else { return 2; }
+}
+fn int32 viaMatch(Optional<int32> o) {             // every arm returns (match is exhaustive by construction)
+    match (o) {
+        case Some(value: v): { return v; }
+        case None:           { return 0; }
+    };
+}
+fn int32 viaMatchExprArms(Optional<int32> o) {     // expression arms that all diverge
+    match (o) {
+        case Some(value: v): panic(msg: "no");
+        case None:           panic(msg: "no");
+    };
+}
+fn int32 viaInfiniteLoop(int32 x) {                // `while (true)` with no break never falls out
+    while (true) {
+        if (x > 3) { return x; }
+        x = x + 1;
+    }
+}
+fn int32 viaForever(int32 x) {                     // `for (;;)` likewise
+    for (;;) { if (x > 3) { return x; } x = x + 1; }
+}
+fn int32 viaPanic(int32 x) {                       // a diverging tail
+    if (x > 0) { return x; }
+    panic(msg: "negative");
+}
+fn int32 viaNestedBlock(int32 x) {                 // an inner block's return still counts
+    { { return x; } }
+}
+fn void voidMayFallThrough(int32 x) {              // `void` is exempt
+    if (x > 0) { return; }
+}
+fn int main() {
+    voidMayFallThrough(x: 1);
+    return viaIfElse(x: 1) + viaMatch(o: Optional::Some(value: 20))
+         + viaInfiniteLoop(x: 0) + viaForever(x: 0) + viaPanic(x: 10)
+         + viaNestedBlock(x: 3);   // 1 + 20 + 4 + 4 + 10 + 3 = 42
+}
