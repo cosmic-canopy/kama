@@ -185,27 +185,48 @@ mid-codepoint would start trapping, though it is already producing invalid UTF-8
 - **`--no-std` and `--target embedded` must keep working.** M2 only adds to `lib/std`, so it should be free —
   but `tools/check-noheap.sh` and `tools/check-embedded.sh` are the proof, not the assumption.
 
-## kama idioms that will bite you (learned the hard way, written nowhere else)
+## Where kama differs from what an LLM will reach for
 
-Every one of these cost a build cycle while writing M1's fixtures:
+Each of these cost a build cycle while writing M1's fixtures — but read the classification before treating
+them as defects. **Almost all are kama being deliberately STRICTER than C#/Rust/Python, and the strictness
+is the point.** Exactly one is a genuine gap, and it is marked. This section exists to save the next
+session those cycles, not to suggest the language is trappy.
 
-- **A `match` subject must be a typed local.** `match (give decode::<T>(src))` is rejected — bind
-  `Result<T, Owned<Error>> r = …;` first, then `match (give r)`. (Tracked in SPEC § Known limitations.)
-- **`slot x` + `ref x` is rejected** — a `ref` is a read borrow of a live value. Use `out`, or restructure
-  so the callee returns instead. In `json.kama` the fix was to drop the out-param entirely and ride the
-  reader's existing sticky `err` flag.
-- **A free function cannot carry `when [T: Copyable]`** — that clause is method-only. Put the bound in the
-  type-param list.
-- **Interpolation holes take an identifier with `.field`/`[i]` only** — `"${a.length()}"` is a lexical
-  error. Bind the call's result to a local first.
-- **A `resource`'s fields are always private** — `public int32 v;` on a `type resource` is an error.
-- **`@generate` requires every field marked** `@field` or `@skip`.
-- **Named args everywhere**, including the ones that read like keywords: `println(s: "…")`,
-  `decode::<T>(src: …)`, `FixedArray.make(size: …)`.
-- **Generic free functions infer their type args from the call** — `max(a: 3, b: 4)`, no turbofish. The
-  explicit form is only for `decode::<T>` shapes where inference has nothing to go on.
-- **A `.d/` fixture is a directory of files built together**; a bare `namespace` in a single-file fixture
-  will not resolve a sibling.
+**Genuine gap:**
+
+- ⚠️ **A `match` SUBJECT must be a named local — a call result is rejected.** `match (pick(x: 1))`, where
+  `pick` returns a plain enum, fails with "`match` requires an enum subject (a tagged union, or a plain
+  enum)" — which is misleading, since it plainly *is* one. Bind first:
+  `Code c = pick(x: 1); match (c) { … }`. Broader than SPEC § Known limitations describes (that lists only
+  a nested value-producing `match` or a variant-producing ternary). Tracked in ROADMAP §2.
+
+**Deliberate design — learn it, don't work around it:**
+
+- **`public` field on a `type resource` is rejected** — a resource owns something, and a public field
+  bypasses the invariant it exists to hold (GOALS 3c). Expose behavior through methods.
+- **`@generate` requires EVERY field marked `@field` or `@skip`** — explicit over implicit, so adding a
+  field can never silently start serializing a secret. (Rust's serde defaults the other way.)
+- **Named arguments everywhere**, including where they read like noise: `println(s: "…")`,
+  `FixedArray.make(size: …)`. This is the headline language feature, not friction.
+- **String-interpolation holes are an identifier plus `.field`/`[i]` only** — `"${a.length()}"` is an
+  error; bind the call's result first. Same boundary Rust's `format!` draws, and what keeps interpolation
+  statically checked rather than a mini-language.
+- **Generic free functions infer their type args** (`max(a: 3, b: 4)`); the turbofish is only for shapes
+  like `decode::<T>` where inference has nothing to go on.
+
+**Correct rejection, unhelpful message (worth fixing, cheap):**
+
+- **`slot x;` then passing `ref x`** — rejected, correctly: `ref` borrows a value that is already live and
+  a `slot` has none. `out` is the tool. The diagnostic is clear here; the trap is only that an LLM reaches
+  for `ref` reflexively.
+- **A free function cannot carry `when [T: Copyable]`** — bounds belong in the type-parameter list
+  (`fn f<T: Copyable>(…)`); `when` gates conditional conformance on a generic TYPE's method, and a free
+  function has no "sometimes". Correct, but the bare `syntax error, unexpected when` should say that.
+
+**Not a language matter:**
+
+- A `.d/` fixture is a DIRECTORY of files built together; a bare `namespace` in a single-file fixture will
+  not resolve a sibling. Test-harness convention.
 
 ## Verification
 

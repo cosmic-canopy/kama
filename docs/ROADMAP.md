@@ -242,6 +242,16 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   generic type, and a contract-bounded param. It presumably fixed itself under the construction-model work.
   The stale claim mattered: it was being cited as the reason a stable merge sort could not be written, which
   would have forced an unstable-only `sort` on a false premise.)*
+- **A `match` SUBJECT must be a named local — a call result is rejected (bug, small; misleading message).**
+  `match (pick(x: 1))`, where `pick` returns a plain enum, fails with "`match` requires an enum subject (a
+  tagged union, or a plain enum)" — which is false and sends the reader looking at the wrong thing: it IS
+  an enum, and the actual rule is that the subject must be a bound local. Workaround is one line
+  (`Code c = pick(x: 1); match (c) { … }`), which is why it has gone unnoticed, but matching directly on a
+  call result is completely ordinary in every ML-descended language and it is the first thing anyone tries.
+  **Wider than [SPEC.md](SPEC.md) § *Known limitations* admits** — that section lists only a nested
+  value-producing `match` and a variant-producing ternary as the deferred subject forms, not an ordinary
+  call. Fix the message first (it is wrong regardless), then the inference; correct the SPEC text either
+  way.
 - **`std::net` — IPv6 and UDP multicast.** `IpAddr` has a `V4` arm only ([`lib/std/net/addr.kama`]), left
   deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
   Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.
